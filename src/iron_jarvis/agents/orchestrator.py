@@ -2002,6 +2002,18 @@ class Orchestrator:
             log.exception("chat delivery failed for session %s", session.id)
             return {"ok": False, "why": "delivery failed", "appended": 0, "skipped": 0}
 
+    def _plain_failure(self, error: Exception) -> str:
+        """One plain sentence for a failed run's summary (v1.354.0, G28):
+        ``providers.failure_words.plain_reason`` (the headline and its fix
+        when the failure is recognised, else the failure's own masked
+        message). Never raises, never empty."""
+        try:
+            from ..providers.failure_words import plain_reason
+
+            return plain_reason(error, manager=getattr(self.p, "providers", None))
+        except Exception:  # noqa: BLE001 - wording only
+            return "it stopped with an error"
+
     async def _finalize_failed(self, session: Session, error: Exception) -> None:
         """Mark a crashed run FAILED, persist, emit SESSION_COMPLETED(ok=False), GC
         its worktree — so an unexpected exception never leaves a zombie ACTIVE
@@ -2018,12 +2030,17 @@ class Orchestrator:
             await self._finalize_cancelled(session)
             return
         session.status = SessionStatus.FAILED
+        # v1.354.0 (G28): the summary a person reads says what happened in
+        # plain words ("The run failed: OpenRouter refused your key. Update it
+        # in ..."), never the exception's class; the class goes to the log
+        # and to the run rows' own record (`error_text`, below).
+        error_text = f"{type(error).__name__}: {error}"
+        log.warning("session %s failed: %s", session.id, error_text[:500])
         session.summary = _with_folder_note(
             session.summary,
-            _prose(session.summary) or f"Session failed: {type(error).__name__}: {error}",
+            _prose(session.summary) or f"The run failed: {self._plain_failure(error)}",
         )
         session.finished_at = utcnow()
-        error_text = f"{type(error).__name__}: {error}"
 
         def _settle_failed() -> tuple[list[str], str | None]:
             # v1.288.0 (agents-04): settle the session's AgentRun rows with it,

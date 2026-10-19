@@ -62,6 +62,7 @@ from .adapters.prompted_tools import PromptedToolsAdapter
 from .reasoning import normalize_level, supports
 from .guided import GuidedToolsAdapter, profile_supports_guided
 from . import egress as _egress
+from . import failure_words as _failure_words
 from .local import is_local_provider
 from .manager import ProviderManager
 
@@ -283,6 +284,20 @@ def failure_reason(exc: Exception) -> str:
     if isinstance(exc, ProviderError) and exc.status_code is not None:
         return f"http {exc.status_code}"
     return "transient error" if is_transient_error(exc) else "error"
+
+
+def _stamp_failed_provider(exc: BaseException, provider: str) -> None:
+    """Record on a primary's failure WHICH provider failed (v1.354.0, G28),
+    unless something deeper already said. Read by
+    ``failure_words.friendly_error`` so the headline names the provider that
+    failed (an Auto pick, a default), not the one the page asked for. An
+    attribute only: the failure, its text and its handling are unchanged.
+    Never raises (an exception that refuses attributes keeps none)."""
+    try:
+        if not getattr(exc, "failed_provider", ""):
+            exc.failed_provider = provider  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - wording only
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -856,9 +871,10 @@ class ModelRouter:
         ``"answered_error"`` (v1.228.0, ``local_primary_policy=refuse``) is the
         fourth kind: the endpoint is UP and said so — a 429/5xx/404 — and the
         policy still forbids a stand-in. That refusal quotes the status and
-        the endpoint's own detail (*exc*) and names the setting, because the
-        user may legitimately want the old behaviour back and must be able to
-        find the switch from the error alone.
+        the endpoint's own detail (*exc*) and says the switch can be allowed
+        in Settings, because the user may legitimately want the old behaviour
+        back and must be able to find it from the error alone (since
+        v1.354.0, G28, in plain words: the setting's raw key is never shown).
 
         ``"cooldown"`` (v1.232.0, audit R4) is the breaker's own refusal: the
         provider tripped :class:`ProviderHealth` and this turn was NOT sent
@@ -886,28 +902,38 @@ class ModelRouter:
             else:
                 text += _NO_STAND_IN
             text += " Wait it out, or pick another model for this chat and retry."
-            return ProviderError(text)
+            return self._tag_refusal(ProviderError(text), kind, wanted, retry_in=retry_in)
         if kind == "signed_out":
             # v1.234.0: the CLI is on disk and said it is not signed in. The
             # remedy is the CLI's own login, not an endpoint check.
-            from .cli_auth import CLI_BINARIES, SIGN_IN_FIX
-
+            # v1.354.0 (G28): in the words the user knows both sides by
+            # ("Claude Code", "Anthropic"), never the raw ids, and the fix is
+            # the Sign in button on Accounts (v1.353.0 G33), never a terminal
+            # command. The CLI's own refusal words still live in
+            # cli_auth.SIGN_IN_FIX for the CLI's raw output.
             cli = self._signed_out_cli(wanted) or wanted
-            fix = SIGN_IN_FIX.get(CLI_BINARIES.get(cli, ""), "sign in via its own CLI.")
+            cli_name = _failure_words.plain_name(cli, self.manager) or cli
+            text = (
+                f"{_failure_words.heading(cli_name)} isn't signed in, so this"
+                " turn was not answered."
+            )
             if cli != wanted:
                 # A keyless API provider served through the CLI (inherited
-                # login): name the CLI, because that is what needs the login.
-                text = (
-                    f"{wanted} runs through {cli}, which is installed but not"
-                    " signed in, so this turn was not answered."
+                # login): name both, because the CLI is what needs the login.
+                wanted_name = _failure_words.plain_name(wanted, self.manager) or wanted
+                text += (
+                    f" {_failure_words.heading(wanted_name)} answers through"
+                    f" your {cli_name} sign-in."
                 )
-            else:
-                text = f"{wanted} is installed but not signed in, so this turn was not answered."
             if pinned:
                 text += " No substitute was tried because strict model pin is on."
             else:
                 text += _NO_STAND_IN
-            return ProviderError(f"{text} {fix}")
+            text += (
+                f" Press Sign in beside {cli_name} in"
+                f" {_failure_words.ACCOUNTS_PLACE}, then retry."
+            )
+            return self._tag_refusal(ProviderError(text), kind, wanted, cli=cli)
         if kind == "answered_error":
             status = getattr(exc, "status_code", None) if exc is not None else None
             what = f"answered HTTP {status}" if status else "answered with an error"
@@ -915,15 +941,15 @@ class ModelRouter:
             text = f"{name} {what}"
             if detail:
                 text += f": {detail.rstrip(' .')}"
-            text += ". No substitute was used on purpose (local_primary_policy=refuse)."
+            # v1.354.0 (G28): the policy in plain words, never its config key.
+            text += (
+                ". Iron Jarvis won't switch to a different AI without asking."
+                " You can allow that in Settings."
+            )
             if pinned:
                 text += " Strict model pin is on as well."
-            text += (
-                " Check that endpoint or pick another model for this chat and"
-                " retry. Set local_primary_policy to failover in Settings if you"
-                " want another provider to stand in."
-            )
-            return ProviderError(text)
+            text += " Check that endpoint or pick another model for this chat and retry."
+            return self._tag_refusal(ProviderError(text), kind, wanted)
         lead = {
             "timeout": f"{name} didn't respond in time",
             "interrupted": f"the connection to {name} dropped mid-request",
@@ -962,7 +988,35 @@ class ModelRouter:
                 " Press Retry. If it keeps happening, check your internet"
                 " connection or pick another model for this chat."
             )
-        return ProviderError(detail + fix)
+        return self._tag_refusal(ProviderError(detail + fix), kind, wanted, partial=partial)
+
+    @staticmethod
+    def _tag_refusal(
+        err: ProviderError,
+        kind: str,
+        wanted: str,
+        *,
+        cli: str = "",
+        partial: bool = False,
+        retry_in: float = 0.0,
+    ) -> ProviderError:
+        """Stamp a refusal with what it IS (v1.354.0, G28): ``kind`` (the
+        refusal kind), ``failed_provider``, and, when they apply, ``cli``,
+        ``partial`` and ``retry_in``. ``failure_words.friendly_error`` reads
+        these typed fields to give the chat its headline; the message text
+        is not changed by this. Never raises."""
+        try:
+            err.kind = kind  # type: ignore[attr-defined]
+            err.failed_provider = wanted  # type: ignore[attr-defined]
+            if cli:
+                err.cli = cli  # type: ignore[attr-defined]
+            if partial:
+                err.partial = True  # type: ignore[attr-defined]
+            if retry_in:
+                err.retry_in = float(retry_in)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - wording only
+            pass
+        return err
 
     # -- local only (v1.332.0) ----------------------------------------------
     def _stays(self, provider: str) -> bool:
@@ -1137,8 +1191,9 @@ class ModelRouter:
             "timeout": "no answer in time, though the endpoint accepted the"
             " connection",
             "interrupted": "the connection dropped mid-request",
-            "answered_error": "answered with an error, so no substitute was used"
-            " (local_primary_policy=refuse)",
+            # v1.354.0 (G28): the policy in plain words, not its config key.
+            "answered_error": "answered with an error, and Iron Jarvis won't switch"
+            " to a different AI without asking",
             # v1.232.0 (audit R4): the breaker's own word, seconds included.
             "cooldown": (
                 f"in cooldown, retry in {int(math.ceil(max(0.0, retry_in)))} s,"
@@ -1823,6 +1878,10 @@ class ModelRouter:
             self._forget_answered(adapter)
             raise
         except Exception as exc:
+            # v1.354.0 (G28): the failure names WHO failed, so the chat's
+            # headline can ("OpenRouter refused your key"). MIRROR NOTE
+            # (lock-step): stream() stamps at the same seam.
+            _stamp_failed_provider(exc, adapter.provider)
             # Any primary failure forgets "it just answered" (v1.332.0), so
             # the next call probes again. MIRROR NOTE (lock-step): stream().
             self._forget_answered(adapter)
@@ -2284,6 +2343,9 @@ class ModelRouter:
                 self._forget_answered(adapter)
             raise
         except Exception as exc:  # noqa: BLE001 — classified below
+            # v1.354.0 (G28): who failed rides the failure. MIRROR NOTE
+            # (lock-step): complete() stamps at the same seam.
+            _stamp_failed_provider(exc, adapter.provider)
             if committed:
                 # Already streaming this provider — never swap mid-stream. But
                 # the death still COUNTS (v1.232.0, audit R3): breaker, ledger,

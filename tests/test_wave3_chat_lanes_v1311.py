@@ -444,7 +444,9 @@ def test_grounded_system_prompt_is_byte_identical(tmp_path, monkeypatch, lane):
     project → knowledge → lessons (learning APPENDS, so its suffix sits right
     after the project block — whether it is applied to the prefix after the
     gather or computed as ``apply_to_prompt("")`` in it) → index → fabric →
-    connector → roster → saved workflows, and nothing grounding-related after.
+    connector → [v1.354.0: the named-apps section, ONLY when the message names
+    an app — this message names none, so the bytes are unchanged] → roster →
+    saved workflows, and nothing grounding-related after.
     """
     _probe, system, _body = _grounded_turn(tmp_path, monkeypatch, lane)
     assert _EXPECTED_GROUNDING_SEGMENT in system, (
@@ -469,6 +471,32 @@ def test_grounded_system_prompt_is_identical_across_lanes(tmp_path, monkeypatch)
         _p, system, _b = _grounded_turn(tmp_path / lane, monkeypatch, lane)
         systems[lane] = system.replace(str(tmp_path / lane), "<HOME>")
     assert systems["post"] == systems["stream"]
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_the_named_apps_section_joins_right_after_connector_memory(tmp_path, monkeypatch, lane):
+    """v1.354.0 (G39): a message that names a catalog app gets the "Apps
+    named in this message" section, joined RIGHT AFTER connector memory and
+    before the roster (before the planner, so its cost is priced), in BOTH
+    lanes. The six hops still overlap (the section is one more hop, off the
+    loop); a message naming no app keeps the byte-identical prompt above."""
+    client = _client(tmp_path)
+    pid = client.post("/projects", json={"name": "Grounded"}).json()["id"]
+    probe = _HopProbe(_GROUND_HOPS)
+    _install_grounding_fakes(client, monkeypatch, probe)
+    seen = _scripted_router(client.app.state.platform, monkeypatch, [], "ok.")
+    _post_turn(client, lane, {
+        "messages": [{"role": "user", "content": "what is in the ledger project? check my Dropbox too"}],
+        "project_id": pid,
+        "connectors": ["brain"],
+    })
+    system = seen["systems"][0]
+    head = "\n\n# Apps named in this message\n"
+    assert "\n\nCONN-1" + head in system, f"{lane}: not right after connector memory:\n{system[-900:]!r}"
+    assert system.index(head) < system.index("\n\nROSTER-1"), f"{lane}: must precede the roster"
+    assert "- Dropbox: not connected." in system
+    assert probe.peak == len(_GROUND_HOPS), f"{lane}: the hops stopped overlapping"
+    assert not any(probe.on_loop.values()), f"{lane}: a hop ran on the loop"
 
 
 def test_a_dropped_grounding_hop_is_reported_never_silent(tmp_path, monkeypatch):

@@ -107,10 +107,16 @@ async def test_connect_my_github_saves_loads_says_how_many_tools_and_the_next_tu
         p.router.stream = with_switch = _calls_stream([])
         await _drive_stream(app, _body("list my open GitHub PRs", connectors=["github"]), await _approve_all(app, []))
         assert "mcp__github__argv" in with_switch.tools[0], with_switch.tools
-        # … and the same message without it is not (the old dead end).
+        # … and (v1.354.0, G39) the same message WITHOUT the switch is offered
+        # them too, because it names GitHub: visible, never granted (each call
+        # cards through the `mcp_call` key). That closes the old dead end on
+        # purpose. A message that names no app still gets none.
         p.router.stream = without = _calls_stream([])
         await _drive_stream(app, _body("list my open GitHub PRs"), await _approve_all(app, []))
-        assert "mcp__github__argv" not in without.tools[0]
+        assert "mcp__github__argv" in without.tools[0]
+        p.router.stream = unnamed = _calls_stream([])
+        await _drive_stream(app, _body("list my open pull requests"), await _approve_all(app, []))
+        assert "mcp__github__argv" not in unnamed.tools[0]
     finally:
         unload_pack_tools(p.registry, "github")
 

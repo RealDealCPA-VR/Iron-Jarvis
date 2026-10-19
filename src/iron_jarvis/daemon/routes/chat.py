@@ -45,6 +45,7 @@ from ...tools.reversible import reversible_flag as _reversible_flag
 from ...eval.pricing import UsageTally
 from ...providers import egress as _egress
 from ...providers.reasoning import normalize_level
+from ...providers.failure_words import GENERIC_TITLE as _GENERIC_TITLE
 from ..doors import collect_doors, door_for, failure_door_for
 
 # The chat TURN lives in daemon/chat_turn.py (v1.136.0 messaging surfaces):
@@ -2317,12 +2318,18 @@ def register(app: FastAPI, d) -> None:
             # line, so a row minted there would be a question nobody sees
             # holding one of the open slots. The pane's lines still count as
             # evidence (they are saved chat threads) for the main chat.
-            return await run_chat_turn(
-                d.platform,
-                d._PERSONAS,
-                body,
-                suggest_preferences=not (body.pane_id or "").strip(),
-            )
+            try:
+                return await run_chat_turn(
+                    d.platform,
+                    d._PERSONAS,
+                    body,
+                    suggest_preferences=not (body.pane_id or "").strip(),
+                )
+            except _chat_turn.ChatTurnFailed as exc:
+                # v1.354.0 (G28): the same 502 and the same `detail`, with
+                # the plain `title` / `fix` / `technical` beside it. MIRROR
+                # NOTE (lock-step): the stream lane's error frame.
+                return JSONResponse(status_code=502, content=exc.body())
 
     @app.post("/chat/stream")
     async def chat_stream_route(body: ChatBody, request: Request):
@@ -2801,6 +2808,9 @@ _PREP_FAILED = (
     "Iron Jarvis could not get ready to answer ({detail}). No answer was"
     " started. Send your message again to retry."
 )
+#: v1.354.0 (G28): the headline of a preparation failure the plain words
+#: could not name (``failure_words`` answered its generic title).
+_PREP_FAILED_TITLE = "Iron Jarvis couldn't get ready to answer"
 
 
 async def _honest_failures(frames):
@@ -2834,10 +2844,16 @@ async def _honest_failures(frames):
             return
         log.warning("chat turn failed inside its stream", exc_info=True)
         detail = _error_detail(exc)
-        yield _sse(
-            "error",
-            {"detail": detail if started else _PREP_FAILED.format(detail=detail)},
+        # v1.354.0 (G28): `detail` is unchanged; the plain words ride beside
+        # it. A failure the words cannot name, before the answer began, is
+        # said as what it is: the answer never started.
+        payload = _chat_turn.error_payload(
+            None, None, exc, detail=detail if started else _PREP_FAILED.format(detail=detail),
         )
+        if not started and payload.get("title") == _GENERIC_TITLE:
+            payload["title"] = _PREP_FAILED_TITLE
+            payload["fix"] = "Send your message again to retry."
+        yield _sse("error", payload)
 
 
 async def chat_stream(
@@ -3475,6 +3491,21 @@ async def chat_stream(
                 t for t in record_tools_for(_last_user_text(body.messages))
                 if t not in armed and t not in ask_armed and d.platform.registry.get(t)
             ]
+            # APPS BY NAME (v1.354.0, G39): a named app that is connected with
+            # tools loaded has them ASK-armed (visible, never granted; the
+            # `mcp_call` key cards each call), before the ceiling and the
+            # low-trust / local-only filters below. `app_connect` leaves when
+            # every named app is already connected and nothing asks to
+            # connect. THIS LANE ONLY (the POST lane never ask-arms); both
+            # lanes carry the "Apps named in this message" grounding.
+            _app_ask, _app_drop = _chat_turn.named_app_ask_tools(
+                _grounding, _last_user_text(body.messages), armed, ask_armed,
+                low_trust=_trust_state["low"],
+                local_only=_egress.current_scope().on,
+            )
+            ask_armed += [t for t in _app_ask if d.platform.registry.get(t)]
+            if _app_drop:
+                ask_armed = [t for t in ask_armed if t != "app_connect"]
             # WORKSPACE ASK (v1.210.0): a chat BOUND to a folder (the
             # Build pane) is a coding surface — `shell` joins the ask tier
             # so the model can propose a command without the user typing
@@ -4878,10 +4909,13 @@ async def chat_stream(
             # `provider` and `model` (detail kept). MIRROR NOTE (lock-step):
             # chat_turn.run_chat_turn re-raises it for the 409.
             _refused = _egress.refusal_of(exc)
+            # v1.354.0 (G28): `detail` unchanged, plus `title`, `fix` and
+            # `technical`. MIRROR NOTE (lock-step): chat_turn.run_chat_turn's
+            # 502 carries the same keys from the same `error_payload`.
             yield _sse(
                 "error",
                 _refused.payload() if _refused is not None
-                else {"detail": _error_detail(exc)},
+                else _chat_turn.error_payload(d, body, exc),
             )
             return
         except BaseException:

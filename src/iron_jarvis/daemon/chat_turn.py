@@ -50,6 +50,7 @@ from typing import Any
 
 from ..providers import egress as _egress
 from ..providers.reasoning import normalize_level
+from ..media.registry import ACCOUNTS_AND_KEYS as _MEDIA_KEYS_PLACE
 from ..core.db import session_scope
 from ..mcp.tools import packs_starting_note
 from ..core.events import EventType
@@ -2135,10 +2136,12 @@ NO_MEDIA_CONNECT_LINE = (
     " it shows the user a secure card to paste their Pixio key (never ask for"
     " the key in chat). Say they can ask again once the key is saved."
 )
+#: v1.354.0: the place is media.registry's ONE constant (the words its own
+#: refusals use), so a Settings rename moves both together. Same value today.
 NO_MEDIA_SETTINGS_LINE = (
     "\nNO MEDIA SERVICE: no image, video or music service is connected yet,"
     " so generate_media cannot make anything this turn. Tell the user to add"
-    " their Pixio key in Settings › Connections › Accounts & keys, then ask"
+    f" their Pixio key in {_MEDIA_KEYS_PLACE}, then ask"
     " again — never ask for the key in chat."
 )
 
@@ -2971,6 +2974,118 @@ def _error_detail(exc: Exception) -> str:
     from ..providers.router import failure_reason
 
     return f"{type(exc).__name__}: {failure_reason(exc)}"
+
+
+def friendly_error(exc: Exception, *, provider: str = "", manager=None) -> dict[str, str]:
+    """``{title, fix, technical}`` for a failed chat turn (v1.354.0, G28):
+    a plain headline ("OpenRouter refused your key"), what to do next, and
+    the original detail (``_error_detail``, masked) for whoever wants it.
+
+    Keyed on the typed fields the failure carries (the router's refusal
+    ``kind``, the adapter's ``status_code``, the ``failed_provider`` the
+    router stamps, ``failure_reason``) through
+    ``providers.failure_words``: deterministic, no model call. *provider*
+    is the turn's own pick, used only when the failure names none. Never
+    raises. MIRROR NOTE (lock-step): both chat lanes put these three keys
+    beside ``detail`` (which is unchanged) through :func:`error_payload`."""
+    from ..providers.failure_words import friendly_error as _words
+
+    try:
+        technical = _error_detail(exc)
+    except Exception:  # noqa: BLE001 - a hostile __str__ is no new failure
+        technical = type(exc).__name__
+    return _words(exc, provider=provider, manager=manager, technical=technical)
+
+
+def error_payload(d, body, exc: Exception, *, detail: "str | None" = None) -> dict[str, str]:
+    """The error a chat turn answers with: ``detail`` (unchanged, or the
+    caller's *detail*) plus ``title``, ``fix`` and ``technical``
+    (:func:`friendly_error`). The provider hint is the turn's own pick,
+    else this install's default. Never raises: at worst it is ``{detail}``.
+    MIRROR NOTE (lock-step): the POST lane's 502 body and the stream lane's
+    ``error`` frames all come from here."""
+    base = _error_detail(exc) if detail is None else detail
+    try:
+        platform = getattr(d, "platform", None)
+        hint = str(getattr(body, "provider", "") or "").strip()
+        if not hint and platform is not None:
+            hint = str(getattr(getattr(platform, "config", None), "default_provider", "") or "")
+        manager = getattr(platform, "providers", None) if platform is not None else None
+        words = friendly_error(exc, provider=hint, manager=manager)
+    except Exception:  # noqa: BLE001 - the error must still be answered
+        log.debug("friendly words for a chat error failed", exc_info=True)
+        return {"detail": base}
+    return {"detail": base, **words}
+
+
+def named_app_ask_tools(
+    grounding,
+    text: str,
+    armed,
+    ask_armed,
+    *,
+    low_trust: bool,
+    local_only: bool,
+) -> "tuple[list[str], bool]":
+    """THE STREAM LANE'S APPS-BY-NAME ARMING (v1.354.0, G39): ``(names to
+    ask-arm, drop app_connect?)``.
+
+    A message that names a catalog app that IS connected with tools loaded
+    ("list my open PRs on GitHub") gets that app's tools ASK-armed — VISIBLE
+    to the model, never GRANTED: every call goes through the ``mcp_call``
+    key, so it shows the ordinary approval card — without the "+" toggle.
+    Bounded like the toggle (``_MAX_CONNECTOR_TOOLS`` in all), names already
+    armed are skipped, and the caller applies the ceiling and the low-trust
+    and local-only filters after, as for every ask-armed name. A turn that
+    started in low trust, or a local-only turn, arms none of them: a pack
+    tool reaches outside this PC and those turns keep the "+" toggle as the
+    one door.
+
+    ``app_connect`` (armed by the same app name) is dropped when every named
+    app is already connected and the message asks for no connecting or
+    re-signing — its card would only answer "already connected". Never
+    raises: a fault arms nothing and drops nothing."""
+    try:
+        named = list(getattr(grounding, "apps_named", None) or [])
+        if not named:
+            return [], False
+        live = dict(getattr(grounding, "apps_live", None) or {})
+        add: list[str] = []
+        if not (low_trust or local_only):
+            have = set(armed or []) | set(ask_armed or [])
+            for cid in named:
+                for name in live.get(cid) or []:
+                    if len(add) >= _MAX_CONNECTOR_TOOLS:
+                        break
+                    if name not in have and name not in add:
+                        add.append(name)
+        from ..connectors.app_names import wants_connect
+
+        drop = all(live.get(cid) for cid in named) and not wants_connect(text)
+        return add, drop
+    except Exception:  # noqa: BLE001 — arming stays as it was
+        log.debug("arming the named apps' tools failed", exc_info=True)
+        return [], False
+
+
+class ChatTurnFailed(HTTPException):
+    """The POST lane's 502 (v1.354.0, G28): an ``HTTPException`` exactly as
+    before (status 502, the same ``detail``), carrying the plain words as
+    ``words`` so ``POST /chat`` can answer them beside ``detail``. A headless
+    caller (the phone poller) that catches ``HTTPException`` and reads
+    ``.detail`` sees no change."""
+
+    def __init__(self, detail: str, words: "dict[str, str] | None" = None) -> None:
+        super().__init__(status_code=502, detail=detail)
+        self.words: dict[str, str] = dict(words or {})
+
+    def body(self) -> dict[str, str]:
+        """The 502 body: ``detail`` first, then ``title``/``fix``/``technical``."""
+        out = {"detail": str(self.detail)}
+        for key in ("title", "fix", "technical"):
+            if self.words.get(key):
+                out[key] = str(self.words[key])
+        return out
 
 
 def _resolve_connectors(d, body) -> tuple[list[str], list[str]]:
@@ -5596,17 +5711,20 @@ class _Grounding:
     (``tests/test_wave3_chat_lanes_v1311.py`` pins it byte for byte)::
 
         project block → project folder instructions → lessons → memory index
-        → fabric → connector memory
+        → fabric → connector memory → apps named in the message
         [attachments + "/" skill: the lane's own, OUTSIDE the gather]
         → roster → saved workflows
 
     Every field is a ready-to-append section ("" when there is nothing).
+    The apps section (v1.354.0, G39) is "" unless the message names a
+    catalog app (or Claude Code / Codex), so every other turn's prompt is
+    byte-identical to before.
     """
 
     __slots__ = (
         "project", "folder_rules", "folder_rules_used", "lessons", "index",
         "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
-        "text_only",
+        "text_only", "apps", "apps_named", "apps_live",
     )
 
     def __init__(self) -> None:
@@ -5626,6 +5744,13 @@ class _Grounding:
         #: MCP packs still loading after the bounded wait (v1.311.0 review);
         #: the lanes put ``packs_starting_note`` on their Tools seam.
         self.packs_starting: list[str] = []
+        #: v1.354.0 (G39): the catalog apps the message names
+        #: (``connectors.app_names.apps_named``), the loaded tools of the ones
+        #: that are connected (read ON the loop; the stream lane ask-arms
+        #: them), and the "Apps named in this message" section.
+        self.apps = ""
+        self.apps_named: list[str] = []
+        self.apps_live: dict[str, list[str]] = {}
 
     def before_attachments(self) -> str:
         # The folder's own instructions ride RIGHT AFTER the project block they
@@ -5634,7 +5759,7 @@ class _Grounding:
         # no instruction files, or the setting is off).
         return (
             self.project + self.folder_rules + self.lessons + self.index
-            + self.fabric + self.connector
+            + self.fabric + self.connector + self.apps
         )
 
     def after_skill(self) -> str:
@@ -5714,6 +5839,27 @@ async def _gather_grounding(
         _resolved_conn: "tuple[Any, BaseException | None]" = (_resolve_connectors(d, body), None)
     except Exception as exc:  # noqa: BLE001 — re-raised in hop order below
         _resolved_conn = (None, exc)
+
+    # APPS NAMED IN THE MESSAGE (v1.354.0, G39): the matcher is text only;
+    # the named apps' loaded tools are read ON the loop like the connector
+    # toggles above (the registry is iterated); the blocking reads (the
+    # connections table, the memory bases, the CLI sign-in cache) and the
+    # section's words are one more hop in the gather. Nothing is added when
+    # nothing is named. Never raises.
+    _apps_named: list[str] = []
+    _clis_named: list[str] = []
+    try:
+        from ..connectors.app_names import apps_named, clis_named, live_tools
+
+        _last_text = _last_user_text(getattr(body, "messages", None) or [])
+        _apps_named = apps_named(_last_text)
+        _clis_named = clis_named(_last_text)
+        if _apps_named:
+            out.apps_named = list(_apps_named)
+            out.apps_live = live_tools(platform, _apps_named)
+    except Exception:  # noqa: BLE001 — knowing the apps never breaks a turn
+        log.debug("naming the apps in a chat message failed", exc_info=True)
+        _apps_named, _clis_named = [], []
 
     def _project_text() -> tuple[str, str, list[str]]:
         # v1.298.0: the instructions and brief are SCANNED for prompt
@@ -5849,6 +5995,20 @@ async def _gather_grounding(
         # SAVED WORKFLOWS (v1.170.0): bounded; never raises.
         return _saved_workflows_block(platform)
 
+    def _apps() -> str:
+        # APPS NAMED IN THE MESSAGE (v1.354.0, G39): connected (N tools) or
+        # not, and Claude Code / Codex sign-in from the CACHED verdict (no
+        # probe). Blocking reads, so off the loop; never raises.
+        try:
+            from ..connectors.app_names import app_states, apps_section
+
+            return apps_section(
+                app_states(platform, _apps_named, out.apps_live, _clis_named)
+            )
+        except Exception:  # noqa: BLE001 — knowing the apps never breaks a turn
+            log.debug("the named-apps section failed", exc_info=True)
+            return ""
+
     _proj_root = (
         str(getattr(resolved_proj, "root", "") or "").strip()
         if resolved_proj is not None else ""
@@ -5879,6 +6039,8 @@ async def _gather_grounding(
     if fabric is not None and recall_query.strip():
         hops.append(("fabric", _fabric))
     hops += [("connector", _connector), ("roster", _roster), ("workflows", _workflows)]
+    if _apps_named or _clis_named:
+        hops.append(("apps", _apps))
 
     results = await asyncio.gather(
         *(asyncio.to_thread(fn) for _name, fn in hops), return_exceptions=True,
@@ -5915,6 +6077,7 @@ async def _gather_grounding(
     out.conn_tools, out.connector = got["connector"]
     out.roster = got["roster"]
     out.workflows = got["workflows"]
+    out.apps = got.get("apps", "")
     return out
 
 
@@ -7208,7 +7371,15 @@ async def run_chat_turn(
         _refused = _egress.refusal_of(exc)
         if _refused is not None:
             raise _refused from exc
-        raise HTTPException(status_code=502, detail=_error_detail(exc))
+        # v1.354.0 (G28): the same 502 with the same `detail`, carrying the
+        # plain words (`title`, `fix`, `technical`) POST /chat answers beside
+        # it. MIRROR NOTE (lock-step): the stream lane's error frame carries
+        # the same keys from the same `error_payload`.
+        _payload = error_payload(d, body, exc)
+        raise ChatTurnFailed(
+            _payload["detail"],
+            {k: v for k, v in _payload.items() if k != "detail"},
+        ) from exc
     # LANGUAGE GUARD (v1.144.0) — runs BEFORE the ledger below so a corrective
     # completion is billed like any other. Operates on the MODEL's text, not on
     # the assembled reply: our own honesty notes are written in English by

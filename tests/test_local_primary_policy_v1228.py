@@ -176,8 +176,10 @@ async def test_local_primary_that_answered_an_error_refuses_by_name(status, expl
         await router.complete(system="", messages=_msgs(), tools=[], **kwargs)
     msg = str(ei.value)
     assert f"fleet-custom answered HTTP {status}" in msg
-    # v1.329.0 (calm chat J1): the dash aside became its own sentence.
-    assert "No substitute was used on purpose (local_primary_policy=refuse)" in msg
+    # v1.354.0 (G28): the policy in plain words, never its config key.
+    assert "Iron Jarvis won't switch to a different AI without asking." in msg
+    assert "You can allow that in Settings." in msg
+    assert "local_primary_policy" not in msg
     assert "rate limited" not in msg
     assert cloud.calls == 0, "the conversation left the machine"
     assert not bus.of(EventType.PROVIDER_FAILOVER)

@@ -256,8 +256,11 @@ async def test_router_refuses_a_signed_out_default_with_the_remedy(tmp_path, mon
             system="", messages=[LLMMessage(role="user", content="hi")], tools=[]
         )
     text = str(ei.value)
-    assert "installed but not signed in" in text
-    assert SIGN_IN_FIX["claude"] in text
+    # v1.354.0 (G28): the name the user knows and the Sign in button on
+    # Accounts, never the raw id or a terminal command.
+    assert text.startswith("Claude Code isn't signed in, so this turn was not answered.")
+    assert "Press Sign in beside Claude Code in Settings \u203a Connections, then retry." in text
+    assert "claude-cli" not in text and "/login" not in text and "terminal" not in text
     assert "isn't connected right now" not in text
 
 
@@ -279,8 +282,11 @@ async def test_router_names_the_cli_behind_a_keyless_inherited_provider(tmp_path
             system="", messages=[LLMMessage(role="user", content="hi")], tools=[]
         )
     text = str(ei.value)
-    assert "anthropic runs through claude-cli" in text
-    assert SIGN_IN_FIX["claude"] in text
+    # v1.354.0 (G28): both sides by the names the user knows them by.
+    assert text.startswith("Claude Code isn't signed in, so this turn was not answered.")
+    assert "Anthropic answers through your Claude Code sign-in." in text
+    assert "claude-cli" not in text and "anthropic runs" not in text
+    assert "Press Sign in beside Claude Code" in text
 
 
 # --- 5. surfaces: rescan + doctor -------------------------------------------------

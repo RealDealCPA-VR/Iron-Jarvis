@@ -260,7 +260,10 @@ async def test_a_failed_run_keeps_the_folder_note_under_the_failure(platform, tm
         await orch.run_session(s.id)
     row = _row(platform.engine, s.id)
     assert row.status is SessionStatus.FAILED
-    assert row.summary.startswith("Session failed: RuntimeError")
+    # v1.354.0 (G28): the summary says what happened in plain words; the
+    # exception class goes to the log, never to the person.
+    assert row.summary.startswith("The run failed: provider exploded")
+    assert "RuntimeError" not in row.summary
     assert row.summary.rstrip().endswith(s.summary)
 
 

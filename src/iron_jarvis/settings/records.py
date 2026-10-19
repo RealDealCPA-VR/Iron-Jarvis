@@ -213,7 +213,7 @@ def _record_tools_named(t: str) -> list[str]:
         out += ["workflow_update", "workflow_delete", "workflow_schedule"]
     if _CHANNEL_WORDS.search(t):
         out += ["channel_toggle", "channel_connect"]
-    if _APP_WORDS.search(t):
+    if _APP_WORDS.search(t) or _names_an_app(t):
         out += ["app_connect"]
     if _WEBHOOK_WORDS.search(t):
         out += ["webhook_update", "webhook_delete"]
@@ -228,6 +228,20 @@ def _record_tools_named(t: str) -> list[str]:
     if _UNDO_WORDS.search(t):
         out += ["config_undo"]
     return list(dict.fromkeys(out))
+
+
+def _names_an_app(t: str) -> bool:
+    """v1.354.0 (G39): does the message name a catalog app by the words a
+    person uses for it ("check my Gmail", "open my inbox", "my Dropbox")?
+    The ONE matcher (``connectors.app_names``, built from the catalog's own
+    names), not a second word list: ``_APP_WORDS`` keeps the connect verbs
+    and the names it always had. Never raises."""
+    try:
+        from ..connectors.app_names import apps_named
+
+        return bool(apps_named(t))
+    except Exception:  # noqa: BLE001 - a matcher fault arms nothing new
+        return False
 
 
 class RecordError(ValueError):
@@ -1410,6 +1424,21 @@ class ChannelConnectTool(_RecordTool):
 # --- apps
 
 
+def _oauth_client_ready(platform: Any, provider: str) -> bool:
+    """Could a sign-in for this OAuth app START right now (an OAuth client is
+    registered)? The connections registry's own row, the one the Directory
+    card reads (v1.353.0, G45). BLOCKING: callers hop off the loop. Unsure is
+    True, so nothing extra is said on a guess. Never raises (v1.354.0, G39)."""
+    try:
+        rows = platform.connections.status()
+        for r in rows or []:
+            if r.get("provider") == provider:
+                return bool(r.get("oauth_client_configured"))
+        return True
+    except Exception:  # noqa: BLE001 - unsure = say nothing extra
+        return True
+
+
 def _oauth_signed_in(platform: Any, provider: str) -> bool:
     """Is this OAuth app's account signed in? The connections registry's own
     row (the Directory card reads the same ``status()``). BLOCKING (database
@@ -1515,7 +1544,23 @@ class AppConnectTool(_RecordTool):
                     ),
                     data={"app": conn.id, "already_connected": True},
                 )
-            return ToolResult(ok=False, error=f"{conn.name} signs in through the browser — connect it from the Connections page.")
+            # v1.354.0 (G39, with G45's words): the one-time setup an app
+            # needs OUTSIDE Iron Jarvis is said BEFORE the user goes to
+            # connect it, while no OAuth client is registered.
+            from ..connectors.app_names import _needs_words
+
+            needs = ""
+            if conn.needs and not await asyncio.to_thread(
+                _oauth_client_ready, self.platform, conn.provider
+            ):
+                needs = _needs_words(conn.needs)
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"{conn.name} signs in through the browser — connect it from the"
+                    f" Connections page.{needs}"
+                ),
+            )
         if conn.connect_via == "api_key":
             req = {
                 "name": f"connection.{conn.provider}",
@@ -1618,9 +1663,20 @@ class AppConnectTool(_RecordTool):
         # stores it (credentials.CredentialStore); one with no token loads now.
         loaded = await asyncio.to_thread(apply_app, self.platform, conn.id, cfg, load=not requests)
         state = "waiting for its token" if requests else (f"{loaded} tools" if loaded else "saved — loads at the next start")
+        # v1.354.0 (G39, G45's words): an app that needs a one-time setup
+        # outside Iron Jarvis (Gmail's Google OAuth client) says so with the
+        # connect, so the model can tell the user why it may not start yet.
+        _needs = ""
+        if conn.needs and not loaded:
+            from ..connectors.app_names import APPS_PLACE, _needs_words
+
+            _needs = (
+                _needs_words(conn.needs).rstrip(".")
+                + f"; its card in {APPS_PLACE} shows how."
+            )
         return ToolResult(
             ok=True,
-            output=f"Connected {conn.name} ({state}). Never ask for a token in chat.",
+            output=f"Connected {conn.name} ({state}). Never ask for a token in chat.{_needs}",
             data={
                 "record_change": self._card(
                     "App connected", conn.name, "connected" if before else None, state, f"app.{conn.id}"

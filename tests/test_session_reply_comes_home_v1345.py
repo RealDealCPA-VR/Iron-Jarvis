@@ -385,7 +385,8 @@ async def test_the_failure_path_appends_the_failure_sentence(tmp_path):
     msgs = _row(p.engine, tid)["messages"]
     assert len(msgs) == 2
     line = msgs[-1]
-    assert line["content"] == row.summary == "Session failed: RuntimeError: the provider blew up"
+    # v1.354.0 (G28): plain words, never the exception class.
+    assert line["content"] == row.summary == "The run failed: the provider blew up"
     assert line["content"] == content_for_session(row)
     assert line["sessionId"] == s.id and line["panelWho"] == "builtin:builder"
     assert line["receipt"]["status"] == "failed"

@@ -1055,6 +1055,44 @@ _RECORD_NOUN = (
     r"jobs?|sessions?|nightly|weekly|daily|cron)\b"
 )
 
+#: The web-research rule's weights — one object, so the rule loop can tell
+#: the web rule by IDENTITY (v1.354.0, G39: :func:`_web_signal_is_an_app`).
+_WEB_WEIGHTS: dict[str, int] = {"web_search": 8, "web_fetch": 3}
+
+#: The web rule's words minus the bare search verbs ("search", "look up",
+#: "browse") and with "google" only as itself (never "Google Drive"/"Google
+#: Maps", which are apps). When a message names a catalog app, only one of
+#: these still makes it a web search (v1.354.0, G39).
+_STRONG_WEB_RX = re.compile(
+    r"\b(?:google|research|online|internet|web(?:sites?)?|latest|news|headlines?|"
+    r"up.to.date|weather|price of|stock|release date|who won|trending)\b",
+    re.IGNORECASE,
+)
+
+
+def _web_signal_is_an_app(msg: str) -> bool:
+    """True when the web rule fired ONLY because of a catalog app's name
+    (v1.354.0, G39): "search my Google Drive for the lease" is a search IN
+    Drive, not a web search — its "search" is aimed at the app and its
+    "Google" is part of the app's name. With the app's words blanked out and
+    the bare search verbs set aside, no web word is left. "search the web
+    and my Notion" keeps "web"; "the latest news on GitHub" keeps "latest".
+    Never raises (a fault keeps today's behaviour: the rule fires)."""
+    try:
+        from ..connectors.app_names import app_name_spans
+
+        spans = app_name_spans(msg)
+        if not spans:
+            return False
+        chars = list(msg)
+        for start, end in spans:
+            for i in range(start, min(end, len(chars))):
+                chars[i] = " "
+        return _STRONG_WEB_RX.search("".join(chars)) is None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # Signal rules: (regex, {tool: weight}). Scores accumulate across rules; the
 # highest-scoring tools fill the free slots. Weights are relative only.
 _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
@@ -1072,7 +1110,7 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             r"release date|who won|trending)\b",
             re.IGNORECASE,
         ),
-        {"web_search": 8, "web_fetch": 3},
+        _WEB_WEIGHTS,
     ),
     # --- working with existing files / folders ---------------------------
     (
@@ -2692,6 +2730,10 @@ def select_auto_tools(
     cutbox = [-1]
     for (rx, weights), gates in zip(_RULES, _RULE_POS_GROUPS):
         if _rule_fires(rx, gates, msg, cutbox):
+            # v1.354.0 (G39): the web rule stays quiet when its only signal
+            # is a catalog app's name (the app is searched, not the web).
+            if weights is _WEB_WEIGHTS and _web_signal_is_an_app(msg):
+                continue
             bump(weights)
     cut = cutbox[0]
     if _URL_RX.search(msg):
