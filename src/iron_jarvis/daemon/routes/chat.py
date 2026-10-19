@@ -46,7 +46,13 @@ from ...eval.pricing import UsageTally
 from ...providers import egress as _egress
 from ...providers.reasoning import normalize_level
 from ...providers.failure_words import is_generic_title as _is_generic_title
-from ..doors import collect_doors, door_for, failure_door_for
+from ..doors import (
+    collect_doors,
+    door_for,
+    failure_door_for,
+    offered_app,
+    with_connect_door,
+)
 
 # The chat TURN lives in daemon/chat_turn.py (v1.136.0 messaging surfaces):
 # POST /chat is a thin wrapper over run_chat_turn so headless callers (the
@@ -3895,6 +3901,10 @@ async def chat_stream(
         # mint one. MIRROR NOTE (lock-step): chat_turn.py's tool loop
         # carries the same collection — edit both or neither.
         door_entries: list[dict[str, str] | None] = []
+        # v1.359.0 (G41): the apps app_connect put its own card or answer up
+        # for this turn — the message's Connect door leaves them out. MIRROR
+        # NOTE (lock-step): chat_turn.py keeps the same list.
+        connect_offered: list[str] = []
         last_tool_output = ""               # last SUCCESSFUL output (synthesis)
         stopped_note = ""                   # round budget cut off tool calls
         escalate = False        # the turn asked for the full agent
@@ -4820,6 +4830,12 @@ async def chat_stream(
                                 # made. MIRROR NOTE (lock-step): chat_turn.py's
                                 # tool loop carries the same append.
                                 door_entries.append(failure_door_for(tc.name, tc.arguments, result))
+                        if ran or _plans[_i]["carded"]:
+                            # v1.359.0 (G41): app_connect answered for its app,
+                            # or put its card up (whatever the answer). MIRROR
+                            # NOTE (lock-step): chat_turn.py notes a call that
+                            # ran (that lane never cards).
+                            connect_offered.append(offered_app(tc.name, tc.arguments))
                         if ran:
                             tools_used.append(tc.name)
                             # DOOR (v1.199.0): a successful creating tool
@@ -5220,6 +5236,13 @@ async def chat_stream(
         suggestion = (
             await _prefs.suggest_for_turn(platform, body) if suggest_preferences else None
         )
+        # CONNECT DOOR (v1.359.0, G41): an app the message named for the
+        # user's own data that is not connected gets its Connect door
+        # whatever the model called — unless app_connect already put its own
+        # card or answer up for it. Low trust and local only too (a door only
+        # links). MIRROR NOTE (lock-step): chat_turn.run_chat_turn does the
+        # same before its response.
+        door_entries = with_connect_door(door_entries, _grounding.apps_offer, connect_offered)
         done_frame: dict[str, Any] = {
             "reply": reply,
             "provider": route_provider,

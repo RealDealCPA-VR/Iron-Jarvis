@@ -72,7 +72,13 @@ from ..core.trust import (
     normalize_trust,
     taint_reason,
 )
-from .doors import collect_doors, door_for, failure_door_for
+from .doors import (
+    collect_doors,
+    door_for,
+    failure_door_for,
+    offered_app,
+    with_connect_door,
+)
 from .mcp_turn import read_turn_resources as _read_turn_resources
 from .chat_refs import read_thread_refs as _read_thread_refs
 
@@ -5963,7 +5969,7 @@ class _Grounding:
     __slots__ = (
         "project", "folder_rules", "folder_rules_used", "lessons", "index",
         "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
-        "text_only", "apps", "apps_named", "apps_live", "apps_on",
+        "text_only", "apps", "apps_named", "apps_live", "apps_on", "apps_offer",
     )
 
     def __init__(self) -> None:
@@ -5996,6 +6002,12 @@ class _Grounding:
         #: "search GitHub for …" over from the web (research about an app,
         #: "look up the Stripe API docs", always keeps the web).
         self.apps_on: list[str] = []
+        #: v1.359.0 (G41): the named apps that are NOT connected, named for
+        #: the user's own data in them (``app_names.connect_offers``,
+        #: ``[{id, name}]``) — both lanes put their Connect door under the
+        #: reply (``doors.with_connect_door``) whatever the model calls.
+        #: Never part of the prompt.
+        self.apps_offer: list[dict[str, str]] = []
 
     def before_attachments(self) -> str:
         # The folder's own instructions ride RIGHT AFTER the project block they
@@ -6093,6 +6105,7 @@ async def _gather_grounding(
     # nothing is named. Never raises.
     _apps_named: list[str] = []
     _clis_named: list[str] = []
+    _last_text = ""
     try:
         from ..connectors.app_names import apps_named, clis_named, live_tools
 
@@ -6240,19 +6253,26 @@ async def _gather_grounding(
         # SAVED WORKFLOWS (v1.170.0): bounded; never raises.
         return _saved_workflows_block(platform)
 
-    def _apps() -> "tuple[str, list[str]]":
+    def _apps() -> "tuple[str, list[str], list[dict[str, str]]]":
         # APPS NAMED IN THE MESSAGE (v1.354.0, G39): connected (N tools) or
         # not, and Claude Code / Codex sign-in from the CACHED verdict (no
         # probe). Blocking reads, so off the loop; never raises. v1.358.0:
         # the connected ones ride back too (the web rule's ``apps_on``).
+        # v1.359.0 (G41): and the not-connected ones named for the user's
+        # own data — their Connect door rides the reply (``apps_offer``).
         try:
-            from ..connectors.app_names import app_states, apps_section, connected_ids
+            from ..connectors.app_names import (
+                app_states,
+                apps_section,
+                connect_offers,
+                connected_ids,
+            )
 
             rows = app_states(platform, _apps_named, out.apps_live, _clis_named)
-            return apps_section(rows), connected_ids(rows)
+            return apps_section(rows), connected_ids(rows), connect_offers(_last_text, rows)
         except Exception:  # noqa: BLE001 — knowing the apps never breaks a turn
             log.debug("the named-apps section failed", exc_info=True)
-            return "", []
+            return "", [], []
 
     _proj_root = (
         str(getattr(resolved_proj, "root", "") or "").strip()
@@ -6322,7 +6342,7 @@ async def _gather_grounding(
     out.conn_tools, out.connector = got["connector"]
     out.roster = got["roster"]
     out.workflows = got["workflows"]
-    out.apps, out.apps_on = got.get("apps", ("", []))
+    out.apps, out.apps_on, out.apps_offer = got.get("apps", ("", [], []))
     return out
 
 
@@ -7016,6 +7036,9 @@ async def run_chat_turn(
     # (lock-step): routes/chat.py's stream loop carries the same collection —
     # edit both or neither.
     door_entries: list[dict[str, str] | None] = []
+    # v1.359.0 (G41): the apps app_connect answered for this turn (it ran) —
+    # the message's Connect door leaves them out. MIRROR NOTE (lock-step).
+    connect_offered: list[str] = []
     if armed:
         from ..tools.base import ToolContext
 
@@ -7527,6 +7550,9 @@ async def run_chat_turn(
                         # stream loop carries the same append — edit both or
                         # neither.
                         door_entries.append(door_for(tc.name, result))
+                        # v1.359.0 (G41): app_connect answered for its app
+                        # (this lane never cards). MIRROR NOTE (lock-step).
+                        connect_offered.append(offered_app(tc.name, tc.arguments))
                         # REMEMBERED (v1.282.0): the sentence a preference call
                         # kept, for the receipt — same gate as tools_used.
                         # MIRROR NOTE (lock-step): routes/chat.py carries the
@@ -7780,6 +7806,12 @@ async def run_chat_turn(
     suggestion = (
         await _prefs.suggest_for_turn(platform, body) if suggest_preferences else None
     )
+    # CONNECT DOOR (v1.359.0, G41): an app the message named for the user's
+    # own data that is not connected gets its Connect door whatever the model
+    # called — unless app_connect already put its own answer up for it. Low
+    # trust and local only too (a door only links). MIRROR NOTE (lock-step):
+    # routes/chat.py does the same before its done frame.
+    door_entries = with_connect_door(door_entries, _grounding.apps_offer, connect_offered)
     out: dict[str, Any] = {
         "reply": reply,
         "provider": route.provider,

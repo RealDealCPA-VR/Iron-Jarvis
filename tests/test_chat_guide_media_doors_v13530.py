@@ -601,7 +601,16 @@ def test_a_refusal_the_registry_made_leaves_no_button_post_lane(app):
     # v1.358.0 (G41, on purpose): the built-in reads in tool words, not its id.
     # v1.358.0 (integrate, on purpose): app_connect has the card's words now.
     assert "Jarvis couldn't connect an app (not turned on for this chat)" in res["reply"], res["reply"]
-    assert res["doors"] == []
+    # v1.359.0 (G41, on purpose): the refusal mints no door of its own; the
+    # one door is the MESSAGE's (Drive named, not connected) — the button the
+    # user would otherwise only get when the model's app_connect could run.
+    assert res["doors"] == [DRIVE_DOOR]
+    # ...and a refusal under a message that names no app leaves no button.
+    platform.router = _PostModel([[ToolCall(id="c1", name="app_connect", arguments={"app": "google_drive"})], []])
+    body2 = ChatBody(messages=[{"role": "user", "content": "What can you do?"}], tools=["read_file"])
+    res2 = asyncio.run(run_chat_turn(platform, {}, body2))
+    assert "app_connect" not in platform.router.tools[0], "anti-vacuity: app_connect was not armed"
+    assert res2["doors"] == []
 
 
 def test_connect_my_google_drive_leaves_the_button_in_the_post_lane(app):

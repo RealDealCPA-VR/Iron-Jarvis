@@ -1,0 +1,13 @@
+{
+  "_comment": "v1.359.0 lane 9C: what the REAL daemon sends when the user names an app that is not connected and the model never calls app_connect. Written by tests/test_connect_door_v13590.py (IJ_REGEN_CONNECT_DOOR=1); read by dashboard/__tests__/connect-door-v13590.test.tsx.",
+  "stream_done": {
+    "doors": [
+      {
+        "href": "/settings?section=connections-apps",
+        "label": "Connect Google Drive in Settings"
+      }
+    ],
+    "reply": "I can't see your Drive yet.",
+    "tools_used": []
+  }
+}

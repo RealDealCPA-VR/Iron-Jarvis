@@ -14,7 +14,11 @@ ONE matcher, built from the catalog itself (:data:`connectors.catalog.CATALOG`
 * the stream lane (``routes/chat.py``) — a named app that IS connected with
   tools loaded has its tools ask-armed (visible, never granted);
 * ``tools.autoselect`` — the web rule does not fire when the only web signal
-  is a catalog app's name ("search my Google Drive" is not a web search).
+  is a catalog app's name ("search my Google Drive" is not a web search);
+* both chat lanes' doors (v1.359.0, G41) — a named app that is NOT connected,
+  named for the user's own data in it rather than in research about it
+  (:func:`connect_offers`), puts its Connect door under the reply whether or
+  not the model called ``app_connect`` (``daemon.doors.with_connect_door``).
 
 Rules that keep it honest:
 
@@ -219,6 +223,169 @@ def clis_named(text: str) -> list[str]:
 def wants_connect(text: str) -> bool:
     """Does *text* ask to connect / fix an app's sign-in (not just use it)?"""
     return bool(CONNECT_INTENT.search(str(text or "")[:_MAX_TEXT]))
+
+
+# --------------------------------------------------------------------------- #
+# v1.359.0 (G41): the Connect door, without the model.
+# --------------------------------------------------------------------------- #
+#: How far back from an app's name its clause is read (the words that say
+#: whether the message is about the user's own data in it or about the app).
+_CLAUSE_REACH = 80
+#: A connect / set-up verb in the app's clause ("how do I connect Dropbox").
+_CONNECT_VERB_RX = re.compile(rf"\b{CONNECT_VERB}\b", re.IGNORECASE)
+#: A how-to question about the app ("how to share a folder in my Drive").
+_HOW_TO_RX = re.compile(r"\bhow\s+(?:to|do|does|can|should|would)\b", re.IGNORECASE)
+#: "What is <app>?" — the app itself, right after the question words (never
+#: "what is in my Dropbox", which asks about the user's own files).
+_WHAT_IS_RX = re.compile(
+    r"\bwhat(?:\s+(?:is|are|does|do)|['’]s)\s+(?:the\s+|an?\s+)?\Z", re.IGNORECASE
+)
+#: Research words right before the app ("news about GitHub", "reviews of
+#: Notion", "alternatives to Slack", "apps like Notion", "cheaper than Box").
+_RESEARCH_BEFORE_RX = re.compile(
+    r"(?:\babout"
+    r"|\b(?:reviews?|alternatives?|competitors?|history|pricing|prices?|costs?|docs"
+    r"|documentation|features?|tutorials?|guides?|news)\s+(?:of|for|to|on|about)"
+    r"|\b(?:vs\.?|versus|than|compared\s+(?:to|with)|instead\s+of|like|similar\s+to))"
+    r"\s+(?:the\s+)?\Z",
+    re.IGNORECASE,
+)
+#: A comparison anywhere in the app's sentence ("is Dropbox better than
+#: Google Drive?", "compare Notion and Evernote") — research about the apps.
+_COMPARE_RX = re.compile(
+    r"\b(?:better|worse|cheaper|pricier|faster|slower|safer|easier|harder)\s+than\b"
+    r"|\bcompar(?:e|ed|es|ing|ison)\b|\bvs\.?(?!\w)|\bversus\b|\bpros\s+and\s+cons\b",
+    re.IGNORECASE,
+)
+_SENTENCE_BREAK_RX = re.compile(r"[.!?\n]")
+#: A web search said in so many words, read with the apps' own names blanked
+#: (so "Google" in "Google Drive" never counts): "search online for …",
+#: "google stripe fees", a message that opens with "research …".
+_WEB_SEARCH_RX = re.compile(
+    r"\bgoogle\b|\bonline\b|\binternet\b|\bweb\s+search\b"
+    r"|\bthe\s+web\b(?!\s*(?:pages?|sites?|apps?|address(?:es)?|links?)\b)"
+    r"|(?:\A|[.!?\n]\s*)research\b",
+    re.IGNORECASE,
+)
+
+
+def _clause_before(t: str, start: int) -> str:
+    """The words before ``t[start]`` back to the last clause break (the
+    autoselect web rule's own break: punctuation, "and", "then", …)."""
+    from ..tools.autoselect import _CLAUSE_BREAK_RX
+
+    head = t[max(0, start - _CLAUSE_REACH):start]
+    last = None
+    for last in _CLAUSE_BREAK_RX.finditer(head):
+        pass
+    return head[last.end():] if last is not None else head
+
+
+def _for_own_data(t: str, start: int, end: int, blanked: str) -> bool:
+    """Is the app named at ``t[start:end]`` named for the user's OWN data in
+    it (or to connect it), rather than in research ABOUT it? The web rule's
+    own reading (``tools.autoselect._searches_in_the_app``, v1.358.0 — its
+    possessive, own-word and public-things regexes, imported, never copied),
+    widened from "a search verb aimed into the app" to any message:
+
+    * a connect / set-up verb before it (or in a generic app's own match) →
+      own (the user wants it connected);
+    * a how-to question, or "what is <app>" → research;
+    * "my <app>", "our <app>", or an app word that is the user's own ("my
+      inbox", "my calendar") → own;
+    * the app's public things after its name ("the Stripe API docs", "Notion
+      templates", "the Dropbox desktop app"), research words before it
+      ("reviews of Notion", "alternatives to Slack", "news about GitHub") or
+      a comparison in its sentence ("stripe vs square", "is Dropbox better
+      than Google Drive?") → research;
+    * a web search said in so many words ("search online for …") → research;
+    * anything else ("find my tax files in Google Drive", "post it to Slack",
+      "search github for issues about login") → own: with the app not
+      connected, the web cannot reach what is in it. Pure."""
+    from ..tools.autoselect import (
+        _OWN_APP_WORDS_RX,
+        _OWN_BEFORE_APP_RX,
+        _RESEARCH_AFTER_APP_RX,
+    )
+
+    hit = t[start:end]
+    clause = _clause_before(t, start)
+    if _CONNECT_VERB_RX.match(hit.lstrip()) or _CONNECT_VERB_RX.search(clause):
+        return True
+    if _HOW_TO_RX.search(clause) or _WHAT_IS_RX.search(clause):
+        return False
+    if _OWN_APP_WORDS_RX.match(hit) or _OWN_BEFORE_APP_RX.search(clause):
+        return True
+    if _RESEARCH_AFTER_APP_RX.match(t[end:end + 120]) is not None:
+        return False
+    if _RESEARCH_BEFORE_RX.search(clause):
+        return False
+    if _COMPARE_RX.search(_sentence_of(t, start, end)):
+        return False
+    return _WEB_SEARCH_RX.search(blanked) is None
+
+
+def _sentence_of(t: str, start: int, end: int) -> str:
+    """The sentence ``t[start:end]`` sits in (bounded to 200 characters each
+    way)."""
+    head = t[max(0, start - 200):start]
+    last = None
+    for last in _SENTENCE_BREAK_RX.finditer(head):
+        pass
+    tail = t[end:end + 200]
+    stop = _SENTENCE_BREAK_RX.search(tail)
+    return (head[last.end():] if last is not None else head) + t[start:end] + (
+        tail[: stop.start()] if stop is not None else tail
+    )
+
+
+def own_data_apps(text: str) -> list[str]:
+    """The catalog ids *text* names for the user's own data in them (or to
+    connect them), in catalog order — research about an app is left out
+    (:func:`_for_own_data`). The same matcher as :func:`apps_named`. Never
+    raises; a fault names nothing."""
+    t = str(text or "")[:_MAX_TEXT]
+    try:
+        hits = app_name_hits(t)
+        if not hits:
+            return []
+        chars = list(t)
+        for _cid, start, end in hits:
+            for i in range(start, min(end, len(chars))):
+                chars[i] = " "
+        blanked = "".join(chars)
+        out: list[str] = []
+        for cid, start, end in hits:
+            if cid not in out and _for_own_data(t, start, end, blanked):
+                out.append(cid)
+        return out
+    except Exception:  # noqa: BLE001 — no door beats a broken turn
+        return []
+
+
+def connect_offers(text: str, rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """The apps whose Connect door the reply carries, whatever the model does
+    (v1.359.0, G41): ``[{id, name}]`` for each row :func:`app_states` read as
+    ``not_connected`` that *text* names for the user's own data in it (or to
+    connect it) — never one named only in research about it
+    (:func:`own_data_apps`). An app that is saved but off, not working or not
+    signed in yet is not "not connected": its card says what to do. Rows
+    order (catalog order). Never raises."""
+    try:
+        cands = [
+            r for r in rows or []
+            if isinstance(r, dict) and r.get("state") == "not_connected"
+            and r.get("id") and r.get("id") not in CLI_WORDS
+        ]
+        if not cands:
+            return []
+        own = set(own_data_apps(text))
+        return [
+            {"id": str(r["id"]), "name": str(r.get("name") or r["id"])}
+            for r in cands if r["id"] in own
+        ]
+    except Exception:  # noqa: BLE001
+        return []
 
 
 # --------------------------------------------------------------------------- #

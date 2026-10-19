@@ -31,10 +31,18 @@ a call that failed because something is not set up (an unpaired browser, an
 app that signs in through the browser) leaves a door to the fix —
 :func:`failure_door_for`, called at each lane's failed-tool site for a call
 the registry did not refuse, into the same ``doors`` list.
+
+THE CONNECT DOOR WITHOUT THE MODEL (v1.359.0, G41): naming an app that is
+not connected — for the user's own data in it, never in research about it
+(``connectors.app_names.connect_offers``) — puts that app's Connect door
+under the reply whether or not the model called ``app_connect``
+(:func:`with_connect_door`; the same Directory door and words, one door for
+every app named, each app once).
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 #: Hard cap on doors per turn — past this the reply reads as a link farm.
@@ -216,10 +224,7 @@ def failure_door_for(tool_name: str, args: Any, result: Any) -> dict[str, str] |
             app = str(args.get("app") or "").strip().lower() if isinstance(args, dict) else ""
             conn = get_connector(app) if app else None
             if conn is not None and getattr(conn, "connect_via", "") == "oauth":
-                return {
-                    "href": _APPS_FIX_HREF,
-                    "label": f"Connect {_clean_name(conn.name)} in Settings",
-                }
+                return {"href": _APPS_FIX_HREF, "label": connect_label([conn.name])}
             # v1.353.0 integrate: the browser ("puppeteer" until G43) is set up
             # on the Browser page -- the SAME button a browser refusal leaves.
             if conn is None and app and get_link_card(app) is not None:
@@ -227,6 +232,115 @@ def failure_door_for(tool_name: str, args: Any, result: Any) -> dict[str, str] |
         return None
     except Exception:  # noqa: BLE001 — no door beats no reply
         return None
+
+
+#: v1.359.0 (G41): the most apps one Connect door names before "and N more".
+_CONNECT_NAMES_MAX = 3
+#: The words of a Directory door this module made (:func:`connect_label`) —
+#: read back only by :func:`with_connect_door`, so the words and their reader
+#: live side by side.
+_CONNECT_LABEL_RX = re.compile(r"\AConnect (.+) in Settings\Z")
+
+
+def connect_label(names: Any) -> str:
+    """The Directory door's words for the apps *names* (v1.359.0, G41): one
+    app reads "Connect Google Drive in Settings" (the words this door has had
+    since v1.353.0), two "Connect Dropbox and Google Drive in Settings",
+    more than three "Connect A, B and 2 more apps in Settings". Names are
+    the CATALOG's (never the model's text), flattened and clipped."""
+    ns = [n for n in (_clean_name(x) for x in (names or [])) if n]
+    if not ns:
+        return "Connect your apps in Settings"
+    if len(ns) > _CONNECT_NAMES_MAX:
+        ns = ns[: _CONNECT_NAMES_MAX - 1] + [f"{len(ns) - (_CONNECT_NAMES_MAX - 1)} more apps"]
+    words = ns[0] if len(ns) == 1 else ", ".join(ns[:-1]) + " and " + ns[-1]
+    return f"Connect {words} in Settings"
+
+
+def offered_app(tool_name: str, args: Any) -> str:
+    """The catalog id an ``app_connect`` call named, or ``""`` for any other
+    call (v1.359.0, G41). Both chat lanes note it for a call that put
+    app_connect's OWN card or answer in front of the user (it ran, or — the
+    stream lane — it carded, whatever the answer), so the message's Connect
+    door leaves that app out (:func:`with_connect_door`). A call the
+    registry refused before anyone saw it (not armed, low trust) is not
+    noted: the door is how that user still gets to connect. The id is
+    normalised the matcher's way ("Google Drive" → ``google_drive``).
+    Never raises."""
+    try:
+        if str(tool_name or "") != "app_connect" or not isinstance(args, dict):
+            return ""
+        from ..connectors.catalog import get_connector
+
+        raw = str(args.get("app") or "").strip().lower()
+        if not raw:
+            return ""
+        for cand in (raw, re.sub(r"[\s-]+", "_", raw)):
+            conn = get_connector(cand)
+            if conn is not None:
+                return str(conn.id)
+        from ..connectors.app_names import apps_named
+
+        named = apps_named(raw)
+        return named[0] if named else ""
+    except Exception:  # noqa: BLE001 — no door beats no reply
+        return ""
+
+
+def with_connect_door(entries: Any, offers: Any, offered: Any = ()) -> list[Any]:
+    """The turn's door entries with the CONNECT DOOR for the apps the user's
+    message named and that are not connected (v1.359.0, G41 — the door no
+    longer waits for the model to call ``app_connect``).
+
+    *offers* is ``connectors.app_names.connect_offers`` (``[{id, name}]``,
+    read when the message arrived; research about an app is never one);
+    *offered* the app ids :func:`offered_app` noted this turn — an app
+    app_connect already put its own card or answer up for gets no second
+    offer. ONE DOOR, ONE ADDRESS: every app is connected on the Directory
+    (``_APPS_FIX_HREF``, the address :func:`failure_door_for` already uses),
+    so the apps share one door — a fix door app_connect left for an OAuth
+    app is widened to name the others too ("Connect Dropbox and Google Drive
+    in Settings"), never a second link to the same place, and each app is
+    named once. The door is kept even past :data:`MAX_DOORS` (it takes the
+    last place). Both chat lanes call this right before their done frame /
+    response, then :func:`collect_doors` as before — MIRROR NOTE
+    (lock-step). Never raises (the entries come back unchanged)."""
+    base = list(entries or [])
+    try:
+        skip = {str(a) for a in (offered or ()) if a}
+        names: list[str] = []
+        for row in offers or []:
+            if not isinstance(row, dict):
+                continue
+            cid = str(row.get("id") or "")
+            name = _clean_name(row.get("name") or "")
+            if cid and name and cid not in skip and name not in names:
+                names.append(name)
+        if not names:
+            return base
+        out: list[Any] = []
+        at: "int | None" = None
+        shown: list[str] = []
+        for e in base:
+            if isinstance(e, dict) and e.get("href") == _APPS_FIX_HREF:
+                m = _CONNECT_LABEL_RX.match(str(e.get("label") or ""))
+                if m and m.group(1) not in shown:
+                    shown.append(m.group(1))
+                if at is None:
+                    at = len(out)
+                    out.append(e)
+                continue
+            out.append(e)
+        door = {"href": _APPS_FIX_HREF, "label": connect_label(shown + [n for n in names if n not in shown])}
+        if at is not None:
+            out[at] = door
+            return out
+        kept = collect_doors(out)
+        if len(kept) >= MAX_DOORS:
+            return kept[: MAX_DOORS - 1] + [door]
+        return out + [door]
+    except Exception:  # noqa: BLE001 — no door beats no reply
+        return base
 
 
 def collect_doors(entries: Any) -> list[dict[str, str]]:

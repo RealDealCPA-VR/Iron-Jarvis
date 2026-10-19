@@ -276,7 +276,17 @@ def test_a_deny_rule_still_refuses_app_connect_for_drive(app):
     frames = _stream(app, _body("connect my Google Drive"))
     finished = [d for ev, d in frames if ev == "tool_call" and d.get("status") == "finished"]
     assert not any(d.get("ok") for d in finished)
-    assert _done(frames)["doors"] == []
+    # v1.359.0 (G41, on purpose): the refused call still mints NO door of its
+    # own; the one door is the MESSAGE's — naming Drive, not connected, offers
+    # its Connect door whatever the model called (a door only links; the deny
+    # rule is about the chat tool, never about the Directory).
+    assert _done(frames)["doors"] == [
+        {"href": "/settings?section=connections-apps", "label": "Connect Google Drive in Settings"}
+    ]
+    model2 = _StreamModel([[ToolCall(id="c1", name="app_connect", arguments={"app": "google_drive"})], []])
+    platform.router.stream = model2
+    frames2 = _stream(app, _body("What can you do?"))
+    assert _done(frames2)["doors"] == [], "a refusal the rules made still leaves no button"
 
 
 # =========================================================================== #
