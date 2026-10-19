@@ -1002,8 +1002,11 @@ function ConnectionCard({
             </div>
             {/* v1.314.0 (UX wave 2): an inherited login has no key, so no
                 "API key" method chip; where the login lives is its own line
-                (it was squeezed into this row and stacked into a column). */}
-            {inheritedVia(conn) ? (
+                (it was squeezed into this row and stacked into a column).
+                v1.354.0 (G47 review): nor does a keyless server of the
+                user's own: an "API key" chip beside "no key needed" said
+                two opposite things on one card. */}
+            {inheritedVia(conn) || ownEndpoint ? (
               conn.account ? (
                 <div className="text-[11px] text-zinc-600">{conn.account}</div>
               ) : null

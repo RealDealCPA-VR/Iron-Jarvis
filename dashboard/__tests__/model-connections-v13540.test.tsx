@@ -222,6 +222,8 @@ describe("G47: the model-server card matches what answers", () => {
     expect(pill.getAttribute("title")).toBe(ENDPOINT_SOURCE);
     // The daemon's name for the slot stays reachable as the title's tooltip.
     expect(within(c).getByText(MODEL_SERVERS_TITLE).getAttribute("title")).toBe("Custom endpoint");
+    // No "API key" method chip beside "no key needed" (the inherited rule).
+    expect(within(c).queryByTestId("conn-card-auth")).toBeNull();
     // The connection IS the endpoint list: it stays, with its add door.
     expect(await within(c).findByTestId("endpoint-row")).toBeInTheDocument();
     expect(within(c).getByRole("button", { name: /Add another endpoint/ })).toBeInTheDocument();
@@ -243,11 +245,13 @@ describe("G47: the model-server card matches what answers", () => {
     seed(customRow());
     let c = await card();
     expect(within(c).getByTestId("conn-status-pill").textContent).toMatch(/^Not connected$/);
+    expect(within(c).getByTestId("conn-card-auth").textContent).toMatch(/API key/);
     cleanup();
 
     seed(customRow({ connected: true, status: "connected", source: "vault" }));
     c = await card();
     expect(within(c).getByTestId("conn-status-pill").textContent).toMatch(/^Connected$/);
+    expect(within(c).getByTestId("conn-card-auth").textContent).toMatch(/API key/);
     expect(within(c).getByRole("button", { name: /Test/ })).toBeInTheDocument();
     expect(within(c).getByText("Disconnect")).toBeInTheDocument();
   });
