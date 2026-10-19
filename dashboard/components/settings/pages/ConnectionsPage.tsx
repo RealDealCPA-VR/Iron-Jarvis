@@ -1177,14 +1177,16 @@ function ConnectionCard({
           </span>
           <div className="min-w-0">
             {/* v1.314.0: the scripted model is never named "Mock" to a user
-                (lib/onboarding providerDisplay); the daemon's name stays in
-                the title. */}
+                (lib/onboarding providerDisplay). v1.357.0 (G76): nor in the
+                title: the daemon's old name for that row ("Mock (offline)")
+                is a retired word, so the demo row carries no title; its
+                heading and the line under it already say what it is. */}
             {/* v1.354.0 (G47): the custom slot's card is "Model servers on
                 your network" (lib/modelServers); the daemon's name rides the
-                title like the mock's. */}
+                title. */}
             <div
               className="text-sm font-semibold text-zinc-100"
-              title={isMock || connectionTitle(conn) !== conn.display_name ? conn.display_name : undefined}
+              title={!isMock && connectionTitle(conn) !== conn.display_name ? conn.display_name : undefined}
             >
               {isMock ? providerDisplay("mock") : connectionTitle(conn)}
             </div>
