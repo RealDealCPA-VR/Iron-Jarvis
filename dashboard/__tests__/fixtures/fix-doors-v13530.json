@@ -1,0 +1,15 @@
+{
+  "_comment": "v1.353.0 lane 3B: the doors the REAL daemon sends for a refusal whose fix is a press. Written by tests/test_chat_guide_media_doors_v13530.py (IJ_REGEN_FIX_DOORS=1); read by dashboard/__tests__/fix-doors-v13530.test.tsx.",
+  "google_drive": [
+    {
+      "href": "/settings?section=connections-apps",
+      "label": "Connect Google Drive in Settings"
+    }
+  ],
+  "unpaired_browser": [
+    {
+      "href": "/computeruse",
+      "label": "Pair your browser"
+    }
+  ]
+}

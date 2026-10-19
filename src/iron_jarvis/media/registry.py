@@ -19,11 +19,17 @@ from typing import Any
 
 from .base import MediaError, MediaProvider
 
-#: What the user can connect, in the words the refusal uses.
+#: Where a key is added, as the Settings page names it.
+ACCOUNTS_AND_KEYS = "Settings › Connections › Accounts & keys"
+
+#: What the user can connect, in the words the refusal uses (v1.353.0, G40:
+#: the place a person goes — never a vault name or an environment variable;
+#: the PIXIO_API_KEY / OPENAI_API_KEY fallbacks still work, they are simply
+#: not what a new user is told to do).
 CONNECT_HINTS: dict[str, str] = {
-    "pixio": "add a Pixio key as the secret 'pixio' (Settings → Connections) or set PIXIO_API_KEY",
-    "openai_images": "add an OpenAI API key under Settings → Connections",
-    "fake": "set IRONJARVIS_MEDIA_FAKE=1 before starting the daemon",
+    "pixio": f"add your Pixio key in {ACCOUNTS_AND_KEYS}",
+    "openai_images": f"add your OpenAI API key in {ACCOUNTS_AND_KEYS}",
+    "fake": "the test media service is off on this install",
 }
 
 
@@ -72,7 +78,7 @@ class MediaRegistry:
                     f"'{wanted}' (from {source}) is not a media service I know — the known ones are: {known}",
                 )
             if not provider.available():
-                hint = CONNECT_HINTS.get(provider.id, "connect it under Settings → Connections")
+                hint = CONNECT_HINTS.get(provider.id, f"connect it in {ACCOUNTS_AND_KEYS}")
                 raise MediaError(
                     "not_configured", f"{provider.label} is not connected — {hint}"
                 )
@@ -82,13 +88,13 @@ class MediaRegistry:
             return ready[0]
         if not ready:
             hints = "; ".join(
-                f"{p.label}: {CONNECT_HINTS.get(p.id, 'connect it under Settings → Connections')}"
+                f"{p.label}: {CONNECT_HINTS.get(p.id, f'connect it in {ACCOUNTS_AND_KEYS}')}"
                 for p in self._providers
                 if p.id != "fake"
             )
             raise MediaError(
                 "not_configured",
-                "No media service is connected. " + (hints or "Connect one under Settings → Connections") + ".",
+                "No media service is connected. " + (hints or f"Connect one in {ACCOUNTS_AND_KEYS}") + ".",
             )
         names = ", ".join(p.id for p in ready)
         raise MediaError(

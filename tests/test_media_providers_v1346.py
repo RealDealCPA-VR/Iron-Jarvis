@@ -542,12 +542,19 @@ def test_registry_refusals_name_the_known_services_and_what_to_connect():
     assert exc.value.code == "unknown_provider" and "pixio" in exc.value.words and "openai_images" in exc.value.words
     with pytest.raises(MediaError) as exc:
         MediaRegistry([pixio_off, oai_off], config=_cfg()).choose("pixio")
-    assert exc.value.code == "not_configured" and "secret 'pixio'" in exc.value.words
+    # v1.353.0 (G40): the place a person goes, never a vault name or an
+    # environment variable (changed on purpose; tests/test_chat_guide_media_doors_v13530.py).
+    assert exc.value.code == "not_configured"
+    assert "Settings › Connections › Accounts & keys" in exc.value.words
+    assert "secret 'pixio'" not in exc.value.words and "PIXIO_API_KEY" not in exc.value.words
     with pytest.raises(MediaError) as exc:
         MediaRegistry([pixio_off, oai_off], config=_cfg()).choose()
     assert exc.value.code == "not_configured"
     assert "No media service is connected" in exc.value.words
-    assert "pixio" in exc.value.words and "OpenAI" in exc.value.words
+    # v1.353.0 (G40): each service is named by its label ("Pixio", "OpenAI"),
+    # no longer by the vault name the old hint carried ("secret 'pixio'").
+    assert "Pixio" in exc.value.words and "OpenAI" in exc.value.words
+    assert "secret '" not in exc.value.words
     with pytest.raises(MediaError) as exc:
         MediaRegistry([pixio_off, oai_off], config=_cfg("stability")).choose()
     assert "Media provider setting" in exc.value.words

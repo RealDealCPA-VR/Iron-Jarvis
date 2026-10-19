@@ -25,6 +25,12 @@ MIRROR NOTE (lock-step): both chat lanes — ``chat_turn.py`` (POST /chat) and
 ``routes/chat.py`` (POST /chat/stream) — collect doors at their ``if ran:``
 site and emit ``"doors"`` next to ``tools_used``. Edit both or neither; a
 door in one lane only is the exact v1.144.0-class bug this repo documents.
+
+FIX DOORS (v1.353.0, G41): a FAILED call never mints its success door, but
+a call that failed because something is not set up (an unpaired browser, an
+app that signs in through the browser) leaves a door to the fix —
+:func:`failure_door_for`, called at each lane's failed-tool site for a call
+the registry did not refuse, into the same ``doors`` list.
 """
 
 from __future__ import annotations
@@ -122,6 +128,82 @@ def door_for(tool_name: str, result: Any) -> dict[str, str] | None:
         except Exception:  # noqa: BLE001 — plain label beats no reply
             pass
     return {"href": spec["href"], "label": label}
+
+
+#: v1.353.0 (G41) — A REFUSAL LEAVES A BUTTON TO THE FIX. The browser codes
+#: whose fix is a press on the Browser page (Settings › Connections ›
+#: Browser; ``/computeruse`` redirects there with its query), and the words
+#: on that press. Keys are ``browser/errors.BrowserErrorCode`` values, read
+#: off the failed result's ``data["code"]`` — the envelope every browser tool
+#: refusal carries. Codes whose fix is the MODEL's next call (a stale
+#: element, a tab id, a page that did not load) are deliberately absent: a
+#: button there would send the user to fix what is not theirs to fix.
+_BROWSER_FIX_DOORS: dict[str, str] = {
+    "BROWSER_NOT_CONNECTED": "Pair your browser",
+    "PAIRING_REQUIRED": "Pair your browser",
+    "AUTHENTICATION_FAILED": "Pair your browser",
+    "BROWSER_ACCESS_OFF": "Turn on browser access",
+    "PERMISSION_DENIED": "Grant site access",
+}
+_BROWSER_FIX_HREF = "/computeruse"
+
+#: Where an app that signs in through the browser is connected: Settings ›
+#: Connections › Apps & tools (the Directory), whose card for that app holds
+#: its Connect press. Chat cannot connect one (``app_connect`` refuses an
+#: OAuth app by design), so the refusal's fix is that page.
+_APPS_FIX_HREF = "/settings?section=connections-apps"
+
+
+def failure_door_for(tool_name: str, args: Any, result: Any) -> dict[str, str] | None:
+    """The door a FAILED ``tool_name`` call leaves: a button to the fix, or
+    ``None`` (v1.353.0, G41).
+
+    The success-only :func:`door_for` is untouched — a failed call never
+    mints ITS door. This is the other half: when a call failed because
+    something is not SET UP, and the fix is a press on a page, the reply
+    carries that press. Both chat lanes call this at their failed-tool site
+    for a call the registry did not refuse (a declined card, "not armed" or
+    "low trust" is the user's or the rules' answer, not a missing setup), and
+    the entry rides the SAME ``doors`` field and ``collect_doors`` cap as a
+    success door. MIRROR NOTE (lock-step): ``chat_turn.py`` and
+    ``routes/chat.py`` carry the same append — edit both or neither.
+
+    Two fixes today, each read off what the failed call really carried —
+    never off its error WORDS:
+
+    * a browser tool's refusal whose ``data["code"]`` is a setup code
+      (:data:`_BROWSER_FIX_DOORS`) → "Pair your browser" (and friends) to the
+      Browser page;
+    * ``app_connect`` for a catalog app that signs in through the browser
+      (``connect_via == "oauth"``) → "Connect <App> in Settings" to the
+      Directory. The label is the CATALOG's name, never the model's text.
+
+    Never raises — a door is decoration, and no decoration is worth failing
+    the turn over."""
+    try:
+        if getattr(result, "ok", False):
+            return None
+        name = str(tool_name or "")
+        if name.startswith("browser_"):
+            data = getattr(result, "data", None)
+            code = str(data.get("code") or "") if isinstance(data, dict) else ""
+            label = _BROWSER_FIX_DOORS.get(code)
+            if label:
+                return {"href": _BROWSER_FIX_HREF, "label": label}
+            return None
+        if name == "app_connect":
+            from ..connectors.catalog import get_connector
+
+            app = str(args.get("app") or "").strip().lower() if isinstance(args, dict) else ""
+            conn = get_connector(app) if app else None
+            if conn is not None and getattr(conn, "connect_via", "") == "oauth":
+                return {
+                    "href": _APPS_FIX_HREF,
+                    "label": f"Connect {_clean_name(conn.name)} in Settings",
+                }
+        return None
+    except Exception:  # noqa: BLE001 — no door beats no reply
+        return None
 
 
 def collect_doors(entries: Any) -> list[dict[str, str]]:

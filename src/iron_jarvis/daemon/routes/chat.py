@@ -45,7 +45,7 @@ from ...tools.reversible import reversible_flag as _reversible_flag
 from ...eval.pricing import UsageTally
 from ...providers import egress as _egress
 from ...providers.reasoning import normalize_level
-from ..doors import collect_doors, door_for
+from ..doors import collect_doors, door_for, failure_door_for
 
 # The chat TURN lives in daemon/chat_turn.py (v1.136.0 messaging surfaces):
 # POST /chat is a thin wrapper over run_chat_turn so headless callers (the
@@ -3383,6 +3383,10 @@ async def chat_stream(
         ),
         "kept": [],
     }
+    # v1.353.0 (G40): set by the arming pass when this turn wanted media and
+    # no media service is connected; read by the Tools line. MIRROR NOTE
+    # (lock-step): chat_turn.run_chat_turn keeps the same flag.
+    _media_unready = False
     if text_only_pick:
         armed, auto_armed, ask_armed = [], [], []
         tool_specs = []
@@ -3487,6 +3491,23 @@ async def chat_stream(
                 and d.platform.registry.get("shell") is not None
             ):
                 ask_armed.append("shell")
+        # NO MEDIA SERVICE, KEY UP FRONT (v1.353.0, G40): a sentence that
+        # ask-armed `generate_media` on an install with no media service gets
+        # `app_connect` in its place — its pixio branch answers with the
+        # secure key card — instead of an approval card that then fails. Only
+        # the SENTENCE's arming is swapped (an explicit "+" pick is consent
+        # and stays; it is only told where the key goes); the vault read is
+        # off the loop and bounded, and "cannot tell" arms exactly as before.
+        # THIS LANE ONLY for the swap (the POST lane never ask-arms); both
+        # lanes say the Tools line below. MIRROR NOTE: chat_turn.run_chat_turn.
+        if (
+            _chat_turn.MEDIA_TOOL in ask_armed or _chat_turn.MEDIA_TOOL in armed
+        ) and await _chat_turn.media_service_ready(d.platform) is False:
+            _media_unready = True
+            ask_armed = [
+                t for t in _chat_turn.swap_media_for_connect(ask_armed, d.platform.registry)
+                if t not in armed
+            ]
         # The family's acting tier (v1.262.0) — after the sentence pass, so a
         # sentence-armed name keeps its place, and before the ceiling, which
         # bounds it like everything else.
@@ -3682,6 +3703,9 @@ async def chat_stream(
                 if "workflow_run" in armed
                 else ""
             )
+            # NO MEDIA SERVICE (v1.353.0, G40): worded by what this turn can
+            # reach. MIRROR NOTE (lock-step): chat_turn.py's Tools seam.
+            + _chat_turn.no_media_service_line(_media_unready, {*armed, *ask_armed})
             + (
                 f"\nYour file tools operate INSIDE the folder {tool_ws}; "
                 "read, edit, and create files there directly, and use the absolute paths "
@@ -4718,6 +4742,14 @@ async def chat_stream(
                                 denied_tools.append(tc.name)
                             if _label:
                                 refused_tools.append((tc.name, _label))
+                            else:
+                                # FIX DOOR (v1.353.0, G41): a call that failed
+                                # because something is not set up leaves a
+                                # button to the fix in the same `doors`
+                                # field; never for a refusal the registry
+                                # made. MIRROR NOTE (lock-step): chat_turn.py's
+                                # tool loop carries the same append.
+                                door_entries.append(failure_door_for(tc.name, tc.arguments, result))
                         if ran:
                             tools_used.append(tc.name)
                             # DOOR (v1.199.0): a successful creating tool

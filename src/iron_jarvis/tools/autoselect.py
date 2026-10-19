@@ -2216,11 +2216,30 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
     # "what does the Reflex page do", "do I have a schedule for …" — questions
     # ABOUT Iron Jarvis or about the user's own things inside it. Narrow on
     # purpose: a bare "what is" must not arm a lookup on every chat question.
+    #
+    # v1.353.0 (G38): the questions a NEW user asks first. "What can you do?"
+    # is the first suggestion pill on the empty chat, and it armed nothing —
+    # the model answered from its own idea of itself instead of the Handbook.
+    # So the rule also hears "what can/could you do", "what can you help me
+    # with", "what are you able to do", "what are your capabilities"; the
+    # how-do-I verbs a first week actually uses (connect, schedule, chat,
+    # text, add, install, pair, send, automate — "how do I chat with you from
+    # my phone", "how do I connect gmail", "how do I schedule something");
+    # and "can I/you … from my phone / from my browser / on a schedule".
+    # "what can you do ABOUT/TO …" is a request about something else, so it
+    # is left out. The awarded tools are READ-ONLY lookups (AUTO_SAFE_TOOLS),
+    # so a sentence that only looks like a question about the app costs a
+    # schema and nothing else.
     (
         re.compile(
             r"\b(?:iron\s*jarvis|this\s+app|the\s+app|the\s+dashboard|"
             r"which\s+page|what\s+page|where\s+in\s+the\s+app|"
-            r"how\s+do\s+i\s+(?:use|set|find|open|turn|enable|disable|change|configure)|"
+            r"what\s+(?:else\s+)?(?:can|could)\s+you\s+(?:do(?!\s+(?:about|to)\b)|help(?:\s+me)?\s+with)|"
+            r"what\s+are\s+you\s+able\s+to\s+do|"
+            r"what\s+are\s+your\s+(?:capabilities|abilities|features)|"
+            r"how\s+do\s+i\s+(?:use|set|find|open|turn|enable|disable|change|configure|"
+            r"connect|schedule|chat|text|add|install|pair|send|automate)|"
+            r"can\s+(?:i|you)\b[^.!?\n]{0,60}?\b(?:(?:from|on)\s+my\s+(?:phone|browser)|on\s+a\s+schedule)|"
             r"do\s+i\s+have\s+(?:a|an|any)\s+(?:project|workflow|schedule|reflex|goal|skill|agent)|"
             r"where\s+(?:is|are)\s+my\s+(?:project|workflow|schedule|reflex|goal|skill|agent)s?)\b",
             re.IGNORECASE,

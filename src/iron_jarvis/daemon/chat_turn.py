@@ -71,7 +71,7 @@ from ..core.trust import (
     normalize_trust,
     taint_reason,
 )
-from .doors import collect_doors, door_for
+from .doors import collect_doors, door_for, failure_door_for
 from .mcp_turn import read_turn_resources as _read_turn_resources
 from .chat_refs import read_thread_refs as _read_thread_refs
 
@@ -2113,6 +2113,99 @@ RECOVERY_BLOCK = (
 )
 
 
+#: v1.353.0 (G40) — ASKING FOR A PICTURE WITH NO MEDIA SERVICE ASKS FOR THE
+#: KEY UP FRONT. Before: "make a video of a cat surfing" with nothing
+#: connected ask-armed ``generate_media``, the user approved its card, and
+#: the reply then said "No media service is connected". Now the stream lane
+#: swaps the sentence-armed ``generate_media`` for ``app_connect`` (whose
+#: api-key branch for ``pixio`` answers with the secure key card) when
+#: :func:`media_service_ready` says no service is connected, and BOTH lanes
+#: put ONE line in the "# Tools" section (:func:`no_media_service_line`) —
+#: worded by what the model can actually reach (the v1.262.0 rule: a brief
+#: that names a tool beside no such tool is a lie).
+MEDIA_TOOL = "generate_media"
+MEDIA_CONNECT_TOOL = "app_connect"
+#: How long the lane waits for the vault to say whether a media key exists.
+#: The read is a secrets lookup per provider, off the loop; past this the
+#: answer is "cannot tell" and the turn is armed exactly as before.
+MEDIA_READY_TIMEOUT_S = 2.0
+NO_MEDIA_CONNECT_LINE = (
+    "\nNO MEDIA SERVICE: no image, video or music service is connected yet,"
+    " so nothing can be made this turn. Call app_connect with app \"pixio\":"
+    " it shows the user a secure card to paste their Pixio key (never ask for"
+    " the key in chat). Say they can ask again once the key is saved."
+)
+NO_MEDIA_SETTINGS_LINE = (
+    "\nNO MEDIA SERVICE: no image, video or music service is connected yet,"
+    " so generate_media cannot make anything this turn. Tell the user to add"
+    " their Pixio key in Settings › Connections › Accounts & keys, then ask"
+    " again — never ask for the key in chat."
+)
+
+
+async def media_service_ready(platform: Any) -> "bool | None":
+    """Is any media service connected? ``True``/``False``, or ``None`` when
+    it cannot be told (no media registry, a fault, a slow vault) — a caller
+    changes nothing on ``None``. The registry's ``available()`` reads the
+    vault per provider, so it runs off the event loop and is bounded by
+    :data:`MEDIA_READY_TIMEOUT_S`. Never raises."""
+    media = getattr(platform, "media", None)
+    available = getattr(media, "available", None)
+    if not callable(available):
+        return None
+    try:
+        ready = await asyncio.wait_for(
+            asyncio.to_thread(available), timeout=MEDIA_READY_TIMEOUT_S
+        )
+    except Exception:  # noqa: BLE001 — cannot tell; arm as before
+        return None
+    try:
+        return bool(ready)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def swap_media_for_connect(ask_armed: "list[str]", registry: Any) -> "list[str]":
+    """``ask_armed`` with ``generate_media`` replaced IN ITS PLACE by
+    ``app_connect`` (once — never a duplicate), or unchanged when
+    ``app_connect`` is not registered. Pure."""
+    if MEDIA_TOOL not in ask_armed:
+        return list(ask_armed)
+    try:
+        has_connect = registry.get(MEDIA_CONNECT_TOOL) is not None
+    except Exception:  # noqa: BLE001
+        has_connect = False
+    if not has_connect:
+        return list(ask_armed)
+    out: list[str] = []
+    for name in ask_armed:
+        if name == MEDIA_TOOL:
+            name = MEDIA_CONNECT_TOOL
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def no_media_service_line(media_unready: bool, names: Any) -> str:
+    """The "# Tools" line for a turn that wanted media with no service
+    connected, worded by what the model can reach: ``app_connect`` visible →
+    call it for pixio (the secure card); else ``generate_media`` visible →
+    tell the user where the key goes; neither → ``""``. ``""`` whenever
+    ``media_unready`` is False. MIRROR NOTE (lock-step): both lanes add this
+    at the same place in their Tools section."""
+    if not media_unready:
+        return ""
+    try:
+        reach = {str(n) for n in (names or ())}
+    except TypeError:
+        return ""
+    if MEDIA_CONNECT_TOOL in reach:
+        return NO_MEDIA_CONNECT_LINE
+    if MEDIA_TOOL in reach:
+        return NO_MEDIA_SETTINGS_LINE
+    return ""
+
+
 #: THE SPEND CHECK IN THE POST LANE (v1.346.0, post-lane spend). The user's
 #: rule is "ask before EVERY spend". The stream lane asks with a card
 #: (routes/chat.py's `_spend`); the agent runtime pauses. ``POST /chat``
@@ -2186,19 +2279,86 @@ def refusal_label(error: str) -> str:
     return ""
 
 
+#: v1.353.0 (G41): a connected app's tool id, ``mcp__<pack>__<tool>``
+#: (``mcp/tools.py``: ``f"mcp__{server_name}__{remote_name}"``), split at the
+#: FIRST ``__`` after the prefix exactly as the registry joins them. The
+#: Python twin of ``dashboard/lib/toolWords.appToolParts`` /
+#: ``appToolNameWords`` (same pack rule, same word split, same caps), so a
+#: footnote and the step row say the same words.
+_APP_PACK_RX = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_APP_NAME_MAX = 40
+_APP_TOOL_MAX = 60
+
+
+def _cut_words(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def app_tool_words(tool: str) -> "tuple[str, str] | None":
+    """``(app name, tool words)`` for a connected app's tool id, or ``None``
+    for any other name (v1.353.0, G41). The app name is the CATALOG's
+    (``connectors.catalog.get_connector`` — "GitHub" for ``github``), else
+    the pack's own name as the user added it; the tool's own name as words
+    ("create_issue" → "create issue", "listOpenIssues" → "list open
+    issues"; an acronym keeps its case). Pure, never raises."""
+    try:
+        name = str(tool or "")
+        if not name.startswith("mcp__"):
+            return None
+        rest = name[len("mcp__"):]
+        cut = rest.find("__")
+        if cut <= 0:
+            return None
+        pack, remote = rest[:cut], rest[cut + 2:]
+        if not _APP_PACK_RX.match(pack) or not remote.strip():
+            return None
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in remote):
+            return None
+        app = pack
+        try:
+            from ..connectors.catalog import get_connector
+
+            conn = get_connector(pack)
+            if conn is not None and str(getattr(conn, "name", "") or "").strip():
+                app = str(conn.name).strip()
+        except Exception:  # noqa: BLE001 — the pack's own name is a fine label
+            app = pack
+        spaced = _re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", remote)
+        words = [
+            w.lower() if _re.fullmatch(r"[A-Z][a-z]+", w) else w
+            for w in _re.split(r"[\s_-]+", spaced)
+            if w
+        ]
+        return _cut_words(app, _APP_NAME_MAX), _cut_words(" ".join(words) or remote, _APP_TOOL_MAX)
+    except Exception:  # noqa: BLE001 — a footnote falls back to the raw id
+        return None
+
+
 def refusal_footnotes(refused: "list[tuple[str, str]]") -> str:
     """The reply footnotes for this turn's refused calls: ONE line per
     (tool, refusal), in first-seen order, deduped — ``_Note: X could not run
     (permission denied)._`` keeps its v1.165.0 words byte for byte; ``not
     armed`` reads ``(not turned on for this chat)`` and ``low trust``
     ``(blocked under low trust)``. Unknown labels are skipped (never a
-    footnote that names a refusal nobody made). Both lanes, lock-step."""
+    footnote that names a refusal nobody made). Both lanes, lock-step.
+
+    v1.353.0 (G41): a connected app's tool is named in the user's words —
+    ``GitHub › create issue``, never ``mcp__github__create_issue`` — and a
+    "not armed" refusal of one says where to turn it on (the chat's
+    ``+ › Connections`` switch for that app). Every other tool keeps its
+    line byte for byte."""
     out = ""
     for name, label in dict.fromkeys(refused):
         words = REFUSAL_FOOTNOTE_WORDS.get(label)
         if not words:
             continue
-        out += f"\n\n_Note: {name} could not run ({words})._"
+        parts = app_tool_words(name)
+        if parts is None:
+            out += f"\n\n_Note: {name} could not run ({words})._"
+            continue
+        app, tool_words = parts
+        fix = f" — turn {app} on in + › Connections" if label == "not armed" else ""
+        out += f"\n\n_Note: {app} › {tool_words} could not run ({words}){fix}._"
     return out
 
 
@@ -6362,6 +6522,11 @@ async def run_chat_turn(
         ),
         "kept": [],
     }
+    # v1.353.0 (G40): this turn wanted media and no media service is
+    # connected — read by the Tools line. This lane never ask-arms, so only an
+    # explicit "+" pick of generate_media can set it; nothing is swapped here.
+    # MIRROR NOTE (lock-step): routes/chat.py keeps the same flag.
+    _media_unready = False
     if text_only_pick:
         armed, auto_armed = [], []
         tool_specs = []
@@ -6409,6 +6574,10 @@ async def run_chat_turn(
             )
             armed = [t for t in armed if t not in _away]
             auto_armed = [t for t in auto_armed if t not in _away]
+        # NO MEDIA SERVICE (v1.353.0, G40) — lock-step with the stream lane's
+        # flag; the vault read is off the loop and bounded.
+        if MEDIA_TOOL in armed and await media_service_ready(d.platform) is False:
+            _media_unready = True
         tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
             _ESCALATE_SPEC,
             _WORKFLOW_DRAFT_SPEC,
@@ -6564,6 +6733,9 @@ async def run_chat_turn(
                 if "workflow_run" in armed
                 else ""
             )
+            # NO MEDIA SERVICE (v1.353.0, G40): worded by what this turn can
+            # reach. MIRROR NOTE (lock-step): routes/chat.py's Tools seam.
+            + no_media_service_line(_media_unready, armed)
             + (
                 f"\nYour file tools operate INSIDE the folder {tool_ws}; "
                 "read, edit, and create files there directly, and use the absolute paths "
@@ -6911,6 +7083,16 @@ async def run_chat_turn(
                             denied_tools.append(tc.name)
                         if _label:
                             refused_tools.append((tc.name, _label))
+                        else:
+                            # FIX DOOR (v1.353.0, G41): a call that failed
+                            # because something is not set up (an unpaired
+                            # browser, an app that signs in through the
+                            # browser) leaves a button to the fix in the
+                            # same `doors` field. Never for a refusal the
+                            # registry made (the label above). MIRROR NOTE
+                            # (lock-step): routes/chat.py's stream loop
+                            # carries the same append — edit both or neither.
+                            door_entries.append(failure_door_for(tc.name, tc.arguments, result))
                     if not ran:
                         _call_key = _keys[_i]
                         _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
