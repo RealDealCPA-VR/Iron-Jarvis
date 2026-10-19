@@ -297,6 +297,40 @@ describe("G72: the key door's Custom endpoint", () => {
     expect(probes().map((p) => (p.body as { base_url: string }).base_url)).toEqual(["http://localhost:8080/v1"]);
   });
 
+  it("a second chip pressed while the first one's fetch is still out asks the second server", async () => {
+    // The first probe is HELD: the picker's own button is disabled ("Fetching
+    // models…") when the second chip fills the new address, so a click in the
+    // same commit is swallowed (a disabled button dispatches nothing). The chip
+    // must press again once the picker has reset for the new address.
+    let release!: (v: unknown) => void;
+    hooks.probe = new Promise((resolve) => {
+      release = resolve;
+    });
+    render(<ConnectDoors />);
+    openDoor(/I have an API key/);
+    fireEvent.click(screen.getByRole("button", { name: "Custom endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "LM Studio on this PC" }));
+    await waitFor(() =>
+      expect((screen.getByTestId("endpoint-fetch-models") as HTMLButtonElement).disabled).toBe(true),
+    );
+    expect(probes()).toHaveLength(1);
+
+    hooks.probe = { models: ["llama-server-model"], error: null, reason: null };
+    fireEvent.click(screen.getByRole("button", { name: "llama.cpp" }));
+    expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe("http://localhost:8080/v1");
+    // Wait for the list the SECOND server answered, not for the request.
+    const panel = await screen.findByTestId("endpoint-model-picker");
+    await waitFor(() => expect(optionTexts(panel)).toEqual(["llama-server-model"]));
+    expect(probes().map((p) => (p.body as { base_url: string }).base_url)).toEqual([
+      "http://localhost:1234/v1",
+      "http://localhost:8080/v1",
+    ]);
+    // The first server's late answer is for an address no longer in the form.
+    release({ models: MODELS, error: null, reason: null });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(optionTexts(screen.getByTestId("endpoint-model-picker"))).toEqual(["llama-server-model"]);
+  });
+
   it("a server that is not running says so in the picker's own words", async () => {
     hooks.probe = {
       models: [],
@@ -375,6 +409,27 @@ describe("G72: Settings › Connections' Add an endpoint form", () => {
     );
   });
 
+  it("the second chip, pressed while the first fetch is out, lists the second server's models", async () => {
+    let release!: (v: unknown) => void;
+    hooks.probe = new Promise((resolve) => {
+      release = resolve;
+    });
+    const card = await openForm();
+    fireEvent.click(within(card).getByRole("button", { name: "LM Studio on this PC" }));
+    await waitFor(() =>
+      expect((within(card).getByTestId("endpoint-fetch-models") as HTMLButtonElement).disabled).toBe(true),
+    );
+    hooks.probe = { models: ["llama-server-model"], error: null, reason: null };
+    fireEvent.click(within(card).getByRole("button", { name: "llama.cpp" }));
+    const panel = await within(card).findByTestId("endpoint-model-picker");
+    await waitFor(() => expect(optionTexts(panel)).toEqual(["llama-server-model"]));
+    expect(probes().map((p) => (p.body as { base_url: string }).base_url)).toEqual([
+      "http://localhost:1234/v1",
+      "http://localhost:8080/v1",
+    ]);
+    release({ models: MODELS, error: null, reason: null });
+  });
+
   it("a name the user already typed is kept", async () => {
     const card = await openForm();
     const name = within(card).getByPlaceholderText("e.g. vLLM box / Ollama Cloud") as HTMLInputElement;
@@ -450,6 +505,42 @@ describe("G46: Settings › Connections' Gemini card", () => {
       expect(hooks.posts.map((p) => p.path)).toEqual(["/connections/google/key", "/connections/google/test"]),
     );
     expect(hooks.posts[0].body).toEqual({ key: KEY });
+  });
+
+  it("a card connected through the account login says OAuth, a key says API key (the record's own way)", async () => {
+    const connected = { ...base, connected: true, status: "connected", source: "vault" };
+    hooks.responses["/connections"] = {
+      connections: [
+        {
+          ...connected,
+          provider: "google",
+          display_name: "Google (Gemini)",
+          method: "api_key",
+          supports_api_key: true,
+          account: "me@example.com",
+          connected_via: "oauth",
+        },
+        {
+          ...connected,
+          provider: "openai",
+          display_name: "OpenAI",
+          method: "oauth",
+          supports_api_key: true,
+          connected_via: "api_key",
+        },
+        // An older daemon sends no connected_via: the card keeps `method`.
+        { ...connected, provider: "xai", display_name: "xAI (Grok)", method: "api_key", supports_api_key: true },
+      ],
+    };
+    hooks.responses["/routing/quality"] = { bar: 0.75, min_samples: 3, rows: [] };
+    hooks.responses["/fleet"] = { nodes: [] };
+    render(<ConnectionsPage />);
+    await screen.findByText("Google (Gemini)");
+    const chip = (p: string) => within(cardOf(p)).getByTestId("conn-card-auth").textContent ?? "";
+    expect(chip("google")).toMatch(/OAuth 2\.0/);
+    expect(chip("google")).not.toMatch(/API key/);
+    expect(chip("openai")).toMatch(/API key/);
+    expect(chip("xai")).toMatch(/API key/);
   });
 
   it("control: a login-only card keeps the login first, in the outlined style", async () => {

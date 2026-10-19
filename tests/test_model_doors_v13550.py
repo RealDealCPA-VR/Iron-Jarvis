@@ -22,7 +22,11 @@ xfail naming the edit, so it turns red (XPASS) the moment the integrator lands
 it and the marker is taken off on purpose:
 ``connections/probe.py`` (a key's Test), ``daemon/routes/terminals.py``
 (``launch_pane`` reads ``launch_entry``) and ``daemon/app.py``
-(``_PROMOTE_DEFAULT_MODEL["google"]``).
+(``_PROMOTE_DEFAULT_MODEL["google"]``). The three edits (and the fix round's
+Gemini tool-loop, menu and method-chip edits, pinned in
+``tests/test_gemini_tool_loop_v13550.py``) are ONE patch the integrator
+applies: ``5d_integrator.patch`` in the lane's notes. Each was run against the
+real modules with that patch overlaid and ``--runxfail``: all green.
 """
 
 from __future__ import annotations

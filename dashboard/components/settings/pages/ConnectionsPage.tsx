@@ -469,6 +469,20 @@ function inheritedVia(conn: Pick<Connection, "source">): string | null {
   return m ? m[1] : null;
 }
 
+/** How a CONNECTED card's credential was made (v1.355.0 fix round). The row's
+ *  `method` is the spec's primary way — "api_key" for Google since Gemini
+ *  takes an AI Studio key — so a user who connected Google through the
+ *  account login would read "API key". The daemon's additive `connected_via`
+ *  (registry status rows: the stored record's own method) says which; an
+ *  older daemon sends none and the card keeps `method`, exactly as before. */
+export function authMethodShown(
+  conn: Pick<Connection, "method" | "connected"> & { connected_via?: string },
+): Connection["method"] {
+  const via = conn.connected_via;
+  if (conn.connected && (via === "oauth" || via === "api_key")) return via;
+  return conn.method;
+}
+
 function StatusPill({ conn }: { conn: Connection }) {
   let tone: Tone;
   let label: string;
@@ -1184,7 +1198,7 @@ function ConnectionCard({
                 className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-zinc-500"
               >
                 <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
-                  {conn.method === "oauth" ? (
+                  {authMethodShown(conn) === "oauth" ? (
                     <>
                       <ShieldCheck size={11} /> OAuth 2.0
                     </>
