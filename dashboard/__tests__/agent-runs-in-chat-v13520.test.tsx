@@ -369,6 +369,47 @@ describe("G16: a run you stopped reads Stopped, not Task failed", () => {
     expect(saved[1].awaitingSession).toBeUndefined();
     expect(readAgentRun(saved[1])).toMatchObject({ session: "s1", status: "cancelled" });
   });
+
+  it("on the chat page: a stopped run comes home under a neutral 'Stopped' card, never a red 'Task failed'", async () => {
+    // v1.352.0 review: the card a user meets on the REAL surface. The run was
+    // stopped (its card's Stop, Running now, the mission screen) while this
+    // chat waited: the daemon's own line arrives carrying the receipt of a
+    // CANCELLED run, and the page renders that receipt as the card.
+    const end = Date.now();
+    const daemonLine = {
+      role: "assistant",
+      content: "Session cancelled by the user.",
+      sessionId: "s1",
+      agentType: "researcher",
+      receipt: stopped,
+    };
+    let n = 0;
+    H.api.getResponses["/chat/threads/t7"] = () => {
+      n += 1;
+      return n === 1
+        ? { id: "t7", title: "saved", updated_at: "S1", messages: WAITING }
+        : { id: "t7", title: "saved", updated_at: "S3", messages: [...WAITING, daemonLine] };
+    };
+    window.history.replaceState({}, "", "/chat?thread=t7");
+    H.api.getResponses["/sessions/s1?transcript=0"] = {
+      session: {
+        id: "s1",
+        status: "cancelled",
+        summary: "Session cancelled by the user.",
+        created_at: isoAgo(45_000, end),
+        finished_at: isoAgo(0, end),
+      },
+    };
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByTestId("run-result-headline").textContent).toBe("Stopped"));
+    expect(screen.queryByText("Task failed")).toBeNull();
+    expect(screen.getByTestId("run-result-icon").getAttribute("data-end")).toBe("stopped");
+    await waitFor(() =>
+      expect(screen.getByTestId("agent-run-words").textContent).toBe(
+        "The researcher worked for 45 s · 6 steps · stopped",
+      ),
+    );
+  });
 });
 
 /* ================================================================ G19 */

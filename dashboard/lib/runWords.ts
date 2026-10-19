@@ -200,7 +200,8 @@ export interface RunActionLine {
 }
 
 /**
- * The run's work as lines, in the order the tools were first used: for each
+ * The run's work as lines, in the order `used` lists the tools (the ledger
+ * lists them by name, agents/outcome.session_result): for each
  * tool, the calls that worked ("Searched your chats 80 times"), then the ones
  * that failed ("3 chat searches failed"). `used` counts every call of a tool
  * (the ledger's `tools_used`), `failed` the failed ones (`tools_failed`), so a

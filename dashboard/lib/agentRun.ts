@@ -41,8 +41,10 @@ export interface AgentRunTool {
   failed: number;
 }
 
-/** At most this many tools are kept on a stamp (the newest-first order of a
- *  ledger is first use, so the first ones are the run's opening moves). */
+/** At most this many tools are kept on a stamp. The ledger lists a run's
+ *  tools by NAME (agents/outcome.session_result sorts `tools_used`), so a run
+ *  that used more distinct tools than this keeps the first ones by name; the
+ *  card under the reply still lists them all. */
 export const STAMP_TOOLS_MAX = 20;
 
 /** What the settled row needs, stamped on the hand-off message by finalize. */
