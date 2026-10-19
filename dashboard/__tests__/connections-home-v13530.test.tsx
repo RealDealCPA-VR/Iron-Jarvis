@@ -256,6 +256,11 @@ describe("G42: the Directory is one Connections home", () => {
     expect(within(group).getByTestId("import-row-github")).toBeTruthy();
     expect(screen.getByTestId("import-source-cursor")).toBeTruthy();
     expect(api.gets.filter((p) => p === "/mcp/import/sources")).toHaveLength(1);
+    // What the re-read after the import answers: the two are added now.
+    api.sources = SOURCES.map((s) => ({
+      ...s,
+      servers: s.servers.map((r) => ({ ...r, exists: r.exists || ["github", "notion"].includes(r.name) })),
+    }));
     fireEvent.click(within(group).getByTestId("import-source-apply-claude-desktop"));
     await waitFor(() =>
       expect(api.posts).toContainEqual({
@@ -267,6 +272,12 @@ describe("G42: the Directory is one Connections home", () => {
     // The page re-reads the cards and the list (the new packs show at once).
     await waitFor(() => expect(api.gets.filter((p) => p === "/mcp/import/sources")).toHaveLength(2));
     expect(api.gets.filter((p) => p === "/connectors").length).toBeGreaterThanOrEqual(2);
+    // Rows the re-read calls "already added" leave the selection, so the
+    // button never offers to add them a second time.
+    await waitFor(() =>
+      expect(screen.getByTestId("import-source-apply-claude-desktop").textContent).toContain("Add selected (0)"),
+    );
+    expect(screen.getByTestId("import-source-apply-claude-desktop").hasAttribute("disabled")).toBe(true);
   });
 
   it("everything already added: says so, and the button only shows them", async () => {
@@ -353,14 +364,14 @@ describe("G43: catalog entries that still install", () => {
       connector("browser_addon", "Your browser", {
         category: "Data & Web",
         connect_via: "link",
-        href: "/settings?section=connections-browser",
+        href: "/computeruse",
         action: "Set up the browser add-on",
       }),
     ];
     api.categories = ["Data & Web"];
     render(<DirectoryPage />);
     const link = await screen.findByTestId("connector-link-browser_addon");
-    expect(link.getAttribute("href")).toBe("/settings?section=connections-browser");
+    expect(link.getAttribute("href")).toBe("/computeruse");
     expect(link.textContent).toContain("Set up the browser add-on");
     expect(within(card("browser_addon")).queryByRole("button", { name: /Connect/ })).toBeNull();
     expect(document.body.textContent).not.toMatch(/Puppeteer/);
@@ -489,10 +500,12 @@ describe("G45: setup needs are shown before Connect", () => {
     render(<DirectoryPage />);
     const gmail = await screen.findByTestId("connector-also-gmail");
     expect(gmail.textContent).toBe("To have Jarvis email you, use Notifications › Email.");
-    expect(within(gmail).getByRole("link").getAttribute("href")).toBe("/settings?section=connections-notifications");
-    expect(screen.getByTestId("connector-also-slack").textContent).toBe(
-      "To have Jarvis message you in Slack, use Notifications › Slack.",
-    );
+    // The old address (it redirects to Settings › Connections › Notifications):
+    // a /settings?section=… link from inside Settings only changes the URL.
+    expect(within(gmail).getByRole("link").getAttribute("href")).toBe("/channels");
+    const slack = screen.getByTestId("connector-also-slack");
+    expect(slack.textContent).toBe("To have Jarvis message you in Slack, use Notifications › Slack.");
+    expect(within(slack).getByRole("link").getAttribute("href")).toBe("/channels");
     const notion = screen.getByTestId("connector-also-notion");
     expect(notion.textContent).toBe("To make your Notion pages part of memory, add a memory base.");
     expect(within(notion).getByRole("link").getAttribute("href")).toBe("/memory?scope=longterm&focus=add-base");
@@ -521,5 +534,18 @@ describe("the new copy keeps the house rules", () => {
     const end = src.indexOf("/*  Skeleton card");
     expect(start).toBeGreaterThan(0);
     expect(src.slice(start, end)).not.toMatch(/text-\[\d+\.5px\]/);
+  });
+
+  it("a link from this Settings section to another one goes through its old address", async () => {
+    // SettingsHome reads ?section= once, on mount, and the App Router keeps a
+    // page mounted across a search-param change (measured on the running
+    // dashboard: a push to /settings?section=connections-browser changed the
+    // URL and left the Directory on screen; /computeruse remounted Settings on
+    // the Browser section). So no link here may point at /settings?section=.
+    const src = read("components/settings/pages/DirectoryPage.tsx");
+    expect(src).not.toMatch(/["'`]\/settings\?section=/);
+    const { RELOCATED } = await import("@/lib/relocated");
+    expect(RELOCATED["/channels"]).toEqual({ base: "/settings", extra: { section: "connections-notifications" } });
+    expect(RELOCATED["/computeruse"]).toEqual({ base: "/settings", extra: { section: "connections-browser" } });
   });
 });

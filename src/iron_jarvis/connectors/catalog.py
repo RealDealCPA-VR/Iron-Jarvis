@@ -424,7 +424,15 @@ LINK_CARDS: list[Connector] = [
         "browser, through the Iron Jarvis browser add-on.",
         connect_via=LINK,
         scopes=["Read pages", "Click and type"],
-        href="/settings?section=connections-browser",
+        # Settings › Connections › Browser through its old address, which
+        # redirects there. The card lives INSIDE Settings
+        # (/settings?section=connections-apps), and a link to
+        # /settings?section=… only changes the address bar: SettingsHome
+        # reads its section once, on mount, and the App Router keeps a page
+        # mounted across a search-param change (measured on the running
+        # dashboard). The old address goes through another route, so the
+        # page mounts again on the Browser section.
+        href="/computeruse",
         action="Set up the browser add-on",
     ),
 ]

@@ -95,10 +95,19 @@ def test_puppeteer_is_no_longer_offered_as_an_app(client):
     assert not any("puppeteer" in (r["name"] + r["blurb"] + r["unlocks"]).lower() for r in rows)
     assert all("server-puppeteer" not in " ".join(c.args) for c in CATALOG)
     # Its place: the browser add-on, a LINK card whose one action opens
-    # Settings › Connections › Browser.
+    # Settings › Connections › Browser — by its old address, because the card
+    # sits inside Settings and a /settings?section=… link from there changes
+    # only the address bar (SettingsHome reads its section on mount; the App
+    # Router keeps the page mounted across a search-param change).
     browser = next(r for r in rows if r["id"] == "browser_addon")
     assert browser["connect_via"] == "link"
-    assert browser["href"] == "/settings?section=connections-browser"
+    assert browser["href"] == "/computeruse"
+    assert not browser["href"].startswith("/settings?")
+    relocated = (REPO / "dashboard" / "lib" / "relocated.ts").read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert re.search(
+        r'"/computeruse":\s*\{\s*base:\s*"/settings",\s*extra:\s*\{\s*section:\s*"connections-browser"\s*\}',
+        relocated,
+    ), "the old address lands on Settings › Connections › Browser"
     assert browser["action"] == "Set up the browser add-on"
     assert browser["connected"] is False and browser["fields"] == []
     # A link card is not a connector: every door answers it as unknown.

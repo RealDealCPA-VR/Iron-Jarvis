@@ -191,6 +191,17 @@ const ADD_MEMORY_BASE = "/memory?scope=longterm&focus=add-base";
 const MEMORY_DRIVES: ReadonlySet<string> = new Set(["google_drive", "onedrive", "dropbox"]);
 
 /**
+ * Settings › Connections › Notifications, by its old address (lib/relocated
+ * redirects it there). This page is itself a Settings section, and a link to
+ * another section's own address from inside Settings only changes the URL:
+ * SettingsHome reads its section once, on mount, and the App Router keeps a
+ * page mounted across a search-param change. The old address goes through
+ * another route, so Settings mounts again on the right section (the same
+ * reason the cards' "/connections" and "/tools" links work).
+ */
+const NOTIFICATIONS = "/channels";
+
+/**
  * v1.353.0 (G45): one sentence that ties an app to the OTHER place people
  * look for it — the Gmail app is not how Jarvis emails you, the Slack app is
  * not how Jarvis messages you, and Notion reaches memory as a memory base.
@@ -200,12 +211,12 @@ const ALSO: Readonly<Record<string, { lead: string; label: string; href: string 
   gmail: {
     lead: "To have Jarvis email you, use",
     label: "Notifications › Email",
-    href: "/settings?section=connections-notifications",
+    href: NOTIFICATIONS,
   },
   slack: {
     lead: "To have Jarvis message you in Slack, use",
     label: "Notifications › Slack",
-    href: "/settings?section=connections-notifications",
+    href: NOTIFICATIONS,
   },
   notion: {
     lead: "To make your Notion pages part of memory, add",
