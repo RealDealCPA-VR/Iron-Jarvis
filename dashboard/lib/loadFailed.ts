@@ -14,14 +14,18 @@
  * The code and the server's own message stay available, but only as a hover
  * title (`failureDetail`) for whoever is troubleshooting — never in the text.
  *
- * Pure strings, no imports: `lib/api.ts` is mocked wholesale by dozens of test
- * files, so these live apart from it (and the component that draws the line
- * lives in components/LoadFailedLine.tsx).
+ * Pure strings; the one import is lib/offlineWords.ts, which is itself
+ * dependency-free. `lib/api.ts` is mocked wholesale by dozens of test files,
+ * so these live apart from it (and the component that draws the line lives in
+ * components/LoadFailedLine.tsx).
  */
 
-/** The words for "nothing answered" (status 0). The same sentence the shell's
- *  offline banner uses (G30), so a panel and the banner never disagree. */
-export const NOT_RESPONDING = "Iron Jarvis isn't responding.";
+import { OFFLINE_TITLE } from "@/lib/offlineWords";
+
+/** The words for "nothing answered" (status 0). It IS the shell's offline
+ *  banner headline (G30, lib/offlineWords.ts), imported rather than copied, so
+ *  a panel and the banner can never disagree. */
+export const NOT_RESPONDING = OFFLINE_TITLE;
 
 /** The words a failed read asks the user to do (the press, and the sentence). */
 export const TRY_AGAIN_PRESS = "Try again";
