@@ -63,6 +63,7 @@ from .runtime import (
 )
 from .team import MISSION_ORIGIN
 from . import chat_delivery as _chat_delivery
+from .task_door import REPLY_OPTION as _REMOTE_REPLY_OPTION
 from .decompose import is_bulk_task
 from .supervisor import run_supervised, with_worklist
 from .types import AgentDefinition, get_agent_definition
@@ -2287,6 +2288,10 @@ class Orchestrator:
             )
             session.finished_at = utcnow()
             self._save(session)
+            # v1.357.0 (G61, review): a task another computer sent that a cap
+            # parked is still owed its answer (none of the finalizers runs for
+            # a run that never started). Never raises; one attempt per run.
+            self._reply_home(session)
         else:
             # No task in ``_running``. A DELEGATED TEAMMATE lands here while
             # it is running (v1.309.0): ``delegate``/``spawn_agent`` keep it
@@ -2336,6 +2341,12 @@ class Orchestrator:
         if prev is None:
             raise KeyError(f"unknown session '{session_id}'")
         allow_tools = _stored_allow_tools(prev)
+        options = _stored_options(prev)
+        # v1.357.0 (G61, review): the answer address of a task another
+        # computer sent belongs to THAT run — its key is single-use and spent
+        # by the first answer — so a rerun never inherits it (it could only
+        # record a failed answer the user did not cause).
+        options.pop(_REMOTE_REPLY_OPTION, None)
         return await self.create_session(
             prev.task,
             prev.agent_type,
@@ -2367,7 +2378,7 @@ class Orchestrator:
             # …and the RUN OPTIONS (v1.299.0): skip_memory / folder_rules are
             # inputs too — a rerun that re-grew the memory blocks or dropped
             # the folder's rules would not be the same run.
-            options=_stored_options(prev) or None,
+            options=options or None,
         )
 
     def _rerun_direct_root(self, prev: Session) -> str | None:
@@ -2462,6 +2473,10 @@ class Orchestrator:
         _chat_id = _chat_delivery.clean_chat_thread_id(chat_thread_id)
         if _chat_id:
             options[_chat_delivery.CHAT_THREAD_OPTION] = _chat_id
+        # v1.357.0 (G61, review): likewise the answer address of a task
+        # another computer sent — its key is single-use and spent by that
+        # task's own answer — so a follow-up never inherits it.
+        options.pop(_REMOTE_REPLY_OPTION, None)
         if getattr(prev, "origin", None) == MISSION_ORIGIN:
             # A MISSION'S FOLLOW-UP KEEPS THE USER'S OWN WORDS (v1.309.0). The
             # recap above is MODEL-facing (it must carry the earlier task and

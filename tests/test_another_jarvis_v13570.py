@@ -897,3 +897,160 @@ def test_the_reachability_sentence_says_iron_jarvis_and_opens_nothing(tmp_path, 
         "/agents/task-door/enable", json={"url": f"http://192.168.1.20:8787{TASK_DOOR_PATH}"}
     ).json()
     assert again["reachable"] == {"host_allowed": True, "note": ""}
+
+
+# --------------------------------------------------------------------------- #
+# Review (v1.357.0 lane 7A review): the paths the first pins left open
+# --------------------------------------------------------------------------- #
+
+
+async def _door_task(cb: httpx.AsyncClient, token: str, **body: Any) -> None:
+    r = await cb.post(TASK_DOOR_PATH, json=body, headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 202, r.text
+
+
+async def test_a_run_that_crashes_still_tells_the_sender(tmp_path, lan, monkeypatch):
+    """The FAILURE finalize (an exception escaping the run, not a model
+    answer that failed) answers home too, with the run's failure sentence."""
+    from iron_jarvis.agents import orchestrator as orch_mod
+
+    a = create_app(str(tmp_path / "a"))
+    b = create_app(str(tmp_path / "b"))
+    net = lan({A_HOST: a, B_HOST: b})
+
+    async def boom(platform, session):
+        raise RuntimeError("the supervisor fell over")
+
+    monkeypatch.setattr(orch_mod, "run_supervised", boom)
+    async with _client(B_HOST) as cb:
+        token = (await cb.post("/agents/task-door/enable", json={"name": "laptop"})).json()["token"]
+        await _door_task(
+            cb,
+            token,
+            task="do it",
+            conversation_id="athr_f",
+            reply_to=f"http://{A_HOST}/agents/remote/desk/inbound",
+            reply_token="k",
+        )
+        rows = await _settled(b)
+    assert rows[0].status is SessionStatus.FAILED
+    replies = [c for c in net.calls if c["url"].endswith("/agents/remote/desk/inbound")]
+    assert len(replies) == 1, "a crashed run still answers the computer that asked"
+    sent = json.loads(replies[0]["body"])
+    assert sent["kind"] == "done" and sent["conversation_id"] == "athr_f"
+    assert sent["message"] and (rows[0].summary or "").startswith(sent["message"])
+
+
+async def test_the_answer_is_masked_on_the_way_home(tmp_path, lan):
+    """A secret in the run's answer never crosses to the other computer."""
+    b = create_app(str(tmp_path / "b"))
+    a = create_app(str(tmp_path / "a"))
+    net = lan({A_HOST: a, B_HOST: b})
+    orch = b.state.orchestrator
+    key = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcd"
+    session = await orch.create_session(
+        "a task from laptop",
+        AgentType.SUPERVISOR,
+        origin=td.remote_origin("laptop"),
+        trust="low",
+        options={
+            td.REPLY_OPTION: td.reply_spec(
+                reply_to=f"http://{A_HOST}/agents/remote/desk/inbound",
+                conversation_id="athr_m",
+                caller="laptop",
+            )
+        },
+    )
+    session.status = SessionStatus.COMPLETED
+    session.summary = f"Here is the key you asked for: {key}"
+    await asyncio.to_thread(td.store_reply_token, b.state.platform.secrets, session.id, "k", "laptop")
+    await td.send_reply(b.state.platform, session)
+    replies = [c for c in net.calls if c["url"].endswith("/agents/remote/desk/inbound")]
+    assert len(replies) == 1
+    message = json.loads(replies[0]["body"])["message"]
+    assert key not in message and "ABCDEFGHIJKLMNOP" not in message
+    assert "sk-ant-***" in message
+
+
+async def test_a_follow_up_on_a_remote_task_never_reuses_its_answer_address(tmp_path, lan):
+    """The answer key a task brought is single-use and belongs to THAT task:
+    a rerun or a Continue on this computer (the restart Continue included)
+    starts no second answer and records no failure the user did not cause."""
+    b = create_app(str(tmp_path / "b"))
+    net = lan({B_HOST: b})
+    b.state.platform.router.stream = _scripted("Done.")
+    async with _client(B_HOST) as cb:
+        token = (await cb.post("/agents/task-door/enable", json={"name": "laptop"})).json()["token"]
+        await _door_task(
+            cb,
+            token,
+            task="do it",
+            conversation_id="athr_c",
+            reply_to="http://gone-pc:8787/agents/remote/desk/inbound",
+            reply_token="k",
+        )
+        first = (await _settled(b))[0]
+        before = (await cb.get("/agents/task-door")).json()["last_reply"]
+        orch = b.state.orchestrator
+        again = await orch.rerun_session(first.id)
+        follow = await orch.continue_session(first.id, "and one more thing")
+        for s in (again, follow):
+            assert td.REPLY_OPTION not in json.loads(s.options_json or "{}")
+            # still the same door's task: its origin and trust carry
+            assert s.origin == first.origin and s.trust == "low"
+        await orch.run_session(again.id)
+        await orch.run_session(follow.id)
+        await td.drain_replies()
+        after = (await cb.get("/agents/task-door")).json()["last_reply"]
+    assert len([c for c in net.calls if "gone-pc" in c["url"]]) == 1
+    assert after == before, "the tile's last answer is still the task's own"
+    for sid in (again.id, follow.id):
+        assert "Could not send" not in (_row(b, sid).summary or "")
+
+
+async def test_a_queued_remote_task_that_is_cancelled_still_tells_the_sender(tmp_path, lan):
+    """With a cap set, a second task waits QUEUED; cancelling it there (the
+    user's Cancel, or Emergency stop) still answers the computer that asked."""
+    a = create_app(str(tmp_path / "a"))
+    b = create_app(str(tmp_path / "b"))
+    net = lan({A_HOST: a, B_HOST: b})
+    b.state.platform.config.max_concurrent_sessions = 1
+    started = asyncio.Event()
+
+    async def hanging(**kw):
+        started.set()
+        await asyncio.Event().wait()
+        yield  # pragma: no cover
+
+    b.state.platform.router.stream = hanging
+    orch = b.state.orchestrator
+    inbound = f"http://{A_HOST}/agents/remote/desk/inbound"
+    async with _client(B_HOST) as cb:
+        token = (await cb.post("/agents/task-door/enable", json={"name": "laptop"})).json()["token"]
+        await _door_task(
+            cb, token, task="first", conversation_id="athr_1", reply_to=inbound, reply_token="k1"
+        )
+        await asyncio.wait_for(started.wait(), 10)
+        await _door_task(
+            cb, token, task="second", conversation_id="athr_2", reply_to=inbound, reply_token="k2"
+        )
+        queued = None
+        for _ in range(200):
+            rows = await asyncio.to_thread(_remote_sessions, b)
+            queued = next((r for r in rows if r.status is SessionStatus.QUEUED), None)
+            if queued is not None:
+                break
+            await asyncio.sleep(0.05)
+        assert queued is not None, "the cap parks the second task"
+        running = next(r for r in rows if r.status is SessionStatus.ACTIVE)
+        await asyncio.to_thread(orch.cancel_session, queued.id)
+        orch.cancel_session(running.id)
+        await _settled(b, count=2)
+    by_conv = {
+        json.loads(c["body"])["conversation_id"]: json.loads(c["body"])
+        for c in net.calls
+        if c["url"] == inbound
+    }
+    assert set(by_conv) == {"athr_1", "athr_2"}, by_conv
+    assert by_conv["athr_2"]["kind"] == "done"
+    assert "never started" in by_conv["athr_2"]["message"]
