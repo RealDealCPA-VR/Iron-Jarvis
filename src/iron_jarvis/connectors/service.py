@@ -15,11 +15,12 @@ from routes and tests alike. No secret value is ever returned.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ..core.config import persist_config_values
 from ..mcp.tools import mcp_tools, unload_pack_tools
-from .catalog import CATALOG, connector_dict, get_connector
+from .catalog import CATALOG, LINK_CARDS, connector_dict, get_connector
 
 
 def _mcp_servers(platform) -> list[dict]:
@@ -28,6 +29,87 @@ def _mcp_servers(platform) -> list[dict]:
 
 def _server_cfg(platform, connector_id: str) -> "dict | None":
     return next((s for s in _mcp_servers(platform) if s.get("name") == connector_id), None)
+
+
+#: v1.353.0 (G42): the gallery's group for the packs the user added outside
+#: the catalog (pasted, imported, added on the Tools page). It read "Custom"
+#: beside the words "Your own MCP server." on every such card.
+USER_CATEGORY = "Added by you"
+
+#: v1.353.0 (G43): OTHER names the SAME pack is installed under. The Tools
+#: page's prebuilt catalog (daemon/app.py) adds Sequential Thinking as
+#: "sequentialthinking" while this catalog's id is "sequential_thinking", so a
+#: running pack showed under Custom beside its own card reading "not
+#: connected". A catalog card lights from the first alias that is configured
+#: (only when its own id is not), and that pack is not listed a second time.
+PACK_ALIASES: dict[str, tuple[str, ...]] = {
+    "sequential_thinking": ("sequentialthinking",),
+}
+
+
+def _configured_name(platform, connector_id: str) -> "str | None":
+    """The ``mcp_servers`` name a catalog connector runs under: its own id
+    when configured, else the first configured alias, else None."""
+    if _server_cfg(platform, connector_id) is not None:
+        return connector_id
+    for alias in PACK_ALIASES.get(connector_id, ()):
+        if _server_cfg(platform, alias) is not None:
+            return alias
+    return None
+
+
+#: v1.353.0 (G45): the helper program a launcher command needs, in plain
+#: words ("Needs Node.js"), and where to get it. Keyed by the command's bare
+#: name (no folder, no .cmd/.exe).
+_RUNTIMES: dict[str, tuple[str, str]] = {
+    "npx": ("Node.js", "https://nodejs.org"),
+    "node": ("Node.js", "https://nodejs.org"),
+    "npm": ("Node.js", "https://nodejs.org"),
+    "uvx": ("uv", "https://docs.astral.sh/uv/"),
+    "uv": ("uv", "https://docs.astral.sh/uv/"),
+    "bunx": ("Bun", "https://bun.sh"),
+    "python": ("Python", "https://www.python.org/downloads/"),
+    "python3": ("Python", "https://www.python.org/downloads/"),
+    "pipx": ("pipx", "https://pipx.pypa.io"),
+    "docker": ("Docker Desktop", "https://www.docker.com/products/docker-desktop/"),
+}
+
+
+def _runtime_for(command: str) -> tuple[str, str]:
+    """``(plain name, where to get it)`` for a launcher command."""
+    cmd = str(command or "").strip()
+    base = cmd.lower().rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    for ext in (".cmd", ".exe"):
+        base = base.removesuffix(ext)
+    return _RUNTIMES.get(base, (cmd, ""))
+
+
+def _launcher_found(command: str) -> bool:
+    """Would the launcher find this stdio command right now? The launcher's
+    OWN resolution (``mcp.tools.resolve_launcher``: the real PATH, then the
+    per-user bin folders a GUI-started app misses) — the same answer
+    ``launcher_ready`` gives the Tools catalog and the import preview, read
+    here without importing a route module. Any fault is False, as there."""
+    from ..mcp.tools import resolve_launcher
+
+    try:
+        resolve_launcher(command)
+        return True
+    except Exception:  # noqa: BLE001 — not found / unreadable folder = not ready
+        return False
+
+
+def _runtime_fields(command: str, cache: dict[str, bool]) -> dict[str, Any]:
+    """``runtime_ready`` / ``runtime`` / ``runtime_url`` for a catalog MCP row
+    (v1.353.0, G45): would this PC start the pack's helper program RIGHT NOW?
+    Read once per command per listing (``cache``), never once per card."""
+    cmd = str(command or "").strip()
+    if not cmd:
+        return {}
+    if cmd not in cache:
+        cache[cmd] = _launcher_found(cmd)
+    name, url = _runtime_for(cmd)
+    return {"runtime_ready": cache[cmd], "runtime": name, "runtime_url": url}
 
 
 #: v1.351.0 (G08): the plain words for a saved pack with ZERO tools and no
@@ -102,31 +184,71 @@ def _mcp_status(configured: bool, tools_loaded: int, name: str = "") -> dict[str
     return {"connected": True, "status": "connected", "detail": ""}
 
 
-def _status_for(platform, connector, conn_status: dict) -> dict[str, Any]:
+def _status_for(
+    platform,
+    connector,
+    conn_status: dict,
+    *,
+    runtime_cache: "dict[str, bool] | None" = None,
+    memory_kinds: "set[str] | None" = None,
+) -> dict[str, Any]:
     if connector.connect_via == "mcp":
-        configured = _server_cfg(platform, connector.id) is not None
-        loaded = platform.registry.mcp_names(connector.id) if configured else []
-        return {
+        server = _configured_name(platform, connector.id)
+        configured = server is not None
+        loaded = platform.registry.mcp_names(server) if server else []
+        row: dict[str, Any] = {
             # CONNECTED MEANS REACHABLE (v1.172.0). This used to be "a config
             # entry exists", so a server whose tools failed to load at boot —
             # npx/uvx unresolved, a cold cache, a 15s timeout — reported a
             # confident green while the model could not call a single tool.
             # The one surface that could have revealed a dark wiki was the
             # surface insisting it was fine. Tools loaded IS the connection.
-            **_mcp_status(configured, len(loaded), connector.id),
+            **_mcp_status(configured, len(loaded), server or connector.id),
             "tools_loaded": len(loaded),
             "tool_names": [n.split("__", 2)[-1] for n in loaded],
             "account": "",
+            # v1.353.0 (G45): before Connect, the card says when this PC lacks
+            # the helper program the pack starts with ("Needs Node.js").
+            **_runtime_fields(connector.command, runtime_cache if runtime_cache is not None else {}),
         }
+        if server and server != connector.id:
+            # v1.353.0 (G43): lit by an ALIAS. The row takes the pack's real
+            # name as its id, because every door the card and the chat use —
+            # Test, Retry (/mcp/servers/{name}/reload), Disconnect, the chat's
+            # connector toggle (registry.mcp_names(id)) — works by that name.
+            row["id"] = server
+            row["catalog_id"] = connector.id
+        return row
     st = conn_status.get(connector.provider)
     if st:
-        return {
+        row = {
             "connected": bool(st.get("connected")),
             "status": st.get("status", "disconnected"),
             "tools_loaded": 0,
             "account": st.get("account", ""),
         }
-    return {"connected": False, "status": "disconnected", "tools_loaded": 0, "account": ""}
+    else:
+        row = {"connected": False, "status": "disconnected", "tools_loaded": 0, "account": ""}
+    if connector.connect_via == "oauth":
+        # v1.353.0 (G45): could a sign-in START right now? The registry's own
+        # answer (the same lookup start_oauth makes); the card says the
+        # one-time developer setup BEFORE Connect while it is False, instead
+        # of only after the press failed. A row the registry did not give
+        # reads as not configured (the press would fail the same way).
+        configured = bool(st.get("oauth_client_configured")) if st else False
+        row["oauth_client_configured"] = configured
+        row["needs"] = "" if (configured or row["connected"]) else connector.needs
+        if memory_kinds is not None and connector.provider in _CLOUD_DRIVE_KINDS:
+            # v1.353.0 (G45): a signed-in drive searches NOTHING until a
+            # memory base points at one of its folders; the card says so.
+            row["memory_source"] = connector.provider in memory_kinds
+    return row
+
+
+#: The OAuth drives whose files reach chat only through a memory base
+#: (``ltm.sources.CLOUD_DRIVE_KINDS``; repeated here so a listing never
+#: imports the LTM package just to name three providers — pinned equal).
+_CLOUD_DRIVE_KINDS: tuple[str, ...] = ("google_drive", "onedrive", "dropbox")
 
 
 def _entry_base(id: str, name: str, category: str, glyph: str, blurb: str,
@@ -141,10 +263,71 @@ def _entry_base(id: str, name: str, category: str, glyph: str, blurb: str,
     }
 
 
-def _user_mcp_connectors(platform) -> list[dict[str, Any]]:
+#: v1.353.0 (G42): what a pack added by the user says about itself on its card
+#: — the first sentence of its first two tools' own descriptions plus the
+#: count. Bounds keep a pack's long (or hostile) text from filling the card;
+#: React renders it as text, never markup.
+_BLURB_SENTENCES = 2
+_BLURB_SENTENCE_MAX = 110
+#: A description that names the mechanism (the registry's own fallback reads
+#: "Remote MCP tool 'x' from server 'y'.") is skipped: no card says MCP.
+_MECHANISM_RX = re.compile(r"\bMCP\b", re.IGNORECASE)
+#: Markdown-ish noise at the start of a description line.
+_LEAD_NOISE_RX = re.compile(r"^[\s#>*_`\-]+")
+#: Where a first sentence ends: ". " / "! " / "? " or a line break.
+_SENTENCE_END_RX = re.compile(r"(?<=[.!?])\s|\n")
+
+
+def _first_sentence(text: str) -> str:
+    raw = _LEAD_NOISE_RX.sub("", str(text or "")).strip()
+    if not raw:
+        return ""
+    first = _SENTENCE_END_RX.split(raw, maxsplit=1)[0].strip()
+    first = re.sub(r"\s+", " ", first).replace("`", "").replace("**", "")
+    if len(first) > _BLURB_SENTENCE_MAX:
+        first = first[: _BLURB_SENTENCE_MAX - 1].rstrip() + "…"
+    elif first and first[-1] not in ".!?…":
+        first += "."
+    return first
+
+
+def user_pack_blurb(platform, name: str, loaded: list[str]) -> str:
+    """The card blurb of a pack the user added (v1.353.0, G42): what its tools
+    say they do, then how many there are — "Read a file. Search the web. 6
+    tools." A pack with no tools yet reads "A tool you added." (its status
+    line says why). Never raises; secret-shaped text is masked."""
+    n = len(loaded)
+    if n == 0:
+        return "A tool you added."
+    sentences: list[str] = []
+    for tool_name in loaded:
+        if len(sentences) >= _BLURB_SENTENCES:
+            break
+        try:
+            tool = platform.registry.get(tool_name)
+            desc = str(getattr(tool, "description", "") or "")
+        except Exception:  # noqa: BLE001 — a blurb never breaks the gallery
+            desc = ""
+        sentence = _first_sentence(desc)
+        if not sentence or _MECHANISM_RX.search(sentence) or sentence in sentences:
+            continue
+        sentences.append(sentence)
+    count = f"{n} tool{'' if n == 1 else 's'}."
+    text = " ".join([*sentences, count])
+    try:
+        from ..detections.redact import mask
+
+        text = mask(text)
+    except Exception:  # noqa: BLE001
+        pass
+    return text
+
+
+def _user_mcp_connectors(platform, skip: "set[str] | None" = None) -> list[dict[str, Any]]:
     """MCP servers the user added OUTSIDE the catalog (pasted configs, the
-    /mcp routes) — established connections, so they belong in the gallery."""
-    catalog_ids = {c.id for c in CATALOG}
+    /mcp routes) — established connections, so they belong in the gallery.
+    ``skip``: names a catalog card already shows (an alias it lit, v1.353.0)."""
+    catalog_ids = {c.id for c in CATALOG} | set(skip or ())
     out: list[dict[str, Any]] = []
     for cfg in _mcp_servers(platform):
         name = str(cfg.get("name") or "").strip()
@@ -153,8 +336,8 @@ def _user_mcp_connectors(platform) -> list[dict[str, Any]]:
         loaded = platform.registry.mcp_names(name)
         out.append({
             **_entry_base(
-                name, name, "Custom", "🧩",
-                "Your own MCP server.",
+                name, name, USER_CATEGORY, "🧩",
+                user_pack_blurb(platform, name, loaded),
                 "Its tools are available to chat and agents once toggled on.",
                 "mcp",
             ),
@@ -170,7 +353,8 @@ def _user_mcp_connectors(platform) -> list[dict[str, Any]]:
 
 #: Plain-English blurb per custom-LTM-source kind (memory connectors).
 _MEMORY_BLURB = {
-    "mcp": "An MCP-served memory brain.",
+    # v1.353.0 (G42): no card says MCP.
+    "mcp": "A memory brain served by a tool you added.",
     "notion": "A Notion database as memory.",
     "markdown": "A markdown folder as memory.",
     "ssh": "A remote brain over SSH.",
@@ -219,6 +403,24 @@ def _memory_connectors(platform) -> list[dict[str, Any]]:
     return out
 
 
+def _memory_kinds(platform) -> "set[str] | None":
+    """The kinds of the user's memory bases (``google_drive`` …), or None when
+    the store cannot be read — then no drive card claims "no folder yet"."""
+    try:
+        from ..ltm.sources import CustomSourceStore
+
+        return {str(rec.kind) for rec in CustomSourceStore(platform.engine).list()}
+    except Exception:  # noqa: BLE001 — unknown is not "none"
+        return None
+
+
+def _link_row(card) -> dict[str, Any]:
+    """A LINK card's row (v1.353.0, G43): never connected here; its one action
+    opens ``href``."""
+    return {**connector_dict(card), "connected": False, "status": "disconnected",
+            "tools_loaded": 0, "account": ""}
+
+
 def list_connectors(platform) -> list[dict[str, Any]]:
     """The curated catalog PLUS the user's own established connections (custom
     MCP servers, memory sources), each annotated with live status. No secrets."""
@@ -226,8 +428,21 @@ def list_connectors(platform) -> list[dict[str, Any]]:
         conn_status = {c["provider"]: c for c in platform.connections.status()}
     except Exception:  # noqa: BLE001 — a broken registry shouldn't blank the gallery
         conn_status = {}
-    out = [{**connector_dict(c), **_status_for(platform, c, conn_status)} for c in CATALOG]
-    out += _user_mcp_connectors(platform)
+    runtime_cache: dict[str, bool] = {}
+    memory_kinds = _memory_kinds(platform)
+    out = [
+        {
+            **connector_dict(c),
+            **_status_for(
+                platform, c, conn_status, runtime_cache=runtime_cache, memory_kinds=memory_kinds
+            ),
+        }
+        for c in CATALOG
+    ]
+    # A pack an alias lit is shown by its catalog card, never a second time.
+    shown = {row["id"] for row in out}
+    out += [_link_row(card) for card in LINK_CARDS]
+    out += _user_mcp_connectors(platform, skip=shown)
     out += _memory_connectors(platform)
     return out
 
@@ -419,7 +634,9 @@ def test(platform, connector_id: str) -> dict[str, Any]:
             return {"ok": True, "kind": "memory"}
         raise KeyError(connector_id)
     if connector.connect_via == "mcp":
-        cfg = _server_cfg(platform, connector.id)
+        # v1.353.0 (G43): the pack may run under an alias (PACK_ALIASES).
+        server = _configured_name(platform, connector.id)
+        cfg = _server_cfg(platform, server) if server else None
         if cfg is None:
             return {"ok": False, "error": "not connected yet"}
         return _probe_mcp(platform, cfg)
@@ -473,6 +690,7 @@ def disconnect(platform, connector_id: str) -> dict[str, Any]:
             return {"ok": True, "disconnected": connector_id}
         raise KeyError(connector_id)
     if connector.connect_via == "mcp":
-        return _disconnect_mcp_server(platform, connector.id)
+        # v1.353.0 (G43): the pack the card shows, even under an alias.
+        return _disconnect_mcp_server(platform, _configured_name(platform, connector.id) or connector.id)
     platform.connections.disconnect(connector.provider)
     return {"ok": True, "disconnected": connector.id}

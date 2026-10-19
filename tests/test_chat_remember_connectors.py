@@ -187,9 +187,12 @@ def test_connectors_list_includes_user_mcp_server(tmp_path):
     ]
     platform.registry.register(_FakeMcpTool("mcp__my_notes__search"), mcp=True)
     out = client.get("/connectors").json()
-    assert "Custom" in out["categories"] and "Memory" in out["categories"]
+    assert "Memory" in out["categories"]
     entry = next(c for c in out["connectors"] if c["id"] == "my_notes")
-    assert entry["category"] == "Custom" and entry["connected"] is True
+    # v1.353.0 (G42): the user's own packs are "Added by you" (was "Custom",
+    # beside "Your own MCP server."); tests/test_connections_home_v13530.py
+    # pins the words.
+    assert entry["category"] == "Added by you" and entry["connected"] is True
     assert entry["tools_loaded"] == 1 and entry["tool_names"] == ["search"]
     assert entry["source"] == "user"
 

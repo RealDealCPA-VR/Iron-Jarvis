@@ -56,6 +56,32 @@ class Connector:
     fields: list[Field] = field(default_factory=list)
     # -- oauth / api_key (routes through the ConnectionRegistry) --
     provider: str = ""  # a ConnectionSpec provider id
+    # v1.353.0 (G45): a one-time setup this app needs OUTSIDE Iron Jarvis,
+    # said on the card BEFORE Connect (Gmail's package reads a Google OAuth
+    # client the user registers themselves; it used to be one clause of the
+    # blurb, and Drive's said nothing until the press failed). For an OAuth
+    # app it is met once an OAuth client is registered, so the gallery shows
+    # it only while `oauth_client_configured` is False (connectors.service).
+    needs: str = ""
+    # v1.353.0 (G43): an honest word about the PACKAGE itself — npm marks
+    # it "no longer supported" and no maintained replacement with the same
+    # settings has been verified yet. Shown on the card; the pack still
+    # installs, so it stays connectable.
+    package_note: str = ""
+    # -- link (a card that points at the page that sets it up; LINK_CARDS) --
+    href: str = ""
+    action: str = ""
+
+
+#: How a LINK card is wired: it is not connected here at all — its one action
+#: opens the page that sets it up. Not in :data:`CONNECT_VIA` and never in
+#: :data:`CATALOG`, so every connect / test / disconnect door (and the chat's
+#: app_connect, which reads :func:`get_connector`) still sees only real
+#: connectors.
+LINK = "link"
+
+#: v1.353.0 (G43): the words for a package npm marks "no longer supported".
+OLDER_PACKAGE_NOTE = "Uses an older package its makers no longer update."
 
 
 # --------------------------------------------------------------------------- #
@@ -85,6 +111,9 @@ CATALOG: list[Connector] = [
                 help=f"Create a token (repo scope) at {_GH}.",
             )
         ],
+        # GitHub's own maintained server speaks HTTP, a different door
+        # (G44); until then this card says what it runs.
+        package_note=OLDER_PACKAGE_NOTE,
     ),
     Connector(
         id="postgres",
@@ -107,6 +136,7 @@ CATALOG: list[Connector] = [
                 kind="arg",
             )
         ],
+        package_note=OLDER_PACKAGE_NOTE,
     ),
     Connector(
         id="filesystem",
@@ -140,20 +170,12 @@ CATALOG: list[Connector] = [
             Field("SENTRY_AUTH_TOKEN", "Sentry auth token", help="An org auth token from Sentry settings.")
         ],
     ),
-    Connector(
-        id="puppeteer",
-        name="Browser (Puppeteer)",
-        category="Developer",
-        glyph="🎭",
-        blurb="Automate a real browser.",
-        unlocks="Navigate pages, click, fill forms, and capture screenshots via a "
-        "headless Chrome — no token required.",
-        connect_via="mcp",
-        scopes=["Browser automation"],
-        docs_url="https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
-        command="npx",
-        args=["-y", "@modelcontextprotocol/server-puppeteer"],
-    ),
+    # v1.353.0 (G43): "Browser (Puppeteer)" is gone from here. npm marks
+    # @modelcontextprotocol/server-puppeteer "no longer supported", and the
+    # app already drives the user's OWN browser through its add-on, so the
+    # Directory offers that instead: the "browser_addon" LINK card below,
+    # whose action opens Settings › Connections › Browser. A pack the user
+    # already added as "puppeteer" keeps working and shows as "Added by you".
     # ---------------- Communication ----------------
     Connector(
         id="slack",
@@ -165,9 +187,15 @@ CATALOG: list[Connector] = [
         "reply to messages on your behalf.",
         connect_via="mcp",
         scopes=["Read channels & messages", "Post messages"],
-        docs_url="https://github.com/modelcontextprotocol/servers/tree/main/src/slack",
+        # v1.353.0 (G43): the maintained server. The reference
+        # @modelcontextprotocol/server-slack is "no longer supported" on npm;
+        # the official servers README names Zencoder's as its maintainer, and
+        # `npm view` (2026-10-18) confirmed it reads the SAME two settings,
+        # SLACK_BOT_TOKEN and SLACK_TEAM_ID, speaks stdio by default and has
+        # one bin, so `npx -y` runs it with the same arguments.
+        docs_url="https://github.com/zencoderai/slack-mcp-server",
         command="npx",
-        args=["-y", "@modelcontextprotocol/server-slack"],
+        args=["-y", "@zencoderai/slack-mcp-server"],
         fields=[
             Field("SLACK_BOT_TOKEN", "Slack bot token", help="A xoxb-… bot token from your Slack app."),
             Field("SLACK_TEAM_ID", "Slack team id", help="Your workspace/team id (T…).", kind="env"),
@@ -179,13 +207,14 @@ CATALOG: list[Connector] = [
         category="Communication",
         glyph="✉️",
         blurb="Read, search, and send email.",
-        unlocks="Search your inbox, read and summarize threads, draft and send "
-        "email. Needs Google OAuth credentials (see docs) on first run.",
+        unlocks="Search your inbox, read and summarize threads, draft and send email.",
         connect_via="mcp",
         scopes=["Read mail", "Send mail"],
         docs_url="https://github.com/GongRzhe/Gmail-MCP-Server",
         command="npx",
         args=["-y", "@gongrzhe/server-gmail-autoauth-mcp"],
+        # v1.353.0 (G45): said BEFORE Connect (it was the blurb's last clause).
+        needs="Needs a one-time Google developer setup",
     ),
     # ---------------- Productivity ----------------
     Connector(
@@ -219,6 +248,7 @@ CATALOG: list[Connector] = [
         command="npx",
         args=["-y", "@modelcontextprotocol/server-google-maps"],
         fields=[Field("GOOGLE_MAPS_API_KEY", "Google Maps API key", help="A Maps Platform API key.")],
+        package_note=OLDER_PACKAGE_NOTE,
     ),
     # ---------------- Storage ----------------
     Connector(
@@ -233,6 +263,8 @@ CATALOG: list[Connector] = [
         scopes=["Read Drive files"],
         provider="google_drive",
         docs_url="https://console.cloud.google.com/apis/credentials",
+        # v1.353.0 (G45): shown only while no OAuth client is registered.
+        needs="Needs a one-time Google developer setup",
     ),
     Connector(
         id="onedrive",
@@ -246,6 +278,7 @@ CATALOG: list[Connector] = [
         scopes=["Read/write files"],
         provider="onedrive",
         docs_url="https://portal.azure.com",
+        needs="Needs a one-time Microsoft developer setup",
     ),
     Connector(
         id="dropbox",
@@ -259,6 +292,7 @@ CATALOG: list[Connector] = [
         scopes=["Read files"],
         provider="dropbox",
         docs_url="https://www.dropbox.com/developers/apps",
+        needs="Needs a one-time Dropbox developer setup",
     ),
     Connector(
         id="box",
@@ -266,8 +300,10 @@ CATALOG: list[Connector] = [
         category="Storage",
         glyph="📦",
         blurb="Manage your Box files.",
-        unlocks="Search, read, and manage files in Box (Box's own MCP server; needs "
-        "uv installed).",
+        # v1.353.0 (G42/G45): no mechanism word on the card, and the helper
+        # program it needs (uv) is the card's own "Needs uv" line, said only
+        # when this PC lacks it.
+        unlocks="Search, read, and manage files in Box, through Box's own server.",
         connect_via="mcp",
         scopes=["Read & manage files"],
         docs_url="https://developer.box.com",
@@ -372,6 +408,27 @@ CATALOG: list[Connector] = [
     ),
 ]
 
+#: v1.353.0 (G43): cards that point somewhere instead of connecting here. The
+#: gallery lists them after the catalog (``connectors.service.list_connectors``);
+#: their one action opens ``href``. Kept OUT of :data:`CATALOG` on purpose:
+#: :func:`get_connector` answers only connectable entries, so a link card can
+#: never reach a connect / test / disconnect door or the chat's app_connect.
+LINK_CARDS: list[Connector] = [
+    Connector(
+        id="browser_addon",
+        name="Your browser",
+        category="Data & Web",
+        glyph="🧭",
+        blurb="Let Jarvis read and act in the browser you already use.",
+        unlocks="Open pages, read them, click and fill in forms in your own "
+        "browser, through the Iron Jarvis browser add-on.",
+        connect_via=LINK,
+        scopes=["Read pages", "Click and type"],
+        href="/settings?section=connections-browser",
+        action="Set up the browser add-on",
+    ),
+]
+
 #: Category display order for the gallery.
 CATEGORY_ORDER = [
     "Developer",
@@ -407,4 +464,12 @@ def connector_dict(c: Connector) -> dict:
         "docs_url": c.docs_url,
         "fields": [field_dict(f) for f in c.fields],
         "provider": c.provider,
+        # v1.353.0 (G45/G43): the setup it needs and a word about its package
+        # ("" when none). For an OAuth app the service blanks `needs` once a
+        # client is registered.
+        "needs": c.needs,
+        "package_note": c.package_note,
+        # A LINK card's one action (both "" for every other card).
+        "href": c.href,
+        "action": c.action,
     }

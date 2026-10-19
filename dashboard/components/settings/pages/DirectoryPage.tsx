@@ -7,19 +7,18 @@ import {
   Brain,
   Search,
   Plug,
-  ShieldCheck,
-  KeyRound,
   Check,
   CheckCircle2,
   Radio,
   ExternalLink,
   Sparkles,
   ArrowRight,
+  FolderInput,
   Info,
   X,
 } from "lucide-react";
 import { post, del, ApiError } from "@/lib/api";
-import { usePolledApi } from "@/lib/useApi";
+import { useApi, usePolledApi } from "@/lib/useApi";
 import {
   Badge,
   OfflineHint,
@@ -33,12 +32,17 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { BrandGlyph } from "@/components/BrandGlyph";
+import { SourcesDoor } from "@/components/tools/AddPack";
+import type { ImportSource } from "@/lib/mcpImport";
+import { discover, discoveryLine } from "@/lib/importDiscovery";
 
 /* -------------------------------------------------------------------------- */
 /*  Types (local — lib/types.ts is intentionally untouched)                    */
 /* -------------------------------------------------------------------------- */
 
-type ConnectVia = "mcp" | "oauth" | "api_key" | "memory";
+/** v1.353.0 (G43): "link" = a card whose one action opens the page that sets
+ *  it up (the browser add-on); it is never connected here. */
+type ConnectVia = "mcp" | "oauth" | "api_key" | "memory" | "link";
 type FieldKind = "secret" | "env" | "arg";
 
 /** One value the user supplies to connect an MCP connector. */
@@ -75,6 +79,21 @@ interface Connector {
   reason?: string | null;
   fix?: string | null;
   stderr_tail?: string | null;
+  /** v1.353.0 (G45): a one-time setup it needs outside Iron Jarvis ("" none;
+   *  an OAuth app's is "" once its OAuth client is registered). */
+  needs?: string | null;
+  /** v1.353.0 (G45): would this PC start the pack's helper program now?
+   *  `false` = say "Needs <runtime>" before Connect. Absent = unknown. */
+  runtime_ready?: boolean | null;
+  runtime?: string | null;
+  runtime_url?: string | null;
+  /** v1.353.0 (G45): an OAuth drive's sign-in is not yet a memory base. */
+  memory_source?: boolean | null;
+  /** v1.353.0 (G43): a word about the package itself ("older package"). */
+  package_note?: string | null;
+  /** v1.353.0 (G43): a LINK card's one action. */
+  href?: string | null;
+  action?: string | null;
 }
 
 interface ConnectorsResponse {
@@ -150,23 +169,50 @@ type TestResult = McpTestResult | ConnTestResult | MemTestResult;
 /*  Per-`connect_via` presentation                                             */
 /* -------------------------------------------------------------------------- */
 
-const VIA: Record<ConnectVia, { label: string; icon: typeof Plug }> = {
-  mcp: { label: "MCP", icon: Plug },
-  oauth: { label: "OAuth", icon: ShieldCheck },
-  api_key: { label: "API key", icon: KeyRound },
-  memory: { label: "Memory", icon: Brain },
+/**
+ * v1.353.0 (G42): HOW a card connects, in a tooltip on its category line. It
+ * used to be a tag on every card ("MCP" / "OAUTH" / "API KEY") — the
+ * mechanism, in capitals, on a page for people who just want their apps.
+ * An unknown value from a newer daemon reads as nothing.
+ */
+const VIA_TITLE: Record<ConnectVia, string> = {
+  mcp: "Runs a small helper program on this PC",
+  oauth: "Connects by signing in to your account",
+  api_key: "Connects with a key from the service",
+  memory: "A memory base",
+  link: "Set up on its own page",
 };
 
-function ViaTag({ via }: { via: ConnectVia }) {
-  // Defensive fallback: an unknown via from a newer daemon must not crash.
-  const { label, icon: Icon } = VIA[via] ?? { label: via, icon: Plug };
-  return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">
-      <Icon size={11} className="text-accent-soft/80" />
-      {label}
-    </span>
-  );
-}
+/** Where "choose a folder for memory" goes: the Memory page's long-term tab,
+ *  at its "Add a memory base" control (both params, as the palette's). */
+const ADD_MEMORY_BASE = "/memory?scope=longterm&focus=add-base";
+
+/** The OAuth drives whose files reach chat only through a memory base. */
+const MEMORY_DRIVES: ReadonlySet<string> = new Set(["google_drive", "onedrive", "dropbox"]);
+
+/**
+ * v1.353.0 (G45): one sentence that ties an app to the OTHER place people
+ * look for it — the Gmail app is not how Jarvis emails you, the Slack app is
+ * not how Jarvis messages you, and Notion reaches memory as a memory base.
+ * Keyed by card id, like TOOLS_TWINS below.
+ */
+const ALSO: Readonly<Record<string, { lead: string; label: string; href: string }>> = {
+  gmail: {
+    lead: "To have Jarvis email you, use",
+    label: "Notifications › Email",
+    href: "/settings?section=connections-notifications",
+  },
+  slack: {
+    lead: "To have Jarvis message you in Slack, use",
+    label: "Notifications › Slack",
+    href: "/settings?section=connections-notifications",
+  },
+  notion: {
+    lead: "To make your Notion pages part of memory, add",
+    label: "a memory base",
+    href: ADD_MEMORY_BASE,
+  },
+};
 
 /** A muted amber "heads up" note — used for the honest MCP restart note. */
 function InfoNote({ children }: { children: React.ReactNode }) {
@@ -357,6 +403,14 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
   // any other state (failed, no_tools) "Needs attention", in the warn tone.
   const healthy = c.connected && c.status === "connected";
   const attention = c.connected && !healthy;
+  // v1.353.0 (G45): the needs said before Connect.
+  const setupNeeds = (c.needs ?? "").trim();
+  const runtimeMissing = c.runtime_ready === false && Boolean((c.runtime ?? "").trim());
+  // v1.353.0 (G45): a signed-in drive searches nothing until a memory base
+  // points at one of its folders. `false` only when the daemon checked.
+  const needsMemoryFolder =
+    healthy && c.connect_via === "oauth" && MEMORY_DRIVES.has(c.provider) && c.memory_source === false;
+  const also = ALSO[c.id];
 
   return (
     <div
@@ -370,16 +424,18 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
             : ""
       }`}
     >
-      {/* Header: glyph + name + via tag + status */}
+      {/* Header: glyph + name + status. v1.353.0 (G42): no mechanism tag;
+          how it connects is the category line's tooltip. */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <BrandGlyph id={c.id} glyph={c.glyph} connected={healthy} />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h3 className="truncate text-sm font-semibold text-zinc-100">{c.name}</h3>
-              <ViaTag via={c.connect_via} />
             </div>
-            <p className="mt-0.5 truncate text-[11px] text-zinc-500">{c.category}</p>
+            <p className="mt-0.5 truncate text-[11px] text-zinc-500" title={VIA_TITLE[c.connect_via]}>
+              {c.category}
+            </p>
           </div>
         </div>
         {healthy ? (
@@ -400,6 +456,45 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
 
       {/* Blurb */}
       <p className="text-[13px] text-zinc-400">{c.blurb}</p>
+
+      {/* v1.353.0 (G45): what it needs, said BEFORE Connect — a one-time
+          setup outside Iron Jarvis (Gmail; a drive with no OAuth client yet)
+          and the helper program this PC lacks ("Needs Node.js"). Words in
+          the warn tone with a dot, never colour alone. */}
+      {!c.connected && (setupNeeds || runtimeMissing) && (
+        <div data-testid={`connector-needs-${c.id}`} className="flex flex-wrap gap-1.5">
+          {setupNeeds && (
+            <Badge
+              value={setupNeeds}
+              tone="amber"
+              variant="calm"
+              keepCase
+              title={c.docs_url ? "The Docs link on this card shows how" : undefined}
+              data-testid={`connector-needs-setup-${c.id}`}
+            />
+          )}
+          {setupNeeds && c.connect_via === "oauth" && (
+            /* The same place the after-the-press note points to. */
+            <Link
+              href="/connections"
+              data-testid={`connector-needs-howto-${c.id}`}
+              className="inline-flex items-center gap-1 text-[11px] text-zinc-400 transition-colors hover:text-accent-soft"
+            >
+              How to set it up <ArrowRight size={11} aria-hidden="true" />
+            </Link>
+          )}
+          {runtimeMissing && (
+            <Badge
+              value={`Needs ${c.runtime}`}
+              tone="amber"
+              variant="calm"
+              keepCase
+              title={`${c.runtime} was not found on this PC.${c.runtime_url ? ` Get it free from ${c.runtime_url}` : ""}`}
+              data-testid={`connector-needs-runtime-${c.id}`}
+            />
+          )}
+        </div>
+      )}
 
       {/* What it unlocks — the plain-English payoff */}
       <div className="flex items-start gap-2 rounded-xl border border-accent/15 bg-accent/[0.04] px-3 py-2.5">
@@ -456,6 +551,22 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               )}
               <LastOutput tail={c.stderr_tail} testId={`connector-stderr-${c.id}`} />
             </div>
+          ) : needsMemoryFolder ? (
+            /* v1.353.0 (G45): "Ready to use" over a drive nothing searched. */
+            <p
+              data-testid={`connector-memory-next-${c.id}`}
+              className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-zinc-300"
+            >
+              <span>
+                {c.account ? `Signed in as ${c.account}. ` : "Connected. "}Now choose a folder for memory.
+              </span>
+              <Link
+                href={ADD_MEMORY_BASE}
+                className="inline-flex items-center gap-1 font-medium text-accent-soft transition-colors hover:text-accent"
+              >
+                Choose a folder <ArrowRight size={12} aria-hidden="true" />
+              </Link>
+            </p>
           ) : (
             <p className="text-[11px] text-zinc-500">
               {c.connect_via === "mcp"
@@ -487,6 +598,24 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
             </div>
           )}
         </div>
+      )}
+
+      {/* v1.353.0 (G43): an honest word about the package itself. */}
+      {c.package_note && (
+        <p data-testid={`connector-package-note-${c.id}`} className="text-[11px] text-zinc-500">
+          {c.package_note}
+        </p>
+      )}
+
+      {/* v1.353.0 (G45): the OTHER place people look for this app. */}
+      {also && (
+        <p data-testid={`connector-also-${c.id}`} className="text-[11px] text-zinc-500">
+          {also.lead}{" "}
+          <Link href={also.href} className="text-zinc-400 underline-offset-2 transition-colors hover:text-accent-soft hover:underline">
+            {also.label}
+          </Link>
+          .
+        </p>
       )}
 
       {/* Docs link */}
@@ -544,6 +673,16 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
         // Memory sources are added on the Memory page, not connected here.
         <Link href="/memory" className="btn-ghost w-full py-1.5 text-center text-xs">
           <Brain size={14} /> Manage on the Memory page
+        </Link>
+      ) : c.connect_via === "link" ? (
+        // v1.353.0 (G43): a card that is set up on its own page (the browser
+        // add-on, where Puppeteer used to be offered as an app).
+        <Link
+          href={c.href || "/settings"}
+          data-testid={`connector-link-${c.id}`}
+          className="btn-ghost w-full py-1.5 text-center text-xs"
+        >
+          {c.action || "Open its settings"} <ArrowRight size={14} aria-hidden="true" />
         </Link>
       ) : (
         <div className="space-y-2.5">
@@ -729,8 +868,11 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
  * v1.316.0 (three-overlapping-catalogs): Directory connectors the Tools page
  * ALSO adds under the same id — both write ONE `mcp_servers` entry named by
  * it, so they are the same pack, never a second copy. Exact twins only:
- * Puppeteer is not Tools' Playwright, and `sequential_thinking` is not Tools'
- * `sequentialthinking`. Kept in step with `DIRECTORY_TWINS` in tools/page.tsx.
+ * the browser card is not Tools' Playwright, and `sequential_thinking` is not
+ * Tools' `sequentialthinking` (since v1.353.0 the daemon lights the Sequential
+ * Thinking card from that pack — `connectors.service.PACK_ALIASES` — and the
+ * row then carries the pack's own name as its id). Kept in step with
+ * `DIRECTORY_TWINS` in tools/page.tsx.
  */
 const TOOLS_TWINS: ReadonlySet<string> = new Set([
   "github",
@@ -739,6 +881,98 @@ const TOOLS_TWINS: ReadonlySet<string> = new Set([
   "memory",
   "box",
 ]);
+
+/* -------------------------------------------------------------------------- */
+/*  v1.353.0 (G42): one Connections home                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * "Import from your other apps", where people come to connect things: one
+ * line about what Claude, Codex, Cursor and VS Code already use (read ONCE,
+ * `GET /mcp/import/sources` — the Tools page's door reads the same answer),
+ * and an Import button that opens that SAME door here. Nothing is added
+ * without a press: the door lists the tools, the user picks, Add selected.
+ */
+function ImportFromApps({ onImported }: { onImported: () => void }) {
+  const { data, error, loading, reload } = useApi<{ sources?: ImportSource[] }>(
+    "/mcp/import/sources",
+  );
+  const [open, setOpen] = useState(false);
+  const sources = useMemo(
+    () => (data ? (Array.isArray(data.sources) ? data.sources : []) : null),
+    [data],
+  );
+  const found = useMemo(() => discover(sources), [sources]);
+  const line = discoveryLine(found);
+  // Nothing to say while the first read is out, after a failed read, or on a
+  // daemon too old to answer (the page's own offline note speaks for that).
+  if (!data) {
+    if (!loading || error) return null;
+    return (
+      <p data-testid="directory-import" className="flex items-center gap-2 text-[13px] text-zinc-500">
+        <FolderInput size={14} aria-hidden="true" />
+        <LoaderInline label="Looking in your other apps" />
+      </p>
+    );
+  }
+  if (!line) return null;
+  const canOpen = found.found > 0;
+  return (
+    <section data-testid="directory-import" aria-label="Import from your other apps" className="space-y-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px]">
+        <FolderInput size={14} className="shrink-0 text-accent-soft" aria-hidden="true" />
+        <span data-testid="directory-import-line" className={found.fresh > 0 ? "text-zinc-300" : "text-zinc-500"}>
+          {line}
+        </span>
+        {canOpen && (
+          <button
+            type="button"
+            data-testid="directory-import-open"
+            aria-expanded={open}
+            aria-controls="directory-import-door"
+            onClick={() => setOpen((v) => !v)}
+            className="btn-ghost px-3 py-1 text-[12px]"
+          >
+            {open ? "Hide" : found.fresh > 0 ? "Import" : "See them"}
+          </button>
+        )}
+      </div>
+      {open && (
+        <div id="directory-import-door">
+          <SourcesDoor
+            sources={sources}
+            onAdded={() => {
+              onImported();
+              reload();
+            }}
+          />
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** What works with nothing to connect (built-in tools). */
+const BUILT_IN = ["Files & documents", "Web", "Images", "Spreadsheets", "Memory"];
+
+/** v1.353.0 (G42): the other doors, so this page is the one place to start. */
+const MORE_WAYS: readonly { label: string; href: string; title: string }[] = [
+  {
+    label: "An agent on another computer",
+    href: "/agents?view=team",
+    title: "Add a remote agent to your team",
+  },
+  {
+    label: "A model server on your network",
+    href: "/fleet",
+    title: "Add a model running on another computer",
+  },
+  {
+    label: "Add a tool by config (advanced)",
+    href: "/tools?focus=packs",
+    title: "Paste a config, add from npm, PyPI or GitHub, or reach a server by URL",
+  },
+];
 
 /* -------------------------------------------------------------------------- */
 /*  Skeleton card (first load)                                                  */
@@ -823,14 +1057,23 @@ export default function MarketplacePage() {
       .filter((g) => g.items.length > 0);
   }, [categories, connectors, visible]);
 
-  const chips = ["All", ...categories];
+  // v1.353.0: a group the daemon's category list does not name yet (a card's
+  // own category, e.g. "Added by you") still gets its chip, after the rest —
+  // the same rule the grouping above follows.
+  const chips = useMemo(() => {
+    const named = new Set(categories);
+    const extra = Array.from(new Set(connectors.map((c) => c.category))).filter(
+      (cat) => cat && !named.has(cat),
+    );
+    return ["All", ...categories, ...extra];
+  }, [categories, connectors]);
 
   return (
     <PageShell>
       <Reveal>
         <PageHeader
           title="Directory"
-          subtitle="Connect Iron Jarvis to your apps — one tap. Tokens are stored encrypted; nothing is sent anywhere but the service you connect."
+          subtitle="Connect Iron Jarvis to the apps you already use. Keys are stored encrypted; nothing is sent anywhere but the service you connect."
           actions={
             /* Users arrive from the chat "+" menu (the Directory has no nav
                row) — give them the door back so a collapsed sidebar never
@@ -892,6 +1135,23 @@ export default function MarketplacePage() {
               {categories.length} categor{categories.length === 1 ? "y" : "ies"}
             </span>
           </p>
+        </Reveal>
+      )}
+
+      {/* v1.353.0 (G42): one Connections home. What the user's other apps
+          already use (with Import), and what needs no connecting at all. */}
+      {!offline && (
+        <Reveal>
+          <div className="space-y-2.5">
+            <ImportFromApps onImported={reload} />
+            <p
+              data-testid="directory-built-in"
+              className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-zinc-500"
+            >
+              <CheckCircle2 size={14} className="shrink-0" aria-hidden="true" />
+              <span>Built in, nothing to connect: {BUILT_IN.join(", ")}.</span>
+            </p>
+          </div>
         </Reveal>
       )}
 
@@ -989,6 +1249,30 @@ export default function MarketplacePage() {
             </section>
           </Reveal>
         ))
+      )}
+
+      {/* v1.353.0 (G42): the doors that live elsewhere, named here so this
+          page is the one place to start. Quiet links, like the cards'. */}
+      {!offline && (
+        <Reveal>
+          <nav
+            aria-label="More ways to connect"
+            data-testid="directory-more-ways"
+            className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12px] text-zinc-500"
+          >
+            <span>More ways to connect:</span>
+            {MORE_WAYS.map((w) => (
+              <Link
+                key={w.href}
+                href={w.href}
+                title={w.title}
+                className="inline-flex items-center gap-1 text-zinc-400 transition-colors hover:text-accent-soft"
+              >
+                {w.label} <ArrowRight size={11} aria-hidden="true" />
+              </Link>
+            ))}
+          </nav>
+        </Reveal>
       )}
     </PageShell>
   );

@@ -167,8 +167,9 @@ interface McpCatalogEntry {
  * offers under the SAME id. Both surfaces write one `mcp_servers` entry named
  * by that id (Directory: `connectors/service.py` `{"name": connector.id}`), so
  * adding in either place is the same pack — never a second copy. Only exact
- * twins are listed: Directory's Puppeteer is not Tools' Playwright, and its
- * `sequential_thinking` is not Tools' `sequentialthinking`.
+ * twins are listed: Directory's browser card is not Tools' Playwright, and its
+ * `sequential_thinking` is not Tools' `sequentialthinking` (v1.353.0: the
+ * Directory card still LIGHTS from that pack — connectors.service.PACK_ALIASES).
  */
 const DIRECTORY_TWINS: ReadonlySet<string> = new Set([
   "github",
@@ -1790,14 +1791,14 @@ export default function ToolsPage() {
           icon={<Plug size={15} />}
         >
           {/* "Plug-ins (MCP)" was insider jargon on a first-run screen (review
-              §2). The parenthetical keeps the word for people who know it and
-              states the one thing that decides whether an extension will even
-              start. */}
+              §2). v1.353.0 (G42): the parenthetical "(MCP)" went too; the
+              blurb states the one thing that decides whether an extension
+              will even start, in plain words, and that the page says so. */}
           <p className="mb-3 text-sm text-zinc-400">
             <span className="text-zinc-300">Extensions</span> add bigger abilities —
-            files, repositories, memory, cloud apps. Each one runs as its own
-            program (MCP), so it may need Node or Python, and you choose the
-            folder or account when you enable it.
+            files, repositories, memory, cloud apps — and you choose the folder or
+            account when you enable one. Some need a free helper program (Node.js).
+            We&apos;ll tell you if one is missing.
           </p>
 
           {mcpOk && (
@@ -1960,8 +1961,10 @@ export default function ToolsPage() {
           </div>
           <p className="mb-2 text-[13px] text-zinc-500">
             Paste an npm package (e.g.{" "}
+            {/* v1.353.0 (G43): an example that installs. It named the Slack
+                reference server, which npm marks "no longer supported". */}
             <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-[11px] text-accent-soft/90">
-              @modelcontextprotocol/server-slack
+              @modelcontextprotocol/server-filesystem
             </code>
             ) or a GitHub repo (e.g.{" "}
             <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-[11px] text-accent-soft/90">

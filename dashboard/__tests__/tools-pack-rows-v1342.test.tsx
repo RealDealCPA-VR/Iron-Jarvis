@@ -542,7 +542,9 @@ describe("the new copy keeps the house rules", () => {
     expect(src.slice(start, end)).not.toMatch(/\[\d+\.\d+px\]/);
     const dir = readSrc(DIRECTORY);
     const dStart = dir.indexOf("function LastOutput");
-    const dEnd = dir.indexOf("const VIA: Record<ConnectVia");
+    // v1.353.0 (G42): the mechanism tag (`const VIA`) became the category
+    // line's tooltip table, `VIA_TITLE`, in the same place.
+    const dEnd = dir.indexOf("const VIA_TITLE: Record<ConnectVia");
     expect(dStart).toBeGreaterThan(0);
     expect(dEnd).toBeGreaterThan(dStart);
     expect(dir.slice(dStart, dEnd)).not.toMatch(/\[\d+\.\d+px\]/);

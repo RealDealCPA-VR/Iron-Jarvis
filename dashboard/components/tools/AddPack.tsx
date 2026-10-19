@@ -240,7 +240,17 @@ function useSelection(initial: PreviewRow[] = []) {
   // A typed value is consumed by the apply: once it has gone to the vault
   // it leaves the page (a controlled input keeps its value in the markup).
   const clearOverrides = () => setOverrides({});
-  return { selected, overrides, seed, toggle, setOverride, clearOverrides };
+  /** v1.353.0 (G42): drop names that became "already added" (a re-read
+   *  after an import), so "Add selected (N)" never counts them again. The
+   *  same Set is kept when nothing changes (no extra render). */
+  const unpick = (names: string[]) =>
+    setSelected((s) => {
+      if (!names.some((n) => s.has(n))) return s;
+      const next = new Set(s);
+      for (const n of names) next.delete(n);
+      return next;
+    });
+  return { selected, overrides, seed, toggle, setOverride, clearOverrides, unpick };
 }
 
 /* ------------------------------------------------------------ paste door */
@@ -385,6 +395,18 @@ function SourceGroup({ source, onAdded }: { source: ImportSource; onAdded: () =>
   const [result, setResult] = useState<ApplyResult | null>(null);
   const rows = source.servers ?? [];
   const sel = useSelection(rows);
+  // v1.353.0 (G42): the Directory re-reads the list after an import; a row
+  // that is now "already added" leaves the selection. Keyed on the names
+  // (a string), so a fresh `[]` each render never re-runs it.
+  const addedKey = rows
+    .filter((r) => r.exists)
+    .map((r) => r.name)
+    .join("\n");
+  const { unpick } = sel;
+  useEffect(() => {
+    if (addedKey) unpick(addedKey.split("\n"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `unpick` is a fresh closure each render; the names are the trigger
+  }, [addedKey]);
 
   async function apply() {
     const names = rows.filter((r) => sel.selected.has(r.name)).map((r) => r.name);
@@ -472,15 +494,31 @@ function SourceGroup({ source, onAdded }: { source: ImportSource; onAdded: () =>
   );
 }
 
-function SourcesDoor({ onAdded }: { onAdded: () => void }) {
-  const [sources, setSources] = useState<ImportSource[] | null>(null);
+/**
+ * The "Import from your other apps" door. v1.353.0 (G42): exported so the
+ * Directory (Settings › Connections › Apps & tools) opens the SAME door under
+ * its discovery line. `sources` given (the list the caller already read;
+ * `null` while it loads) = no second read here, and a re-read after an
+ * import flows straight in; left out = the door reads it itself, as on the
+ * Tools page.
+ */
+export function SourcesDoor({
+  onAdded,
+  sources: given,
+}: {
+  onAdded: () => void;
+  sources?: ImportSource[] | null;
+}) {
+  const controlled = given !== undefined;
+  const [fetched, setFetched] = useState<ImportSource[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (controlled) return;
     let live = true;
     get<{ sources: ImportSource[] }>("/mcp/import/sources")
       .then((res) => {
-        if (live) setSources(res.sources ?? []);
+        if (live) setFetched(res.sources ?? []);
       })
       .catch((err) => {
         if (live) setError(errorText(err));
@@ -488,7 +526,9 @@ function SourcesDoor({ onAdded }: { onAdded: () => void }) {
     return () => {
       live = false;
     };
-  }, []);
+  }, [controlled]);
+
+  const sources = controlled ? given : fetched;
 
   return (
     <div data-testid="add-pack-sources-door">
