@@ -707,10 +707,14 @@ function sendNow(): void {
   finishWork();
   // v1.353.0 (G53): the turn starts now — the folded line's time reads from here.
   turnStartedAt = Date.now();
+  const startedAt = turnStartedAt;
   // v1.267.0: the pick rides every Send; nothing is stored on the daemon for it.
   const pick = currentPick();
   void post(PANEL_ACTION_SEND, { text, ...(pick ? pick : {}) }).then((sent) => {
     if (!sent) {
+      // v1.353.0 (G53 review): no turn started, so no start time is kept —
+      // another window's turn this panel later sees must not borrow it.
+      if (turnStartedAt === startedAt) turnStartedAt = 0;
       setTurn(false);
       say("error", "That did not reach Iron Jarvis — this browser is not connected.");
     }

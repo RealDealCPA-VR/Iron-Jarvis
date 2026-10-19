@@ -215,6 +215,35 @@ describe("a failed pane turn can be retried (G51)", () => {
     expect(screen.getAllByTestId("pane-user-bubble")).toHaveLength(1);
   });
 
+  it("Retry takes the interrupted partial off the screen while the new answer comes (review)", async () => {
+    // The chat page's completeChat sets the history first, so a retried
+    // answer never streams under the old cut-off one. Held: the retried run
+    // does not answer until the test says so, so the in-between screen is
+    // what is asserted.
+    let release: (v: Record<string, unknown>) => void = () => {};
+    const held = new Promise<Record<string, unknown>>((resolve) => {
+      release = resolve;
+    });
+    S.stream.outcomes = [
+      new S.FakeStreamError("the line dropped", 0, true, false, "Half an ans"),
+      held as unknown as Record<string, unknown>,
+    ];
+    render(<PaneChat paneId="p1" cwd={CWD} />);
+    await typeAndSend("explain the build");
+    expect(await screen.findByText(/interrupted — this answer is incomplete/i)).toBeInTheDocument();
+    expect(screen.getByText("Half an ans")).toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId("pane-chat-retry"));
+    // The retried run has been asked and has not answered yet.
+    await waitFor(() => expect(S.stream.bodies.length).toBe(2));
+    await waitFor(() => expect(screen.queryByText("Half an ans")).not.toBeInTheDocument());
+    expect(screen.queryByText(/interrupted — this answer is incomplete/i)).not.toBeInTheDocument();
+    // The question itself stays.
+    expect(screen.getByTestId("pane-user-bubble")).toHaveTextContent("explain the build");
+    release({ reply: "The whole answer." });
+    await screen.findByText("The whole answer.");
+    expect(screen.getAllByTestId("pane-user-bubble")).toHaveLength(1);
+  });
+
   it("anything the user typed after the failure is kept when they press Retry", async () => {
     S.stream.outcomes = [new S.FakeStreamError("timed out", 0, false), { reply: "ok" }];
     render(<PaneChat paneId="p1" cwd={CWD} />);

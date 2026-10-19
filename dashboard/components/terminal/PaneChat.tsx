@@ -968,7 +968,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
    *  pane scale. The restored draft is retired when it is still exactly the
    *  question being re-sent (anything the user typed is kept); the history
    *  and files are the failed turn's own, so the daemon gets the same
-   *  message again, and the reply replaces any interrupted partial. */
+   *  message again. The interrupted partial leaves the screen as the retry
+   *  starts (the chat page's completeChat sets the history first), so the
+   *  new answer never streams under the old cut-off one; the saved copy
+   *  keeps the partial until the new reply is saved over it. */
   function retryTurn() {
     const failed = failedTurn;
     if (!failed || busy || !canCompose) return;
@@ -976,6 +979,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     if (asked && input.trim() === asked.content.trim()) setInput("");
     setError(null);
     setFailedTurn(null);
+    setMessages(failed.history);
     setSending(true);
     void completeTurn(failed.history, failed.atts);
   }
@@ -1184,7 +1188,8 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                   ("2 files changed +14 −3", each file opening its diff).
                   Only a reply whose documents list paths has a window; it is
                   asked once, when the reply is on screen. Undo is the pane's
-                  own (the same confirm and journal row as the card below). */}
+                  own (the same confirm and journal row as the receipt's
+                  file rows below). */}
               <ReplyChanges
                 turn={paneTurnWindow(messages, i)}
                 undoFor={undoStateFor}

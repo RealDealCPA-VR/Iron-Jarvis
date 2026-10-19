@@ -28,6 +28,8 @@ const PANEL_JS = join(ADDON, "dist", "sidepanel.js");
 const SRC_HTML = join(ADDON, "src", "sidepanel", "sidepanel.html");
 
 const absent = [PANEL_HTML, PANEL_JS].filter((p) => !existsSync(p));
+/** Whether the worker says a Send left the browser (review: a refused send). */
+let delivered = true;
 
 type Message = Record<string, unknown>;
 
@@ -66,7 +68,7 @@ function mountPanel(): { sent: Message[]; emit: (event: string, payload?: Record
             pendingCommands: 0,
           };
         }
-        if (message["kind"] === "panel_action") return { sent: true };
+        if (message["kind"] === "panel_action") return { sent: delivered };
         return {};
       },
       onMessage: { addListener: (fn: (message: unknown) => void) => (listener = fn) },
@@ -113,6 +115,7 @@ if (absent.length) {
   });
 } else {
   afterEach(() => {
+    delivered = true;
     vi.restoreAllMocks();
     document.head.innerHTML = "";
     document.body.innerHTML = "";
@@ -208,6 +211,23 @@ if (absent.length) {
       now += 5_000;
       h.emit("done", {});
       expect(blocks()[0].querySelector("summary")?.textContent).toBe("1 step");
+    });
+
+    it("a Send that never left the browser leaves no start behind either (review)", async () => {
+      // No turn started, so a later turn this panel only watches (another
+      // window's, broadcast by the worker) must not be timed from this press.
+      const h = await ready();
+      let now = 40_000_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      delivered = false;
+      await send(h, "are you there?");
+      await waitFor(() => expect(el("transcript").textContent ?? "").toContain("did not reach Iron Jarvis"));
+      now += 300_000;
+      h.emit("tool", { name: "browser_click", text: "Clicked 'Next'.", status: "finished", ok: true });
+      now += 5_000;
+      h.emit("done", {});
+      expect(blocks()[0].querySelector("summary")?.textContent).toBe("1 step");
+      expect(blocks()[0].dataset["started"]).toBeUndefined();
     });
 
     it("the stylesheet inks a failed turn's folded line amber, from the palette token (source + dist)", () => {
