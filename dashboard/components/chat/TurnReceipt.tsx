@@ -262,6 +262,13 @@ function servedName(rt: TurnRoute): string {
   return label || providerDisplay(rt.provider);
 }
 
+/** v1.357.0 review (G76): what a demo turn ran on, as a record for support
+ *  ("mock · mock-1 (mock)"). It rides the route line's title only: on the
+ *  line itself the demo model has one name (lib/demoWords). */
+function demoRecord(rt: TurnRoute): string {
+  return `${rt.provider}${rt.model ? ` · ${rt.model}` : ""}${rt.reason ? ` (${rt.reason})` : ""}`;
+}
+
 /** One tool step with its duration (v1.323.0) — `useChatStream`'s TurnStep.
  *  `ok` null = never said; `ms` null = a start or an end was not seen. */
 export interface ReceiptStep {
@@ -785,6 +792,9 @@ export function TurnReceipt({
   }
 
   const mismatch = !!rt?.requested && rt.requested !== rt.provider;
+  // v1.357.0 review (G76): the demo model answered. Its expanded route line
+  // says "Demo model (scripted)" alone; the raw record moves to the title.
+  const demoRoute = rt?.provider === "mock";
   const inTok = fin(usage?.input_tokens);
   const outTok = fin(usage?.output_tokens);
   const ctx = fin(contextPct);
@@ -1023,15 +1033,22 @@ export function TurnReceipt({
             <div className="flex items-start gap-2">
               <RouteIcon size={12} className="mt-0.5 shrink-0 text-zinc-500" />
               <div className="min-w-0 text-[12px] leading-relaxed">
-                <span className={warning ? "text-tone-warn" : "text-zinc-300"}>
+                {/* v1.357.0 review (G76): the demo model's line says its ONE
+                    name and nothing else; its raw record ("mock · mock-1
+                    (mock)", the provider id the canon retired) rides this
+                    title, the rule the mission card's demo line follows. */}
+                <span
+                  className={warning ? "text-tone-warn" : "text-zinc-300"}
+                  title={demoRoute ? demoRecord(rt) : undefined}
+                >
                   {servedName(rt)}
                 </span>
                 {/* v1.314.0: the raw id, quietly — a record for support.
                     v1.330.0: an endpoint's label leads, its id follows. */}
-                {servedName(rt) !== rt.provider && (
+                {!demoRoute && servedName(rt) !== rt.provider && (
                   <span className="text-zinc-600"> ({rt.provider})</span>
                 )}
-                {rt.model && (
+                {rt.model && !demoRoute && (
                   <span className="text-zinc-500"> · {rt.model}</span>
                 )}
                 {mismatch && (
@@ -1068,7 +1085,7 @@ export function TurnReceipt({
                     )
                   </span>
                 ) : (
-                  rt.reason && (
+                  rt.reason && !demoRoute && (
                     <span className="text-zinc-500"> ({rt.reason})</span>
                   )
                 )}
