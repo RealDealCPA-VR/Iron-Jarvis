@@ -12,6 +12,8 @@
  * refused-retry sentences, the empty states, the draft note, the follow-up
  * placeholder) go the same way, and so do the literal hues and half-pixel
  * sizes in those two files.
+ * v1.357.0 (G76): the demo has one name on every surface (lib/demoWords), so
+ * these lines now read "Demo answer. No AI model ran." / "On the demo model."
  *
  * And components/workflow/agents.ts held literal amber / sky / emerald /
  * violet chip classes that WorkflowDraftCard (a chat card) renders; they are
@@ -140,14 +142,14 @@ afterEach(cleanup);
 
 /* ------------------------------------------------ 1. the teammate cards --- */
 
-describe("a teammate card says the mock in the chat's words", () => {
+describe("a teammate card says the demo in the chat's words", () => {
   async function modelLine(m: MissionMember): Promise<HTMLElement> {
     render(<AgentCards members={[m]} />);
     fireEvent.click(screen.getByRole("button", { expanded: false }));
     return screen.findByTestId(`mission-card-model-${m.agent}`);
   }
 
-  it("a DONE mock teammate: 'Mock answer. No real model ran (mock · mock-1).' in the warn tone", async () => {
+  it("a DONE demo teammate: 'Demo answer. No AI model ran (mock · mock-1).' in the warn tone", async () => {
     const line = await modelLine(member());
     expect(line.textContent).toBe("Demo answer. No AI model ran (mock · mock-1).");
     expect(line.className).toContain("text-tone-warn");
@@ -188,8 +190,8 @@ describe("a teammate card says the mock in the chat's words", () => {
 
 /* ---------------------------------------------- 2. the mission receipt --- */
 
-describe("the mission receipt says the mock in the chat's words", () => {
-  it("a completed mock mission: 'Mock answer. No real model ran.' + the way to Connections", () => {
+describe("the mission receipt says the demo in the chat's words", () => {
+  it("a completed demo mission: 'Demo answer. No AI model ran.' + the way to Connections", () => {
     renderOutput(view());
     const receipt = screen.getByTestId("mission-receipt");
     expect(receipt.textContent).toBe("Demo answer. No AI model ran. Connect a model on Connections");
@@ -197,7 +199,7 @@ describe("the mission receipt says the mock in the chat's words", () => {
     expect(receipt.querySelector('a[href="/connections"]')).not.toBeNull();
   });
 
-  it("a failed mock mission: 'On the mock. No real model ran.'", () => {
+  it("a failed demo mission: 'On the demo model. No AI model ran.'", () => {
     renderOutput(view({ status: "failed" }));
     expect(screen.getByTestId("mission-receipt").textContent).toMatch(/^On the demo model\. No AI model ran\. /);
   });
