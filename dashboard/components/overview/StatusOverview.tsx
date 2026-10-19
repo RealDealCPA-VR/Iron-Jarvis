@@ -328,7 +328,9 @@ export default function OverviewPage({ embedded = false }: { embedded?: boolean 
                   aria-label={`${runningCount} running. ${runningOpen ? "Hide" : "Show"} what is running`}
                   title={runningOpen ? "Hide what is running" : "Show what is running"}
                   onClick={() => setRunningOpen((o) => !o)}
-                  className="inline-flex items-center gap-1 rounded-md underline decoration-white/20 decoration-dotted underline-offset-4 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                  // ring-INSET: HeroStat's value box is `truncate` (overflow
+                  // hidden), which clipped an outer focus ring to nothing.
+                  className="inline-flex items-center gap-1 rounded-md underline decoration-white/20 decoration-dotted underline-offset-4 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60"
                 >
                   {String(runningCount)}
                   <ChevronDown

@@ -101,10 +101,27 @@ def test_the_route_never_fails_a_settings_page(no_allowlist):
     assert access_summary.access_facts(None)["writes"]["chat_files_dir"] == ""
 
 
+def _strings(value):
+    """Every string inside a parsed JSON answer."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _strings(v)
+
+
 def test_no_protected_path_rides_the_answer(tmp_path, no_allowlist):
     client, d = _client(tmp_path)
-    raw = client.get("/settings/access").text
+    # Compare against the PARSED answer: the raw JSON text escapes every
+    # Windows backslash, so a substring check on it could never match a path
+    # (review v1.352.0: a protected root planted in the answer stayed green).
+    body = client.get("/settings/access").json()
     home = str(Path(d.platform.config.home))
-    for root in fs_policy.protected_roots():
-        assert str(root) not in raw
-    assert os.path.join(home, "secrets") not in raw
+    roots = [str(r) for r in fs_policy.protected_roots()] + [os.path.join(home, "secrets")]
+    assert fs_policy.protected_roots(), "anti-vacuity: the app registered its protected roots"
+    for text in _strings(body):
+        for root in roots:
+            assert root.lower() not in text.lower(), f"{root!r} rode the answer"

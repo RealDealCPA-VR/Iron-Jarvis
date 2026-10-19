@@ -222,7 +222,11 @@ describe("lib/runningNow: the rows, in words", () => {
 /* ========================================================================== */
 
 function seedRunning() {
-  H.replies[RUNNING_SESSIONS_PATH] = { sessions: [SCHEDULE, MISSION, DONE] };
+  // The start time is taken NOW, not at file load: "3 min" must not turn
+  // into "4 min" on a slow runner (a clock-relative pin, never absolute).
+  H.replies[RUNNING_SESSIONS_PATH] = {
+    sessions: [{ ...SCHEDULE, created_at: ago(3 * MIN + 5_000) }, MISSION, DONE],
+  };
   H.replies["/chat/threads"] = {
     threads: [
       { id: "t-run", title: "Draft the memo", running: true, updated_at: ago(MIN) },
@@ -389,6 +393,10 @@ describe("Everything › Status: the Running number opens the same list", () => 
     const toggle = await screen.findByTestId("status-running-toggle", {}, W);
     await waitFor(() => expect(toggle.textContent).toContain("2"), W);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    // Its value box is `truncate` (overflow hidden): an OUTER focus ring
+    // would be clipped away, so the ring is drawn inside the button.
+    expect(toggle.parentElement?.className).toContain("truncate");
+    expect(toggle.className).toContain("focus-visible:ring-inset");
     expect(H.gets.some((g) => /^\/sessions(\?|$)/.test(g))).toBe(false);
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
