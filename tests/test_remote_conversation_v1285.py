@@ -702,8 +702,10 @@ def test_enable_says_whether_a_remote_elsewhere_could_reach_this_daemon(app, mon
     out = client.post("/agents/remote/hermes/inbound/enable", json={"url": lan}).json()
     assert out["reachable"]["host_allowed"] is False
     note = out["reachable"]["note"]
-    assert "IRONJARVIS_HOST_ALLOWLIST=192.168.1.20" in note
-    assert "--host 192.168.1.20" in note
+    # v1.358.0 (G61, moved on purpose): the note names the setting that
+    # opens the way, never a command line or an environment variable.
+    assert "Let other computers on my network reach this Iron Jarvis" in note
+    assert "IRONJARVIS_HOST_ALLOWLIST" not in note and "--host" not in note
     assert "127.0.0.1" in note  # the same-machine case is spelled out too
     monkeypatch.setenv("IRONJARVIS_HOST_ALLOWLIST", "192.168.1.20")
     out = client.post("/agents/remote/hermes/inbound/enable", json={"url": lan}).json()

@@ -91,7 +91,7 @@ Iron Jarvis is a desktop app that turns AI models into a working system: **a cha
 
 1. **Download** `Iron-Jarvis-Setup-<version>.exe` from the **[latest release](https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest)**. Ignore the `.blockmap` and `latest.yml` files; the updater uses those.
 2. **Install.** The app isn't code-signed yet ([why](docs/SIGNING.md)), so SmartScreen shows *"Windows protected your PC"*. Click **More info → Run anyway**.
-3. **Connect a model.** The app opens on chat. If you're signed in to Claude Code or Codex, or Ollama is running on this PC with a model downloaded, the empty chat offers it as one press (for example **Use Ollama (on this PC) for answers**, which also connects Ollama). It never picks one for you. Signed out of Claude Code or Codex? **Sign in** on the chat's door or on **Settings → Connections → Connections** opens a sign-in window inside the app. You can also paste an API key (Anthropic, OpenAI, xAI, OpenRouter, or a Gemini key from Google AI Studio), or point it at a local Ollama / vLLM / LM Studio / OpenAI-compatible server under **Settings → Connections** (Gemini can also log in with your own Google OAuth app). Until you choose a model, a **Simulated mode** strip reminds you that replies come from the offline demo.
+3. **Connect a model.** The app opens on chat. If you're signed in to Claude Code or Codex, or Ollama is running on this PC with a model downloaded, the empty chat offers it as one press (for example **Use Ollama (on this PC) for answers**, which also connects Ollama). It never picks one for you. Signed out of Claude Code or Codex? **Sign in** on the chat's door or on **Settings → Connections → Connections** opens a sign-in window inside the app. You can also paste an API key (Anthropic, OpenAI, xAI, OpenRouter, or a Gemini key from Google AI Studio), or point it at a local Ollama / vLLM / LM Studio / OpenAI-compatible server under **Settings → Connections** (Gemini can also log in with your own Google OAuth app). Until you choose a model, a **Demo replies** strip under the title bar says so: replies come from the built-in demo model, a scripted demo, not real answers. Its button takes you to the next step (**Choose a model**, or **Connect a model** when none is connected yet).
 
 Iron Jarvis inherits your subscription through the logged-in CLI. It never performs an account login itself and never sees that credential.
 
@@ -110,10 +110,10 @@ Needs **Python 3.12+**, [uv](https://docs.astral.sh/uv/), **Node 20+** and [pnpm
 git clone https://github.com/RealDealCPA-VR/Iron-Jarvis && cd Iron-Jarvis
 uv sync --extra dev
 cd dashboard && pnpm install && pnpm build && cd ..
-uv run ironjarvis up          # daemon + dashboard, opens your browser
+uv run ironjarvis up          # Iron Jarvis + dashboard, opens your browser
 ```
 
-No keys? `uv run ironjarvis demo` runs end to end with the offline demo model. To run it on a server, see [`DEPLOY.md`](DEPLOY.md) (Docker Compose, Render, Railway, DigitalOcean, AWS, Azure). The API runs code by design, so read the security checklist there first.
+No keys? `uv run ironjarvis demo` runs end to end with the built-in demo model. To run it on a server, see [`DEPLOY.md`](DEPLOY.md) (Docker Compose, Render, Railway, DigitalOcean, AWS, Azure). The API runs code by design, so read the security checklist there first.
 
 ---
 

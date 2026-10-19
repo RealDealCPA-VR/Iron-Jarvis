@@ -892,7 +892,9 @@ def test_startup_dialog_shows_the_gate_reason():
     src = _src()
     # v1.249.0 (R-06): the call now passes a fourth argument (the context the
     # cause-classifier reads), so the window ends at `pendingUpdate,`.
-    m = re.search(r'"Iron Jarvis — daemon did not start",(.{0,900}?)pendingUpdate,\n', src, re.S)
+    # v1.358.0 (G30): the title says "Iron Jarvis did not start" — the
+    # program's name, never the code's "daemon" (moved on purpose).
+    m = re.search(r'"Iron Jarvis did not start",(.{0,900}?)pendingUpdate,\n', src, re.S)
     assert m, "startup()'s daemon-failure branch moved"
     assert "err && err.message" in m.group(1), "the dialog does not show the gate's reason"
 

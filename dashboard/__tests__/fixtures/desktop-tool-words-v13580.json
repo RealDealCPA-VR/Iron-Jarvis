@@ -1,0 +1,329 @@
+{
+  "about": "v1.358.0 lane 8E: one table of tool ids and the words the approval card (dashboard/lib/toolWords.ts toolWords) and the desktop's closed-window ask toast (desktop/main.js askToolWords/plainAskSummary) say for each. tests/test_desktop_words_v13580.py runs the desktop half under node; dashboard/__tests__/desktop-tool-words-v13580.test.ts runs the card half. 'card' null = the card has no words of its own and shows the id; 'ahead' rows are the desktop's words for tools the card does not describe yet (it must say the same words once it does).",
+  "rows": [
+    {
+      "tool": "write_file",
+      "kind": "table",
+      "card": "save a file",
+      "desktop": "save a file"
+    },
+    {
+      "tool": "edit_file",
+      "kind": "table",
+      "card": "change a file",
+      "desktop": "change a file"
+    },
+    {
+      "tool": "rename_file",
+      "kind": "table",
+      "card": "rename or move a file",
+      "desktop": "rename or move a file"
+    },
+    {
+      "tool": "shell",
+      "kind": "table",
+      "card": "run a command",
+      "desktop": "run a command"
+    },
+    {
+      "tool": "repl",
+      "kind": "table",
+      "card": "run some code",
+      "desktop": "run some code"
+    },
+    {
+      "tool": "run_code",
+      "kind": "table",
+      "card": "run some code",
+      "desktop": "run some code"
+    },
+    {
+      "tool": "web_fetch",
+      "kind": "table",
+      "card": "read a web page",
+      "desktop": "read a web page"
+    },
+    {
+      "tool": "web_search",
+      "kind": "table",
+      "card": "search the web",
+      "desktop": "search the web"
+    },
+    {
+      "tool": "rest_call",
+      "kind": "table",
+      "card": "call one of your saved web services",
+      "desktop": "call one of your saved web services"
+    },
+    {
+      "tool": "config_change",
+      "kind": "table",
+      "card": "change a setting",
+      "desktop": "change a setting"
+    },
+    {
+      "tool": "config_change_protected",
+      "kind": "table",
+      "card": "change a protected setting",
+      "desktop": "change a protected setting"
+    },
+    {
+      "tool": "schedule_update",
+      "kind": "table",
+      "card": "change a schedule",
+      "desktop": "change a schedule"
+    },
+    {
+      "tool": "schedule_delete",
+      "kind": "table",
+      "card": "remove a schedule",
+      "desktop": "remove a schedule"
+    },
+    {
+      "tool": "workflow_update",
+      "kind": "table",
+      "card": "change a saved workflow",
+      "desktop": "change a saved workflow"
+    },
+    {
+      "tool": "workflow_delete",
+      "kind": "table",
+      "card": "remove a saved workflow",
+      "desktop": "remove a saved workflow"
+    },
+    {
+      "tool": "workflow_schedule",
+      "kind": "table",
+      "card": "put a saved workflow on a schedule",
+      "desktop": "put a saved workflow on a schedule"
+    },
+    {
+      "tool": "channel_toggle",
+      "kind": "table",
+      "card": "turn a channel's two-way messages on or off",
+      "desktop": "turn a channel's two-way messages on or off"
+    },
+    {
+      "tool": "channel_connect",
+      "kind": "table",
+      "card": "add a notification channel",
+      "desktop": "add a notification channel"
+    },
+    {
+      "tool": "app_connect",
+      "kind": "table",
+      "card": "connect an app",
+      "desktop": "connect an app"
+    },
+    {
+      "tool": "webhook_update",
+      "kind": "table",
+      "card": "change a webhook",
+      "desktop": "change a webhook"
+    },
+    {
+      "tool": "webhook_delete",
+      "kind": "table",
+      "card": "remove a webhook",
+      "desktop": "remove a webhook"
+    },
+    {
+      "tool": "sentinel_update",
+      "kind": "table",
+      "card": "pause or resume a watcher",
+      "desktop": "pause or resume a watcher"
+    },
+    {
+      "tool": "sentinel_delete",
+      "kind": "table",
+      "card": "remove a watcher",
+      "desktop": "remove a watcher"
+    },
+    {
+      "tool": "goal_update",
+      "kind": "table",
+      "card": "change a goal",
+      "desktop": "change a goal"
+    },
+    {
+      "tool": "goal_delete",
+      "kind": "table",
+      "card": "drop a goal",
+      "desktop": "drop a goal"
+    },
+    {
+      "tool": "reflex_create",
+      "kind": "table",
+      "card": "add a rule that acts on its own",
+      "desktop": "add a rule that acts on its own"
+    },
+    {
+      "tool": "reflex_update",
+      "kind": "table",
+      "card": "change a rule that acts on its own",
+      "desktop": "change a rule that acts on its own"
+    },
+    {
+      "tool": "reflex_delete",
+      "kind": "table",
+      "card": "remove a rule that acts on its own",
+      "desktop": "remove a rule that acts on its own"
+    },
+    {
+      "tool": "config_undo",
+      "kind": "table",
+      "card": "undo your last change",
+      "desktop": "undo your last change"
+    },
+    {
+      "tool": "approve_plan",
+      "kind": "table",
+      "card": "follow this plan",
+      "desktop": "follow this plan"
+    },
+    {
+      "tool": "browser_get_status",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_list_tabs",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_get_active_tab",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_read_page",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_get_elements",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_screenshot",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_activate_tab",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_scroll",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_create_tab",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_close_tab",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_click",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_type",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_press_key",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "browser_navigate",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
+      "tool": "mcp__github__create_issue",
+      "kind": "app",
+      "card": "use github (create issue)",
+      "desktop": "use github (create issue)"
+    },
+    {
+      "tool": "mcp__gmail__searchMessages",
+      "kind": "app",
+      "card": "use gmail (search messages)",
+      "desktop": "use gmail (search messages)"
+    },
+    {
+      "tool": "mcp__notion__get-file",
+      "kind": "app",
+      "card": "use notion (get file)",
+      "desktop": "use notion (get file)"
+    },
+    {
+      "tool": "mcp__acme.crm__get_PR",
+      "kind": "app",
+      "card": "use acme.crm (get PR)",
+      "desktop": "use acme.crm (get PR)"
+    },
+    {
+      "tool": "some_new_tool",
+      "kind": "unknown",
+      "card": null,
+      "desktop": "use some new tool"
+    },
+    {
+      "tool": "rename_real_file",
+      "kind": "unknown",
+      "card": null,
+      "desktop": "use rename real file"
+    },
+    {
+      "tool": "browser_backup",
+      "kind": "unknown",
+      "card": null,
+      "desktop": "use browser backup"
+    },
+    {
+      "tool": "Browser_click",
+      "kind": "unknown",
+      "card": null,
+      "desktop": "use Browser click"
+    },
+    {
+      "tool": "write_document",
+      "kind": "ahead",
+      "card": null,
+      "desktop": "create a document"
+    },
+    {
+      "tool": "excel_edit",
+      "kind": "ahead",
+      "card": null,
+      "desktop": "edit a workbook"
+    }
+  ]
+}

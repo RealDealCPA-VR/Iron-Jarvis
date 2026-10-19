@@ -96,6 +96,34 @@ a sentence and the scan sees it. The few deliberate uses are listed in the test'
 allowlist, each with a one-line reason, and an allowlist entry that no longer
 matches anything fails too (so a fixed line takes its entry with it).
 
+### Beyond the dashboard (v1.358.0)
+
+The dashboard scan reads only `dashboard/app`, `components` and `lib`, so the
+words Iron Jarvis and its desktop shell write THEMSELVES still reached people
+unchecked: the tray said "the daemon keeps stalling", the startup dialog's
+title was "Iron Jarvis — daemon did not start", a schedule with no reason
+pointed at "the daemon log". `tests/test_vocabulary_beyond_dashboard_v13580.py`
+is the same rule on the other side, reading the SAME retired-word list
+(`dashboard/__tests__/helpers/retiredWords.ts`, parsed, never copied):
+
+- **desktop/main.js** — every string a person can read (tray tooltips,
+  Windows notifications, dialogs, menu labels, the startup-failure reasons
+  shown under "Details:"). Log lines (`desktopLog`, `fileLogger`, `console`)
+  and ids with no space and no capital (`"daemon"`, `"pane:"`) are code and
+  are skipped, exactly like the dashboard scan. The crash-loop words are also
+  driven under node with the code's own label, because a `${label}` piece is
+  invisible to a static read.
+- **settings/schema.py** — every label, help line, option label, group name
+  and placeholder (search aliases are kept on purpose and not read).
+- **scheduling/run_outcome.py** and **comm/notifier.py** — every sentence
+  they hold (docstrings, log calls, dict keys and comparisons are not read).
+
+Its allowlist works like the dashboard's: each entry names its file, a piece
+of its text and why, and an entry that no longer matches anything fails.
+The program is **Iron Jarvis** in all of these; where the desktop has to tell
+its two children apart, the window's own server is **the Iron Jarvis
+dashboard**.
+
 ## Reserved
 
 - **Pack** — reserved for the future staff-export bundle ("hand your setup to

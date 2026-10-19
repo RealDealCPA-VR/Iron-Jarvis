@@ -896,7 +896,10 @@ def test_the_reachability_sentence_says_iron_jarvis_and_opens_nothing(tmp_path, 
     note = reach["note"]
     assert note.startswith("Iron Jarvis on this computer")
     assert "daemon" not in note.lower()
-    assert "IRONJARVIS_HOST_ALLOWLIST=192.168.1.20" in note and "--host 192.168.1.20" in note
+    # v1.358.0 (G61, moved on purpose): the way in is the SETTING, never a
+    # command line or an environment variable the desktop app cannot set.
+    assert "Let other computers on my network reach this Iron Jarvis" in note
+    assert "IRONJARVIS_HOST_ALLOWLIST" not in note and "--host" not in note
     assert "the other computer needs the same" in note
     import os
 

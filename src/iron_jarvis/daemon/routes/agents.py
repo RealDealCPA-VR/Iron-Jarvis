@@ -72,7 +72,23 @@ PAUSE_DEFAULT_REASON = "paused by the user"
 AUTO_PAUSE_PREFIX = "monthly allowance used up"
 
 
-def reachability(url: str, *, who: str, instead: str) -> dict[str, Any]:
+#: v1.358.0 (G61): the setting that lets another computer reach this one —
+#: its key (settings/schema.py, the Config field, desktop/main.js
+#: LAN_ACCESS_KEY and dashboard/lib/anotherJarvis.ts, pinned equal) and where
+#: a person finds it. The reachability sentence names THIS, never a command
+#: line or an environment variable (the desktop app offers neither).
+LAN_ACCESS_KEY = "lan_access"
+LAN_ACCESS_PLACE = "Settings › Connections"
+
+
+def _lan_access_label() -> str:
+    """The setting's own label, read from the ONE schema (never retyped)."""
+    from ...settings import schema
+
+    return schema.get(LAN_ACCESS_KEY).label
+
+
+def reachability(url: str, *, who: str, instead: str, lan_access: bool = False) -> dict[str, Any]:
     """Whether THIS Iron Jarvis would even accept a request addressed to
     ``url``'s host, and what it takes if not — ``{host_allowed, note}``.
 
@@ -80,11 +96,19 @@ def reachability(url: str, *, who: str, instead: str) -> dict[str, Any]:
     inbound door, v1.357.0's task door): the packaged app listens on
     127.0.0.1 and the Host guard (``auth._host_ok``, the SAME check, read
     here) admits loopback only unless ``IRONJARVIS_HOST_ALLOWLIST`` names the
-    host, so a machine elsewhere needs two things the user must do ON
-    PURPOSE — said in the same answer as the token, never discovered as a
-    bare refusal in the other machine's logs. Nothing here opens a bind or
-    writes the allowlist. ``who`` names the other side ("a remote on another
-    machine"); ``instead`` says where a tunnel's address goes."""
+    host — said in the same answer as the token, never discovered as a bare
+    refusal in the other machine's logs. Nothing here opens a bind or writes
+    the allowlist. ``who`` names the other side ("a remote on another
+    machine"); ``instead`` says where a tunnel's address goes.
+
+    v1.358.0 (G61): the way in is a SETTING the user turns on ON PURPOSE
+    ("Let other computers on my network reach this Iron Jarvis", key
+    ``lan_access``, read by the desktop shell at every daemon spawn), so the
+    note names that setting — never ``ironjarvis serve --host`` or an
+    environment variable, which the desktop app cannot do. ``lan_access`` is
+    the SAVED value: on but not yet allowing this address means it takes
+    effect when Iron Jarvis restarts (or this computer has no such address);
+    the verdict itself is still the Host guard's own answer."""
     from urllib.parse import urlparse
 
     from ..auth import _host_ok
@@ -96,16 +120,25 @@ def reachability(url: str, *, who: str, instead: str) -> dict[str, Any]:
     allowed = bool(host) and _host_ok(host)
     note = ""
     if not allowed:
-        label = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
-        ip = label or "<your LAN IP>"
-        note = (
-            f"Iron Jarvis on this computer currently accepts requests addressed to "
-            f"127.0.0.1 or localhost only, so {who} cannot reach it yet. "
-            f"To allow it: run Iron Jarvis listening on your LAN address "
-            f"(ironjarvis serve --host {ip}) and set IRONJARVIS_HOST_ALLOWLIST={ip} "
-            f"before starting it — or point a tunnel or reverse proxy at "
-            f"127.0.0.1:8787 and {instead}. Nothing opens on its own."
+        setting = f"“{_lan_access_label()}” in {LAN_ACCESS_PLACE}"
+        tunnel = (
+            f"Or point a tunnel or reverse proxy at 127.0.0.1:8787 and {instead}. "
+            "Nothing opens on its own."
         )
+        if lan_access:
+            note = (
+                f"Iron Jarvis on this computer still accepts requests from this computer "
+                f"only, so {who} cannot reach it yet. The setting {setting} is on and "
+                f"takes effect when Iron Jarvis restarts: restart it from Settings › System "
+                f"or the tray. If it still cannot be reached after that, this computer has "
+                f"no address on your network that the setting can use. {tunnel}"
+            )
+        else:
+            note = (
+                f"Iron Jarvis on this computer accepts requests from this computer only, "
+                f"so {who} cannot reach it yet. To allow it, turn on {setting} and restart "
+                f"Iron Jarvis. Every request still needs its token. {tunnel}"
+            )
     return {"host_allowed": allowed, "note": note}
 
 # Face overrides (v1.180.0). Imported as a MODULE, never as loose names: the
@@ -2619,6 +2652,15 @@ def register(app: FastAPI, d) -> None:
         (PATCH inbound_url) for tunnels and proxies."""
         return _lan_url_for(request, f"/agents/remote/{quote(name, safe='')}/inbound")
 
+    def _lan_access_saved() -> bool:
+        """The SAVED "Let other computers on my network reach this Iron
+        Jarvis" (v1.358.0, G61) — read off the live config object, the one
+        the settings writer changes in place. Never raises."""
+        try:
+            return bool(getattr(d.platform.config, LAN_ACCESS_KEY, False))
+        except Exception:  # noqa: BLE001 — wording only
+            return False
+
     def _inbound_reachability(url: str) -> dict[str, Any]:
         """The remote inbound door's reachability verdict (v1.285.0) — the ONE
         sentence (:func:`reachability`, v1.357.0: "Iron Jarvis on this
@@ -2631,6 +2673,7 @@ def register(app: FastAPI, d) -> None:
                 "paste its address here (Edit → inbound URL). A remote running on "
                 "THIS machine can post to http://127.0.0.1:8787 as is"
             ),
+            lan_access=_lan_access_saved(),
         )
 
     def _bearer_of(request: Request) -> str:
@@ -2962,6 +3005,7 @@ def register(app: FastAPI, d) -> None:
                 "give the other computer that address instead. For answers to come "
                 "back, the other computer needs the same done for itself"
             ),
+            lan_access=_lan_access_saved(),
         )
 
     def _door_view(status: dict[str, Any]) -> dict[str, Any]:

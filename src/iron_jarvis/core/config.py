@@ -445,6 +445,17 @@ class Config(BaseModel):
     #: through the one settings writer), never at load: an unplugged drive
     #: must not stop the app starting — it just reads nothing there.
     readable_folders: list[str] = Field(default_factory=list)
+    #: LET OTHER COMPUTERS ON MY NETWORK REACH THIS IRON JARVIS (v1.358.0,
+    #: G61) — Settings › Connections, off by default, saved only through the
+    #: one settings writer. The DESKTOP SHELL reads it from config.toml at
+    #: every daemon spawn (desktop/main.js ``readDaemonNetwork``): on, with a
+    #: private network address, the daemon listens on every interface and
+    #: ``IRONJARVIS_HOST_ALLOWLIST`` names this PC's own private addresses.
+    #: The daemon never opens anything from this field itself — it takes
+    #: effect through a restart, and every request still needs a token (the
+    #: install token; each door its own). Read by ``routes/agents.reachability``
+    #: so the doors' sentence points at THIS setting, never a command line.
+    lan_access: bool = False
     # Where a chat with NO project keeps the files it was handed and the files
     # it makes (v1.244.0): one dated folder per conversation, so the work lands
     # somewhere the user will look. "" = <Documents>\Iron Jarvis. Read through

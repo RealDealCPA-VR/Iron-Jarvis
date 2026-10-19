@@ -209,8 +209,11 @@ def test_the_desktop_toast_and_the_card_say_the_plan_ask_alike(tmp_path):
         {"id": "q", "tool": PLAN_APPROVAL_TOOL, "count": 2},
     ], "now": 0}]}, tmp_path)["out"]
     bodies = [n["body"] for n in out[0]["notify"]]
+    # v1.358.0 (lane 8E): the toast reads the card's OWN words now (one
+    # table, pinned equal in test_desktop_words_v13580) — "follow this
+    # plan", no longer its own "follow a plan" (moved on purpose).
     assert bodies == [
-        "follow a plan — click to open the run.",
+        f"{card} — click to open the run.",
         "follow 2 plans — click to open the run.",
     ], bodies
 

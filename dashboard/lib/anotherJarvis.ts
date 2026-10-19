@@ -60,6 +60,19 @@ export function decodeDoor(raw: unknown): TaskDoorStatus {
   };
 }
 
+/** v1.358.0 (G61): the setting that lets another computer reach this one —
+ *  `lan_access` in settings/schema.py (the Config field, desktop/main.js
+ *  LAN_ACCESS_KEY and routes/agents.LAN_ACCESS_KEY, pinned equal). The
+ *  daemon's reachability sentence names it in words; the card offers the one
+ *  press that opens it (Settings reads `?focus=` on mount and brings the row
+ *  into view). */
+export const LAN_SETTING_KEY = "lan_access";
+export const LAN_SETTING_HREF = `/settings?focus=${LAN_SETTING_KEY}`;
+export const LAN_SETTING_LINK = "Open the setting";
+
+/** Said quietly when another computer CAN reach the address shown. */
+export const REACHABLE_LINE = "Other computers on your network can reach this address.";
+
 /** The card's title — the Agents › Your team tile. */
 export const CARD_TITLE = "Another computer running Jarvis";
 

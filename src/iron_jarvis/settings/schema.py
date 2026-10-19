@@ -161,9 +161,12 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("default_model", "Default model", "models", "string",
       "The model that answers by default.", tier="allow",
       aliases=("model", "default model", "which model", "use model"), placeholder="claude-opus-4-8"),
-    S("default_persona", "Default persona", "models", "string",
-      "Used whenever a chat doesn't pick one — including from your phone.", tier="allow",
-      aliases=("persona", "assistant style")),
+    # v1.358.0 (lane 8E, readiness M): the label in plain words; the help
+    # names the word the chat's own menu uses ("Persona"). Key unchanged.
+    S("default_persona", "How the assistant talks by default", "models", "string",
+      "The persona (the assistant's voice and manner) used whenever a chat doesn't pick one, "
+      "including from your phone. A chat can change it from its ⋯ menu.", tier="allow",
+      aliases=("persona", "default persona", "assistant style")),
     S("chat_followups", "Suggest follow-up questions", "models", "bool",
       "Show up to three short questions you might ask next under a reply. "
       "This makes one extra short call to the same model after each reply.",
@@ -244,12 +247,15 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("voice_transcribe_model", "Voice: speech-to-text model", "models", "string",
       "The transcription model that server serves. Empty = auto-discover.",
       tier="allow", section="Voice", advanced=True),
-    S("voice_vosk_model_path", "Voice: offline model folder", "models", "string",
+    # v1.358.0 (lane 8E, G76 scan): a SPEECH model that works offline, said
+    # so — "offline model" is the demo model's retired name.
+    S("voice_vosk_model_path", "Voice: offline speech model folder", "models", "string",
       "Folder of an offline Vosk speech model.", tier="ask", section="Voice", advanced=True),
     # ------------------------------------------------------------ connections
-    S("iron_proxy_enabled", "Iron-Proxy (shared accounts)", "connections", "bool",
-      "Pick which signed-in account each Claude/Codex/Grok call uses.",
-      tier="ask", put=False, aliases=("iron proxy", "accounts switcher")),
+    S("iron_proxy_enabled", "Use several accounts", "connections", "bool",
+      "Pick which of your signed-in Claude, Codex or Grok accounts each request uses. "
+      "Add the accounts under Connections, Several accounts (Iron-Proxy).",
+      tier="ask", put=False, aliases=("iron proxy", "iron-proxy", "shared accounts", "accounts switcher")),
     S("browser_access", "Your browser", "connections", "enum",
       "What Jarvis may do in your own browser through the add-on.",
       options=(("off", "Off"), ("read_only", "Read pages only"), ("interactive", "Read and act (each action asks)")),
@@ -266,6 +272,22 @@ SETTINGS: tuple[SettingDef, ...] = (
       "Let agents drive their own separate browser (never your logged-in one).",
       tier="ask", floor_when=(True,), attr="computer_use.enabled", section="Browser",
       aliases=("computer use", "agent browser")),
+    # v1.358.0 (G61): ANOTHER COMPUTER can reach this one only when the user
+    # turns this on. Off by default; asks every time from chat (a model must
+    # never widen who can reach this PC); takes effect when Iron Jarvis
+    # restarts, because the DESKTOP SHELL reads it from config.toml at every
+    # daemon spawn (desktop/main.js readDaemonNetwork) and only then listens
+    # on the network with the host allowlist set to this PC's own private
+    # addresses. Every request still needs a token. The doors' reachability
+    # sentence (routes/agents.reachability) names THIS row.
+    S("lan_access", "Let other computers on my network reach this Iron Jarvis", "connections", "bool",
+      "Off unless you turn it on. When on, Iron Jarvis also listens on this PC's address on your "
+      "network after it restarts, so another computer running Iron Jarvis can hand it tasks "
+      "(Agents, Your team, Another computer running Jarvis). Every request still needs that "
+      "door's token. Windows may ask once whether to allow Iron Jarvis on your network.",
+      tier="ask-floor", restart=True, section="Another computer",
+      aliases=("lan access", "network access", "another computer", "other computers",
+               "reach from another computer", "local network")),
     # Media in chat (v1.346.0): which service makes images/video/audio, and
     # when a generation asks before spending. The rows are config fields;
     # the Settings page draws them from here.
@@ -296,9 +318,10 @@ SETTINGS: tuple[SettingDef, ...] = (
     # -------------------------------------------------------------- automation
     S("max_agent_steps", "Max steps per run", "automation", "number",
       "Safety ceiling on how many steps one agent run may take.", tier="ask", check=_range(1, 1000)),
-    S("tool_call_timeout_s", "Tool call deadline (seconds)", "automation", "number",
-      "How long one tool call may take before it is stopped and recorded as failed. 0 = no deadline.",
-      tier="ask", check=_range(0, 86400)),
+    S("tool_call_timeout_s", "Time limit for one step (seconds)", "automation", "number",
+      "How long one step of a run (reading a file, running a command, using an app) may take "
+      "before it is stopped and recorded as failed. 0 = no limit.",
+      tier="ask", check=_range(0, 86400), aliases=("tool call deadline", "tool timeout", "step time limit")),
     S("max_concurrent_sessions", "Runs at once", "automation", "number",
       "How many agent runs may work at the same time. 0 = no cap.", tier="ask", check=_range(0, 64)),
     S("busy_runs_notice_at", "Busy notice after", "automation", "number",
@@ -308,14 +331,15 @@ SETTINGS: tuple[SettingDef, ...] = (
     # v1.350.0: an agent's plan, shown before any step runs. Turning it OFF
     # from chat asks every time (a model must not quietly drop the check).
     S("plan_approval", "Ask me to approve an agent's plan before it starts", "automation", "bool",
-      "When an agent splits a job into steps, it shows you the plan and does nothing until "
+      "When an agent splits a task into steps, it shows you the plan and does nothing until "
       "you press Approve. Only runs started from chat or the Agents page wait; schedules, "
       "goals and other background runs never do. Off: the plan shows as a checklist and "
       "the work starts at once.",
       tier="allow", floor_when=(False,), aliases=("plan approval", "approve the plan", "approve plans")),
-    S("autonomy_enabled", "Autonomy (the pulse)", "automation", "bool",
-      "Let Iron Jarvis deliberate on your goals and propose (or, within budget, act).",
-      tier="ask-floor", section="Autonomy", aliases=("autonomy",)),
+    S("autonomy_enabled", "Work on my goals by itself", "automation", "bool",
+      "Let Iron Jarvis think about your goals in the background and suggest next steps "
+      "(or, within the limits below, take them).",
+      tier="ask-floor", section="Autonomy", aliases=("autonomy", "the pulse")),
     S("autonomy_level", "Autonomy ceiling", "automation", "enum",
       "How far it may go on its own. High-risk steps are never done automatically.",
       options=(("suggest", "Suggest only"), ("act_low", "Act on low-risk steps"),
@@ -335,10 +359,13 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="allow", floor_when=(False,), section="Autonomy", aliases=("kill switch", "stop everything")),
     S("autonomy_tick_seconds", "Think every (seconds)", "automation", "number",
       "How often the background loop wakes up.", tier="ask", section="Autonomy", check=_range(10, 86400)),
-    S("autonomy_max_actions_per_day", "Max actions / day", "automation", "number",
-      "Rolling cap on self-initiated actions.", tier="ask", section="Autonomy", check=_range(0)),
-    S("autonomy_max_tokens_per_day", "Max tokens / day", "automation", "number",
-      "Rolling token budget for self-initiated work.", tier="ask", section="Autonomy", check=_range(0)),
+    S("autonomy_max_actions_per_day", "Most actions it may take in a day", "automation", "number",
+      "How many actions work it started by itself may take in any 24 hours.", tier="ask",
+      section="Autonomy", check=_range(0), aliases=("max actions per day",)),
+    S("autonomy_max_tokens_per_day", "Most model use in a day (tokens)", "automation", "number",
+      "How much model text work it started by itself may use in any 24 hours, counted in "
+      "tokens (a token is about three quarters of a word).", tier="ask", section="Autonomy",
+      check=_range(0), aliases=("max tokens per day", "token budget")),
     S("sentinels_enabled", "Folder watchers (sentinels)", "automation", "bool",
       "Watchers that notice changes and suggest work (they never act on their own).",
       tier="ask", section="Watchers", aliases=("sentinels", "watchers")),
@@ -377,9 +404,9 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("profile_share_codex", "Share my profile with Codex", "memory", "bool",
       "Write your profile into Codex's own instructions file on this PC.",
       tier="ask", put=False, section="Share with Build"),
-    S("chat_folder_rules", "Read a project's AGENTS.md and CLAUDE.md in chat", "memory", "bool",
-      "When a chat is in a project that has a folder, it reads the instruction files in that "
-      "folder (AGENTS.md, CLAUDE.md and their .local versions) and follows them.",
+    S("chat_folder_rules", "Follow a project folder's own instructions in chat", "memory", "bool",
+      "When a chat is in a project that has a folder, it reads the instruction files kept in "
+      "that folder (AGENTS.md, CLAUDE.md and their .local versions) and follows them.",
       tier="allow", aliases=("agents.md", "claude.md", "folder rules", "project instructions")),
     S("memory_steward_enabled", "Memory steward", "memory", "bool",
       "Tidy and de-duplicate long-term memory in the background.", tier="ask", advanced=True),

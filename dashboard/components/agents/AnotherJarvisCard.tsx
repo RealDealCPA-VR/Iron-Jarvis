@@ -19,6 +19,7 @@
  */
 
 import { useCallback, useEffect, useId, useState } from "react";
+import Link from "next/link";
 import { ApiError, get, post } from "@/lib/api";
 import { ConfirmButton, ErrorNote, LoaderInline } from "@/components/ui";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
@@ -27,7 +28,10 @@ import {
   CALLER_LABEL,
   CALLER_PLACEHOLDER,
   CARD_TITLE,
+  LAN_SETTING_HREF,
+  LAN_SETTING_LINK,
   OFF_EXPLAINER,
+  REACHABLE_LINE,
   TOKEN_ONCE,
   TURN_ON,
   addThisComputerSteps,
@@ -117,6 +121,9 @@ export function AnotherJarvisCard() {
     status?.enabled && status.reachable && status.reachable.host_allowed === false
       ? status.reachable.note ?? ""
       : "";
+  // v1.358.0 (G61): the address shown CAN be reached (the setting is on and
+  // applied, or the user opened the way themselves) — said once, quietly.
+  const reachable = !!(status?.enabled && status.reachable && status.reachable.host_allowed === true);
 
   return (
     <section
@@ -209,6 +216,24 @@ export function AnotherJarvisCard() {
               className="rounded-md bg-tone-warn/[0.08] px-2.5 py-1.5 text-[12px] leading-relaxed text-tone-warn"
             >
               {reachNote}
+            </p>
+          )}
+          {reachNote && (
+            <div className="px-1">
+              {/* v1.358.0 (G61): the one press the sentence above points at —
+                  Settings opens on that row (?focus=). Nothing turns on here. */}
+              <Link
+                href={LAN_SETTING_HREF}
+                data-testid="another-jarvis-lan-setting"
+                className={GHOST_BTN}
+              >
+                {LAN_SETTING_LINK}
+              </Link>
+            </div>
+          )}
+          {reachable && (
+            <p data-testid="another-jarvis-reachable" className="px-1 text-[12px] text-zinc-500">
+              {REACHABLE_LINE}
             </p>
           )}
           <div className="flex flex-wrap items-center gap-1.5 px-1">

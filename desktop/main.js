@@ -108,6 +108,113 @@ function ironProxyEnv() {
   };
 }
 
+// --- Let other computers on my network reach this Iron Jarvis (v1.358.0, G61)
+// The daemon listens on 127.0.0.1 and its Host guard (daemon/auth._host_ok)
+// admits loopback names only, so another computer running Iron Jarvis could
+// never reach this one's task door or remote inbound door from the app — the
+// card told the user to run `ironjarvis serve --host` and set an environment
+// variable, which nobody can do from the desktop app. The setting
+// `lan_access` (Settings › Connections, "Let other computers on my network
+// reach this Iron Jarvis") is OFF by default, asks every time from chat, and
+// is saved by the daemon's ONE settings writer into <home>/config.toml. This
+// shell reads it at EVERY daemon spawn (so "Restart Iron Jarvis" applies a
+// change) and only when it is on AND this PC has a private network address
+// does it start the daemon listening on every interface (the window keeps
+// talking to 127.0.0.1: the dashboard's address is baked at build time, so a
+// bind to the network address alone would cut the window off) with
+// IRONJARVIS_HOST_ALLOWLIST naming this PC's own private addresses. Every
+// request still needs the install token, and each door checks its own token.
+// Off, unreadable, or no private address = exactly the spawn it always was.
+
+//: The settings key (settings/schema.py, the Config field), pinned equal.
+const LAN_ACCESS_KEY = "lan_access";
+
+//: True only for a top-level `lan_access = true` in config.toml. tomli_w
+//: (core/config.atomic_write_toml) writes every plain value BEFORE the first
+//: [table], so the scan stops at a table header. Anything else (no file, an
+//: unreadable file, false, a typo) is OFF: nothing opens by accident.
+function lanAccessOn(tomlText) {
+  const text = String(tomlText || "").replace(/^\uFEFF/, "");
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("[")) break;
+    const m = /^(?:lan_access|"lan_access"|'lan_access')\s*=\s*(true|false)\s*(?:#.*)?$/.exec(line);
+    if (m) return m[1] === "true";
+  }
+  return false;
+}
+
+//: This PC's PRIVATE network IPv4 addresses (the shape of
+//: os.networkInterfaces()): 10/8, 172.16/12, 192.168/16 and 100.64/10 (a
+//: Tailscale-style private network — providers/egress counts it as this
+//: network too). Loopback, link-local and public addresses never qualify:
+//: the setting says "my network", not the internet.
+function lanAddresses(ifaces) {
+  const out = [];
+  for (const list of Object.values(ifaces || {})) {
+    for (const a of Array.isArray(list) ? list : []) {
+      if (!a || a.internal || !(a.family === "IPv4" || a.family === 4)) continue;
+      const ip = String(a.address || "");
+      const p = ip.split(".").map((n) => (/^\d{1,3}$/.test(n) ? Number(n) : -1));
+      if (p.length !== 4 || p.some((n) => n < 0 || n > 255)) continue;
+      const priv =
+        p[0] === 10 ||
+        (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||
+        (p[0] === 192 && p[1] === 168) ||
+        (p[0] === 100 && p[1] >= 64 && p[1] <= 127);
+      if (priv && !out.includes(ip)) out.push(ip);
+    }
+  }
+  return out;
+}
+
+//: Where the daemon listens and what it is told, from the setting and this
+//: PC's addresses. A host allowlist the user already set is KEPT (ours is
+//: added to it, never replaces it). Pure: the node pins drive it directly.
+function daemonNetwork(on, addresses, ambientAllow) {
+  const ips = (Array.isArray(addresses) ? addresses : []).filter((a) => typeof a === "string" && a);
+  if (!on || ips.length === 0) return { host: "127.0.0.1", env: {}, lan: [] };
+  const allow = [];
+  const ambient = String(ambientAllow || "").split(",").map((s) => s.trim()).filter(Boolean);
+  for (const name of ambient.concat(ips)) if (!allow.includes(name)) allow.push(name);
+  return { host: "0.0.0.0", env: { IRONJARVIS_HOST_ALLOWLIST: allow.join(",") }, lan: ips };
+}
+
+//: The daemon's spawn arguments — the ONE place `--host` is decided.
+function daemonServeArgs(net, port, root) {
+  return ["serve", "--host", (net && net.host) || "127.0.0.1", "--port", String(port), "--root", root];
+}
+
+//: Read the setting from the daemon's home at spawn time. `ifaces` is for the
+//: node pins; the app passes nothing and reads this PC's own interfaces.
+function readDaemonNetwork(homeDir, ifaces) {
+  let text = "";
+  try {
+    text = fs.readFileSync(path.join(homeDir, "config.toml"), "utf8");
+  } catch {
+    /* no config yet: off */
+  }
+  const on = lanAccessOn(text);
+  let ips = [];
+  if (on) {
+    try {
+      ips = lanAddresses(ifaces || require("os").networkInterfaces());
+    } catch {
+      ips = [];
+    }
+  }
+  const net = daemonNetwork(on, ips, process.env.IRONJARVIS_HOST_ALLOWLIST);
+  if (on) {
+    desktopLog(
+      "warn",
+      ips.length
+        ? `[network] ${LAN_ACCESS_KEY} is on — other computers on this network can reach ${ips.join(", ")} (token required)`
+        : `[network] ${LAN_ACCESS_KEY} is on but this PC has no private network address — listening on 127.0.0.1 only`
+    );
+  }
+  return net;
+}
+
 // The dashboard's API base (NEXT_PUBLIC_IJ_API) is baked at build time to
 // 127.0.0.1:8787, so the bundled daemon MUST listen on 8787.
 const DAEMON_PORT = parseInt(process.env.IJ_DAEMON_PORT || "8787", 10);
@@ -837,7 +944,7 @@ function startService(label, spawnFn) {
       rec.cappedWindowMin = minutes;
       desktopLog("error", `[${label}] ${rec.restartTimes.length} restarts in ${minutes} minutes — giving up; use the tray's "Restart Iron Jarvis"`);
       fileLogger(label)(`[main] ${new Date(now).toISOString()} ${rec.restartTimes.length} restarts in ${minutes} minutes — giving up; use the tray's "Restart Iron Jarvis"\n`);
-      notifyCrashLoop(label, `The ${label} crashed ${rec.restartTimes.length} times in ${minutes} minutes and is no longer being restarted. Use the tray's "Restart Iron Jarvis" to try again.`);
+      notifyCrashLoop(label, (who) => `${who} crashed ${rec.restartTimes.length} times in ${minutes} minutes and is no longer being restarted. Use the tray's "Restart Iron Jarvis" to try again.`);
       refreshTrayMenu(); // adds the "Restart Iron Jarvis" item
       return;
     }
@@ -847,7 +954,7 @@ function startService(label, spawnFn) {
     fileLogger(label)(`[main] ${new Date(now).toISOString()} unexpected exit — restart #${rec.restarts} in ${delay}ms\n`);
     if (rec.restarts === 3) notifyCrashLoop(label);
     else if (rec.deaths.length === DEATHS_DAY_TOAST_AT) {
-      notifyCrashLoop(label, `The ${label} has crashed ${rec.deaths.length} times in the last 24 hours and is being restarted each time. Logs: ${path.join(userDataDir || "", "logs")}`);
+      notifyCrashLoop(label, (who) => `${who} has crashed ${rec.deaths.length} times in the last 24 hours and is being restarted each time. Logs: ${path.join(userDataDir || "", "logs")}`);
     }
     // The handle lives on the record (review of D1): the tray "Restart Iron
     // Jarvis" spawns a dead child at once and must cancel this pending spawn,
@@ -949,19 +1056,30 @@ function restartDaemonFromShell() {
   return true;
 }
 
+// v1.358.0 (G30): a tooltip or a toast names what the user knows, never the
+// code's label. The labels "daemon" / "dashboard" stay ids (logs, the services
+// map, killChild reasons); the program the window talks to is "Iron Jarvis"
+// (VOCABULARY.md) and the window's own server is "the Iron Jarvis dashboard"
+// (classifyStartupFailure's words). The table lives INSIDE this function on
+// purpose: the node harnesses lift it by name (fnSource), so a top-level
+// helper would be undefined there. A caller's body may be a function of the
+// subject (`(who) => …`) so the words are written once, here.
 function notifyCrashLoop(label, body) {
   const logsDir = path.join(userDataDir || "", "logs");
   const rec = _services[label];
+  const who = label === "dashboard" ? "The Iron Jarvis dashboard" : "Iron Jarvis";
+  const tip = label === "dashboard" ? "Iron Jarvis — the dashboard" : "Iron Jarvis";
   markTrayDegraded(
     label,
     rec && rec.capped
-      ? `Iron Jarvis — ${label} stopped (crashed too often; Restart from the tray)`
-      : `Iron Jarvis — ${label} is restarting repeatedly (check logs)`
+      ? `${tip} stopped (crashed too often; Restart from the tray)`
+      : `${tip} is restarting repeatedly (check logs)`
   );
+  const text = typeof body === "function" ? body(who) : body;
   try {
     new Notification({
       title: "Iron Jarvis — problem",
-      body: body || `The ${label} keeps crashing and is being restarted. Logs: ${logsDir}`,
+      body: text || `${who} keeps crashing and is being restarted. Logs: ${logsDir}`,
     }).show();
   } catch {
     /* notifications unavailable */
@@ -1339,14 +1457,16 @@ function waitForDaemon(timeoutMs, intervalMs) {
       ) {
         // A NEGATIVE code is a spawn failure (ENOENT/EACCES — v1.226.0, F-E-3):
         // the daemon program itself, not the port, is the problem.
+        // v1.358.0 (G30): these reasons reach the startup dialog's
+        // "Details:" line, so they say "Iron Jarvis", never "the daemon".
         if (daemonProc.exitCode < 0) {
           return reject(
             new Error(
-              `the daemon program could not be started (missing or blocked file; spawn code ${daemonProc.exitCode})`
+              `the Iron Jarvis program could not be started (missing or blocked file; spawn code ${daemonProc.exitCode})`
             )
           );
         }
-        return reject(new Error(`daemon exited early (code ${daemonProc.exitCode}) — port in use?`));
+        return reject(new Error(`Iron Jarvis stopped while starting (code ${daemonProc.exitCode}) — port in use?`));
       }
       const req = http.get(
         `http://127.0.0.1:${DAEMON_PORT}/health`,
@@ -1370,7 +1490,7 @@ function waitForDaemon(timeoutMs, intervalMs) {
                 // kept equal by the suite, so this compares like with like.
                 if (ok && d.version !== app.getVersion()) {
                   ok = false;
-                  why = `an Iron Jarvis daemon of a different version (v${d.version}; this app is v${app.getVersion()}) answers on the port`;
+                  why = `a copy of Iron Jarvis of a different version (v${d.version}; this app is v${app.getVersion()}) answers on the port`;
                 }
                 // A version match is not ownership (review S1): a token-less
                 // dev daemon of the same version passed this gate at t=1s and
@@ -1379,7 +1499,7 @@ function waitForDaemon(timeoutMs, intervalMs) {
                 // foreign (exit 75 → foreignNotified) fail now, not at 90s.
                 if (ok) {
                   const rec = _services.daemon;
-                  const foreignWhy = `port ${DAEMON_PORT} is held by an Iron Jarvis daemon that is not ours (v${d.version}) — stop it or change its port`;
+                  const foreignWhy = `port ${DAEMON_PORT} is held by a copy of Iron Jarvis that is not ours (v${d.version}) — stop it or change its port`;
                   if (rec && rec.foreignNotified) return reject(new Error(foreignWhy));
                   probeDaemonOwnership(2500).then((owner) => {
                     if (owner === "ours") return resolve();
@@ -1401,7 +1521,7 @@ function waitForDaemon(timeoutMs, intervalMs) {
         if (why) lastWhy = why;
         if (Date.now() >= deadline) {
           reject(
-            new Error(`daemon /health not healthy within ${timeoutMs}ms` + (lastWhy ? ` (${lastWhy})` : ""))
+            new Error(`Iron Jarvis did not answer within ${timeoutMs}ms` + (lastWhy ? ` (${lastWhy})` : ""))
           );
         } else setTimeout(attempt, intervalMs);
       }
@@ -1571,13 +1691,14 @@ function daemonWatchdogTick() {
 
 function notifyWatchdogExhausted() {
   const logsDir = path.join(userDataDir || "", "logs");
-  markTrayDegraded("daemon", "Iron Jarvis — the daemon keeps stalling (Restart from the tray)");
+  // v1.358.0 (G30): "Iron Jarvis", never "the daemon" (VOCABULARY.md).
+  markTrayDegraded("daemon", "Iron Jarvis keeps stalling (Restart from the tray)");
   try {
     new Notification({
       title: "Iron Jarvis — problem",
       // v1.312.0: the tray offers "Restart Iron Jarvis" in this state now (so
       // does the window's offline banner) — the short way back, not a Quit.
-      body: `The daemon stopped answering repeatedly and automatic restarts are paused. Use "Restart Iron Jarvis" in the tray menu to start it again. Logs: ${logsDir}`,
+      body: `Iron Jarvis stopped answering repeatedly and automatic restarts are paused. Use "Restart Iron Jarvis" in the tray menu to start it again. Logs: ${logsDir}`,
     }).show();
   } catch {
     /* notifications unavailable */
@@ -2125,7 +2246,7 @@ function daemonRequest(method, apiPath, body) {
       }
     );
     req.on("error", reject);
-    req.setTimeout(15000, () => req.destroy(new Error("daemon request timed out")));
+    req.setTimeout(15000, () => req.destroy(new Error("Iron Jarvis did not answer in time")));
     if (payload) req.write(payload);
     req.end();
   });
@@ -2621,25 +2742,139 @@ let askWaitingCount = 0;
 //: them in its own words; they fall back to "use <its name>" below.
 //: v1.350.0: approve_plan is the daemon's own plan approval (a name no custom
 //: tool may take — tools/dynamic.RESERVED_TOOL_NAMES); the card says "follow
-//: this plan", the toast "follow a plan".
-const ASK_PHRASES = {
-  rename_file: ["rename or move", "file", "files"],
-  write_file: ["save", "file", "files"],
-  write_document: ["create", "document", "documents"],
-  excel_edit: ["edit", "workbook", "workbooks"],
-  shell: ["run", "command", "commands"],
-  approve_plan: ["follow", "plan", "plans"],
+//: this plan".
+//:
+//: v1.358.0 (lane 8E): ONE TABLE. These are the approval card's OWN words,
+//: entry for entry (dashboard/lib/toolWords.ts WORDS) — this process cannot
+//: import the dashboard's TypeScript, so tests/test_desktop_words_v13580.py
+//: reads both files and fails on any key or phrase that differs. Two entries
+//: are ahead of the card (write_document, excel_edit: the card still reads
+//: "run write_document" there); the pin allows exactly those two until the
+//: card's table has them, and then requires the same words. The toast used
+//: to keep its own six-entry table, so `edit_file` read "use edit file"
+//: beside the card's "change a file".
+const TOOL_WORDS = {
+  write_file: "save a file",
+  edit_file: "change a file",
+  rename_file: "rename or move a file",
+  shell: "run a command",
+  repl: "run some code",
+  run_code: "run some code",
+  web_fetch: "read a web page",
+  web_search: "search the web",
+  rest_call: "call one of your saved web services",
+  config_change: "change a setting",
+  config_change_protected: "change a protected setting",
+  schedule_update: "change a schedule",
+  schedule_delete: "remove a schedule",
+  workflow_update: "change a saved workflow",
+  workflow_delete: "remove a saved workflow",
+  workflow_schedule: "put a saved workflow on a schedule",
+  channel_toggle: "turn a channel's two-way messages on or off",
+  channel_connect: "add a notification channel",
+  app_connect: "connect an app",
+  webhook_update: "change a webhook",
+  webhook_delete: "remove a webhook",
+  sentinel_update: "pause or resume a watcher",
+  sentinel_delete: "remove a watcher",
+  goal_update: "change a goal",
+  goal_delete: "drop a goal",
+  reflex_create: "add a rule that acts on its own",
+  reflex_update: "change a rule that acts on its own",
+  reflex_delete: "remove a rule that acts on its own",
+  config_undo: "undo your last change",
+  approve_plan: "follow this plan",
+  write_document: "create a document",
+  excel_edit: "edit a workbook",
 };
+
+//: The batch forms ("rename or move 4 files") for the asks that come in
+//: batches. Every other phrase says how many times after it.
+const TOOL_WORDS_MANY = {
+  write_file: "save {n} files",
+  edit_file: "change {n} files",
+  rename_file: "rename or move {n} files",
+  write_document: "create {n} documents",
+  excel_edit: "edit {n} workbooks",
+  shell: "run {n} commands",
+  approve_plan: "follow {n} plans",
+};
+
+//: The 14 built-in browser tools, by EXACT name — lib/toolWords.ts
+//: BROWSER_TOOLS, pinned equal. Never a `browser_` prefix: a custom tool may
+//: take any other name and runs what its author wrote.
+const ASK_BROWSER_TOOLS = new Set([
+  "browser_get_status",
+  "browser_list_tabs",
+  "browser_get_active_tab",
+  "browser_read_page",
+  "browser_get_elements",
+  "browser_screenshot",
+  "browser_activate_tab",
+  "browser_scroll",
+  "browser_create_tab",
+  "browser_close_tab",
+  "browser_click",
+  "browser_type",
+  "browser_press_key",
+  "browser_navigate",
+]);
+
+//: What the card says for a tool id, or null when it says nothing of its own
+//: (the card then shows the exact id) — lib/toolWords.ts `toolWords`, the
+//: same three rules in the same order: the table, the built-in browser
+//: tools, a connected app's tool read off its `mcp__<app>__<tool>` id.
+function askToolWords(tool) {
+  const id = String(tool || "").trim();
+  if (!id) return null;
+  if (Object.prototype.hasOwnProperty.call(TOOL_WORDS, id)) return TOOL_WORDS[id];
+  if (ASK_BROWSER_TOOLS.has(id)) return "act in a browser tab";
+  if (id.startsWith("mcp__")) {
+    const rest = id.slice("mcp__".length);
+    const cut = rest.indexOf("__");
+    if (cut > 0) {
+      const app = rest.slice(0, cut);
+      const name = rest.slice(cut + 2);
+      // eslint-disable-next-line no-control-regex
+      if (/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(app) && name.trim() && !/[\u0000-\u001f\u007f]/.test(name)) {
+        const cutWords = (s, max) => (s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s);
+        const words = name
+          .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+          .split(/[\s_-]+/)
+          .filter(Boolean)
+          .map((w) => (/^[A-Z][a-z]+$/.test(w) ? w.toLowerCase() : w));
+        return `use ${cutWords(app, 40)} (${cutWords(words.join(" ") || name, 60)})`;
+      }
+    }
+  }
+  return null;
+}
 
 function plainAskSummary(ask) {
   const count = Number(ask && ask.count) > 1 ? Math.floor(Number(ask.count)) : 1;
   const tool = String((ask && ask.tool) || "a tool");
-  const phrase = ASK_PHRASES[tool];
-  if (phrase) {
-    return count > 1 ? `${phrase[0]} ${count} ${phrase[2]}` : `${phrase[0]} a ${phrase[1]}`;
+  if (count > 1 && Object.prototype.hasOwnProperty.call(TOOL_WORDS_MANY, tool)) {
+    return TOOL_WORDS_MANY[tool].replace("{n}", String(count));
+  }
+  const words = askToolWords(tool);
+  if (words) {
+    if (count === 1) return words;
+    return words.endsWith(")") ? `${words}, ${count} times` : `${words} (${count} times)`;
   }
   const spoken = tool.replace(/_/g, " ");
   return count > 1 ? `use ${spoken} (${count} times)` : `use ${spoken}`;
+}
+
+//: v1.358.0 (lane 8E): the asking run's task, said in the toast — the first
+//: line the daemon already cut and masked for the bell's "for: …" line
+//: (GET /chat/approvals/pending `task`), cut again to one short quote.
+//: Empty when the row has none (a chat ask, an older daemon).
+function askTaskWords(ask) {
+  const raw = ask && typeof ask.task === "string" ? ask.task : "";
+  // eslint-disable-next-line no-control-regex
+  const flat = raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!flat) return "";
+  return flat.length > 80 ? `${flat.slice(0, 79).trimEnd()}…` : flat;
 }
 
 // WHAT TO SAY, and to whom — pure, so the schedule is testable without toasts.
@@ -2662,7 +2897,11 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
     const rec = prev ? { first: prev.first, sent: prev.sent } : { first: now, sent: 0 };
     const isChat = ask.kind === "chat";
     const hasTool = typeof ask.tool === "string" && ask.tool !== "";
-    const summary = plainAskSummary(ask);
+    // v1.358.0 (lane 8E): the card's words, then WHICH task is asking —
+    // `save a file for “Draft the Q3 letter”` — so a toast on a closed
+    // window says what the run is, not only what it wants to do.
+    const task = isChat ? "" : askTaskWords(ask);
+    const summary = task ? `${plainAskSummary(ask)} for “${task}”` : plainAskSummary(ask);
     const sessionId = !isChat && typeof ask.session_id === "string" ? ask.session_id : "";
     const threadId = isChat && typeof ask.thread_id === "string" ? ask.thread_id : "";
     // v1.357.0 (G76): the canon's words — the click opens the RUN that is
@@ -3576,19 +3815,23 @@ async function startup() {
         : {};
     const resourceEnv = { ...voskEnv, ...addonEnv, ...ironProxyEnv() };
     // 1) Frozen daemon. Must serve on 8787 to match the build-time-baked client URL.
-    startService("daemon", () =>
-      spawnChild(
+    // v1.358.0 (G61): where it listens is read from the "Let other computers
+    // on my network reach this Iron Jarvis" setting at EVERY spawn (the
+    // home is userData/.ironjarvis — IRONJARVIS_HOME is blanked below).
+    startService("daemon", () => {
+      const net = readDaemonNetwork(path.join(stateDir, ".ironjarvis"));
+      return spawnChild(
         "daemon",
         DAEMON_EXE,
-        ["serve", "--host", "127.0.0.1", "--port", String(DAEMON_PORT), "--root", stateDir],
+        daemonServeArgs(net, DAEMON_PORT, stateDir),
         path.dirname(DAEMON_EXE),
         // Blank out any ambient IRONJARVIS_HOME (e.g. left over from source/dev use)
         // so the packaged app's per-install userData home always wins — an empty
         // value makes resolve_home() fall back to --root (userData/.ironjarvis).
-        { IRONJARVIS_TOKEN: authToken, IRONJARVIS_HOME: "", ...resourceEnv },
+        { IRONJARVIS_TOKEN: authToken, IRONJARVIS_HOME: "", ...resourceEnv, ...net.env },
         false
-      )
-    );
+      );
+    });
     // 2) Next.js standalone server (server.js) via Electron's bundled Node.
     startService("dashboard", () =>
       spawnChild(
@@ -3619,7 +3862,7 @@ async function startup() {
         "Iron Jarvis — missing prerequisites",
         "Could not find the required tool(s) on your PATH:\n\n" +
           "  - " + missing.join("\n  - ") + "\n\n" +
-          "Iron Jarvis (dev mode) launches the local repo's Python daemon (via uv) and\n" +
+          "Iron Jarvis (dev mode) launches the local repo's Python service (via uv) and\n" +
           "the Next.js dashboard (via pnpm). Install the tool(s) above, then relaunch."
       );
       isQuitting = true;
@@ -3628,15 +3871,20 @@ async function startup() {
       return;
     }
     // 1) Python daemon (FastAPI on DAEMON_PORT) with the per-install token.
-    startService("daemon", () =>
-      spawnChild(
+    // v1.358.0 (G61): the same setting, read from the home resolve_home()
+    // picks for --root REPO_ROOT (IRONJARVIS_HOME when set, else the repo's
+    // own .ironjarvis).
+    startService("daemon", () => {
+      const home = (process.env.IRONJARVIS_HOME || "").trim() || path.join(REPO_ROOT, ".ironjarvis");
+      const net = readDaemonNetwork(home);
+      return spawnChild(
         "daemon",
         "uv",
-        ["run", "ironjarvis", "serve", "--host", "127.0.0.1", "--port", String(DAEMON_PORT), "--root", REPO_ROOT],
+        ["run", "ironjarvis", ...daemonServeArgs(net, DAEMON_PORT, REPO_ROOT)],
         REPO_ROOT,
-        { IRONJARVIS_TOKEN: authToken, ...ironProxyEnv() }
-      )
-    );
+        { IRONJARVIS_TOKEN: authToken, ...ironProxyEnv(), ...net.env }
+      );
+    });
     // 2) Next.js dashboard. `next start` honours the PORT env var.
     startService("dashboard", () =>
       spawnChild("dashboard", "pnpm", ["start"], DASHBOARD_DIR, {
@@ -3677,8 +3925,10 @@ async function startup() {
       handleCorruptInstall(integrityResult);
       return;
     }
+    // v1.358.0 (G30): the window title a person reads says the program's
+    // name, never the code's "daemon" (VOCABULARY.md).
     handleStartupFailure(
-      "Iron Jarvis — daemon did not start",
+      "Iron Jarvis did not start",
       (err && err.message) || "no details",
       pendingUpdate,
       {
