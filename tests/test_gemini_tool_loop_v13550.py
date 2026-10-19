@@ -36,7 +36,6 @@ taken off on purpose and the pin must pass.
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 import re
 from pathlib import Path
