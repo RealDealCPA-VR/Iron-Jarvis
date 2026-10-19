@@ -184,6 +184,31 @@ describe("Settings › Permissions: the row and the block", () => {
     expect(within(block).queryByRole("button", { name: "Change folders" })).toBeNull();
   });
 
+  it("after Save the block above the row says the new folders (it re-reads what the gate enforces)", async () => {
+    // v1.356.0 review: the block read GET /settings/access once, so right
+    // after saving two folders it still said "reads anywhere" above the row
+    // that had just limited reading. It now re-reads when the saved folders
+    // change.
+    openPermissions();
+    const block = await screen.findByTestId("access-summary", {}, W);
+    await waitFor(() => expect(within(block).getByRole("button", { name: "Choose folders" })).toBeTruthy(), W);
+    expect(within(block).getByTestId("access-reads").textContent).not.toContain(A);
+    const row = await screen.findByTestId("setting-readable_folders", {}, W);
+    fireEvent.change(within(row).getByRole("textbox"), { target: { value: `${A}\n${B}` } });
+    // What the daemon answers once the setting is saved.
+    H.gets["/settings/access"] = {
+      reads: { limited: true, folders: [A, B], chosen: [A, B], install: false },
+      writes: { chat_files_dir: "C:\\Users\\me\\Documents\\Iron Jarvis" },
+    };
+    fireEvent.click(await screen.findByRole("button", { name: "Save changes" }, W));
+    await waitFor(() => expect(H.puts).toHaveLength(1), W);
+    await waitFor(
+      () => expect(within(block).getByTestId("access-reads").textContent).toContain(`without asking: ${A}, ${B}`),
+      W,
+    );
+    expect(within(block).getByRole("button", { name: "Change folders" })).toBeTruthy();
+  });
+
   it("CONTROL: a daemon whose schema has no such row gets no press (nothing to open)", async () => {
     H.gets["/settings/schema"] = { groups: GROUPS, settings: [SETTINGS[0]], secrets: [] };
     openPermissions();

@@ -153,7 +153,11 @@ export function AccessSummary({
   onGo?: (group: string, sub?: string) => void;
 }) {
   const headingId = useId();
-  const access = useApi<AccessFacts>("/settings/access");
+  // v1.356.0 review (G81): re-read what the gate enforces when the SAVED
+  // folders change — a Save on the row below must not leave this block
+  // saying "reads anywhere" above a limit that is already in force.
+  const readKey = JSON.stringify(values.readable_folders ?? null);
+  const access = useApi<AccessFacts>("/settings/access", [readKey]);
   const connectors = useApi<{ connectors?: ConnectorRow[] }>("/connectors");
   const grants = useApi<{ grants?: unknown[] }>("/grants");
 
