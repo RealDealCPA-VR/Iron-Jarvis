@@ -222,6 +222,10 @@ export function providerHeading(provider: string | null | undefined): string {
   if (HEADING[p]) return HEADING[p];
   const shown = providerDisplay(p);
   if (shown === p) return ""; // unknown: not ours to name
+  // Sentence case only for OUR lower-case phrases; a brand keeps its own
+  // casing ("xAI" must not read "XAI"; review of v1.353.0 lane 3A).
+  const first = shown.split(" ")[0];
+  if (first !== first.toLowerCase()) return shown;
   return shown[0].toUpperCase() + shown.slice(1);
 }
 

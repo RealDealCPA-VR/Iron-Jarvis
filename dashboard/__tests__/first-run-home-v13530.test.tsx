@@ -462,6 +462,9 @@ describe("G57 — names, not provider ids", () => {
     expect(providerHeading("custom")).toBe("Your model server");
     expect(providerHeading("claude-cli")).toBe("Claude Code");
     expect(providerHeading("fleet-x")).toBe("");
+    // A brand keeps its own casing (review): never "XAI".
+    expect(providerHeading("xai")).toBe("xAI");
+    expect(modelGroupName({ provider: "xai", model: "grok-4" })).toBe("xAI");
     expect(modelGroupName({ provider: "fleet-x", model: "m", name: "Box" })).toBe("Box");
     expect(modelGroupName({ provider: "ollama", model: "q", name: "q" })).toBe("Ollama");
     expect(modelGroupName({ provider: "fleet-y", model: "m" })).toBe("fleet-y");
