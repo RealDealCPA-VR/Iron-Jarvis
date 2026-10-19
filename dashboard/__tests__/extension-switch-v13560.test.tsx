@@ -46,6 +46,10 @@ const api = vi.hoisted(() => {
     switchAnswer: null as null | ((name: string, on: boolean) => Record<string, unknown>),
     /** What POST /mcp/import/preview answers (the paste door). */
     preview: null as null | Record<string, unknown>,
+    /** What GET /mcp/import/sources answers (review: the sources door). */
+    sources: [] as Record<string, unknown>[],
+    /** What POST /mcp/import/apply answers (review). */
+    apply: null as null | Record<string, unknown>,
   };
 });
 
@@ -63,12 +67,13 @@ vi.mock("@/lib/api", () => ({
     if (path === "/mcp/catalog") return { catalog: api.catalog };
     if (path === "/tools/custom") return { tools: [] };
     if (path === "/connectors") return { connectors: api.connectors, categories: ["Developer"] };
-    if (path === "/mcp/import/sources") return { sources: [] };
+    if (path === "/mcp/import/sources") return { sources: api.sources };
     return {};
   },
   post: async (path: string) => {
     api.posts.push(path);
     if (path === "/mcp/import/preview" && api.preview) return api.preview;
+    if (path === "/mcp/import/apply" && api.apply) return api.apply;
     return {};
   },
   put: async () => ({}),
@@ -232,6 +237,8 @@ beforeEach(() => {
   api.connectors = [];
   api.switchAnswer = null;
   api.preview = null;
+  api.sources = [];
+  api.apply = null;
 });
 afterEach(() => cleanup());
 
@@ -325,6 +332,84 @@ describe("a Tools row switches its extension off and on without losing it", () =
     api.servers = [SLACK_OFF];
     const { savedWhileOff } = words;
     expect(savedWhileOff("slack")).toBe(`"slack" saved. It's off, so it starts when you turn it on.`);
+  });
+
+  it("a server its app had switched off, ticked anyway, is ADDED SWITCHED OFF: no warn triangle, no chat line, its press lands on the row's switch (review)", async () => {
+    const scrolled: Element[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      // The row the daemon lists once it is saved: off, no tools.
+      api.servers = [{ ...SLACK_OFF, name: "parked" }];
+      api.sources = [
+        {
+          source: "claude-desktop",
+          label: "Claude Desktop",
+          origin: "C:\\AppData\\Claude\\claude_desktop_config.json",
+          readable: true,
+          note: "",
+          servers: [
+            {
+              name: "parked",
+              transport: "stdio",
+              command: "npx",
+              args: ["-y", "@example/parked"],
+              url: "",
+              header_names: [],
+              env_keys: [],
+              secret_keys: [],
+              exists: false,
+              runtime_ready: true,
+              launcher_note: "",
+              source: "claude-desktop",
+              origin: "C:\\AppData\\Claude\\claude_desktop_config.json",
+              disabled: true,
+              exists_as: "",
+              blurb: "",
+            },
+          ],
+        },
+      ];
+      // The apply answer for a ticked disabled row (routes/agents._apply_specs).
+      api.apply = {
+        added: [
+          {
+            name: "parked",
+            tools_loaded: 0,
+            note: "saved switched off, as it was in the app it came from; turn it on to use it",
+            state: "off",
+          },
+        ],
+        skipped: [],
+      };
+      render(<ToolsPage />);
+      const group = await screen.findByTestId("import-source-claude-desktop");
+      const parked = await within(group).findByTestId("import-row-parked");
+      fireEvent.click(within(parked).getByTestId("import-pick-parked"));
+      fireEvent.click(within(group).getByTestId("import-source-apply-claude-desktop"));
+      const result = await within(group).findByTestId("import-result-parked");
+      expect(result.getAttribute("data-outcome")).toBe("off");
+      expect(within(result).getByTestId("import-off-added-parked").textContent).toBe(
+        "Added switched off, as it was in its app.",
+      );
+      // Saved, not started on purpose: never the warn triangle or the
+      // "didn't start" words, and no "Use it in a chat" line for it.
+      expect(within(result).queryByTestId("import-warn-parked")).toBeNull();
+      expect(result.textContent).not.toMatch(/didn.t start/i);
+      expect(within(group).queryByTestId("import-use-in-chat")).toBeNull();
+      // Its press goes to the row and puts the focus on the row's switch
+      // (an off row has no Retry).
+      const jump = within(result).getByTestId("import-open-row-parked");
+      expect(jump.textContent).toBe("Turn it on in its row below.");
+      await screen.findByTestId("mcp-switch-parked");
+      fireEvent.click(jump);
+      expect(document.activeElement).toBe(screen.getByTestId("mcp-switch-parked"));
+      expect(scrolled.length).toBeGreaterThan(0);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
   });
 });
 
