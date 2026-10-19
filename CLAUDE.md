@@ -3584,7 +3584,12 @@ does not need a bump, stop and bump it.
   app keeps its card and a DENY still refuses (lanes read `ask` only when the
   mode is not DENY); `catalog.get_link_card` / `LINK_ALIASES` ("puppeteer",
   "browser") → app_connect answers where the browser is set up and
-  `failure_door_for` returns the SAME "Pair your browser" door; `door_for
+  `failure_door_for` returns the SAME "Pair your browser" door; (re-review)
+  an OAuth app the user ALREADY signed in to answers "already connected"
+  (ok, so no Connect button — `records._oauth_signed_in`, the registry's
+  `status()`, off the loop; the account name never reaches the model) and
+  app_connect's description names google_drive / onedrive / dropbox so a
+  real model calls it (`tests/test_rereview_wave3_v13530.py`); `door_for
   ("browser_get_status")` opens that door from the status READ (the one
   browser tool chat offers while access is off). CONNECTIONS (3C): GET
   /connectors rows gain `needs`, `package_note`, `href`, `action`, MCP

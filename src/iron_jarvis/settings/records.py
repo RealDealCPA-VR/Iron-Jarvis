@@ -1410,6 +1410,20 @@ class ChannelConnectTool(_RecordTool):
 # --- apps
 
 
+def _oauth_signed_in(platform: Any, provider: str) -> bool:
+    """Is this OAuth app's account signed in? The connections registry's own
+    row (the Directory card reads the same ``status()``). BLOCKING (database
+    reads): callers hop off the loop. Unsure (no registry, a fault) is False,
+    so the call answers as before. Never raises (v1.353.0 re-review)."""
+    try:
+        rows = platform.connections.status()
+        return any(
+            r.get("provider") == provider and bool(r.get("connected")) for r in rows or []
+        )
+    except Exception:  # noqa: BLE001 — unsure = not signed in
+        return False
+
+
 class AppConnectTool(_RecordTool):
     name = "app_connect"
     RECORD = "app"
@@ -1418,7 +1432,10 @@ class AppConnectTool(_RecordTool):
         "`app` is the connector id (notion, github, sentry, slack, stripe, brave_search, "
         "google_maps, postgres, filesystem, fetch, memory, …). Non-secret settings go in "
         "`values`; a token is pasted into the secure card this shows — never ask for it in "
-        "chat. The user approves on a card; Undo disconnects it."
+        "chat. The user approves on a card; Undo disconnects it. Apps that sign in through "
+        "the browser (google_drive, onedrive, dropbox) and the browser itself are set up on "
+        "their own pages: the call says whether one is connected, and where to connect it "
+        "when it is not."
     )
     input_schema = {
         "type": "object",
@@ -1467,16 +1484,37 @@ class AppConnectTool(_RecordTool):
             # instead of "there is no app called 'puppeteer'". The failed
             # call leaves the "Pair your browser" button (doors.failure_door_for).
             if get_link_card(cid) is not None:
+                # v1.353.0 re-review: worded so it is true whether or not a
+                # browser is already paired (this call cannot tell).
                 return ToolResult(
                     ok=False,
                     error=(
-                        "Your browser isn't connected from chat: pair the Iron Jarvis "
-                        "browser add-on in Settings › Connections › Browser."
+                        "The browser isn't connected from chat: it is set up in "
+                        "Settings › Connections › Browser (pair the Iron Jarvis browser "
+                        "add-on there, and turn on browser access)."
                     ),
                 )
             known = ", ".join(c.id for c in CATALOG)
             return ToolResult(ok=False, error=f"There is no app called {cid!r}. Known: {known}.")
         if conn.connect_via == "oauth":
+            # v1.353.0 re-review: an app the user ALREADY signed in to is not
+            # sent to connect it again. "find my tax files in Google Drive"
+            # arms this tool (the drive words, v1.353.0 integrate), and a
+            # failed call leaves "Connect Google Drive in Settings"
+            # (doors.failure_door_for) — on a signed-in Drive that button and
+            # "connect it from the Connections page" were both untrue. The
+            # Directory's own answer (connections.status, off the loop).
+            # The account name stays out of the answer (it would reach the model).
+            if await asyncio.to_thread(_oauth_signed_in, self.platform, conn.provider):
+                return ToolResult(
+                    ok=True,
+                    output=(
+                        f"{conn.name} is already connected. Its files reach chat through a "
+                        "memory base: if none points at one of its folders yet, the user can add "
+                        "one on the Memory page."
+                    ),
+                    data={"app": conn.id, "already_connected": True},
+                )
             return ToolResult(ok=False, error=f"{conn.name} signs in through the browser — connect it from the Connections page.")
         if conn.connect_via == "api_key":
             req = {
