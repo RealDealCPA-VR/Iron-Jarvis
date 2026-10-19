@@ -91,7 +91,8 @@ const SUBSECTIONS: Record<string, Sub[]> = {
     {
       id: "connections-browser",
       label: "Browser",
-      blurb: "The browser add-on and computer use.",
+      // v1.353.0 (G71): what exists — no desktop control is offered.
+      blurb: "Your browser add-on and the agent browser.",
       Comp: page(() => import("@/components/settings/pages/BrowserPage")),
     },
     {

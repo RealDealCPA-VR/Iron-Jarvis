@@ -465,6 +465,11 @@
       .work .step[data-ok="false"] {
         color: var(--amber);
       }
+      /* v1.353.0 (G53): a turn where a step failed folds to an amber line
+         ("4 steps · 1 failed · 12 s"), so the failure is seen without opening. */
+      .work[data-failed] > summary {
+        color: var(--amber);
+      }
       #empty {
         color: var(--muted);
         padding: 4px 2px;

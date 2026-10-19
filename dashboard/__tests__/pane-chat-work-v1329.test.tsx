@@ -558,6 +558,8 @@ describe("the pane chat uses tone tokens, not literal hues", () => {
     const src = read("components", "terminal", "PaneChat.tsx");
     expect(src).not.toMatch(/\b(?:text|bg|border|ring|fill|stroke)-(?:rose|emerald|amber|red|green|orange|yellow)-\d/);
     expect(src).toContain("text-tone-warn");
-    expect(src).toContain("hover:text-tone-danger");
+    // v1.353.0 (G51): "hover:text-tone-danger" lived on the pane's own
+    // changed-file card's Undo, which is gone (the receipt's Undo, the chat
+    // page's, replaced it) — the rule above still holds for every class.
   });
 });

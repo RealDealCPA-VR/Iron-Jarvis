@@ -31,6 +31,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 
 // ------------------------------------------------------------- module mocks
@@ -530,7 +531,11 @@ describe("honest failure states", () => {
       screen.getByText(/interrupted — this answer is incomplete/i),
     ).toBeInTheDocument();
     // The user bubble is not lost.
-    expect(screen.getByText("try this")).toBeInTheDocument();
+    expect(screen.getByTestId("pane-user-bubble")).toHaveTextContent("try this");
+    // v1.353.0 (G51): the question is also back in the box for an edit
+    // (the chat page's restore rule), and Retry is offered.
+    expect(screen.getByLabelText("Message")).toHaveValue("try this");
+    expect(screen.getByTestId("pane-chat-retry")).toBeInTheDocument();
     // FAILED turns save too (the chat page's own rule) — nothing is lost to a
     // pane close.
     await waitFor(() => expect(H.api.puts.length).toBe(2)); // v1.339.0: the question, then the reply
@@ -905,7 +910,12 @@ describe("Run in terminal (BC2)", () => {
   });
 });
 
-describe("changed-file cards + undo where you look (BC2)", () => {
+describe("a reply's files: listed once, opened and undone from the receipt (BC2; v1.353.0 G51)", () => {
+  // v1.353.0 (G51): the pane's own changed-file cards were the THIRD list of
+  // the same files (the changes line, the cards, the receipt). They are gone
+  // on purpose; the receipt — the chat page's, word for word — carries Open
+  // and Undo, and the pane's honest confirm still decides every Undo. These
+  // tests moved from the cards to the receipt with the same promises.
   const DOC = "C:\\work\\demo\\notes\\out.md";
 
   function seedFileThread(paneId: string, docs: string[] = [DOC]) {
@@ -919,57 +929,50 @@ describe("changed-file cards + undo where you look (BC2)", () => {
     };
   }
 
+  /** Open the (only, or the n-th) reply's receipt. */
+  async function openReceipt(n = 0) {
+    await waitFor(() => expect(screen.getAllByTestId("turn-receipt").length).toBeGreaterThan(n));
+    fireEvent.click(screen.getAllByTestId("turn-receipt")[n]);
+    return screen.findByTestId("turn-receipt-detail");
+  }
+
   let confirmSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
   });
   afterEach(() => confirmSpy.mockRestore());
 
-  it("renders a card per receipt path; Open posts the full path to /documents/open", async () => {
+  it("no pane file cards; the receipt counts the file once and Open posts the full path", async () => {
     seedFileThread("pc");
     render(<PaneChat paneId="pc" cwd={CWD} />);
-    const card = await screen.findByTestId("pane-file-card");
-    expect(card).toHaveTextContent("out.md");
-    fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await waitFor(() => expect(screen.getByTestId("turn-receipt")).toHaveTextContent("1 file"));
+    expect(screen.queryByTestId("pane-file-card")).not.toBeInTheDocument();
+    const detail = await openReceipt();
+    const doc = within(detail).getByTestId("turn-doc");
+    expect(doc).toHaveTextContent("out.md");
+    expect(doc).toHaveAttribute("title", DOC);
+    fireEvent.click(doc);
     await waitFor(() =>
       expect(
-        H.api.posts.some(
-          (p) => p.path === "/documents/open" && p.body.path === DOC,
-        ),
+        H.api.posts.some((p) => p.path === "/documents/open" && p.body.path === DOC),
       ).toBe(true),
     );
-    // Inside the pane's folder — no location flag.
-    expect(screen.queryByText(/outside this folder/i)).not.toBeInTheDocument();
   });
 
-  it("Undo joins the NEWEST journal row, says so honestly (label + confirm), POSTs that id; success disables", async () => {
+  it("Undo joins the NEWEST journal row, the confirm says so honestly, POSTs that id; then it is spent", async () => {
     seedFileThread("pu");
     // Newest first (the route's order): tool_new must win over tool_old.
     H.api.undoRows = [
-      {
-        action_id: "tool_new",
-        kind: "file_write",
-        undoable: true,
-        path: "notes/out.md",
-        workspace: "C:\\work\\demo",
-      },
-      {
-        action_id: "tool_old",
-        kind: "file_write",
-        undoable: true,
-        path: "notes/out.md",
-        workspace: "C:\\work\\demo",
-      },
+      { action_id: "tool_new", kind: "file_write", undoable: true, path: "notes/out.md", workspace: "C:\\work\\demo" },
+      { action_id: "tool_old", kind: "file_write", undoable: true, path: "notes/out.md", workspace: "C:\\work\\demo" },
     ];
     render(<PaneChat paneId="pu" cwd={CWD} />);
+    await openReceipt();
     // BC2 defect 3: the join is newest-per-path over the SHARED session-
     // "chat" journal, so the reverted write may be another surface's — the
-    // label and confirm must say "newest write", never "this message's".
-    const undo = await screen.findByRole("button", {
-      name: /undo newest write/i,
-    });
+    // confirm must say "newest write", never "this message's".
+    const undo = await screen.findByRole("button", { name: /undo the write to out\.md/i });
     fireEvent.click(undo);
-    // Exactly one decision, to the newest row — never the stale one.
     await waitFor(() => {
       const posts = H.api.posts.filter((p) => p.path.startsWith("/undo/"));
       expect(posts.length).toBe(1);
@@ -980,68 +983,54 @@ describe("changed-file cards + undo where you look (BC2)", () => {
     expect(prompt).toContain("out.md");
     expect(prompt).toContain("NEWEST write");
     expect(prompt).toContain("panes and Chat share one journal");
-    // Honest success note + the button disables (and stays disabled after
-    // the refetch — undone state is remembered by action id).
-    expect(
-      await screen.findByText(/undone — restored to before the newest write/i),
-    ).toBeInTheDocument();
+    // Remembered by action id: the press is spent even after the refetch.
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /undone/i })).toBeDisabled(),
+      expect(screen.getByRole("button", { name: /undo the write to out\.md/i })).toBeDisabled(),
     );
   });
 
   it("the since-changed guard's refusal renders VERBATIM and the button stays usable", async () => {
     seedFileThread("pg");
     H.api.undoRows = [
-      {
-        action_id: "tool_1",
-        kind: "file_write",
-        undoable: true,
-        path: "notes/out.md",
-        workspace: "C:\\work\\demo",
-      },
+      { action_id: "tool_1", kind: "file_write", undoable: true, path: "notes/out.md", workspace: "C:\\work\\demo" },
     ];
     H.api.undoFail = {
-      detail:
-        "out.md changed since this write — refusing to clobber the newer content",
+      detail: "out.md changed since this write — refusing to clobber the newer content",
       status: 409,
     };
     render(<PaneChat paneId="pg" cwd={CWD} />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: /undo newest write/i }),
-    );
+    await openReceipt();
+    fireEvent.click(await screen.findByRole("button", { name: /undo the write to out\.md/i }));
     // The daemon's own words, where the user clicked.
     expect(
-      await screen.findByText(
-        /out\.md changed since this write — refusing to clobber the newer content/i,
-      ),
+      await screen.findByText(/out\.md changed since this write — refusing to clobber the newer content/i),
     ).toBeInTheDocument();
     // A refused undo did not happen — the affordance must not die.
-    expect(
-      screen.getByRole("button", { name: /undo newest write/i }),
-    ).toBeEnabled();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /undo the write to out\.md/i })).toBeEnabled(),
+    );
   });
 
   it("no matching journal row = NO undo affordance (never a guess); Open still offered", async () => {
     seedFileThread("pz");
     H.api.undoRows = []; // nothing joinable
     render(<PaneChat paneId="pz" cwd={CWD} />);
-    await screen.findByTestId("pane-file-card");
-    expect(
-      screen.queryByRole("button", { name: /undo newest write/i }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^open$/i })).toBeInTheDocument();
+    const detail = await openReceipt();
+    await waitFor(() => expect(H.api.gets).toContain("/undo?session_id=chat"));
+    expect(within(detail).getByTestId("turn-doc")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /undo the write to/i })).not.toBeInTheDocument();
   });
 
-  it("a path OUTSIDE the pane cwd still renders — flagged with its location", async () => {
+  it("a path OUTSIDE the pane cwd still renders — the receipt is truth, full path kept", async () => {
     seedFileThread("po", ["D:\\elsewhere\\gen.txt"]);
     render(<PaneChat paneId="po" cwd={CWD} />);
-    const card = await screen.findByTestId("pane-file-card");
-    expect(card).toHaveTextContent("gen.txt");
-    expect(card).toHaveTextContent(/outside this folder/i);
+    const detail = await openReceipt();
+    const doc = within(detail).getByTestId("turn-doc");
+    expect(doc).toHaveTextContent("gen.txt");
+    expect(doc).toHaveAttribute("title", "D:\\elsewhere\\gen.txt");
   });
 
-  it("a file re-written by a LATER turn notes '(newer than this message)' on the older card only", async () => {
+  it("a file re-written by a LATER reply: the older reply's Undo confirm says so, the newest's does not", async () => {
     // The detectable half of the shared-journal hazard: a later assistant
     // message in THIS thread lists the same path, so the newest journal row
     // cannot be the older message's write.
@@ -1056,24 +1045,26 @@ describe("changed-file cards + undo where you look (BC2)", () => {
       ],
     };
     H.api.undoRows = [
-      {
-        action_id: "tool_2",
-        kind: "file_write",
-        undoable: true,
-        path: "notes/out.md",
-        workspace: "C:\\work\\demo",
-      },
+      { action_id: "tool_2", kind: "file_write", undoable: true, path: "notes/out.md", workspace: "C:\\work\\demo" },
     ];
+    confirmSpy.mockReturnValue(false); // read the words, undo nothing
     render(<PaneChat paneId="pn2" cwd={CWD} />);
-    const cards = await screen.findAllByTestId("pane-file-card");
-    expect(cards.length).toBe(2);
-    // Older card: flagged (the note waits on the async /undo join — it only
-    // qualifies an offered undo button). Newest card: no flag — its write IS
-    // the newest known to this thread.
-    await waitFor(() =>
-      expect(cards[0]).toHaveTextContent(/newer than this message/i),
+    // The older reply's receipt.
+    await openReceipt(0);
+    fireEvent.click(await screen.findByRole("button", { name: /undo the write to out\.md/i }));
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1));
+    expect(String(confirmSpy.mock.calls[0][0])).toMatch(
+      /A later reply in this conversation wrote out\.md again/,
     );
-    expect(cards[1]).not.toHaveTextContent(/newer than this message/i);
+    // Close it, open the newest reply's receipt: no such note.
+    fireEvent.click(screen.getAllByTestId("turn-receipt")[0]);
+    await waitFor(() => expect(screen.queryByTestId("turn-receipt-detail")).not.toBeInTheDocument());
+    await openReceipt(1);
+    fireEvent.click(await screen.findByRole("button", { name: /undo the write to out\.md/i }));
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(2));
+    expect(String(confirmSpy.mock.calls[1][0])).not.toMatch(/A later reply/);
+    // Declined twice: nothing was undone.
+    expect(H.api.posts.some((p) => p.path.startsWith("/undo/"))).toBe(false);
   });
 
   it("the UNDETECTABLE half (cross-surface newer writes) is documented in-code (source-pinned)", () => {

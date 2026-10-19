@@ -606,7 +606,10 @@ if (absent.length) {
       expect(block.dataset["live"]).toBe("true");
       h.emit("done", {});
       expect(block.dataset["live"]).toBe("false");
-      expect(block.querySelector("summary")?.textContent).toBe("2 steps");
+      // v1.353.0 (G53): the folded line counts the failure too (no time: this
+      // panel did not send the turn, so it does not know when it started).
+      expect(block.querySelector("summary")?.textContent).toBe("2 steps · 1 failed");
+      expect(block.dataset["failed"]).toBe("1");
       // The next turn gets its own block.
       h.emit("tool", { name: "browser_scroll", text: "Scrolling…" });
       expect(el("transcript").querySelectorAll("details.work").length).toBe(2);

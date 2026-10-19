@@ -32,7 +32,7 @@ describe("resolveState — the idle/done split lives on the client", () => {
     expect(resolveState("idle", false)).toBe("idle");
   });
 
-  it("calls it 'finished' when the pane settled unwatched", () => {
+  it("calls it 'done' (shown as 'stopped — take a look') when the pane settled unwatched", () => {
     // herdr's distinction: the same underlying ready state reached while you
     // were looking elsewhere is a different thing to be told. The daemon
     // cannot know it — seen-ness is a fact about this browser — so the
@@ -66,7 +66,9 @@ describe("PaneStateChip", () => {
     expect(screen.getByTestId("pane-state-blocked").textContent).toContain("needs you");
     cleanup();
     render(<PaneStateChip state="done" />);
-    expect(screen.getByTestId("pane-state-done").textContent).toContain("finished");
+    // v1.353.0 (G52): a quiet pane is not a success claim — the classifier
+    // has no error state, so it asks the user to look.
+    expect(screen.getByTestId("pane-state-done").textContent).toContain("stopped — take a look");
     cleanup();
     render(<PaneStateChip state="working" />);
     expect(screen.getByTestId("pane-state-working").textContent).toContain("working");
@@ -105,7 +107,9 @@ describe("PaneStateSummary — never hunt for the stuck one", () => {
     render(<PaneStateSummary panes={panes} onFocus={vi.fn()} />);
     const strip = screen.getByTestId("pane-summary");
     expect(strip.textContent).toContain("1 working");
-    expect(strip.textContent).toContain("1 finished");
+    // v1.353.0 (G52): "stopped — take a look", never "finished".
+    expect(strip.textContent).toContain("1 stopped — take a look");
+    expect(strip.textContent).not.toContain("finished");
   });
 
   it("renders nothing when there is nothing to say", () => {

@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   AlertTriangle,
   Bell,
   CheckCircle2,
+  SquareTerminal,
   GitBranch,
   GraduationCap,
   KeyRound,
@@ -50,6 +52,14 @@ import {
   scopeLabel,
   undoLine,
 } from "@/lib/approvalWords";
+// v1.353.0 (G52): a Build pane waiting on its CLI's question (dependency-free).
+import {
+  blockedPanes,
+  onBuildPage,
+  paneWaitingHref,
+  paneWaitingTitle,
+  type BlockedPane,
+} from "@/lib/paneAsks";
 
 /** One /diagnostics → background_loops entry (daemon/app.py `_tick`). */
 type LoopHealth = { ok?: boolean; last_error?: string; error?: string; at?: string };
@@ -1028,6 +1038,35 @@ function ChatWaitingRow({ ask, onOpen }: { ask: ChatWaitingAsk; onOpen: () => vo
   );
 }
 
+/** v1.353.0 (G52): a Build pane whose coding CLI is waiting on the user
+ *  ("Allow this edit?"), as a bell row — the waiting chat's exact look (the
+ *  amber tile, a title, one quiet line, the arrow). The answer is given IN
+ *  the pane (the question is on its screen), so the row is a link to it. */
+function PaneWaitingRow({ pane, onOpen }: { pane: BlockedPane; onOpen: () => void }) {
+  return (
+    <li data-testid="bell-pane-waiting" data-pane={pane.id}>
+      <Link
+        href={paneWaitingHref(pane)}
+        onClick={onOpen}
+        className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]"
+      >
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+          <SquareTerminal size={15} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium text-zinc-100">
+            {paneWaitingTitle(pane)}
+          </span>
+          <span className="block truncate text-[11px] text-zinc-500">
+            {pane.name ? `Open ${pane.name}` : "Open the pane"}
+          </span>
+        </span>
+        <ArrowRight size={13} className="shrink-0 text-zinc-600" />
+      </Link>
+    </li>
+  );
+}
+
 /** Parse one /chat/approvals/pending row (null = not a usable row). A chat
  *  row (v1.351.0) is not an agent ask: `parseChatAsk` reads it. */
 function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
@@ -1384,6 +1423,12 @@ export function NotificationBell() {
   // v1.249.0 (R-02): work a restart cut off. It waits on the user exactly like
   // the rows above — an update used to end these silently and offer nothing.
   const interrupted = useInterruptedJobs(15000);
+  // v1.353.0 (G52): Build panes whose coding CLI stopped on a question. The
+  // same tiny listing the Build page polls (names + state only); a pane that
+  // waits is told where the user is, not only on Build. On Build itself the
+  // pane already wears "needs you", so the bell stays quiet there.
+  const panesApi = usePolledApi<unknown>("/terminals/activity", 15000);
+  const pathname = usePathname();
 
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -1430,6 +1475,11 @@ export function NotificationBell() {
     }
     return out;
   }, [agentAsksApi.data]);
+  // v1.353.0 (G52): one row per pane in state `blocked` — never on Build.
+  const paneAsks = useMemo(
+    () => (onBuildPage(pathname) ? [] : blockedPanes(panesApi.data)),
+    [panesApi.data, pathname],
+  );
 
   // A live approval.requested/resolved event means the polled list is stale —
   // refetch right away (same idiom as the workflow.waiting refresh below).
@@ -1638,6 +1688,7 @@ export function NotificationBell() {
     waiting.length +
     agentAsks.length +
     chatAsks.length +
+    paneAsks.length +
     failingLoops.length +
     interrupted.jobs.length +
     (busyAsk ? 1 : 0);
@@ -1679,8 +1730,11 @@ export function NotificationBell() {
       if (reviews.length)
         parts.push(`${reviews.length} review${reviews.length === 1 ? "" : "s"} awaiting approval`);
       if (pendingApprovals)
+        // v1.353.0 (G54): what it is, in the user's words.
         parts.push(
-          `${pendingApprovals} computer-use approval${pendingApprovals === 1 ? "" : "s"}`,
+          pendingApprovals === 1
+            ? "A website action is waiting for your OK"
+            : `${pendingApprovals} website actions are waiting for your OK`,
         );
       if (waiting.length)
         parts.push(
@@ -1694,6 +1748,8 @@ export function NotificationBell() {
         parts.push(
           `${chatAsks.length} chat${chatAsks.length === 1 ? "" : "s"} waiting for your OK`,
         );
+      // v1.353.0 (G52): each waiting pane by its CLI's name.
+      for (const pane of paneAsks) parts.push(paneWaitingTitle(pane));
       if (failingLoops.length)
         parts.push(
           `${failingLoops.length} background task${failingLoops.length === 1 ? "" : "s"} failing`,
@@ -1714,6 +1770,7 @@ export function NotificationBell() {
     waiting.length,
     agentAsks.length,
     chatAsks.length,
+    paneAsks,
     failingLoops.length,
     interrupted.jobs.length,
     busyAsk,
@@ -1858,6 +1915,12 @@ export function NotificationBell() {
                     <ChatWaitingRow key={ask.id} ask={ask} onOpen={() => setOpen(false)} />
                   ))}
 
+                  {/* v1.353.0 (G52): a Build pane whose CLI waits on the
+                      user — answered in the pane, so a link to it. */}
+                  {paneAsks.map((pane) => (
+                    <PaneWaitingRow key={`pane-${pane.id}`} pane={pane} onOpen={() => setOpen(false)} />
+                  ))}
+
                   {/* v1.249.0 (R-02): jobs a restart cut off, with the Continue
                       the user had to go hunting for before. */}
                   {interrupted.jobs.map((job) => (
@@ -1878,13 +1941,20 @@ export function NotificationBell() {
                         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
                           <MonitorCog size={15} />
                         </span>
+                        {/* v1.353.0 (G54): a queued website action, in
+                            words. Approving it does not resume the step:
+                            the agent's next identical call runs once. */}
                         <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium text-zinc-100">
-                            {pendingApprovals} computer-use approval
-                            {pendingApprovals === 1 ? "" : "s"}
+                          <span
+                            data-testid="bell-website-action"
+                            className="block text-sm font-medium text-zinc-100"
+                          >
+                            {pendingApprovals === 1
+                              ? "A website action is waiting for your OK"
+                              : `${pendingApprovals} website actions are waiting for your OK`}
                           </span>
                           <span className="block text-[11px] text-zinc-500">
-                            A sensitive action is waiting for your OK.
+                            Approve it, then ask the agent to do that step again.
                           </span>
                         </span>
                         <ArrowRight size={13} className="shrink-0 text-zinc-600" />
@@ -2023,7 +2093,9 @@ export function NotificationBell() {
                         ? "/workflows"
                         : agentAsks.length === 0 && chatAsks.length > 0
                           ? chatAskHref(chatAsks[0])
-                          : "/agents"
+                          : agentAsks.length === 0 && paneAsks.length > 0
+                            ? paneWaitingHref(paneAsks[0])
+                            : "/agents"
                   }
                   onClick={() => setOpen(false)}
                   className="flex items-center justify-center gap-1.5 text-[11px] font-medium text-accent-soft transition-colors hover:text-accent"
@@ -2034,7 +2106,9 @@ export function NotificationBell() {
                       ? "Open the Workflows page"
                       : agentAsks.length === 0 && chatAsks.length > 0
                         ? "Open the chat"
-                        : "Open the Agents page"}{" "}
+                        : agentAsks.length === 0 && paneAsks.length > 0
+                          ? "Open Build"
+                          : "Open the Agents page"}{" "}
                   <ArrowRight size={12} />
                 </Link>
               </footer>

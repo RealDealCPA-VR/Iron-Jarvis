@@ -24,7 +24,7 @@
  */
 
 import type { ReactNode } from "react";
-import { AlertTriangle, Check, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 
 export type PaneState = "working" | "blocked" | "idle" | "done" | "unknown";
 
@@ -84,6 +84,11 @@ export function resolveState(
   return raw ?? "unknown";
 }
 
+/** v1.353.0 (G52): what a pane that went quiet while unseen is called —
+ *  on its chip, in the rail and in the canvas summary. Not "finished": the
+ *  output stopping says nothing about whether the work succeeded. */
+export const DONE_WORDS = "stopped — take a look";
+
 const LOOK: Record<
   Exclude<PaneDisplay, "unknown">,
   { label: string; cls: string; icon: ReactNode }
@@ -118,10 +123,15 @@ const LOOK: Record<
     cls: "border-white/[0.06] bg-white/[0.01] text-zinc-500",
     icon: null,
   },
+  // v1.353.0 (G52): a pane that went quiet while unseen is NOT a success.
+  // The classifier has no error state — "settled" only means the output
+  // stopped, and a CLI that died on an error settles exactly like one that
+  // finished. So no green, no check: the idle look with brighter words, and
+  // the words ask the user to look rather than claim an outcome.
   done: {
-    label: "finished",
-    cls: "border-tone-success/30 bg-tone-success/[0.08] text-tone-success",
-    icon: <Check size={10} aria-hidden />,
+    label: DONE_WORDS,
+    cls: "border-white/10 bg-white/[0.02] text-zinc-300",
+    icon: null,
   },
 };
 
@@ -152,7 +162,7 @@ export function PaneStateChip({
         (state === "blocked"
           ? "waiting on an approval or a question"
           : state === "done"
-            ? "finished while you were looking elsewhere"
+            ? "went quiet while you were looking elsewhere. Open it to see whether it finished or stopped on an error"
             : state === "unclear"
               ? "an agent is here and its output does not say what it is doing — NOT a claim that it finished"
               : look.label) +
@@ -217,9 +227,10 @@ export function PaneStateSummary({
         </span>
       )}
       {done.length > 0 && (
-        <span className="text-tone-success/80">
+        // v1.353.0 (G52): quiet zinc, never the success tone — see DONE_WORDS.
+        <span data-testid="pane-summary-stopped" className="text-zinc-400">
           {blocked.length > 0 || working > 0 ? "· " : ""}
-          {done.length} finished
+          {done.length} {DONE_WORDS}
         </span>
       )}
     </div>
@@ -240,7 +251,9 @@ export function PaneDot({ state }: { state: PaneDisplay }) {
       : state === "working"
         ? "bg-accent"
         : state === "done"
-          ? "bg-tone-success"
+          ? // v1.353.0 (G52): neutral, a step brighter than "ready" — never
+            // the success tone (a quiet pane may have stopped on an error).
+            "bg-zinc-300"
           : state === "idle"
             ? "bg-zinc-500"
             : "bg-zinc-600";

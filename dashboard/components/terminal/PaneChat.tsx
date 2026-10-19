@@ -37,16 +37,19 @@ import {
   ArrowUp,
   ChevronDown,
   CircleAlert,
-  FileText,
   FolderKanban,
   Loader2,
   Paperclip,
   Play,
-  Undo2,
+  RefreshCw,
   X,
 } from "lucide-react";
 import { get, post, put, ApiError } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
+// v1.353.0 (G51): the reply's "answered by <model>" uses the chat page's
+// names — the catalog's label, else the name the id spells (one reader).
+import { useModels } from "@/lib/useModels";
+import { answeredModelName } from "@/lib/answeredModel";
 import { useChatStream, StreamError } from "@/lib/useChatStream";
 import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
 import { TurnClock } from "@/components/chat/TurnClock";
@@ -89,7 +92,6 @@ import { usePaneNarrow } from "@/components/terminal/usePaneNarrow";
 import {
   joinUndoByPath,
   normalizeFsPath,
-  parentDir,
   type UndoRowLike,
 } from "@/components/chat/ArtifactsRail";
 import {
@@ -101,7 +103,6 @@ import {
   paneBasename,
   paneThreadKey,
   paneTitle,
-  pathIsUnder,
   projectForCwd,
   readAsBase64,
   runnableBlocks,
@@ -164,12 +165,24 @@ interface PaneAttachment {
  * honesty: confirming a "restore" there would confirm the user into a
  * deletion.
  */
-function paneUndoPrompt(kind: string | undefined, base: string): string {
+function paneUndoPrompt(
+  kind: string | undefined,
+  base: string,
+  newerInThread = false,
+): string {
+  // v1.353.0 (G51): the changed-file cards are gone (the reply now lists its
+  // files once, in the changes line and the receipt, like /chat), so the
+  // detectable "a later reply wrote it again" note rides the confirm the
+  // user reads before anything is undone.
+  const later = newerInThread
+    ? `A later reply in this conversation wrote ${base} again, so this undoes ` +
+      `THAT newer write. `
+    : "";
   return kind === "file_delete" || kind === "files_delete"
-    ? `Undo the newest write? ${base} was created by a chat write and will be ` +
+    ? `${later}Undo the newest write? ${base} was created by a chat write and will be ` +
         `removed — that write may be more recent than this message (panes and ` +
         `Chat share one journal).`
-    : `This restores ${base} to its content from before the NEWEST write to ` +
+    : `${later}This restores ${base} to its content from before the NEWEST write to ` +
         `it — which may be more recent than this message (panes and Chat ` +
         `share one journal). Continue?`;
 }
@@ -180,7 +193,7 @@ function paneUndoPrompt(kind: string | undefined, base: string): string {
  * proves it (that later turn wrote the file after this one). The
  * CROSS-SURFACE half is NOT detectable with the current row shape — rows
  * carry created_at but no thread/message attribution, and wire messages
- * carry no timestamps to compare against — which is exactly why the button
+ * carry no timestamps to compare against — which is exactly why the confirm
  * says "Undo newest write" rather than pretending to know.
  */
 function docReappearsLater(
@@ -194,6 +207,28 @@ function docReappearsLater(
     if (m.documents?.some((d) => normalizeFsPath(d) === normPath)) return true;
   }
   return false;
+}
+
+/** v1.353.0 (G51): the newest question in a history. */
+function lastUserOf(history: readonly PaneMessage[]): PaneMessage | undefined {
+  for (let j = history.length - 1; j >= 0; j -= 1) {
+    if (history[j]?.role === "user") return history[j];
+  }
+  return undefined;
+}
+
+/** v1.353.0 (G51): a question's files as attachments (a followed turn's own
+ *  files, so its Retry re-sends them too). Name and path pair by position;
+ *  a path with no name keeps its base name. */
+function attachmentsOf(m: PaneMessage | undefined): PaneAttachment[] {
+  const paths = Array.isArray(m?.attachmentPaths) ? m.attachmentPaths : [];
+  const names = Array.isArray(m?.attachmentNames) ? m.attachmentNames : [];
+  return paths
+    .filter((p): p is string => typeof p === "string" && !!p)
+    .map((path, k) => ({
+      path,
+      name: typeof names[k] === "string" && names[k] ? names[k] : paneBasename(path),
+    }));
 }
 
 function storedThreadId(paneId: string): string | null {
@@ -218,6 +253,9 @@ function PaneMarkdown({ text, live = false }: { text: string; live?: boolean }) 
 export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps) {
   const daemon = useDaemon();
   const stream = useChatStream();
+  // v1.353.0 (G51): the shared model catalog (one reader per window), for
+  // the receipt's "answered by <model>".
+  const catalog = useModels();
 
   const [messages, setMessages] = useState<PaneMessage[]>([]);
   const messagesRef = useRef<PaneMessage[]>(messages);
@@ -238,6 +276,13 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // v1.353.0 (G51): the turn that just FAILED — its exact history and
+  // attachments — so Retry re-sends the same message (the chat page's
+  // failedTurn rule). Cleared by Retry, a new send, or a pane change.
+  const [failedTurn, setFailedTurn] = useState<{
+    history: PaneMessage[];
+    atts: PaneAttachment[];
+  } | null>(null);
   const [attachments, setAttachments] = useState<PaneAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -282,11 +327,6 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
   const [undoneActions, setUndoneActions] = useState<Set<string>>(new Set());
   // One undo in flight at a time (keyed by normalized path).
   const [undoBusyPath, setUndoBusyPath] = useState<string | null>(null);
-  // Per-file result notes (open failure, undo success, the guard's refusal),
-  // keyed by normalized path — a blocked undo must say why, where clicked.
-  const [fileNotes, setFileNotes] = useState<
-    Record<string, { ok: boolean; text: string }>
-  >({});
   // Per-run-button notes ("terminal not connected"), keyed "<msg>:<block>".
   const [runNotes, setRunNotes] = useState<Record<string, string>>({});
 
@@ -317,6 +357,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     setLoadError(null);
     setSaveFailure(null);
     setError(null);
+    setFailedTurn(null);
     setAttachments([]);
     setInput("");
     setProvider("");
@@ -332,7 +373,6 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     setUndoRows([]);
     setUndoneActions(new Set());
     setUndoBusyPath(null);
-    setFileNotes({});
     setRunNotes({});
     const stored = storedThreadId(paneId);
     saveTargetRef.current = { id: stored };
@@ -460,70 +500,38 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
   // joinUndoByPath keeps the first) — the shared join, not a reimplementation.
   const undoByPath = useMemo(() => joinUndoByPath(undoRows), [undoRows]);
 
-  function setFileNote(normPath: string, note: { ok: boolean; text: string } | null) {
-    setFileNotes((prev) => {
-      const next = { ...prev };
-      if (note) next[normPath] = note;
-      else delete next[normPath];
-      return next;
-    });
-  }
-
-  /** "Open": POST /documents/open — the OS-associated app, the ArtifactsRail's
-   *  own Open mechanism. Chosen over DocPreview deliberately: the preview is
-   *  a rail-sized surface (diff machinery, width management) and this pane is
-   *  a narrow column inside a terminal pane; launching the real app is the
-   *  lightest honest open. A failure lands on the card, verbatim. */
+  /** "Open" (the receipt's file row): POST /documents/open — the
+   *  OS-associated app, the ArtifactsRail's own Open mechanism, the lightest
+   *  honest open from a narrow pane. A failure is said in the pane's error
+   *  line, verbatim — never silent. */
   async function openDoc(path: string) {
-    const norm = normalizeFsPath(path);
-    setFileNote(norm, null);
     try {
       await post<{ ok: boolean; app?: string }>("/documents/open", { path });
     } catch (e) {
-      setFileNote(norm, {
-        ok: false,
-        text: e instanceof Error ? e.message : String(e),
-      });
+      setError(
+        `Couldn't open ${paneBasename(path)}: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
   }
 
-  /** "Undo newest write": explicit confirm (the app's window.confirm
-   *  convention, in the pane's honest wording — see paneUndoPrompt), POST
-   *  /undo/{action_id}. The daemon's since-changed hash guard is the safety —
-   *  its refusal (409 detail) renders VERBATIM on the card; success disables
-   *  the button and says so. */
-  async function undoWrite(actionId: string, path: string) {
-    const norm = normalizeFsPath(path);
-    try {
-      await undoNewestWrite(actionId, path);
-    } catch (e) {
-      // The guard's own words — a blocked undo must say why.
-      setFileNote(norm, {
-        ok: false,
-        text: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }
-
-  /** The ONE undo both places use (the file card above, and the "files
-   *  changed" list, v1.329.0): the pane's honest confirm, POST /undo/{id},
-   *  the card's note, the refetch. THROWS on a refusal, so each caller shows
-   *  the guard's words where the user pressed. A declined confirm (or an undo
-   *  already running) does nothing. */
-  async function undoNewestWrite(actionId: string, path: string) {
+  /** The ONE undo both places use — the "files changed" line (v1.329.0) and
+   *  the receipt's file rows (v1.353.0, which replaced the pane's own file
+   *  cards): the pane's honest confirm (it undoes the NEWEST write, and says
+   *  so when a later reply here wrote the file again), POST /undo/{id}, the
+   *  refetch. THROWS on a refusal, so each caller shows the daemon guard's
+   *  words where the user pressed. A declined confirm (or an undo already
+   *  running) does nothing. `index` = the reply the press came from. */
+  async function undoNewestWrite(actionId: string, path: string, index?: number) {
     const norm = normalizeFsPath(path);
     if (undoBusyPath) return;
     const row = undoByPath.get(norm);
-    if (!window.confirm(paneUndoPrompt(row?.kind, paneBasename(path)))) return;
+    const newer =
+      typeof index === "number" && !!row && docReappearsLater(messagesRef.current, index, norm);
+    if (!window.confirm(paneUndoPrompt(row?.kind, paneBasename(path), newer))) return;
     setUndoBusyPath(norm);
-    setFileNote(norm, null);
     try {
       await post(`/undo/${encodeURIComponent(actionId)}`, {});
       setUndoneActions((prev) => new Set(prev).add(actionId));
-      setFileNote(norm, {
-        ok: true,
-        text: "undone — restored to before the newest write",
-      });
       void refreshUndoRows();
     } finally {
       setUndoBusyPath(null);
@@ -830,6 +838,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     if (!text || busy || !canCompose || uploading) return;
     const atts = attachmentsRef.current;
     setError(null);
+    setFailedTurn(null);
     const userMsg: PaneMessage = {
       role: "user",
       content: text,
@@ -942,10 +951,33 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
       setMessages(full);
       queueSave(full);
       setError(e instanceof Error ? e.message : String(e));
+      // v1.353.0 (G51): Retry re-sends THIS turn — the same question and the
+      // same files (a followed turn's files are read off its question) — and
+      // the question goes back in an empty box for an edit (the chat page's
+      // restoreComposerDraft rule; anything typed meanwhile is kept).
+      const asked = lastUserOf(history);
+      setFailedTurn({ history, atts: atts.length ? atts : attachmentsOf(asked) });
+      if (asked) setInput((cur) => (cur.trim() ? cur : asked.content));
     } finally {
       notePaneTurn(paneId, null);
       setSending(false);
     }
+  }
+
+  /** v1.353.0 (G51): Retry the failed turn — the chat page's retryTurn at
+   *  pane scale. The restored draft is retired when it is still exactly the
+   *  question being re-sent (anything the user typed is kept); the history
+   *  and files are the failed turn's own, so the daemon gets the same
+   *  message again, and the reply replaces any interrupted partial. */
+  function retryTurn() {
+    const failed = failedTurn;
+    if (!failed || busy || !canCompose) return;
+    const asked = lastUserOf(failed.history);
+    if (asked && input.trim() === asked.content.trim()) setInput("");
+    setError(null);
+    setFailedTurn(null);
+    setSending(true);
+    void completeTurn(failed.history, failed.atts);
   }
 
   /** Engine pick: rides the next turn's body AND persists to the thread setup
@@ -1156,118 +1188,36 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
               <ReplyChanges
                 turn={paneTurnWindow(messages, i)}
                 undoFor={undoStateFor}
-                onUndo={undoNewestWrite}
+                onUndo={(actionId, path) => undoNewestWrite(actionId, path, i)}
               />
-              {/* CHANGED-FILE CARDS (BC2): the receipt's created/changed
-                  paths as actionable rows — Open (OS app) + Undo (the real
-                  journal). The receipt below stays the accountability record;
-                  these are the actions where the user is looking. */}
-              {m.documents?.length ? (
-                <div className="mt-1.5 space-y-1">
-                  {Array.from(new Set(m.documents)).map((p) => {
-                    const norm = normalizeFsPath(p);
-                    const row = undoByPath.get(norm);
-                    const undone = row
-                      ? undoneActions.has(row.action_id)
-                      : false;
-                    const outside = !pathIsUnder(p, cwd);
-                    const note = fileNotes[norm];
-                    // The detectable half of "newest row is newer than this
-                    // message" — a later turn in THIS thread wrote the file
-                    // again (cross-surface writes stay undetectable, see
-                    // docReappearsLater).
-                    const newerInThread =
-                      !!row && docReappearsLater(messages, i, norm);
-                    return (
-                      <div
-                        key={p}
-                        data-testid="pane-file-card"
-                        className={PANE_QUIET_ROW}
-                      >
-                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                          <FileText
-                            size={12}
-                            className="shrink-0 text-accent-soft/80"
-                          />
-                          <span className="min-w-0 truncate text-xs text-zinc-200">
-                            {paneBasename(p)}
-                          </span>
-                          <span
-                            className="hidden min-w-0 truncate text-[11px] text-zinc-500 sm:inline"
-                            title={p}
-                          >
-                            {parentDir(p)}
-                          </span>
-                          {outside ? (
-                            // The receipt is truth — a path outside the
-                            // pane's folder still renders, flagged.
-                            <span className="shrink-0 rounded-full bg-tone-warn/[0.08] px-1.5 py-px text-[11px] text-tone-warn">
-                              outside this folder
-                            </span>
-                          ) : null}
-                          <div className="ml-auto flex shrink-0 items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => void openDoc(p)}
-                              className={PANE_GHOST_BUTTON}
-                            >
-                              Open
-                            </button>
-                            {row ? (
-                              <button
-                                type="button"
-                                disabled={
-                                  undone ||
-                                  undoBusyPath === norm ||
-                                  row.undoable === false
-                                }
-                                title={
-                                  row.undoable === false
-                                    ? "this action has no safe inverse"
-                                    : undefined
-                                }
-                                onClick={() =>
-                                  void undoWrite(row.action_id, p)
-                                }
-                                className={`${PANE_GHOST_BUTTON} hover:bg-tone-danger/10 hover:text-tone-danger`}
-                              >
-                                <Undo2 size={10} />
-                                {undone ? "Undone" : "Undo newest write"}
-                              </button>
-                            ) : null}
-                            {newerInThread ? (
-                              <span className="shrink-0 text-[11px] text-tone-warn">
-                                (newer than this message)
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                        {note ? (
-                          <div
-                            className={`mt-1 text-[11px] ${
-                              note.ok ? "text-tone-success" : "text-tone-danger"
-                            }`}
-                          >
-                            {note.text}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {/* Server-truth receipt + doors — the shared components, verbatim. */}
-              <TurnReceipt
-                route={m.route}
-                adapted={m.adapted}
-                toolsUsed={m.toolsUsed}
-                deniedTools={m.deniedTools}
-                trust={m.trust}
-                trustReason={m.trustReason}
-                trustNote={m.trustNote}
-                usage={m.usage}
-                documents={m.documents}
-              />
+              {/* Server-truth receipt + doors — the shared components, verbatim.
+                  v1.353.0 (G51): the chat page's receipt, word for word —
+                  "answered by <model> · 2 files", opening onto the steps,
+                  the timing and each file with Open + Undo. It replaced the
+                  pane's own changed-file cards, so a file is listed once at
+                  rest (the changes line above names what changed; the
+                  receipt counts it). The row wraps, so the detail opens on
+                  its own line under it, as on /chat. */}
+              <div data-testid="pane-reply-receipt" className="mt-1 flex min-w-0 flex-wrap items-center empty:hidden">
+                <TurnReceipt
+                  inline
+                  modelName={answeredModelName(m.route, catalog.models)}
+                  route={m.route}
+                  adapted={m.adapted}
+                  toolsUsed={m.toolsUsed}
+                  deniedTools={m.deniedTools}
+                  trust={m.trust}
+                  trustReason={m.trustReason}
+                  trustNote={m.trustNote}
+                  usage={m.usage}
+                  steps={m.steps}
+                  timing={m.timing}
+                  documents={m.documents}
+                  onOpenDocument={(path) => void openDoc(path)}
+                  undoFor={undoStateFor}
+                  onUndo={(actionId, path) => undoNewestWrite(actionId, path, i)}
+                />
+              </div>
               <DoorsStrip doors={m.doors} />
             </div>
           ),
@@ -1295,6 +1245,22 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
           </div>
         ) : null}
         {error ? <ErrorNote>{error}</ErrorNote> : null}
+        {/* v1.353.0 (G51): a failed turn can be re-sent where it failed —
+            the chat page's Retry, at pane scale (a quiet ghost press). */}
+        {failedTurn && !busy ? (
+          <div className="flex">
+            <button
+              type="button"
+              data-testid="pane-chat-retry"
+              onClick={retryTurn}
+              disabled={!canCompose}
+              title="Re-send the last message"
+              className={PANE_GHOST_BUTTON}
+            >
+              <RefreshCw size={10} aria-hidden="true" /> Retry
+            </button>
+          </div>
+        ) : null}
         <div ref={endRef} />
       </div>
 

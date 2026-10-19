@@ -188,6 +188,8 @@ let steerSeq = 0;
 let work: HTMLDetailsElement | null = null;
 /** Steps in the current block — the count the summary shows once the turn ends. */
 let stepCount = 0;
+/** v1.353.0 (G53): when THIS panel sent the running turn (0 = not known). */
+let turnStartedAt = 0;
 
 // --- painting ---------------------------------------------------------------
 
@@ -253,6 +255,10 @@ function ensureWork(): HTMLDetailsElement {
   const block = document.createElement("details");
   block.className = "work";
   block.dataset["live"] = "true";
+  // v1.353.0 (G53): when this turn was sent, so the folded line can say how
+  // long it took. Absent for a turn this panel did not send (reopened while it
+  // ran) — the line then says no time rather than a time it cannot know.
+  if (turnStartedAt > 0) block.dataset["started"] = String(turnStartedAt);
   block.appendChild(document.createElement("summary"));
   el.transcript?.appendChild(block);
   work = block;
@@ -260,9 +266,37 @@ function ensureWork(): HTMLDetailsElement {
   return block;
 }
 
-/** The label a finished block shows: how much work it holds. */
-export function workSummary(steps: number): string {
-  return `${steps} ${steps === 1 ? "step" : "steps"}`;
+/**
+ * How long, in the app's own words (v1.353.0, G53) — the SAME rule as the
+ * chat receipt's `secondsText` (dashboard/components/chat/TurnReceipt.tsx):
+ * "4.2 s" under ten seconds, "12 s" under a minute, then "3 min 5 s". The
+ * add-on cannot import the dashboard, so the rule is restated here and the
+ * runtime test compares the two on the same numbers.
+ */
+export function durationWords(ms: number | null | undefined): string | null {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return null;
+  const s = ms / 1000;
+  if (s < 10) return `${s.toFixed(1)} s`;
+  if (s < 60) return `${Math.round(s)} s`;
+  const whole = Math.round(s);
+  const min = Math.floor(whole / 60);
+  const rest = whole % 60;
+  return rest ? `${min} min ${rest} s` : `${min} min`;
+}
+
+/**
+ * The label a finished block shows: how much work it holds, how much of it
+ * FAILED and how long the turn took — "4 steps · 1 failed · 12 s"
+ * (v1.353.0, G53; it used to be only "4 steps", so a click that failed was
+ * amber inside the fold and invisible on it). A count of zero failures is not
+ * said, and no time is said when the turn's start is not known.
+ */
+export function workSummary(steps: number, failed = 0, ms: number | null = null): string {
+  const parts = [`${steps} ${steps === 1 ? "step" : "steps"}`];
+  if (failed > 0) parts.push(`${failed} failed`);
+  const took = durationWords(ms);
+  if (took) parts.push(took);
+  return parts.join(" · ");
 }
 
 /**
@@ -298,14 +332,23 @@ function step(name: string, text: string, status: string, ok: boolean | null): v
   el.transcript?.scrollTo({ top: el.transcript.scrollHeight });
 }
 
-/** The turn ended: the block stops being live and its summary becomes the count. */
+/** The turn ended: the block stops being live and its summary becomes the count
+ *  (v1.353.0, G53: with the failed steps and the time; `data-failed` turns the
+ *  folded line amber in sidepanel.html, so a failure is seen without opening). */
 function finishWork(): void {
   const block = work;
+  turnStartedAt = 0;
   if (!block) return;
   block.dataset["live"] = "false";
+  const failed = block.querySelectorAll('.step[data-ok="false"]').length;
+  const started = Number(block.dataset["started"] ?? "");
+  const ms = Number.isFinite(started) && started > 0 ? Math.max(0, Date.now() - started) : null;
+  if (failed > 0) {
+    block.dataset["failed"] = String(failed);
+  }
   const summary = block.querySelector("summary");
   if (summary) {
-    summary.textContent = workSummary(stepCount);
+    summary.textContent = workSummary(stepCount, failed, ms);
   }
   work = null;
   stepCount = 0;
@@ -662,6 +705,8 @@ function sendNow(): void {
   setTurn(true);
   streaming = null;
   finishWork();
+  // v1.353.0 (G53): the turn starts now — the folded line's time reads from here.
+  turnStartedAt = Date.now();
   // v1.267.0: the pick rides every Send; nothing is stored on the daemon for it.
   const pick = currentPick();
   void post(PANEL_ACTION_SEND, { text, ...(pick ? pick : {}) }).then((sent) => {

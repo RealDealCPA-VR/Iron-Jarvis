@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ShieldAlert,
   Bot,
@@ -47,6 +47,8 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { YourBrowserCard } from "@/components/browser/YourBrowserCard";
 import { PageGrid } from "@/components/PageGrid";
+// v1.353.0 (G54): the app's one "Denied" sentence (dependency-free).
+import { answeredLine } from "@/lib/approvalWords";
 
 /* -------------------------------------------------------------------------- */
 /*  Local contracts (daemon additions not yet in lib/types)                    */
@@ -195,7 +197,9 @@ function ApprovalCard({
   onResolved,
 }: {
   approval: ApprovalWithScreenshot;
-  onResolved: () => void;
+  /** v1.353.0 (G54): which answer landed, so the queue can say what to do
+   *  next after this card leaves. */
+  onResolved: (verdict: "approve" | "deny") => void;
 }) {
   const [busy, setBusy] = useState<"approve" | "deny" | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -208,7 +212,7 @@ function ApprovalCard({
     setErr(null);
     try {
       await post(`/computeruse/approvals/${approval.id}/${verdict}`);
-      onResolved();
+      onResolved(verdict);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : String(e));
       setBusy(null);
@@ -442,6 +446,23 @@ const BEST_PRACTICES: { icon: LucideIcon; text: string }[] = [
 
 const RUN_FINISHED_EVENTS = { types: ["computeruse.run_finished"] };
 
+/** v1.353.0 (G54): what the queue really does. A sensitive website action
+ *  ends the agent's step (as a failed step) and files a request here; an
+ *  approval lets the agent's NEXT identical call run once, within 15 minutes —
+ *  nothing is resumed. The old words ("it pauses here and waits for you")
+ *  promised a resume that never happened. */
+export const WEBSITE_QUEUE_SENTENCE =
+  "When the agent wants to do something sensitive or destructive on a website, its step stops here. " +
+  "Approve it, then ask the agent to do that step again within 15 minutes; it will run once.";
+/** Said for a few seconds after an Approve lands. */
+export const WEBSITE_APPROVED_SENTENCE = "Approved. Ask the agent to try that step again.";
+/** How long the answered line stays. */
+export const WEBSITE_ANSWER_LINGER_MS = 8000;
+/** Recent runs, empty: the agent's website steps are listed where they were
+ *  asked for, not in this list. */
+export const RUNS_EMPTY_SENTENCE =
+  "No runs recorded yet. The agent's website steps are listed in the chat or run that asked for them.";
+
 export default function ComputerUsePage() {
   const { data, error, loading, reload } = useApi<ComputerUseStatus>("/computeruse");
   const approvalsState = usePolledApi<{ approvals: ApprovalWithScreenshot[] }>(
@@ -520,6 +541,27 @@ export default function ComputerUsePage() {
   }
 
   const approvals = approvalsState.data?.approvals ?? [];
+
+  // v1.353.0 (G54): approving a queued website action does NOT resume the
+  // agent's step — the step already ended, and only the agent's next
+  // identical call (within 15 minutes) runs, once. So after an answer the
+  // queue says what happens next, for a few seconds, through ONE live region
+  // that is on the page before its words change (a screen reader hears it).
+  const [answered, setAnswered] = useState<"approve" | "deny" | null>(null);
+  const answeredTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (answeredTimer.current) clearTimeout(answeredTimer.current);
+    },
+    [],
+  );
+  const reloadApprovals = approvalsState.reload;
+  function onApprovalResolved(verdict: "approve" | "deny") {
+    setAnswered(verdict);
+    if (answeredTimer.current) clearTimeout(answeredTimer.current);
+    answeredTimer.current = setTimeout(() => setAnswered(null), WEBSITE_ANSWER_LINGER_MS);
+    reloadApprovals();
+  }
 
   // Run history. A 404 just means the daemon predates GET /computeruse/runs
   // (not restarted since the update) — useApi captures it, data stays null,
@@ -615,8 +657,9 @@ export default function ComputerUsePage() {
               Read this before you turn it on.
             </div>
             <p className="leading-relaxed text-amber-100/80">
-              The agent browser lets an agent control a browser (and, later, the desktop) on
-              your behalf. It is{" "}
+              The agent browser lets an agent control a disposable browser on your behalf.
+              Jarvis can run commands with your OK; it does not click around other desktop
+              apps. It is{" "}
               <span className="font-semibold text-amber-100">off by default</span>. Only enable it
               on an <span className="font-semibold text-amber-100">isolated, disposable VM</span> —
               never on a machine with logged-in accounts or files you can&apos;t afford to lose.
@@ -701,7 +744,7 @@ export default function ComputerUsePage() {
                     <div className="text-xs text-zinc-500">
                       {enabled
                         ? "Agents may drive the browser within the limits below."
-                        : "Agents cannot drive a browser or desktop."}
+                        : "Agents cannot drive the agent browser."}
                     </div>
                   </div>
                 </div>
@@ -923,8 +966,18 @@ export default function ComputerUsePage() {
           }
         >
           <p className="mb-4 text-xs leading-relaxed text-zinc-500">
-            When the agent wants to do something sensitive or destructive, it pauses here and waits
-            for you — that action does not run until you approve it.
+            {WEBSITE_QUEUE_SENTENCE}
+          </p>
+          <p
+            role="status"
+            data-testid="cu-answered-note"
+            className={`text-xs leading-relaxed text-zinc-300 ${answered ? "mb-3" : "sr-only"}`}
+          >
+            {answered === "approve"
+              ? WEBSITE_APPROVED_SENTENCE
+              : answered === "deny"
+                ? answeredLine("denied")
+                : ""}
           </p>
           {approvalsState.loading && !approvalsState.data ? (
             <SkeletonRows rows={2} />
@@ -933,7 +986,7 @@ export default function ComputerUsePage() {
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
               {approvals.map((a) => (
-                <ApprovalCard key={a.id} approval={a} onResolved={approvalsState.reload} />
+                <ApprovalCard key={a.id} approval={a} onResolved={onApprovalResolved} />
               ))}
             </div>
           )}
@@ -952,10 +1005,12 @@ export default function ComputerUsePage() {
             </span>
           }
         >
-          <p className="mb-4 text-xs leading-relaxed text-zinc-500">
-            The last 20 runs, newest first. Click a run to inspect its recorded trace —
-            every action, result, screenshot reference, and error, in order.
-          </p>
+          {runs.length > 0 ? (
+            <p className="mb-4 text-xs leading-relaxed text-zinc-500">
+              The last 20 runs, newest first. Click a run to inspect its recorded trace —
+              every action, result, screenshot reference, and error, in order.
+            </p>
+          ) : null}
           {runsState.error && runsState.error.status !== 0 && runsState.error.status !== 404 ? (
             // v1.226.0: a real error (e.g. 500) is not "no runs yet". 404 stays the
             // quiet empty state on purpose — see the runsState comment above.
@@ -963,9 +1018,9 @@ export default function ComputerUsePage() {
           ) : runsState.loading && !runsState.data ? (
             <SkeletonRows rows={3} />
           ) : runs.length === 0 ? (
-            <Empty icon={<History size={28} />}>
-              No runs recorded yet — history appears after the agent browser&apos;s first run.
-            </Empty>
+            // v1.353.0 (G54): this list is not where an agent's website steps
+            // are kept, so it promises nothing it will not fill.
+            <Empty icon={<History size={28} />}>{RUNS_EMPTY_SENTENCE}</Empty>
           ) : (
             <ul className="space-y-2">
               {runs.map((r) => {

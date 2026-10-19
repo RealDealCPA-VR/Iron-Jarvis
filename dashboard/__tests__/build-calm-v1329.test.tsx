@@ -277,7 +277,10 @@ describe("the terminal list is rows, not cards", () => {
       </div>,
     );
     expect(screen.getByTestId("pane-dot-blocked").className).toContain("bg-tone-warn");
-    expect(screen.getByTestId("pane-dot-done").className).toContain("bg-tone-success");
+    // v1.353.0 (G52): a pane that went quiet unseen is NOT a success — its
+    // dot is neutral (zinc), never the success tone.
+    expect(screen.getByTestId("pane-dot-done").className).toContain("bg-zinc-300");
+    expect(screen.getByTestId("pane-dot-done").className).not.toContain("tone-success");
     expect(screen.getByTestId("pane-dot-blocked").className).not.toMatch(/amber|emerald/);
   });
 });

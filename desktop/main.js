@@ -2708,6 +2708,62 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
   return { seen: next, notify, waiting: Object.keys(next).length };
 }
 
+// A BUILD PANE WAITING ON YOU (v1.353.0, G52). A coding CLI in a Build pane
+// that stops on a question ("Allow this edit?") wears "needs you" on Build —
+// and nowhere else, so a window closed to the tray never heard of it. The
+// watcher reads the same tiny listing the Build page and the bell poll
+// (GET /terminals/activity: ids, names, CLI ids and the classifier's state,
+// never the screen) and raises ONE toast per pane that turns `blocked` while
+// no window is open. Keyed only on `blocked`: a pane that leaves the state
+// and comes back is a new episode. While a window is open the bell owns it —
+// the pane is recorded here, so closing the window later does not
+// re-announce it. The words are the bell's own (dashboard/lib/paneAsks.ts):
+// the CLI's catalog name, pinned equal to it and to terminals/ai_clis.py.
+const PANE_CLI_NAMES = {
+  claude: "Claude Code",
+  codex: "Codex",
+  grok: "Grok CLI",
+  opencode: "opencode",
+  pi: "Pi",
+  gemini: "Gemini CLI",
+  "cursor-agent": "Cursor Agent",
+  aider: "Aider",
+  crush: "Crush",
+  goose: "Goose",
+  qwen: "Qwen Code",
+  llm: "llm",
+  ollama: "Ollama",
+};
+let paneBlockedSeen = {}; // pane id -> true while it stays blocked
+
+function paneWaitingTitle(cli) {
+  const id = typeof cli === "string" ? cli.trim() : "";
+  if (!id) return "A Build pane is waiting for you";
+  const name = Object.prototype.hasOwnProperty.call(PANE_CLI_NAMES, id) ? PANE_CLI_NAMES[id] : id;
+  return `${name} in Build is waiting for you`;
+}
+
+// WHAT TO SAY about waiting panes — pure, like planAskNotifications.
+function planPaneNotifications(seen, panes, windowOpen) {
+  const next = {};
+  const notify = [];
+  for (const pane of Array.isArray(panes) ? panes : []) {
+    const id = pane && typeof pane.id === "string" ? pane.id.trim() : "";
+    if (!id || pane.state !== "blocked" || pane.alive === false) continue;
+    if (!seen[id] && !windowOpen) {
+      const name = typeof pane.name === "string" ? pane.name.trim() : "";
+      notify.push({
+        id: `pane:${id}`,
+        paneId: id,
+        title: paneWaitingTitle(pane.agent_cli),
+        body: name ? `${name}: click to open the pane.` : "Click to open the pane.",
+      });
+    }
+    next[id] = true;
+  }
+  return { seen: next, notify };
+}
+
 function setAskWaitingTooltip(count) {
   askWaitingCount = count;
   if (_trayDegraded.size) return; // a degraded service is the louder truth
@@ -2733,6 +2789,9 @@ function showAskNotification(item) {
         // v1.351.0 (G05): a waiting CHAT opens that chat, where its card is.
         const q = item.threadId ? `?thread=${encodeURIComponent(item.threadId)}` : "";
         mainWin.loadURL(`${DASHBOARD_URL}/chat${q}`);
+      } else if (item.paneId) {
+        // v1.353.0 (G52): a waiting Build pane opens Build on THAT pane.
+        mainWin.loadURL(`${DASHBOARD_URL}/terminals?focus=${encodeURIComponent(item.paneId)}`);
       } else if (item.sessionId) {
         mainWin.loadURL(`${DASHBOARD_URL}/sessions/${item.sessionId}`);
       }
@@ -2753,6 +2812,19 @@ function installAskWatcher() {
         const plan = planAskNotifications(askSeen, list, Date.now(), windowOpen);
         askSeen = plan.seen;
         setAskWaitingTooltip(plan.waiting);
+        for (const item of plan.notify) showAskNotification(item);
+      })
+      .catch(() => {
+        /* daemon busy or down — try again on the next tick */
+      });
+    // v1.353.0 (G52): Build panes waiting on their CLI's question, on the
+    // same tick (the listing the Build page and the bell read).
+    daemonRequest("GET", "/terminals/activity", null)
+      .then((res) => {
+        const panes = res && Array.isArray(res.panes) ? res.panes : null;
+        if (!panes) return; // nothing readable — keep what we know
+        const plan = planPaneNotifications(paneBlockedSeen, panes, windowOpen);
+        paneBlockedSeen = plan.seen;
         for (const item of plan.notify) showAskNotification(item);
       })
       .catch(() => {
