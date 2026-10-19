@@ -1418,6 +1418,14 @@ export function NotificationBell() {
     () => staleFailingLoops(diag.data?.background_loops, Date.now()),
     [diag.data],
   );
+  // v1.355.0 (G32): the desktop ping's words for them — one failing task is
+  // named in the row's words, more are counted (the rows name each one).
+  const failingLoopsPing =
+    failingLoops.length === 1
+      ? loopWords(failingLoops[0].name).problem
+      : failingLoops.length > 1
+        ? `${failingLoops.length} background tasks failing`
+        : "";
   // Workflow runs parked on an `ask` step wait on the user too — same polled
   // cadence as the other bell sources (they don't ride a replayable stream).
   // Server-side `status=waiting` (v1.168.0) so an old parked question can
@@ -1766,11 +1774,8 @@ export function NotificationBell() {
         );
       // v1.353.0 (G52): each waiting pane by its CLI's name.
       for (const pane of paneAsks) parts.push(paneWaitingTitle(pane));
-      // v1.355.0 (G32): one failing task is named in the row's words; more
-      // are counted (the rows name each one).
-      if (failingLoops.length === 1) parts.push(loopWords(failingLoops[0].name).problem);
-      else if (failingLoops.length > 1)
-        parts.push(`${failingLoops.length} background tasks failing`);
+      // v1.355.0 (G32): the failing tasks in the rows' words (failingLoopsPing).
+      if (failingLoopsPing) parts.push(failingLoopsPing);
       if (interrupted.jobs.length)
         parts.push(
           // v1.354.0: the words the bell's own rows and the run page say.
@@ -1789,7 +1794,7 @@ export function NotificationBell() {
     agentAsks.length,
     chatAsks.length,
     paneAsks,
-    failingLoops.length,
+    failingLoopsPing,
     interrupted.jobs.length,
     busyAsk,
     notify,
