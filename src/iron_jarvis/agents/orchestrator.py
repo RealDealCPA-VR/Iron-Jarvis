@@ -423,6 +423,14 @@ EMERGENCY_STOP_REFUSAL = (
 #: shows): the stop was the user's switch, not "cancelled by the user" at a
 #: Cancel button they never pressed.
 EMERGENCY_STOP_STOPPED = "Emergency stop was turned on, so this run was stopped."
+#: The summary (and run result) the boot reconcile gives a run a restart cut
+#: off (v1.354.0, G30): Iron Jarvis, never "the daemon". The SAME words the
+#: run page's restart line, the bell's interrupted-jobs rows and the chat line
+#: a chat-started run delivers home say (dashboard
+#: components/sessions/runPageWords.RESTART_WORDS, pinned equal by
+#: tests/test_integrate_wave4_v13540.py). Rows stored before v1.354.0 keep
+#: the old "interrupted by a daemon restart"; the run page reads both.
+RESTART_SUMMARY = "Stopped when Iron Jarvis restarted."
 
 
 class EmergencyStopOn(RuntimeError):
@@ -2796,7 +2804,7 @@ class Orchestrator:
                 # Overview offer Continue while this is set.
                 s.interrupted_at = utcnow()
                 if not s.summary:
-                    s.summary = "interrupted by a daemon restart"
+                    s.summary = RESTART_SUMMARY
                 db.add(s)
                 marked += 1
                 interrupted.append(s.id)
@@ -2817,7 +2825,7 @@ class Orchestrator:
                     r.state = AgentState.FAILED
                     r.finished_at = utcnow()
                     if not r.result:
-                        r.result = "interrupted by a daemon restart"
+                        r.result = RESTART_SUMMARY
                     db.add(r)
             # v1.288.0 (agents-04, the one-off repair): rows left RUNNING or
             # WAITING under a session that is ALREADY terminal — the ghosts the

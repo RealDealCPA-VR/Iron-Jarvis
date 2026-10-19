@@ -313,7 +313,8 @@ describe("G42: the Directory is one Connections home", () => {
     const hrefs = within(more)
       .getAllByRole("link")
       .map((a) => a.getAttribute("href"));
-    expect(hrefs).toEqual(["/agents?view=team", "/fleet", "/tools?focus=packs"]);
+    // v1.354.0 integrate (on purpose): straight to the Tools page's add area.
+    expect(hrefs).toEqual(["/agents?view=team", "/fleet", "/tools?focus=add"]);
     expect(within(more).getByRole("link", { name: /Add a tool by config \(advanced\)/ })).toBeTruthy();
   });
 

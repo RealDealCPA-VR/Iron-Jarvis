@@ -19,6 +19,7 @@ import {
 import { useApi } from "@/lib/useApi";
 import { get, post, patch, del, ApiError } from "@/lib/api";
 import { Card, Empty, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { timeAgo } from "@/lib/format";
 import { composerChipClass } from "@/lib/composerChips";
 
@@ -373,9 +374,7 @@ export function KnowledgePanel({
       {loading && !data ? (
         <SkeletonRows rows={3} />
       ) : error && error.status === 0 ? (
-        <p className="py-2 text-sm text-zinc-500">
-          Knowledge unavailable. The daemon looks offline.
-        </p>
+        <LoadFailedLine thing="Knowledge" error={error} />
       ) : items.length === 0 ? (
         <Empty icon={<BookOpen size={22} />}>
           No knowledge yet. Paste a note or add a file to ground this project.

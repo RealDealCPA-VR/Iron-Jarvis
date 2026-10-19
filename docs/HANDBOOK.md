@@ -70,7 +70,7 @@ words you pressed, **Done — Claude (your Claude Code sign-in) answers you
 now.** Nothing switches on its own: whether your questions go to a cloud
 service or stay on this PC is your decision. Claude Code or Codex installed
 but signed out? Press **Sign in** — on the card's door or on **Settings →
-Connections → Accounts & keys** — and a sign-in window (a Build pane with
+Connections → Connections** — and a sign-in window (a Build pane with
 the tool running) opens inside the app; finish there and the row turns green
 by itself. No model at all? The card's three doors — **I already pay for
 Claude or ChatGPT**, **Free & private on this PC**, **I have an API key** —
@@ -868,7 +868,7 @@ seam); Train (teach it your writing voice, suggest-only).
   Restart to update)* — it can show you the version, nothing there installs.
   The
   git self-update card belongs to a daemon started from a source checkout.
-- **Settings → Daemon access token** (v1.232.0): inside the desktop app the
+- **Settings → System → Access token** (v1.232.0): inside the desktop app the
   box is read-only and says **Set by the desktop app** (it seeds the token
   on every launch — nothing to paste or clear). The paste box, **Clear**, and
   the "leave this empty" line appear only in a browser without the desktop
@@ -1791,7 +1791,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **"Claude Code isn't signed in" / "Codex isn't signed in"** (v1.234.0) →
   the subscription CLI is installed but logged out, so Iron Jarvis refuses
   the turn instead of failing over. Press **Sign in to Claude Code** (or
-  **Codex**) on **Settings → Connections → Accounts & keys** (v1.353.0): a
+  **Codex**) on **Settings → Connections → Connections** (v1.353.0): a
   Build pane opens with the tool running on this PC's own login — type
   `/login` there for Claude Code (Codex shows its own sign-in screen) and
   finish in your browser. The row reads **Installed · not signed in** until
@@ -1891,6 +1891,70 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Plain words everywhere; chat knows your apps (v1.354.0)
+
+Iron Jarvis now says what happened in plain words, in the same words
+wherever you meet them, and the chat knows which of your apps are connected.
+The look of the app is the same.
+
+- **When an answer fails, the line says why and what to do.** "OpenRouter
+  refused your key. Update it in Settings › Connections." or "Claude Code
+  isn't signed in. Press Sign in beside Claude Code in Settings ›
+  Connections, then retry." The service's own message is still there: hover
+  the line. A run that fails for the same reason says the same sentence on
+  its page and in the bell ("The run failed: OpenRouter refused your key…"),
+  and so does the message on your phone. Iron Jarvis still never switches to
+  a different AI without asking; the words now say that, and that you can
+  allow it in Settings.
+- **Iron Jarvis, not "the daemon".** When the app stops answering, the
+  banner says **Iron Jarvis isn't responding.** and that your chats and files
+  are saved. When it answers again you see **Iron Jarvis is back.** for a
+  few seconds, and anything a restart stopped is waiting in the bell. A panel
+  that could not load says so in one quiet line ("The board couldn't load.
+  Try again."); the code behind it is on hover. Settings › Maintenance says
+  **Restart Iron Jarvis**, and the token card is called **Access token** like
+  its row.
+- **A run's page reads like a receipt.** It is titled by what you asked,
+  says which agent and model did it and how long it took ("Took 2 min 5 s"),
+  shows the steps in the chat's words, and folds the full record under one
+  **Full record** line. A run a restart cut off reads **Interrupted**, says
+  "Stopped when Iron Jarvis restarted", and offers the bell's **Continue** /
+  **Dismiss**. Continue opens the new run, titled by what you first asked.
+- **Chat knows your apps by name.** Say "check my Gmail", "search my Google
+  Drive for the lease" or "is GitHub connected?" and the chat knows whether
+  that app is connected. A connected app's tools are offered for that
+  message (each use still asks you first); one that isn't connected is said
+  so, with a button to connect it, and the chat never searches the web
+  instead.
+- **Bring your tools from your other apps.** Settings › Tools › **Add a
+  tool** opens on **Bring your tools from Claude, Codex, Cursor…**. It also
+  reads VS Code's `mcp.json`, a project's `.vscode` / `.cursor` settings,
+  Windsurf, Gemini CLI and the Claude Code plugins you installed. Each tool
+  says in one line what it does (the command is under **Details**); one you
+  switched off in its app is listed unticked as "turned off in Claude
+  Desktop"; one you already have reads "already connected". After **Add
+  selected**, it names the tools that are ready and says "Use it in a chat:
+  + › Connections"; one that didn't start offers **Open its row** to retry
+  it. The paste box is now **Paste from a website or README (advanced)**.
+  The Directory's "Found 3 tools in …" line opens this same door, and every
+  **Add a tool** link lands right on it.
+- **Your model server's card tells the truth.** A server on your network
+  that answers reads **Connected · your endpoint · no key needed**, exactly
+  when the model menu can use it. A mistyped address says it could not be
+  reached instead of a green "saved". The old REST checks sit under
+  **More ways to connect (advanced)** and say they only check a connection.
+- **Settings rows are named like their pages.** Connections, Directory,
+  Secrets, Tools, You and Train Jarvis on me; searching the old names still
+  finds them.
+- **Deleting asks twice, the same way everywhere.** Removing a writing
+  sample and deleting a workflow from the canvas take two presses
+  ("Remove" → "Remove sample?", "Delete" → "Delete workflow?").
+- **Your phone and desktop alerts are in plain words.** "Your schedule
+  morning brief could not finish — The run failed: …", "Your workflow nightly
+  digest could not finish — the Workflows page shows which step stopped.",
+  "A change is waiting for your review (2 files changed, high risk)." — the
+  bell's words, never an internal event name or code.
 
 ## Connect what you use, and a clean first five minutes (v1.353.0)
 
@@ -2346,6 +2410,11 @@ the common cases, from the chat:
   schedule") still arms what it asks for.
 
 ## Add a tool pack in one paste (v1.343.0)
+
+*(Since v1.354.0 this area is called **Add a tool**, its first door is
+**Bring your tools from Claude, Codex, Cursor…** and the paste door is
+**Paste from a website or README (advanced)** — see "Plain words everywhere;
+chat knows your apps (v1.354.0)".)*
 
 Settings → Tools has a new **Add a pack** area with three doors that all end
 in the same preview list:

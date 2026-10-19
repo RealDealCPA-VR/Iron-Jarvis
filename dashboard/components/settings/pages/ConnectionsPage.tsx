@@ -1889,7 +1889,9 @@ interface RescannedModel {
  */
 const CONNECT_ELSEWHERE = [
   {
-    href: "/tools",
+    // v1.354.0 integrate: lands ON the add area (useFocusRef "add"), which
+    // sits below the built-in tools and the catalog.
+    href: "/tools?focus=add",
     title: "Add a tool",
     desc: "Ready-made extensions that give Jarvis new abilities.",
     icon: <Blocks size={17} />,
@@ -2197,7 +2199,7 @@ export default function ConnectionsPage() {
                       <ChevronRight size={13} className="text-zinc-600" />
                     </Link>
                     <Link
-                      href="/tools"
+                      href="/tools?focus=add"
                       role="menuitem"
                       onClick={() => setMenuOpen(false)}
                       className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"

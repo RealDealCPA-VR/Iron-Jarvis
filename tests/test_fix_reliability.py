@@ -42,7 +42,8 @@ async def test_reconcile_interrupted_sessions(platform):
     assert n >= 1
     refreshed = orch.get_session(sess.id)
     assert refreshed.status is SessionStatus.FAILED
-    assert "interrupted" in refreshed.summary.lower()
+    # v1.354.0 (G30, on purpose): the restart is named by the app, not "the daemon".
+    assert refreshed.summary == "Stopped when Iron Jarvis restarted."
     assert refreshed.finished_at is not None
 
 

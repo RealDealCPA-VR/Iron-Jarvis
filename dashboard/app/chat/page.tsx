@@ -317,6 +317,7 @@ import {
   type PriorToolResult,
 } from "@/lib/useChatStream";
 import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
+import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
 import { adoptDaemonLines, daemonLineFor, panelWorkingLabel, threadIsNewer } from "@/lib/chatReread";
 import { settledSplit } from "@/lib/streamSplit";
 import { useModels } from "@/lib/useModels";
@@ -3873,6 +3874,11 @@ export default function ChatPage() {
   // CARET (v1.105.0), not the start of the message, so it needs to know where
   // the cursor is — mid-sentence "/" is the whole point of that change.
   const [error, setError] = useState<string | null>(null);
+  // v1.354.0 (G28): the technical text behind the CURRENT failure line, kept
+  // with the line it belongs to so a later error from another path never
+  // wears a stale hover (read only when `text === error`). A ref, not state:
+  // the line re-renders with setError anyway.
+  const errorTechRef = useRef<{ text: string; technical: string }>({ text: "", technical: "" });
   const [offline, setOffline] = useState(false);
   // v1.354.0 (G31): the chat's own offline hint clears BY ITSELF when Iron
   // Jarvis answers again. It used to stay until the user sent, retried or
@@ -8569,7 +8575,16 @@ export default function ChatPage() {
           if (partial) setMessages(withPartial);
           if (se?.offline || (e instanceof ApiError && e.status === 0 && !se))
             setOffline(true);
-          else setError(e instanceof ApiError ? e.message : String(e));
+          else {
+            // v1.354.0 (G28): the daemon's plain sentence ("OpenRouter
+            // refused your key. Update it in Settings › Connections.") — the
+            // words a failed run's summary ends with — with its masked
+            // technical text on the line's hover only (lib/failureLine). A
+            // failure without a title keeps its message, as before.
+            const line = turnErrorText(e);
+            errorTechRef.current = { text: line, technical: turnErrorTechnical(e) };
+            setError(line);
+          }
           // v1.332.0: a "local only" refusal names the provider it did not
           // send to, so the row can offer to send it there once.
           setLocalRefusal(localOnlyRefusalFrom(e));
@@ -12166,6 +12181,11 @@ export default function ChatPage() {
                           <p
                             role="alert"
                             data-testid="chat-turn-error"
+                            title={
+                              errorTechRef.current.text === error && errorTechRef.current.technical
+                                ? errorTechRef.current.technical
+                                : undefined
+                            }
                             className="min-w-0 flex-1 break-words text-[13px] leading-5 text-tone-danger"
                           >
                             {error}

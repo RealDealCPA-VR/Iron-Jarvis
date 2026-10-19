@@ -85,7 +85,7 @@ def _check_fixture(section: str, actual: Any) -> None:
 
 
 GUIDE = {"guide_search", "app_search", "app_status"}
-SETTINGS_PLACE = "Settings › Connections › Accounts & keys"
+SETTINGS_PLACE = "Settings › Connections"  # v1.354.0: the row is named like its page (G67)
 DRIVE_DOOR = {"href": "/settings?section=connections-apps", "label": "Connect Google Drive in Settings"}
 PAIR_DOOR = {"href": "/computeruse", "label": "Pair your browser"}
 MAKE = "make a picture of a cat surfing"

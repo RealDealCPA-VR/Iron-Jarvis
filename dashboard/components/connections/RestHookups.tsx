@@ -429,7 +429,7 @@ export function RestHookups() {
         Connection checks only. Jarvis can&apos;t call these yet. Save a web
         service&apos;s address, and its key if it needs one, then press Test to see that
         it answers. To give Jarvis a new ability, use{" "}
-        <Link href="/tools" className="font-medium text-accent-soft hover:text-accent">
+        <Link href="/tools?focus=add" className="font-medium text-accent-soft hover:text-accent">
           Add a tool
         </Link>
         .

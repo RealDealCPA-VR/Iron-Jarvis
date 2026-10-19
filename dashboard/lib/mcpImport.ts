@@ -33,6 +33,13 @@ export interface PreviewRow {
   launcher_note?: string | null;
   source?: string | null;
   origin?: string | null;
+  /** v1.354.0 (G50): the app it came from has this server switched off — a
+   *  preview fact, never stored; the door leaves the row unticked. */
+  disabled?: boolean | null;
+  /** v1.354.0: how it is already here: "pack" | "app" | "memory" ("" = new). */
+  exists_as?: string | null;
+  /** v1.354.0 (G49): the catalog's one line about the package ("" = none). */
+  blurb?: string | null;
 }
 
 /** POST /mcp/import/preview's answer. */

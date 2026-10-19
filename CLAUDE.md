@@ -3547,6 +3547,66 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **ONE sentence per cause, in the app's name, wherever the user meets it**
+  (v1.354.0, product-readiness Wave 4, G20/G28/G30/G31/G39/G47-G50/G59/G67/
+  G68; lanes 4A-4E + integrate). FAILURES (4A): `providers/failure_words.
+  friendly_error(exc)` → `{title, fix, technical}` deterministically from the
+  typed fields (router refusal `kind` / `failed_provider` / `cli`, adapter
+  `status_code`, cli_auth's `SIGN_IN_FIX` for the CLI's own mid-turn refusal)
+  — never a model call; `technical` is `redact.mask`ed. BOTH chat lanes answer
+  through ONE `chat_turn.error_payload` (MIRROR NOTE): `detail` UNCHANGED for
+  headless callers + title/fix/technical (stream `error` frame, POST 502 via
+  `ChatTurnFailed`); a failed run's summary is `"The run failed: " +
+  failure_words.plain_reason` (= `title. fix`; the class goes to the log).
+  The dashboard decodes the three keys (`useChatStream` `case "error"` →
+  `StreamError.title/fix/technical`) and the chat line shows `lib/failureLine.
+  turnErrorText` = `title. fix`, technical on the line's hover ONLY
+  (`errorTechRef`, keyed to its own line so another path's error never wears
+  it); no title → the message, exactly as before. RESTART: `orchestrator.
+  RESTART_SUMMARY` "Stopped when Iron Jarvis restarted." = the run page's
+  `runPageWords.RESTART_SUMMARY` (which still reads the old stored "interrupted
+  by a daemon restart") = the chat line a chat-started run delivers = the
+  bell's rows/ping; goals' `_INTERRUPTED_REASON` is it mid-sentence; a restart
+  Continue's run is titled by the earlier task out of the continue door's
+  `repr` recap (`runPageWords.originalTaskOf`). OFFLINE (4B): `lib/
+  offlineWords` is the ONE "Iron Jarvis isn't responding" (banner, OfflineHint,
+  status-0 ApiError, the stream's offline frame, `lib/loadFailed.
+  NOT_RESPONDING`); `components/LoadFailedLine` + `lib/loadFailed` is the ONE
+  "<Thing> couldn't load. Try again." line (code on hover) (4D). NOTIFIER
+  (integrate): `comm/notifier.format_event` words EVERY default alert in the
+  bell's words (`_session_line` = the bell's runVerdict/UNATTENDED_SUBJECT,
+  `_provider_failed_line` = failure_words' sentence, failover, review,
+  autonomy, workflow) and a type it does not know is `UNKNOWN_EVENT_LINE` —
+  never an event type, `key=value` or an id; `notifier.EVENT_WORDS` is pinned
+  equal to `lib/eventWords.EVENT_WORDS` (which TimeTravelFeed now re-exports;
+  one table). APPS BY NAME (4A): `connectors/app_names` is THE matcher; both
+  lanes get the "Apps named in this message" section (byte-identical prompt
+  when none is named); the STREAM lane ask-arms a named connected app's tools
+  (never granted, not in low trust / local only; POST never ask-arms); the
+  web rule skips a bare search verb aimed at an app. IMPORT (4C) is ONE door:
+  `SourcesDoor` on the Tools page's add area AND the Directory's found-line
+  (one GET /mcp/import/sources), named `addPackWords.DOOR_LABELS`; `PackSpec.
+  disabled` / `exists_as` / `blurb` are preview facts (never stored); every
+  "Add a tool" link is `/tools?focus=add` (ToolsPage `useFocusRef("add")`).
+  MODEL CARDS (4E): a keyless endpoint slot is connected iff the router says
+  it answers — GET /connections `connected` == /health `available` (what the
+  model menu greys by) == `providers.available`. SETTINGS (4D): a relocated
+  row is named by `lib/settingsRows.settingsRowLabel` (its page's nav label);
+  the media key place IS `failure_words.ACCOUNTS_PLACE` ("Settings ›
+  Connections"); every remaining native `confirm()` is allow-listed with a
+  reason in settings-panel-words-v13540. THE RULE A FUTURE CHANGE MUST KEEP: a
+  user-facing string never names the engine ("daemon", an event type, a
+  config key, a raw provider id, HTTP codes in the visible text) — reuse the
+  one helper for the cause (failure_words / failureLine, offlineWords,
+  loadFailed, RESTART_SUMMARY, notifier words) instead of writing a second
+  sentence. Pins: `tests/test_{failure_words,chat_knows_apps,mcp_import_
+  sources,model_connections,integrate_wave4}_v13540.py`, `dashboard/
+  __tests__/{run-page,run-page-words,offline-words,chat-back-online,
+  tools-add-pack,settings-panel-words,project-board-words,model-connections,
+  wave4-seams,wave4-words,wave4-import-door}-v13540.test.tsx` and
+  `fixtures/wave4-seams-v13540.json` (the REAL daemon's words, regenerate
+  with `IJ_REGEN_WAVE4_SEAMS=1`) (every lane and integrator change
+  mutation-checked red).
 - **ONE place for each kind of thing, and a refusal leaves the door the other
   surfaces already use** (v1.353.0, product-readiness Wave 3, G33-G38,
   G40-G43, G45, G51-G54, G56-G58, G66, G71; lanes 3A-3E + integrate).

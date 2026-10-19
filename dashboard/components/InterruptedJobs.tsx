@@ -3,7 +3,7 @@
 // Jobs a RESTART cut off (v1.249.0, R-02).
 //
 // An update (or a crash) ends every running session, and the boot reconcile
-// marks them FAILED with "interrupted by a daemon restart". Until now that was
+// marks them FAILED with "Stopped when Iron Jarvis restarted." (before v1.354.0: "interrupted by a daemon restart"). Until now that was
 // the end of it: the work was gone, nothing offered to pick it up, and the
 // user had to find the session and press Continue themselves — if they even
 // knew it had been running.

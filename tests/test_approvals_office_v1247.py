@@ -318,7 +318,7 @@ async def test_a_daemon_restart_while_waiting_ends_the_run_honestly(tmp_path):
     with session_scope(app.state.platform.engine) as db:
         run = db.exec(select(AgentRun).where(AgentRun.session_id == sess.id)).first()
         assert run.state == AgentState.FAILED
-        assert run.result == "interrupted by a daemon restart"
+        assert run.result == "Stopped when Iron Jarvis restarted."  # v1.354.0 G30: words changed on purpose
 
 
 # --------------------------------------------------------------------------- #

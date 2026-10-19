@@ -462,7 +462,7 @@ def test_the_boot_reconcile_tells_the_chat_the_run_was_interrupted(tmp_path):
     msgs = _row(p.engine, tid)["messages"]
     assert len(msgs) == 3, msgs
     by_session = {m["sessionId"]: m for m in msgs[1:]}
-    assert by_session[cut_id]["content"] == "interrupted by a daemon restart"
+    assert by_session[cut_id]["content"] == "Stopped when Iron Jarvis restarted."  # v1.354.0 G30: no "daemon" in a chat line
     assert by_session[kept_id]["content"] == "half done"
     for line in by_session.values():
         assert line["panelWho"] == "builtin:builder" and line["receipt"]["status"] == "failed"

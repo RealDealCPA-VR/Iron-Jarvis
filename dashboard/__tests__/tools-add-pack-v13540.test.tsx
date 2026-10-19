@@ -274,7 +274,12 @@ describe("G49: Bring your tools from Claude, Codex, Cursor…", () => {
       const output = screen.getByTestId("mcp-stderr-slack") as HTMLDetailsElement;
       expect(output.open).toBe(false);
       fireEvent.click(jump);
-      expect(scrolled).toContain(retry);
+      // v1.354.0 integrate (on purpose): the Tools page now marks its rows
+      // with data-pack-row, so the jump scrolls to the WHOLE row (which holds
+      // the Retry) and still puts the focus on Retry.
+      const packRow = retry.closest('[data-pack-row="slack"]') as HTMLElement;
+      expect(packRow).not.toBeNull();
+      expect(scrolled).toContain(packRow);
       expect(document.activeElement).toBe(retry);
       expect(output.open).toBe(true);
       expect(within(group).queryByTestId("import-row-missing-slack")).toBeNull();

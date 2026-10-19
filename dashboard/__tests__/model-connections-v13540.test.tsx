@@ -366,10 +366,11 @@ describe("G48: Accounts & keys hides the dead-end REST hookups and says Add a to
     await card();
     const where = screen.getByText("Where else things connect").closest("section") as HTMLElement;
     const tile = within(where).getByRole("link", { name: /Add a tool/ });
-    expect(tile.getAttribute("href")).toBe("/tools");
+    // v1.354.0 integrate (on purpose): straight to the add area.
+    expect(tile.getAttribute("href")).toBe("/tools?focus=add");
     fireEvent.click(screen.getByRole("button", { name: /Add connection/ }));
     const item = within(screen.getByRole("menu")).getByRole("menuitem", { name: /Add a tool/ });
-    expect(item.getAttribute("href")).toBe("/tools");
+    expect(item.getAttribute("href")).toBe("/tools?focus=add");
     expect(document.body.textContent).not.toMatch(/Extensions \(MCP\)/);
   });
 
@@ -400,7 +401,7 @@ describe("G48: Accounts & keys hides the dead-end REST hookups and says Add a to
     expect(note.textContent?.replace(/\s+/g, " ")).toContain(
       "Connection checks only. Jarvis can't call these yet.",
     );
-    expect(within(note).getByRole("link", { name: "Add a tool" }).getAttribute("href")).toBe("/tools");
+    expect(within(note).getByRole("link", { name: "Add a tool" }).getAttribute("href")).toBe("/tools?focus=add");
     fireEvent.click(screen.getByRole("button", { name: /Add a check/ }));
     expect(screen.getByText("New connection check")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Add check/ })).toBeInTheDocument();

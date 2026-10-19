@@ -218,7 +218,7 @@ function NotReadyCard({ data }: { data: SelfDevStatus | null }) {
           {off ? (
             <>
               Self-development is off. Turn on <strong>Self-development</strong> in Settings →
-              Advanced, then restart Iron Jarvis (Settings → Maintenance → Restart daemon) so it
+              Advanced, then restart Iron Jarvis (Settings → Maintenance → Restart Iron Jarvis) so it
               takes effect.
             </>
           ) : noRepo ? (

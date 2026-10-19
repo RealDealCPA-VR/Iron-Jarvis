@@ -495,7 +495,7 @@ async def test_shutdown_queue_discards_parked_runs_and_blocks_promotion(
     assert orchestrator.reconcile_interrupted_sessions() == 3
     assert orchestrator.get_session(b.id).status is SessionStatus.FAILED
     assert orchestrator.get_session(c.id).status is SessionStatus.FAILED
-    assert orchestrator.get_session(b.id).summary == "interrupted by a daemon restart"
+    assert orchestrator.get_session(b.id).summary == "Stopped when Iron Jarvis restarted."  # v1.354.0 G30
 
 
 async def test_dequeue_next_is_inert_while_draining(platform, orchestrator):
@@ -552,7 +552,7 @@ def test_reconcile_marks_stranded_queued_failed(platform, orchestrator):
     assert marked == 1
     row = orchestrator.get_session(s.id)
     assert row.status is SessionStatus.FAILED
-    assert row.summary == "interrupted by a daemon restart"
+    assert row.summary == "Stopped when Iron Jarvis restarted."  # v1.354.0 G30
     assert row.finished_at is not None
 
 

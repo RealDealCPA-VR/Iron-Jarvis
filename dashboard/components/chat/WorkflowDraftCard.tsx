@@ -324,7 +324,7 @@ function OutcomeBanner({ status }: { status: string | null }) {
   if (status === RUN_RECORD_GONE)
     return (
       <div className="mx-3.5 mb-2.5 rounded-lg border border-white/[0.08] bg-white/[0.03] px-2.5 py-1.5 text-[12px] text-zinc-500">
-        This run&apos;s record is no longer on the daemon (old runs are pruned)
+        Iron Jarvis no longer has this run&apos;s record (old runs are pruned)
         — no outcome to show.
       </div>
     );

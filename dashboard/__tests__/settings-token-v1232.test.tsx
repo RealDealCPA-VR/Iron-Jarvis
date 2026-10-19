@@ -38,7 +38,8 @@ describe("DaemonTokenCard (v1.232.0)", () => {
     expect(screen.queryByRole("button", { name: /clear/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /save token/i })).toBeNull();
     expect(screen.queryByText(/leave this empty/i)).toBeNull();
-    const box = screen.getByLabelText(/Daemon access token \(set by the desktop app\)/);
+    // v1.354.0 (G59, on purpose): named like its Settings row, no "daemon".
+    const box = screen.getByLabelText(/^Access token \(set by the desktop app\)/);
     expect(box).toHaveAttribute("readonly");
   });
 

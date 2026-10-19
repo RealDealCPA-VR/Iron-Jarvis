@@ -572,7 +572,8 @@ describe("Help — the Guide status line speaks plainly; the counts stay in a ti
     S.errors["/guide/status"] = 0;
     S.responses["/helpdocs"] = { docs: [] };
     render(<HelpPage />);
-    expect(screen.getByText(/daemon looks offline/)).toBeInTheDocument();
+    // v1.354.0 (G59, on purpose): in the app's name, still "unknown".
+    expect(screen.getByText(/What the Guide knows couldn't load\. Iron Jarvis isn't responding\./)).toBeInTheDocument();
     expect(screen.queryByText(/Knows /)).toBeNull();
   });
 });

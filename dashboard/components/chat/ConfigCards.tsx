@@ -292,7 +292,7 @@ function AppOutcome({
         <span className="text-zinc-400">· {waitingWords(connected)}</span>
       </span>
     );
-  // The words name Settings › Connections › Apps & tools (the Directory, where
+  // The words name Settings › Connections › Directory (where
   // the app's row shows why it did not start, with Test and Retry), so the
   // link goes there: `/marketplace` is that page's address. `/tools` is
   // "Tools & permissions", a different page (v1.351.0 review).
@@ -300,7 +300,7 @@ function AppOutcome({
     <span data-testid="credential-card-not-loaded" className="text-zinc-300" title={connected.reason || undefined}>
       Saved, but its tools did not load —{" "}
       <Link href="/marketplace" className="text-accent-soft underline-offset-2 hover:underline">
-        open Apps &amp; tools
+        open the Directory
       </Link>
     </span>
   );

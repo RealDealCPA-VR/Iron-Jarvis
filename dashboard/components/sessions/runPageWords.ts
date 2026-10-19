@@ -47,9 +47,34 @@ export const CHAT_RECAP_SEP = "\n\n---\n\n";
 const SKILL_LINE_RE = /^Use the "[^"\n]+" skill for this — load it with skill_load first\.\s*/;
 const CONTINUE_RECAP_MARK = "\n\n[Continuing an earlier session.";
 
+const ORIGINAL_TASK_MARK = " Original task: ";
+
+/** The earlier run's task out of the continue door's recap. The daemon
+ *  writes it with Python's `repr` (`{prev.task!r}`, agents/orchestrator.
+ *  continue_session): quoted, with newlines, tabs, backslashes and the quote
+ *  escaped. "" when the recap carries none. */
+export function originalTaskOf(recap: string): string {
+  const at = recap.indexOf(ORIGINAL_TASK_MARK);
+  if (at < 0) return "";
+  const q = recap.charAt(at + ORIGINAL_TASK_MARK.length);
+  if (q !== "'" && q !== '"') return "";
+  const from = at + ORIGINAL_TASK_MARK.length + 1;
+  const end = recap.indexOf(`${q}. Prior result: `, from);
+  if (end < 0) return "";
+  return recap
+    .slice(from, end)
+    .replace(/\\(\\|n|t|r|'|")/g, (_m, c: string) =>
+      c === "n" ? "\n" : c === "t" ? "\t" : c === "r" ? "" : c,
+    );
+}
+
 /** What the user asked a run, without the wrapping the chat and the continue
- *  door add around it (above). Unwrapped text is returned as it is. */
-export function askedText(task: string | null | undefined): string {
+ *  door add around it (above). Unwrapped text is returned as it is.
+ *  v1.354.0 integrate: a restart Continue's run was asked the APP's words
+ *  ("Continue where you left off — Iron Jarvis restarted…"), so it is titled
+ *  by the run it continues — the earlier task in the door's recap — the way
+ *  the mission screen keeps a resumed mission's objective. */
+export function askedText(task: string | null | undefined, depth = 0): string {
   let t = (task ?? "").replace(/\r\n/g, "\n");
   if (t.startsWith(CHAT_RECAP_HEAD)) {
     const at = t.lastIndexOf(CHAT_RECAP_SEP);
@@ -57,7 +82,14 @@ export function askedText(task: string | null | undefined): string {
   }
   t = t.replace(SKILL_LINE_RE, "");
   const cont = t.indexOf(CONTINUE_RECAP_MARK);
-  if (cont > 0) t = t.slice(0, cont);
+  if (cont > 0) {
+    const asked = t.slice(0, cont);
+    if (asked.trim() === CONTINUE_AFTER_RESTART && depth < 4) {
+      const earlier = originalTaskOf(t.slice(cont));
+      if (earlier.trim()) return askedText(earlier, depth + 1);
+    }
+    t = asked;
+  }
   return t;
 }
 
@@ -148,9 +180,21 @@ export function liveEventWords(e: IJEvent): { label: string; detail: string } {
 export const RESTART_WORDS = "Stopped when Iron Jarvis restarted";
 
 /** The summary the boot reconcile writes on such a run when it had none
- *  (agents/orchestrator.reconcile_interrupted_sessions) — the engine's word,
- *  which the receipt must not print under its own plain line. */
-export const RESTART_SUMMARY = "interrupted by a daemon restart";
+ *  (agents/orchestrator.RESTART_SUMMARY, v1.354.0 integrate): the run
+ *  page's own sentence, so the chat line a chat-started run delivers home,
+ *  the bell and this page say ONE thing — which the receipt must still not
+ *  print twice under its own plain line. */
+export const RESTART_SUMMARY = `${RESTART_WORDS}.`;
+
+/** What the reconcile wrote before v1.354.0 — stored rows and saved chat
+ *  lines keep it, so the receipt still reads it as the restart line. */
+export const OLD_RESTART_SUMMARY = "interrupted by a daemon restart";
+
+/** Whether *summary* is the reconcile's stock restart words (either era). */
+export function isRestartSummary(summary: string | null | undefined): boolean {
+  const s = (summary ?? "").trim().toLowerCase();
+  return s === RESTART_SUMMARY.toLowerCase() || s === OLD_RESTART_SUMMARY;
+}
 
 /** The origin a mission's teammate runs under (agents/team.py). */
 export const MISSION_MEMBER_ORIGIN = "job:mission-member";
@@ -162,8 +206,8 @@ export const MISSION_MEMBER_ORIGIN = "job:mission-member";
 export function shownSummary(summary: string | null | undefined, interrupted: boolean): string | null {
   const s = (summary ?? "").trim();
   if (!s) return null;
-  if (s.toLowerCase() !== RESTART_SUMMARY) return summary ?? null;
-  return interrupted ? null : `${RESTART_WORDS}.`;
+  if (!isRestartSummary(s)) return summary ?? null;
+  return interrupted ? null : RESTART_SUMMARY;
 }
 
 /**

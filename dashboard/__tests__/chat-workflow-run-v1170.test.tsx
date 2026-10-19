@@ -287,7 +287,8 @@ describe("WorkflowRunChip — a PRUNED run record settles, never spins", () => {
       await vi.advanceTimersByTimeAsync(100);
     });
     expect(
-      screen.getByText(/record is no longer on the daemon/i),
+      // v1.354.0 (G30, on purpose): the app's name, not "the daemon".
+      screen.getByText(/Iron Jarvis no longer has this run.s record/i),
     ).toBeInTheDocument();
     const settled = api.gets.filter((p) => p === "/workflows/runs/gone1").length;
     await act(async () => {
@@ -314,7 +315,7 @@ describe("WorkflowRunChip — a PRUNED run record settles, never spins", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText(/record is no longer on the daemon/i),
+      screen.queryByText(/Iron Jarvis no longer has this run.s record/i),
     ).not.toBeInTheDocument();
   });
 });

@@ -353,8 +353,11 @@ def test_on_event_alerts_on_matching_type():
 
     assert results is not None and results["mock"]["ok"]
     assert len(mock.sent) == 1
-    assert EventType.REVIEW_REQUESTED in mock.sent[0]
-    assert "session=s9" in mock.sent[0]
+    # v1.354.0 integrate (on purpose): the line is in the bell's words, never
+    # the event type or a key=value dump (tests/test_integrate_wave4_v13540.py).
+    assert mock.sent[0].startswith("A change is waiting for your review")
+    assert EventType.REVIEW_REQUESTED not in mock.sent[0]
+    assert "session=s9" not in mock.sent[0] and "s9" not in mock.sent[0]
 
 
 def test_on_event_ignores_non_matching_type():
@@ -377,7 +380,9 @@ async def test_on_event_attaches_to_event_bus(platform):
     await platform.event_bus.publish(EventType.TOOL_EXECUTED, {"tool": "grep"})
 
     assert len(mock.sent) == 1
-    assert "provider=mock" in mock.sent[0]
+    # v1.354.0 integrate (on purpose): plain words, the provider by its name.
+    assert mock.sent[0].startswith("The demo model couldn't answer.")
+    assert "provider=mock" not in mock.sent[0]
 
 
 # --------------------------------------------------------------------------- #

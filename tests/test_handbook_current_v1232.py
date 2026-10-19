@@ -105,7 +105,11 @@ def test_daemon_offline_remedy_is_the_same_in_all_three_places(phrase: str):
 
 def test_help_page_daemon_offline_entry_points_at_maintenance():
     src = _read(HELP_PAGE)
-    entry = src[src.find("“Daemon offline” in the dashboard") :]
+    # v1.354.0 (G30, on purpose): the entry is named by the banner's own
+    # words (lib/offlineWords OFFLINE_WORDS), no longer "Daemon offline".
+    at = src.find("symptom: `“${OFFLINE_WORDS}” in the dashboard`")
+    assert at != -1
+    entry = src[at:]
     entry = entry[: entry.find("Port 8787")]
     assert 'href="/settings"' in entry
     assert "Settings → Maintenance" in entry

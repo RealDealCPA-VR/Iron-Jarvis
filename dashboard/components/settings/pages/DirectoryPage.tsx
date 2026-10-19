@@ -33,6 +33,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { BrandGlyph } from "@/components/BrandGlyph";
 import { SourcesDoor } from "@/components/tools/AddPack";
+import { DOOR_LABELS } from "@/lib/addPackWords";
 import type { ImportSource } from "@/lib/mcpImport";
 import { discover, discoveryLine } from "@/lib/importDiscovery";
 
@@ -929,7 +930,9 @@ function ImportFromApps({ onImported }: { onImported: () => void }) {
   if (!line) return null;
   const canOpen = found.found > 0;
   return (
-    <section data-testid="directory-import" aria-label="Import from your other apps" className="space-y-3">
+    // v1.354.0 integrate: the SAME door as the Tools page's add area, so it
+    // is named with that door's own words (lib/addPackWords DOOR_LABELS).
+    <section data-testid="directory-import" aria-label={DOOR_LABELS.sources} className="space-y-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px]">
         <FolderInput size={14} className="shrink-0 text-accent-soft" aria-hidden="true" />
         <span data-testid="directory-import-line" className={found.fresh > 0 ? "text-zinc-300" : "text-zinc-500"}>
@@ -982,8 +985,10 @@ const MORE_WAYS: readonly { label: string; href: string; title: string }[] = [
   },
   {
     label: "Add a tool by config (advanced)",
-    href: "/tools?focus=packs",
-    title: "Paste a config, add from npm, PyPI or GitHub, or reach a server by URL",
+    // v1.354.0 integrate: lands on the add area itself (useFocusRef "add"),
+    // whose doors this title names in their own words.
+    href: "/tools?focus=add",
+    title: `${DOOR_LABELS.paste}, add from npm, PyPI or GitHub, or reach a server by URL`,
   },
 ];
 

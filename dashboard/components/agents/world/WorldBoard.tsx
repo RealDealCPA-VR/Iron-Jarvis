@@ -17,6 +17,7 @@ import { useDocumentVisible } from "@/lib/useDocumentVisible";
 import { useReviews } from "@/lib/useReviews";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { Empty, SkeletonRows } from "@/components/ui";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import type { SessionView } from "@/lib/types";
 
 export function WorldBoard({ projectId }: { projectId: string }) {
@@ -30,12 +31,10 @@ export function WorldBoard({ projectId }: { projectId: string }) {
   const list = sessions ?? [];
   const mine = list.filter((s) => s.project_id === projectId);
 
+  // v1.354.0 (G59): the panels' one "couldn't load" line — the same words as
+  // the Projects page's board (components/LoadFailedLine), the code on hover.
   if (error && error.status === 0 && list.length === 0)
-    return (
-      <p data-testid="world-board" className="py-2 text-sm text-zinc-500">
-        Board unavailable. The daemon looks offline.
-      </p>
-    );
+    return <LoadFailedLine thing="The board" error={error} testId="world-board" />;
   // Same honesty rule as the project page: "nothing here" is only said once
   // an answer has landed; loading or errored is not "you have nothing".
   if (!data)
@@ -44,9 +43,14 @@ export function WorldBoard({ projectId }: { projectId: string }) {
         {loading || !error ? (
           <SkeletonRows rows={3} />
         ) : (
-          <p className="py-2 text-sm text-zinc-500">
-            Board unavailable. The daemon returned an error (HTTP {error.status}).
-          </p>
+          <LoadFailedLine
+            thing="The board"
+            error={error}
+            onRetry={() => {
+              reload();
+              reviewsState.reload();
+            }}
+          />
         )}
       </div>
     );

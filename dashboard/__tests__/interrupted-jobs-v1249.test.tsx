@@ -216,7 +216,8 @@ describe("both surfaces are wired to the same source", () => {
     expect(count?.[0]).toContain("interrupted.jobs.length");
     // And a poll failure must not be reported as "all clear".
     expect(src).toMatch(/interrupted\.error/);
-    expect(src).toMatch(/stopped by a restart/);
+    // v1.354.0 (on purpose): the desktop ping says what the rows say.
+    expect(src).toMatch(/stopped when Iron Jarvis restarted/);
   });
 
   it("the Overview renders the note where the user lands after a restart", () => {

@@ -29,14 +29,10 @@ import type { PreviewRow } from "@/lib/mcpImport";
 /** A preview / source row as the v1.354.0 daemon sends it: the v1.343.0 row
  *  plus three keys an older daemon leaves out (read as "unknown", never as a
  *  claim). */
-export type ImportRow = PreviewRow & {
-  /** The app it came from has this server switched off. */
-  disabled?: boolean | null;
-  /** How it is already here: "pack" | "app" | "memory" ("" = new). */
-  exists_as?: string | null;
-  /** The catalog's one line about the package ("" = not in the catalog). */
-  blurb?: string | null;
-};
+/** A preview row as the door reads it. v1.354.0 integrate: `disabled`,
+ *  `exists_as` and `blurb` now live on `PreviewRow` itself (lib/mcpImport);
+ *  the name stays for the callers that use it. */
+export type ImportRow = PreviewRow;
 
 /** The doors, in the order a new user meets them. */
 export const DOOR_LABELS = {

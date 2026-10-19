@@ -1,0 +1,18 @@
+{
+  "_about": "v1.354.0 integrate: the words the REAL daemon says for one cause. Written by tests/test_integrate_wave4_v13540.py (IJ_REGEN_WAVE4_SEAMS=1); read by dashboard/__tests__/wave4-seams-v13540.test.tsx.",
+  "refused_key": {
+    "detail": "openrouter API error 401: No auth credentials found",
+    "fix": "Update it in Settings › Connections.",
+    "phone_line": "A run could not finish — The run failed: OpenRouter refused your key. Update it in Settings › Connections.",
+    "sentence": "OpenRouter refused your key. Update it in Settings › Connections.",
+    "summary": "The run failed: OpenRouter refused your key. Update it in Settings › Connections.",
+    "technical": "openrouter API error 401: No auth credentials found",
+    "title": "OpenRouter refused your key"
+  },
+  "restart": {
+    "asked": "Summarise the lease\nthen email it to Sam's accountant",
+    "continuation_task": "Continue where you left off — Iron Jarvis restarted while this was running.\n\n[Continuing an earlier session. Original task: \"Summarise the lease\\nthen email it to Sam's accountant\". Prior result: Stopped when Iron Jarvis restarted. The earlier workspace files are available in your workspace.]",
+    "goal_reason": "stopped when Iron Jarvis restarted",
+    "summary": "Stopped when Iron Jarvis restarted."
+  }
+}

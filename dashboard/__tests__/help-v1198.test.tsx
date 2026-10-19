@@ -269,12 +269,15 @@ describe("Troubleshooting card (v1.198.0)", () => {
     expect(screen.getByText("If something looks wrong")).toBeInTheDocument();
 
     // Daemon offline: quit from the tray and relaunch (the app supervises).
+    // v1.354.0 (G30, on purpose): named by the banner's words, no "daemon".
     const daemonRow = screen
-      .getByText(/“Daemon offline” in the dashboard/)
+      .getByText(/“Iron Jarvis isn't responding” in the dashboard/)
       .closest("li");
     expect(daemonRow).not.toBeNull();
     expect(daemonRow!.textContent).toMatch(/Quit from the tray and relaunch/i);
-    expect(daemonRow!.textContent).toMatch(/supervises and restarts its daemon/i);
+    expect(daemonRow!.textContent).toMatch(/supervises and restarts its background service/i);
+    expect(daemonRow!.textContent).toMatch(/Your chats and files are saved/);
+    expect(daemonRow!.textContent).not.toMatch(/daemon/i);
 
     // SmartScreen: unsigned yet; More info -> Run anyway, once per download.
     const ssRow = screen.getByText("Windows SmartScreen on install").closest("li");

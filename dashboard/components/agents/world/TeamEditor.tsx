@@ -21,6 +21,7 @@ import { useApi } from "@/lib/useApi";
 import AgentFace from "@/components/agents/AgentFace";
 import { rosterAvatarSrc, type RosterEntry } from "@/components/agents/RosterStrip";
 import { ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
+import { couldntLoad, failureDetail } from "@/lib/loadFailed";
 import {
   REMOTE_SEES,
   bareMemberName,
@@ -142,9 +143,9 @@ export function TeamEditor({
         <SkeletonRows rows={3} />
       ) : !data && error ? (
         <ErrorNote>
-          {error.status === 0
-            ? "The daemon looks offline — the team can't be read right now."
-            : error.message || `The team could not be read (HTTP ${error.status}).`}
+          {/* v1.354.0 (G59): the panels' one "couldn't load" sentence; the
+              code and the server's words ride the hover title. */}
+          <span title={failureDetail(error)}>{couldntLoad("The team", error)}</span>
         </ErrorNote>
       ) : (
         <>

@@ -66,6 +66,7 @@ import {
 import { EnableDialog, type EnablePlan } from "@/components/tools/EnableDialog";
 import { PermissionsPanel } from "@/components/tools/PermissionsPanel";
 import { AddPack } from "@/components/tools/AddPack";
+import { mentionsNode } from "@/lib/addPackWords";
 import { EditPack, type EditSaved } from "@/components/tools/EditPack";
 import {
   LAUNCHER_CHOICES,
@@ -77,6 +78,7 @@ import {
 import type { McpToolRow } from "@/lib/types";
 import {
   RICHER_PACK,
+  RUNTIME_HELP,
   VERIFY_PACK_ID,
   isOfficial,
   packCaps,
@@ -659,6 +661,10 @@ export default function ToolsPage() {
   // Deep-link target: /tools?focus=packs lands on the MCP tool-packs card
   // (where auto-approve lives — the setting people search for by name).
   const packsFocusRef = useFocusRef<HTMLDivElement>("packs");
+  // v1.354.0 integrate: /tools?focus=add lands on the add area — the
+  // "Add a tool" tile, the Connections "+" menu and the hookups note all go
+  // here (it sits below the built-in tools and the catalog).
+  const addFocusRef = useFocusRef<HTMLDivElement>("add");
 
   const { data, error, loading, reload } = usePolledApi<{ tools: CustomTool[] }>(
     "/tools/custom",
@@ -1950,11 +1956,15 @@ export default function ToolsPage() {
           )}
 
           {/* v1.343.0: ADD A PACK, three doors into one preview list (paste a
-              config, import from your other apps, an HTTP server). */}
-          <div className="mb-2.5 mt-6">
-            <SectionLabel>Add a pack</SectionLabel>
+              config, import from your other apps, an HTTP server). v1.354.0
+              integrate: named "Add a tool" like the tile and menu that open it
+              (/tools?focus=add), and the deep-link target. */}
+          <div ref={addFocusRef} data-testid="tools-add-area">
+            <div className="mb-2.5 mt-6">
+              <SectionLabel>Add a tool</SectionLabel>
+            </div>
+            <AddPack onAdded={() => void reloadServers()} />
           </div>
-          <AddPack onAdded={() => void reloadServers()} />
 
           <div className="mb-2.5 mt-6">
             <SectionLabel>Add from npm, PyPI or GitHub</SectionLabel>
@@ -2229,6 +2239,9 @@ export default function ToolsPage() {
                 return (
                   <div
                     key={s.name}
+                    // v1.354.0: the add area's "Open its row" finds the row
+                    // by this (lib/addPackWords.packRowParts).
+                    data-pack-row={s.name}
                     className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-3.5 py-2.5"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2330,6 +2343,19 @@ export default function ToolsPage() {
                                 : `Didn’t start: ${cause || "it gave no reason"}`}
                             </span>
                             {retryButton}
+                            {/* v1.354.0: the add area's outcome offers this link
+                                beside a Node.js reason; the row says it too. */}
+                            {mentionsNode(`${s.reason ?? ""} ${s.fix ?? ""} ${s.last_error ?? ""}`) && (
+                              <a
+                                href={RUNTIME_HELP.Node.href}
+                                target="_blank"
+                                rel="noreferrer"
+                                data-testid={`mcp-install-node-${s.name}`}
+                                className="font-medium text-accent-soft underline underline-offset-2"
+                              >
+                                Install Node.js
+                              </a>
+                            )}
                             {s.fix && (
                               <span
                                 data-testid={`mcp-fix-${s.name}`}

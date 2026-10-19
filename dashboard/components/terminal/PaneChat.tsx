@@ -45,6 +45,7 @@ import {
   X,
 } from "lucide-react";
 import { get, post, put, ApiError } from "@/lib/api";
+import { couldntLoad } from "@/lib/loadFailed";
 import { useDaemon } from "@/lib/daemon";
 // v1.353.0 (G51): the reply's "answered by <model>" uses the chat page's
 // names — the catalog's label, else the name the id spells (one reader).
@@ -423,7 +424,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         } else {
           setLoadError(
             e instanceof ApiError && e.status === 0
-              ? "Daemon offline — this pane's conversation could not be loaded."
+              ? couldntLoad("This pane's conversation", e)
               : `Couldn't load this pane's conversation: ${
                   e instanceof Error ? e.message : String(e)
                 }`,

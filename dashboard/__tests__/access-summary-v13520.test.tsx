@@ -299,7 +299,7 @@ describe("Settings › Permissions & ledger opens with what Jarvis can reach", (
     await waitFor(() => expect(within(block).getByTestId("access-grants").textContent).toContain("Not available"), W);
   });
 
-  it("'Manage apps' opens Connections › Apps & tools; 'Review' opens Standing grants", async () => {
+  it("'Manage apps' opens Connections › Directory; 'Review' opens Standing grants", async () => {
     openPermissions();
     const block = await screen.findByTestId("access-summary", {}, W);
     await waitFor(() => expect(within(block).getByTestId("access-grants").textContent).toContain("2 approvals"), W);

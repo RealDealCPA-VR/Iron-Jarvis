@@ -35,6 +35,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { ApiError, get } from "@/lib/api";
+import { couldntLoad, failureDetail } from "@/lib/loadFailed";
+import { OFFLINE_WORDS } from "@/lib/offlineWords";
 import { useApi } from "@/lib/useApi";
 import { guideChatPath } from "@/lib/mission";
 import { Card, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
@@ -425,8 +427,9 @@ function GuidesCard() {
       {!loading && error && (
         <div className="mt-4">
           <ErrorNote>
-            Couldn&apos;t load the guides
-            {error.status === 0 ? " — the daemon is offline" : ""}: {error.message}
+            {/* v1.354.0 (G59): the panels' one "couldn't load" sentence;
+                the code rides the hover title. */}
+            <span title={failureDetail(error)}>{couldntLoad("The guides", error)}</span>
           </ErrorNote>
         </div>
       )}
@@ -512,13 +515,16 @@ function GuidesCard() {
 // these are the app's real remedies, not new ones invented for this card.
 const TROUBLE: { symptom: string; fix: ReactNode }[] = [
   {
-    symptom: "“Daemon offline” in the dashboard",
+    // v1.354.0 (G30): the banner's own words (lib/offlineWords OFFLINE_WORDS),
+    // never "Daemon offline" — a new user does not know there is a daemon.
+    symptom: `“${OFFLINE_WORDS}” in the dashboard`,
     // Same words as HANDBOOK.md "Troubleshooting in one minute" and the README
     // (v1.232.0) — tests/test_handbook_current_v1232.py pins the three together.
     fix: (
       <>
-        The desktop app supervises and restarts its daemon automatically, and the banner needs
-        two missed polls before it shows — give it a moment. If it stays: quit from the tray and
+        The desktop app supervises and restarts its background service automatically, and the
+        banner needs two missed polls before it shows — give it a moment. Your chats and files
+        are saved. If it stays: quit from the tray and
         relaunch (or tray → <Kbd>Restart Iron Jarvis</Kbd>), then{" "}
         <Link href="/settings" className="text-accent-soft hover:text-accent">
           Settings → Maintenance
@@ -643,11 +649,8 @@ function AskGuideCard() {
       </div>
       <p className="mt-2 text-[11px] text-zinc-500">
         {status.error ? (
-          status.error.status === 0 ? (
-            "Guide status unavailable — the daemon looks offline."
-          ) : (
-            `Guide status unavailable — the daemon returned an error (HTTP ${status.error.status}).`
-          )
+          // v1.354.0 (G59): the panels' one "couldn't load" sentence.
+          <span title={failureDetail(status.error)}>{couldntLoad("What the Guide knows", status.error)}</span>
         ) : !s ? (
           "Checking what the Guide knows…"
         ) : (

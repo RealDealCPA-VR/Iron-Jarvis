@@ -1756,7 +1756,8 @@ export function NotificationBell() {
         );
       if (interrupted.jobs.length)
         parts.push(
-          `${interrupted.jobs.length} job${interrupted.jobs.length === 1 ? "" : "s"} stopped by a restart`,
+          // v1.354.0: the words the bell's own rows and the run page say.
+          `${interrupted.jobs.length} job${interrupted.jobs.length === 1 ? "" : "s"} stopped when Iron Jarvis restarted`,
         );
       if (busyAsk) parts.push(`${busyAsk.running} background runs going at once`);
       const body = parts.join(" · ") || "Something needs your attention.";

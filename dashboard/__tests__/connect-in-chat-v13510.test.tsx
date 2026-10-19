@@ -248,7 +248,8 @@ describe("connect from chat, then carry on (G15)", () => {
       load_reason: "the package was not found",
     });
     expect(saved.textContent).toContain("Saved, but its tools did not load");
-    const link = within(saved).getByRole("link", { name: "open Apps & tools" });
+    // v1.354.0 (G67, on purpose): the row is named like its page, "Directory".
+    const link = within(saved).getByRole("link", { name: "open the Directory" });
     // Review: the words name Apps & tools (the Directory, `/marketplace` →
     // Settings › Connections › Apps & tools, where the app's row says why it
     // did not start). `/tools` opens "Tools & permissions", a different page.
@@ -261,7 +262,7 @@ describe("connect from chat, then carry on (G15)", () => {
     const cards = readFileSync(join(__dirname, "..", "components", "chat", "ConfigCards.tsx"), "utf8").replace(/\r\n/g, "\n");
     expect(cards).toMatch(/^import Link from "next\/link";$/m);
     const notLoaded = cards.slice(cards.indexOf('data-testid="credential-card-not-loaded"'));
-    expect(notLoaded.slice(0, notLoaded.indexOf("</span>"))).toMatch(/<Link href="\/marketplace"[^>]*>\s*open Apps &amp; tools\s*<\/Link>/);
+    expect(notLoaded.slice(0, notLoaded.indexOf("</span>"))).toMatch(/<Link href="\/marketplace"[^>]*>\s*open the Directory\s*<\/Link>/);
     expect(within(saved).getByTestId("credential-card-not-loaded").getAttribute("title")).toBe("the package was not found");
     expect(screen.queryByTestId("credential-card-continue")).toBeNull();
   });

@@ -227,6 +227,13 @@ export type SSEEvent =
       code?: string;
       provider?: string;
       model?: string;
+      /** v1.354.0 (G28): the daemon's plain words beside `detail`
+       *  (chat_turn.error_payload, both lanes) — the headline, what to do,
+       *  and the server's own text masked. Absent from an older daemon and
+       *  from the page's own offline / stall frames. */
+      title?: string;
+      fix?: string;
+      technical?: string;
     }
   /** v1.324.0: an installed app asks the USER something (MCP elicitation)
    *  or asks to use the turn's model (MCP sampling) — the decoded ask. */
@@ -750,6 +757,10 @@ export function sseEventFrom(
       if (str(data.code)) ev.code = str(data.code);
       if (str(data.provider)) ev.provider = str(data.provider);
       if (str(data.model)) ev.model = str(data.model);
+      // v1.354.0 (G28): the plain words (lib/failureLine reads them).
+      if (str(data.title)) ev.title = str(data.title);
+      if (str(data.fix)) ev.fix = str(data.fix);
+      if (str(data.technical)) ev.technical = str(data.technical);
       return ev;
     }
     // v1.324.0: apps that talk back. Each decoder WHITELISTS (lib/mcpInteract)
@@ -922,19 +933,38 @@ export async function* streamSSE(
 
     if (!res.ok) {
       let detail = `${res.status} ${res.statusText}`;
-      let refusal: { code?: string; provider?: string; model?: string } = {};
+      let refusal: {
+        code?: string;
+        provider?: string;
+        model?: string;
+        title?: string;
+        fix?: string;
+        technical?: string;
+      } = {};
       try {
         const parsed = (await res.json()) as {
           detail?: unknown;
           code?: unknown;
           provider?: unknown;
           model?: unknown;
+          title?: unknown;
+          fix?: unknown;
+          technical?: unknown;
         };
         // v1.226.0: a list-shaped pydantic 422 flattens to "field: msg" (C4).
         if (parsed?.detail) detail = flattenDetail(parsed.detail);
         // v1.332.0: a 409 "local only" refusal names what it did not send to.
         if (str(parsed?.code)) {
           refusal = { code: str(parsed.code), provider: str(parsed.provider), model: str(parsed.model) };
+        }
+        // v1.354.0 (G28): a failed answer's plain words, when the body has them.
+        if (str(parsed?.title)) {
+          refusal = {
+            ...refusal,
+            title: str(parsed.title),
+            fix: str(parsed.fix),
+            technical: str(parsed.technical),
+          };
         }
       } catch {
         /* body wasn't JSON — keep the status line */
@@ -1080,13 +1110,25 @@ export class StreamError extends ApiError {
   readonly code: string;
   readonly provider: string;
   readonly model: string;
+  /** v1.354.0 (G28): the daemon's plain headline, what to do, and its masked
+   *  technical text ("" when the failure carried none) — lib/failureLine. */
+  readonly title: string;
+  readonly fix: string;
+  readonly technical: string;
   constructor(
     message: string,
     status: number,
     committed: boolean,
     offline: boolean,
     partial = "",
-    refusal: { code?: string; provider?: string; model?: string } = {},
+    refusal: {
+      code?: string;
+      provider?: string;
+      model?: string;
+      title?: string;
+      fix?: string;
+      technical?: string;
+    } = {},
   ) {
     super(message, status);
     this.name = "StreamError";
@@ -1096,6 +1138,9 @@ export class StreamError extends ApiError {
     this.code = refusal.code ?? "";
     this.provider = refusal.provider ?? "";
     this.model = refusal.model ?? "";
+    this.title = refusal.title ?? "";
+    this.fix = refusal.fix ?? "";
+    this.technical = refusal.technical ?? "";
   }
 }
 
@@ -1570,7 +1615,14 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 committed,
                 ev.offline ?? false,
                 acc,
-                { code: ev.code, provider: ev.provider, model: ev.model },
+                {
+                  code: ev.code,
+                  provider: ev.provider,
+                  model: ev.model,
+                  title: ev.title,
+                  fix: ev.fix,
+                  technical: ev.technical,
+                },
               );
             default:
               break; // round / unknown — nothing to accumulate

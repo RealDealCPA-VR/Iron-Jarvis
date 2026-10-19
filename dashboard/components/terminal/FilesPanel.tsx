@@ -557,7 +557,7 @@ export function FilesPanel({
           </Empty>
         ) : offline ? (
           <div className="p-3">
-            <OfflineHint detail="The files panel needs the daemon running." />
+            <OfflineHint detail="The files panel needs Iron Jarvis running." />
           </div>
         ) : error ? (
           <p

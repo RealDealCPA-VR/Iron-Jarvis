@@ -129,7 +129,10 @@ describe("Ask the Guide (v1.223.0)", () => {
     hooks.errors["/guide/status"] = new hooks.MockApiError("offline", 0);
     hooks.responses["/helpdocs"] = { docs: [] };
     render(<HelpPage />);
-    expect(screen.getByText(/daemon looks offline/)).toBeInTheDocument();
+    // v1.354.0 (G59, on purpose): the panels' one "couldn't load" line, in
+    // the app's name — still UNKNOWN, never "knows nothing".
+    expect(screen.getByText("What the Guide knows couldn't load. Iron Jarvis isn't responding.")).toBeInTheDocument();
+    expect(screen.queryByText(/daemon looks offline/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Knows /)).not.toBeInTheDocument();
   });
 });

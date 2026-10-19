@@ -473,7 +473,7 @@ async def test_rehydrate_reconciles_a_goal_stranded_mid_iteration(
     assert record.state == "active"
     breaker = record.decoded_breaker()
     assert len(breaker["failures"]) == 1
-    assert breaker["last_reason"] == "interrupted by a daemon restart"
+    assert breaker["last_reason"] == "stopped when Iron Jarvis restarted"  # v1.354.0 G30: words changed on purpose
     checkpoint = record.decoded_checkpoint()
     assert "running_session_id" not in checkpoint
     assert checkpoint["last_session_id"] == session.id

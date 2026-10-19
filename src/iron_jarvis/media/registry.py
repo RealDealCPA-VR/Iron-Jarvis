@@ -17,10 +17,15 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from ..providers.failure_words import ACCOUNTS_PLACE
 from .base import MediaError, MediaProvider
 
-#: Where a key is added, as the Settings page names it.
-ACCOUNTS_AND_KEYS = "Settings › Connections › Accounts & keys"
+#: Where a key is added, as the Settings page names it. v1.354.0 (G67 renamed
+#: the row "Accounts & keys" to the page's own name, "Connections"): ONE
+#: place shared with the chat's failure words (``failure_words.
+#: ACCOUNTS_PLACE``, the Settings group whose first row is that page), so a
+#: media refusal and a model refusal send the user to the same words.
+ACCOUNTS_AND_KEYS = ACCOUNTS_PLACE
 
 #: What the user can connect, in the words the refusal uses (v1.353.0, G40:
 #: the place a person goes — never a vault name or an environment variable;

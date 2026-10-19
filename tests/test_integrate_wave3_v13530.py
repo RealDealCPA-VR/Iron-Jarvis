@@ -155,7 +155,16 @@ def test_the_pixio_refusal_names_a_place_that_exists():
     assert "label: settingsRowLabel(sub.id, sub.label ?? sub.id)" in home
     row = _settings_row_label("connections-accounts")
     assert row == "Connections"
-    assert ACCOUNTS_AND_KEYS == f"Settings › Connections › {row}"
+    # v1.354.0 integrate (on purpose): the place is the Settings group whose
+    # FIRST row is that page, the SAME words the chat's failure lines use
+    # (providers/failure_words.ACCOUNTS_PLACE) — "Settings › Connections ›
+    # Connections" said one word twice. It still ends in the row's name.
+    from iron_jarvis.providers.failure_words import ACCOUNTS_PLACE
+
+    assert ACCOUNTS_AND_KEYS == ACCOUNTS_PLACE == "Settings › Connections"
+    assert ACCOUNTS_AND_KEYS.endswith(f"› {row}")
+    first_row = re.search(r'connections:\s*\[\s*\{\s*id:\s*"([a-z-]+)"', home)
+    assert first_row and first_row.group(1) == "connections-accounts"
     # …and Pixio is on that page (its "Creative media" group).
     assert re.search(r"pixio:\s*\"creative\"", _src("components", "settings", "pages", "ConnectionsPage.tsx"))
 

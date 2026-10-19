@@ -8,6 +8,7 @@ message whenever a *subscribed* event type fires (e.g. ``review.requested``,
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from ..core.events import EventType
@@ -89,6 +90,195 @@ def _event_field(event: Any, attr: str, default: Any = None) -> Any:
     return getattr(event, attr, default)
 
 
+# --------------------------------------------------------------------------- #
+# PLAIN WORDS FOR EVERY LINE THE NOTIFIER SENDS (v1.354.0 integrate)
+# --------------------------------------------------------------------------- #
+#
+# The phone, Telegram, email, Slack, Discord and this PC's desktop toast all
+# receive ``format_event``'s line. Every event type without a branch below
+# used to fall through to ``"Iron Jarvis: session.completed — status=failed,
+# summary=…, origin=schedule:daily (session session_7b32…)"`` — an event type
+# name, key=value pairs and an internal id, on the user's lock screen. Each
+# default alert now says what happened in the words the dashboard's bell
+# uses for the same event (components/NotificationBell ``toActivity``), and
+# a type nothing here knows says so in a sentence, never by its name.
+
+#: Plain words for an event type — the twin of the dashboard's
+#: ``lib/eventWords.EVENT_WORDS`` (the Time-travel feed and the run page),
+#: pinned equal by ``tests/test_integrate_wave4_v13540.py``.
+EVENT_WORDS: dict[str, str] = {
+    "provider.routed": "Picked a model for this turn",
+    "provider.failover": "Switched provider after a failure",
+    "provider.downgraded": "No real model answered",
+    "autonomy.proposed": "Proposed an action on its own",
+    "autonomy.executed": "Ran an action on its own",
+    "llm.completed": "Model call finished",
+    "session.created": "Session started",
+    "session.completed": "Session finished",
+    "agent.started": "Agent started",
+    "agent.state_changed": "Agent changed state",
+    "agent.completed": "Agent finished",
+    "action.reverted": "Action undone",
+    "tool.executed": "Ran a tool",
+    "tool.denied": "Refused a tool",
+    "delegation.started": "Handed work to a teammate",
+    "delegation.completed": "Teammate finished",
+    "comm.desktop": "Sent a desktop notification",
+}
+
+#: The line for a subscribed type nothing here has words for.
+UNKNOWN_EVENT_LINE = "Iron Jarvis has an update for you. Open the app to see it."
+
+#: How an unattended run is named — the bell's ``UNATTENDED_SUBJECT``
+#: (``Session.origin`` is ``<door>:<name>``; a goal's suffix is an internal
+#: id and is never shown).
+_UNATTENDED_SUBJECT: dict[str, Any] = {
+    "schedule": lambda n: f"Your schedule {n}" if n else "A schedule",
+    "goal": lambda n: "Your goal's run",
+    "workflow": lambda n: f"A step of your workflow {n}" if n else "A workflow step",
+    "reflex": lambda n: f"Your reflex {n}" if n else "A reflex rule",
+    "comm": lambda n: f"Your request from {n}" if n else "A request from your phone",
+    "autonomy": lambda n: "An autonomy run",
+}
+
+#: A mission's root run (agents/team.py) — the bell's "Your objective …".
+_MISSION_ORIGIN = "job:mission"
+
+#: The longest summary a phone line carries.
+_SUMMARY_MAX = 300
+
+
+def _text(value: Any) -> str:
+    return " ".join(str(value).split()) if isinstance(value, str) else ""
+
+
+def _clip(text: str, limit: int = _SUMMARY_MAX) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _with_summary(title: str, summary: Any) -> str:
+    said = _clip(_text(summary))
+    return f"{title} — {said}" if said else title
+
+
+def _run_words(payload: dict) -> str:
+    """How a run ended, in the bell's words (``runVerdict`` + its rows): an
+    expired ask is the headline even on a failed run; only a positive
+    ``completed`` outcome is "finished"."""
+    status = _text(payload.get("status"))
+    outcome = _text(payload.get("outcome"))
+    ran = status == "completed" and payload.get("ok") is not False
+    if status == "cancelled":
+        return "was stopped"
+    if outcome == "needs_you":
+        return "needs you"
+    if not ran:
+        return "could not finish"
+    if outcome == "completed":
+        return "finished"
+    if outcome == "completed_with_failures":
+        return "finished, but part of it failed"
+    return "finished. Check what it did"
+
+
+def _session_line(payload: dict) -> str:
+    origin = _text(payload.get("origin"))
+    summary = payload.get("summary")
+    if origin == _MISSION_ORIGIN:
+        status = _text(payload.get("status"))
+        outcome = _text(payload.get("outcome"))
+        ran = status == "completed" and payload.get("ok") is not False
+        if status == "cancelled":
+            title = "Your objective was stopped"
+        elif not ran:
+            title = "Your objective could not be finished"
+        elif outcome == "completed":
+            title = "Your objective is done"
+        elif outcome == "needs_you":
+            title = "Your objective finished, but something needs you"
+        elif outcome == "completed_with_failures":
+            title = "Your objective finished, but part of it failed"
+        elif not outcome:
+            title = "Your objective finished"
+        else:
+            title = "Your objective finished. Check what it did"
+        return _with_summary(title, summary)
+    kind, _, name = origin.partition(":")
+    subject_for = _UNATTENDED_SUBJECT.get(kind.strip())
+    subject = subject_for(name.strip()) if subject_for else "A run"
+    return _with_summary(f"{subject} {_run_words(payload)}", summary)
+
+
+def _workflow_line(payload: dict) -> str:
+    name = _text(payload.get("workflow"))
+    subject = f"Your workflow {name}" if name else "A workflow"
+    status = _text(payload.get("status"))
+    if status == "failed":
+        return f"{subject} could not finish — the Workflows page shows which step stopped."
+    if status == "completed":
+        return f"{subject} finished"
+    if status == "cancelled":
+        return f"{subject} was stopped"
+    return f"{subject} ended"
+
+
+def _provider_name(provider: str) -> str:
+    try:
+        from ..providers.failure_words import heading, plain_name
+
+        return heading(plain_name(provider)) or "The AI service"
+    except Exception:  # noqa: BLE001 — wording only
+        return provider or "The AI service"
+
+
+#: ``"ProviderError: "`` — the exception class the router puts first.
+_CLASS_PREFIX_RX = re.compile(r"^[A-Za-z_][\w.]*: ")
+
+
+def _provider_failed_line(payload: dict) -> str:
+    """The SAME sentence the chat's failure line shows for this failure
+    (``failure_words`` title + fix), read from the event's error text — the
+    router publishes ``"<Class>: <message>"``, so the class is set aside and
+    the message classified. Never the server's raw text."""
+    provider = _text(payload.get("provider"))
+    error = str(payload.get("error") or "")
+    head = _CLASS_PREFIX_RX.match(error)
+    message = error[head.end():] if head else error
+    try:
+        from ..providers.failure_words import GENERIC_FIX, classify
+
+        words = classify(RuntimeError(message), provider=provider)
+        if words is None:
+            words = (f"{_provider_name(provider)} couldn't answer", GENERIC_FIX)
+        return f"{words[0]}. {words[1]}"
+    except Exception:  # noqa: BLE001 — wording only
+        return f"{_provider_name(provider)} couldn't answer."
+
+
+def _failover_line(payload: dict) -> str:
+    was = _provider_name(_text(payload.get("from")))
+    now = _provider_name(_text(payload.get("to")))
+    why = _text(payload.get("reason"))
+    because = f" ({why})" if why else ""
+    return (
+        f"{EVENT_WORDS['provider.failover']}: {was} couldn't answer{because}, "
+        f"so {now} answered instead."
+    )
+
+
+def _review_line(payload: dict) -> str:
+    files = payload.get("changed_files")
+    n = len(files) if isinstance(files, (list, tuple)) else 0
+    risk = _text(payload.get("risk")).lower()
+    bits = []
+    if n:
+        bits.append(f"{n} file{'' if n == 1 else 's'} changed")
+    if risk:
+        bits.append(f"{risk} risk")
+    detail = f" ({', '.join(bits)})" if bits else ""
+    return f"A change is waiting for your review{detail}. Open Iron Jarvis to look it over."
+
+
 def format_event(event: Any) -> str:
     """Build a concise human-readable alert line from an event."""
     etype = _event_field(event, "type", "event")
@@ -137,15 +327,26 @@ def format_event(event: Any) -> str:
             # skill to disk — "review it" would point at an empty review queue.
             return f"New skill added automatically: {name} — see it on the Skills page"
         return f"New skill suggested: {name} — review it on the Skills page"
-    session_id = _event_field(event, "session_id")
-    parts = [
-        f"{k}={v}"
-        for k, v in payload.items()
-        if k != "content" and not isinstance(v, (dict, list))
-    ]
-    detail = f" — {', '.join(parts)}" if parts else ""
-    suffix = f" (session {session_id})" if session_id else ""
-    return f"Iron Jarvis: {etype}{detail}{suffix}"
+    # v1.354.0 integrate: every other default alert in the bell's words, and
+    # never an event type name, a key=value pair or an internal id.
+    if not isinstance(payload, dict):
+        payload = {}
+    if etype == EventType.SESSION_COMPLETED:
+        return _session_line(payload)
+    if etype == EventType.WORKFLOW_COMPLETED:
+        return _workflow_line(payload)
+    if etype == EventType.PROVIDER_FAILED:
+        return _provider_failed_line(payload)
+    if etype == EventType.PROVIDER_FAILOVER:
+        return _failover_line(payload)
+    if etype == EventType.REVIEW_REQUESTED:
+        return _review_line(payload)
+    if etype == EventType.AUTONOMY_EXECUTED:
+        return "Iron Jarvis ran an action on its own — see it on the Autonomy page."
+    words = EVENT_WORDS.get(str(etype or ""))
+    if words:
+        return _with_summary(f"Iron Jarvis: {words}", payload.get("summary"))
+    return UNKNOWN_EVENT_LINE
 
 
 class Notifier:

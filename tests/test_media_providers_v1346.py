@@ -545,7 +545,9 @@ def test_registry_refusals_name_the_known_services_and_what_to_connect():
     # v1.353.0 (G40): the place a person goes, never a vault name or an
     # environment variable (changed on purpose; tests/test_chat_guide_media_doors_v13530.py).
     assert exc.value.code == "not_configured"
-    assert "Settings › Connections › Accounts & keys" in exc.value.words
+    # v1.354.0 (G67, on purpose): the row is named like its page; the place
+    # is the Settings group the chat's failure words name too.
+    assert "add your Pixio key in Settings › Connections" in exc.value.words
     assert "secret 'pixio'" not in exc.value.words and "PIXIO_API_KEY" not in exc.value.words
     with pytest.raises(MediaError) as exc:
         MediaRegistry([pixio_off, oai_off], config=_cfg()).choose()

@@ -272,18 +272,20 @@ def test_reconcile_settles_agentruns_with_the_session(tmp_path):
     for s, r in rows:
         row = orch.get_session(s.id)
         assert row.status is SessionStatus.FAILED
-        assert row.summary == "interrupted by a daemon restart"
+        assert row.summary == "Stopped when Iron Jarvis restarted."  # v1.354.0 G30
         assert row.finished_at is not None
         with session_scope(p.engine) as db:
             run = db.get(AgentRun, r.id)
             assert run.state is AgentState.FAILED, f"AgentRun {r.id} left {run.state}"
             assert run.finished_at is not None
-            assert run.result == "interrupted by a daemon restart"
+            assert run.result == "Stopped when Iron Jarvis restarted."  # v1.354.0 G30
     # What the UI reads: GET /sessions/{id} -> transcript.runs[].state
     state = orch.transcript(rows[0][0].id)["runs"][0]["state"]
     assert getattr(state, "value", state) == "failed"
     q = orch.get_session(qid)
-    assert q.status is SessionStatus.FAILED and "interrupted" in q.summary
+    # v1.354.0 (G30, on purpose): the words name the app, not "interrupted
+    # by a daemon restart".
+    assert q.status is SessionStatus.FAILED and q.summary == "Stopped when Iron Jarvis restarted."
 
 
 def test_reconcile_never_touches_a_run_that_already_ended(tmp_path):
@@ -363,7 +365,7 @@ async def test_queued_session_is_failed_not_rerun_after_restart(tmp_path):
     fresh.reconcile_interrupted_sessions()
     rb = fresh.get_session(b.id)
     assert rb.status is SessionStatus.FAILED
-    assert rb.summary == "interrupted by a daemon restart"
+    assert rb.summary == "Stopped when Iron Jarvis restarted."  # v1.354.0 G30
     assert not fresh._queued and not fresh._running
     assert (p.config.workspaces_dir / b.id).is_dir()
     fresh.delete_session(b.id)

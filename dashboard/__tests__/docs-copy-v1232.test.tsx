@@ -169,7 +169,8 @@ describe("Memory import door (v1.232.0)", () => {
 describe("Help 'Daemon offline' entry (v1.232.0)", () => {
   it("says the same thing as the Handbook: tray restarts, two misses, Maintenance", () => {
     render(<HelpPage />);
-    const row = screen.getByText(/“Daemon offline” in the dashboard/).closest("li");
+    // v1.354.0 (G30, on purpose): the entry is named by the banner's own words.
+    const row = screen.getByText(/“Iron Jarvis isn't responding” in the dashboard/).closest("li");
     expect(row).not.toBeNull();
     const text = row!.textContent ?? "";
     expect(text).toMatch(/two missed polls/);

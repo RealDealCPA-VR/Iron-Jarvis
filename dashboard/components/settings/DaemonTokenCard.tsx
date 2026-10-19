@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The Settings page's "Daemon access token" card (v1.232.0, audit Wave 6).
+ * The Settings page's "Access token" card (v1.232.0, audit Wave 6; renamed like its Settings row in v1.354.0).
  *
  * Lifted out of app/settings/page.tsx so it can be mounted on its own. The
  * fix it carries: the packaged desktop app ALWAYS seeds this token
@@ -47,7 +47,7 @@ export function DaemonTokenCard() {
 
   if (seededByDesktop) {
     return (
-      <Card title="Daemon access token" icon={<KeyRound size={15} />}>
+      <Card title="Access token" icon={<KeyRound size={15} />}>
         <div className="space-y-3.5">
           <div>
             <SectionLabel>Token</SectionLabel>
@@ -55,12 +55,12 @@ export function DaemonTokenCard() {
               type="password"
               value={token}
               readOnly
-              aria-label="Daemon access token (set by the desktop app)"
+              aria-label="Access token (set by the desktop app)"
               className="field mt-1.5 font-mono text-[13px] opacity-70"
             />
           </div>
           <p className="text-[12px] leading-relaxed text-zinc-400" data-testid="token-seeded">
-            Set by the desktop app. It pairs this window with its own daemon and is
+            Set by the desktop app. It pairs this window with Iron Jarvis on this PC and is
             renewed on every launch — there is nothing to paste or clear here.
           </p>
         </div>
@@ -69,10 +69,10 @@ export function DaemonTokenCard() {
   }
 
   return (
-    <Card title="Daemon access token" icon={<KeyRound size={15} />}>
+    <Card title="Access token" icon={<KeyRound size={15} />}>
       <div className="space-y-3.5">
         <p className="text-[12px] leading-relaxed text-zinc-500">
-          If the daemon is protected with a bearer token, paste it here. It&apos;s stored in
+          If Iron Jarvis is protected with a bearer token, paste it here. It&apos;s stored in
           your browser and sent with every request — so you can log into a deployed instance
           without a rebuild.
         </p>
@@ -104,7 +104,7 @@ export function DaemonTokenCard() {
         </div>
         {tokenNote && <SuccessNote>{tokenNote}</SuccessNote>}
         <p className="text-[11px] text-zinc-600">
-          A daemon started by hand on this machine usually needs no token — leave this
+          Iron Jarvis started by hand on this machine usually needs no token — leave this
           empty. The desktop app sets its own.
         </p>
       </div>

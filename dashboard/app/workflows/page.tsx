@@ -6,6 +6,7 @@ import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { post, ApiError } from "@/lib/api";
+import { couldntLoad, couldntWhileNoAnswer } from "@/lib/loadFailed";
 import type { WorkflowRun, WorkflowStep } from "@/lib/types";
 import {
   STARTERS,
@@ -337,7 +338,7 @@ function useWorkflowBuilder(): WorkflowBuilder {
       if (err instanceof ApiError) {
         if (err.status === 422)
           reply = "I couldn't turn that into a workflow. Try describing the steps more concretely.";
-        else if (err.status === 0) reply = "The daemon looks offline. Start it and try again.";
+        else if (err.status === 0) reply = couldntWhileNoAnswer("build that workflow");
         else reply = err.message;
       }
       setMessages((m) => [...m, { role: "assistant", content: reply }]);
@@ -707,7 +708,7 @@ function RunHistory() {
         <SkeletonRows rows={4} />
       ) : offline ? (
         <Empty icon={<History size={22} />}>
-          Daemon offline. Run history is unavailable.
+          {couldntLoad("Run history", null)}
         </Empty>
       ) : ordered.length === 0 ? (
         <Empty icon={<History size={22} />}>
