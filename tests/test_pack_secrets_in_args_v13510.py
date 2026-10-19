@@ -477,7 +477,9 @@ async def test_undo_of_a_postgres_reconnect_launches_the_connection_it_shows(tmp
 
     # Undo (the card's own button, the real route): what it SHOWS is what it
     # LAUNCHES — the old connection, not the new one under the old words.
-    await _undo_card(app, _card(frames, "App connected"))
+    # v1.358.0 (on purpose): the stubbed loader loads nothing, so the card
+    # says "App saved" (it did not start), never "App connected".
+    await _undo_card(app, _card(frames, "App saved"))
     assert launched() == ("postgresql://me:***@old-host:5432/books", old)
     text = _toml_text(p)
     assert DB_PASSWORD not in text and "NEWpw-LANE1E-review3" not in text

@@ -372,7 +372,8 @@ def test_denied_armed_tool_gets_a_note_and_stays_out_of_tools_used(
     assert r.status_code == 200
     body = r.json()
     assert body["tools_used"] == []      # a denied call is not honestly "used"
-    assert "image_info could not run (permission denied)" in body["reply"]
+    # v1.358.0 (G41, on purpose): the built-in reads in tool words, not its id.
+    assert "Jarvis couldn't use image info (permission denied)" in body["reply"]
 
 
 # --- response contract --------------------------------------------------------

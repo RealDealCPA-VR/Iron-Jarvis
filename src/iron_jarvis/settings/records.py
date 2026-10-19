@@ -485,6 +485,42 @@ def apply_app(platform: Any, connector_id: str, cfg: dict[str, Any] | None, *, l
     return load_app(platform, cfg) if load else 0
 
 
+#: v1.358.0: the card's state for an app whose pack loaded no tools — it did
+#: not start, and the next start will not change that by itself.
+NOT_STARTED_STATE = "saved, did not start"
+#: How much of a load failure's own words reach the model.
+_WHY_MAX = 240
+
+
+def _why_not_started(connector_id: str, *, has_needs: bool = False) -> str:
+    """": <the pack's own reason>." for an app whose pack loaded no tools —
+    the load record's plain words (``mcp.tools.load_status``, masked when
+    recorded), with where to see it. Never a secret, an env var or a vault
+    name. "." plus where to look when nothing was recorded. Never raises."""
+    from ..connectors.app_names import APPS_PLACE
+
+    where = f" Its card in {APPS_PLACE} shows why."
+    try:
+        from ..mcp.tools import STATE_OK, load_status
+
+        rec = dict(load_status(connector_id) or {})
+    except Exception:  # noqa: BLE001
+        rec = {}
+    if rec.get("state") == STATE_OK:
+        return ": it started but offered no tools." + where
+    reason = " ".join(str(rec.get("reason") or "").split()).rstrip(". ")
+    if not reason:
+        # A setup the app needs is said right after (`_needs`); else where.
+        return "." if has_needs else "." + where
+    if len(reason) > _WHY_MAX:
+        reason = reason[: _WHY_MAX - 1].rstrip() + "…"
+    fix = " ".join(str(rec.get("fix") or "").split()).rstrip(". ")
+    # A fix that points at the Tools page's own row ("its last output below")
+    # means nothing in chat; the card says where instead.
+    tail = f" To fix it: {fix}." if fix and "below" not in fix.lower() else where
+    return f": {reason}." + tail
+
+
 def restore_app(platform: Any, connector_id: str, prior: dict[str, Any] | None) -> str:
     apply_app(platform, connector_id, copy.deepcopy(prior) if prior is not None else None)
     return f"undo: {'disconnected' if prior is None else 'restored'} the app '{connector_id}'"
@@ -1815,7 +1851,14 @@ class AppConnectTool(_RecordTool):
         # A pack waiting for its token is saved now and loaded when the card
         # stores it (credentials.CredentialStore); one with no token loads now.
         loaded = await asyncio.to_thread(apply_app, self.platform, conn.id, cfg, load=not requests)
-        state = "waiting for its token" if requests else (f"{loaded} tools" if loaded else "saved — loads at the next start")
+        # v1.358.0: a pack that loaded NO tools did not start — the next start
+        # runs the same loader and will not make it start either. It is never
+        # "saved — loads at the next start": say it did not start and why.
+        not_started = not requests and not loaded
+        state = (
+            "waiting for its token" if requests
+            else (f"{loaded} tools" if loaded else NOT_STARTED_STATE)
+        )
         # v1.354.0 (G39, G45's words): an app that needs a one-time setup
         # outside Iron Jarvis (Gmail's Google OAuth client) says so with the
         # connect, so the model can tell the user why it may not start yet.
@@ -1827,18 +1870,27 @@ class AppConnectTool(_RecordTool):
                 _needs_words(conn.needs).rstrip(".")
                 + f"; its card in {APPS_PLACE} shows how."
             )
-        return ToolResult(
-            ok=True,
+        if not_started:
+            output = (
+                f"Saved {conn.name}, but it did not start, so its tools are not in this chat"
+                f"{_why_not_started(conn.id, has_needs=bool(_needs))} Never ask for a token in"
+                f" chat.{_needs}"
+            )
+        else:
             # v1.356.0 re-review (G60): an app that signs in on this PC says
             # what is still to do, and where (only when nothing is waiting for
             # a token — the secure card comes first then).
-            output=(
+            output = (
                 f"Connected {conn.name} ({state}). Never ask for a token in chat.{_needs}"
                 + ("" if requests else signin_hint(conn))
-            ),
+            )
+        return ToolResult(
+            ok=True,
+            output=output,
             data={
                 "record_change": self._card(
-                    "App connected", conn.name, "connected" if before else None, state, f"app.{conn.id}"
+                    "App saved" if not_started else "App connected",
+                    conn.name, "connected" if before else None, state, f"app.{conn.id}",
                 ),
                 "secret_requests": requests,
             },

@@ -1077,26 +1077,101 @@ _BARE_WEB_VERB_RX = re.compile(r"\b(?:search|look\s?up|browse)\b", re.IGNORECASE
 _CLAUSE_BREAK_RX = re.compile(r"[.;:!?,\n]|\b(?:and|then|but|also)\b", re.IGNORECASE)
 _VERB_REACH = 40
 
+#: v1.358.0 (the re-audit's confirmed regression): v1.354.0 set the web
+#: aside for ANY search verb aimed at an app's name, so "look up the Stripe
+#: API docs for refunds", "search for Notion templates for a CRM" and "look
+#: up Google Maps API pricing" armed nothing — research ABOUT an app, which
+#: only the web can answer. A search verb now hands the search to the app
+#: only when the request is about the user's OWN data in it:
+#:
+#: * a possessive right before the app ("search MY Google Drive", "in OUR
+#:   Slack") or an app word that is itself the user's ("my inbox", "my
+#:   calendar") — whether or not the app is connected: the web cannot reach
+#:   what is inside the user's own app, and a not-connected one is offered
+#:   to connect instead (G39's Drive acceptance, kept);
+#: * the app as the verb's own object or place ("search GitHub for …",
+#:   "look up the invoice IN Stripe") — ONLY when the app is CONNECTED
+#:   (*apps_on*) and the app's own public things do not follow its name
+#:   ("the Stripe API docs", "Notion templates", "the Dropbox desktop app",
+#:   "Google Maps API pricing"): with it not connected that sentence may well
+#:   be a question about the app's public side, so the web stays and the app
+#:   is offered too.
+#:
+#: And never after "how to …" / "what is …" (a question about the app).
+_ABOUT_THE_APP_RX = re.compile(
+    r"\b(?:how\s+(?:to|do|does|can|should)|what\s+(?:is|are|does))\b", re.IGNORECASE
+)
+#: The app's public things, right after its name (at most two words between,
+#: never a connector word — "my Drive FOR the API notes" is not research).
+_RESEARCH_AFTER_APP_RX = re.compile(
+    r"\A(?:['’]s)?\s+"
+    r"(?:(?!(?:for|in|to|from|about|with|on|of|that|which|and|or|by|at|my|our|the)\b)"
+    r"[\w.-]+\s+){0,2}?"
+    r"(?:apis?|docs?|documentation|pricing|prices?|plans?|tiers?|templates?|"
+    r"tutorials?|guides?|courses?|downloads?|desktop|mobile|app|apps|alternatives?|"
+    r"competitors?|reviews?|features?|changelog|release\s+notes|status\s+page|sdks?|"
+    r"integrations?|support|help\s+center|blog|careers|stock|vs\.?|versus)\b",
+    re.IGNORECASE,
+)
+#: The user's own: a possessive right before the app's words.
+_OWN_BEFORE_APP_RX = re.compile(r"\b(?:my|our)\s+\Z", re.IGNORECASE)
+#: An app word that IS the user's own ("my inbox", "the mailbox", "my calendar").
+_OWN_APP_WORDS_RX = re.compile(r"\A(?:my|our|the)\b", re.IGNORECASE)
+#: The app as the verb's own object or place: nothing but "the"/"in the"
+#: between the verb and the app, or "… in|from|on <app>" closing the gap.
+_INTO_THE_APP_RX = re.compile(
+    r"(?:\A\s*(?:(?:through|in|inside|within)\s+)?(?:the\s+)?"
+    r"|\b(?:in|inside|within|from|on|through|across)\s+(?:the\s+)?)\Z",
+    re.IGNORECASE,
+)
 
-def _web_signal_is_an_app(msg: str) -> bool:
+
+def _searches_in_the_app(
+    msg: str, verb_end: int, cid: str, start: int, end: int, apps_on: "frozenset[str]"
+) -> bool:
+    """Is the search verb ending at *verb_end* aimed INTO the app named at
+    ``msg[start:end]`` (the user's own data in it), rather than ABOUT it?
+    See the note above :data:`_ABOUT_THE_APP_RX`. Pure."""
+    if start < verb_end or start - verb_end > _VERB_REACH:
+        return False
+    between = msg[verb_end:start]
+    if _CLAUSE_BREAK_RX.search(between) is not None:
+        return False
+    if _ABOUT_THE_APP_RX.search(between) is not None:
+        return False
+    # The user's own ("my Notion templates" are theirs, not Notion's).
+    if _OWN_APP_WORDS_RX.match(msg[start:end]) or _OWN_BEFORE_APP_RX.search(between):
+        return True
+    if cid not in apps_on:
+        return False
+    if _RESEARCH_AFTER_APP_RX.match(msg[end:end + 120]) is not None:
+        return False
+    return _INTO_THE_APP_RX.search(between) is not None
+
+
+def _web_signal_is_an_app(msg: str, apps_on: "frozenset[str] | set[str] | tuple[str, ...]" = ()) -> bool:
     """True when the web rule fired ONLY because of a catalog app's name
     (v1.354.0, G39): "search my Google Drive for the lease" is a search IN
     Drive, not a web search — its "search" is aimed at the app and its
     "Google" is part of the app's name. With the app's words blanked out, no
-    strong web word is left, and every bare search verb has a named app
-    right after it in its own clause. "search the web and my Notion" keeps
+    strong web word is left, and every bare search verb is aimed INTO a
+    named app in its own clause (:func:`_searches_in_the_app` — v1.358.0:
+    the user's own data in it, never research about it; *apps_on* are the
+    named apps that are connected). "search the web and my Notion" keeps
     "web"; "the latest news on GitHub" keeps "latest"; "search for flights
     to Paris and save them to my Notion" keeps its search (the verb's clause
-    names no app — the v1.354.0 review's regression case).
+    names no app — the v1.354.0 review's regression case); "look up the
+    Stripe API docs" keeps its search (research about Stripe).
     Never raises (a fault keeps today's behaviour: the rule fires)."""
     try:
-        from ..connectors.app_names import app_name_spans
+        from ..connectors.app_names import app_name_hits
 
-        spans = app_name_spans(msg)
-        if not spans:
+        hits = app_name_hits(msg)
+        if not hits:
             return False
+        on = frozenset(apps_on or ())
         chars = list(msg)
-        for start, end in spans:
+        for _cid, start, end in hits:
             for i in range(start, min(end, len(chars))):
                 chars[i] = " "
         blanked = "".join(chars)
@@ -1104,13 +1179,10 @@ def _web_signal_is_an_app(msg: str) -> bool:
             return False
         # A verb inside an app's own name ("Brave Search") was blanked above.
         for verb in _BARE_WEB_VERB_RX.finditer(blanked):
-            aimed = any(
-                start >= verb.end()
-                and start - verb.end() <= _VERB_REACH
-                and _CLAUSE_BREAK_RX.search(msg[verb.end():start]) is None
-                for start, _end in spans
-            )
-            if not aimed:
+            if not any(
+                _searches_in_the_app(msg, verb.end(), cid, start, end, on)
+                for cid, start, end in hits
+            ):
                 return False
         return True
     except Exception:  # noqa: BLE001
@@ -2687,11 +2759,17 @@ def select_auto_tools(
     exclude: set[str] | frozenset[str] | None = None,
     cap: int = 6,
     max_tools: int | None = None,
+    apps_on: "frozenset[str] | set[str] | tuple[str, ...] | list[str] | None" = None,
 ) -> list[str]:
     """Score *text* (the last user message) + attachment file names and return
     up to *cap* auto-armable tool names, best signal first. Tools in *exclude*
     (the user's explicit picks) are never repeated. Returns ``[]`` for plain
     conversation — no signal, no tools, no latency.
+
+    *apps_on* (v1.358.0) — the catalog ids of the apps the message names
+    that are CONNECTED (the chat lanes read them off the turn's grounding).
+    Only a connected app takes a search like "search GitHub for …" over from
+    the web; ``None`` (agents, the intent gate) reads as none connected.
 
     *max_tools* is the CAPABILITY ENVELOPE's arming budget (v1.202.0):
     ``envelope/profile.CapabilityProfile.max_tools()`` for the model answering
@@ -2756,7 +2834,7 @@ def select_auto_tools(
         if _rule_fires(rx, gates, msg, cutbox):
             # v1.354.0 (G39): the web rule stays quiet when its only signal
             # is a catalog app's name (the app is searched, not the web).
-            if weights is _WEB_WEIGHTS and _web_signal_is_an_app(msg):
+            if weights is _WEB_WEIGHTS and _web_signal_is_an_app(msg, tuple(apps_on or ())):
                 continue
             bump(weights)
     cut = cutbox[0]

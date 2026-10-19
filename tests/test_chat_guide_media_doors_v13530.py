@@ -584,7 +584,8 @@ def test_a_refusal_the_registry_made_leaves_no_button_stream_lane(app):
     frames = _stream(app, _body("What can you do?"))
     assert "app_connect" not in model.tools[0], "anti-vacuity: app_connect was not armed"
     done = _done(frames)
-    assert "app_connect could not run (not turned on for this chat)" in done["reply"], done["reply"]
+    # v1.358.0 (G41, on purpose): the built-in reads in tool words, not its id.
+    assert "Jarvis couldn't use app connect (not turned on for this chat)" in done["reply"], done["reply"]
     assert done["doors"] == []
 
 
@@ -596,7 +597,8 @@ def test_a_refusal_the_registry_made_leaves_no_button_post_lane(app):
     body = ChatBody(messages=[{"role": "user", "content": "connect my Google Drive"}], tools=["read_file"])
     res = asyncio.run(run_chat_turn(platform, {}, body))
     assert "app_connect" not in platform.router.tools[0], "anti-vacuity: app_connect was not armed"
-    assert "app_connect could not run (not turned on for this chat)" in res["reply"], res["reply"]
+    # v1.358.0 (G41, on purpose): the built-in reads in tool words, not its id.
+    assert "Jarvis couldn't use app connect (not turned on for this chat)" in res["reply"], res["reply"]
     assert res["doors"] == []
 
 
@@ -653,9 +655,10 @@ def test_an_app_tools_refusal_reads_in_the_users_words():
     assert app_tool_words("mcp__my-pack__listOpenIssues") == ("my-pack", "list open issues")
     # A catalog app is named by the catalog; an acronym keeps its case.
     assert app_tool_words("mcp__github__get_PR") == (get_connector("github").name, "get PR")
-    # Built-ins are byte for byte the v1.344.0 words; malformed ids stay raw.
+    # v1.358.0 (G41, on purpose): built-ins read in tool words, never the raw
+    # id (tests/test_chat_picks_tools_v13580.py); malformed ids stay raw.
     assert refusal_footnotes([("image_info", "permission denied")]) == (
-        "\n\n_Note: image_info could not run (permission denied)._"
+        "\n\n_Note: Jarvis couldn't use image info (permission denied)._"
     )
     for raw in ("mcp__", "mcp____x", "mcp__ok__", "mcp__bad pack__x"):
         assert app_tool_words(raw) is None, raw

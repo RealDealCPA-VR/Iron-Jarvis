@@ -105,6 +105,30 @@ STREAM_MISMATCH = "claude-cli: the CLI's final text differs from what it streame
 #: cloud provider's dropped connection.
 DROPPED = "claude-cli: the connection to Anthropic dropped before an answer arrived — try again"
 
+#: v1.358.0 (the re-audit's confirmed regression): how the transport's own
+#: timeout and cut-off answers BEGIN, so ``providers.failure_words`` can name
+#: them from these constants (never loose words) when an error arrives
+#: without its typed ``kind`` — and how :func:`_typed` stamps them, so the
+#: chat says "Claude Code didn't answer in time" / "The connection to Claude
+#: Code dropped mid-answer", never an anonymous "couldn't finish".
+TIMEOUT_PREFIX = f"{PROVIDER}: CLI timed out"
+INCOMPLETE_PREFIX = f"{PROVIDER}: incomplete upstream response"
+
+
+def _typed(err: ProviderError, kind: str, *, partial: bool = False) -> ProviderError:
+    """Stamp a transport error with what it IS — the router's own refusal
+    vocabulary (``kind`` "timeout" | "interrupted", ``failed_provider``,
+    ``partial``), which ``failure_words.classify`` reads. The message, the
+    status and ``transient`` are unchanged. Never raises."""
+    try:
+        err.kind = kind  # type: ignore[attr-defined]
+        err.failed_provider = PROVIDER  # type: ignore[attr-defined]
+        if partial:
+            err.partial = True  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - wording only
+        pass
+    return err
+
 #: Anthropic's words for a credential that no longer works. A 403 is only
 #: "signed out" when it reads like this (or is typed authentication_error);
 #: any other 403 (an organisation/permission refusal) keeps its own words.
@@ -521,10 +545,14 @@ class _Timeouts:
         return self.idle, False
 
     def error(self, is_total: bool) -> ProviderError:
+        # v1.358.0: typed as a timeout (`_typed`), words unchanged.
         if is_total:
-            return ProviderError(f"claude-cli: CLI timed out after {self.total:.0f}s", transient=True)
-        return ProviderError(
-            f"claude-cli: CLI timed out — no output for {self.idle:.0f}s", transient=True
+            return _typed(
+                ProviderError(f"{TIMEOUT_PREFIX} after {self.total:.0f}s", transient=True), "timeout"
+            )
+        return _typed(
+            ProviderError(f"{TIMEOUT_PREFIX} — no output for {self.idle:.0f}s", transient=True),
+            "timeout",
         )
 
 
@@ -814,16 +842,21 @@ def upstream_failure(got: Collected, admission: Any, *, probe: bool = True) -> E
         # Part of the answer already reached the user: unchanged since v1.300.0.
         if said:
             first += ", upstream said: " + said[:500]
-        return ProviderError(
-            f"{PROVIDER}: incomplete upstream response ({first})"
-            + (f": {got.native_error}" if got.native_error else "")
+        # v1.358.0: typed as cut off mid-answer (`_typed`), words unchanged.
+        return _typed(
+            ProviderError(
+                f"{INCOMPLETE_PREFIX} ({first})"
+                + (f": {got.native_error}" if got.native_error else "")
+            ),
+            "interrupted",
+            partial=True,
         )
     if status is None and admission.failure and getattr(admission, "failure_network", None) is False:
         return ProviderError(
             f"{PROVIDER}: Iron Jarvis could not pass the request on to Anthropic "
             "(an internal relay error, not your connection)"
         )
-    return ProviderError(DROPPED, transient=True)
+    return _typed(ProviderError(DROPPED, transient=True), "interrupted")
 
 
 def assemble(

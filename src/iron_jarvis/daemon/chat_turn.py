@@ -2405,19 +2405,70 @@ def app_tool_words(tool: str) -> "tuple[str, str] | None":
         return None
 
 
+#: v1.358.0 (G41): a BUILT-IN tool's id shape ("write_file", "web_search").
+#: Anything else (an app's ``mcp__…`` tool is worded above; a malformed id)
+#: keeps its raw line — never invented words for a name the app cannot read.
+_BUILTIN_TOOL_ID_RX = _re.compile(r"[a-z][a-z0-9_]{0,63}")
+#: Where a built-in tool the chat was not given is turned on, in the chat's
+#: own words (the Tools menu under the message box: "Web & research" and
+#: "Auto tools" — `lib/chatControlWords`, the menu's switches).
+WEB_TOOLS_PLACE = "turn on Web & research in the chat's Tools menu"
+AUTO_TOOLS_PLACE = "turn on Auto tools in the chat's Tools menu, then ask for it in your message"
+
+
+def builtin_tool_words(tool: str) -> "str | None":
+    """What a refused BUILT-IN tool would have done, in the approval card's
+    words ("save a file", "search the web" — ``agents.mission.ask_words``,
+    the Python twin of ``lib/toolWords``), else "use <its name>"; ``None``
+    for an app's tool or an id that is not a built-in's shape. Pure."""
+    name = str(tool or "")
+    if name.startswith("mcp__") or not _BUILTIN_TOOL_ID_RX.fullmatch(name):
+        return None
+    try:
+        from ..agents.mission import ask_words
+
+        return ask_words(name)
+    except Exception:  # noqa: BLE001 — a footnote falls back to the raw id
+        return None
+
+
+def builtin_tool_place(tool: str) -> str:
+    """Where a built-in tool that was "not turned on for this chat" can be
+    turned on: the Web & research switch for the two web tools, Auto tools
+    for a tool the request picks by itself (``AUTO_SAFE_TOOLS``), else ""
+    (a tool no chat switch arms — the line names no false place). Pure."""
+    name = str(tool or "")
+    if name in ("web_search", "web_fetch"):
+        return WEB_TOOLS_PLACE
+    try:
+        from ..tools.autoselect import AUTO_SAFE_TOOLS
+
+        if name in AUTO_SAFE_TOOLS:
+            return AUTO_TOOLS_PLACE
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
 def refusal_footnotes(refused: "list[tuple[str, str]]") -> str:
     """The reply footnotes for this turn's refused calls: ONE line per
-    (tool, refusal), in first-seen order, deduped — ``_Note: X could not run
-    (permission denied)._`` keeps its v1.165.0 words byte for byte; ``not
-    armed`` reads ``(not turned on for this chat)`` and ``low trust``
-    ``(blocked under low trust)``. Unknown labels are skipped (never a
-    footnote that names a refusal nobody made). Both lanes, lock-step.
+    (tool, refusal), in first-seen order, deduped — ``not armed`` reads
+    ``(not turned on for this chat)``, ``low trust`` ``(blocked under low
+    trust)``, ``permission denied`` as itself. Unknown labels are skipped
+    (never a footnote that names a refusal nobody made). Both lanes,
+    lock-step.
 
     v1.353.0 (G41): a connected app's tool is named in the user's words —
     ``GitHub › create issue``, never ``mcp__github__create_issue`` — and a
     "not armed" refusal of one says where to turn it on (the chat's
-    ``+ › Connections`` switch for that app). Every other tool keeps its
-    line byte for byte."""
+    ``+ › Connections`` switch for that app).
+
+    v1.358.0 (G41, the built-in half): a BUILT-IN tool is named by what it
+    does ("_Note: Jarvis couldn't save a file (not turned on for this
+    chat) — turn on Auto tools in the chat's Tools menu, then ask for it in
+    your message._"), never by its raw id, and a "not armed" refusal says
+    where to turn it on (:func:`builtin_tool_place`). An id that is neither
+    keeps its raw line."""
     out = ""
     for name, label in dict.fromkeys(refused):
         words = REFUSAL_FOOTNOTE_WORDS.get(label)
@@ -2425,7 +2476,13 @@ def refusal_footnotes(refused: "list[tuple[str, str]]") -> str:
             continue
         parts = app_tool_words(name)
         if parts is None:
-            out += f"\n\n_Note: {name} could not run ({words})._"
+            does = builtin_tool_words(name)
+            if does is None:
+                out += f"\n\n_Note: {name} could not run ({words})._"
+                continue
+            place = builtin_tool_place(name) if label == "not armed" else ""
+            fix = f" — {place}" if place else ""
+            out += f"\n\n_Note: Jarvis couldn't {does} ({words}){fix}._"
             continue
         app, tool_words = parts
         fix = f" — turn {app} on in + › Connections" if label == "not armed" else ""
@@ -3115,6 +3172,23 @@ def fix_action(exc: BaseException | None, *, provider: str = "") -> dict[str, st
     return {}
 
 
+def _pick_connector_tools(registry, names: "list[str]", text: str, limit: int) -> "list[str]":
+    """At most *limit* of an app's tool *names* for this message (v1.358.0,
+    G15/G39): ``ToolRegistry.pick_for_message`` — the most relevant when the
+    app has more tools than the room, every one in order when it fits. A
+    registry without it (a test double) keeps the first *limit* in order.
+    Never raises."""
+    if limit <= 0:
+        return []
+    picker = getattr(registry, "pick_for_message", None)
+    if callable(picker):
+        try:
+            return list(picker(names, text, limit))
+        except Exception:  # noqa: BLE001 — arming stays as it was
+            log.debug("picking an app's tools failed", exc_info=True)
+    return list(names)[:limit]
+
+
 def named_app_ask_tools(
     grounding,
     text: str,
@@ -3123,6 +3197,7 @@ def named_app_ask_tools(
     *,
     low_trust: bool,
     local_only: bool,
+    registry=None,
 ) -> "tuple[list[str], bool]":
     """THE STREAM LANE'S APPS-BY-NAME ARMING (v1.354.0, G39): ``(names to
     ask-arm, drop app_connect?)``.
@@ -3143,6 +3218,14 @@ def named_app_ask_tools(
     re-signing — its card would only answer "already connected". Never
     raises: a fault arms nothing and drops nothing.
 
+    v1.358.0 (G15/G39): with *registry* given, an app with more tools than
+    the room left has the ones most relevant to *text* armed
+    (``registry.pick_for_message``: the message's words against each tool's
+    name and description, read-only first on a tie) — "list my open pull
+    requests" reaches GitHub's ``list_pull_requests``, which sorts past the
+    cap by name. Every one is still ASK-armed (each call shows its card), and
+    an app that fits arms every tool exactly as before.
+
     Its twin for the user's REST hookups (v1.357.0, G84) is
     ``integrations.hookups.named_hookup_ask_tools`` — ``rest_call``, called
     right after this in the stream lane, under the same rules. This lane
@@ -3156,11 +3239,14 @@ def named_app_ask_tools(
         if not (low_trust or local_only):
             have = set(armed or []) | set(ask_armed or [])
             for cid in named:
-                for name in live.get(cid) or []:
-                    if len(add) >= _MAX_CONNECTOR_TOOLS:
-                        break
-                    if name not in have and name not in add:
-                        add.append(name)
+                room = _MAX_CONNECTOR_TOOLS - len(add)
+                if room <= 0:
+                    break
+                fresh = [n for n in live.get(cid) or [] if n not in have and n not in add]
+                if registry is not None:
+                    add += _pick_connector_tools(registry, fresh, text, room)
+                else:
+                    add += fresh[:room]
         from ..connectors.app_names import wants_connect
 
         drop = all(live.get(cid) for cid in named) and not wants_connect(text)
@@ -3205,15 +3291,23 @@ def _resolve_connectors(d, body) -> tuple[list[str], list[str]]:
     # left out of a local-only turn (its search would carry the turn's words
     # off the network). MCP connector tools are out of this release's scope.
     _local_only = _egress.current_scope().on
+    # v1.358.0 (G15/G39): WHICH of an app's tools fill the room is decided by
+    # the message (`registry.pick_for_message`), not by name order — GitHub's
+    # own server sorts its pull-request tools past the cap. An app that fits
+    # arms every tool exactly as before.
+    _text: "str | None" = None
     for raw in (getattr(body, "connectors", None) or [])[:_MAX_CONNECTORS]:
         cid = (raw or "").strip()
         if not cid:
             continue
         names = d.platform.registry.mcp_names(cid)
         if names:
+            fresh = [n for n in names if n not in tools]
             room = _MAX_CONNECTOR_TOOLS - len(tools)
             if room > 0:
-                tools.extend(n for n in names[:room] if n not in tools)
+                if len(fresh) > room and _text is None:
+                    _text = _last_user_text(getattr(body, "messages", None) or [])
+                tools.extend(_pick_connector_tools(d.platform.registry, fresh, _text or "", room))
             continue
         try:
             _conn = d.platform.ltm.get(cid)
@@ -3292,8 +3386,22 @@ class ArmedSelection(tuple):
         return self
 
 
+def arming_kw(grounding) -> "dict[str, Any]":
+    """The keyword arguments the lanes add to their ``_resolve_armed_tools``
+    hop (v1.358.0): ``{"apps_on": [...]}`` when the turn named a connected
+    app, else ``{}`` — PASSED ONLY WHEN SET, so a turn that names no
+    connected app calls the arming pass exactly as before (and the test
+    doubles that predate the knob keep their signature). Both lanes, MIRROR
+    NOTE. Never raises."""
+    try:
+        on = [str(c) for c in (getattr(grounding, "apps_on", None) or []) if c]
+    except Exception:  # noqa: BLE001
+        on = []
+    return {"apps_on": on} if on else {}
+
+
 def _resolve_armed_tools(
-    d, body, max_tools: "int | None" = None
+    d, body, max_tools: "int | None" = None, *, apps_on: "list[str] | tuple[str, ...] | None" = None
 ) -> "ArmedSelection":
     """The turn's tool set: explicit "+"-armed tools first, then — when the
     client sent ``auto_tools`` — auto-selected tools fill the free slots under
@@ -3332,7 +3440,12 @@ def _resolve_armed_tools(
     smaller ceiling only stops earlier), so the capped selection is a subset
     of the baseline and the difference is exactly the candidates the envelope
     excluded. Two fills only ever run on a measured-weak-capped turn — rare,
-    and already off the event loop (both lanes hop here via to_thread)."""
+    and already off the event loop (both lanes hop here via to_thread).
+
+    ``apps_on`` (v1.358.0) — the named apps the turn's grounding read as
+    CONNECTED (``_Grounding.apps_on``), handed to ``select_auto_tools`` so
+    only a connected app takes a search over from the web. Both lanes pass
+    it (MIRROR NOTE); ``None`` reads as none connected."""
     explicit = [
         t for t in (body.tools or [])[:_MAX_ARMED_TOOLS] if d.platform.registry.get(t)
     ]
@@ -3409,6 +3522,7 @@ def _resolve_armed_tools(
                     # — `cap` is already "how many auto slots remain", so a
                     # narrowed ceiling IS the max_tools consult (v1.202.0).
                     cap=ceiling - len(explicit) - len(auto),
+                    apps_on=apps_on,
                 )
                 if d.platform.registry.get(t)
             ]
@@ -5833,7 +5947,7 @@ class _Grounding:
     __slots__ = (
         "project", "folder_rules", "folder_rules_used", "lessons", "index",
         "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
-        "text_only", "apps", "apps_named", "apps_live",
+        "text_only", "apps", "apps_named", "apps_live", "apps_on",
     )
 
     def __init__(self) -> None:
@@ -5860,6 +5974,12 @@ class _Grounding:
         self.apps = ""
         self.apps_named: list[str] = []
         self.apps_live: dict[str, list[str]] = {}
+        #: v1.358.0: the named apps the section read as CONNECTED (their
+        #: catalog ids, ``app_names.connected_ids``) — the arming pass hands
+        #: them to the web rule, so only a connected app takes a search like
+        #: "search GitHub for …" over from the web (research about an app,
+        #: "look up the Stripe API docs", always keeps the web).
+        self.apps_on: list[str] = []
 
     def before_attachments(self) -> str:
         # The folder's own instructions ride RIGHT AFTER the project block they
@@ -6104,19 +6224,19 @@ async def _gather_grounding(
         # SAVED WORKFLOWS (v1.170.0): bounded; never raises.
         return _saved_workflows_block(platform)
 
-    def _apps() -> str:
+    def _apps() -> "tuple[str, list[str]]":
         # APPS NAMED IN THE MESSAGE (v1.354.0, G39): connected (N tools) or
         # not, and Claude Code / Codex sign-in from the CACHED verdict (no
-        # probe). Blocking reads, so off the loop; never raises.
+        # probe). Blocking reads, so off the loop; never raises. v1.358.0:
+        # the connected ones ride back too (the web rule's ``apps_on``).
         try:
-            from ..connectors.app_names import app_states, apps_section
+            from ..connectors.app_names import app_states, apps_section, connected_ids
 
-            return apps_section(
-                app_states(platform, _apps_named, out.apps_live, _clis_named)
-            )
+            rows = app_states(platform, _apps_named, out.apps_live, _clis_named)
+            return apps_section(rows), connected_ids(rows)
         except Exception:  # noqa: BLE001 — knowing the apps never breaks a turn
             log.debug("the named-apps section failed", exc_info=True)
-            return ""
+            return "", []
 
     _proj_root = (
         str(getattr(resolved_proj, "root", "") or "").strip()
@@ -6186,7 +6306,7 @@ async def _gather_grounding(
     out.conn_tools, out.connector = got["connector"]
     out.roster = got["roster"]
     out.workflows = got["workflows"]
-    out.apps = got.get("apps", "")
+    out.apps, out.apps_on = got.get("apps", ("", []))
     return out
 
 
@@ -6638,8 +6758,11 @@ async def run_chat_turn(
         # worker thread is the honest home for it; the mirror in
         # `routes/chat.py` gets the same hop, because these two lanes are
         # LOCK-STEP and the streaming one is the lane the user watches.
+        # v1.358.0: the named apps that are connected ride along
+        # (`arming_kw`) so only a connected app takes a search over from
+        # the web. MIRROR NOTE (lock-step): routes/chat.py.
         _prep.start("arming", asyncio.to_thread(
-            _resolve_armed_tools, d, body, _tool_cap
+            _resolve_armed_tools, d, body, _tool_cap, **arming_kw(_grounding)
         ))
 
     images, attach_block = await _prep.take("attachments")

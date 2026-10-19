@@ -45,7 +45,7 @@ from ...tools.reversible import reversible_flag as _reversible_flag
 from ...eval.pricing import UsageTally
 from ...providers import egress as _egress
 from ...providers.reasoning import normalize_level
-from ...providers.failure_words import GENERIC_TITLE as _GENERIC_TITLE
+from ...providers.failure_words import is_generic_title as _is_generic_title
 from ..doors import collect_doors, door_for, failure_door_for
 
 # The chat TURN lives in daemon/chat_turn.py (v1.136.0 messaging surfaces):
@@ -2850,7 +2850,9 @@ async def _honest_failures(frames):
         payload = _chat_turn.error_payload(
             None, None, exc, detail=detail if started else _PREP_FAILED.format(detail=detail),
         )
-        if not started and payload.get("title") == _GENERIC_TITLE:
+        # v1.358.0: the generic headline may now name the provider
+        # ("Claude Code couldn't finish this answer") — still generic.
+        if not started and _is_generic_title(payload.get("title")):
             payload["title"] = _PREP_FAILED_TITLE
             payload["fix"] = "Send your message again to retry."
         yield _sse("error", payload)
@@ -3193,8 +3195,11 @@ async def chat_stream(
         # `chat_turn.run_chat_turn`; see the reasoning there. This lane
         # matters more, not less: it is the one the user watches token by
         # token, so a parked loop here reads as the app having died.
+        # v1.358.0: the named apps that are connected ride along so only a
+        # connected app takes a search over from the web. MIRROR NOTE
+        # (lock-step): chat_turn.run_chat_turn passes the same `arming_kw`.
         _prep.start("arming", asyncio.to_thread(
-            _resolve_armed_tools, d, body, _tool_cap
+            _resolve_armed_tools, d, body, _tool_cap, **_chat_turn.arming_kw(_grounding)
         ))
 
     # Attachments: text formats extracted inline (scans via OCR), images to
@@ -3498,10 +3503,13 @@ async def chat_stream(
             # every named app is already connected and nothing asks to
             # connect. THIS LANE ONLY (the POST lane never ask-arms); both
             # lanes carry the "Apps named in this message" grounding.
+            # v1.358.0 (G15/G39): with the registry, an app with more tools
+            # than the room has the ones the message asks about armed.
             _app_ask, _app_drop = _chat_turn.named_app_ask_tools(
                 _grounding, _last_user_text(body.messages), armed, ask_armed,
                 low_trust=_trust_state["low"],
                 local_only=_egress.current_scope().on,
+                registry=d.platform.registry,
             )
             ask_armed += [t for t in _app_ask if d.platform.registry.get(t)]
             if _app_drop:

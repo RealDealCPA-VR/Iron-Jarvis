@@ -13,6 +13,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 import threading
 from collections import OrderedDict
 from contextvars import ContextVar
@@ -39,6 +40,108 @@ from .undo import make_file_descriptor
 from .undo import finalize_post_hash
 
 _log = logging.getLogger("iron_jarvis.tools.registry")
+
+
+# --------------------------------------------------------------------------- #
+# WHICH of an app's tools a chat arms (v1.358.0, G15/G39).
+# --------------------------------------------------------------------------- #
+# Chat arms at most ``chat_turn._MAX_CONNECTOR_TOOLS`` (24) of a connected
+# app's tools. They used to be the first 24 in NAME order, and GitHub's own
+# server (v1.355.0) sorts its pull-request tools past 24 — "list my open pull
+# requests" could not reach ``list_pull_requests``. When an app has more tools
+# than the room, :meth:`ToolRegistry.pick_for_message` keeps the ones whose
+# name and description share the most words with the message; a tie goes to
+# the read-only tool, then to name order. A tool that arrived since the user
+# last looked (``quarantined``, v1.299.0 — not yet on the card they saw) is
+# picked only after every tool they did see. When the app fits, every tool is
+# armed exactly as before, in the same order.
+_RANK_WORD_RX = re.compile(r"[a-z0-9]+")
+_RANK_CAMEL_RX = re.compile(r"([a-z0-9])([A-Z])")
+#: Words that say nothing about WHICH tool ("list my open pull requests").
+_RANK_STOP: frozenset[str] = frozenset({
+    "a", "an", "the", "my", "our", "your", "me", "i", "we", "us", "it", "its",
+    "to", "of", "for", "in", "on", "at", "by", "with", "from", "into", "and",
+    "or", "is", "are", "be", "was", "were", "this", "that", "these", "those",
+    "please", "can", "could", "would", "will", "you", "all", "any", "some",
+    "what", "which", "who", "how", "do", "does", "did", "about", "there",
+    "here", "just", "also", "want", "need", "tell", "give", "let", "now",
+    "jarvis", "mcp",
+})
+#: The short words people use for a longer one a tool names.
+_RANK_ALIASES: dict[str, tuple[str, ...]] = {
+    "pr": ("pull", "request"),
+    "prs": ("pull", "request"),
+    "repo": ("repository",),
+    "repos": ("repository",),
+    "dm": ("message",),
+    "dms": ("message",),
+    "mail": ("email",),
+    "mails": ("email",),
+    "doc": ("document",),
+    "docs": ("document",),
+}
+#: A tool named by one of these verbs reads (when its server said nothing).
+_RANK_READ_VERBS: frozenset[str] = frozenset({
+    "get", "list", "search", "read", "fetch", "find", "query", "view", "show",
+    "describe", "lookup", "count", "download", "check",
+})
+#: How much of a description is matched (descriptions can be long).
+_RANK_DESC_CHARS = 400
+#: Cached word sets per (tool name, description) — bounded.
+_RANK_CACHE: "OrderedDict[tuple[str, str], tuple[frozenset[str], frozenset[str]]]" = OrderedDict()
+_RANK_CACHE_MAX = 4096
+
+
+def _rank_stem(word: str) -> str:
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+def rank_words(text: str) -> frozenset[str]:
+    """The words of *text* a tool is matched on: camelCase and snake_case
+    split, lower-cased, a plural folded ("requests" -> "request"), the short
+    forms widened ("PRs" -> pull, request), the filler words dropped. Pure."""
+    t = _RANK_CAMEL_RX.sub(r"\1 \2", str(text or "")[:4000]).lower()
+    out: set[str] = set()
+    for w in _RANK_WORD_RX.findall(t):
+        if w in _RANK_ALIASES:
+            out.update(_RANK_ALIASES[w])
+            continue
+        if w in _RANK_STOP or len(w) < 2:
+            continue
+        out.add(_rank_stem(w))
+    return frozenset(out)
+
+
+def _tool_rank_words(name: str, tool: Any) -> tuple[frozenset[str], frozenset[str]]:
+    """``(name words, description words)`` for one registered tool, cached."""
+    remote = str(getattr(tool, "remote_name", "") or name.rsplit("__", 1)[-1])
+    desc = str(getattr(tool, "description", "") or "")[:_RANK_DESC_CHARS]
+    key = (name, desc)
+    hit = _RANK_CACHE.get(key)
+    if hit is not None:
+        _RANK_CACHE.move_to_end(key)
+        return hit
+    got = (rank_words(remote), rank_words(desc))
+    _RANK_CACHE[key] = got
+    while len(_RANK_CACHE) > _RANK_CACHE_MAX:
+        _RANK_CACHE.popitem(last=False)
+    return got
+
+
+def _reads_only(name: str, tool: Any) -> bool:
+    """Does this tool only read? Its server's own ``readOnlyHint`` (an MCP
+    tool's ``write_like``) when it has one, else a reading verb first in its
+    name. Wording only — this never grants anything."""
+    ann = getattr(tool, "mcp_annotations", None)
+    if isinstance(ann, dict) and "readOnlyHint" in ann:
+        return ann.get("readOnlyHint") is True
+    remote = str(getattr(tool, "remote_name", "") or name.rsplit("__", 1)[-1])
+    first = _RANK_WORD_RX.findall(_RANK_CAMEL_RX.sub(r"\1 \2", remote).lower())[:1]
+    return bool(first) and first[0] in _RANK_READ_VERBS
 
 
 #: The per-call deadline scope of the tool call now executing (v1.288.0) —
@@ -418,6 +521,37 @@ class ToolRegistry:
             return sorted(self._mcp)
         prefix = f"mcp__{server}__"
         return sorted(n for n in self._mcp if n.startswith(prefix))
+
+    def pick_for_message(self, names: Iterable[str], text: str, limit: int) -> list[str]:
+        """At most *limit* of *names* to arm for a chat message (v1.358.0,
+        G15/G39 — see the note above :func:`rank_words`). Every name, in the
+        order given, when they fit; else the *limit* best for *text* (most
+        words shared with the tool's name, then its description; read-only
+        first on a tie; a tool not yet seen on the app's card last), still in
+        the order given. Only names this registry holds are considered. Dict
+        reads and a bounded word match, so it may run ON the loop (the
+        callers read the registry there). Never raises: a fault keeps the
+        first *limit* in the order given (the old behaviour)."""
+        pool = list(dict.fromkeys(n for n in names or [] if n))
+        if limit <= 0:
+            return []
+        if len(pool) <= limit:
+            return pool
+        try:
+            msg = rank_words(text)
+            ranked: list[tuple[int, int, int, int, str]] = []
+            for i, name in enumerate(pool):
+                tool = self._tools.get(name)
+                unseen = 1 if bool(getattr(tool, "quarantined", False)) else 0
+                name_w, desc_w = _tool_rank_words(name, tool)
+                score = 3 * len(msg & name_w) + len(msg & (desc_w - name_w))
+                ranked.append((unseen, -score, 0 if _reads_only(name, tool) else 1, i, name))
+            ranked.sort()
+            keep = {name for *_rest, name in ranked[:limit]}
+            return [n for n in pool if n in keep]
+        except Exception:  # noqa: BLE001 — arming must never fail a turn
+            _log.debug("ranking an app's tools failed", exc_info=True)
+            return pool[:limit]
 
     def specs(self, allowed: list[str] | None = None) -> list[dict[str, Any]]:
         tools = list(self._tools.values())

@@ -169,12 +169,19 @@ def test_a_named_app_arms_app_connect_and_a_question_still_arms_no_writer():
 def test_the_web_rule_does_not_fire_when_its_only_signal_is_an_apps_name():
     for text in (
         "search my Google Drive for the lease",
-        "search github for issues about login",
         "look up the invoice in my Dropbox",
         "search for the lease in my Google Drive",
     ):
         got = select_auto_tools(text)
         assert "web_search" not in got and "web_fetch" not in got, (text, got)
+    # v1.358.0 (on purpose, the re-audit's regression): a search IN an app
+    # with no "my" is taken over only when that app is CONNECTED; otherwise
+    # it may be about the app's public side and keeps the web (the full
+    # probe table: tests/test_chat_picks_tools_v13580.py).
+    text = "search github for issues about login"
+    assert "web_search" in select_auto_tools(text)
+    got = select_auto_tools(text, apps_on=("github",))
+    assert "web_search" not in got and "web_fetch" not in got, got
     # A real web word still makes it a web search, app named or not.
     for text in (
         "search the web and my Notion for the lease",
@@ -207,7 +214,9 @@ def test_drive_not_set_up_is_said_so_in_both_lanes_and_the_web_is_not_offered(tm
     section = _section(seen["systems"][0])
     assert "- Google Drive: not connected." in section
     assert "It needs a one-time Google developer setup first." in section
-    assert "offer to connect it" in section and "Never search the web in its place." in section
+    # v1.358.0 (on purpose): never the web for what is IN the user's Drive;
+    # research about an app itself may use it (tests/test_chat_picks_tools_v13580).
+    assert "offer to connect it" in section and "Never search the web for what is in it." in section
     tools = seen["tools"][0]
     assert "web_search" not in tools and "web_fetch" not in tools, tools
     if lane == "stream":

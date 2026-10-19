@@ -91,10 +91,13 @@ def test_a_missing_app_is_raised_only_when_answering_needs_it(tmp_path, monkeypa
     assert r.status_code == 200, r.text
     section = _section(seen["systems"][0])
     assert "- Google Drive: not connected." in section
-    assert "If answering needs Google Drive, tell the user plainly" in section
-    assert "If it does not, say nothing about it." in section
-    # The acceptance words stay: the offer, and never the web in its place.
-    assert "offer to connect it" in section and "Never search the web in its place." in section
+    # v1.358.0 (on purpose): the line speaks of what is IN the user's own
+    # Drive; research about Drive itself may use the web (the re-audit's
+    # regression: "Never search the web in its place" stopped API-docs lookups).
+    assert "If answering needs what is in the user's own Google Drive, tell the user plainly" in section
+    assert "If answering needs neither, say nothing about it." in section
+    # The acceptance words stay: the offer, and never the web for what is in it.
+    assert "offer to connect it" in section and "Never search the web for what is in it." in section
 
 
 # --------------------------------------------------------------------------- #

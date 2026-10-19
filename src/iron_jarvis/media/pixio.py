@@ -205,9 +205,14 @@ def map_error(status: int, payload: Any, headers: dict[str, str] | None = None) 
     code = str(body.get("code") or "").lower()
     text = detail(body)
     if status == 401:
+        # v1.358.0 (G41): where the user fixes it, in the app's own words
+        # (the media refusals' place, `failure_words.ACCOUNTS_PLACE`) — never
+        # a vault name or an environment variable a new user cannot act on.
+        from ..providers.failure_words import ACCOUNTS_PLACE
+
         return MediaError(
             "not_configured",
-            "Pixio rejected the API key — update the 'pixio' secret or PIXIO_API_KEY",
+            f"Pixio didn't accept your key. Update your Pixio key in {ACCOUNTS_PLACE}, then try again.",
             status=status,
         )
     if status == 402 or code == "insufficient_credits":

@@ -25,6 +25,7 @@ from typing import Any
 
 import pytest
 
+from iron_jarvis.agents.mission import ask_words
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.daemon.chat_turn import (
     REFUSAL_FOOTNOTE_WORDS,
@@ -109,7 +110,9 @@ def test_a_paid_prompt_is_refused_without_running_and_the_refusal_is_everywhere_
     assert tool_msg.content.startswith(f"{SPEND_NOT_ASKED_LABEL}: {PAID_WORDS} — {TAIL}")
     assert "make the request one the service does for free" in tool_msg.content
     # The reply footnotes it and nothing was made.
-    assert f"_Note: {TOOL} could not run ({FOOTNOTE})._" in res["reply"]
+    # v1.358.0 (G41, on purpose): in tool words, never the raw id.
+    assert f"_Note: Jarvis couldn't {ask_words(TOOL)} ({FOOTNOTE})._" in res["reply"]
+    assert f"{TOOL} could not run" not in res["reply"]
     assert "![" not in res["reply"]
     assert res["documents"] == []
     assert TOOL not in res["tools_used"]

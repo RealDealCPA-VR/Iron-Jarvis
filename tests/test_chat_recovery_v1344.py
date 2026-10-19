@@ -31,6 +31,7 @@ from typing import Any
 import pytest
 
 from iron_jarvis.agents import runtime as agent_runtime
+from iron_jarvis.agents.mission import ask_words
 from iron_jarvis.core.trust import LOW_TRUST_DENY
 from iron_jarvis.daemon import chat_turn
 from iron_jarvis.daemon.app import create_app
@@ -238,16 +239,18 @@ def test_refusal_label_reads_the_registry_s_prefixes():
 
 
 def test_refusal_footnotes_are_one_line_per_tool_deduped_and_keep_the_old_words():
+    # v1.358.0 (G41, on purpose): a built-in's id reads in tool words ("use
+    # image info"), never the raw id; one line per tool, deduped, as before.
     assert refusal_footnotes([]) == ""
     assert refusal_footnotes([("image_info", "permission denied")]) == (
-        "\n\n_Note: image_info could not run (permission denied)._"
+        "\n\n_Note: Jarvis couldn't use image info (permission denied)._"
     )
     out = refusal_footnotes([
         ("a", "not armed"), ("b", "low trust"), ("a", "not armed"), ("c", "mystery"),
     ])
     assert out == (
-        "\n\n_Note: a could not run (not turned on for this chat)._"
-        "\n\n_Note: b could not run (blocked under low trust)._"
+        "\n\n_Note: Jarvis couldn't use a (not turned on for this chat)._"
+        "\n\n_Note: Jarvis couldn't use b (blocked under low trust)._"
     )
 
 
@@ -375,7 +378,7 @@ async def test_post_lane_footnotes_a_not_armed_refusal(tmp_path):
     out, double = await _run_post(platform, _body(LOOKUP), _calls_an_unarmed_tool())
     assert other.calls == [], "the roster gate refused it before execute"
     assert _tool_message(double.seen[1], "c1").startswith("not armed:")
-    assert out["reply"].endswith(f"\n\n_Note: {OTHER} could not run (not turned on for this chat)._")
+    assert out["reply"].endswith(f"\n\n_Note: Jarvis couldn't {ask_words(OTHER)} (not turned on for this chat)._")
     assert out.get("denied_tools", []) == [], "the permission-denied list keeps its old contract"
     assert out["tools_used"] == []
 
@@ -386,7 +389,7 @@ async def test_stream_lane_footnotes_a_not_armed_refusal(tmp_path):
     done, _, double = await _run_stream(platform, _body(LOOKUP), _calls_an_unarmed_tool())
     assert other.calls == []
     assert _tool_message(double.seen[1], "c1").startswith("not armed:")
-    assert done["reply"].endswith(f"\n\n_Note: {OTHER} could not run (not turned on for this chat)._")
+    assert done["reply"].endswith(f"\n\n_Note: Jarvis couldn't {ask_words(OTHER)} (not turned on for this chat)._")
     assert done["denied_tools"] == []
     assert done["tools_used"] == []
 
@@ -411,7 +414,7 @@ async def test_post_lane_footnotes_a_low_trust_refusal(tmp_path):
     assert reader.calls == [{"q": "x"}]
     assert out["trust"] == "low", out
     assert _tool_message(double.seen[2], "c2").startswith("low trust:")
-    assert out["reply"].endswith(f"\n\n_Note: {KEPT_AWAY} could not run (blocked under low trust)._")
+    assert out["reply"].endswith(f"\n\n_Note: Jarvis couldn't {ask_words(KEPT_AWAY)} (blocked under low trust)._")
     assert out.get("denied_tools", []) == []
     assert out["tools_used"] == [READER]
 
@@ -425,7 +428,7 @@ async def test_stream_lane_footnotes_a_low_trust_refusal(tmp_path):
     assert reader.calls == [{"q": "x"}]
     assert done["trust"] == "low", done
     assert _tool_message(double.seen[2], "c2").startswith("low trust:")
-    assert done["reply"].endswith(f"\n\n_Note: {KEPT_AWAY} could not run (blocked under low trust)._")
+    assert done["reply"].endswith(f"\n\n_Note: Jarvis couldn't {ask_words(KEPT_AWAY)} (blocked under low trust)._")
     assert done["denied_tools"] == []
     assert done["tools_used"] == [READER]
 
@@ -444,9 +447,9 @@ async def test_post_lane_keeps_the_permission_denied_footnote_one_line_deduped(t
     out, double = await _run_post(platform, _body(DENIED), _calls_a_denied_tool_twice())
     assert tool.calls == [], "the engine refused it before execute"
     assert _tool_message(double.seen[1], "c1").startswith("permission denied:")
-    footnote = f"\n\n_Note: {DENIED} could not run (permission denied)._"
+    footnote = f"\n\n_Note: Jarvis couldn't {ask_words(DENIED)} (permission denied)._"
     assert out["reply"].endswith(footnote)
-    assert out["reply"].count("could not run") == 1
+    assert out["reply"].count("Jarvis couldn't") == 1
     assert out.get("denied_tools", [DENIED, DENIED]) == [DENIED, DENIED]
 
 
@@ -456,9 +459,9 @@ async def test_stream_lane_keeps_the_permission_denied_footnote_one_line_deduped
     done, _, double = await _run_stream(platform, _body(DENIED), _calls_a_denied_tool_twice())
     assert tool.calls == []
     assert _tool_message(double.seen[1], "c1").startswith("permission denied:")
-    footnote = f"\n\n_Note: {DENIED} could not run (permission denied)._"
+    footnote = f"\n\n_Note: Jarvis couldn't {ask_words(DENIED)} (permission denied)._"
     assert done["reply"].endswith(footnote)
-    assert done["reply"].count("could not run") == 1
+    assert done["reply"].count("Jarvis couldn't") == 1
     assert done["denied_tools"] == [DENIED, DENIED]
 
 
@@ -470,7 +473,7 @@ async def test_an_ordinary_failure_earns_no_footnote(tmp_path):
         LLMResponse(text="Could not look it up."),
     ])
     assert tool.calls == [{"q": "x"}]
-    assert "could not run" not in out["reply"]
+    assert "could not run" not in out["reply"] and "Jarvis couldn't" not in out["reply"]
 
 
 # --------------------------------------------------------------------------- #

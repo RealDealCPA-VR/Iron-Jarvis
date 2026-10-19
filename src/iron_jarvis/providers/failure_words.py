@@ -66,9 +66,17 @@ PLAIN_NAMES: dict[str, str] = {
     "openrouter": "OpenRouter",
     "ollama": "Ollama",
     "custom": "your own endpoint",
+    # v1.358.0: the two local model servers the dashboard now names (lane
+    # 8D's FRIENDLY rows) — kept equal by tests/test_integrate_wave4_v13540.
+    "lmstudio": "LM Studio",
+    "llamacpp": "llama.cpp",
     "mock": "the demo model",
     "auto": "Auto",
 }
+
+#: Brands spelled in lower case on purpose — never capitalised at the start
+#: of a sentence ("llama.cpp couldn't finish this answer").
+_LOWER_CASE_BRANDS: frozenset[str] = frozenset({"llama.cpp"})
 
 #: The subscription CLIs a user SIGNS IN to (Accounts has a Sign in button
 #: for each, v1.353.0 G33) — a refusal from one is about the sign-in, not a key.
@@ -125,7 +133,7 @@ def heading(name: str) -> str:
     if not name:
         return name
     first = name.split(" ")[0]
-    if first != first.lower():
+    if first != first.lower() or first in _LOWER_CASE_BRANDS:
         return name
     return name[0].upper() + name[1:]
 
@@ -165,6 +173,55 @@ def _cli_sign_in_refusal(text: str) -> str:
     return ""
 
 
+def _transport_kind(text: str) -> "tuple[str, bool]":
+    """``(kind, partial)`` for an error the Claude transport made, read off
+    the transport's OWN constants (``claude_native.transport.TIMEOUT_PREFIX``
+    / ``INCOMPLETE_PREFIX`` / ``DROPPED``), never loose words — the fallback
+    for an error that arrives without the ``kind`` the transport stamps on it
+    (v1.358.0: a Claude Code timeout read as an anonymous "couldn't finish").
+    ``("", False)`` when it is not one. Never raises."""
+    if not text:
+        return "", False
+    try:
+        from .adapters.claude_native.transport import DROPPED, INCOMPLETE_PREFIX, TIMEOUT_PREFIX
+
+        t = text.lstrip()
+        if t.startswith(TIMEOUT_PREFIX):
+            return "timeout", False
+        if t.startswith(INCOMPLETE_PREFIX):
+            return "interrupted", True
+        if t.startswith(DROPPED):
+            return "interrupted", False
+    except Exception:  # noqa: BLE001 — wording only
+        return "", False
+    return "", False
+
+
+#: ``"<provider id>: …"`` — the prefix an adapter puts on its own errors
+#: ("claude-cli: CLI timed out …"). Counted only for a provider id this
+#: module knows (:data:`PLAIN_NAMES`), so an unrelated "error: …" names no one.
+_PROVIDER_PREFIX_RX = re.compile(r"^\s*(?P<p>[a-z][a-z0-9_.\-]{1,40}):\s")
+
+
+def _provider_error_type() -> "type | tuple":
+    """The adapters' typed failure class (``()`` if it cannot be imported —
+    ``isinstance(x, ())`` is simply False)."""
+    try:
+        from .adapters.base import ProviderError
+
+        return ProviderError
+    except Exception:  # noqa: BLE001 — wording only
+        return ()
+
+
+def _prefix_provider(text: str) -> str:
+    m = _PROVIDER_PREFIX_RX.match(text or "")
+    if m is None:
+        return ""
+    p = m.group("p")
+    return p if p in PLAIN_NAMES and p not in ("auto", "mock") else ""
+
+
 def failure_facts(exc: BaseException | None) -> _Facts:
     """The typed fields of *exc* and what it was raised from (the first value
     found for each field wins, outermost first). Never raises."""
@@ -189,6 +246,14 @@ def failure_facts(exc: BaseException | None) -> _Facts:
                     f.kind = "signed_out"
                     if not f.cli:
                         f.cli = cli
+            if not f.kind:
+                # v1.358.0: the Claude transport's own timeout / cut-off
+                # answer, by its constants, when it arrived untyped.
+                tkind, tpartial = _transport_kind(str(cur) or "")
+                if tkind:
+                    f.kind = tkind
+                    if tpartial:
+                        f.partial = True
             if not f.provider:
                 f.provider = str(getattr(cur, "failed_provider", "") or "")
             if not f.cli:
@@ -210,6 +275,10 @@ def failure_facts(exc: BaseException | None) -> _Facts:
                     f.provider = m.group("p")
                 if f.status is None:
                     f.status = int(m.group("s"))
+            if not f.provider and isinstance(cur, _provider_error_type()):
+                # v1.358.0: an adapter's own "<provider id>: …" prefix names
+                # the provider that failed ("claude-cli: CLI timed out").
+                f.provider = _prefix_provider(str(cur) or "")
             if not f.transport:
                 try:
                     from .router import local_failure_kind
@@ -247,7 +316,8 @@ def technical_text(exc: BaseException | None, detail: str | None = None) -> str:
         text = mask(text)
     except Exception:  # noqa: BLE001 — never fail on wording
         pass
-    return str(text or "")[:2000]
+    # v1.358.0: a wrapper's "claude-cli: claude-cli: …" is said once.
+    return undoubled(str(text or ""))[:2000]
 
 
 def _is_local(provider: str) -> bool:
@@ -340,6 +410,71 @@ def classify(
 #: The generic words when nothing typed says more.
 GENERIC_TITLE = "Iron Jarvis couldn't finish this answer"
 GENERIC_FIX = "Press Retry. If it happens again, pick another model for this chat."
+#: v1.358.0 (the re-audit's confirmed regression): the generic headline's
+#: ending — said after the provider's own name when the failure came from a
+#: provider it knows ("Claude Code couldn't finish this answer"), never an
+#: anonymous "Iron Jarvis" over a model's failure.
+GENERIC_TITLE_TAIL = " couldn't finish this answer"
+
+
+def generic_title(name: str = "") -> str:
+    """The generic headline: "<Name> couldn't finish this answer" for a
+    provider it knows, else :data:`GENERIC_TITLE`. Pure."""
+    n = " ".join(str(name or "").split())
+    return f"{heading(n)}{GENERIC_TITLE_TAIL}" if n else GENERIC_TITLE
+
+
+def is_generic_title(title: Any) -> bool:
+    """Is *title* the generic headline (named or not)? The stream lane asks,
+    to say a failure before the answer began as what it is. Pure."""
+    t = str(title or "")
+    return t == GENERIC_TITLE or t.endswith(GENERIC_TITLE_TAIL)
+
+
+def _generic_name(exc: BaseException | None, provider: str, manager: Any) -> str:
+    """Whose name the generic headline carries: the provider the failure
+    itself names (the router's ``failed_provider``, an adapter's own
+    "<provider>: …" / "<provider> API error" text), else the caller's hint
+    — but only for a PROVIDER's failure (a typed ``ProviderError`` in the
+    chain); Iron Jarvis's own fault, or Auto, stays "Iron Jarvis". Never
+    raises."""
+    try:
+        f = failure_facts(exc)
+        who = f.provider
+        if not who:
+            pe = _provider_error_type()
+            cur, seen = exc, 0
+            while cur is not None and seen < _CHAIN:
+                if isinstance(cur, pe):
+                    who = str(provider or "").strip()
+                    break
+                cur = cur.__cause__ or cur.__context__
+                seen += 1
+        if not who or who.lower() in ("auto",):
+            return ""
+        return plain_name(who, manager)
+    except Exception:  # noqa: BLE001 — wording only
+        return ""
+
+
+#: "claude-cli: claude-cli: …" — a wrapper that prefixes the provider onto
+#: an error that already carries it (``router.stream``'s "busy" sentence).
+_DOUBLED_PREFIX_RX = re.compile(r"(?<![\w.-])([a-z][a-z0-9_.\-]{1,40}):\s+\1:")
+
+
+def undoubled(text: str) -> str:
+    """*text* with a provider prefix said twice in a row said once
+    ("claude-cli: claude-cli: CLI timed out" -> "claude-cli: CLI timed
+    out"). Pure; never raises."""
+    try:
+        prev = None
+        out = str(text or "")
+        while prev != out:  # "a: a: a:" folds all the way
+            prev = out
+            out = _DOUBLED_PREFIX_RX.sub(r"\1:", out)
+        return out
+    except Exception:  # noqa: BLE001
+        return str(text or "")
 
 
 def friendly_error(
@@ -351,12 +486,18 @@ def friendly_error(
 ) -> dict[str, str]:
     """``{title, fix, technical}`` for *exc* (see the module docstring).
     *provider* is the caller's hint (the provider the turn asked for), used
-    only when the failure names none itself. Never raises."""
+    only when the failure names none itself. A failure the words cannot
+    classify still names the provider it came from (v1.358.0,
+    :func:`generic_title`); the technical text stays in ``technical``.
+    Never raises."""
     try:
         words = classify(exc, provider=provider, manager=manager)
     except Exception:  # noqa: BLE001 — words are never a new failure
         words = None
-    title, fix = words if words is not None else (GENERIC_TITLE, GENERIC_FIX)
+    if words is not None:
+        title, fix = words
+    else:
+        title, fix = generic_title(_generic_name(exc, provider, manager)), GENERIC_FIX
     return {"title": title, "fix": fix, "technical": technical_text(exc, technical)}
 
 
@@ -383,7 +524,8 @@ def plain_reason(exc: BaseException | None, *, manager: Any = None) -> str:
             raw = mask(raw)
         except Exception:  # noqa: BLE001
             pass
-        return raw[:400]
+        # v1.358.0: never "claude-cli: claude-cli: …" on a run summary.
+        return undoubled(raw)[:400]
     try:
         from .router import failure_reason
 

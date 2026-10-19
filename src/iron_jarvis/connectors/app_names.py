@@ -185,21 +185,29 @@ def apps_named(text: str) -> list[str]:
     return out
 
 
-def app_name_spans(text: str) -> list[tuple[int, int]]:
-    """Where in *text* each named app's words sit (for the web rule, which
-    must not count "Google" in "Google Drive" as a web signal). Never raises."""
+def app_name_hits(text: str) -> list[tuple[str, int, int]]:
+    """``(catalog id, start, end)`` for every place *text* names an app, in
+    catalog order (v1.358.0: the web rule asks WHICH app a search verb is
+    aimed at, because only a CONNECTED app takes a search over). Never
+    raises."""
     t = str(text or "")[:_MAX_TEXT]
-    spans: list[tuple[int, int]] = []
+    hits: list[tuple[str, int, int]] = []
     try:
         for cid, rx in _compiled():
             if cid == "gmail" and _OTHER_MAIL.search(t) and not re.search(
                 r"\bg-?mail\b", t, re.IGNORECASE
             ):
                 continue
-            spans += [(m.start(), m.end()) for m in rx.finditer(t)]
+            hits += [(cid, m.start(), m.end()) for m in rx.finditer(t)]
     except Exception:  # noqa: BLE001
         return []
-    return spans
+    return hits
+
+
+def app_name_spans(text: str) -> list[tuple[int, int]]:
+    """Where in *text* each named app's words sit (for the web rule, which
+    must not count "Google" in "Google Drive" as a web signal). Never raises."""
+    return [(start, end) for _cid, start, end in app_name_hits(text)]
 
 
 def clis_named(text: str) -> list[str]:
@@ -384,11 +392,26 @@ def _needs_words(needs: str) -> str:
     return f" {n} first."
 
 
+def connected_ids(rows: list[dict[str, Any]]) -> list[str]:
+    """The catalog ids of the rows :func:`app_states` read as ``connected``
+    (v1.358.0): the apps a search may be taken over by (the web rule's
+    ``apps_on``). CLI rows are never apps. Never raises."""
+    try:
+        return [
+            str(r.get("id")) for r in rows or []
+            if r.get("state") == "connected" and r.get("id") and r.get("id") not in CLI_WORDS
+        ]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def apps_section(rows: list[dict[str, Any]]) -> str:
     """The grounding section for the named apps ("" when none). Plain facts
     the model must not contradict, plus what to do for an app that is not
-    connected — say so and offer to connect it, never search the web in its
-    place. Never raises."""
+    connected — say so and offer to connect it, never search the web for
+    what is inside it. v1.358.0 (the re-audit's regression): a question ABOUT
+    the app itself (its docs, pricing, how to use it) is ordinary web
+    research, so the line no longer forbids the web outright. Never raises."""
     if not rows:
         return ""
     lines: list[str] = []
@@ -421,12 +444,20 @@ def apps_section(rows: list[dict[str, Any]]) -> str:
                     f" {APPS_PLACE} to turn it on. Never ask for its key again."
                 )
             elif state == "not_connected":
+                # v1.358.0: "Never search the web in its place" read as "never
+                # search the web" to a model asked "look up the Stripe API docs"
+                # — it offered to connect Stripe instead of reading the docs.
+                # What the web cannot do is reach what is INSIDE the user's
+                # app; a question about the app itself is web research.
                 line = (
                     f"- {name}: not connected.{_needs_words(r.get('needs', ''))} If"
-                    f" answering needs {name}, tell the user plainly and offer to"
-                    " connect it (the app_connect tool does that when it is offered;"
-                    f" otherwise {APPS_PLACE}). Never search the web in its place."
-                    " If it does not, say nothing about it."
+                    f" answering needs what is in the user's own {name}, tell the"
+                    " user plainly and offer to connect it (the app_connect tool"
+                    f" does that when it is offered; otherwise {APPS_PLACE}). Never"
+                    " search the web for what is in it. A question about"
+                    f" {name} itself (its docs, pricing or how to use it) may be"
+                    " answered from the web. If answering needs neither, say"
+                    " nothing about it."
                 )
             elif state == "signed_in":
                 line = f"- {name}: signed in."
