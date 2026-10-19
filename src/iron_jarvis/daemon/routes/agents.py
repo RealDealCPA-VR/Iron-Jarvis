@@ -641,17 +641,149 @@ def launcher_note(command: str, ready: bool) -> str:
     return f"needs {_LAUNCHER_WORDS.get(base, cmd)}"
 
 
-def preview_rows(d, specs: list[Any]) -> list[dict[str, Any]]:
+def _fold_name(name: Any) -> str:
+    """A name compared without case, spaces, ``-`` or ``_`` (v1.354.0, G50):
+    ``brave_search``, ``brave-search`` and ``Brave Search`` are one server,
+    and the catalog's ``sequential_thinking`` is the Tools catalog's
+    ``sequentialthinking``."""
+    return re.sub(r"[\s_-]+", "", str(name or "").strip().lower())
+
+
+def known_connections(d) -> dict[str, str]:
+    """What is ALREADY connected here, by folded name → how (v1.354.0, G50):
+    ``"pack"`` (a pack in ``config.mcp_servers``), ``"app"`` (a Directory
+    connection that is live — an OAuth drive, a key, a catalog pack under
+    its catalog id) or ``"memory"`` (a memory source, e.g. a brain served by
+    a tool). Read through ``connectors.service.list_connectors`` — the
+    Directory's own list — ONCE per answer; a list that cannot be read
+    leaves the packs alone answering, never an error."""
+    known: dict[str, str] = {}
+    for s in getattr(d.platform.config, "mcp_servers", None) or []:
+        if isinstance(s, dict) and _fold_name(s.get("name")):
+            known.setdefault(_fold_name(s.get("name")), "pack")
+    try:
+        from ...connectors.service import list_connectors
+
+        rows = list_connectors(d.platform)
+    except Exception:  # noqa: BLE001 — the preview never fails on the gallery
+        rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        via = str(row.get("connect_via") or "")
+        if via == "memory":
+            for key in (row.get("id"), row.get("name")):
+                if _fold_name(key):
+                    known.setdefault(_fold_name(key), "memory")
+        elif via in ("mcp", "oauth", "api_key") and row.get("connected") is True:
+            for key in (row.get("id"), row.get("catalog_id")):
+                if _fold_name(key):
+                    known.setdefault(_fold_name(key), "app")
+    return known
+
+
+_PKG_PREFIX_RX = re.compile(r"^(?:npm|pip|pypi):", re.IGNORECASE)
+#: A description that names the mechanism is not a description (the G42
+#: rule: no card says MCP).
+_MECHANISM_WORD_RX = re.compile(r"\bMCP\b", re.IGNORECASE)
+
+
+def _package_key(arg: Any) -> str:
+    """A package reference without its version or prefix, lowercased:
+    ``@scope/pkg@1.2`` → ``@scope/pkg``, ``pkg@latest`` → ``pkg``,
+    ``pip:pkg==1.0`` → ``pkg``. ``""`` for a flag or a ``<placeholder>``."""
+    text = _PKG_PREFIX_RX.sub("", str(arg or "").strip()).lower()
+    if not text or text.startswith(("-", "<")):
+        return ""
+    if text.startswith("@"):
+        scope, _, rest = text.partition("/")
+        if not rest:
+            return ""
+        text = f"{scope}/{rest.split('@', 1)[0]}"
+    else:
+        text = text.split("@", 1)[0]
+    return re.split(r"[=<>~!]", text, maxsplit=1)[0].strip()
+
+
+def _first_package(args: Any) -> str:
+    for arg in list(args or []):
+        key = _package_key(arg)
+        if key:
+            return key
+    return ""
+
+
+def _first_sentence(text: Any) -> str:
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not raw:
+        return ""
+    first = re.split(r"(?<=[.!?])\s", raw, maxsplit=1)[0].strip()
+    return first if first.endswith((".", "!", "?")) else first + "."
+
+
+def catalog_blurbs(d) -> dict[str, str]:
+    """Package → one line about what it does (v1.354.0, G49): the
+    Directory catalog's ``blurb`` first (``connectors/catalog.CATALOG``),
+    then the first sentence of the Tools catalog's description for a
+    package only that one lists. A line that names the mechanism is left
+    out, so a row then says where it came from instead."""
+    index: dict[str, str] = {}
+    try:
+        from ...connectors.catalog import CATALOG
+
+        for c in CATALOG:
+            key = _first_package(c.args) if c.connect_via == "mcp" else ""
+            if key and c.blurb and not _MECHANISM_WORD_RX.search(c.blurb):
+                index.setdefault(key, c.blurb)
+    except Exception:  # noqa: BLE001 — a blurb never breaks the preview
+        pass
+    for row in getattr(d, "_MCP_CATALOG", None) or []:
+        if not isinstance(row, dict):
+            continue
+        key = _first_package(row.get("args"))
+        line = _first_sentence(row.get("description"))
+        if key and line and not _MECHANISM_WORD_RX.search(line):
+            index.setdefault(key, line)
+    return index
+
+
+def _blurb_for(spec: Any, blurbs: dict[str, str]) -> str:
+    """The catalog line for a stdio spec whose arguments name a package the
+    catalog knows; ``""`` otherwise (an http pack, an unknown package)."""
+    if getattr(spec, "transport", "stdio") != "stdio":
+        return ""
+    for arg in getattr(spec, "args", None) or []:
+        key = _package_key(arg)
+        if key and key in blurbs:
+            return blurbs[key]
+    return ""
+
+
+def preview_rows(
+    d,
+    specs: list[Any],
+    *,
+    known: dict[str, str] | None = None,
+    blurbs: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     """The import preview's rows (v1.343.0): each spec's ``preview_row``
     (names only — ``mcp/import_config.PackSpec.preview_row`` never carries
     a value) plus ``exists`` (the name is already in ``config.mcp_servers``),
     ``runtime_ready`` (:func:`launcher_ready`, cached per command; always
-    True for an http/sse pack — nothing to launch) and ``launcher_note``."""
-    existing = {
-        str(s.get("name") or "")
-        for s in (getattr(d.platform.config, "mcp_servers", None) or [])
-        if isinstance(s, dict)
-    }
+    True for an http/sse pack — nothing to launch) and ``launcher_note``.
+
+    v1.354.0: ``exists`` also covers a server connected ANOTHER way — a live
+    Directory connection or a memory source (:func:`known_connections`,
+    names compared folded) — and ``exists_as`` says which (``"pack"`` /
+    ``"app"`` / ``"memory"``, ``""`` when new); ``blurb`` is the catalog's
+    one line about the package (:func:`catalog_blurbs`, ``""`` when the
+    catalog does not know it); ``disabled`` (from the spec) says the app it
+    came from has it switched off. ``known`` / ``blurbs`` let a caller that
+    previews many lists (the sources route) read them once."""
+    if known is None:
+        known = known_connections(d)
+    if blurbs is None:
+        blurbs = catalog_blurbs(d)
     cache: dict[str, bool] = {}
     rows: list[dict[str, Any]] = []
     for spec in specs:
@@ -664,9 +796,12 @@ def preview_rows(d, specs: list[Any]) -> list[dict[str, Any]]:
             note = launcher_note(cmd, ready)
         else:
             ready, note = True, ""
-        row["exists"] = bool(spec.name) and spec.name in existing
+        exists_as = known.get(_fold_name(spec.name), "") if spec.name else ""
+        row["exists"] = bool(exists_as)
         row["runtime_ready"] = ready
         row["launcher_note"] = note
+        row["exists_as"] = exists_as
+        row["blurb"] = _blurb_for(spec, blurbs)
         rows.append(row)
     return rows
 
@@ -3589,14 +3724,32 @@ def register(app: FastAPI, d) -> None:
         value. A missing file is ``readable: false`` with an empty note; a
         malformed one names the file in one line, never its contents. Iron
         Jarvis's own server entries are not listed.
+
+        v1.354.0 (G50): also VS Code's ``User/mcp.json``, a project's
+        ``.vscode/mcp.json`` and ``.cursor/mcp.json`` (only while a project
+        is active), Windsurf, Gemini CLI and the installed Claude Code
+        plugins; rows carry ``disabled`` / ``exists_as`` / ``blurb`` (see
+        :func:`preview_rows`).
         """
         from ...mcp.import_sources import scan
 
         def _rows() -> list[dict[str, Any]]:
+            # v1.354.0: what is already connected and the catalog's lines
+            # are read ONCE for every file, not once per file.
+            try:
+                known = known_connections(d)
+            except Exception:  # noqa: BLE001
+                known = {}
+            try:
+                blurbs = catalog_blurbs(d)
+            except Exception:  # noqa: BLE001
+                blurbs = {}
             out: list[dict[str, Any]] = []
             for item in scan(d.platform):
                 try:
-                    servers = preview_rows(d, item.specs) if item.readable else []
+                    servers = (
+                        preview_rows(d, item.specs, known=known, blurbs=blurbs) if item.readable else []
+                    )
                 except Exception:  # noqa: BLE001 — one bad file never hides the rest
                     servers = []
                 out.append(item.row(servers))

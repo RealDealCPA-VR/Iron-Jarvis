@@ -8,6 +8,16 @@ known folders (``CLAUDE_CONFIG_DIR``, ``CODEX_HOME``, ``APPDATA``,
 platform (the active project's root); nothing here takes a path from a
 request, so a browser can never make the daemon read an arbitrary file.
 
+v1.354.0 (G50): the files current tools really use — VS Code's
+``User/mcp.json`` and a project's ``.vscode/mcp.json`` (VS Code moved its
+servers out of ``settings.json``), a project's ``.cursor/mcp.json``,
+Windsurf's ``~/.codeium/windsurf/mcp_config.json``, Gemini CLI's
+``~/.gemini/settings.json`` and the servers of the Claude Code PLUGINS the
+user installed (``<Claude config>/plugins/installed_plugins.json`` → each
+plugin's ``.mcp.json`` and its manifest's ``mcpServers``). A project-only
+source is listed only while a project is active. A server an app has
+switched off arrives with ``disabled`` set (see ``PackSpec.disabled``).
+
 :func:`scan` reads each file through :func:`mcp.import_config.parse_file`
 (``open(..., "rb")`` only, size-capped, never raises) and answers the
 contract rows with NO values: a missing file is ``readable: False`` with an
@@ -25,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from .import_config import PackSpec, parse_file
+from .import_config import FILE_CAP_BYTES, PackSpec, parse_file, unique_names
 
 #: Marks of Iron Jarvis's own server, repeated here only for the doc reader;
 #: the parser (``import_config._OWN_SERVER_MARKS``) is what drops them.
@@ -129,21 +139,208 @@ class SourceDef:
     """One known config file: a UNIQUE ``source`` key (the dashboard keys
     its groups and posts it back on apply), the dialect the parser reads it
     as (``PackSpec.source``), a label in plain words, and a resolver that
-    answers the path (``None`` when the environment has no such place)."""
+    answers the path (``None`` when the environment has no such place).
+
+    v1.354.0 (G50): ``project`` marks a file inside the active project's
+    folder — with no project active there is no file to name, so the row is
+    left out of the scan. ``read`` replaces :func:`parse_file` for a source
+    that is more than one file (the Claude Code plugins): it is handed the
+    resolved path and answers ``(specs, readable, note)``, never raising."""
 
     source: str
     dialect: str
     label: str
     resolve: Callable[[Any], Path | None]
+    project: bool = False
+    read: Callable[[Path], tuple[list[PackSpec], bool, str]] | None = None
 
 
 def _p(path: Path | None, *parts: str) -> Path | None:
     return path.joinpath(*parts) if path is not None else None
 
 
+def _in_project(*parts: str) -> Callable[[Any], Path | None]:
+    """A resolver for a file inside the active project's folder."""
+
+    def _resolve(platform: Any) -> Path | None:
+        root = active_project_root(platform)
+        return Path(root).joinpath(*parts) if root else None
+
+    return _resolve
+
+
 def _project_mcp_json(platform: Any) -> Path | None:
-    root = active_project_root(platform)
-    return Path(root) / ".mcp.json" if root else None
+    return _in_project(".mcp.json")(platform)
+
+
+# --------------------------------------------------------------------------- #
+# Claude Code plugins (v1.354.0, G50)
+# --------------------------------------------------------------------------- #
+#: At most this many installed plugins are read (each is a folder or two).
+PLUGINS_MAX = 100
+
+
+def claude_plugins_file() -> Path | None:
+    """Claude Code's record of the plugins it installed:
+    ``<Claude config>/plugins/installed_plugins.json`` — or
+    ``$CLAUDE_CODE_PLUGIN_CACHE_DIR/installed_plugins.json`` when that
+    override is set (read off claude 2.1.303: the plugins folder is the
+    override, else ``<config dir>/plugins``)."""
+    override = _env_dir("CLAUDE_CODE_PLUGIN_CACHE_DIR")
+    if override is not None:
+        return override / "installed_plugins.json"
+    return _p(claude_config_dir(), "plugins", "installed_plugins.json")
+
+
+def _read_json_object(path: Path) -> dict[str, Any] | None:
+    """A small JSON object off the disk (read-only, size-capped), or None."""
+    try:
+        if not path.is_file():
+            return None
+        with open(path, "rb") as fh:
+            data = fh.read(FILE_CAP_BYTES + 1)
+    except OSError:
+        return None
+    if len(data) > FILE_CAP_BYTES:
+        return None
+    try:
+        from ..core.jsonish import loads_object
+
+        obj = loads_object(data.decode("utf-8", errors="replace").lstrip("﻿"))
+    except Exception:  # noqa: BLE001
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _enabled_plugins() -> dict[str, bool]:
+    """``enabledPlugins`` from Claude Code's user ``settings.json``: plugin
+    id → on/off. A plugin the map does not name is left ON (installed)."""
+    path = _p(claude_config_dir(), "settings.json")
+    obj = _read_json_object(path) if path is not None else None
+    raw = obj.get("enabledPlugins") if isinstance(obj, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): v for k, v in raw.items() if isinstance(v, bool)}
+
+
+def _install_root(records: Any) -> Path | None:
+    """The plugin's folder from its installed record: the v1 shape is one
+    dict, the v2 shape a list of per-scope dicts (the first with a path)."""
+    for rec in records if isinstance(records, list) else [records]:
+        if isinstance(rec, dict) and isinstance(rec.get("installPath"), str) and rec["installPath"].strip():
+            return Path(rec["installPath"].strip())
+    return None
+
+
+def _inside(root: Path, rel: str) -> Path | None:
+    """``root/rel`` when it stays inside ``root`` (a manifest names files
+    RELATIVE to its plugin; a path that climbs out is not read)."""
+    try:
+        base = root.resolve()
+        target = (root / rel).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return None
+    return target
+
+
+_PLUGIN_ROOT_MARKS: tuple[str, ...] = ("${CLAUDE_PLUGIN_ROOT}", "$CLAUDE_PLUGIN_ROOT")
+
+
+def _with_plugin_root(spec: PackSpec, root: Path) -> PackSpec:
+    """Claude Code expands ``${CLAUDE_PLUGIN_ROOT}`` to the plugin's folder
+    when it starts a plugin's server; an imported pack starts from here,
+    so the folder is written in."""
+    folder = str(root)
+
+    def _sub(text: str) -> str:
+        for mark in _PLUGIN_ROOT_MARKS:
+            text = text.replace(mark, folder)
+        return text
+
+    spec.command = _sub(spec.command)
+    spec.args = [_sub(a) for a in spec.args]
+    spec.cwd = _sub(spec.cwd)
+    spec.env = {k: _sub(v) for k, v in spec.env.items()}
+    return spec
+
+
+def _plugin_specs(root: Path) -> list[PackSpec]:
+    """Every server one plugin ships: its ``.mcp.json`` plus the manifest's
+    ``mcpServers`` (an inline map, a relative path to a JSON file, or a list
+    of those — a bundle file is not read)."""
+    from .import_config import _parse_text
+
+    specs: list[PackSpec] = []
+    seen: set[str] = set()
+
+    def _add_file(path: Path | None) -> None:
+        if path is None:
+            return
+        key = str(path).lower()
+        if key in seen:
+            return
+        seen.add(key)
+        found, _readable, _note = parse_file(path, source="claude-code")
+        specs.extend(found)
+
+    _add_file(root / ".mcp.json")
+    manifest = _read_json_object(root / ".claude-plugin" / "plugin.json")
+    declared = manifest.get("mcpServers") if isinstance(manifest, dict) else None
+    for item in declared if isinstance(declared, list) else [declared]:
+        if isinstance(item, str) and item.strip().lower().endswith(".json"):
+            _add_file(_inside(root, item.strip()))
+        elif isinstance(item, dict) and item:
+            import json as _json
+
+            inline, _ok = _parse_text(
+                _json.dumps({"mcpServers": item}),
+                source="claude-code",
+                origin=str(root / ".claude-plugin" / "plugin.json"),
+                kind_hint="json",
+            )
+            specs.extend(inline)
+    return [_with_plugin_root(s, root) for s in specs]
+
+
+def read_claude_plugins(path: Path) -> tuple[list[PackSpec], bool, str]:
+    """The servers of every Claude Code plugin the user INSTALLED (never the
+    whole marketplace catalogue the plugins folder also holds), each with
+    its own file as ``origin``; a plugin switched off in ``enabledPlugins``
+    gives disabled specs. A missing record is ``([], False, "")`` like any
+    missing file; a broken one names the file. Never raises."""
+    try:
+        if not path.is_file():
+            return ([], False, "")
+    except OSError:
+        return ([], False, "")
+    doc = _read_json_object(path)
+    if doc is None:
+        return ([], False, f"{path.name} could not be read as a config file")
+    plugins = doc.get("plugins")
+    if not isinstance(plugins, dict):
+        return ([], True, "")
+    enabled = _enabled_plugins()
+    specs: list[PackSpec] = []
+    for count, (plugin_id, records) in enumerate(plugins.items()):
+        if count >= PLUGINS_MAX:
+            break
+        root = _install_root(records)
+        if root is None:
+            continue
+        try:
+            found = _plugin_specs(root)
+        except Exception:  # noqa: BLE001 — one broken plugin never hides the rest
+            continue
+        off = enabled.get(str(plugin_id)) is False
+        for spec in found:
+            if off:
+                spec.disabled = True
+            specs.append(spec)
+    return (unique_names(specs), True, "")
 
 
 KNOWN_SOURCES: tuple[SourceDef, ...] = (
@@ -154,7 +351,15 @@ KNOWN_SOURCES: tuple[SourceDef, ...] = (
         "Claude Code settings",
         lambda _p_: _p(claude_config_dir(), "settings.json"),
     ),
-    SourceDef("claude-code-project", "claude-code", "Claude Code (this project)", _project_mcp_json),
+    SourceDef("claude-code-project", "claude-code", "Claude Code (this project)", _project_mcp_json, project=True),
+    # v1.354.0 (G50): the plugins the user installed in Claude Code.
+    SourceDef(
+        "claude-code-plugins",
+        "claude-code",
+        "Claude Code plugins",
+        lambda _p_: claude_plugins_file(),
+        read=read_claude_plugins,
+    ),
     SourceDef(
         "claude-desktop",
         "claude-desktop",
@@ -163,12 +368,29 @@ KNOWN_SOURCES: tuple[SourceDef, ...] = (
     ),
     SourceDef("codex", "codex", "Codex", lambda _p_: _p(codex_home(), "config.toml")),
     SourceDef("cursor", "cursor", "Cursor", lambda _p_: _p(_home(), ".cursor", "mcp.json")),
+    SourceDef("cursor-project", "cursor", "Cursor (this project)", _in_project(".cursor", "mcp.json"), project=True),
+    # v1.354.0 (G50): current VS Code keeps its servers in mcp.json (user
+    # and per-project); settings.json is the older place, still read.
+    SourceDef(
+        "vscode-mcp",
+        "vscode",
+        "VS Code",
+        lambda _p_: _p(app_data_dir(), "Code", "User", "mcp.json"),
+    ),
+    SourceDef("vscode-project", "vscode", "VS Code (this project)", _in_project(".vscode", "mcp.json"), project=True),
     SourceDef(
         "vscode",
         "vscode",
-        "VS Code",
+        "VS Code settings",
         lambda _p_: _p(app_data_dir(), "Code", "User", "settings.json"),
     ),
+    SourceDef(
+        "windsurf",
+        "windsurf",
+        "Windsurf",
+        lambda _p_: _p(_home(), ".codeium", "windsurf", "mcp_config.json"),
+    ),
+    SourceDef("gemini-cli", "gemini-cli", "Gemini CLI", lambda _p_: _p(_home(), ".gemini", "settings.json")),
 )
 
 
@@ -215,7 +437,10 @@ def _scan_one(defn: SourceDef, platform: Any) -> SourceScan:
         # row with nothing to say, like a missing file.
         return SourceScan(source=defn.source, label=defn.label, origin="")
     try:
-        specs, readable, note = parse_file(origin, source=defn.dialect)
+        if defn.read is not None:
+            specs, readable, note = defn.read(Path(origin))
+        else:
+            specs, readable, note = parse_file(origin, source=defn.dialect)
     except Exception:  # noqa: BLE001 — parse_file never raises; belt and braces
         specs, readable, note = [], False, f"{Path(origin).name} could not be read"
     # The parser drops Iron Jarvis's own server entries; a config that
@@ -232,7 +457,7 @@ def _scan_one(defn: SourceDef, platform: Any) -> SourceScan:
 
 def scan(platform: Any) -> list[SourceScan]:
     """Read every known source READ-ONLY. One :class:`SourceScan` per
-    :data:`KNOWN_SOURCES` entry, in that order; the project row is left out
+    :data:`KNOWN_SOURCES` entry, in that order; a project row is left out
     when no project is active (there is no file to name). Never raises."""
     out: list[SourceScan] = []
     for defn in KNOWN_SOURCES:
@@ -240,7 +465,7 @@ def scan(platform: Any) -> list[SourceScan]:
             item = _scan_one(defn, platform)
         except Exception:  # noqa: BLE001
             item = SourceScan(source=defn.source, label=defn.label, origin="")
-        if defn.source == "claude-code-project" and not item.origin:
+        if defn.project and not item.origin:
             continue
         out.append(item)
     return out

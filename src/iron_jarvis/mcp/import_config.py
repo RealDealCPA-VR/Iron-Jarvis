@@ -26,6 +26,7 @@ from typing import Any
 TRANSPORTS: tuple[str, ...] = ("stdio", "http", "sse")
 
 #: Where a spec came from (the preview and the Tools page say it in words).
+#: v1.354.0 (G50): Windsurf and Gemini CLI read through the same parser.
 SOURCES: tuple[str, ...] = (
     "paste",
     "claude-code",
@@ -33,6 +34,8 @@ SOURCES: tuple[str, ...] = (
     "codex",
     "cursor",
     "vscode",
+    "windsurf",
+    "gemini-cli",
     "form",
 )
 
@@ -181,6 +184,14 @@ class PackSpec:
     source: str = "paste"
     #: The file the spec was read from, or ``"paste"``.
     origin: str = "paste"
+    #: v1.354.0 (G50): the other app has this server switched OFF
+    #: (``"disabled": true`` / ``"enabled": false`` on the entry, a Claude
+    #: Code project's ``disabledMcpServers``, Gemini CLI's ``mcp.excluded``,
+    #: a Claude Code plugin turned off in ``enabledPlugins``). The preview
+    #: row says so and the import door leaves the row unticked. NOT stored:
+    #: a server the user ticks anyway is added like any other — the press is
+    #: the choice.
+    disabled: bool = False
 
     # -- normalisation -------------------------------------------------- #
     def __post_init__(self) -> None:
@@ -209,6 +220,7 @@ class PackSpec:
             self.auth = None
         self.source = str(self.source or "paste")
         self.origin = str(self.origin or "paste")
+        self.disabled = self.disabled is True
 
     # -- the stored / launched shape ------------------------------------ #
     def to_config(self) -> dict[str, Any]:
@@ -291,6 +303,8 @@ class PackSpec:
             "auth_set": bool(self.auth and self.auth.get("value")),
             "source": self.source,
             "origin": self.origin,
+            # v1.354.0 (G50): switched off in the app it came from.
+            "disabled": bool(self.disabled),
         }
 
 
@@ -465,12 +479,22 @@ def _spec_from_entry(raw_name: str, entry: dict[str, Any], *, source: str, origi
         if words:
             command, args = words[0], words[1:]
     url = ""
+    url_key = ""
     for key in ("url", "httpUrl", "serverUrl"):
         if isinstance(entry.get(key), str) and entry[key].strip():
             url = entry[key].strip()
+            url_key = key
             break
     kind_raw = str(entry.get("transport") or entry.get("type") or "").strip().lower()
     kind = _TRANSPORT_WORDS.get(kind_raw, "")
+    if not kind and url:
+        # v1.354.0 (G50): Gemini CLI names the transport by the KEY —
+        # ``httpUrl`` is streamable HTTP, ``url`` is SSE — so its address
+        # need not end in /sse. Everyone else: the /sse suffix rule.
+        if url_key == "httpUrl":
+            kind = "http"
+        elif url_key == "url" and source == "gemini-cli":
+            kind = "sse"
     if not kind:
         kind = ("sse" if url.lower().rstrip("/").endswith("/sse") else "http") if url else "stdio"
     if kind == "stdio" and not command and url:
@@ -498,10 +522,34 @@ def _spec_from_entry(raw_name: str, entry: dict[str, Any], *, source: str, origi
         auth=auth if kind != "stdio" else None,
         source=source,
         origin=origin,
+        disabled=entry_switched_off(entry),
     )
 
 
-def _specs_from_map(servers: Any, *, source: str, origin: str) -> list[PackSpec]:
+def entry_switched_off(entry: Any) -> bool:
+    """v1.354.0 (G50): is this server entry switched OFF in its app?
+    ``"disabled": true`` (Claude Desktop, Windsurf, Cline-style configs) or
+    ``"enabled": false`` (Codex and others). Only a real boolean (or its
+    plain-word spelling) counts: an entry that says nothing is ON."""
+    if not isinstance(entry, dict):
+        return False
+
+    def _flag(value: Any) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+            return value.strip().lower() == "true"
+        return None
+
+    return _flag(entry.get("disabled")) is True or _flag(entry.get("enabled")) is False
+
+
+def _specs_from_map(
+    servers: Any, *, source: str, origin: str, off_names: frozenset[str] = frozenset()
+) -> list[PackSpec]:
+    """Every entry of a ``{name: entry}`` map as a spec. ``off_names`` (raw
+    names, as the app wrote them) are switched off by a list kept BESIDE the
+    map (a Claude Code project's ``disabledMcpServers``)."""
     out: list[PackSpec] = []
     if not isinstance(servers, dict):
         return out
@@ -510,8 +558,36 @@ def _specs_from_map(servers: Any, *, source: str, origin: str) -> list[PackSpec]
             continue
         spec = _spec_from_entry(str(raw_name), entry, source=source, origin=origin)
         if spec is not None:
+            if str(raw_name) in off_names:
+                spec.disabled = True
             out.append(spec)
     return out
+
+
+def _name_list(value: Any) -> frozenset[str]:
+    """A list of server names (strings only); anything else is empty."""
+    if not isinstance(value, (list, tuple)):
+        return frozenset()
+    return frozenset(str(v) for v in value if isinstance(v, str) and v.strip())
+
+
+def _gemini_switched_off(obj: dict[str, Any], specs: list[PackSpec]) -> None:
+    """v1.354.0 (G50): Gemini CLI keeps its on/off list BESIDE the servers:
+    ``"mcp": {"excluded": [...]}`` switches those names off and a non-empty
+    ``"mcp": {"allowed": [...]}`` switches off every name it does not list.
+    VS Code's ``"mcp": {"servers": ...}`` carries neither key, so this is a
+    no-op for it. Names are compared the way the specs were named
+    (:func:`safe_name`)."""
+    mcp = obj.get("mcp")
+    if not isinstance(mcp, dict):
+        return
+    excluded = {safe_name(n) for n in _name_list(mcp.get("excluded"))}
+    allowed = {safe_name(n) for n in _name_list(mcp.get("allowed"))}
+    if not excluded and not allowed:
+        return
+    for spec in specs:
+        if spec.name in excluded or (allowed and spec.name not in allowed):
+            spec.disabled = True
 
 
 def _guess_source(obj: dict[str, Any], default: str) -> str:
@@ -532,7 +608,10 @@ def _specs_from_json(obj: dict[str, Any], *, source: str, origin: str) -> tuple[
     recognised = False
     if isinstance(obj.get("mcpServers"), dict):
         recognised = True
-        specs += _specs_from_map(obj["mcpServers"], source=_guess_source(obj, source), origin=origin)
+        top = _specs_from_map(obj["mcpServers"], source=_guess_source(obj, source), origin=origin)
+        # v1.354.0 (G50): Gemini CLI's on/off list sits beside its servers.
+        _gemini_switched_off(obj, top)
+        specs += top
     if isinstance(obj.get("projects"), dict):
         # ~/.claude.json: per-project servers, origin = the project path.
         for project_path, project in obj["projects"].items():
@@ -542,6 +621,9 @@ def _specs_from_json(obj: dict[str, Any], *, source: str, origin: str) -> tuple[
                     project["mcpServers"],
                     source=source or "claude-code",
                     origin=str(project_path) or origin,
+                    # v1.354.0 (G50): `/mcp` → disable in Claude Code writes
+                    # the name into the project's `disabledMcpServers`.
+                    off_names=_name_list(project.get("disabledMcpServers")),
                 )
     mcp = obj.get("mcp")
     if isinstance(mcp, dict) and isinstance(mcp.get("servers"), dict):
@@ -820,6 +902,13 @@ def _specs_from_lines(text: str, *, source: str, origin: str) -> tuple[list[Pack
     return specs, True
 
 
+def unique_names(specs: list[PackSpec]) -> list[PackSpec]:
+    """Public name of :func:`_unique_names` (v1.354.0): the Claude Code
+    plugins source gathers servers from many files into ONE list, which must
+    not hold two packs under one name either."""
+    return _unique_names(specs)
+
+
 def _unique_names(specs: list[PackSpec]) -> list[PackSpec]:
     """Two specs from one paste must not share a name: the second becomes
     ``<name>-2``, the third ``<name>-3`` (within :data:`NAME_MAX`)."""
@@ -905,10 +994,15 @@ def _source_for_path(path: str) -> str:
         return "codex"
     if "/.cursor/" in low:
         return "cursor"
-    if name == "settings.json" and ("/code/user/" in low or "/code - insiders/user/" in low):
+    if name in ("settings.json", "mcp.json") and ("/code/user/" in low or "/code - insiders/user/" in low):
         return "vscode"
     if name == "mcp.json" and "/.vscode/" in low:
         return "vscode"
+    # v1.354.0 (G50): Windsurf and Gemini CLI.
+    if name == "mcp_config.json" and "/.codeium/" in low:
+        return "windsurf"
+    if name == "settings.json" and "/.gemini/" in low:
+        return "gemini-cli"
     if name in (".claude.json", ".mcp.json") or "/.claude/" in low:
         return "claude-code"
     return "paste"

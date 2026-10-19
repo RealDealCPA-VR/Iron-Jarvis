@@ -251,6 +251,15 @@ async function openTools() {
   return await screen.findByTestId("add-pack");
 }
 
+/** v1.354.0 (G49, updated on purpose): the paste box is the advanced door,
+ *  no longer the one the area opens on. */
+async function openToolsPaste() {
+  const area = await openTools();
+  fireEvent.click(within(area).getByTestId("add-pack-door-paste"));
+  await within(area).findByTestId("add-pack-paste");
+  return area;
+}
+
 describe("Tools add doors: green only when the pack works", () => {
   it("paste: a pack that loaded no tools reads 'Added, but it didn't start' under a warning triangle", async () => {
     api.preview = {
@@ -274,7 +283,7 @@ describe("Tools add doors: green only when the pack works", () => {
       unrecognised: false,
     };
     api.apply = { added: [{ name: "slack", tools_loaded: 0, note: NO_NODE_NOTE, state: "failed" }], skipped: [] };
-    const area = await openTools();
+    const area = await openToolsPaste();
     const box = within(area).getByTestId("add-pack-paste");
     fireEvent.change(box, { target: { value: "npx -y @modelcontextprotocol/server-slack" } });
     fireEvent.blur(box);
@@ -309,7 +318,7 @@ describe("Tools add doors: green only when the pack works", () => {
       unrecognised: false,
     };
     api.apply = { added: [{ name: "time", tools_loaded: 2, note: null, state: "ok" }], skipped: [] };
-    const area = await openTools();
+    const area = await openToolsPaste();
     const box = within(area).getByTestId("add-pack-paste");
     fireEvent.change(box, { target: { value: "uvx mcp-server-time" } });
     fireEvent.blur(box);

@@ -503,6 +503,11 @@ def test_preview_lists_names_only_and_never_the_planted_token(client):
         "exists": False,
         "runtime_ready": False,
         "launcher_note": f"needs {NO_SUCH_COMMAND}",
+        # v1.354.0 (G49/G50, updated on purpose): switched off in its app?
+        # connected another way? and the catalog's one line for the package.
+        "disabled": False,
+        "exists_as": "",
+        "blurb": "Repos, issues, and pull requests.",
     }
     assert "env" not in gh and "headers" not in gh
     # Nothing was added by a preview.

@@ -255,13 +255,20 @@ def test_sources_lists_every_known_file_with_readable_flags_and_never_a_value(cl
     for secret in (TOKEN, HEADER_VALUE, PLAIN_VALUE, "mcpServers"):
         assert secret not in res.text, f"a value or file contents reached the answer: {secret!r}"
     body = res.json()
+    # v1.354.0 (G50, updated on purpose): the files current tools use joined
+    # the list (Claude Code plugins, VS Code's mcp.json, Windsurf, Gemini CLI);
+    # the project-only rows stay out while no project is active.
     assert [r["source"] for r in body["sources"]] == [
         "claude-code",
         "claude-code-settings",
+        "claude-code-plugins",
         "claude-desktop",
         "codex",
         "cursor",
+        "vscode-mcp",
         "vscode",
+        "windsurf",
+        "gemini-cli",
     ], "no project is active, so no project row; the rest in the known order"
     rows = _by_source(body)
     for key, path in planted.items():
@@ -288,6 +295,10 @@ def test_sources_lists_every_known_file_with_readable_flags_and_never_a_value(cl
         "exists": False,
         "runtime_ready": False,
         "launcher_note": f"needs {NO_SUCH}",
+        # v1.354.0 (G49/G50, updated on purpose).
+        "disabled": False,
+        "exists_as": "",
+        "blurb": "Read the history, diffs, and branches of a local git repo.",
     }
     assert by_name["notion"]["transport"] == "http"
     assert by_name["notion"]["origin"] == "C:\\work\\app"
@@ -319,7 +330,8 @@ def test_sources_lists_every_known_file_with_readable_flags_and_never_a_value(cl
 
 def test_sources_with_nothing_planted_are_all_unreadable_with_empty_notes(client):
     body = client.get("/mcp/import/sources").json()
-    assert len(body["sources"]) == 6
+    # v1.354.0 (G50, updated on purpose): ten files are looked for now.
+    assert len(body["sources"]) == 10
     for row in body["sources"]:
         assert row["readable"] is False and row["note"] == "" and row["servers"] == [], row
         assert row["origin"], "even a missing file is named, so the user knows where to put one"
@@ -441,7 +453,19 @@ def test_scan_never_raises_with_no_home_and_no_appdata(monkeypatch, tmp_path):
 
     monkeypatch.setattr(import_sources.Path, "home", staticmethod(_no_home))
     out = import_sources.scan(platform=None)
-    assert [s.source for s in out] == ["claude-code", "claude-code-settings", "claude-desktop", "codex", "cursor", "vscode"]
+    # v1.354.0 (G50, updated on purpose): the new sources, no project rows.
+    assert [s.source for s in out] == [
+        "claude-code",
+        "claude-code-settings",
+        "claude-code-plugins",
+        "claude-desktop",
+        "codex",
+        "cursor",
+        "vscode-mcp",
+        "vscode",
+        "windsurf",
+        "gemini-cli",
+    ]
     for item in out:
         assert item.readable is False and item.note == "" and item.specs == [] and item.origin == ""
     # A resolver that faults is "no such place", never a raise.

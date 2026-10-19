@@ -163,17 +163,33 @@ async function openPage() {
   return await screen.findByTestId("add-pack");
 }
 
+/** v1.354.0 (G49, updated on purpose): the area opens on "Bring your tools
+ *  from Claude, Codex, Cursor…"; the paste box is the advanced door, one
+ *  press away. */
+async function openPaste() {
+  const area = await openPage();
+  fireEvent.click(within(area).getByTestId("add-pack-door-paste"));
+  await within(area).findByTestId("add-pack-paste");
+  return area;
+}
+
 /* ===================================================================== */
 /*  the area                                                               */
 /* ===================================================================== */
 
 describe("the Add a pack area", () => {
-  it("sits on the Tools page with three doors, Paste a config open first", async () => {
+  it("sits on the Tools page with three doors, Bring your tools from Claude, Codex, Cursor… open first (v1.354.0 G49, updated on purpose)", async () => {
     const area = await openPage();
-    expect(within(area).getByTestId("add-pack-door-paste").getAttribute("aria-selected")).toBe("true");
-    expect(within(area).getByTestId("add-pack-door-sources")).toBeTruthy();
+    expect(within(area).getByTestId("add-pack-door-sources").getAttribute("aria-selected")).toBe("true");
+    expect(within(area).getByTestId("add-pack-door-sources").textContent).toContain(
+      "Bring your tools from Claude, Codex, Cursor…",
+    );
+    expect(within(area).getByTestId("add-pack-door-paste").textContent).toContain(
+      "Paste from a website or README (advanced)",
+    );
     expect(within(area).getByTestId("add-pack-door-http")).toBeTruthy();
-    expect(within(area).getByTestId("add-pack-paste")).toBeTruthy();
+    expect(await within(area).findByTestId("add-pack-sources-door")).toBeTruthy();
+    expect(within(area).queryByTestId("add-pack-paste")).toBeNull();
     // The catalog cards and the npm door stay.
     expect(screen.getByTestId("npm-door-input")).toBeTruthy();
   });
@@ -186,7 +202,7 @@ describe("the Add a pack area", () => {
 describe("paste a config", () => {
   it("previews on blur: POST /mcp/import/preview {text}; rows carry the launcher, the runtime chip, the already-added badge and a password box per secret key; no value", async () => {
     api.preview = { servers: [BRAVE, FILESYSTEM, PY, REMOTE], unrecognised: false };
-    const area = await openPage();
+    const area = await openPaste();
     const box = within(area).getByTestId("add-pack-paste") as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: '{"mcpServers": {"brave": {}}}' } });
     fireEvent.blur(box);
@@ -224,7 +240,7 @@ describe("paste a config", () => {
 
   it("says when nothing in the text was recognised", async () => {
     api.preview = { servers: [], unrecognised: true };
-    const area = await openPage();
+    const area = await openPaste();
     const box = within(area).getByTestId("add-pack-paste");
     fireEvent.change(box, { target: { value: "hello there" } });
     fireEvent.click(within(area).getByTestId("add-pack-preview"));
@@ -240,7 +256,7 @@ describe("paste a config", () => {
       added: [{ name: "brave", tools_loaded: 3, note: null, state: "ok" }],
       skipped: [{ name: "py", why: "uvx is not installed" }],
     };
-    const area = await openPage();
+    const area = await openPaste();
     const box = within(area).getByTestId("add-pack-paste");
     const text = "npx -y @brave/brave-search-mcp-server";
     fireEvent.change(box, { target: { value: text } });
@@ -284,7 +300,7 @@ describe("paste a config", () => {
       added: [{ name: "brave", tools_loaded: 0, note: "it needs BRAVE_API_KEY and none was given", state: "failed" }],
       skipped: [],
     };
-    const area = await openPage();
+    const area = await openPaste();
     const box = within(area).getByTestId("add-pack-paste");
     fireEvent.change(box, { target: { value: "npx -y x" } });
     fireEvent.blur(box);
@@ -309,7 +325,7 @@ describe("paste a config", () => {
     const SLACK = previewRow("slack", { env_keys: ["SLACK_TOKEN"], secret_keys: ["SLACK_TOKEN"] });
     api.preview = { servers: [BRAVE, SLACK], unrecognised: false };
     api.apply = { added: [{ name: "brave", tools_loaded: 1, note: null, state: "ok" }], skipped: [] };
-    const area = await openPage();
+    const area = await openPaste();
     const box = within(area).getByTestId("add-pack-paste");
     fireEvent.change(box, { target: { value: '{"mcpServers": {"brave": {}, "slack": {}}}' } });
     fireEvent.blur(box);
@@ -341,7 +357,7 @@ describe("paste a config", () => {
   });
 
   it("the preview route refusing is one error line, nothing applied", async () => {
-    const area = await openPage();
+    const area = await openPaste();
     api.previewError = new api.FakeApiError("daemon too old", 404);
     const box = within(area).getByTestId("add-pack-paste");
     fireEvent.change(box, { target: { value: "npx -y x" } });
@@ -356,7 +372,7 @@ describe("paste a config", () => {
 /* ===================================================================== */
 
 describe("import from your other apps", () => {
-  it("reads GET /mcp/import/sources once the door opens: one group per readable source with its rows, one quiet line per unreadable one", async () => {
+  it("reads GET /mcp/import/sources as the area opens (the first door since v1.354.0): one group per app with tools, a broken file's quiet line, the empty places folded", async () => {
     api.sources = [
       {
         source: "claude-code",
@@ -377,9 +393,7 @@ describe("import from your other apps", () => {
       { source: "cursor", label: "Cursor", origin: "C:\\Users\\me\\.cursor\\mcp.json", readable: false, note: "", servers: [] },
       { source: "vscode", label: "VS Code", origin: "C:\\x\\settings.json", readable: true, note: "", servers: [] },
     ];
-    const area = await openPage();
-    expect(api.gets).not.toContain("/mcp/import/sources");
-    fireEvent.click(within(area).getByTestId("add-pack-door-sources"));
+    await openPage();
 
     const claude = await screen.findByTestId("import-source-claude-code");
     expect(api.gets.filter((g) => g === "/mcp/import/sources")).toHaveLength(1);
@@ -392,8 +406,13 @@ describe("import from your other apps", () => {
     expect(codex.textContent).toContain("Codex: config.toml could not be read");
     expect(within(codex).queryByTestId("import-preview")).toBeNull();
     expect(screen.getByTestId("import-source-cursor").textContent).toContain("Cursor: not found");
-    // readable but empty
-    expect(screen.getByTestId("import-source-vscode").textContent).toContain("No servers in this file");
+    // readable but empty (v1.354.0 G50, updated on purpose: folded with the
+    // missing ones into one "Also looked in" line, in tools words)
+    expect(screen.getByTestId("import-source-vscode").textContent).toContain("no tools in this file");
+    const folded = screen.getByTestId("import-looked-in");
+    expect(within(folded).getByTestId("import-source-cursor")).toBeTruthy();
+    expect(within(folded).getByTestId("import-source-vscode")).toBeTruthy();
+    expect(within(folded).queryByTestId("import-source-codex")).toBeNull();
   });
 
   it("Add selected on a source posts {source, names, overrides} and no text", async () => {
@@ -408,8 +427,7 @@ describe("import from your other apps", () => {
       },
     ];
     api.apply = { added: [{ name: "brave", tools_loaded: 2, note: null, state: "ok" }, { name: "py", tools_loaded: 1, note: null, state: "ok" }], skipped: [] };
-    const area = await openPage();
-    fireEvent.click(within(area).getByTestId("add-pack-door-sources"));
+    await openPage();
     const group = await screen.findByTestId("import-source-claude-desktop");
     fireEvent.change(within(group).getByTestId("override-brave-BRAVE_API_KEY"), { target: { value: SECRET } });
     fireEvent.click(within(group).getByTestId("import-source-apply-claude-desktop"));
