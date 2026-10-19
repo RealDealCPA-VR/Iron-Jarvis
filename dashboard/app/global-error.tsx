@@ -52,7 +52,7 @@ export default function GlobalError({
             <div className="p-5">
               <div className="flex items-start gap-2.5 rounded-xl border border-rose-500/25 bg-rose-500/[0.07] px-3 py-2.5 text-sm text-rose-200">
                 <span>
-                  Something broke while rendering the dashboard. Your daemon and data are
+                  Something broke while rendering the dashboard. Iron Jarvis and your data are
                   unaffected — try reloading this view.
                 </span>
               </div>

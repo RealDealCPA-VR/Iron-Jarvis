@@ -26,6 +26,7 @@
 
 import type { IJEvent } from "@/lib/types";
 import { wordChange } from "@/components/chat/TurnReceipt";
+import { DEMO_ANSWER } from "@/lib/demoWords";
 
 // A few agent states worth naming; anything else falls back to "Working…".
 const STATE_LABEL: Record<string, string> = {
@@ -105,7 +106,7 @@ function downgradedLabel(p: Record<string, unknown>): string {
     if (name && why) return `Nothing answered. ${name}: ${why}.`;
     return name ? `Nothing answered. ${name} did not answer.` : "Nothing answered.";
   }
-  if (used === "mock") return "The offline mock answered, not a real model.";
+  if (used === "mock") return DEMO_ANSWER;
   if (used) return name ? `${clip(used, 40)} answered instead of ${name}.` : `${clip(used, 40)} answered.`;
   return name ? `${name} was not used.` : "The chosen model was not used.";
 }

@@ -6,7 +6,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Iron Jarvis",
     short_name: "Jarvis",
-    description: "Control center for the Iron Jarvis daemon.",
+    description: "Iron Jarvis, your local-first AI assistant.",
     start_url: "/",
     scope: "/",
     display: "standalone",

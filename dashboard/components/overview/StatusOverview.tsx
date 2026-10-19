@@ -279,7 +279,7 @@ export default function OverviewPage({ embedded = false }: { embedded?: boolean 
           >
             <AlertTriangle size={14} className="shrink-0" />
             <span className="min-w-0 truncate">
-              Tool pack{failedPacks.length === 1 ? "" : "s"} didn’t start:{" "}
+              Extension{failedPacks.length === 1 ? "" : "s"} didn’t start:{" "}
               {failedPacks.map((p) => `${p.name} — ${p.error}`).join(" · ")}
             </span>
             <Link href="/tools" className="ml-auto shrink-0 font-medium text-amber-100 underline-offset-2 hover:underline">

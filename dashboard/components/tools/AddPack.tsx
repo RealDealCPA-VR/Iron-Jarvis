@@ -319,7 +319,7 @@ function RowJump({
       </button>
       {missed && (
         <span role="status" className="text-zinc-500" data-testid={`import-row-missing-${name}`}>
-          Its row is under Connected packs below.
+          Its row is under Connected extensions below.
         </span>
       )}
     </>
@@ -528,7 +528,7 @@ function PasteDoor({ onAdded, rowsHere }: { onAdded: () => void; rowsHere: boole
     <div data-testid="add-pack-paste-door">
       <p className="mb-2 text-[13px] text-zinc-500">
         Paste a config block from a README, a Claude or Codex config, an npx line, or a server URL.
-        Nothing is added until you choose the packs and press Add.
+        Nothing is added until you choose the extensions and press Add.
       </p>
       <textarea
         data-testid="add-pack-paste"
@@ -597,7 +597,7 @@ function PasteDoor({ onAdded, rowsHere }: { onAdded: () => void; rowsHere: boole
               </>
             )}
           </button>
-          <span className="text-[11px] text-zinc-600">A pack that is already added is skipped.</span>
+          <span className="text-[11px] text-zinc-600">An extension that is already added is skipped.</span>
         </div>
       )}
       {result && <ApplyOutcome result={result} rowsHere={rowsHere} />}

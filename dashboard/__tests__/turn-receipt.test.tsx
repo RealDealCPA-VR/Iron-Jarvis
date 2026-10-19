@@ -97,7 +97,7 @@ describe("TurnReceipt — the honesty chip (visible WITHOUT expanding)", () => {
   it("mock gets the strongest wording, collapsed", () => {
     render(<TurnReceipt route={{ provider: "mock", reason: "default" }} />);
     // No expand click — this must be on the collapsed line.
-    const chip = screen.getByText(/Mock answer\. No real model ran\./);
+    const chip = screen.getByText(/Demo answer\. No AI model ran\./);
     expect(chip).toBeTruthy();
     expect(screen.getByRole("button", { expanded: false })).toBeTruthy();
     // And it is styled as a warning, not quiet zinc. v1.329.0 (G2): through
@@ -272,7 +272,7 @@ describe("routeWarning (the pure honesty predicate)", () => {
   it("mock outranks everything", () => {
     expect(
       routeWarning({ requested: "mock", provider: "mock", reason: "explicit" }),
-    ).toBe("Mock answer. No real model ran.");
+    ).toBe("Demo answer. No AI model ran.");
   });
   it("mock outranks failover — a failover TO the mock is still a mock answer", () => {
     // Kills the precedence-swap mutation: reason says failover, but "no real
@@ -283,7 +283,7 @@ describe("routeWarning (the pure honesty predicate)", () => {
         provider: "mock",
         reason: "failover",
       }),
-    ).toBe("Mock answer. No real model ran.");
+    ).toBe("Demo answer. No AI model ran.");
   });
   it("failover warns even when requested is absent", () => {
     expect(routeWarning({ provider: "openai", reason: "failover" })).toContain(
@@ -458,7 +458,7 @@ describe("TurnReceipt — pathological server data", () => {
 describe("TurnReceipt — interaction & accessibility", () => {
   it("clicking the warning chip itself toggles expansion (it lives inside the button)", () => {
     render(<TurnReceipt route={{ provider: "mock", reason: "mock" }} />);
-    fireEvent.click(screen.getByText(/Mock answer/));
+    fireEvent.click(screen.getByText(/Demo answer/));
     expect(
       screen.getByRole("button", { expanded: true }).getAttribute("aria-expanded"),
     ).toBe("true");
@@ -515,7 +515,7 @@ describe("TurnReceipt — interaction & accessibility", () => {
       />,
     );
     expect(container.firstChild).not.toBeNull();
-    expect(screen.getByText(/Mock answer\. No real model ran\./)).toBeTruthy();
+    expect(screen.getByText(/Demo answer\. No AI model ran\./)).toBeTruthy();
     expect(screen.getByRole("button", { expanded: false })).toBeTruthy();
   });
 });

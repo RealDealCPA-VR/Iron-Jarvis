@@ -149,15 +149,15 @@ export function rosterStatus(e: RosterEntry | null | undefined): {
       status: "waiting",
       note:
         h.blocked > 0
-          ? `${h.blocked} job${h.blocked === 1 ? "" : "s"} blocked — waiting on you`
-          : "its last job is waiting on you",
+          ? `${h.blocked} task${h.blocked === 1 ? "" : "s"} blocked — waiting on you`
+          : "its last task is waiting on you",
     };
   if (livenessOf(e) === "busy" || (h?.running ?? 0) > 0)
-    return { status: "working", note: "running a job right now" };
+    return { status: "working", note: "running a task right now" };
   if (h?.last_outcome === "failed")
     return {
       status: "error",
-      note: h.last_error ? `last job failed — ${h.last_error}` : "its last job failed",
+      note: h.last_error ? `last task failed — ${h.last_error}` : "its last task failed",
     };
   return { status: "idle", note: "" };
 }

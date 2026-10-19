@@ -173,7 +173,7 @@ export function PermissionsPanel({
                           data-testid={`perm-trust-${r.name}-${tool}`}
                           onClick={() => onTrustTool?.(r.name, tool)}
                           disabled={!onTrustTool || busyKey === `trust:${r.name}:${tool}`}
-                          title={`Trust ${tool} from ${r.name} — it follows the pack's permission from now on`}
+                          title={`Trust ${tool} from ${r.name} — it follows the extension's permission from now on`}
                           className="rounded border border-amber-400/40 px-1 font-sans text-[10.5px] font-medium text-amber-100 transition-colors hover:bg-amber-400/20 disabled:opacity-50"
                         >
                           {busyKey === `trust:${r.name}:${tool}` ? "…" : "Trust"}

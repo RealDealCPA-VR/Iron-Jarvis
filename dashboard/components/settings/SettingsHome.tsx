@@ -72,7 +72,7 @@ const SUB_DEFS: Record<string, SubDef[]> = {
     {
       id: "models-local",
       label: "What your local models can do",
-      blurb: "Each local model's measured skills, and which jobs it is trusted with.",
+      blurb: "Each local model's measured skills, and which tasks it is trusted with.",
       Comp: named(() => import("@/components/settings/pages/LegacySettingsForm"), "LocalCapabilitiesCard"),
     },
   ],

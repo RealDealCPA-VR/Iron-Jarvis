@@ -1070,7 +1070,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
             </div>
           )
         ) : testResult.ok ? (
-          <SuccessNote>Memory source is live and searchable.</SuccessNote>
+          <SuccessNote>Memory base is live and searchable.</SuccessNote>
         ) : (
           <ErrorNote>{testResult.error ?? "Test failed."}</ErrorNote>
         ))}
@@ -1304,7 +1304,7 @@ export default function MarketplacePage() {
             <Link
               href="/chat"
               className="btn-ghost px-3 py-1.5 text-[13px]"
-              title="Back to the conversation — new connectors appear in the + menu"
+              title="Back to the conversation — new connections appear in the + menu"
             >
               <ArrowLeft size={14} /> Back to chat
             </Link>
@@ -1334,8 +1334,8 @@ export default function MarketplacePage() {
               disabled={connectedCount === 0 && !connectedOnly}
               title={
                 connectedOnly
-                  ? "Show every connector again"
-                  : "Show only the connectors you have connected"
+                  ? "Show every connection again"
+                  : "Show only what you have connected"
               }
               className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-medium transition-colors disabled:cursor-default disabled:opacity-60 ${
                 connectedOnly
@@ -1392,8 +1392,8 @@ export default function MarketplacePage() {
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search connectors…"
-              aria-label="Search connectors"
+              placeholder="Search connections…"
+              aria-label="Search connections"
               className="field pl-9"
             />
           </div>
@@ -1435,12 +1435,12 @@ export default function MarketplacePage() {
         <Reveal>
           <Empty icon={<Search size={24} />}>
             {connectedOnly && !q && activeCat === "All"
-              ? "Nothing is connected yet — press the connected count again to see every connector."
+              ? "Nothing is connected yet — press the connected count again to see every connection."
               : connectedOnly && (q || activeCat !== "All")
-              ? "No connected connectors match your search — press the connected count to show every connector."
+              ? "Nothing you have connected matches your search — press the connected count to show every connection."
               : q || activeCat !== "All" || connectedOnly
-              ? "No connectors match your search. Try a different term or category."
-              : "No connectors available."}
+              ? "No connections match your search. Try a different term or category."
+              : "No connections available."}
           </Empty>
         </Reveal>
       ) : (

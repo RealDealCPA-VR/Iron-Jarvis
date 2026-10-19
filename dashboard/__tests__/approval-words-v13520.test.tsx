@@ -132,8 +132,8 @@ describe("one set of approval words (lib/approvalWords)", () => {
   it("names who asks from the run's origin, never a guessed name", () => {
     expect(runSubject("schedule:nightly-brief")).toBe("Your nightly-brief run");
     expect(runSubject("reflex:inbox-sorter")).toBe("Your inbox-sorter run");
-    expect(runSubject("job:mission")).toBe("Your mission");
-    expect(runSubject("job:mission-member")).toBe("A mission teammate");
+    expect(runSubject("job:mission")).toBe("Your objective");
+    expect(runSubject("job:mission-member")).toBe("A teammate on your objective");
     // An internal id is never shown; no origin is "an agent run".
     expect(runSubject("goal:goal_8f2a")).toBe("An agent run");
     expect(runSubject("schedule:")).toBe("An agent run");
@@ -329,7 +329,7 @@ describe("the bell's ask says what and why (G24) and whether it can be undone (G
     render(<NotificationBell />);
     const row = await openBellRow();
     expect(folded(within(row).getByTestId("bell-approval-line").textContent)).toMatch(
-      /^A mission teammate wants to \S/,
+      /^A teammate on your objective wants to \S/,
     );
     expect(within(row).getByTestId("bell-approval-undo").textContent).toBe("This may not be undoable.");
   });

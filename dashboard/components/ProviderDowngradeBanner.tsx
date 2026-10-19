@@ -10,13 +10,15 @@ import { sessionHref } from "@/lib/missionLinks";
 // v1.355.0 integrate: the ONE sentence for a refusal's cause (the run's own
 // summary words, providers/failure_words via the daemon).
 import { failureSentence } from "@/lib/failureLine";
+// v1.357.0 (G76): the ONE demo name.
+import { DEMO_ANSWER } from "@/lib/demoWords";
 
 /** The one /events type the banner reads (v1.311.0). */
 export const PROVIDER_DOWNGRADE_EVENT_TYPES: readonly string[] = ["provider.downgraded"];
 
 /** What the banner says about one `provider.downgraded` event, or null. */
 export interface DowngradeNotice {
-  /** "mock" = the offline mock really answered; "refused" = nothing answered. */
+  /** "mock" = the demo model really answered; "refused" = nothing answered. */
   kind: "mock" | "refused";
   title: string;
   detail: string;
@@ -25,17 +27,19 @@ export interface DowngradeNotice {
    *  no change (earlier steps of the run may have; hence "in that step"). A
    *  mock answer can write files, so it never claims this. */
   still: string;
-  /** v1.355.0 (G32): the run it happened in ("" for none), for "See the job". */
+  /** v1.355.0 (G32): the run it happened in ("" for none), for "See the task". */
   sessionId: string;
 }
 
+/** v1.357.0 (G76): the demo-trap's sentence. The router publishes
+ *  `used: "mock"` ONLY when the default is still the demo model while an AI
+ *  model is connected, and its own reason names the provider id ('mock'), so
+ *  the banner says it in the canon's words instead of echoing it. */
+export const DEMO_TRAP_DETAIL =
+  "Your default is still the demo model, but an AI model is connected. Choose it as your default on the Connections page.";
+
 /** v1.355.0 (G32): the refusal's "what was not affected" sentence. */
 export const REFUSED_STILL = "Nothing was changed in that step.";
-
-function sentence(text: string): string {
-  const t = text.trim().replace(/[.\s]+$/, "");
-  return t ? `${t.charAt(0).toUpperCase()}${t.slice(1)}.` : "";
-}
 
 /**
  * The banner's one decision (v1.329.0, calm chat J1), pure so it is pinned.
@@ -63,7 +67,7 @@ export function downgradeNotice(e: IJEvent | null | undefined): DowngradeNotice 
   const used = String(p.used ?? "");
   const reason = String(p.reason ?? "");
   const sid = String(e.session_id ?? "").trim();
-  // A chat turn's id ("chat") is not a job anyone can open.
+  // A chat turn's id ("chat") is not a run anyone can open.
   const runId = sid && sid !== "chat" ? sid : "";
   if (used === "none") {
     if (!runId) return null;
@@ -71,12 +75,12 @@ export function downgradeNotice(e: IJEvent | null | undefined): DowngradeNotice 
     const name = String(p.label || p.requested || "the chosen model");
     const why = reason.trim().replace(/[.\s]+$/, "");
     // v1.355.0 integrate: the daemon's failure_words sentence for this cause
-    // (title + fix) when it sends one -- the same words the job's own
+    // (title + fix) when it sends one -- the same words the run's own
     // summary ends with. An older daemon keeps the reason clause below.
     const plain = failureSentence(p.title, p.fix);
     return {
       kind: "refused",
-      title: "Nothing answered a background job.",
+      title: "Nothing answered a background task.",
       detail: plain || (why ? `${name}: ${why}.` : `${name} did not answer.`),
       still: REFUSED_STILL,
       sessionId: runId,
@@ -84,8 +88,8 @@ export function downgradeNotice(e: IJEvent | null | undefined): DowngradeNotice 
   }
   return {
     kind: "mock",
-    title: "Output came from the mock model.",
-    detail: sentence(reason || "a session ran on the offline mock model instead of a real provider"),
+    title: DEMO_ANSWER,
+    detail: DEMO_TRAP_DETAIL,
     still: "",
     sessionId: runId,
   };
@@ -97,7 +101,8 @@ export function downgradeNotice(e: IJEvent | null | undefined): DowngradeNotice 
  * nothing answered, the warn tone for a mock answer), a hairline, a quiet link
  * to Connections, dismissible; the next event that needs saying shows again.
  * v1.355.0 (G32): it also says what was not affected and, when the event
- * names its run, offers a quiet "See the job" beside Connections.
+ * names its run, offers a quiet "See the task" beside Connections (v1.357.0:
+ * the canon's word for the unit of work).
  */
 export function ProviderDowngradeBanner() {
   // v1.311.0 (wave 3): only the one type it reads. It sits on every page,
@@ -138,7 +143,7 @@ export function ProviderDowngradeBanner() {
               data-testid="provider-downgrade-job"
               className="whitespace-nowrap text-zinc-300 underline-offset-2 transition-colors hover:text-zinc-100 hover:underline"
             >
-              See the job
+              See the task
             </Link>
             <span aria-hidden="true" className="text-zinc-600">
               {" · "}

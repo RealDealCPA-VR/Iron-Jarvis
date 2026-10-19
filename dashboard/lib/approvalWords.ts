@@ -21,6 +21,7 @@
  */
 
 import { toolWords } from "@/lib/toolWords";
+import { REMOTE_KIND, remoteTaskSubject } from "@/lib/remoteTask";
 
 /** The narrow answer: this one call. */
 export const ALLOW_ONCE = "Allow once";
@@ -92,19 +93,21 @@ const NAMED_RUN_KINDS: ReadonlySet<string> = new Set(["schedule", "reflex", "sen
 
 /**
  * WHO IS ASKING, as the subject of the bell's sentence: "Your nightly-brief
- * run" for a schedule, "Your mission" for a mission's coordinator, "A
- * mission teammate", else "An agent run". Read from `Session.origin` (the
- * same values OriginChip reads); an origin with no name worth saying is the
- * plain "An agent run", never a guessed one.
+ * run" for a schedule, "Your objective" for a mission's coordinator, "A
+ * teammate on your objective", "A task from desk" for a task another Jarvis
+ * sent (v1.357.0, the canon's words: VOCABULARY.md), else "An agent run".
+ * Read from `Session.origin` (the same values OriginChip reads); an origin
+ * with no name worth saying is the plain "An agent run", never a guessed one.
  */
 export function runSubject(origin: string | null | undefined): string {
   const value = (origin || "").trim();
-  if (value === "job:mission") return "Your mission";
-  if (value === "job:mission-member") return "A mission teammate";
+  if (value === "job:mission") return "Your objective";
+  if (value === "job:mission-member") return "A teammate on your objective";
   const i = value.indexOf(":");
   if (i > 0) {
     const kind = value.slice(0, i).trim();
     const name = value.slice(i + 1).trim();
+    if (kind === REMOTE_KIND) return remoteTaskSubject(name);
     if (NAMED_RUN_KINDS.has(kind) && name) return `Your ${name} run`;
   }
   return "An agent run";

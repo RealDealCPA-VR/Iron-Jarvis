@@ -275,6 +275,15 @@ class NoStoreMiddleware:
 #: the exact ``BROWSER_WS_PATH`` comparison above.
 MCP_PATH = "/mcp"
 
+#: Another computer running Iron Jarvis hands THIS one a task here (v1.357.0,
+#: G61; ``agents/task_door.py``). Spelled once, EXEMPT for the same reason the
+#: remote inbound leaf is: the sender holds the DOOR's own token (minted into
+#: the vault, shown once), never the install bearer — and the handler verifies
+#: it fail-closed (door off = 403, wrong or missing token = 401). EXACT MATCH
+#: ONLY: the door's controls beside it (``/agents/task-door``, ``/enable``,
+#: ``/disable``) stay guarded by the install bearer.
+TASK_DOOR_PATH = "/agents/task-door/task"
+
 _EXEMPT_EXACT = frozenset(
     {"/health", "/docs", "/openapi.json", "/redoc", MCP_PATH}
 )
@@ -485,6 +494,10 @@ def _is_exempt(path: str) -> bool:
     # fail-closed (inbound off or no vault entry = 403, wrong token = 401).
     # Exactly the ".../inbound" leaf: enable/disable beneath it stay guarded.
     if path.startswith("/agents/remote/") and path.endswith("/inbound"):
+        return True
+    # Another computer running Iron Jarvis sending a task (v1.357.0): its own
+    # door token, verified fail-closed in the handler. Exactly this leaf.
+    if path == TASK_DOOR_PATH:
         return True
     return False
 

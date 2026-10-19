@@ -296,7 +296,7 @@ export default function UpdatesPage() {
                     </p>
                     <p className="text-[11px] leading-relaxed text-zinc-600">
                       Running from a git clone instead? Self-update appears here once
-                      the daemon is started from that checkout.
+                      Iron Jarvis is started from that checkout.
                     </p>
                   </div>
                 ) : (
@@ -477,8 +477,8 @@ export default function UpdatesPage() {
                           <div>
                             <div className="font-semibold text-amber-200">Restart required.</div>
                             <div className="mt-0.5 text-amber-100/70">
-                              The files on disk are updated, but the daemon (and the
-                              dashboard you&apos;re viewing) are still running the old
+                              The files on disk are updated, but Iron Jarvis and the
+                              dashboard you&apos;re viewing are still running the old
                               code. Restart{" "}
                               <Code>ironjarvis serve</Code>{" "}
                               (and the dashboard) to load it.

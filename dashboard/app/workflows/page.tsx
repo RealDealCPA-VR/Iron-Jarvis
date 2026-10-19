@@ -818,7 +818,7 @@ function RunHistory() {
                           ))}
                           {r.status === "interrupted" && (
                             <div className="mb-2 text-[12px] text-tone-warn">
-                              This run was interrupted (the daemon restarted
+                              This run was interrupted (Iron Jarvis restarted
                               mid-run). The steps below show how far it got.
                               Resume continues from the first unfinished step.
                             </div>

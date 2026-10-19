@@ -675,8 +675,8 @@ export function YourBrowserCard() {
           </ErrorNote>
         ) : unavailable ? (
           <ErrorNote>
-            This daemon does not have the Browser surface yet — restart Iron Jarvis and reopen this
-            page.
+            This version of Iron Jarvis does not have the Browser surface yet — restart Iron Jarvis
+            and reopen this page.
           </ErrorNote>
         ) : (
           <>

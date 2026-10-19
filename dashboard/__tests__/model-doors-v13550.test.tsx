@@ -233,8 +233,8 @@ describe("G73: the free-and-private door downloads a starter model with one pres
 
     fireEvent.click(screen.getByRole("button", { name: /Download a starter model/ }));
     const pane = await screen.findByTestId("starter-model-pane");
-    expect(pane.textContent).toMatch(/A Build pane opened and is downloading it/);
-    expect(within(pane).getByRole("link", { name: "Open the Build pane" }).getAttribute("href")).toBe(
+    expect(pane.textContent).toMatch(/A Build terminal opened and is downloading it/);
+    expect(within(pane).getByRole("link", { name: "Open the Build terminal" }).getAttribute("href")).toBe(
       "/terminals?focus=t9",
     );
     expect(hooks.posts).toEqual([{ path: "/terminals/launch", body: { cli: "ollama-starter" } }]);

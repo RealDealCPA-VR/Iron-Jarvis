@@ -386,7 +386,7 @@ function SessionsList() {
                   </select>
                   <select
                     aria-label="Filter by origin"
-                    title='Who started the session — "Mine" = no origin tag, "Automated" = dispatched by a schedule, job, workflow…'
+                    title='Who started the session — "Mine" = no origin tag, "Automated" = dispatched by a schedule, task, workflow…'
                     value={originFilter}
                     onChange={(e) => setOriginFilter(e.target.value)}
                     className="rounded-lg border border-white/[0.08] bg-ink-900/80 px-2.5 py-1.5 text-sm text-zinc-300 outline-none focus:border-accent/60"

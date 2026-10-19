@@ -84,7 +84,7 @@ const ROWS: Readonly<Record<string, Row>> = {
     href: "/connections",
     still: "",
   },
-  dispatcher: { label: "Queued jobs", problem: "Queued jobs aren't starting", href: TEAM },
+  dispatcher: { label: "Queued tasks", problem: "Queued tasks aren't starting", href: TEAM },
   autonomy: { label: "Autonomy", problem: "Work Jarvis plans on its own isn't being checked", href: "/autonomy" },
   sentinels: { label: "Watchers", problem: "Your watchers aren't checking", href: "/sentinels" },
   lesson_compaction: { label: "Lessons", problem: "Your lessons aren't being tidied", href: "/lessons" },
@@ -98,8 +98,8 @@ const ROWS: Readonly<Record<string, Row>> = {
   fts_backfill: { label: "Chat search", problem: "Older chats aren't searchable yet", href: STATUS_HREF },
   // Steps that run once when Iron Jarvis starts.
   requeue_assignments: {
-    label: "Queued jobs",
-    problem: "Queued jobs weren't picked back up after the restart",
+    label: "Queued tasks",
+    problem: "Queued tasks weren't picked back up after the restart",
     href: TEAM,
   },
   reconcile_media_jobs: {
@@ -130,13 +130,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     href: STATUS_HREF,
   },
   reconcile_sessions: {
-    label: "Cut-off jobs",
-    problem: "Jobs the restart cut off weren't tidied up",
+    label: "Cut-off tasks",
+    problem: "Tasks the restart cut off weren't tidied up",
     href: "/sessions",
   },
   notify_interrupted_comm: {
     label: "Phone messages",
-    problem: "Your phone wasn't told about a job the restart cut off",
+    problem: "Your phone wasn't told about a task the restart cut off",
     href: "/channels",
   },
   rehydrate_goals: { label: "Goals", problem: "Your goals weren't loaded", href: "/autonomy" },

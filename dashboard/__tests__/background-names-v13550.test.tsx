@@ -127,7 +127,7 @@ describe("lib/loopWords: each background task in the user's words", () => {
     expect(LOOP_LABELS.scheduler).toBe("Schedules");
     expect(LOOP_LABELS.inbound).toBe("Phone messages");
     expect(LOOP_LABELS.fleet).toBe("Model servers");
-    expect(LOOP_LABELS.dispatcher).toBe("Queued jobs");
+    expect(LOOP_LABELS.dispatcher).toBe("Queued tasks");
     expect(loopWords("slack_socket").problem).toBe("Slack messages aren't arriving");
   });
 
@@ -395,9 +395,9 @@ describe("the background-refusal banner names its job and what was not affected"
     render(<ProviderDowngradeBanner />);
     const line = screen.getByTestId("provider-downgrade");
     expect(line).toHaveTextContent(
-      "Nothing answered a background job. Office Spark: not connected. Nothing was changed in that step.",
+      "Nothing answered a background task. Office Spark: not connected. Nothing was changed in that step.",
     );
-    expect(screen.getByRole("link", { name: "See the job" })).toHaveAttribute("href", "/sessions/s-42");
+    expect(screen.getByRole("link", { name: "See the task" })).toHaveAttribute("href", "/sessions/s-42");
     expect(screen.getByRole("link", { name: "Open Connections" })).toHaveAttribute("href", "/connections");
   });
 
@@ -409,7 +409,7 @@ describe("the background-refusal banner names its job and what was not affected"
     render(<ProviderDowngradeBanner />);
     expect(screen.getByTestId("provider-downgrade").textContent).not.toContain("Nothing was changed");
     expect(screen.queryByTestId("provider-downgrade-still")).toBeNull();
-    expect(screen.getByRole("link", { name: "See the job" })).toHaveAttribute("href", "/sessions/s-7");
+    expect(screen.getByRole("link", { name: "See the task" })).toHaveAttribute("href", "/sessions/s-7");
   });
 
   it("no job to see without a run: a chat refusal stays silent, a sessionless mock has no link", () => {
@@ -417,6 +417,6 @@ describe("the background-refusal banner names its job and what was not affected"
     H.events = [ev("4", { used: "mock", reason: "demo" }, null)];
     render(<ProviderDowngradeBanner />);
     expect(screen.getByTestId("provider-downgrade")).toBeTruthy();
-    expect(screen.queryByRole("link", { name: "See the job" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "See the task" })).toBeNull();
   });
 });

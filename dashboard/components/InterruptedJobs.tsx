@@ -218,7 +218,7 @@ export function InterruptedJobActions({
           type="button"
           onClick={() => void act("dismiss")}
           disabled={busy !== null}
-          title="Stop offering to continue this job"
+          title="Stop offering to continue this task"
           className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:border-white/20 hover:text-zinc-100 disabled:opacity-50"
         >
           {busy === "dismiss" ? "Dismissing…" : "Dismiss"}
@@ -245,7 +245,7 @@ export function InterruptedJobRow({
         </span>
         <div className="min-w-0 flex-1">
           <span className="block text-sm font-medium text-zinc-100">
-            A job stopped when Iron Jarvis restarted
+            A task stopped when Iron Jarvis restarted
           </span>
           <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-amber-200">{job.task}</p>
           <InterruptedJobActions job={job} onGone={onGone} />
@@ -278,7 +278,7 @@ export function InterruptedJobsNote({ intervalMs = 30000 }: { intervalMs?: numbe
       <div className="flex items-center gap-2">
         <History size={14} className="shrink-0" />
         <span className="font-medium">
-          {jobs.length} job{jobs.length === 1 ? "" : "s"} stopped when Iron Jarvis restarted
+          {jobs.length} task{jobs.length === 1 ? "" : "s"} stopped when Iron Jarvis restarted
         </span>
       </div>
       <ul className="mt-2 space-y-2">

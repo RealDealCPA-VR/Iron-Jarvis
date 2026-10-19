@@ -115,7 +115,7 @@ describe("a restart: one sentence on the run, in the chat line, in the bell", ()
 
   it("the bell's interrupted rows and its desktop ping say the same words", () => {
     const words = RESTART_WORDS.charAt(0).toLowerCase() + RESTART_WORDS.slice(1);
-    expect(src("components/InterruptedJobs.tsx")).toContain(`A job ${words}`);
+    expect(src("components/InterruptedJobs.tsx")).toContain(`A task ${words}`);
     expect(src("components/NotificationBell.tsx")).toContain(`"s"} ${words}\``);
     expect(src("components/NotificationBell.tsx")).not.toContain("stopped by a restart");
   });

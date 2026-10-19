@@ -10,6 +10,7 @@ import { useModels } from "@/lib/useModels";
 import type { SessionView, ModelOption, Health } from "@/lib/types";
 import { ErrorNote, LoaderInline } from "./ui";
 import { providerDisplay } from "@/lib/onboarding";
+import { DEMO_MODEL } from "@/lib/demoWords";
 import { agentLabel } from "@/lib/agentWorlds";
 import { VoiceInput, appendDictation } from "./VoiceInput";
 
@@ -331,7 +332,7 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
         >
           <PlugZap size={13} className="shrink-0 text-amber-300" />
           <span>
-            Running on the built-in offline model.{" "}
+            Running on the built-in {DEMO_MODEL}.{" "}
             <span className="font-medium text-accent-soft">Connect a real model</span>
           </span>
           <ArrowRight size={12} className="ml-auto shrink-0 text-amber-300/70" />

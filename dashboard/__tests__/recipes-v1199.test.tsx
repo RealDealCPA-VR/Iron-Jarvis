@@ -69,7 +69,7 @@ describe("RecipesRow (v1.199.0)", () => {
   it("renders all 6 recipes (title + blurb) under the whole-job heading", () => {
     render(<RecipesRow onPick={() => {}} />);
 
-    expect(screen.getByText(/or start a whole job/i)).not.toBeNull();
+    expect(screen.getByText(/or start a whole task/i)).not.toBeNull();
     for (const r of RECIPES) {
       expect(screen.getByText(r.title)).not.toBeNull();
       expect(screen.getByText(r.blurb)).not.toBeNull();

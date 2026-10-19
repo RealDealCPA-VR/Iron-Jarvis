@@ -1075,7 +1075,7 @@ export default function ToolsPage() {
       await post(
         `/mcp/servers/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(tool)}/trust`,
       );
-      setMcpOk(`"${tool}" from ${serverName} is trusted — it follows the pack's permission now.`);
+      setMcpOk(`"${tool}" from ${serverName} is trusted — it follows the extension's permission now.`);
       reloadServers();
     } catch (err) {
       setMcpError(err instanceof ApiError ? err.message : String(err));
@@ -1698,7 +1698,7 @@ export default function ToolsPage() {
               (MCP — needs Node or Python)"). */}
           <p className="mb-4 text-sm text-zinc-400">
             <span className="text-zinc-300">Built-in tools work immediately</span>{" "}
-            — nothing to install, no setup. One-click helpers for everyday jobs: checking
+            — nothing to install, no setup. One-click helpers for everyday tasks: checking
             a website, zipping a folder, seeing what&apos;s eating your disk.
           </p>
           {suiteOk && (
@@ -2000,7 +2000,7 @@ export default function ToolsPage() {
           {/* Catalog grid ------------------------------------------------- */}
           {catError ? (
             <p className="text-[13px] text-zinc-600">
-              Pack list unavailable{catError.status !== 0 ? ` — ${catError.message}` : ""}.
+              Extension list unavailable{catError.status !== 0 ? ` — ${catError.message}` : ""}.
             </p>
           ) : catalog.length === 0 ? (
             <p className="text-[13px] text-zinc-600">No extensions to show.</p>
@@ -2184,7 +2184,7 @@ export default function ToolsPage() {
                     <LoaderInline label="Connecting…" />
                   ) : (
                     <>
-                      <Plug size={14} /> Connect this pack
+                      <Plug size={14} /> Connect this extension
                     </>
                   )}
                 </button>
@@ -2272,7 +2272,7 @@ export default function ToolsPage() {
                     <LoaderInline label="Adding…" />
                   ) : (
                     <>
-                      <Plus size={14} /> Connect this pack
+                      <Plus size={14} /> Connect this extension
                     </>
                   )}
                 </button>
@@ -2293,14 +2293,14 @@ export default function ToolsPage() {
           {/* Connected servers --------------------------------------------- */}
           <div className="mb-2.5 mt-6">
             <SectionLabel>
-              Connected packs{servers.length ? ` · ${servers.length}` : ""}
+              Connected extensions{servers.length ? ` · ${servers.length}` : ""}
             </SectionLabel>
           </div>
           {mcpLoading && !mcpData ? (
             <SkeletonRows rows={2} />
           ) : servers.length === 0 ? (
             <p className="text-[13px] text-zinc-600">
-              No tool packs connected yet — add one from the list above.
+              No extensions connected yet — add one from the list above.
             </p>
           ) : (
             <div className="space-y-2">

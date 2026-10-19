@@ -46,7 +46,7 @@ const SCOPES: ScopeDef[] = [
     Icon: BrainCircuit,
     // v1.316.0: plain words — the old blurb's storage jargon read like a
     // database console to the person this page is for.
-    blurb: "Scratch notes agents keep while a job is running.",
+    blurb: "Scratch notes agents keep while a task is running.",
   },
   {
     id: "lessons",
@@ -55,7 +55,7 @@ const SCOPES: ScopeDef[] = [
     // v1.314.0: true to the daemon — reflections are kept out of every
     // prompt since v1.279.0 (learning/engine.py _PROMPT_EXCLUDED_SOURCES).
     blurb:
-      "Preferences and lessons Jarvis reads into chats and runs. Task reflections are kept as notes about past jobs and are not sent to the model.",
+      "Preferences and lessons Jarvis reads into chats and runs. Task reflections are kept as notes about past tasks and are not sent to the model.",
   },
   {
     id: "longterm",

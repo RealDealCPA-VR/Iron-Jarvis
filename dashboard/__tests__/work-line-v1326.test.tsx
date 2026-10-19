@@ -404,10 +404,10 @@ describe("the receipt reads 'answered by <model>' inside the action row", () => 
 
   it("a mock answer says so on the row, in amber, not 'answered by the demo'", () => {
     render(<TurnReceipt inline modelName="mock" route={{ provider: "mock", model: "mock", reason: "mock" }} />);
-    expect(screen.getByTestId("turn-receipt").textContent).toMatch(/Mock answer\. No real model ran\./);
+    expect(screen.getByTestId("turn-receipt").textContent).toMatch(/Demo answer\. No AI model ran\./);
     expect(screen.queryByTestId("turn-answered-by")).toBeNull();
     // v1.329.0 (G2): the warning tone through the token, so Daylight inks it.
-    expect(classes(screen.getByText("Mock answer. No real model ran."))).toContain("text-tone-warn");
+    expect(classes(screen.getByText("Demo answer. No AI model ran."))).toContain("text-tone-warn");
   });
 
   it("knows which receipts must be seen without a hover", () => {
@@ -469,7 +469,7 @@ describe("on the chat page (calm chat W1-5)", () => {
     const [mockRow, quietRow] = screen.getAllByTestId("reply-actions");
     // The mock answer's warning is on screen without a hover or a click.
     expect(classes(mockRow)).not.toContain("opacity-0");
-    expect(within(mockRow).getByText("Mock answer. No real model ran.")).toBeTruthy();
+    expect(within(mockRow).getByText("Demo answer. No AI model ran.")).toBeTruthy();
     // A quiet older receipt waits for a hover like the rest of its row, and
     // an open receipt keeps the row open.
     expect(classes(quietRow)).toEqual(

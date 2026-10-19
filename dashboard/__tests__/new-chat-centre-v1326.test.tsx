@@ -300,13 +300,13 @@ describe("a new chat: one centred group", () => {
   it("the whole-job ideas are one press away under the suggestions", async () => {
     render(<ChatPage />);
     await box();
-    expect(screen.queryByText(/or start a whole job/i)).toBeNull();
+    expect(screen.queryByText(/or start a whole task/i)).toBeNull();
     const more = screen.getByTestId("chat-more-ideas");
     expect(more.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(more);
-    expect(await screen.findByText(/or start a whole job/i)).toBeTruthy();
+    expect(await screen.findByText(/or start a whole task/i)).toBeTruthy();
     expect(more.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByTestId("chat-hero-foot").contains(screen.getByText(/or start a whole job/i))).toBe(true);
+    expect(screen.getByTestId("chat-hero-foot").contains(screen.getByText(/or start a whole task/i))).toBe(true);
   });
 
   it("the chip above the card names the project and picks one from its menu, which opens downward", async () => {

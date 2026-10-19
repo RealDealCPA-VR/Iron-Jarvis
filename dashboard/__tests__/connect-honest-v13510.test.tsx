@@ -355,7 +355,7 @@ describe("Tools add doors: green only when the pack works", () => {
     fireEvent.change(screen.getByTestId("npm-door-input"), {
       target: { value: "@modelcontextprotocol/server-slack" },
     });
-    fireEvent.click(await screen.findByText("Connect this pack"));
+    fireEvent.click(await screen.findByText("Connect this extension"));
     const warn = await screen.findByTestId("mcp-add-warn");
     expect(warn.textContent).toContain('Extension "server-slack" added, but it didn\'t start');
     expect(warn.textContent).toContain("npx isn't installed, or isn't on the PATH this app can see");
@@ -370,7 +370,7 @@ describe("Tools add doors: green only when the pack works", () => {
     fireEvent.change(screen.getByTestId("npm-door-input"), {
       target: { value: "@modelcontextprotocol/server-slack" },
     });
-    fireEvent.click(await screen.findByText("Connect this pack"));
+    fireEvent.click(await screen.findByText("Connect this extension"));
     await waitFor(() =>
       expect(screen.getByText('Extension "server-slack" connected — 3 tools ready to use.')).toBeTruthy(),
     );

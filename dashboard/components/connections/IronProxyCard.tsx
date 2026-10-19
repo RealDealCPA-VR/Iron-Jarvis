@@ -337,7 +337,7 @@ function IronProxyBody({
       const res = await post<{ terminal_id?: string; name?: string }>(
         `/iron-proxy/accounts/${enc(id)}/signin`,
       );
-      if (!res?.terminal_id) throw new Error("The daemon did not open a sign-in terminal.");
+      if (!res?.terminal_id) throw new Error("Iron Jarvis did not open a sign-in terminal.");
       // v1.303.3: watch a signed-out account so its chip flips to Ready on
       // its own (an account that is already usable has nothing to wait for).
       const acc = accounts.find((a) => a.id === id);
@@ -355,7 +355,7 @@ function IronProxyBody({
     if (!ok) return;
     reload();
     if (status === "unauthenticated") {
-      setActionError("Still not signed in. Finish the login in the Sign in pane.");
+      setActionError("Still not signed in. Finish the login in the Sign in terminal.");
     } else if (status === "ready" || status === "active") {
       setNote(`Signed in. ${title} is ready.`);
     }
@@ -366,7 +366,7 @@ function IronProxyBody({
     await run(`${id}:open`, async () => {
       const res = await post<unknown>(`/iron-proxy/accounts/${enc(id)}/open`);
       const paneId = openedPaneId(res);
-      if (!paneId) throw new Error("The daemon did not open a Build pane.");
+      if (!paneId) throw new Error("Iron Jarvis did not open a Build terminal.");
       router.push(terminalsHref(paneId));
     });
   }
@@ -655,7 +655,7 @@ function IronProxyBody({
           Iron Jarvis keeps using its own keys.
         </p>
         <p id="iron-proxy-build-help" className="mt-1.5 text-[11px] leading-relaxed text-zinc-600">
-          How accounts work in Build: a terminal pane keeps the account it started on. Read
+          How accounts work in Build: a terminal keeps the account it started on. Read
           “Several accounts in Build” in the Handbook (Help → Guides).
         </p>
       </Card>

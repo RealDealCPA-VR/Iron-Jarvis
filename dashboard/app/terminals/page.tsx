@@ -1341,8 +1341,8 @@ export default function TerminalsPage() {
                               }
                               aria-label={
                                 termBadge
-                                  ? `Terminal view for pane ${t.id} — New terminal output`
-                                  : `Terminal view for pane ${t.id}`
+                                  ? `Terminal view for ${t.id} — New terminal output`
+                                  : `Terminal view for ${t.id}`
                               }
                               aria-pressed={view === "terminal"}
                               className={`relative grid h-5 w-5 place-items-center rounded-md transition-colors ${
@@ -1375,12 +1375,12 @@ export default function TerminalsPage() {
                                   ? "Chat needs a working folder — this terminal has no cwd"
                                   : chatBadgeText
                                     ? `Chat view — ${chatBadgeText}`
-                                    : "Chat view — talk to an agent grounded in this pane's folder"
+                                    : "Chat view — talk to an agent grounded in this terminal's folder"
                               }
                               aria-label={
                                 chatBadgeText
-                                  ? `Chat view for pane ${t.id} — ${chatBadgeText}`
-                                  : `Chat view for pane ${t.id}`
+                                  ? `Chat view for ${t.id} — ${chatBadgeText}`
+                                  : `Chat view for ${t.id}`
                               }
                               aria-pressed={view === "chat"}
                               className={`relative grid h-5 w-5 place-items-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${

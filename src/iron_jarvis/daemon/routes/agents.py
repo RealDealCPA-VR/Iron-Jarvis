@@ -39,6 +39,7 @@ from ..schemas import (
     SkillApplyBody,
     SkillCreate,
     SpawnBody,
+    TaskDoorEnable,
     ToolGenerateBody,
 )
 
@@ -69,6 +70,43 @@ PAUSE_DEFAULT_REASON = "paused by the user"
 #: tells "lift it because the allowance was raised" from "the user said no".
 #: Pinned against that source line in tests/test_agent_employee_routes_v1295.py.
 AUTO_PAUSE_PREFIX = "monthly allowance used up"
+
+
+def reachability(url: str, *, who: str, instead: str) -> dict[str, Any]:
+    """Whether THIS Iron Jarvis would even accept a request addressed to
+    ``url``'s host, and what it takes if not — ``{host_allowed, note}``.
+
+    ONE sentence for every door another machine posts to (v1.285.0's remote
+    inbound door, v1.357.0's task door): the packaged app listens on
+    127.0.0.1 and the Host guard (``auth._host_ok``, the SAME check, read
+    here) admits loopback only unless ``IRONJARVIS_HOST_ALLOWLIST`` names the
+    host, so a machine elsewhere needs two things the user must do ON
+    PURPOSE — said in the same answer as the token, never discovered as a
+    bare refusal in the other machine's logs. Nothing here opens a bind or
+    writes the allowlist. ``who`` names the other side ("a remote on another
+    machine"); ``instead`` says where a tunnel's address goes."""
+    from urllib.parse import urlparse
+
+    from ..auth import _host_ok
+
+    try:
+        host = urlparse(url).netloc or ""
+    except Exception:  # noqa: BLE001
+        host = ""
+    allowed = bool(host) and _host_ok(host)
+    note = ""
+    if not allowed:
+        label = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+        ip = label or "<your LAN IP>"
+        note = (
+            f"Iron Jarvis on this computer currently accepts requests addressed to "
+            f"127.0.0.1 or localhost only, so {who} cannot reach it yet. "
+            f"To allow it: run Iron Jarvis listening on your LAN address "
+            f"(ironjarvis serve --host {ip}) and set IRONJARVIS_HOST_ALLOWLIST={ip} "
+            f"before starting it — or point a tunnel or reverse proxy at "
+            f"127.0.0.1:8787 and {instead}. Nothing opens on its own."
+        )
+    return {"host_allowed": allowed, "note": note}
 
 # Face overrides (v1.180.0). Imported as a MODULE, never as loose names: the
 # route looks every helper up on `faces` at call time so a test can monkeypatch
@@ -2289,8 +2327,53 @@ def register(app: FastAPI, d) -> None:
     def list_remote_agents() -> dict[str, Any]:
         return {"agents": [_remote_view(r) for r in _remote_reg().list()]}
 
+    def _jarvis_reply_on(request: Request, rec) -> dict[str, Any]:
+        """ANOTHER IRON JARVIS ANSWERS HOME (v1.357.0, G61). A remote whose
+        address IS a task door (``task_door.is_task_door_url``) is another
+        computer running Iron Jarvis, and its answer comes back through THIS
+        computer's inbound door for it — so registering one turns message-back
+        on (the token minted into the vault exactly as "Let it message back"
+        does; it rides to that computer beside ``reply_to`` with each task, so
+        the user never copies it). Nothing about the bind or the allowlist is
+        touched: the answer carries the reachability sentence instead. ``{}``
+        for any other remote, or one whose message-back is already on."""
+        from ...agents.task_door import is_task_door_url
+
+        if not is_task_door_url(getattr(rec, "base_url", "")):
+            return {}
+        if bool(getattr(rec, "inbound_enabled", False)):
+            return {
+                "another_jarvis": True,
+                "reachable": _inbound_reachability(str(getattr(rec, "inbound_url", "") or "")),
+            }
+        out = _remote_reg().enable_inbound(
+            rec.name, d.platform.secrets.set, url=_inbound_url_for(request, rec.name)
+        )
+        if out is None:
+            return {}
+        row, _token = out  # never returned: it travels with each task instead
+        return {
+            **_remote_view(row),
+            "another_jarvis": True,
+            "reachable": _inbound_reachability(row.inbound_url),
+        }
+
+    def _refuse_door_kind(base_url: str, kind: str) -> None:
+        """Another Iron Jarvis's task door speaks ``http-task`` only — a chat
+        body sent there could only be turned away, so say it at the form."""
+        from ...agents.task_door import is_task_door_url
+
+        if is_task_door_url(base_url) and kind != "http-task":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This address is another computer running Iron Jarvis. Choose "
+                    "http-task (task API) for it."
+                ),
+            )
+
     @app.post("/agents/remote")
-    def add_remote_agent(body: RemoteAgentCreate) -> dict[str, Any]:
+    def add_remote_agent(body: RemoteAgentCreate, request: Request) -> dict[str, Any]:
         import re as _re
 
         from ...agents.remote import KINDS
@@ -2304,6 +2387,7 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(
                 status_code=400, detail=f"kind must be one of {', '.join(KINDS)}"
             )
+        _refuse_door_kind(body.base_url, body.kind)
         secret_name: str | None = None
         if (body.token or "").strip():
             secret_name = "remote_agent_" + name
@@ -2319,10 +2403,10 @@ def register(app: FastAPI, d) -> None:
             # deadline (asyncio.timeout), and a stored negative expires at once.
             timeout_s=max(1, int(body.timeout_s or 120)),
         )
-        return _remote_view(rec)
+        return {**_remote_view(rec), **_jarvis_reply_on(request, rec)}
 
     @app.patch("/agents/remote/{name}")
-    def edit_remote_agent(name: str, body: RemoteAgentPatch) -> dict[str, Any]:
+    def edit_remote_agent(name: str, body: RemoteAgentPatch, request: Request) -> dict[str, Any]:
         """Fix one thing about a registered remote agent (v1.164.0).
 
         Before this the only options were Test and Delete, so a mistyped base
@@ -2368,6 +2452,13 @@ def register(app: FastAPI, d) -> None:
                 )
             fields["inbound_url"] = inbound_url
 
+        # v1.357.0 (G61): refused BEFORE the credential is touched below, so
+        # a refused edit can never have replaced the stored token.
+        _refuse_door_kind(
+            str(fields.get("base_url", rec.base_url) or ""),
+            str(fields.get("kind", rec.kind) or ""),
+        )
+
         # CREDENTIAL: three distinct intents, and conflating any two of them
         # loses a secret the user cannot retype.
         if body.clear_token:
@@ -2388,6 +2479,10 @@ def register(app: FastAPI, d) -> None:
         updated = reg.update(name, **fields)
         if updated is None:  # raced with a delete
             raise HTTPException(status_code=404, detail="no such remote agent")
+        # v1.357.0 (G61): an address fixed to point at another Iron Jarvis's
+        # task door turns its answer path on, exactly as registering one does.
+        if "base_url" in fields:
+            return {**_remote_view(updated), **_jarvis_reply_on(request, updated)}
         return _remote_view(updated)
 
     @app.delete("/agents/remote/{name}")
@@ -2494,12 +2589,13 @@ def register(app: FastAPI, d) -> None:
         except Exception:  # noqa: BLE001 — offline / no route
             return ""
 
-    def _inbound_url_for(request: Request, name: str) -> str:
-        """The address a remote is told to post to. The DASHBOARD reaches this
-        daemon on 127.0.0.1 — an address no other machine can use — so a
-        loopback request derives the LAN address of this machine instead, on
-        the same port; a request that already came over a real host keeps it.
-        Editable afterwards (PATCH inbound_url) for tunnels and proxies."""
+    def _lan_url_for(request: Request, path: str) -> str:
+        """The address another machine is told to use for ``path`` here. The
+        DASHBOARD reaches this daemon on 127.0.0.1 — an address no other
+        machine can use — so a loopback request derives the LAN address of
+        this machine instead, on the same port; a request that already came
+        over a real host keeps it. (v1.357.0: shared by the remote inbound
+        door and the task door — one rule for "this computer's address".)"""
         from ..auth import _host_label
 
         host = (request.headers.get("host") or "").strip()
@@ -2512,38 +2608,26 @@ def register(app: FastAPI, d) -> None:
             if lan:
                 port = host.rsplit(":", 1)[1] if host.count(":") == 1 else ""
                 host = f"{lan}:{port}" if port else lan
-        return f"{scheme}://{host}/agents/remote/{quote(name, safe='')}/inbound"
+        return f"{scheme}://{host}{path}"
+
+    def _inbound_url_for(request: Request, name: str) -> str:
+        """The address a remote is told to post to. Editable afterwards
+        (PATCH inbound_url) for tunnels and proxies."""
+        return _lan_url_for(request, f"/agents/remote/{quote(name, safe='')}/inbound")
 
     def _inbound_reachability(url: str) -> dict[str, Any]:
-        """Whether THIS daemon would even accept a request addressed to
-        ``url``'s host, and what it takes if not. The packaged app binds the
-        daemon to 127.0.0.1 and the Host guard admits loopback only, so a
-        remote on another machine needs two things the user must do on purpose
-        — said here, in the same answer as the token, never discovered as a
-        bare 403 in the remote's logs."""
-        from urllib.parse import urlparse
-
-        from ..auth import _host_ok
-
-        try:
-            host = urlparse(url).netloc or ""
-        except Exception:  # noqa: BLE001
-            host = ""
-        allowed = bool(host) and _host_ok(host)
-        note = ""
-        if not allowed:
-            label = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
-            note = (
-                f"This daemon currently accepts requests addressed to 127.0.0.1 or "
-                f"localhost only, so a remote on another machine cannot reach it yet. "
-                f"To allow it: run the daemon listening on your LAN address "
-                f"(ironjarvis serve --host {label or '<your LAN IP>'}) and set "
-                f"IRONJARVIS_HOST_ALLOWLIST={label or '<your LAN IP>'} before starting it "
-                f"— or point a tunnel or reverse proxy at 127.0.0.1:8787 and paste its "
-                f"address here (Edit → inbound URL). A remote running on THIS machine "
-                f"can post to http://127.0.0.1:8787 as is."
-            )
-        return {"host_allowed": allowed, "note": note}
+        """The remote inbound door's reachability verdict (v1.285.0) — the ONE
+        sentence (:func:`reachability`, v1.357.0: "Iron Jarvis on this
+        computer", never "this daemon"), with where a tunnel's address goes
+        and the same-machine case spelled out."""
+        return reachability(
+            url,
+            who="a remote on another machine",
+            instead=(
+                "paste its address here (Edit → inbound URL). A remote running on "
+                "THIS machine can post to http://127.0.0.1:8787 as is"
+            ),
+        )
 
     def _bearer_of(request: Request) -> str:
         header = request.headers.get("authorization") or ""
@@ -2849,6 +2933,207 @@ def register(app: FastAPI, d) -> None:
             # v1.345.0: the line also landed in the chat the room was asked from.
             "homed": homed,
         }
+
+    # --- Another computer running Iron Jarvis (v1.357.0, G61) ----------------
+    # The task door: another Iron Jarvis registers THIS one through its own
+    # remote-agent form (http-task, this door's address, this door's token)
+    # and "@desk do X" lands here as a run whose answer goes home. The whole
+    # contract is ``agents/task_door.py``; these routes are its controls (the
+    # install bearer guards them) and the door itself (exempt for exactly its
+    # leaf, ``auth.TASK_DOOR_PATH``, and verified here, fail-closed).
+    # Registered before the /agents/{name} catch-alls below.
+
+    from ..auth import TASK_DOOR_PATH as _TASK_DOOR_PATH
+
+    def _task_door():
+        from ...agents.task_door import door_for
+
+        return door_for(d.platform)
+
+    def _door_reachability(url: str) -> dict[str, Any]:
+        return reachability(
+            url,
+            who="the other computer",
+            instead=(
+                "give the other computer that address instead. For answers to come "
+                "back, the other computer needs the same done for itself"
+            ),
+        )
+
+    def _door_view(status: dict[str, Any]) -> dict[str, Any]:
+        url = str(status.get("url") or "")
+        return {
+            **status,
+            "reachable": _door_reachability(url) if (status.get("enabled") and url) else None,
+        }
+
+    @app.get("/agents/task-door")
+    def task_door_status() -> dict[str, Any]:
+        """Whether this computer takes tasks from another computer running
+        Iron Jarvis, the address to give it, the reachability sentence, and
+        what happened last. Never the token."""
+        return _door_view(_task_door().status())
+
+    @app.post("/agents/task-door/enable")
+    def task_door_enable(request: Request, body: TaskDoorEnable | None = None) -> dict[str, Any]:
+        """Turn the door ON: mint (or ROTATE) its token and return it ONCE —
+        it lives in the vault afterwards and no answer ever carries it again.
+        ``name`` is what to call the computer that sends tasks (its runs are
+        stamped ``remote:<name>``); ``url`` overrides the address derived from
+        this request (a tunnel or a proxy). Opens no bind, writes no
+        allowlist: the answer SAYS what reaching it takes."""
+        url = ((body.url if body else "") or "").strip() or _lan_url_for(request, _TASK_DOOR_PATH)
+        if url and not url.lower().startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="url must start with http:// or https://")
+        state, token = _task_door().enable(caller=(body.name if body else ""), url=url)
+        return {**_door_view(_task_door().status()), "token": token}
+
+    @app.post("/agents/task-door/disable")
+    def task_door_disable() -> dict[str, Any]:
+        """Turn the door OFF and forget its token (the sender's next task is
+        refused at once). Tasks already running finish and still answer."""
+        _task_door().disable()
+        return _door_view(_task_door().status())
+
+    def _door_bearer(request: Request) -> str:
+        header = request.headers.get("authorization") or ""
+        return header[7:].strip() if header.lower().startswith("bearer ") else ""
+
+    async def _door_check(request: Request):
+        """The door's two locks, fail-closed and off the loop: on (else 403,
+        in words) and the sender's token (else 401). Returns the door."""
+        from ...agents.task_door import DOOR_OFF
+
+        door = _task_door()
+        if not await asyncio.to_thread(door.enabled):
+            raise HTTPException(status_code=403, detail=DOOR_OFF)
+        if not await asyncio.to_thread(door.verify, _door_bearer(request)):
+            raise HTTPException(
+                status_code=401,
+                detail="this computer does not know that token — copy it again from its card",
+            )
+        return door
+
+    @app.get(_TASK_DOOR_PATH)
+    async def task_door_probe(request: Request) -> dict[str, Any]:
+        """The other computer's Test: does this door take its tasks? Token
+        checked; nothing is started."""
+        await _door_check(request)
+        return {"ok": True, "takes_tasks": True}
+
+    @app.post(_TASK_DOOR_PATH, status_code=202)
+    async def task_door_task(request: Request) -> dict[str, Any]:
+        """A task from another computer running Iron Jarvis (v1.357.0, G61).
+
+        Speaks exactly the ``http-task`` body its remote-agent registry sends:
+        ``{task, conversation_id?, history?, reply_to?, reply_token?}``.
+        Fail-closed, in order: door off → 403; wrong / missing token → 401;
+        past ``TASK_RATE_MAX`` a minute → 429; a body past
+        ``TASK_MAX_BODY_BYTES`` or a task past ``TASK_MAX_CHARS`` → 413;
+        Emergency stop on → 409 in its own words. Then ONE session through
+        ``create_session``: origin ``remote:<caller>`` (unattended — nobody
+        here answers its asks), LOW trust, the reply address on the row and
+        the reply key in the vault; started in the background and answered
+        ``202 {"accepted": true}`` at once. The answer goes home when the run
+        ends (``task_door.send_reply``)."""
+        from ...agents import task_door as td
+
+        door = await _door_check(request)
+        if not door.rate_ok():
+            raise HTTPException(
+                status_code=429, detail="too many tasks this minute — try again shortly"
+            )
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            declared = 0
+        if declared > td.TASK_MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="that task is too large to take")
+        raw = await request.body()
+        if len(raw) > td.TASK_MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="that task is too large to take")
+        try:
+            body = json.loads(raw or b"{}")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="body must be JSON")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="body must be a JSON object")
+        task = str(body.get("task") or "").strip()
+        if not task:
+            raise HTTPException(status_code=400, detail="task is required")
+        if len(task) > td.TASK_MAX_CHARS:
+            raise HTTPException(
+                status_code=413, detail=f"task longer than {td.TASK_MAX_CHARS} characters"
+            )
+        reply_to = str(body.get("reply_to") or "").strip()
+        if reply_to and not td.valid_reply_to(reply_to):
+            raise HTTPException(
+                status_code=400,
+                detail="reply_to must be another Iron Jarvis's inbound address",
+            )
+        reply_token = str(body.get("reply_token") or "").strip()
+        caller = await asyncio.to_thread(door.caller)
+        origin = td.remote_origin(caller)
+        orchestrator = d.orchestrator
+        options: dict[str, Any] = {}
+        if reply_to:
+            options[td.REPLY_OPTION] = td.reply_spec(
+                reply_to=reply_to,
+                conversation_id=str(body.get("conversation_id") or ""),
+                caller=caller,
+            )
+        # LOCAL ONLY (v1.332.0) crosses the wire: the sender's chat is local
+        # only, so this run is too — ``create_session`` refuses it when the
+        # model here leaves this network, and the runtime scopes every call.
+        if body.get("local_only") is True:
+            options["local_only"] = True
+        from ...agents.orchestrator import EmergencyStopOn
+        from ...providers import egress as _egress
+
+        try:
+            session = await orchestrator.create_session(
+                td.build_task_text(task, body.get("history"), caller),
+                AgentType.SUPERVISOR,
+                origin=origin,
+                trust="low",
+                trust_reason=f"a task sent by {caller}, another computer running Iron Jarvis",
+                options=options,
+            )
+        except EmergencyStopOn as exc:
+            # EMERGENCY STOP is ONE rule, in ``create_session``
+            # (``emergency_stop_covers``: a ``remote:`` origin is unattended);
+            # the sender hears the switch's own words, nothing was created.
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(  # type: ignore[return-value]
+                status_code=409, content={"detail": str(exc), "code": "emergency_stop"}
+            )
+        except _egress.LocalOnlyRefused as exc:
+            from fastapi.responses import JSONResponse
+
+            where = _egress.friendly_name(exc.provider, getattr(d.platform, "providers", None))
+            return JSONResponse(  # type: ignore[return-value]
+                status_code=409,
+                content={
+                    "detail": (
+                        f"the chat it came from is local only, and this computer would "
+                        f"answer with {where}, which is off its network — so the task "
+                        "was not run here. Choose a local model on this computer to "
+                        "take such tasks."
+                    ),
+                    "code": "local_only",
+                },
+            )
+        if reply_to and reply_token:
+            try:
+                await asyncio.to_thread(
+                    td.store_reply_token, d.platform.secrets, session.id, reply_token, caller
+                )
+            except Exception:  # noqa: BLE001 — the run still happens; its reply will say why
+                log.warning("task door: could not keep the answer key for %s", session.id)
+        await asyncio.to_thread(door.note_task, session.id)
+        d._spawn_bg(session.id, orchestrator.run_session(session.id))
+        return {"accepted": True}
 
     # --- The folder (v1.297.0) ----------------------------------------------
     # `<home>/agents/<slug>/`: AGENTS.md (the instructions — the SAME text as

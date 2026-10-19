@@ -461,7 +461,7 @@ describe("the pane's Memory box says what is enforced (v1.290.0)", () => {
     expect(on).toMatch(/launched agent may search and read memory through Jarvis \(read-only\)/);
     expect(off).toMatch(/launched agent gets no memory tools through Jarvis/);
     for (const w of [on, off]) {
-      expect(w).toMatch(/this pane's chat is not affected/);
+      expect(w).toMatch(/this terminal's chat is not affected/);
       expect(w).not.toMatch(/not enforced/);
     }
     // Files / Shell / Extensions stay honest.

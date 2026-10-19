@@ -985,7 +985,7 @@ export function LongTerm() {
                         rows={6}
                         spellCheck={false}
                         placeholder={
-                          'Paste the memory app\'s setup block (as Claude Desktop shows it), e.g.\n"my-brain": {\n  "command": "npx",\n  "args": ["-y", "mcp-remote", "http://host:8098/mcp", "--header", "Authorization: Bearer …"]\n}\n— or just its web address.'
+                          'Paste the memory app\'s setup block (as Claude Desktop shows it), e.g.\n"my-notes": {\n  "command": "npx",\n  "args": ["-y", "mcp-remote", "http://host:8098/mcp", "--header", "Authorization: Bearer …"]\n}\n— or just its web address.'
                         }
                         className="field resize-y font-mono text-[11px]"
                       />
@@ -1402,7 +1402,7 @@ export function LongTerm() {
                         <ConfirmButton
                           onConfirm={() => removeSource(s.name)}
                           label="Remove"
-                          title={`Remove memory source "${s.name}"`}
+                          title={`Remove memory base "${s.name}"`}
                         />
                       </li>
                     ))}

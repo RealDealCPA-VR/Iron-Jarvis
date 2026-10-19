@@ -9,6 +9,8 @@ import { put, post, ApiError } from "@/lib/api";
 import type { Health, ModelOption } from "@/lib/types";
 import { ModelRowChips, modelText } from "@/components/ModelRowBits";
 import { noModelChosen } from "@/lib/onboarding";
+// v1.357.0 (G76): the ONE demo name and sentence.
+import { DEMO_REPLIES, DEMO_STATE } from "@/lib/demoWords";
 
 /** Quality tiers, plainly labelled so users pick outcome over model IDs. */
 type Tier = "fast" | "balanced" | "best";
@@ -564,14 +566,14 @@ export function ModelSwitcher() {
           autoOn
             ? `Auto — smart routing${rv?.routing_model ? ` · via ${rv.routing_model}` : ""}`
             : demo
-              ? "No model chosen — replies are a scripted demo. Click to choose one."
+              ? `No model chosen — replies are ${DEMO_REPLIES}. Click to choose one.`
               : "Switch the active model"
         }
         aria-label={
           autoOn
             ? "Auto — smart routing"
             : demo
-              ? "Demo replies — no model chosen yet. Choose a model"
+              ? `${DEMO_STATE} — no model chosen yet. Choose a model`
               : "Switch the active model"
         }
       >
@@ -593,7 +595,7 @@ export function ModelSwitcher() {
             150px model name was what pushed them over each other; there the
             icon (or the amber dot) speaks and the name is one click away. */}
         {demo ? (
-          <span className="hidden text-[11px] font-medium lg:inline">Demo replies</span>
+          <span className="hidden text-[11px] font-medium lg:inline">{DEMO_STATE}</span>
         ) : autoOn ? (
           <span className="hidden items-baseline gap-1 lg:inline-flex">
             <span className="text-[11px] font-medium text-accent-soft">Auto</span>
@@ -856,7 +858,7 @@ export function ModelSwitcher() {
                 Choose a model
               </div>
               <p className="mt-0.5 text-[11px] leading-snug text-amber-300">
-                Replies are a scripted demo until you pick a model below.
+                Replies are {DEMO_REPLIES} until you pick a model below.
               </p>
             </div>
           ) : (

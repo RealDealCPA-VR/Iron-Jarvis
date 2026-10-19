@@ -67,7 +67,7 @@ describe("routeWarning with from/why (v1.228.0)", () => {
   it("mock still outranks a failover that carries from/why", () => {
     expect(
       routeWarning({ provider: "mock", reason: "failover", from: "ollama", why: "http 500" }),
-    ).toBe("Mock answer. No real model ran.");
+    ).toBe("Demo answer. No AI model ran.");
   });
 
   it("from/why are ignored when the reason is not failover", () => {

@@ -86,7 +86,7 @@ describe("the step line for provider.downgraded reads `used`", () => {
         reason: "your default provider is 'mock' but a real provider is connected.",
       }),
     );
-    expect(line).toBe("The offline mock answered, not a real model.");
+    expect(line).toBe("Demo answer. No AI model ran.");
   });
 
   it("an older daemon (no `used`) is told neither: only that the chosen model was not used", () => {
@@ -230,6 +230,9 @@ const FILES = [
   // v1.330.0 (wave 12): the Draft card's footer showed "paste into your
   // email — formatting is kept" on a real reply, and no guard read the file.
   "components/chat/DraftCard.tsx",
+  // v1.357.0 (G76): the demo's one set of words moved out of stepLabel (and
+  // the receipt) into lib/demoWords; the guard follows the words.
+  "lib/demoWords.ts",
 ];
 
 describe("the chat page and its notice components keep to plain sentences", () => {
@@ -261,7 +264,10 @@ describe("the chat page and its notice components keep to plain sentences", () =
     expect(page).toContain("Allowed for this chat.");
     expect(page).toContain("Editing a sent message. The");
     const step = copyPieces("components/chat/stepLabel.ts").map((p) => p.text).join("\n");
-    expect(step).toContain("The offline mock answered, not a real model.");
+    expect(step).toContain("Nothing answered.");
+    // v1.357.0 (G76): the demo line is read from lib/demoWords now.
+    const demo = copyPieces("lib/demoWords.ts").map((p) => p.text).join("\n");
+    expect(demo).toContain("Demo answer. No AI model ran.");
   });
 
   it("the guard catches a dash aside in a string, a template and JSX, and skips comments", () => {

@@ -560,7 +560,7 @@ describe("Directory — one name, one primary, a summary line (marketplace-hiera
     fireEvent.click(within(screen.getByRole("group", { name: /Filter by category/ })).getByRole("button", { name: "Storage" }));
     expect(screen.getByRole("heading", { level: 3, name: "Google Drive" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { level: 3, name: "GitHub" })).toBeNull();
-    expect(screen.getByRole("searchbox", { name: /Search connectors/ })).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: /Search connections/ })).toBeInTheDocument();
   });
 
   it("no card's Connect is the filled accent; the page has at most one at rest", () => {

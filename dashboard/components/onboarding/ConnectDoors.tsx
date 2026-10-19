@@ -87,6 +87,8 @@ import type { ConnectionTestResult } from "@/lib/types";
 import { AnswerPressNote, useAnswerPress } from "./AnswerPress";
 import { MODEL_SERVERS_TITLE } from "@/lib/modelServers";
 import { MODEL_NAME_LABEL, MODEL_SERVER_ADDRESS } from "@/lib/chatControlWords";
+// v1.357.0 (G76): the ONE demo name.
+import { DEMO_MODEL, DEMO_REPLIES } from "@/lib/demoWords";
 
 type Door = "subscription" | "local" | "key";
 
@@ -390,7 +392,7 @@ export function ConnectDoors({
             Ready — choose what answers you
           </div>
           <p className="mt-1 text-xs leading-relaxed text-emerald-300/80">
-            Replies still come from the offline demo until you choose what answers you —
+            Replies still come from the {DEMO_MODEL} until you choose what answers you —
             nothing switches on its own.
           </p>
           <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -429,7 +431,7 @@ export function ConnectDoors({
       ) : (
         <p className="text-xs leading-relaxed text-zinc-500">
           {demo
-            ? "Until a model is connected, replies come from an offline demo — a script, not a real answer. Pick whichever sounds like you:"
+            ? `Until a model is connected, replies come from the ${DEMO_MODEL}: ${DEMO_REPLIES}. Pick whichever sounds like you:`
             : "No model is answering right now. Pick whichever sounds like you:"}
         </p>
       )}
@@ -548,14 +550,14 @@ export function ConnectDoors({
                             data-testid={`pane-hint-${c.cli}`}
                             className="mt-1.5 block text-zinc-400"
                           >
-                            A Build pane opened with {c.name} running. {withCode(c.paneHint)} This
+                            A Build terminal opened with {c.name} running. {withCode(c.paneHint)} This
                             turns green by itself once you&apos;re signed in.{" "}
                             <Link
                               href={paneHref(si.paneId)}
                               onClick={() => onOpenPane?.()}
                               className="font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent"
                             >
-                              Open the Build pane
+                              Open the Build terminal
                             </Link>
                           </span>
                         ) : (
@@ -633,14 +635,14 @@ export function ConnectDoors({
               2. Download a starter model ({STARTER_MODEL_LABEL}, about 2 GB):
               {starter.paneId !== undefined ? (
                 <span data-testid="starter-model-pane" className="mt-1.5 block text-zinc-400">
-                  A Build pane opened and is downloading it. That takes a few minutes; when the
-                  pane says success, come back for step 3.{" "}
+                  A Build terminal opened and is downloading it. That takes a few minutes; when the
+                  terminal says success, come back for step 3.{" "}
                   <Link
                     href={paneHref(starter.paneId)}
                     onClick={() => onOpenPane?.()}
                     className="font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent"
                   >
-                    Open the Build pane
+                    Open the Build terminal
                   </Link>
                 </span>
               ) : (

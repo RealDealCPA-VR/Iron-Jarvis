@@ -13,7 +13,7 @@
  *    "# Final Report ## …" too); Run now answers in AMBER for those, never
  *    "Ran ✓";
  *  - a project's Schedules list says the same words;
- *  - the home line above the composer offers "1 scheduled job needs a look"
+ *  - the home line above the composer offers "1 scheduled task needs a look"
  *    whose Open goes to /schedules, ranked under a waiting ask and above work
  *    that is merely running.
  */
@@ -361,9 +361,9 @@ describe("the home line names a scheduled job that needs a look", () => {
 
   it("one line, its words, ranked under a waiting ask and above running work", () => {
     expect(homeLineItems({ ...base, shortSchedules: 1 })).toEqual([
-      { kind: "schedules", text: "1 scheduled job needs a look" },
+      { kind: "schedules", text: "1 scheduled task needs a look" },
     ]);
-    expect(homeLineItems({ ...base, shortSchedules: 3 })[0].text).toBe("3 scheduled jobs need a look");
+    expect(homeLineItems({ ...base, shortSchedules: 3 })[0].text).toBe("3 scheduled tasks need a look");
     expect(homeLineItems({ ...base, shortSchedules: 1, running: 2 }).map((i) => i.kind)).toEqual([
       "schedules",
       "working",
@@ -392,7 +392,7 @@ describe("the home line names a scheduled job that needs a look", () => {
     api.responses["/chat/approvals/pending"] = { approvals: [] };
     render(<HomeLine />);
     const line = await screen.findByTestId("home-line");
-    await waitFor(() => expect(line.textContent).toContain("1 scheduled job needs a look"));
+    await waitFor(() => expect(line.textContent).toContain("1 scheduled task needs a look"));
     expect(line.getAttribute("data-kind")).toBe("schedules");
     expect(within(line).getByRole("link", { name: "Open" }).getAttribute("href")).toBe("/schedules");
   });

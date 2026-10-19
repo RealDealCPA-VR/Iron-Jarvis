@@ -100,7 +100,7 @@ export function queuedSentence(assignee: string): string {
 export function assignmentTitle(a: Assignment): string {
   if (a.title && a.title.trim()) return a.title.trim();
   const first = (a.task ?? "").split(/\r?\n/)[0]?.trim() ?? "";
-  return first.length > 90 ? `${first.slice(0, 90)}…` : first || "Untitled job";
+  return first.length > 90 ? `${first.slice(0, 90)}…` : first || "Untitled task";
 }
 
 /** The priority badge word for a queued row, or null for Normal. */
@@ -233,7 +233,7 @@ export function AssignmentRow({
         {a.coalesced_count > 0 && (
           <span
             className="shrink-0 text-[11px] text-zinc-500"
-            title="The same job was asked for again while this one waited"
+            title="The same task was asked for again while this one waited"
           >
             ×{a.coalesced_count + 1}
           </span>
@@ -440,7 +440,7 @@ function AssignComposer({
             aria-label="Project (optional)"
             value={projectId}
             onChange={(e) => setProjectId(e.target.value)}
-            title="The project this job belongs to"
+            title="The project this task belongs to"
             className={`${composerChipClass(Boolean(projectId))} max-w-[12rem] cursor-pointer truncate bg-transparent`}
           >
             <option value="">No project</option>
@@ -540,7 +540,7 @@ export function AgentInbox({ name, projectId }: { name: string; projectId?: stri
       {empty ? (
         <p data-testid={`inbox-empty-${name}`} className="px-1 text-[12px] leading-relaxed text-zinc-500">
           {/* v1.315.0: CSS casing only. v1.329.0: two plain sentences. */}
-          Nothing queued. Give <span className={nameCase(name)}>{bare}</span> a job above and it runs when{" "}
+          Nothing queued. Give <span className={nameCase(name)}>{bare}</span> a task above and it runs when{" "}
           <span className={nameCase(name)}>{bare}</span> is free.
         </p>
       ) : (

@@ -287,9 +287,9 @@ function seedApi(terminals: unknown[]) {
 // lookups match by prefix (the plain name is asserted exactly where the
 // absence of a badge is the point).
 const chatBtn = (id: string) =>
-  screen.getByRole("button", { name: new RegExp(`^Chat view for pane ${id}`) });
+  screen.getByRole("button", { name: new RegExp(`^Chat view for ${id}`) });
 const termBtn = (id: string) =>
-  screen.getByRole("button", { name: new RegExp(`^Terminal view for pane ${id}`) });
+  screen.getByRole("button", { name: new RegExp(`^Terminal view for ${id}`) });
 
 async function renderPage(firstId = "t1") {
   render(<TerminalsPage />);
@@ -429,7 +429,7 @@ describe("chat badge on the toggle (page)", () => {
     expect(badge.className).not.toContain("bg-accent");
     // Title AND accessible name carry the status.
     const btn = screen.getByRole("button", {
-      name: "Chat view for pane t1 — Approval waiting in chat",
+      name: "Chat view for t1 — Approval waiting in chat",
     });
     expect(btn).toHaveAttribute("title", "Chat view — Approval waiting in chat");
 
@@ -439,14 +439,14 @@ describe("chat badge on the toggle (page)", () => {
     expect(working.className).toContain("bg-accent");
     expect(working.className).not.toContain("bg-tone-warn");
     expect(
-      screen.getByRole("button", { name: "Chat view for pane t1 — Chat is working" }),
+      screen.getByRole("button", { name: "Chat view for t1 — Chat is working" }),
     ).toHaveAttribute("title", "Chat view — Chat is working");
 
     // Turn done → no badge, and the PLAIN name is back (exact match).
     fireEvent.click(screen.getByTestId("emit-idle-t1"));
     expect(screen.queryByTestId("pane-chat-badge-t1")).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Chat view for pane t1" }),
+      screen.getByRole("button", { name: "Chat view for t1" }),
     ).toBeInTheDocument();
   });
 
@@ -485,7 +485,7 @@ describe("terminal-output badge on the toggle (page)", () => {
     fireEvent.click(screen.getByTestId("emit-output-t1"));
     expect(screen.getByTestId("pane-term-badge-t1")).toBeInTheDocument();
     const btn = screen.getByRole("button", {
-      name: "Terminal view for pane t1 — New terminal output",
+      name: "Terminal view for t1 — New terminal output",
     });
     expect(btn).toHaveAttribute("title", "Terminal view — New terminal output");
 
@@ -497,7 +497,7 @@ describe("terminal-output badge on the toggle (page)", () => {
     fireEvent.click(btn);
     expect(screen.queryByTestId("pane-term-badge-t1")).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Terminal view for pane t1" }),
+      screen.getByRole("button", { name: "Terminal view for t1" }),
     ).toBeInTheDocument();
 
     // And the gate keeps reading the LIVE view across repeated flips.

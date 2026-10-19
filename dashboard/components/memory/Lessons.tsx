@@ -345,7 +345,7 @@ export function Lessons() {
             // The title is unchanged at rest and armed (pinned by count).
             title={
               note
-                ? "Forget this lesson — removes this note about a past job"
+                ? "Forget this lesson — removes this note about a past task"
                 : "Forget this lesson — it stops shaping your chats and runs"
             }
             aria-label={
@@ -437,9 +437,9 @@ export function Lessons() {
               )}
               {notes.length > 0 && (
                 <div className={kept.length > 0 ? "mt-6" : ""}>
-                  <SectionLabel>Notes about past jobs</SectionLabel>
+                  <SectionLabel>Notes about past tasks</SectionLabel>
                   <p className="mb-3 mt-1 text-[12px] leading-relaxed text-zinc-500">
-                    What Jarvis noted after finishing a job. Kept for reference — not sent to the
+                    What Jarvis noted after finishing a task. Kept for reference — not sent to the
                     model.
                   </p>
                   <ul className="space-y-3">{notes.map((lesson, i) => renderLesson(lesson, i))}</ul>
@@ -658,7 +658,7 @@ export function Lessons() {
             {/* v1.314.0: true to the daemon — the top lessons by weight are
                 read in (not every one), and reflections never are. */}
             Preferences and lessons are read into your chats and runs, most important first, so I
-            keep getting closer to how you like things done. Notes about past jobs are not sent to
+            keep getting closer to how you like things done. Notes about past tasks are not sent to
             the model.
           </div>
         </Reveal>

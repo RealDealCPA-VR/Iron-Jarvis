@@ -20,6 +20,8 @@ import { ApiError } from "@/lib/api";
 // W2-6 (track B): `chooseForAnswers` is `useModel` under a name the hooks
 // lint rule does not mistake for a hook (it is called from a click handler).
 import { candidateFor, chooseForAnswers, decodeOnboardingModel } from "@/lib/onboarding";
+// v1.357.0 (G76): the ONE demo sentence.
+import { DEMO_REPLIES } from "@/lib/demoWords";
 import { useDaemon } from "@/lib/daemon";
 import type { DoctorCheck, Onboarding, OnboardingStep } from "@/lib/types";
 
@@ -315,16 +317,14 @@ export function OnboardingWelcome({ state }: { state?: ApiState<Onboarding> } = 
             </p>
           ) : offers.length > 0 ? (
             <p className="text-zinc-200">
-              Replies are a scripted demo right now — no model has been chosen to answer
-              yet.{" "}
+              Replies are {DEMO_REPLIES} — no model has been chosen to answer yet.{" "}
               {offers.length === 1
                 ? `${offers[0].label} is ready to answer.`
                 : "These are ready — choose the one that should answer:"}
             </p>
           ) : (
             <p className="text-zinc-200">
-              Replies are a scripted demo until you connect a model — what you ask won’t
-              get a real answer yet.{" "}
+              Replies are {DEMO_REPLIES} until you connect a model.{" "}
               <Link
                 href="/connections"
                 className="font-medium text-accent-soft underline-offset-2 hover:underline"

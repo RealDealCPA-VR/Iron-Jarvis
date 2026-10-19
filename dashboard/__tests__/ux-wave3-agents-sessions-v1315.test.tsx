@@ -311,7 +311,7 @@ describe("Session board card: the coordinator reads Jarvis, other ids are title-
     // Raw kept: the agent id rides a title on the card.
     expect(titled(card, "supervisor").length).toBeGreaterThan(0);
     // Anti-vacuity: the origin chip still says it came from a mission.
-    expect(within(card).getByTestId("origin-chip").textContent).toBe("Mission");
+    expect(within(card).getByTestId("origin-chip").textContent).toBe("Objective");
   });
 
   it("a supervisor run that is NOT a mission keeps its id as text, title-cased by `capitalize`", () => {

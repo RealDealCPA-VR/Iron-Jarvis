@@ -99,7 +99,7 @@ describe("What Jarvis knows about you (v1.279.0)", () => {
     expect(card.textContent).toContain("1 remote base");
     expect(card.textContent).toContain("2 working memories");
     expect(card.textContent).toContain("113 past conversations searchable");
-    expect(card.textContent).toContain("23 task reflections (notes about past jobs — not read into conversations)");
+    expect(card.textContent).toContain("23 task reflections (notes about past tasks — not read into conversations)");
   });
 
   it("says nothing at all when the daemon cannot answer", async () => {
@@ -137,7 +137,7 @@ describe("the words", () => {
         lessons: { total: 1, reflections: 1, by_source: { reflection: 1 } },
         history: { docs: 1, available: true },
       }),
-    ).toBe("1 note · 1 past conversation searchable · 1 task reflection (notes about past jobs — not read into conversations)");
+    ).toBe("1 note · 1 past conversation searchable · 1 task reflection (notes about past tasks — not read into conversations)");
     // An unavailable history index is not counted, however many docs it claims.
     expect(countsLine({ ...EMPTY, history: { docs: 50, available: false } })).toBe("");
   });

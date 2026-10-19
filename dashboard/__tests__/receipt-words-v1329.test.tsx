@@ -273,7 +273,7 @@ const WARN_ROUTES = [
 describe("the receipt speaks in plain sentences, warnings in the warning token", () => {
   it("every warning is plain words with no dash aside", () => {
     expect(WARN_ROUTES.map((r) => routeWarning(r))).toEqual([
-      "Mock answer. No real model ran.",
+      "Demo answer. No AI model ran.",
       "answered by Claude Code (fleet-rtx6000ada returned HTTP 500)",
       "answered by Claude Code (Ollama was not available)",
       "answered by Claude Code (Codex was not available)",

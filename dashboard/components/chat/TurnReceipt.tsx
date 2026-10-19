@@ -79,6 +79,7 @@ import { stepPhrase } from "@/lib/stepWords";
 import { cleanTarget } from "@/lib/workTarget";
 import type { StepDetail } from "@/lib/stepDetail";
 import { SENT_WITH_OK } from "@/lib/localOnly";
+import { DEMO_ANSWER } from "@/lib/demoWords";
 import {
   folderRulesLine,
   refWarningCount,
@@ -530,7 +531,8 @@ export function routeWarning(
   if (!route) return null;
   // v1.329.0 (G2): plain short sentences, no dash asides. The reason a
   // substitute answered rides in brackets after the name.
-  if (route.provider === "mock") return "Mock answer. No real model ran.";
+  // v1.357.0 (G76): the ONE demo name (lib/demoWords).
+  if (route.provider === "mock") return DEMO_ANSWER;
   // v1.329.0 (W6 H1): ONE way to name who answered. A substitute is named
   // by its MODEL, as a normal row is ("answered by Sonnet 4.6"): the
   // caller's name (lib/answeredModel, the catalog's label), else the name

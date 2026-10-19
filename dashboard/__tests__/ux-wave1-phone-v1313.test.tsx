@@ -284,8 +284,8 @@ describe("search-field icons are visible (the verifier's isolate + z-[1])", () =
   it("each field keeps its label and placeholder", () => {
     expect(src("app/projects/page.tsx")).toContain('aria-label="Filter projects by name"');
     expect(src("app/projects/page.tsx")).toContain('placeholder="Filter projects by name…"');
-    expect(src("components/settings/pages/DirectoryPage.tsx")).toContain('aria-label="Search connectors"');
-    expect(src("components/settings/pages/DirectoryPage.tsx")).toContain('placeholder="Search connectors…"');
+    expect(src("components/settings/pages/DirectoryPage.tsx")).toContain('aria-label="Search connections"');
+    expect(src("components/settings/pages/DirectoryPage.tsx")).toContain('placeholder="Search connections…"');
   });
 
   it("FilterBar renders the magnifier above its input, and the input is unchanged", () => {

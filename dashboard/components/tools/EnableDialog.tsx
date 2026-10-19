@@ -174,8 +174,8 @@ export function EnableDialog({
                   Install {help.label}
                 </a>
               )}
-              . If it is missing, enabling still works and the pack will report
-              it cannot start.
+              . If it is missing, enabling still works and the extension will
+              report it cannot start.
             </p>
           </section>
         )}

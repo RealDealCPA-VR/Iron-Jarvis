@@ -178,7 +178,7 @@ describe("AppSignIn", () => {
     const hint = await screen.findByTestId("connector-signin-hint-microsoft_365");
     expect(api.posts).toEqual([{ path: "/terminals/launch", body: { cli: "microsoft-365-signin-work" } }]);
     expect(hint.textContent).toContain(PANE_OPENED_LINE);
-    const link = within(hint).getByRole("link", { name: "Open the Build pane" });
+    const link = within(hint).getByRole("link", { name: "Open the Build terminal" });
     expect(link.getAttribute("href")).toBe("/terminals?focus=term_ms365");
   });
 

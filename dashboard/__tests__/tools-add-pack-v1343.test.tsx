@@ -535,7 +535,7 @@ describe("the npm door", () => {
     // a typed name goes through the same rule (dots -> "-", lowercase)
     fireEvent.change(screen.getByTestId("npm-door-custom-name"), { target: { value: "My.Own.Name" } });
     await waitFor(() => expect(screen.getByTestId("npm-door-name").textContent).toBe("my-own-name"));
-    fireEvent.click(screen.getByText("Connect this pack"));
+    fireEvent.click(screen.getByText("Connect this extension"));
     await waitFor(() => expect(posted("/mcp/servers")).toHaveLength(1));
     const body = posted("/mcp/servers")[0].body as Record<string, unknown>;
     expect(body).toEqual({ name: "my-own-name", command: "uvx", args: ["@scope/my.pkg"], env: {}, launcher: "uvx" });
@@ -562,7 +562,7 @@ describe("the npm door", () => {
     );
     expect(launcher.value).toBe("npx");
     expect(launcher.disabled).toBe(true);
-    fireEvent.click(screen.getByText("Connect this pack"));
+    fireEvent.click(screen.getByText("Connect this extension"));
     await waitFor(() => expect(posted("/mcp/servers")).toHaveLength(1));
     const body = posted("/mcp/servers")[0].body as Record<string, unknown>;
     expect(body.command).toBe("npx");

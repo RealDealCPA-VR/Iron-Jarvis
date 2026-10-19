@@ -159,11 +159,11 @@ export const RUNTIME_HELP: Record<string, { label: string; href: string; how: st
   Node: {
     label: "Node",
     href: "https://nodejs.org/en/download",
-    how: "Packs marked Node run through npx, which ships with Node.js.",
+    how: "Extensions marked Node run through npx, which ships with Node.js.",
   },
   "Python (uv)": {
     label: "Python (uv)",
     href: "https://docs.astral.sh/uv/getting-started/installation/",
-    how: "Packs marked Python run through uvx, which comes with uv.",
+    how: "Extensions marked Python run through uvx, which comes with uv.",
   },
 };

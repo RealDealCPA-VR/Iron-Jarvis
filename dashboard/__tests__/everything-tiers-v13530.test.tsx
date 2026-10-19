@@ -219,7 +219,7 @@ describe("each entry says what it is for", () => {
     expect(blurb("/tools")).not.toMatch(/MCP/);
     expect(blurb("/webhooks")).toBe("Let another app start work here, or get told when work finishes.");
     expect(blurb("/sessions")).toBe("Every task an agent ran, step by step.");
-    expect(blurb("/agents")).toMatch(/^For jobs bigger than one chat: /);
+    expect(blurb("/agents")).toMatch(/^For tasks bigger than one chat: /);
     // People who know the protocol still find Tools by it.
     expect(NAV_ENTRIES.find((e) => e.href === "/tools")!.aliases).toContain("mcp");
   });

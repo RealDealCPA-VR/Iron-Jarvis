@@ -21,6 +21,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useApi } from "@/lib/useApi";
+import { OFFLINE_TITLE } from "@/lib/offlineWords";
 import { timeAgo } from "@/lib/format";
 import { Card, DataError, OfflineHint, SkeletonRows } from "@/components/ui";
 import type {
@@ -344,7 +345,7 @@ export function SafetyChecksCard() {
           {rulesOpen ? (
             rules.error ? (
               rules.error.status === 0 ? (
-                <p className="mt-2 text-[12px] text-zinc-500">The daemon is not reachable.</p>
+                <p className="mt-2 text-[12px] text-zinc-500">{OFFLINE_TITLE}</p>
               ) : (
                 <div className="mt-2">
                   <DataError error={rules.error} what="the rules" />

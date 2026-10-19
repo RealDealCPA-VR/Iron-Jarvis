@@ -2035,6 +2035,17 @@ class RemoteInboundEnable(BaseModel):
     url: str = ""
 
 
+class TaskDoorEnable(BaseModel):
+    """Turn on this computer's task door (v1.357.0, G61): another computer
+    running Iron Jarvis may then send it tasks. ``name`` is what to call that
+    computer (its runs are stamped ``remote:<name>``; blank keeps the name
+    already given, else "another computer"); ``url`` overrides the address
+    derived from this request — for a tunnel or a reverse proxy."""
+
+    name: str = ""
+    url: str = ""
+
+
 class AgentPatch(BaseModel):
     """Edit a dynamic agent in place (only the provided fields change).
 

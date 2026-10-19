@@ -1476,7 +1476,7 @@ export function TerminalPane({
         {renaming ? (
           <input
             autoFocus
-            aria-label="Pane name"
+            aria-label="Terminal name"
             value={draftName}
             onChange={(e) => setDraftName(e.target.value)}
             onMouseDown={(e) => e.stopPropagation()}
@@ -1502,7 +1502,7 @@ export function TerminalPane({
               setDraftName(paneName || "");
               setRenaming(true);
             }}
-            title={paneName ? "Rename this pane" : "Name this pane"}
+            title={paneName ? "Rename this terminal" : "Name this terminal"}
             className="shrink-0 cursor-text rounded px-1 font-mono text-[11px] font-semibold text-zinc-200 hover:bg-white/[0.06]"
           >
             {paneName || info.shell}
@@ -1567,7 +1567,7 @@ export function TerminalPane({
             termRef.current?.focus();
           }}
           aria-label="Clear scrollback"
-          title="Clear scrollback — wipes this pane's on-screen history and repaints (the shell keeps running)"
+          title="Clear scrollback — wipes this terminal's on-screen history and repaints (the shell keeps running)"
           className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-accent/15 hover:text-accent-soft"
         >
           <Eraser size={13} />
@@ -1695,7 +1695,7 @@ export function TerminalPane({
               installedClis.filter((c) => c.recipe && c.recipe.method !== "none").length > 0 && (
                 <>
                   <div className="px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
-                    With Jarvis capabilities — opens a new pane
+                    With Jarvis capabilities — opens a new terminal
                   </div>
                   {installedClis
                     .filter((c) => c.recipe && c.recipe.method !== "none")
@@ -1714,7 +1714,7 @@ export function TerminalPane({
                             <Rocket size={12} className="text-accent-soft/80" />
                             <span className="font-medium">{c.label}</span>
                           </span>
-                          <span className="font-mono text-[10px] text-zinc-500">new pane</span>
+                          <span className="font-mono text-[10px] text-zinc-500">new terminal</span>
                         </span>
                         <LaunchRecipeNote cli={c} />
                       </button>

@@ -76,8 +76,8 @@ export const PANE_CAPABILITIES: {
   label: string;
   hint: string;
 }[] = [
-  { key: "files", label: "Files", hint: "read and write in this pane's folder" },
-  { key: "shell", label: "Shell", hint: "run commands in this pane" },
+  { key: "files", label: "Files", hint: "read and write in this terminal's folder" },
+  { key: "shell", label: "Shell", hint: "run commands in this terminal" },
   { key: "browser", label: "Browser", hint: "drive your browser through Jarvis" },
   { key: "extensions", label: "Extensions", hint: "use this install's extensions" },
   {
@@ -148,8 +148,8 @@ export function capabilityStatus(
   if (key === MEMORY_CAPABILITY) {
     return {
       word: on
-        ? "enforced — a launched agent may search and read memory through Jarvis (read-only); this pane's chat is not affected"
-        : "enforced — a launched agent gets no memory tools through Jarvis; this pane's chat is not affected",
+        ? "enforced — a launched agent may search and read memory through Jarvis (read-only); this terminal's chat is not affected"
+        : "enforced — a launched agent gets no memory tools through Jarvis; this terminal's chat is not affected",
       available: true,
       offForInstall: false,
     };
@@ -172,8 +172,8 @@ export function capabilityStatus(
   }
   return {
     word: on
-      ? "enforced — this pane may use your browser"
-      : "enforced — this pane gets no browser tools",
+      ? "enforced — this terminal may use your browser"
+      : "enforced — this terminal gets no browser tools",
     available: true,
     offForInstall: false,
   };
@@ -368,7 +368,7 @@ export function PaneRail({
         }
       } catch {
         setOverlay((o) => ({ ...o, [p.id]: before }));
-        setCapsError("Could not save that — the pane still has the capabilities it had.");
+        setCapsError("Could not save that — the terminal still has the capabilities it had.");
       }
     },
     [overlay],
@@ -441,7 +441,7 @@ export function PaneRail({
                       ref={inputRef}
                       autoFocus
                       data-testid="rail-rename-input"
-                      aria-label={`Rename pane ${p.label}`}
+                      aria-label={`Rename terminal ${p.label}`}
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
                       onBlur={() => commit(p.id, p.label)}
@@ -489,7 +489,7 @@ export function PaneRail({
                       {p.chatApproval ? (
                         <span
                           data-testid={`rail-chat-approval-${p.id}`}
-                          title="An approval is waiting in this pane's chat"
+                          title="An approval is waiting in this terminal's chat"
                           className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-tone-warn"
                         />
                       ) : null}
@@ -558,7 +558,7 @@ export function PaneRail({
                     <button
                       type="button"
                       onClick={() => (capsOpen === p.id ? closeCaps() : openCaps(p.id))}
-                      title="Capabilities for this pane"
+                      title="Capabilities for this terminal"
                       aria-label={`Capabilities for ${p.label}`}
                       aria-expanded={capsOpen === p.id}
                       data-testid={`rail-caps-${p.id}`}
@@ -571,7 +571,7 @@ export function PaneRail({
                     <button
                       type="button"
                       onClick={() => begin(p)}
-                      title="Rename this pane"
+                      title="Rename this terminal"
                       aria-label={`Rename ${p.label}`}
                       data-testid={`rail-rename-${p.id}`}
                       className={`${RAIL_ACTION} hover:bg-white/[0.08] hover:text-zinc-200 ${
@@ -583,7 +583,7 @@ export function PaneRail({
                     <button
                       type="button"
                       onClick={() => onClose(p.id)}
-                      title="Close this pane"
+                      title="Close this terminal"
                       aria-label={`Close ${p.label}`}
                       data-testid={`rail-close-${p.id}`}
                       className={`${RAIL_ACTION} hover:bg-tone-danger/15 hover:text-tone-danger ${
@@ -674,7 +674,7 @@ export function PaneRail({
                                     data-testid={`rail-cap-conflict-${p.id}-${cap.key}`}
                                     className="block text-[10px] leading-relaxed text-tone-warn"
                                   >
-                                    Ticked for this pane, but unavailable — the install setting wins. Untick it here if you want the grant gone.
+                                    Ticked for this terminal, but unavailable — the install setting wins. Untick it here if you want the grant gone.
                                   </span>
                                 ) : null}
                               </span>
@@ -698,12 +698,12 @@ export function PaneRail({
                         data-testid={`rail-caps-footnote-${p.id}`}
                         className="mt-1.5 border-t border-white/[0.06] px-1 pt-1.5 text-[10px] leading-relaxed text-zinc-500"
                       >
-                        <span className="text-zinc-300">Browser</span> is enforced. A pane
-                        starts unticked, and an unticked Browser box means this pane&rsquo;s chat and
+                        <span className="text-zinc-300">Browser</span> is enforced. A terminal
+                        starts unticked, and an unticked Browser box means this terminal&rsquo;s chat and
                         anything it launches get no browser tools.{" "}
                         <span className="text-zinc-300">Memory</span> is enforced only for a program
                         launched here (Claude Code, Codex&hellip;): ticked, it may search and read
-                        memory through Jarvis, read-only; this pane&rsquo;s own chat is not affected.
+                        memory through Jarvis, read-only; this terminal&rsquo;s own chat is not affected.
                         Files, Shell and Extensions are recorded here and shown to you; nothing gates
                         on them yet.
                       </p>

@@ -36,7 +36,7 @@ export const metadata: Metadata = {
   // Base title; NotificationBell mutates document.title at runtime to surface
   // pending review/approval counts.
   title: "Iron Jarvis",
-  description: "Dashboard for the Iron Jarvis daemon.",
+  description: "Iron Jarvis, your local-first AI assistant.",
   manifest: "/manifest.webmanifest",
   applicationName: "Iron Jarvis",
   appleWebApp: {

@@ -105,7 +105,7 @@ describe("what a restart left behind", () => {
     serve([JOB]);
     render(<InterruptedJobsNote />);
     expect(screen.getByTestId("interrupted-jobs-note")).toBeInTheDocument();
-    expect(screen.getByText("1 job stopped when Iron Jarvis restarted")).toBeInTheDocument();
+    expect(screen.getByText("1 task stopped when Iron Jarvis restarted")).toBeInTheDocument();
     expect(screen.getByText("Rename the Q1 client files")).toBeInTheDocument();
   });
 
@@ -118,7 +118,7 @@ describe("what a restart left behind", () => {
   it("shows three jobs and counts the rest", () => {
     serve([1, 2, 3, 4, 5].map((n) => ({ ...JOB, id: `sess_${n}`, task: `job ${n}` })));
     render(<InterruptedJobsNote />);
-    expect(screen.getByText("5 jobs stopped when Iron Jarvis restarted")).toBeInTheDocument();
+    expect(screen.getByText("5 tasks stopped when Iron Jarvis restarted")).toBeInTheDocument();
     expect(screen.getByText("job 3")).toBeInTheDocument();
     expect(screen.queryByText("job 4")).not.toBeInTheDocument();
     expect(screen.getByText("…and 2 more in the notification bell.")).toBeInTheDocument();
@@ -197,7 +197,7 @@ describe("Continue picks the work up", () => {
       </ul>,
     );
     expect(screen.getByTestId("bell-interrupted-job")).toBeInTheDocument();
-    expect(screen.getByText("A job stopped when Iron Jarvis restarted")).toBeInTheDocument();
+    expect(screen.getByText("A task stopped when Iron Jarvis restarted")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(gone).toEqual([JOB.id]));
     expect(apiState.posts[0].path).toBe("/sessions/sess_aaaaaaaa/continue");

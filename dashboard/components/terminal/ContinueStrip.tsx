@@ -157,7 +157,7 @@ function ContinueStrip({
     setError(null);
     try {
       const res = await post<unknown>(`/terminals/${encodeURIComponent(paneId)}/continue-on-next`);
-      if (!isContinueAnswer(res)) throw new Error("The daemon did not open a new pane.");
+      if (!isContinueAnswer(res)) throw new Error("Iron Jarvis did not open a new terminal.");
       rememberContinued(res.pane.id, res.from?.title || account.title, continueNote(res));
       // This pane is still at its limit: it has been answered, so it stops asking.
       dismissedLine.set(paneId, limitKey(limit));
@@ -194,7 +194,7 @@ function ContinueStrip({
           data-testid={`pane-continue-go-${paneId}`}
           onClick={() => void go()}
           disabled={busy}
-          title="Opens a new pane on that account in this folder and carries the conversation over when it can"
+          title="Opens a new terminal on that account in this folder and carries the conversation over when it can"
           className="shrink-0 rounded-md border border-tone-warn/50 px-2 py-0.5 font-medium text-tone-warn transition-colors hover:bg-tone-warn/15 disabled:opacity-60"
         >
           {busy ? (
@@ -400,7 +400,7 @@ function SignInNeededStrip({
     try {
       const res = await post<unknown>(`/iron-proxy/accounts/${encodeURIComponent(need.account.id)}/signin`);
       const id = openedPaneId(res);
-      if (!id) throw new Error("The daemon did not open a sign-in terminal.");
+      if (!id) throw new Error("Iron Jarvis did not open a sign-in terminal.");
       // The page adopts a FULL pane row; the sign-in answer is only its id.
       let row: ContinuedPane | undefined;
       try {

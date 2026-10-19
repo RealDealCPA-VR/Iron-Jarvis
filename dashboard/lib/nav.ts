@@ -211,7 +211,7 @@ export const NAV: NavSectionDef[] = [
           "assistants",
         ],
         blurb:
-          "For jobs bigger than one chat: give Jarvis one objective, your team of agents works it, and the result comes back here.",
+          "For tasks bigger than one chat: give Jarvis one objective, your team of agents works it, and the result comes back here.",
       },
       {
         href: "/tools",

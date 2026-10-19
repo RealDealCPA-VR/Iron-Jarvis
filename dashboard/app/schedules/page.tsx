@@ -1282,7 +1282,7 @@ function KnobFields({
             aria-label="Pre-run folder"
             className="field text-xs"
           >
-            <option value="">Run in the job&apos;s folder (workspace)</option>
+            <option value="">Run in the task&apos;s folder (workspace)</option>
             <option value="workspace">workspace</option>
             <option value="home">Iron Jarvis home</option>
           </select>
@@ -1372,7 +1372,7 @@ function ScheduleEditor({
       onSaved(`Schedule "${schedule.name}" updated.`);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
-        setError("This daemon cannot edit schedules yet — update Iron Jarvis, or delete and re-add it.");
+        setError("This version of Iron Jarvis cannot edit schedules yet — update it, or delete and re-add the schedule.");
       } else {
         setError(err instanceof ApiError ? err.message : String(err));
       }

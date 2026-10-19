@@ -489,9 +489,9 @@ describe("turn receipt names who answered in plain words (receipt-raw-provider-i
 
   it("CONTROL: the demo-model warning still outranks everything, amber, without expanding", () => {
     render(<TurnReceipt route={{ provider: "mock", reason: "failover", from: "ollama", why: "http 500" }} />);
-    const chip = screen.getByText(/No real model ran/);
+    const chip = screen.getByText(/No AI model ran/);
     expect(chip.className).toMatch(/text-tone-warn/);
-    expect(screen.getByRole("button", { expanded: false }).textContent).toMatch(/No real model ran/);
+    expect(screen.getByRole("button", { expanded: false }).textContent).toMatch(/No AI model ran/);
   });
 });
 

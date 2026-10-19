@@ -336,7 +336,7 @@ function openedRow(row: unknown): { id: string; project: string } | null {
 function retryRefusal(message: string): string {
   const said = message.trim();
   if (/nothing failed/i.test(said)) return "Nothing is marked failed any more. The list may have changed.";
-  if (/no worklist/i.test(said)) return "This mission kept no list of items, so there is nothing to retry.";
+  if (/no worklist/i.test(said)) return "This objective kept no list of items, so there is nothing to retry.";
   if (!said || /^\d{3}\b|[{}\[\]]|\bdetail\b/i.test(said)) {
     return "Iron Jarvis could not retry this right now. Try again in a moment.";
   }
@@ -366,7 +366,7 @@ function actionError(e: unknown, what: string): string {
   }
   if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
     return what === "retry"
-      ? "This daemon can't retry failed items yet. Restart Iron Jarvis to update it."
+      ? "This version of Iron Jarvis can't retry failed items yet. Restart Iron Jarvis to update it."
       : "This objective no longer exists.";
   }
   return e instanceof Error && e.message ? e.message : "Could not start it.";
@@ -490,7 +490,7 @@ export function MissionOutput({
         if (name === "followup") setFollowup("");
         onOpen(row.id, row.project || project);
       } else {
-        setActNote("The daemon did not say which mission it started.");
+        setActNote("Iron Jarvis did not say which objective it started.");
         onChanged();
       }
     } catch (e) {

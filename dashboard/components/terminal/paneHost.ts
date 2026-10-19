@@ -880,7 +880,7 @@ export function acquirePaneHost(id: string, deps: AcquireDeps = {}): Promise<Pan
       building.delete(id);
       if (doomed.delete(id)) {
         host.dispose();
-        throw new Error(`pane ${id} was closed`);
+        throw new Error(`terminal ${id} was closed`);
       }
       hosts.set(id, host);
       return host;

@@ -168,7 +168,7 @@ export function useMission(id: string | null): UseMission {
       setError(null);
     } catch (e) {
       if (idRef.current !== want) return;
-      setError(e instanceof Error ? e.message : "could not load the mission");
+      setError(e instanceof Error ? e.message : "could not load the objective");
     } finally {
       if (idRef.current === want) setLoading(false);
     }

@@ -367,11 +367,11 @@ describe("Launch → Claude Code → as <account>", () => {
     renderRows({ id: "a", title: "Work Max", source: "iron-proxy", state: "active" });
     const rows = screen.getByTestId("launch-accounts-claude").querySelectorAll("button");
     expect([...rows].map((b) => b.textContent)).toEqual([
-      "as Work Maxthis pane",
-      "as Home MaxReady · new pane",
+      "as Work Maxthis terminal",
+      "as Home MaxReady · new terminal",
       `as SpareParked until ${localTime(PARKED_ISO)}`,
       "as Old LoginNeeds sign-in",
-      "as this PC's loginnew pane",
+      "as this PC's loginnew terminal",
     ]);
     expect(asRow("c").disabled).toBe(true);
     expect(asRow("c").title).toMatch(/plan limit reached/);
@@ -590,7 +590,7 @@ describe("the account chip", () => {
     expect(chip()!.getAttribute("data-tone")).toBe("plain");
     const tip = chip()!.getAttribute("title")!;
     expect(tip).toMatch(/Claude Code as the Iron-Proxy account “Work Max”/);
-    expect(tip).toMatch(/fixed for this pane's life/);
+    expect(tip).toMatch(/fixed for this terminal's life/);
     expect(tip).toMatch(/Launch \(the rocket\) → Claude Code → “as …”/);
   });
 
@@ -661,7 +661,7 @@ describe("the account chip", () => {
     expect(chipProvider(accounts, "codex")).toBe("anthropic");
     render(<PaneAccountChip paneId="t9" accounts={accounts} agentCli="grok" />);
     expect(chip("t9")!.textContent).toBe("Grok · Grok main");
-    expect(chip("t9")!.getAttribute("title")).toContain("Also on this pane: Claude · Work Max.");
+    expect(chip("t9")!.getAttribute("title")).toContain("Also on this terminal: Claude · Work Max.");
   });
 
   it("the rail row shows the same short label", () => {
@@ -716,7 +716,7 @@ describe("Iron-Proxy card: Open in Build", () => {
     hooks.results["POST /iron-proxy/accounts/a/open"] = {};
     await mountCard(ON);
     fireEvent.click(await screen.findByTestId("iron-proxy-open-a"));
-    await screen.findByText("The daemon did not open a Build pane.");
+    await screen.findByText("Iron Jarvis did not open a Build terminal.");
     expect(hooks.push).not.toHaveBeenCalled();
   });
 

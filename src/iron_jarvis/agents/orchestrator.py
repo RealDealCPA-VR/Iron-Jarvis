@@ -1423,6 +1423,8 @@ class Orchestrator:
                 # completion event, so a page that re-reads the chat on
                 # ``agent.completed`` finds the line already there.
                 await self._deliver_to_chat(session)
+                # v1.357.0 (G61): a task another computer sent answers home.
+                self._reply_home(session)
                 await self.p.event_bus.publish(
                     EventType.SESSION_COMPLETED,
                     _completion_payload(session),
@@ -2010,6 +2012,28 @@ class Orchestrator:
             log.exception("chat delivery failed for session %s", session.id)
             return {"ok": False, "why": "delivery failed", "appended": 0, "skipped": 0}
 
+    def _reply_home(self, session: Session, *, from_boot: bool = False) -> None:
+        """A TASK ANOTHER COMPUTER SENT gets its answer sent home (v1.357.0,
+        G61; ``agents/task_door``). Every terminal path calls this beside the
+        chat delivery: a run whose row carries a reply address (only the task
+        door writes one) starts ONE bounded, masked reply to the computer that
+        asked — on its own tracked task, so this run's teardown never waits on
+        another machine (and the boot reconcile, which has no loop yet, on a
+        daemon thread). A run with no reply address starts nothing. A failed
+        reply is recorded on the row and the door, named — never retried.
+        Never raises."""
+        try:
+            from . import task_door as _task_door
+
+            if _task_door.reply_spec_of(session) is None:
+                return
+            if from_boot:
+                _task_door.send_reply_in_thread(self.p, session)
+            else:
+                _task_door.send_reply_soon(self.p, session)
+        except Exception:  # noqa: BLE001 — a reply miss must never break a finalize
+            log.exception("could not start the reply for session %s", session.id)
+
     def _plain_failure(self, error: Exception) -> str:
         """One plain sentence for a failed run's summary (v1.354.0, G28):
         ``providers.failure_words.plain_reason`` (the headline and its fix
@@ -2099,6 +2123,8 @@ class Orchestrator:
         # v1.345.0 (lane T): the failure sentence lands in the chat it was
         # asked in, before the event the page re-reads on.
         await self._deliver_to_chat(session)
+        # v1.357.0 (G61): the computer that sent this task hears it failed.
+        self._reply_home(session)
         try:
             await self.p.event_bus.publish(
                 EventType.SESSION_COMPLETED,
@@ -2179,6 +2205,8 @@ class Orchestrator:
         # v1.345.0 (lane T): the stopped sentence lands in the chat it was
         # asked in, before the event the page re-reads on.
         await self._deliver_to_chat(session)
+        # v1.357.0 (G61): the computer that sent this task hears it stopped.
+        self._reply_home(session)
         try:
             await self.p.event_bus.publish(
                 EventType.SESSION_COMPLETED,
@@ -2873,6 +2901,10 @@ class Orchestrator:
             row = self.get_session(sid)
             if row is not None:
                 self._deliver_to_chat_sync(row)
+                # v1.357.0 (G61): a task another computer sent hears that a
+                # restart cut it off — on a daemon thread, so boot never
+                # waits on another machine.
+                self._reply_home(row, from_boot=True)
         # ONE event per boot, never one per session (v1.249.0, R-02): the bell
         # and the Overview poll `/sessions/interrupted`, and this is what makes
         # them show the offer without waiting out a poll interval. Fifty

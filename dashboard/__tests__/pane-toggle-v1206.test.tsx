@@ -268,9 +268,9 @@ function seedApi(terminals: unknown[]) {
   };
 }
 
-const chatBtn = (id: string) => screen.getByRole("button", { name: `Chat view for pane ${id}` });
+const chatBtn = (id: string) => screen.getByRole("button", { name: `Chat view for ${id}` });
 const termBtn = (id: string) =>
-  screen.getByRole("button", { name: `Terminal view for pane ${id}` });
+  screen.getByRole("button", { name: `Terminal view for ${id}` });
 
 async function renderPage(firstId = "t1") {
   render(<TerminalsPage />);

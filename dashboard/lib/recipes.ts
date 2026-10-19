@@ -84,9 +84,9 @@ export const RECIPES: Recipe[] = [
   {
     key: "build-workflow",
     title: "Build me a workflow",
-    blurb: "Turn a repeated job into reusable steps you can run from the canvas.",
+    blurb: "Turn a repeated task into reusable steps you can run from the canvas.",
     prompt:
-      "Build me a reusable workflow. Ask me what job I do repeatedly, break it into clear numbered steps, then create the workflow so I can open it on the canvas, review every step, and run it whenever I need it. When it's created, walk me through what each step does and how to run it.",
+      "Build me a reusable workflow. Ask me what task I do repeatedly, break it into clear numbered steps, then create the workflow so I can open it on the canvas, review every step, and run it whenever I need it. When it's created, walk me through what each step does and how to run it.",
   },
   {
     key: "notes-to-email",

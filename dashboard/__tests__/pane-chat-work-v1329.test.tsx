@@ -432,7 +432,7 @@ describe("the chat page's 'files changed' line under a pane reply", () => {
     fireEvent.click(undo);
     await waitFor(() => expect(H.api.posts.some((p) => p.path === "/undo/act_1")).toBe(true));
     expect(confirm).toHaveBeenCalledTimes(1);
-    expect(String(confirm.mock.calls[0][0])).toContain("panes and Chat share one journal");
+    expect(String(confirm.mock.calls[0][0])).toContain("terminals and Chat share one journal");
   });
 });
 

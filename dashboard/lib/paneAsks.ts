@@ -53,15 +53,16 @@ export interface BlockedPane {
 
 /** What a waiting pane is called in a sentence: the CLI's own name, an id
  *  the catalog has never heard of as itself (a name we half-know beats
- *  none — Build's rail rule), else "A Build pane". */
+ *  none — Build's rail rule), else "A Build terminal" (v1.357.0: the canon's
+ *  word; desktop/main.js says the same). */
 export function paneWaitingSubject(cli: string): string {
   const id = cli.trim();
-  if (!id) return "A Build pane";
+  if (!id) return "A Build terminal";
   return PANE_CLI_NAMES[id] ?? id;
 }
 
 /** The row's words: "Claude Code in Build is waiting for you". With no CLI
- *  named: "A Build pane is waiting for you". */
+ *  named: "A Build terminal is waiting for you". */
 export function paneWaitingTitle(p: Pick<BlockedPane, "cli">): string {
   const subject = paneWaitingSubject(p.cli);
   return p.cli.trim()

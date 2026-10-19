@@ -15,9 +15,13 @@ PR that ships it.
 
 | Concept | The one name | Retired words (kept as search aliases) |
 |---|---|---|
-| Anything recall reads | **memory base** | source, brain, LTM |
+| The program on this PC that does the work (what the window talks to) | **Iron Jarvis** | daemon |
+| One piece of work Jarvis does for you: what a chat hands an agent, a step of an objective, a queued task for an agent, a schedule's fire, a task another Jarvis sent | **task**; one attempt at it is a **run** | job, assignment |
+| Anything recall reads | **memory base** | source, memory source, brain, LTM |
 | Anything the app talks to | **connection** | integration, connector |
-| An MCP server (a connection that adds tools) | **extension** | plug-in, tool pack, MCP pack |
+| An MCP server (a connection that adds tools) | **extension** | plug-in, pack, tool pack, MCP pack |
+| The built-in stand-in that answers when no AI model is chosen (provider id `mock`) | **demo model**; what it says is "a scripted demo, not real answers"; under one reply: "Demo answer. No AI model ran." | mock, offline mock, offline demo, offline model, simulated mode |
+| One shell or CLI window on the Build page | **terminal** | pane |
 | Anything Iron Jarvis knows how to do | **skill** | — |
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |
 | A destination you can talk back to | **two-way destination** | gateway, messaging platform |
@@ -47,6 +51,39 @@ user's word; "mission" survives in the URL (`/agents?mission=<id>`) and the
 API (`/missions`) and is kept as a search alias. The round table did not
 vanish — it is the panel that answers an `@`-mention in chat — so its row
 stays, re-scoped to where it lives now.
+
+### One unit of work, one demo, one Iron Jarvis (v1.357.0)
+
+The readiness audit counted the names a new user met for ONE thing. A piece
+of work was a session, a run, a task, an objective, a Mission, a job and an
+assignment; the demo model had six names ("Mock answer", "offline mock",
+"Simulated mode", "the offline demo", "the built-in offline model", "Demo
+replies"); Build said terminal on one line and pane on the next; a dozen
+error lines still said "the daemon". So:
+
+- **task** is the unit of work. A **run** is one attempt at a task (a task
+  that is retried has two runs). The team's one task is still an
+  **objective** (row above). "Session" is the engine's record of a run and
+  names the Advanced Sessions page. It is NOT retired yet: about 120 other
+  lines still say it (the run page, the board, the bell's message row), so
+  the scanner does not police it; folding those into task/run is a later
+  wave's job, and this note goes when it ships.
+- A task another Jarvis sent reads **From <caller>** wherever its origin is
+  shown (origin `remote:<caller>`, `OriginChip.originLabel` and the bell).
+- The **demo model** is the one name for the scripted stand-in, and every
+  surface takes its words from `dashboard/lib/demoWords.ts`.
+- **Iron Jarvis** is the program; a version too old for a feature is "this
+  version of Iron Jarvis". A real file name (`daemon.log`) is a file name.
+- **terminal** is one window on the Build page; the page itself is Build.
+
+`dashboard/__tests__/vocabulary.test.ts` now SCANS: every string literal and
+JSX text node in `dashboard/app`, `components` and `lib` is read through the
+TypeScript parser (`__tests__/helpers/retiredWords.ts`) and a retired word in
+anything a user can read fails the test. Comments, ids, test ids, routes,
+object keys, comparisons, matcher arguments and search aliases are not prose
+and are skipped by rule. The few deliberate uses are listed in the test's
+allowlist, each with a one-line reason, and an allowlist entry that no longer
+matches anything fails too (so a fixed line takes its entry with it).
 
 ## Reserved
 

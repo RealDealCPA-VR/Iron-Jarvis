@@ -51,6 +51,18 @@ text, no memory between calls, and no way for the remote to reach back. Now:
   on re-enable). The daemon lands the message in that room — and, when the
   room belongs to a phone conversation, on the phone — so progress, questions,
   results and files arrive where the user is, unprompted.
+
+ANOTHER IRON JARVIS IS A REMOTE TOO (v1.357.0, G61). A second computer running
+Iron Jarvis turns on its task door (``agents/task_door.py``,
+``POST /agents/task-door/task``) and this one registers it HERE, through the
+same form, as an ``http-task`` remote: its door address and its door token.
+Nothing about the wire changes except what the answer needs: when the remote's
+address IS such a door (:func:`~iron_jarvis.agents.task_door.is_task_door_url`)
+and message-back is on, ``run`` adds ``reply_token`` — this computer's inbound
+token for that remote — beside ``reply_to``, so the other Iron Jarvis can post
+its answer home (every other remote's body is byte-identical); ``test`` asks
+the door a token-checked question instead of handing it a throwaway task; and a
+door's refusal (off, wrong token, Emergency stop, too many) is said in words.
 """
 
 from __future__ import annotations
@@ -156,6 +168,41 @@ def _dialect_hint(kind: str, body: str) -> str:
             "this looks like an OpenAI-compatible endpoint, not a plain task "
             "webhook — set kind to 'openai-responses' or 'openai-chat'"
         )
+    return ""
+
+
+def _door_refusal(record: Any, status: int, body: str) -> str:
+    """Plain words for another Iron Jarvis's task door turning a task away
+    (v1.357.0, G61), or "" when the remote is not such a door (its old
+    "remote returned HTTP …" wording stays). The door's own sentence (its
+    JSON ``detail``) is quoted, prefixed with the remote's name, so the
+    sender's room says WHICH computer refused and why."""
+    try:
+        from .task_door import is_task_door_url
+    except Exception:  # noqa: BLE001
+        return ""
+    if not is_task_door_url(getattr(record, "base_url", "")):
+        return ""
+    name = str(getattr(record, "name", "") or "the other computer")
+    detail = ""
+    try:
+        import json as _json
+
+        parsed = _json.loads(body) if body else None
+        if isinstance(parsed, dict) and isinstance(parsed.get("detail"), str):
+            detail = " ".join(parsed["detail"].split())[:400]
+    except ValueError:
+        detail = ""
+    if status == 401:
+        return (
+            f"{name} turned the task away: its token does not match. Copy the token "
+            f"again from that computer (Agents, Your team, Another computer running "
+            f"Jarvis) and paste it into Edit here."
+        )
+    if status == 429:
+        return f"{name} turned the task away: too many tasks this minute. Try again shortly."
+    if detail:
+        return f"{name} turned the task away: {detail}"
     return ""
 
 
@@ -386,8 +433,23 @@ class RemoteAgentRegistry:
         history: list[dict[str, Any]] | None = None,
         conversation_id: str = "",
         reply_to: str = "",
+        reply_token: str = "",
+        local_only: bool = False,
     ) -> dict[str, Any]:
         """Hand ``task`` to a remote agent and relay its reply.
+
+        ``local_only`` (v1.357.0, G61): the chat this task comes from is local
+        only, so the receiving Iron Jarvis must not hand it to a model off ITS
+        network (it refuses in words instead). Sent as ``"local_only": true``
+        on ``http-task`` only when set; the caller sets it only for another
+        Iron Jarvis's task door.
+
+        ``reply_token`` (v1.357.0, G61): the key the remote must present when
+        it posts its answer to ``reply_to`` — this computer's inbound token
+        for that remote. Sent ONLY beside a ``reply_to`` on ``http-task``; the
+        caller passes it only to another Iron Jarvis's task door
+        (``AgentThreads._speak_remote``), so every other remote's body is
+        unchanged.
 
         Returns ``{ok, result, detail}`` — fail-closed with an honest ``detail``
         on timeout, a non-2xx status, or a reply that doesn't match the shape.
@@ -448,6 +510,10 @@ class RemoteAgentRegistry:
                 payload["history"] = rows
             if reply_to:
                 payload["reply_to"] = reply_to
+                if reply_token:
+                    payload["reply_token"] = reply_token
+            if local_only:
+                payload["local_only"] = True
 
         # v1.288.0 — ``timeout`` is a TOTAL deadline. httpx's ``timeout=`` is
         # per phase (the read timeout is the gap between chunks), so a remote
@@ -478,10 +544,16 @@ class RemoteAgentRegistry:
             return {"ok": True, "accepted": True, "result": "", "detail": "accepted", "files": []}
         if status // 100 != 2:
             snippet = ""
+            body_text = ""
             try:
-                snippet = (resp.text or "")[:200]
+                body_text = (resp.text or "")[:2000]
+                snippet = body_text[:200]
             except Exception:  # noqa: BLE001
                 snippet = ""
+            door_words = _door_refusal(record, status, body_text)
+            if door_words:
+                # v1.357.0 (G61): another Iron Jarvis said why, in words.
+                return {"ok": False, "result": "", "detail": door_words}
             detail = f"remote returned HTTP {status}"
             if snippet:
                 detail += f": {snippet}"
@@ -560,7 +632,15 @@ class RemoteAgentRegistry:
     async def test(
         self, record: RemoteAgentRecord, secret_resolver: SecretResolver
     ) -> dict[str, Any]:
-        """Cheap reachability probe: ask the remote to reply 'ok', short timeout."""
+        """Cheap reachability probe: ask the remote to reply 'ok', short timeout.
+
+        Another Iron Jarvis's task door (v1.357.0, G61) is ASKED, not handed
+        work: a GET on the door with the token answers whether it would take
+        a task — a throwaway "reply ok" task would start a real run there."""
+        from .task_door import is_task_door_url
+
+        if is_task_door_url(record.base_url):
+            return await self._test_door(record, secret_resolver)
         probe = await self.run(
             record,
             "reply with the single word: ok",
@@ -570,6 +650,47 @@ class RemoteAgentRegistry:
         if probe.get("ok"):
             return {"ok": True, "detail": f"{record.name} replied"}
         return {"ok": False, "detail": probe.get("detail") or "probe failed"}
+
+    async def _test_door(
+        self, record: RemoteAgentRecord, secret_resolver: SecretResolver
+    ) -> dict[str, Any]:
+        """Ask another Iron Jarvis's task door whether it takes tasks from this
+        computer (token checked, nothing started). Bounded; never raises."""
+        import httpx
+
+        token = ""
+        if record.secret_name:
+            try:
+                token = (secret_resolver(record.secret_name) or "") if secret_resolver else ""
+            except Exception:  # noqa: BLE001
+                token = ""
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        timeout = min(record.timeout_s or 120, 15)
+        try:
+            async with asyncio.timeout(timeout):
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.get(record.base_url, headers=headers)
+        except Exception:  # noqa: BLE001 — timeout / connection / DNS
+            return {
+                "ok": False,
+                "detail": f"{record.name} could not be reached. Check its address, and "
+                "that the other computer is open to this one (its card says how).",
+            }
+        status = int(getattr(resp, "status_code", 0) or 0)
+        if status == 200:
+            return {
+                "ok": True,
+                "detail": f"{record.name} is another computer running Iron Jarvis and takes tasks from here.",
+            }
+        try:
+            body = (resp.text or "")[:2000]
+        except Exception:  # noqa: BLE001
+            body = ""
+        words = _door_refusal(record, status, body)
+        return {
+            "ok": False,
+            "detail": words or f"{record.name} answered, but did not say it takes tasks from here.",
+        }
 
 
 class DelegateRemoteTool(Tool):

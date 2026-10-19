@@ -152,7 +152,7 @@ describe("TurnReceipt — the quiet adapted line", () => {
       />,
     );
     // The warning stays the warning; the quiet line stays quiet.
-    const chip = screen.getByText(/Mock answer\. No real model ran\./);
+    const chip = screen.getByText(/Demo answer\. No AI model ran\./);
     expect(chip.className).toContain("text-tone-warn");
     const line = screen.getByText(/adapted to tiny/);
     expect(line.className).not.toContain("tone-warn");

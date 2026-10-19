@@ -296,7 +296,7 @@ describe("G49: Bring your tools from Claude, Codex, Cursor…", () => {
     fireEvent.click(within(group).getByTestId("import-source-apply-claude-desktop"));
     fireEvent.click(await within(group).findByTestId("import-open-row-ghost"));
     expect((await within(group).findByTestId("import-row-missing-ghost")).textContent).toBe(
-      "Its row is under Connected packs below.",
+      "Its row is under Connected extensions below.",
     );
   });
 
@@ -396,14 +396,14 @@ describe("G50: respects off, knows what is already connected", () => {
     expect((posted("/mcp/import/apply")[0].body as { names: string[] }).names).toEqual(["ledger-tool", "parked"]);
   });
 
-  it("a tool connected another way reads 'already connected' / 'already a memory source' and starts unticked", async () => {
+  it("a tool connected another way reads 'already connected' / 'already a memory base' and starts unticked", async () => {
     api.sources = [desktop([DRIVE, BRAIN, LEDGER])];
     await openTools();
     const drive = await screen.findByTestId("import-row-google-drive");
     expect(within(drive).getByTestId("import-exists-google-drive").textContent).toBe("already connected");
     expect((within(drive).getByTestId("import-pick-google-drive") as HTMLInputElement).checked).toBe(false);
     const brain = screen.getByTestId("import-row-basic-memory");
-    expect(within(brain).getByTestId("import-exists-basic-memory").textContent).toBe("already a memory source");
+    expect(within(brain).getByTestId("import-exists-basic-memory").textContent).toBe("already a memory base");
     expect((within(brain).getByTestId("import-pick-basic-memory") as HTMLInputElement).checked).toBe(false);
   });
 

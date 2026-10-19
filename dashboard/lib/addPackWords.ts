@@ -67,7 +67,7 @@ export function offWords(app: string): string {
  *  a pack added under another spelling of the name says that name. */
 export function existsWords(row: ImportRow): string {
   if (row.exists_as === "app") return "already connected";
-  if (row.exists_as === "memory") return "already a memory source";
+  if (row.exists_as === "memory") return "already a memory base";
   const other = typeof row.exists_name === "string" ? row.exists_name.trim() : "";
   if (other && other !== row.name) return `already added as ${other}`;
   return "already added";

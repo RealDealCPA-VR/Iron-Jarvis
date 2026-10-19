@@ -327,7 +327,7 @@ describe("a terminal frame that changes nothing on screen renders nothing (B6)",
   it("ten repaints of the same status line cost one render; a new line still shows", async () => {
     render(<TerminalsPage />);
     await screen.findByTestId("terminal-pane-t1");
-    fireEvent.click(screen.getByRole("button", { name: /^Chat view for pane t1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Chat view for t1/ }));
     P.chunk = "\x1b[2K\r✻ Thinking… (esc to interrupt)\r\n";
     fireEvent.click(screen.getByTestId("emit-output-t1"));
     expect(screen.getByTestId("pane-peek-t1")).toHaveTextContent("Thinking");

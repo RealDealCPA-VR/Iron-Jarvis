@@ -323,7 +323,7 @@ function AddIntegrationForm({
             type="text"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="What this connector is for"
+            placeholder="What this connection is for"
             autoComplete="off"
             className="field text-sm"
           />

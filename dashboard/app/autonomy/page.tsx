@@ -168,8 +168,8 @@ function count(v: number | null | undefined): string {
  *  starts, and how many runs it stopped (the daemon's count). Pure. */
 function killEngagedWords(stopped: number | null | undefined): string {
   const n = typeof stopped === "number" && Number.isFinite(stopped) && stopped > 0 ? Math.floor(stopped) : 0;
-  const base = "Kill switch engaged — schedules, goals, rules, phone jobs and autonomy will not start.";
-  return n > 0 ? `${base} Stopped ${n} running ${n === 1 ? "job" : "jobs"}.` : base;
+  const base = "Kill switch engaged — schedules, goals, rules, phone tasks and autonomy will not start.";
+  return n > 0 ? `${base} Stopped ${n} running ${n === 1 ? "task" : "tasks"}.` : base;
 }
 
 function errText(err: unknown): string {
@@ -437,7 +437,7 @@ export default function AutonomyPage() {
                 title={
                   killed
                     ? "Release the global kill switch"
-                    : "Stop everything that starts on its own: schedules, goals, rules, phone jobs and autonomy"
+                    : "Stop everything that starts on its own: schedules, goals, rules, phone tasks and autonomy"
                 }
               >
                 {killBusy ? (
@@ -478,7 +478,7 @@ export default function AutonomyPage() {
                 Kill switch engaged — autonomy is halted.
               </div>
               <div className="mt-1 text-rose-100/60" data-testid="kill-switch-scope">
-                Schedules, goals, rules, phone jobs and autonomy will not start, and
+                Schedules, goals, rules, phone tasks and autonomy will not start, and
                 what they had running was stopped. Chat and work you start still
                 run. Release it above to resume.
               </div>

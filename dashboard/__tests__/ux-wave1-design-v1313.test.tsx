@@ -563,8 +563,8 @@ describe("C. status primitives read through the tone tokens", () => {
     // v1.314.0: the visible word is "demo model"; the title still names it
     // honestly (scripted, no real AI) and keeps the old term for search.
     const chip = screen.getByText(/demo model/);
-    expect(chip.getAttribute("title")).toMatch(/scripted replies, no real AI/);
-    expect(chip.getAttribute("title")).toMatch(/offline mock/);
+    expect(chip.getAttribute("title")).toMatch(/a scripted demo, not real answers/);
+    expect(chip.getAttribute("title")).toMatch(/demo model/);
     expect(chip.className).toContain("text-tone-warn");
     expect(chip.className).not.toMatch(NO_RAW_HUE);
   });

@@ -596,7 +596,7 @@ export default function SessionDetailPage({
                     </>
                   ) : (
                     <p data-testid="session-interrupted-part" className="mt-0.5 text-zinc-400">
-                      It was part of a bigger job. Continue that job instead.
+                      It was part of a bigger task. Continue that task instead.
                     </p>
                   )}
                 </div>

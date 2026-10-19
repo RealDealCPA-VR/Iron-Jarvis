@@ -96,7 +96,7 @@ describe("mcp.pack_failed in the bell", () => {
   it("maps to 'Pack <name> is failing: <reason>' linking to the Tools page, the fix as the body", () => {
     const item = toActivity(FAILED);
     expect(item).not.toBeNull();
-    expect(item!.title).toBe("Pack brave is failing: It needs BRAVE_API_KEY and none was given");
+    expect(item!.title).toBe("Extension brave is failing: It needs BRAVE_API_KEY and none was given");
     expect(item!.href).toBe("/tools");
     // v1.355.0 (G32, updated on purpose): the body also says what keeps
     // working (the fix gets its full stop first).
@@ -110,14 +110,14 @@ describe("mcp.pack_failed in the bell", () => {
 
   it("with no reason it names the error; with neither it still names the pack", () => {
     const noReason = toActivity(ev({ name: "brave", error: "exit code 1", reason: "", fix: "" }))!;
-    expect(noReason.title).toBe("Pack brave is failing: exit code 1");
+    expect(noReason.title).toBe("Extension brave is failing: exit code 1");
     // v1.355.0 (G32, updated on purpose): with no fix the body still says
     // what keeps working (it was empty).
     expect(noReason.body).toBe("Chat and your other tools keep working.");
     const bare = toActivity(ev({ name: "brave" }))!;
-    expect(bare.title).toMatch(/^Pack brave is failing: \S/);
+    expect(bare.title).toMatch(/^Extension brave is failing: \S/);
     const nameless = toActivity(ev({}))!;
-    expect(nameless.title).toMatch(/^Pack a pack is failing: /);
+    expect(nameless.title).toMatch(/^Extension an extension is failing: /);
   });
 
   it("the pack's error text never reaches the row as its title (the reason does)", () => {
@@ -131,7 +131,7 @@ describe("mcp.pack_failed in the bell", () => {
     render(<NotificationBell />);
     fireEvent.click(await screen.findByRole("button", { name: /notification/i }));
     const title = await screen.findByText(
-      "Pack brave is failing: It needs BRAVE_API_KEY and none was given",
+      "Extension brave is failing: It needs BRAVE_API_KEY and none was given",
     );
     const link = title.closest("a") as HTMLAnchorElement;
     expect(link).toBeTruthy();

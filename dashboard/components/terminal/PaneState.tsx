@@ -203,7 +203,7 @@ export function PaneStateSummary({
         <span className="flex flex-wrap items-center gap-1.5">
           <AlertTriangle size={12} className="shrink-0 text-tone-warn" aria-hidden />
           <span className="text-tone-warn/90">
-            {blocked.length} pane{blocked.length === 1 ? "" : "s"} need
+            {blocked.length} terminal{blocked.length === 1 ? "" : "s"} need
             {blocked.length === 1 ? "s" : ""} you
           </span>
           {blocked.map((p) => (
@@ -212,7 +212,7 @@ export function PaneStateSummary({
               type="button"
               onClick={() => onFocus(p.id)}
               data-testid={`focus-blocked-${p.id}`}
-              title="Bring this pane to the front"
+              title="Bring this terminal to the front"
               className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-tone-warn transition-colors hover:bg-tone-warn/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-tone-warn/50"
             >
               {p.name || p.id}

@@ -13,6 +13,7 @@ import {
 import Link from "next/link";
 import { DESKTOP_OFFLINE_HINT, isDesktopShell } from "@/lib/desktopShell";
 import { OFFLINE_SAVED_SENTENCE, OFFLINE_TITLE } from "@/lib/offlineWords";
+import { DEMO_CHIP_TITLE, DEMO_MODEL } from "@/lib/demoWords";
 
 /** v1.354.0 (G30): the app's own words for an outage ("Iron Jarvis isn't
  *  responding"), never "the daemon". Defined in lib/offlineWords (lib/api
@@ -487,16 +488,16 @@ export function Empty({
   );
 }
 
-/** A small warn-tone chip marking sessions that ran on the built-in offline
- *  model. The words and the title are the disclosure; the tone (v1.313.0)
+/** A small warn-tone chip marking sessions that ran on the built-in demo
+ *  model (lib/demoWords). The words and the title are the disclosure; the tone (v1.313.0)
  *  only makes sure it can be READ on every Mark. */
 export function MockChip({ className = "" }: { className?: string }) {
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full border border-tone-warn/25 bg-tone-warn/10 px-2 py-0.5 text-[10px] font-medium text-tone-warn ${className}`}
-      title="Ran on the built-in demo model — scripted replies, no real AI (offline mock)"
+      title={DEMO_CHIP_TITLE}
     >
-      <MoonStar size={10} /> demo model
+      <MoonStar size={10} /> {DEMO_MODEL}
     </span>
   );
 }

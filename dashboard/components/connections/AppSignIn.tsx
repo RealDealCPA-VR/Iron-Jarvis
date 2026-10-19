@@ -117,7 +117,7 @@ export function signInLine(signin: Pick<AppSigninRow, "account">): string {
 
 /** What the pane shows, said after the press. */
 export const PANE_OPENED_LINE =
-  "A Build pane opened with a web address and a code. Open the address, type the code and sign in there.";
+  "A Build terminal opened with a web address and a code. Open the address, type the code and sign in there.";
 
 /** The card's Sign in press. `id` is the card's id (test ids). */
 export function AppSignIn({ id, signin }: { id: string; signin: AppSigninRow }) {
@@ -145,7 +145,7 @@ export function AppSignIn({ id, signin }: { id: string; signin: AppSigninRow }) 
         <span data-testid={`connector-signin-hint-${id}`}>
           {PANE_OPENED_LINE}{" "}
           <Link href={paneHref(paneId)} className={ROW_LINK}>
-            Open the Build pane
+            Open the Build terminal
           </Link>
         </span>
       ) : (

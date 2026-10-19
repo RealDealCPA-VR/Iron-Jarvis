@@ -76,7 +76,7 @@ describe("downgradeNotice — what each event says", () => {
   it("a refused RUN says plainly that nothing answered, by the endpoint's label", () => {
     const n = downgradeNotice(REFUSED_RUN)!;
     expect(n.kind).toBe("refused");
-    expect(n.title).toBe("Nothing answered a background job.");
+    expect(n.title).toBe("Nothing answered a background task.");
     expect(n.detail).toBe("Office Spark: not connected.");
     expect(`${n.title} ${n.detail}`).not.toMatch(/mock/i);
   });
@@ -89,8 +89,9 @@ describe("downgradeNotice — what each event says", () => {
   it("a mock that REALLY answered keeps the old truth", () => {
     const n = downgradeNotice(MOCK)!;
     expect(n.kind).toBe("mock");
-    expect(n.title).toBe("Output came from the mock model.");
-    expect(n.detail).toMatch(/^Your default provider is 'mock'/);
+    expect(n.title).toBe("Demo answer. No AI model ran.");
+    expect(n.detail).toMatch(/^Your default is still the demo model/);
+    expect(n.detail).not.toMatch(/mock/i); // v1.357.0: the daemon's own reason names the id; the banner never echoes it
     expect(n.detail).not.toContain(DASH);
   });
 
@@ -113,7 +114,7 @@ describe("ProviderDowngradeBanner — rendered", () => {
     render(<ProviderDowngradeBanner />);
     const line = screen.getByTestId("provider-downgrade");
     expect(line).toHaveAttribute("data-kind", "refused");
-    expect(line).toHaveTextContent("Nothing answered a background job. Office Spark: not connected.");
+    expect(line).toHaveTextContent("Nothing answered a background task. Office Spark: not connected.");
     expect(line.textContent).not.toMatch(/mock/i);
     expect(screen.getByRole("link", { name: "Open Connections" })).toHaveAttribute("href", "/connections");
     expect(line.innerHTML).toContain("text-tone-danger");
@@ -124,7 +125,7 @@ describe("ProviderDowngradeBanner — rendered", () => {
     render(<ProviderDowngradeBanner />);
     const line = screen.getByTestId("provider-downgrade");
     expect(line).toHaveAttribute("data-kind", "mock");
-    expect(line).toHaveTextContent("Output came from the mock model.");
+    expect(line).toHaveTextContent("Demo answer. No AI model ran.");
     expect(line.innerHTML).toContain("text-tone-warn");
     expect(line.innerHTML).not.toMatch(/amber-|rose-/);
     expect(line.textContent).not.toContain(DASH);

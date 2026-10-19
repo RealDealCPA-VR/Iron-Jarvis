@@ -182,9 +182,9 @@ describe("G33 — a signed-out Claude Code is one press from signing in", () => 
       account: "default",
     });
     const hint = await screen.findByTestId("cli-pane-hint-claude-cli");
-    expect(hint.textContent).toMatch(/A Build pane opened with Claude Code running\. Type \/login there/);
+    expect(hint.textContent).toMatch(/A Build terminal opened with Claude Code running\. Type \/login there/);
     expect(hint.textContent).toMatch(/turns green by itself/);
-    expect(within(hint).getByRole("link", { name: "Open the Build pane" }).getAttribute("href")).toBe(
+    expect(within(hint).getByRole("link", { name: "Open the Build terminal" }).getAttribute("href")).toBe(
       "/terminals?focus=pane-7",
     );
     expect(hooks.refresh).toHaveBeenCalled(); // the row follows /health at once

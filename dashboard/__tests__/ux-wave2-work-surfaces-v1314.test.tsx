@@ -473,7 +473,7 @@ describe("New-session form: no 'mock' in the model picker", () => {
   it("anti-vacuity: the honest 'built-in offline model' banner and Connect door stay", () => {
     seed();
     render(<NewSessionForm />);
-    expect(screen.getByText(/Running on the built-in offline model/)).toBeInTheDocument();
+    expect(screen.getByText(/Running on the built-in demo model/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Connect a real model/ }).getAttribute("href")).toBe("/connections");
   });
 });

@@ -1678,6 +1678,42 @@ class AgentThreads:
             return ""
         return str(getattr(record, "inbound_url", "") or "")
 
+    @staticmethod
+    async def _reply_token_for(record: Any, d: Any) -> str:
+        """This computer's inbound token for ``record`` — sent beside
+        ``reply_to`` ONLY when the remote is another Iron Jarvis's task door
+        (v1.357.0, G61), so that computer can post its answer home. Every
+        other remote is handed nothing new (its body stays byte-identical).
+        The vault read is off the loop; any miss is "" (no key sent)."""
+        from .task_door import is_task_door_url
+
+        if not is_task_door_url(getattr(record, "base_url", "")):
+            return ""
+        name = str(getattr(record, "inbound_secret_name", "") or "")
+        if not name or not bool(getattr(record, "inbound_enabled", False)):
+            return ""
+        try:
+            return str(await asyncio.to_thread(d.platform.secrets.get, name) or "")
+        except Exception:  # noqa: BLE001 — a vault miss sends no key
+            return ""
+
+    @staticmethod
+    def _local_only_for_door(record: Any) -> bool:
+        """A LOCAL-ONLY chat that @-mentions another Iron Jarvis (v1.357.0,
+        G61) tells that computer so: it is on this network (the seat check
+        above let it speak), but the model IT answers with might not be — so
+        the door refuses there instead of handing this chat to a cloud model.
+        Only a task door hears it; any other remote's body is unchanged."""
+        try:
+            from ..providers import egress as _egress
+            from .task_door import is_task_door_url
+
+            return bool(_egress.current_scope().on) and is_task_door_url(
+                getattr(record, "base_url", "")
+            )
+        except Exception:  # noqa: BLE001 — cannot judge: say local only
+            return True
+
     async def _speak_remote(
         self,
         p: dict[str, str],
@@ -1716,13 +1752,18 @@ class AgentThreads:
                 # v1.304.0: it was handed only the user's lines and its own.
                 brief += " " + PROJECT_ROOM_PRIVATE_NOTE
             task = f"{brief}\n\n{message or transcript or '(no message)'}"
+            reply_to = self._inbound_url(record)
             out = await registry.run(
                 record,
                 task,
                 d.platform.secrets.get,
                 history=history,
                 conversation_id=conversation_id,
-                reply_to=self._inbound_url(record),
+                reply_to=reply_to,
+                reply_token=(
+                    await self._reply_token_for(record, d) if reply_to else ""
+                ),
+                local_only=self._local_only_for_door(record),
             )
         else:
             task = (

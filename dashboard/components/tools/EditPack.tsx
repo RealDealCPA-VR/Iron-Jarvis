@@ -473,7 +473,7 @@ export function EditPack({
         >
           Cancel
         </button>
-        <span className="text-[11px] text-zinc-600">Only what you changed is sent. The pack restarts after a save.</span>
+        <span className="text-[11px] text-zinc-600">Only what you changed is sent. The extension restarts after a save.</span>
       </div>
     </div>
   );

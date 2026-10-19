@@ -122,6 +122,7 @@ import { CALM_ACTION, ENDPOINT_CHIP, ENDPOINT_CHIP_BUTTON } from "@/components/c
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { ProviderMark } from "@/components/BrandGlyph";
+import { DEMO_REPLIES } from "@/lib/demoWords";
 
 /* -------------------------------------------------------------------------- */
 /*  Saved-endpoint row lines (v1.330.0, calm wave 12)                          */
@@ -1242,8 +1243,8 @@ function ConnectionCard({
       {/* Body */}
       {isMock ? (
         <p className="text-xs leading-relaxed text-zinc-500">
-          The built-in demo model: scripted replies, no AI. Always available for testing. No
-          key needed.
+          The built-in demo model: {DEMO_REPLIES}. Always available for testing. No key
+          needed.
         </p>
       ) : conn.connected && !ownEndpoint ? (
         // v1.354.0 (G47): a card connected through its own keyless server
@@ -1741,10 +1742,10 @@ function CliSignInAction({ provider }: { provider: string }) {
     <div data-testid={`cli-sign-in-${provider}`} className="mt-1 text-[11px] leading-relaxed text-zinc-500">
       {si.paneId !== undefined ? (
         <span data-testid={`cli-pane-hint-${provider}`}>
-          A Build pane opened with {cli.name} running. {withCode(cli.paneHint)} This turns green by
+          A Build terminal opened with {cli.name} running. {withCode(cli.paneHint)} This turns green by
           itself once you&apos;re signed in.{" "}
           <Link href={paneHref(si.paneId)} className={ROW_LINK}>
-            Open the Build pane
+            Open the Build terminal
           </Link>
         </span>
       ) : (
@@ -2388,7 +2389,7 @@ export default function ConnectionsPage() {
               type="button"
               onClick={rescanClis}
               disabled={rescanBusy}
-              title="Re-detect locally installed CLI providers (Claude, Codex, Grok) without restarting the daemon"
+              title="Re-detect locally installed CLI providers (Claude, Codex, Grok) without restarting Iron Jarvis"
               className={CALM_ACTION}
             >
               {rescanBusy ? (

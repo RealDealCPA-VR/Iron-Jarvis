@@ -172,7 +172,7 @@ describe("the one conditional line", () => {
       "1 task running · 1 waiting for you",
     );
     expect(homeLineItems({ interrupted: 1, failingLoops: 0, failingPacks: 0, running: 0, waiting: 0 })[0].text).toBe(
-      "1 job was interrupted by the last restart.",
+      "1 task was interrupted by the last restart.",
     );
   });
 

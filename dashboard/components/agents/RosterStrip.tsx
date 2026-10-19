@@ -341,7 +341,7 @@ export function LivePill({
         busy
           ? `${bare} is running a session right now`
           : idle
-            ? `${bare} is free. A queued job runs as soon as it is given one`
+            ? `${bare} is free. A queued task runs as soon as it is given one`
             : `${bare} has a session waiting for a free slot`
       }
       // v1.329.0 (calm chat wave 9, K4): the dot and the word in a tone, no
@@ -965,7 +965,7 @@ export function RosterStrip({
                 // names a removed surface is a small lie about the only thing
                 // the button does, and the strip cannot know which composition
                 // it is in, so it names the intent instead.
-                title={`Give ${shown} a job`}
+                title={`Give ${shown} a task`}
                 className="btn-ghost shrink-0 px-2.5 py-1.5 text-[11.5px]"
               >
                 <Briefcase size={12} /> Give work

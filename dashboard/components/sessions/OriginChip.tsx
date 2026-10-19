@@ -1,5 +1,7 @@
 "use client";
 
+import { REMOTE_KIND, remoteOriginLabel } from "@/lib/remoteTask";
+
 /**
  * OriginChip — who started this session (v1.168.0).
  *
@@ -39,10 +41,13 @@ export function originKind(origin: string): string {
   return (i >= 0 ? origin.slice(0, i) : origin).trim();
 }
 
-/** v1.314.0 (UX wave 2): whole origins that have their own words. */
+
+/** v1.314.0 (UX wave 2): whole origins that have their own words.
+ *  v1.357.0 (G76): the canon's words — a mission is an "Objective" (the word
+ *  the Agents page and the bell already say) and a queued task is a "task". */
 const EXACT_WORDS: Record<string, string> = {
-  "job:mission": "Mission",
-  "job:mission-member": "Mission teammate",
+  "job:mission": "Objective",
+  "job:mission-member": "Objective teammate",
   "job:agents": "Agents page",
   self_dev: "Self-development",
   "memory-review": "Memory review",
@@ -62,9 +67,9 @@ const KIND_WORDS: Record<string, { word: string; showName: boolean }> = {
   comm: { word: "Message", showName: true },
   workflow: { word: "Workflow", showName: false },
   goal: { word: "Goal", showName: false },
-  assignment: { word: "Queued job", showName: false },
+  assignment: { word: "Queued task", showName: false },
   project: { word: "Project task", showName: false },
-  job: { word: "Job", showName: true },
+  job: { word: "Task", showName: true },
   sentinel: { word: "Sentinel", showName: true },
 };
 
@@ -79,6 +84,9 @@ export function originLabel(origin: string | null | undefined): string {
   if (!value) return "";
   if (EXACT_WORDS[value]) return EXACT_WORDS[value];
   const kind = originKind(value);
+  // v1.357.0 (G76): a task another Jarvis sent (`remote:<caller>`, stamped
+  // by the daemon's task door) reads as who sent it (lib/remoteTask).
+  if (kind === REMOTE_KIND) return remoteOriginLabel(value);
   const rule = KIND_WORDS[kind];
   if (!rule) return value;
   const name = value.slice(kind.length + 1).trim();

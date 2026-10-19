@@ -278,7 +278,7 @@ describe("the Your team panel is plain sections, not boxes", () => {
   it("the inbox's empty line is two plain sentences", async () => {
     panel();
     const line = await screen.findByTestId("inbox-empty-builder");
-    expect(line.textContent).toBe("Nothing queued. Give builder a job above and it runs when builder is free.");
+    expect(line.textContent).toBe("Nothing queued. Give builder a task above and it runs when builder is free.");
   });
 
   it("the open row is a soft fill, not an accent-bordered box; a remote's kind is a quiet word", () => {

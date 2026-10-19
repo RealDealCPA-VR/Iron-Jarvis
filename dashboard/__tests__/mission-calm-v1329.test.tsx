@@ -149,14 +149,14 @@ describe("a teammate card says the mock in the chat's words", () => {
 
   it("a DONE mock teammate: 'Mock answer. No real model ran (mock · mock-1).' in the warn tone", async () => {
     const line = await modelLine(member());
-    expect(line.textContent).toBe("Mock answer. No real model ran (mock · mock-1).");
+    expect(line.textContent).toBe("Demo answer. No AI model ran (mock · mock-1).");
     expect(line.className).toContain("text-tone-warn");
     expect(line.textContent).not.toContain("—");
   });
 
   it("a mock teammate that has not answered says so in plain sentences", async () => {
     const line = await modelLine(member({ status: "working", model: "" }));
-    expect(line.textContent).toBe("On the mock. No real model ran (mock).");
+    expect(line.textContent).toBe("On the demo model. No AI model ran (mock).");
   });
 
   it("control: a real model keeps the receipt's tense and the quiet colour", async () => {
@@ -192,19 +192,19 @@ describe("the mission receipt says the mock in the chat's words", () => {
   it("a completed mock mission: 'Mock answer. No real model ran.' + the way to Connections", () => {
     renderOutput(view());
     const receipt = screen.getByTestId("mission-receipt");
-    expect(receipt.textContent).toBe("Mock answer. No real model ran. Connect a model on Connections");
+    expect(receipt.textContent).toBe("Demo answer. No AI model ran. Connect a model on Connections");
     expect(receipt.className).toContain("text-tone-warn");
     expect(receipt.querySelector('a[href="/connections"]')).not.toBeNull();
   });
 
   it("a failed mock mission: 'On the mock. No real model ran.'", () => {
     renderOutput(view({ status: "failed" }));
-    expect(screen.getByTestId("mission-receipt").textContent).toMatch(/^On the mock\. No real model ran\. /);
+    expect(screen.getByTestId("mission-receipt").textContent).toMatch(/^On the demo model\. No AI model ran\. /);
   });
 
   it("mockLine is the one wording both places read", () => {
-    expect(mockLine(true)).toBe("Mock answer. No real model ran.");
-    expect(mockLine(false)).toBe("On the mock. No real model ran.");
+    expect(mockLine(true)).toBe("Demo answer. No AI model ran.");
+    expect(mockLine(false)).toBe("On the demo model. No AI model ran.");
   });
 
   it("a card's parenthetical never breaks inside 'mock-1'", async () => {

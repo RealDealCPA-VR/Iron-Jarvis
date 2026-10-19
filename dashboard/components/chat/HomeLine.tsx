@@ -14,7 +14,7 @@
  *
  * v1.351.0 (readiness audit G02): a scheduled job whose last run failed or
  * finished short of the job (an ask expired, a step failed) gets its own
- * line — "1 scheduled job needs a look" — whose Open goes to /schedules,
+ * line — "1 scheduled task needs a look" (v1.357.0: was "job") — whose Open goes to /schedules,
  * where the row says what happened. It ranks under an ask that is waiting
  * NOW and above work that is merely running.
  *
@@ -68,7 +68,8 @@ export function homeLineItems(input: {
   if (input.interrupted > 0) {
     out.push({
       kind: "interrupted",
-      text: `${input.interrupted} ${s(input.interrupted, "job was", "jobs were")} interrupted by the last restart.`,
+      // v1.357.0 (G76): the canon's unit of work is a task.
+      text: `${input.interrupted} ${s(input.interrupted, "task was", "tasks were")} interrupted by the last restart.`,
     });
   }
   const failing = input.failingLoops + input.failingPacks;
@@ -81,7 +82,7 @@ export function homeLineItems(input: {
   const short = input.shortSchedules ?? 0;
   const schedules: HomeLineItem | null =
     short > 0
-      ? { kind: "schedules", text: `${short} scheduled ${s(short, "job needs", "jobs need")} a look` }
+      ? { kind: "schedules", text: `${short} scheduled ${s(short, "task needs", "tasks need")} a look` }
       : null;
   let working: HomeLineItem | null = null;
   if (input.running > 0 || input.waiting > 0) {

@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef } from "react";
 import { Cable, Cpu, TriangleAlert } from "lucide-react";
 import { useDaemon } from "@/lib/daemon";
 import { noModelChosen } from "@/lib/onboarding";
+// v1.357.0 (G76): the ONE demo name and sentence.
+import { DEMO_REPLIES, DEMO_STATE } from "@/lib/demoWords";
 
 /**
  * A slim, PERSISTENT (deliberately non-dismissable) strip shown whenever the
@@ -13,7 +15,8 @@ import { noModelChosen } from "@/lib/onboarding";
  * no way to hide it; the only way to make it go away is to choose a model.
  *
  * Two cases, two honest sentences (v1.313.0):
- *  1. NOTHING is connected — "Simulated mode", and the way out is
+ *  1. NOTHING is connected — "Demo replies" (v1.357.0; was "Simulated
+ *     mode", a second name for the same demo), and the way out is
  *     Connections ("Connect a model").
  *  2. A model IS connected (a Claude/Codex sign-in, Ollama…) but none has
  *     been chosen to answer, so the default is still the demo. Before
@@ -96,10 +99,10 @@ export function SimulatedBanner() {
         {hasRealProvider ? (
           <>
             <p className="min-w-0 flex-1 text-[13px] leading-snug text-amber-100/90">
-              <span className="font-semibold text-amber-200">Demo replies</span>
+              <span className="font-semibold text-amber-200">{DEMO_STATE}</span>
               <span className="text-amber-100/70">
                 {" "}
-                — a model is connected but not chosen yet, so replies are scripted.
+                — a model is connected but not chosen yet, so replies are {DEMO_REPLIES}.
               </span>
             </p>
             <button
@@ -113,10 +116,10 @@ export function SimulatedBanner() {
         ) : (
           <>
             <p className="min-w-0 flex-1 text-[13px] leading-snug text-amber-100/90">
-              <span className="font-semibold text-amber-200">Simulated mode</span>
+              <span className="font-semibold text-amber-200">{DEMO_STATE}</span>
               <span className="text-amber-100/70">
                 {" "}
-                — no AI model is connected, so replies are fabricated by an offline mock.
+                — no AI model is connected, so replies are {DEMO_REPLIES}.
               </span>
             </p>
             <Link

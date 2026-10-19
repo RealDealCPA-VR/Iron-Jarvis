@@ -208,8 +208,8 @@ export function paneAccountTooltip(
   const lines: string[] = [];
   lines.push(
     isDefault(a)
-      ? `This pane runs ${cli} on this PC's own login (outside Iron-Proxy).`
-      : `This pane runs ${cli} as the Iron-Proxy account “${a.title}”.`,
+      ? `This terminal runs ${cli} on this PC's own login (outside Iron-Proxy).`
+      : `This terminal runs ${cli} as the Iron-Proxy account “${a.title}”.`,
   );
   const s = a.state ?? "";
   if (s === "parked") {
@@ -222,19 +222,19 @@ export function paneAccountTooltip(
     lines.push("That account needs signing in again — use Sign in on the Connections page.");
   } else if (s === "missing" && a.reason === "disabled") {
     lines.push(
-      "That account is switched off in Iron-Proxy — turn it back on from the Connections page, or start a new pane on another account.",
+      "That account is switched off in Iron-Proxy — turn it back on from the Connections page, or start a new terminal on another account.",
     );
   } else if (s === "missing") {
-    lines.push("That account is no longer in Iron-Proxy — start a new pane to choose another.");
+    lines.push("That account is no longer in Iron-Proxy — start a new terminal to choose another.");
   }
   lines.push(
-    "The account is fixed for this pane's life: a running CLI cannot change accounts. " +
-      `To use another one, open Launch (the rocket) → ${cli} → “as …”, which opens a new pane on it.`,
+    "The account is fixed for this terminal's life: a running CLI cannot change accounts. " +
+      `To use another one, open Launch (the rocket) → ${cli} → “as …”, which opens a new terminal on it.`,
   );
   const others = Object.keys(accounts)
     .filter((p) => p !== provider)
     .map((p) => accountLabel(p, accounts[p]));
-  if (others.length) lines.push(`Also on this pane: ${others.join(", ")}.`);
+  if (others.length) lines.push(`Also on this terminal: ${others.join(", ")}.`);
   const notes = Object.values(accounts)
     .map((x) => x.note)
     .filter((n): n is string => !!n);

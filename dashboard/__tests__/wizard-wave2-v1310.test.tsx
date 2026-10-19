@@ -433,14 +433,14 @@ describe("the celebration reads the provider that ACTUALLY answered", () => {
     const verdict = await waitFor(
       () => {
         const v = screen.getByTestId("first-task-verdict");
-        expect(v.textContent).toMatch(/offline demo|output is real/i);
+        expect(v.textContent).toMatch(/Demo answer|output is real/i);
         return v;
       },
       { timeout: 8000 },
     );
     expect(dialog().textContent).not.toMatch(/output is real/i);
-    expect(verdict.textContent).toMatch(/offline demo/i);
-    expect(verdict.textContent).toMatch(/no model ran/i);
+    expect(verdict.textContent).toMatch(/Demo answer/i);
+    expect(verdict.textContent).toMatch(/no AI model ran/i);
     expect(verdict.className).toMatch(/amber/);
   });
 
@@ -454,7 +454,7 @@ describe("the celebration reads the provider that ACTUALLY answered", () => {
     await screen.findByRole("button", { name: /Start using Iron Jarvis/ });
     // Named: who answered, read off the session row.
     expect(dialog().textContent).toMatch(/anthropic/i);
-    expect(dialog().textContent).not.toMatch(/offline demo/i);
+    expect(dialog().textContent).not.toMatch(/Demo answer/i);
     expect(screen.getByTestId("first-task-verdict").textContent).toMatch(/anthropic/i);
     // Handed over: the file the run wrote (SessionFiles pattern) — the
     // summary deliberately does not mention it, so only a file list can.

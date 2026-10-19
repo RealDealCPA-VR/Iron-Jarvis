@@ -239,7 +239,7 @@ export function ProposalsCard() {
         icon={<Inbox size={15} aria-hidden="true" />}
       >
         <p className="mb-3 text-[13px] leading-relaxed text-zinc-500">
-          When a job would have gone better with a tool Iron Jarvis doesn&apos;t have,
+          When a task would have gone better with a tool Iron Jarvis doesn&apos;t have,
           the agent asks for it here instead of working around it.{" "}
           <span className="text-zinc-300">
             Asking creates nothing — approving is what creates it.

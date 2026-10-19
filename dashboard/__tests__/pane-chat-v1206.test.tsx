@@ -492,7 +492,7 @@ describe("receipt + doors: the done frame's server truth renders", () => {
     // disclosure the receipt exists for.
     await waitFor(() =>
       expect(
-        screen.getByText(/Mock answer\. No real model ran\./i),
+        screen.getByText(/Demo answer\. No AI model ran\./i),
       ).toBeInTheDocument(),
     );
     expect(screen.getByText(/adapted to qwen-3b/i)).toBeInTheDocument();
@@ -569,7 +569,7 @@ describe("honest failure states", () => {
     render(<PaneChat paneId="p1" cwd={CWD} />);
     await waitFor(() =>
       expect(
-        screen.getByText(/Couldn't load this pane's conversation/i),
+        screen.getByText(/Couldn't load this terminal's conversation/i),
       ).toBeInTheDocument(),
     );
     expect(screen.getByLabelText("Message")).toBeDisabled();
@@ -982,7 +982,7 @@ describe("a reply's files: listed once, opened and undone from the receipt (BC2;
     const prompt = String(confirmSpy.mock.calls[0][0]);
     expect(prompt).toContain("out.md");
     expect(prompt).toContain("NEWEST write");
-    expect(prompt).toContain("panes and Chat share one journal");
+    expect(prompt).toContain("terminals and Chat share one journal");
     // Remembered by action id: the press is spent even after the refetch.
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /undo the write to out\.md/i })).toBeDisabled(),

@@ -60,18 +60,18 @@ describe("providerDisplay — no 'mock' in front of a user", () => {
   it("MockChip's visible words are 'demo model'", () => {
     render(<MockChip />);
     expect(screen.getByText(/demo model/)).toBeInTheDocument();
-    expect(screen.queryByText(/offline mock/)).toBeNull(); // only in the title
+    expect(screen.queryByText(/offline mock/)).toBeNull(); // v1.357.0: nowhere now
   });
 });
 
 describe("originLabel / OriginChip — plain words, raw kept", () => {
   it.each([
-    ["job:mission", "Mission"],
-    ["job:mission-member", "Mission teammate"],
+    ["job:mission", "Objective"],
+    ["job:mission-member", "Objective teammate"],
     ["schedule:nightly-brief", "Schedule · nightly-brief"],
     ["comm:email", "Message · email"],
     ["reflex:on-mail", "Reflex · on-mail"],
-    ["assignment:asg_123abc", "Queued job"],
+    ["assignment:asg_123abc", "Queued task"],
     ["project:project_c4078b", "Project task"],
     ["self_dev", "Self-development"],
     ["rerun", "Re-run"],
@@ -87,7 +87,7 @@ describe("originLabel / OriginChip — plain words, raw kept", () => {
   it("the chip shows the words, keeps the raw origin in title + data-origin, and is not monospace", () => {
     render(<OriginChip origin="assignment:asg_123abc" />);
     const chip = screen.getByTestId("origin-chip");
-    expect(chip.textContent).toBe("Queued job");
+    expect(chip.textContent).toBe("Queued task");
     expect(chip.getAttribute("data-origin")).toBe("assignment:asg_123abc");
     expect(chip.getAttribute("title")).toBe("Started by: assignment:asg_123abc");
     expect(chip.className.split(/\s+/)).not.toContain("font-mono");

@@ -104,7 +104,7 @@ export function LaunchAccountRows({
     try {
       const res = await post<unknown>("/terminals/launch", launchBody(cliId, choiceId, paneId));
       const id = openedPaneId(res);
-      if (!id) throw new Error("The daemon did not open a new pane.");
+      if (!id) throw new Error("Iron Jarvis did not open a new terminal.");
       onOpened({ ...(res as object), id } as OpenedPane);
     } catch (err) {
       // The daemon's one plain sentence (409: parked / needs sign-in / missing).
@@ -133,8 +133,8 @@ export function LaunchAccountRows({
         title={
           why ??
           (own
-            ? `This pane already runs ${cliLabel} on this account — types it here.`
-            : `Opens a new pane next to this one with ${cliLabel} started on this account.`)
+            ? `This terminal already runs ${cliLabel} on this account — types it here.`
+            : `Opens a new terminal next to this one with ${cliLabel} started on this account.`)
         }
         onClick={() => void choose(choiceId)}
         className="flex w-full items-center justify-between gap-2 rounded-lg py-1 pl-7 pr-2 text-left text-[11px] text-zinc-300 transition-colors hover:bg-accent/10 hover:text-accent-soft disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-zinc-300"
@@ -144,7 +144,7 @@ export function LaunchAccountRows({
           <span className="truncate">as {title}</span>
         </span>
         <span className="shrink-0 text-[10px] text-zinc-500">
-          {own ? "this pane" : disabled ? word : [word, "new pane"].filter(Boolean).join(" · ")}
+          {own ? "this terminal" : disabled ? word : [word, "new terminal"].filter(Boolean).join(" · ")}
         </span>
       </button>
     );

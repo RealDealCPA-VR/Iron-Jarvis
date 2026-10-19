@@ -719,8 +719,8 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
             </div>
           ) : (
             <div className="text-xs text-zinc-600">
-              No avoided-spend estimate: the daemon reported no comparison model
-              to price local tokens against.
+              No avoided-spend estimate: Iron Jarvis has no comparison model to
+              price local tokens against.
             </div>
           )}
           {byNode.length > 0 && baseline && (

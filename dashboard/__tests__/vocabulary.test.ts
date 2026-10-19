@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { RETIRED, readableCopy, retiredHits, scannedFiles } from "./helpers/retiredWords";
+
 /**
  * One name per concept (v1.113.0).
  *
@@ -229,5 +231,153 @@ describe("the README stays true (v1.117.0)", () => {
   it("speaks the canon: bases, not custom sources", () => {
     expect(readme()).not.toContain("Add a custom source");
     expect(readme()).toContain("Add a memory base");
+  });
+});
+
+/**
+ * THE SCAN (v1.357.0, product readiness G76). The pins above each guard one
+ * exact string, so a variant slipped past all of them ("Connected packs",
+ * "Open the pane", "the offline mock", "the daemon did not open…"). This
+ * reads EVERY string literal and JSX text node in app/, components/ and lib/
+ * through the TypeScript parser (helpers/retiredWords.ts says what it skips
+ * and why) and fails on a retired word in anything a user can read.
+ *
+ * ALLOW is the short list of DELIBERATE uses — each names its file, a piece
+ * of its text and why. An entry that no longer matches anything fails too,
+ * so a reworded line takes its entry with it.
+ */
+const ALLOW: ReadonlyArray<{ file: string; text: string; why: string }> = [
+  {
+    file: "components/settings/MaintenanceTools.tsx",
+    text: "daemon.log",
+    why: "the real log file's name in the folder this button opens; a file name is a name, not prose",
+  },
+  {
+    file: "components/sessions/runPageWords.ts",
+    text: "interrupted by a daemon restart",
+    why: "OLD_RESTART_SUMMARY: matches what versions before v1.354.0 STORED on old runs; read by isRestartSummary, never shown",
+  },
+  {
+    file: "components/agents/SetupCard.tsx",
+    text: "Job card",
+    why: "an agent's job description (its role, v1.295.0 'a custom agent is an employee'), not a unit of work",
+  },
+  // PENDING (v1.357.0): SetupCard is lane 7A's file this wave. The integrator
+  // rewords these three lines (notes_for_integrator of lane 7C) and deletes
+  // the entries; the stale-entry check below fails until it does.
+  {
+    file: "components/agents/SetupCard.tsx",
+    text: "Follows the chat or job that starts it",
+    why: "PENDING lane 7A file: becomes 'Follows the chat or task that starts it'",
+  },
+  {
+    file: "components/agents/SetupCard.tsx",
+    text: "This daemon doesn’t report which ones",
+    why: "PENDING lane 7A file: becomes 'This version of Iron Jarvis doesn’t report which ones'",
+  },
+  {
+    file: "components/agents/SetupCard.tsx",
+    text: "This daemon doesn’t report the resolved list.",
+    why: "PENDING lane 7A file: becomes 'This version of Iron Jarvis doesn’t report the resolved list.'",
+  },
+];
+
+const allowed = (h: { file: string; text: string }) => ALLOW.some((a) => a.file === h.file && h.text.includes(a.text));
+
+describe("the canon is a scan, not a list of strings (v1.357.0)", () => {
+  const hits = scannedFiles().flatMap((f) => retiredHits(f));
+
+  it("no retired word in anything a user reads", () => {
+    const left = hits
+      .filter((h) => !allowed(h))
+      .map((h) => `${h.file}:${h.line} [${h.word}] ${h.text.slice(0, 110)}`);
+    expect(left).toEqual([]);
+  });
+
+  it("every allowlist entry still matches a line, and says why", () => {
+    for (const a of ALLOW) {
+      expect(a.why.trim().length, `${a.file}: ${a.text}`).toBeGreaterThan(10);
+      expect(
+        hits.some((h) => h.file === a.file && h.text.includes(a.text)),
+        `stale allowlist entry ${a.file}: "${a.text}"`,
+      ).toBe(true);
+    }
+  });
+
+  it("scans every folder a user reads, and a lot of files", () => {
+    const files = scannedFiles();
+    for (const dir of ["app/", "components/", "lib/"]) expect(files.some((f) => f.startsWith(dir))).toBe(true);
+    expect(files.length).toBeGreaterThan(300);
+    expect(files).toContain("app/chat/page.tsx");
+  });
+
+  it("reads prose and skips code (the probe that keeps the scan honest)", () => {
+    // Anti-vacuity: a scanner that reads nothing passes every file. Each
+    // shape below is one a real file has; the expectation says which a user
+    // can read.
+    const probe = [
+      `import x from "@/components/agents/mission/TeamScreen";`,
+      `// the daemon restarts here (a comment)`,
+      `/* a pack in a block comment */`,
+      `const KEYS = { "job:mission": "Kept as a key" };`,
+      `const isMock = provider === "mock";`,
+      `if (s.includes("Mock answer")) {}`,
+      `console.warn("daemon unreachable");`,
+      `const id = "pane-rail";`,
+      `const route = "/missions";`,
+      `const aliases = { aliases: ["connect a pack", "pane"] };`,
+      `const t = { title: "Output came from the mock model." };`,
+      `export function A({ n }: { n: number }) {`,
+      `  return (`,
+      `    <div data-testid="pane-rail" className="pane" title="Close this pane" aria-label="Rename pane">`,
+      `      Open the Build pane`,
+      `      <span>{n === 1 ? "pane" : "panes"}</span>`,
+      `      <p>{\`\${n} queued \${n === 1 ? "job" : "jobs"}\`}</p>`,
+      `      <b>{"The daemon did not answer."}</b>`,
+      `    </div>`,
+      `  );`,
+      `}`,
+    ].join("\n");
+    const prose = readableCopy("probe.tsx", probe).map((p) => p.text.trim());
+    // What a user reads:
+    expect(prose).toContain("Output came from the mock model.");
+    expect(prose).toContain("Close this pane");
+    expect(prose).toContain("Rename pane");
+    expect(prose).toContain("Open the Build pane");
+    expect(prose).toContain("pane");
+    expect(prose).toContain("panes");
+    expect(prose).toContain("job");
+    expect(prose).toContain("jobs");
+    expect(prose).toContain("The daemon did not answer.");
+    expect(prose).toContain("Kept as a key");
+    // What it does not:
+    for (const code of [
+      "@/components/agents/mission/TeamScreen",
+      "job:mission",
+      "mock",
+      "Mock answer",
+      "daemon unreachable",
+      "pane-rail",
+      "/missions",
+      "connect a pack",
+    ]) {
+      expect(prose, code).not.toContain(code);
+    }
+    // And the words it reads become hits, one per retired word.
+    const words = new Set(retiredHits("probe.tsx", probe).map((h) => h.word));
+    for (const w of ["mock", "pane", "job", "daemon"]) expect(words.has(w), w).toBe(true);
+    expect(words.has("pack")).toBe(false); // only in a comment and an alias
+  });
+
+  it("covers every retired word the canon names", () => {
+    const words = RETIRED.map((r) => r.word);
+    for (const w of ["pack", "connector", "memory source", "brain", "mission", "daemon", "mock", "pane", "job"]) {
+      expect(words).toContain(w);
+    }
+    const canon = readFileSync(join(DASH, "..", "VOCABULARY.md"), "utf-8").replace(/\r\n/g, "\n");
+    expect(canon).toContain("| One piece of work Jarvis does for you");
+    expect(canon).toMatch(/\*\*task\*\*; one attempt at it is a \*\*run\*\*/);
+    expect(canon).toContain("| **terminal** | pane |");
+    expect(canon).toContain("| **Iron Jarvis** | daemon |");
   });
 });

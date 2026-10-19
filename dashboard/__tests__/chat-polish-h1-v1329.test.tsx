@@ -418,7 +418,7 @@ describe("a substitute is named by its model, like a normal row", () => {
     expect(routeWarning({ ...FAILOVER, model: "" })).toBe("answered by Anthropic (fleet-local was not available)");
     // The mock wording is unchanged.
     expect(routeWarning({ provider: "mock", model: "mock", reason: "mock" }, "Opus 4.8")).toBe(
-      "Mock answer. No real model ran.",
+      "Demo answer. No AI model ran.",
     );
   });
 

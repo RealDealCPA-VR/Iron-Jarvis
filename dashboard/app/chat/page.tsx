@@ -12521,7 +12521,7 @@ export default function ChatPage() {
                         {failedTurn && !busy && turnFix?.kind === "sign_in" && signInHere &&
                           cliSignIns[turnFix.cli.cli]?.paneId !== undefined && (
                           <div data-testid="chat-turn-sign-in-hint" className="basis-full text-[12px] leading-5 text-zinc-400">
-                            A Build pane opened with {turnFix.cli.name} running.{" "}
+                            A Build terminal opened with {turnFix.cli.name} running.{" "}
                             {codeParts(turnFix.cli.paneHint).map((part, k) =>
                               part.code ? (
                                 <code key={k} className="font-mono text-zinc-300">
@@ -12536,7 +12536,7 @@ export default function ChatPage() {
                               href={paneHref(cliSignIns[turnFix.cli.cli]?.paneId)}
                               className="text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent"
                             >
-                              Open the Build pane
+                              Open the Build terminal
                             </Link>
                           </div>
                         )}

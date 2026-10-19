@@ -182,7 +182,7 @@ describe("lib/runningNow: the rows, in words", () => {
     expect(sched.href).toBe("/sessions/s-sched");
     expect(sched.detail).toBe("Write the nightly brief"); // the first line of the task
     const miss = items.find((i) => i.key === "s:s-miss")!;
-    expect(miss.who).toBe("Mission");
+    expect(miss.who).toBe("Objective");
     expect(miss.href).toBe(missionPath("s-miss", "p1"));
     // A finished run is not running.
     expect(items.some((i) => i.key === "s:s-done")).toBe(false);

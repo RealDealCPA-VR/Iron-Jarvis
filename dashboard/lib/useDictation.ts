@@ -174,7 +174,7 @@ export function useDictation(lang = "en-US"): UseDictation {
       .catch(() => {
         if (cancelled) return;
         setServerReady(false);
-        setReason("Voice needs the daemon running (couldn't reach /voice/status).");
+        setReason("Voice needs Iron Jarvis running, and it isn't responding.");
       });
     return () => {
       cancelled = true;
@@ -419,7 +419,7 @@ export function useDictation(lang = "en-US"): UseDictation {
           setInterim("");
         }
       };
-      ws.onerror = () => setError("Voice stream error — is the daemon running?");
+      ws.onerror = () => setError("Voice stream error — is Iron Jarvis running?");
       // v1.226.0: a SERVER-side close (bad frame, daemon restart) used to leave
       // the mic on and the button "listening" forever — nothing tore down.
       // Our own teardown nulls wsRef before closing, so that path is skipped.

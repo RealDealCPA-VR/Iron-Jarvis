@@ -729,7 +729,7 @@ describe("the mission says which model did the work", () => {
     render(<AgentsPage />);
     const receipt = await screen.findByTestId("mission-receipt");
     expect(receipt.hasAttribute("data-mock")).toBe(true);
-    expect(receipt.textContent).toMatch(/no real model ran/i);
+    expect(receipt.textContent).toMatch(/no AI model ran/i);
     expect(receipt.querySelector('a[href="/connections"]')).not.toBeNull();
   });
 

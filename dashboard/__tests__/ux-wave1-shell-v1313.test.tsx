@@ -563,11 +563,13 @@ describe("SimulatedBanner — a connected model that nobody chose to answer", ()
     for (const a of within(strip).queryAllByRole("link")) expect(a.getAttribute("href")).not.toBe("/");
   });
 
-  it("CONTROL: nothing connected keeps the 'Simulated mode' strip and its Connect a model link", async () => {
+  it("CONTROL: nothing connected keeps the demo strip (v1.357.0: 'Demo replies', was 'Simulated mode') and its Connect a model link", async () => {
     mockDaemon(health("mock", "claude-opus-4-8", []));
     await renderWithDaemon(<SimulatedBanner />);
     const strip = await screen.findByRole("status");
-    expect(strip.textContent).toContain("Simulated mode");
+    expect(strip.textContent).toContain("Demo replies");
+    expect(strip.textContent).toContain("a scripted demo, not real answers");
+    expect(strip.textContent).not.toMatch(/Simulated mode|offline mock|fabricated/);
     expect(within(strip).getByRole("link", { name: /Connect a model/ }).getAttribute("href")).toBe(
       "/connections",
     );

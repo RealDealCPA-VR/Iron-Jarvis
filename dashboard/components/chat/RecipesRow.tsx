@@ -20,7 +20,7 @@ export function RecipesRow({ onPick }: { onPick: (prompt: string) => void }) {
   return (
     <div className="w-full max-w-2xl">
       <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
-        or start a whole job
+        or start a whole task
       </p>
       <div className="grid gap-1.5 sm:grid-cols-2">
         {RECIPES.map((r) => (

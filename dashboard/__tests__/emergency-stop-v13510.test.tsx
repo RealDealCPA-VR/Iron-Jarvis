@@ -121,7 +121,7 @@ describe("Emergency stop says what it stopped", () => {
     await pressKill();
     expect(
       await screen.findByText(
-        "Kill switch engaged — schedules, goals, rules, phone jobs and autonomy will not start. Stopped 2 running jobs.",
+        "Kill switch engaged — schedules, goals, rules, phone tasks and autonomy will not start. Stopped 2 running tasks.",
       ),
     ).toBeInTheDocument();
     expect(api.posts).toContainEqual({ path: "/autonomy/kill", body: { enabled: true } });
@@ -135,7 +135,7 @@ describe("Emergency stop says what it stopped", () => {
     await pressKill();
     expect(
       await screen.findByText(
-        "Kill switch engaged — schedules, goals, rules, phone jobs and autonomy will not start.",
+        "Kill switch engaged — schedules, goals, rules, phone tasks and autonomy will not start.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Stopped \d/)).toBeNull();
@@ -148,7 +148,7 @@ describe("Emergency stop says what it stopped", () => {
     await pressKill();
     expect(
       await screen.findByText(
-        "Kill switch engaged — schedules, goals, rules, phone jobs and autonomy will not start.",
+        "Kill switch engaged — schedules, goals, rules, phone tasks and autonomy will not start.",
       ),
     ).toBeInTheDocument();
   });
@@ -158,7 +158,7 @@ describe("Emergency stop says what it stopped", () => {
     render(<AutonomyPage />);
     expect(await screen.findByRole("button", { name: /Release kill switch/ })).toBeInTheDocument();
     const scope = screen.getByTestId("kill-switch-scope");
-    expect(scope.textContent).toMatch(/Schedules, goals, rules, phone jobs and autonomy will not start/);
+    expect(scope.textContent).toMatch(/Schedules, goals, rules, phone tasks and autonomy will not start/);
     expect(scope.textContent).toMatch(/Chat and work you start still\s+run/);
   });
 });

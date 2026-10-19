@@ -965,7 +965,7 @@ export function ProjectTasks({
         {assignments.length > 0 && (
           <div data-testid="project-assignments" className="border-t hairline pt-2.5">
             <div className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
-              Assignments
+              Queued tasks
             </div>
             <ul className="space-y-0.5">
               {assignments.map((a) => (

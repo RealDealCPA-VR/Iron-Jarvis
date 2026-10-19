@@ -755,9 +755,9 @@ describe("What I've learned — copy matches the daemon (reflections are not sen
     expect(container.textContent).not.toMatch(/every chat and run/i);
   });
 
-  it("reflections sit after preferences, under 'Notes about past jobs'", () => {
+  it("reflections sit after preferences, under 'Notes about past tasks'", () => {
     renderLessons();
-    expect(screen.getByText("Notes about past jobs")).toBeInTheDocument();
+    expect(screen.getByText("Notes about past tasks")).toBeInTheDocument();
     const pref = lessonRow("Keep answers short");
     const refl = lessonRow(LESSONS.lessons[0].text);
     expect(pref.compareDocumentPosition(refl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -1194,7 +1194,7 @@ describe("Activity — runs of lifecycle steps fold; undo/denied rows never do",
     const undo = await screen.findByRole("button", { name: /^Undo$/ });
     const row = undo.closest("li") as HTMLElement;
     const seen = visibleText(row);
-    expect(seen).toMatch(/\bMission\b/);
+    expect(seen).toMatch(/\bObjective\b/);
     expect(seen).not.toMatch(/job:mission/);
     expect(titles(row).some((t) => t.includes("job:mission"))).toBe(true);
     const link = within(row).getByRole("link");

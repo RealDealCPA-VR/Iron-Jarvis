@@ -548,11 +548,11 @@ describe("toActivity maps the assignment events", () => {
     expect(toActivity(ev("assignment.requeued", { count: 2, ids: ["a", "b"] }))).toMatchObject({
       href: "/agents?view=team",
       icon: RotateCcw,
-      title: "2 assignments picked back up after a restart",
+      title: "2 queued tasks picked back up after a restart",
       body: "",
     });
     expect(toActivity(ev("assignment.requeued", { count: 1, ids: ["a"] }))?.title).toBe(
-      "1 assignment picked back up after a restart",
+      "1 queued task picked back up after a restart",
     );
     // started / created are not bell items.
     expect(toActivity(ev("assignment.started", { id: "a1", assignee: "builder", title: "x", session_id: "s" }))).toBeNull();

@@ -28,6 +28,7 @@ import { ChevronDown, ChevronRight, ExternalLink, Square } from "lucide-react";
 import { post } from "@/lib/api";
 // v1.350.0 re-review: the plan approval's name (dependency-free).
 import { PLAN_TOOL } from "@/lib/toolWords";
+import { DEMO_ANSWER, DEMO_RUNNING } from "@/lib/demoWords";
 import { askPhrase } from "@/lib/approvalWords";
 import { ranOnWords, tookMs, type RanOnRow } from "@/lib/ranOnWords";
 import { useModels } from "@/lib/useModels";
@@ -106,16 +107,17 @@ export function ProgressBar({
   );
 }
 
-/** The mock's line (v1.329.0), in the chat receipt's words: "Mock answer. No
- *  real model ran." (TurnReceipt) for an answer, the same second sentence for
- *  a run that has not answered. Plain sentences, no dash aside. The mission
- *  receipt (MissionOutput) and every teammate card read it from here; a card
- *  names what it ran on in parentheses before the last stop (MockRanOn). */
+/** The demo model's line (v1.329.0; v1.357.0 the ONE demo name from
+ *  lib/demoWords), in the chat receipt's words: "Demo answer. No AI model
+ *  ran." (TurnReceipt) for an answer, the same second sentence for a run that
+ *  has not answered. Plain sentences, no dash aside. The mission receipt
+ *  (MissionOutput) and every teammate card read it from here; a card names
+ *  what it ran on in parentheses before the last stop (MockRanOn). */
 export function mockLine(answered: boolean): string {
-  return answered ? "Mock answer. No real model ran." : "On the mock. No real model ran.";
+  return answered ? DEMO_ANSWER : DEMO_RUNNING;
 }
 
-/** The card's mock line with what it ran on: "Mock answer. No real model ran
+/** The card's demo line with what it ran on: "Demo answer. No AI model ran
  *  (mock · mock-1)." The parentheses never break inside (a narrow card used
  *  to wrap "mock-" from "1"). */
 function MockRanOn({ answered, ranOn }: { answered: boolean; ranOn: string }) {

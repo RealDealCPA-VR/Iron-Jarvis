@@ -50,6 +50,7 @@ import AgentFace from "@/components/agents/AgentFace";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import { useMission } from "@/lib/useMission";
 import { MISSION_TERMINAL, statusWord } from "@/lib/mission";
+import { OFFLINE_TITLE } from "@/lib/offlineWords";
 import type { WorldDetail } from "@/lib/agentWorlds";
 import { AgentCards, ProgressBar } from "./AgentCards";
 import { LiveActivity } from "./LiveActivity";
@@ -260,7 +261,7 @@ export function MissionScreen({
           )}
           {m.error && missionId && (
             <p className="text-[12px] text-tone-warn">
-              Can&apos;t reach the daemon right now. Showing the last known state.
+              {OFFLINE_TITLE} Showing the last known state.
             </p>
           )}
         </div>

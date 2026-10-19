@@ -40,6 +40,8 @@ import { MISSION_ORIGIN, sessionHref } from "@/lib/missionLinks";
 import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
 import { PLAN_TOOL } from "@/lib/toolWords";
+// v1.357.0 (G76): a task another Jarvis sent, in the one set of words.
+import { REMOTE_KIND, remoteTaskSubject } from "@/lib/remoteTask";
 // v1.352.0 (G24/G25): the chat card's own answer words, dependency-free.
 import {
   ALLOW_ONCE,
@@ -240,7 +242,8 @@ function runVerdict(p: Record<string, unknown>): {
 
 /** v1.351.0 (G03): the doors that start work with NOBODY watching — a
  *  schedule, a goal, a workflow step, a reflex rule, a message from the
- *  phone, autonomy — and how a row names each run (`Session.origin` is
+ *  phone, autonomy, a task another Jarvis sent (v1.357.0) — and how a row
+ *  names each run (`Session.origin` is
  *  `<door>:<name>`; autonomy stamps a bare "autonomy"). A goal's suffix is
  *  its internal id, never shown (the OriginChip rule). A workflow's STEP
  *  says so: whether the WORKFLOW finished is its own row
@@ -252,6 +255,10 @@ const UNATTENDED_SUBJECT: Record<string, (name: string) => string> = {
   reflex: (n) => (n ? `Your reflex ${n}` : "A reflex rule"),
   comm: (n) => (n ? `Your request from ${n}` : "A request from your phone"),
   autonomy: () => "An autonomy run",
+  // v1.357.0 (G76, with G61): a task another computer running Iron Jarvis
+  // sent (`remote:<caller>`). Nobody at this PC watches it, so a failure
+  // rings like the other doors; keyed on the prefix (lib/remoteTask).
+  [REMOTE_KIND]: (n) => remoteTaskSubject(n),
 };
 
 /** The unattended door a run came through, or null (chat, a mission, a job
@@ -514,7 +521,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       ts: e.ts,
       href: "/schedules",
       icon: CalendarClock,
-      title: `Scheduled job ran: ${name}`,
+      title: `Scheduled task ran: ${name}`,
       body: "",
     };
   }
@@ -561,7 +568,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
   if (e.type === "assignment.blocked") {
     // v1.296.0: a queued job hit something only the user can settle.
     // Payload: {id, assignee, title, blocked_reason}.
-    const title = typeof p.title === "string" && p.title ? p.title : "a job";
+    const title = typeof p.title === "string" && p.title ? p.title : "a task";
     const assignee = typeof p.assignee === "string" && p.assignee ? p.assignee : "an agent";
     const why = typeof p.blocked_reason === "string" ? p.blocked_reason : "";
     return {
@@ -587,7 +594,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     const shortfall =
       p.ok !== false && (outcome === "needs_you" || outcome === "completed_with_failures");
     if (p.ok !== false && !shortfall) return null;
-    const title = typeof p.title === "string" && p.title ? p.title : "a job";
+    const title = typeof p.title === "string" && p.title ? p.title : "a task";
     const assignee = typeof p.assignee === "string" && p.assignee ? p.assignee : "an agent";
     const sid =
       typeof p.session_id === "string" && p.session_id
@@ -660,7 +667,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       // Names no agent (several jobs, several assignees): Your team itself.
       href: agentHref(null),
       icon: RotateCcw,
-      title: `${picked} assignment${picked === 1 ? "" : "s"} picked back up after a restart`,
+      title: `${picked} queued task${picked === 1 ? "" : "s"} picked back up after a restart`,
       body: "",
     };
   }
@@ -670,7 +677,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     // episode. The TITLE is the plain reason (the error can carry a masked
     // tail); the fix is the body; the row opens the Tools page.
     // v1.355.0 (G32): the body also says what keeps working (packFailedBody).
-    const name = typeof p.name === "string" && p.name ? p.name : "a pack";
+    const name = typeof p.name === "string" && p.name ? p.name : "an extension";
     const reason =
       typeof p.reason === "string" && p.reason.trim()
         ? p.reason.trim()
@@ -682,7 +689,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       ts: e.ts,
       href: "/tools",
       icon: AlertTriangle,
-      title: `Pack ${name} is failing: ${reason}`,
+      title: `Extension ${name} is failing: ${reason}`,
       body: packFailedBody(p.fix),
     };
   }
@@ -1080,7 +1087,7 @@ function PaneWaitingRow({ pane, onOpen }: { pane: BlockedPane; onOpen: () => voi
             {paneWaitingTitle(pane)}
           </span>
           <span className="block truncate text-[11px] text-zinc-500">
-            {pane.name ? `Open ${pane.name}` : "Open the pane"}
+            {pane.name ? `Open ${pane.name}` : "Open the terminal"}
           </span>
         </span>
         <ArrowRight size={13} className="shrink-0 text-zinc-600" />
@@ -1273,7 +1280,7 @@ function AgentApprovalRow({
               href={missionPath(ask.missionId, ask.projectId ?? "")}
               className="mt-1 inline-block text-[12px] text-accent-soft transition-colors hover:text-accent"
             >
-              Open the mission →
+              Open the objective →
             </Link>
           ) : null}
           <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-zinc-600">
@@ -1785,7 +1792,7 @@ export function NotificationBell() {
       if (interrupted.jobs.length)
         parts.push(
           // v1.354.0: the words the bell's own rows and the run page say.
-          `${interrupted.jobs.length} job${interrupted.jobs.length === 1 ? "" : "s"} stopped when Iron Jarvis restarted`,
+          `${interrupted.jobs.length} task${interrupted.jobs.length === 1 ? "" : "s"} stopped when Iron Jarvis restarted`,
         );
       if (busyAsk) parts.push(`${busyAsk.running} background runs going at once`);
       const body = parts.join(" · ") || "Something needs your attention.";

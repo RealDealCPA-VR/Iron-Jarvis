@@ -60,7 +60,7 @@ const SUBSYSTEMS: Subsystem[] = [
     href: "/chat",
     title: "Chat",
     icon: MessageSquare,
-    desc: "One surface for everything — ask, attach files, type / for skills; big jobs escalate themselves.",
+    desc: "One surface for everything — ask, attach files, type / for skills; big tasks escalate themselves.",
   },
   {
     href: "/projects",
@@ -92,7 +92,7 @@ const SUBSYSTEMS: Subsystem[] = [
     href: "/sessions",
     title: "Sessions",
     icon: Boxes,
-    desc: "Hand an agent a task in plain language and watch it work the job end to end, step by step.",
+    desc: "Hand an agent a task in plain language and watch it work the task end to end, step by step.",
   },
   {
     href: "/agents",
@@ -116,7 +116,7 @@ const SUBSYSTEMS: Subsystem[] = [
     href: "/memory?scope=longterm",
     title: "Memory & long-term memory",
     icon: Database,
-    desc: "Search and append durable notes across the built-in brain and your own Obsidian or Notion sources.",
+    desc: "Search and append durable notes across the built-in memory base and your own Obsidian or Notion bases.",
   },
   {
     href: "/documents",
@@ -781,7 +781,7 @@ export default function HelpPage() {
           <p className="text-[13px] leading-relaxed text-zinc-400" data-testid="help-phone-lead">
             The way to use Iron Jarvis from your phone is to{" "}
             <span className="text-zinc-300">message it</span>: a Telegram bot becomes a two-way
-            conversation with the same Iron Jarvis, and when a job needs your OK it asks you there.
+            conversation with the same Iron Jarvis, and when a task needs your OK it asks you there.
             Opening this dashboard itself on a phone is an advanced setup, further down.
           </p>
 
@@ -804,7 +804,7 @@ export default function HelpPage() {
               </div>
             </div>
             <p className="mt-3 text-[13px] leading-relaxed text-zinc-400">
-              Text your bot like a person — same brain, same memory, and the conversation shows up
+              Text your bot like a person — same assistant, same memory, and the conversation shows up
               in{" "}
               <Link href="/chat" className="text-accent-soft hover:text-accent">
                 Chat
@@ -837,7 +837,7 @@ export default function HelpPage() {
               </li>
             </ol>
             <p className="mt-3 text-[12px] leading-relaxed text-zinc-500">
-              When a job needs your OK, the bot asks you: reply <Code>approve</Code> or{" "}
+              When a task needs your OK, the bot asks you: reply <Code>approve</Code> or{" "}
               <Code>deny</Code>. Send <Code>/new</Code> to start a fresh conversation (the old one
               stays in your desktop thread list). A waiting workflow can ask you a question there
               too — reply with a number or <Code>/answer</Code>.
@@ -873,9 +873,10 @@ export default function HelpPage() {
               </div>
             </div>
             <p className="mt-3 text-[13px] leading-relaxed text-zinc-400">
-              The desktop app keeps both of its servers on this PC only: the daemon listens on{" "}
-              <Code>127.0.0.1:8787</Code> and this dashboard on <Code>127.0.0.1:8788</Code>, and
-              the dashboard calls the daemon at <Code>http://127.0.0.1:8787</Code> — which, on a
+              The desktop app keeps both of its servers on this PC only: Iron Jarvis&apos;s
+              background service listens on <Code>127.0.0.1:8787</Code> and this dashboard on{" "}
+              <Code>127.0.0.1:8788</Code>, and the dashboard calls that service at{" "}
+              <Code>http://127.0.0.1:8787</Code> — which, on a
               phone, is the phone itself. So the installed app cannot be opened from a phone, over
               Wi-Fi or a VPN, until all of this is in place (nothing here is applied for you):
             </p>
@@ -895,19 +896,19 @@ export default function HelpPage() {
               </li>
               <li>
                 <span className="text-zinc-300">3.</span>{" "}
-                <span className="text-zinc-200">The daemon letting the phone in.</span> Add the
+                <span className="text-zinc-200">Iron Jarvis letting the phone in.</span> Add the
                 PC&apos;s name or address to <Kbd>IRONJARVIS_HOST_ALLOWLIST</Kbd> and the phone&apos;s
                 page address to <Kbd>IRONJARVIS_CORS_ORIGINS</Kbd>.
               </li>
               <li>
                 <span className="text-zinc-300">4.</span>{" "}
                 <span className="text-zinc-200">A token.</span> Set <Kbd>IRONJARVIS_TOKEN</Kbd>{" "}
-                before you start the daemon and enter it on the phone: a daemon started without
-                one answers anyone who can reach it.
+                before you start Iron Jarvis and enter it on the phone: started without one, it
+                answers anyone who can reach it.
               </li>
             </ol>
             <pre className="mt-3 overflow-x-auto rounded-xl border border-white/[0.06] bg-black/40 p-3 font-mono text-[11px] leading-relaxed text-zinc-300">
-              <span className="text-zinc-500"># set these, then start the daemon</span>
+              <span className="text-zinc-500"># set these, then start Iron Jarvis</span>
               {"\n"}IRONJARVIS_HOST_ALLOWLIST=my-pc.local,192.168.1.42
               {"\n"}IRONJARVIS_CORS_ORIGINS=http://192.168.1.42:8788
               {"\n"}IRONJARVIS_TOKEN=&lt;a long random string&gt;
@@ -925,7 +926,7 @@ export default function HelpPage() {
             <ShieldCheck size={18} className="mt-0.5 shrink-0 text-amber-300" aria-hidden="true" />
             <div className="text-[13px] leading-relaxed text-amber-100/90">
               <span className="font-semibold text-amber-200">Only over a trusted network.</span>{" "}
-              The local daemon can run tools on your machine, so expose it only over a network or VPN
+              Iron Jarvis can run tools on your machine, so expose it only over a network or VPN
               you trust — never the open internet. When in doubt, message your bot instead.
             </div>
           </div>

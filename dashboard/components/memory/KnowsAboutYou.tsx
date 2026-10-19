@@ -78,7 +78,7 @@ export function countsLine(o: MemoryOverview): string {
   }
   if (o.lessons.reflections > 0) {
     parts.push(
-      `${o.lessons.reflections} task reflection${o.lessons.reflections === 1 ? "" : "s"} (notes about past jobs — not read into conversations)`,
+      `${o.lessons.reflections} task reflection${o.lessons.reflections === 1 ? "" : "s"} (notes about past tasks — not read into conversations)`,
     );
   }
   return parts.join(" · ");

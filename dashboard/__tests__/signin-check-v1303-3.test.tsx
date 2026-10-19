@@ -297,7 +297,7 @@ describe("Check again", () => {
     await mountCard();
     const before = n(LIGHT);
     fireEvent.click(await screen.findByTestId("iron-proxy-check-d"));
-    expect(await screen.findByText("Still not signed in. Finish the login in the Sign in pane.")).toBeTruthy();
+    expect(await screen.findByText("Still not signed in. Finish the login in the Sign in terminal.")).toBeTruthy();
     expect(callsTo("POST", "/iron-proxy/accounts/d/check")).toHaveLength(1);
     await waitFor(() => expect(n(LIGHT)).toBeGreaterThan(before));
   });

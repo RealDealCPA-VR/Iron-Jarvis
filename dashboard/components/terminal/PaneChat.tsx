@@ -182,10 +182,10 @@ function paneUndoPrompt(
     : "";
   return kind === "file_delete" || kind === "files_delete"
     ? `${later}Undo the newest write? ${base} was created by a chat write and will be ` +
-        `removed — that write may be more recent than this message (panes and ` +
+        `removed — that write may be more recent than this message (terminals and ` +
         `Chat share one journal).`
     : `${later}This restores ${base} to its content from before the NEWEST write to ` +
-        `it — which may be more recent than this message (panes and Chat ` +
+        `it — which may be more recent than this message (terminals and Chat ` +
         `share one journal). Continue?`;
 }
 
@@ -425,8 +425,8 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         } else {
           setLoadError(
             e instanceof ApiError && e.status === 0
-              ? couldntLoad("This pane's conversation", e)
-              : `Couldn't load this pane's conversation: ${
+              ? couldntLoad("This terminal's conversation", e)
+              : `Couldn't load this terminal's conversation: ${
                   e instanceof Error ? e.message : String(e)
                 }`,
           );

@@ -308,12 +308,12 @@ describe("the Capabilities popover", () => {
     // read-only MCP tools, never the pane's own chat, and the word says both.
     expect(word("t1", "memory")).not.toMatch(/not enforced/i);
     expect(word("t1", "memory")).toMatch(/launched agent gets no memory tools/i);
-    expect(word("t1", "memory")).toMatch(/this pane's chat is not affected/i);
+    expect(word("t1", "memory")).toMatch(/this terminal's chat is not affected/i);
     const panel = screen.getByTestId("rail-caps-panel-t1").textContent ?? "";
     expect(panel).toMatch(/Files, Shell and Extensions are recorded/i);
     expect(panel).toMatch(/nothing gates\s+on them yet/i);
     expect(panel).toMatch(/Memory is enforced only for a program\s+launched here/i);
-    expect(panel).toMatch(/read-only; this pane.s own chat is not affected/i);
+    expect(panel).toMatch(/read-only; this terminal.s own chat is not affected/i);
     expect(panel).not.toMatch(/Only Browser is enforced/i);
   });
 
@@ -441,7 +441,7 @@ describe("capabilityStatus — the pure rule the boxes read", () => {
     expect(on.word).toMatch(/may search and read memory through Jarvis \(read-only\)/i);
     expect(off.word).toMatch(/gets no memory tools/i);
     for (const st of [on, off]) {
-      expect(st.word).toMatch(/this pane's chat is not affected/i);
+      expect(st.word).toMatch(/this terminal's chat is not affected/i);
       expect(st.word).not.toMatch(/not enforced/i);
       expect(st.available).toBe(true);
     }

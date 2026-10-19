@@ -134,14 +134,14 @@ export function MissionComposer({
         ...(projectId ? { project_id: projectId } : {}),
       });
       if (row && typeof row.id === "string" && row.id) onStarted(row.id, projectId);
-      else setError("The mission may have started, but Iron Jarvis did not say which one. Check your missions before starting it again.");
+      else setError("The objective may have started, but Iron Jarvis did not say which one. Check your objectives before starting it again.");
     } catch (e) {
       setError(
         e instanceof ApiError && (e.status === 404 || e.status === 405)
           ? "Restart Iron Jarvis to finish updating."
           : e instanceof Error
             ? e.message
-            : "Could not start the mission.",
+            : "Could not start the objective.",
       );
     } finally {
       setBusy(false);

@@ -23,6 +23,8 @@ import { useDaemon } from "@/lib/daemon";
 import { useDictation } from "@/lib/useDictation";
 import { ConnectDoors } from "@/components/onboarding/ConnectDoors";
 import { AnswerPressNote, useAnswerPress } from "@/components/onboarding/AnswerPress";
+// v1.357.0 (G76): the ONE demo name.
+import { DEMO_ANSWER, DEMO_MODEL } from "@/lib/demoWords";
 import {
   availableRows,
   candidateFor,
@@ -606,7 +608,7 @@ export function FirstRunWizard() {
                       <p className="mt-2 text-xs leading-relaxed text-zinc-500">
                         Give the agent something small and watch it work end to end — right here.
                         {!sessionId && pinnedFor
-                          ? ` This test asks ${pinnedFor.label} by name; chat keeps the offline demo until you choose what answers you.`
+                          ? ` This test asks ${pinnedFor.label} by name; chat keeps the ${DEMO_MODEL} until you choose what answers you.`
                           : ""}
                       </p>
                     )}
@@ -683,7 +685,7 @@ export function FirstRunWizard() {
                           )}
                           <span>
                             {ranOnDemo
-                              ? "That was the offline demo — no model ran. Its reply below is a script, not an answer."
+                              ? `${DEMO_ANSWER} Its reply below is a script, not an answer.`
                               : runStatus === "completed"
                                 ? runProvider
                                   ? `It worked — answered by ${friendlyProvider(runProvider)} (${runProvider}${
@@ -720,7 +722,7 @@ export function FirstRunWizard() {
                                 ranOnDemo ? "text-amber-300/80" : "text-accent-soft"
                               }`}
                             >
-                              <Sparkles size={12} /> {ranOnDemo ? "What the demo said" : "Result"}
+                              <Sparkles size={12} /> {ranOnDemo ? `What the ${DEMO_MODEL} said` : "Result"}
                             </div>
                             <p className="whitespace-pre-wrap text-xs leading-relaxed text-zinc-300">
                               {runResult}
@@ -856,7 +858,7 @@ export function FirstRunWizard() {
                       onClick={() => finish("demo")}
                       className="text-xs text-zinc-500 underline decoration-zinc-700 underline-offset-4 transition-colors hover:text-zinc-300"
                     >
-                      Skip — try demo mode (output simulated)
+                      Skip — use the {DEMO_MODEL} for now
                     </button>
                   )}
 

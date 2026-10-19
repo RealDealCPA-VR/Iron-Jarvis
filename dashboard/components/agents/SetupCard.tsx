@@ -48,6 +48,20 @@ import { AgentPortrait } from "./AgentPortrait";
 import { GHOST_BTN, QUIET_FIELD, SECTION_LABEL, SUB_LABEL, primaryBtn } from "./teamLook";
 import { agentLabel } from "@/lib/agentWorlds";
 import type { RemoteAgentInfo } from "./identity";
+import { AnotherJarvisCard } from "./AnotherJarvisCard";
+import { TASK_DOOR_PATH } from "@/lib/anotherJarvis";
+
+/** v1.357.0 (G61): is this base URL another computer's Iron Jarvis task door?
+ *  (The daemon's `task_door.is_task_door_url`: the path is exactly the door.) */
+export function isTaskDoorUrl(url: string): boolean {
+  try {
+    const u = new URL(url.trim());
+    return (u.protocol === "http:" || u.protocol === "https:") &&
+      u.pathname.replace(/\/+$/, "") === TASK_DOOR_PATH;
+  } catch {
+    return false;
+  }
+}
 
 /** An agent's model on its row (v1.330.0): quiet mono words beside the calm
  *  Badge, not a second bordered chip. */
@@ -2116,7 +2130,36 @@ function RemoteRow({
           />
         </span>
       </div>
-      {minted && (
+      {minted && isTaskDoorUrl(agent.base_url) && (
+        // v1.357.0 (G61): another computer running Iron Jarvis is handed this
+        // token with each task, so there is nothing to copy — the same box,
+        // without the token or the wire details.
+        <div
+          data-testid="inbound-minted"
+          className="mt-2 rounded-lg bg-tone-success/[0.06] px-3 py-2 text-[12px] text-zinc-200"
+        >
+          <div className="font-medium">
+            {agent.name} can answer back now. It is another computer running Iron Jarvis, so the
+            new token goes to it with its next task. There is nothing to copy.
+          </div>
+          {minted.note && (
+            <p
+              data-testid="inbound-reach-note"
+              className="mt-1.5 rounded-md bg-tone-warn/[0.08] px-2.5 py-1.5 leading-relaxed text-tone-warn"
+            >
+              {minted.note}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => setMinted(null)}
+            className="btn-ghost mt-1 py-0.5 text-[11px]"
+          >
+            Done
+          </button>
+        </div>
+      )}
+      {minted && !isTaskDoorUrl(agent.base_url) && (
         <div
           data-testid="inbound-minted"
           className="mt-2 rounded-lg bg-tone-success/[0.06] px-3 py-2 text-[12px] text-zinc-200"
@@ -2221,6 +2264,11 @@ export function RemoteAgentsSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  // v1.357.0 (G61): when the remote is another computer running Iron Jarvis,
+  // ITS answers come back through this computer — the daemon says whether
+  // that computer could reach this one yet (the same sentence as everywhere).
+  const [reachNote, setReachNote] = useState<string | null>(null);
+  const doorUrl = isTaskDoorUrl(baseUrl);
 
   async function connect(e: React.FormEvent) {
     e.preventDefault();
@@ -2228,8 +2276,12 @@ export function RemoteAgentsSection({
     setBusy(true);
     setError(null);
     setOk(null);
+    setReachNote(null);
     try {
-      await post("/agents/remote", {
+      const r = await post<{
+        another_jarvis?: boolean;
+        reachable?: { host_allowed?: boolean; note?: string };
+      }>("/agents/remote", {
         name: name.trim(),
         base_url: baseUrl.trim(),
         kind,
@@ -2237,7 +2289,17 @@ export function RemoteAgentsSection({
         token: secret.trim(), // stored encrypted in the vault, never returned
         enabled: true,
       });
-      setOk(`"${name.trim()}" is connected. Jarvis can hand it work now.`);
+      if (r && r.another_jarvis) {
+        setOk(
+          `"${name.trim()}" is connected. It is another computer running Iron Jarvis: ` +
+            `"@${name.trim()}" in a chat hands it a task, and its answer comes back to that chat.`,
+        );
+        setReachNote(
+          r.reachable && r.reachable.host_allowed === false ? r.reachable.note ?? "" : null,
+        );
+      } else {
+        setOk(`"${name.trim()}" is connected. Jarvis can hand it work now.`);
+      }
       setName("");
       setBaseUrl("");
       setModel("");
@@ -2311,6 +2373,13 @@ export function RemoteAgentsSection({
           autoComplete="off"
           className={`${QUIET_FIELD} font-mono`}
         />
+        {doorUrl && (
+          <p data-testid="connect-remote-jarvis-hint" className="px-1 text-[11px] leading-relaxed text-zinc-500">
+            This is another computer running Iron Jarvis. Use http-task and the token from
+            its Another computer running Jarvis card; its answers will come back to the chat
+            that asked.
+          </p>
+        )}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <input
             type="password"
@@ -2346,8 +2415,20 @@ export function RemoteAgentsSection({
           </button>
         </div>
         {ok && <SuccessNote>{ok}</SuccessNote>}
+        {reachNote && (
+          <p
+            data-testid="connect-remote-reach-note"
+            className="rounded-md bg-tone-warn/[0.08] px-2.5 py-1.5 text-[12px] leading-relaxed text-tone-warn"
+          >
+            {reachNote}
+          </p>
+        )}
         {error && <ErrorNote>{error}</ErrorNote>}
       </form>
+
+      {/* v1.357.0 (G61): THIS computer can take tasks from another one —
+          the other half of the pairing the form above makes. */}
+      <AnotherJarvisCard />
     </section>
   );
 }

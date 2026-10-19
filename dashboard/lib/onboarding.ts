@@ -30,6 +30,7 @@
 
 import { post } from "@/lib/api";
 import type { Health, ProviderHealth } from "@/lib/types";
+import { DEMO_MODEL_LABEL } from "@/lib/demoWords";
 
 /* ------------------------------------------------------------ W2-1 / W2-6 --- */
 
@@ -209,7 +210,7 @@ export function friendlyProvider(provider: string): string {
 export function providerDisplay(provider: string | null | undefined): string {
   const p = (provider || "").trim();
   if (!p) return "";
-  if (p === "mock") return "Demo model (scripted)";
+  if (p === "mock") return DEMO_MODEL_LABEL;
   if (p === "auto") return "Auto";
   return friendlyProvider(p);
 }

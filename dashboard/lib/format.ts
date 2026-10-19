@@ -67,7 +67,7 @@ export function describeEngineExit(code: number | null): string {
   if (code === 4294967295 || code === -1) {
     return (
       "The engine was terminated (code -1) — usually the app restarted " +
-      "underneath it (an update applying, or the daemon restarting), " +
+      "underneath it (an update applying, or Iron Jarvis restarting), " +
       "occasionally a crash in the engine itself."
     );
   }

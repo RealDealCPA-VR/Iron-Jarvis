@@ -261,7 +261,7 @@ export function AgentsPanel({
           >
             {entries.length === 0 ? (
               <p className="p-3 text-[12px] leading-relaxed text-zinc-500">
-                This daemon serves no roster, so there is nobody to show here.
+                This version of Iron Jarvis lists no agents, so there is nobody to show here.
                 The New &amp; manage tab still works.
               </p>
             ) : (
@@ -560,7 +560,7 @@ export function AgentDetail({
             <button
               type="button"
               onClick={() => onAssign(entry.kind, bare)}
-              title={`Give ${bare} a job`}
+              title={`Give ${bare} a task`}
               className={GHOST_BTN}
             >
               <Briefcase size={13} /> Give work
@@ -621,7 +621,7 @@ export function AgentDetail({
           />
         ) : (
           <p className="text-[12px] leading-relaxed text-zinc-500">
-            This daemon predates chosen faces, so every face is drawn from the
+            This version of Iron Jarvis predates chosen faces, so every face is drawn from the
             agent&rsquo;s name. A portrait still works.
           </p>
         )}

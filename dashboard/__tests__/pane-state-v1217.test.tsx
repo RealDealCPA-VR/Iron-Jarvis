@@ -98,7 +98,7 @@ describe("PaneStateSummary — never hunt for the stuck one", () => {
     const onFocus = vi.fn();
     render(<PaneStateSummary panes={panes} onFocus={onFocus} />);
     const strip = screen.getByTestId("pane-summary");
-    expect(strip.textContent).toContain("1 pane needs you");
+    expect(strip.textContent).toContain("1 terminal needs you");
     fireEvent.click(screen.getByTestId("focus-blocked-t1"));
     expect(onFocus).toHaveBeenCalledWith("t1");
   });
@@ -134,7 +134,7 @@ describe("PaneStateSummary — never hunt for the stuck one", () => {
         onFocus={vi.fn()}
       />,
     );
-    expect(screen.getByTestId("pane-summary").textContent).toContain("2 panes need you");
+    expect(screen.getByTestId("pane-summary").textContent).toContain("2 terminals need you");
   });
 });
 

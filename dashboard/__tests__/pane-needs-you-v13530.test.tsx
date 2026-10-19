@@ -204,7 +204,7 @@ describe("lib/paneAsks: which panes wait, and what they are called", () => {
     expect(paneWaitingTitle({ cli: "claude" })).toBe("Claude Code in Build is waiting for you");
     expect(paneWaitingTitle({ cli: "codex" })).toBe("Codex in Build is waiting for you");
     expect(paneWaitingTitle({ cli: "my-cli" })).toBe("my-cli in Build is waiting for you");
-    expect(paneWaitingTitle({ cli: "" })).toBe("A Build pane is waiting for you");
+    expect(paneWaitingTitle({ cli: "" })).toBe("A Build terminal is waiting for you");
     expect(paneWaitingSubject("grok")).toBe("Grok CLI");
     expect(Object.keys(PANE_CLI_NAMES)).toContain("cursor-agent");
   });
@@ -238,7 +238,7 @@ describe("a pane waiting on its CLI's question reaches the bell (G52)", () => {
     await openBell();
     const row = await screen.findByTestId("bell-pane-waiting");
     expect(row).toHaveTextContent("Claude Code in Build is waiting for you");
-    expect(row).toHaveTextContent("Open the pane");
+    expect(row).toHaveTextContent("Open the terminal");
     expect(within(row).getByRole("link")).toHaveAttribute("href", "/terminals?focus=t1");
     // Only panes waiting: the footer goes to Build, not the Agents page.
     const footer = screen.getByRole("link", { name: /Open Build/ });

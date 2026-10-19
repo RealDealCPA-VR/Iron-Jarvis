@@ -264,7 +264,7 @@ describe("a mission's paused ask in the bell opens the mission (W2-5)", () => {
     H.api["/chat/approvals/pending"] = { approvals: [{ ...ASK, mission_id: "m1", project_id: "p1" }] };
     const row = await openBellRow();
     const link = within(row).getByTestId("bell-approval-mission");
-    expect(link.textContent).toMatch(/open the mission/i);
+    expect(link.textContent).toMatch(/open the objective/i);
     expect(link.getAttribute("href")).toBe(missionPath("m1", "p1"));
     // The answer buttons stay on the row: the link adds context, it does not
     // replace answering from the bell.
@@ -334,7 +334,7 @@ describe("a teammate card's model line follows the member's status (the receipt 
     at("?mission=s1");
     render(<AgentsPage />);
     expect(await modelLine("writer")).toMatch(/^Ran with glm-5\.3-flash on fleet-custom/);
-    expect(await modelLine("researcher")).toMatch(/no real model ran/i);
+    expect(await modelLine("researcher")).toMatch(/no AI model ran/i);
   });
 });
 
