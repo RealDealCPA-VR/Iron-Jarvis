@@ -54,7 +54,8 @@ export interface BlockedPane {
 /** What a waiting pane is called in a sentence: the CLI's own name, an id
  *  the catalog has never heard of as itself (a name we half-know beats
  *  none — Build's rail rule), else "A Build terminal" (v1.357.0: the canon's
- *  word; desktop/main.js says the same). */
+ *  word; desktop/main.js's own copy of this line must say the same —
+ *  tests/test_pane_asks_v13530.py pins that file's words). */
 export function paneWaitingSubject(cli: string): string {
   const id = cli.trim();
   if (!id) return "A Build terminal";

@@ -91,6 +91,8 @@ describe("nav catalogue — the friction phrases resolve", () => {
     ["auto-approve", "/tools"],
     ["mcp", "/tools"],
     ["packs", "/tools"],
+    // v1.357.0 (G76): "pane" left the screen; the word still finds Build.
+    ["pane", "/terminals"],
     // Billing anxiety, phrased two ways.
     ["tokens", "/usage"],
     ["cost", "/usage"],

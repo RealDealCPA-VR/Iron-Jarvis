@@ -258,8 +258,8 @@ function AgentCard({
               {/* v1.310.0: the coordinator receipt's tense, by THIS
                   teammate's status (./receipt) — a failed teammate "tried"
                   its model, it was never "answered by" it.
-                  v1.329.0: the mock line says it in the chat receipt's own
-                  words ("Mock answer. No real model ran.") and its warn
+                  v1.329.0: the demo line says it in the chat receipt's own
+                  words ("Demo answer. No AI model ran.") and its warn
                   tone, with what it ran on in parentheses. */}
               {m.provider === "mock" ? (
                 <MockRanOn answered={m.status === "done"} ranOn={ranOn} />

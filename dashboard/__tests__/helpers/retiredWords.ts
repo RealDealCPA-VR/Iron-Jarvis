@@ -21,10 +21,16 @@
  * - a token with no space and no capital ("mock", "pane-rail", "/missions",
  *   "ij.pane.thread.") — an id, a test id, a route or a key — UNLESS it is
  *   rendered as it stands (a JSX child, a branch of a ternary in one, a piece
- *   of a sentence template).
+ *   of a sentence template, one side of an `n === 1 ? … : …` plural choice
+ *   wherever it is kept).
  *
  * A visible attribute (title, aria-label, placeholder, alt, label) is read
- * whatever its shape. What is left is prose; a retired word in prose is a hit,
+ * whatever its shape (a ternary, a fallback, a template), and a hidden one
+ * (className, data-*, href, …) is skipped whatever its shape. A single
+ * lower-case word kept in a variable or an object VALUE and rendered later
+ * (`{ mcp: "pack" }` then `{LABEL[k]}`) cannot be told from an id and is NOT
+ * read: write it capitalised or in a sentence. What is left is prose; a
+ * retired word in prose is a hit,
  * unless the caller's allowlist names that file and that text with a reason.
  */
 
@@ -162,9 +168,73 @@ function proseTemplate(t: ts.TemplateExpression): boolean {
   return pieces.some((p) => /\s/.test(p) || /[A-Z]/.test(p));
 }
 
+/** A comparison with the number 1 (`n === 1`, `count !== 1`): the condition
+ *  of a singular/plural choice, which is always words. */
+function comparesWithOne(e: ts.Expression): boolean {
+  let x: ts.Expression = e;
+  while (ts.isParenthesizedExpression(x)) x = x.expression;
+  if (!ts.isBinaryExpression(x)) return false;
+  const op = x.operatorToken.kind;
+  if (
+    op !== ts.SyntaxKind.EqualsEqualsEqualsToken &&
+    op !== ts.SyntaxKind.ExclamationEqualsEqualsToken &&
+    op !== ts.SyntaxKind.EqualsEqualsToken &&
+    op !== ts.SyntaxKind.ExclamationEqualsToken
+  )
+    return false;
+  const one = (s: ts.Expression) => ts.isNumericLiteral(s) && s.text === "1";
+  return one(x.left) || one(x.right);
+}
+
+/** The JSX attribute a literal is the VALUE of, climbing through the shapes
+ *  an attribute value takes (`{…}`, parentheses, a ternary branch, a
+ *  fallback, a template piece, `+`): `title={x ? "Close pane" : "Open"}` is
+ *  the title's text, `className={\`pane ${x}\`}` is a class. Null when the
+ *  literal sits inside a call or anything else first. (v1.357.0 review: the
+ *  attribute used to be read only when the literal was its DIRECT value, so a
+ *  one-word title in a ternary was skipped as code and a class template read
+ *  as prose.) */
+function enclosingAttribute(node: ts.Node): ts.JsxAttribute | null {
+  let cur: ts.Node = node;
+  for (;;) {
+    const p: ts.Node | undefined = cur.parent;
+    if (!p) return null;
+    if (ts.isJsxAttribute(p)) return p;
+    if (
+      ts.isJsxExpression(p) ||
+      ts.isParenthesizedExpression(p) ||
+      ts.isAsExpression(p) ||
+      ts.isTemplateExpression(p) ||
+      ts.isTemplateSpan(p)
+    ) {
+      cur = p;
+      continue;
+    }
+    if (ts.isConditionalExpression(p) && (p.whenTrue === cur || p.whenFalse === cur)) {
+      cur = p;
+      continue;
+    }
+    if (ts.isBinaryExpression(p)) {
+      const op = p.operatorToken.kind;
+      if (
+        op === ts.SyntaxKind.PlusToken ||
+        ((op === ts.SyntaxKind.BarBarToken ||
+          op === ts.SyntaxKind.QuestionQuestionToken ||
+          op === ts.SyntaxKind.AmpersandAmpersandToken) &&
+          p.right === cur)
+      ) {
+        cur = p;
+        continue;
+      }
+    }
+    return null;
+  }
+}
+
 /** Is a code-shaped literal RENDERED as it stands: a JSX child, a ternary
- *  branch / fallback inside one, a piece of a sentence template, or glued to
- *  a sentence with `+`? */
+ *  branch / fallback inside one, a piece of a sentence template, glued to a
+ *  sentence with `+`, or one side of a singular/plural choice
+ *  (`n === 1 ? "pane" : "panes"`, wherever it is kept)? */
 function renderedAsItStands(node: ts.Node): boolean {
   let cur: ts.Node = node;
   for (;;) {
@@ -175,6 +245,7 @@ function renderedAsItStands(node: ts.Node): boolean {
       continue;
     }
     if (ts.isConditionalExpression(p) && (p.whenTrue === cur || p.whenFalse === cur)) {
+      if (comparesWithOne(p.condition)) return true;
       cur = p;
       continue;
     }
@@ -262,12 +333,8 @@ export function skipReason(node: ts.Node, sf: ts.SourceFile): string {
     const key = p.parent.name.getText(sf).replace(/["']/g, "");
     if (ALIAS_KEYS.has(key)) return "alias";
   }
-  // A JSX attribute: its name decides.
-  const attr = ts.isJsxAttribute(p)
-    ? p
-    : ts.isJsxExpression(p) && p.parent && ts.isJsxAttribute(p.parent)
-      ? p.parent
-      : null;
+  // A JSX attribute: its name decides, whatever shape its value takes.
+  const attr = enclosingAttribute(node);
   if (attr) {
     const name = attr.name.getText(sf);
     if (VISIBLE_ATTRS.has(name)) return "";

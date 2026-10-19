@@ -369,6 +369,26 @@ describe("the canon is a scan, not a list of strings (v1.357.0)", () => {
     expect(words.has("pack")).toBe(false); // only in a comment and an alias
   });
 
+  it("an attribute is judged by its NAME whatever shape its value takes, and a plural choice is words (v1.357.0 review)", () => {
+    // Read: a one-word title / aria-label / placeholder behind a ternary or a
+    // fallback, and a singular/plural choice kept in a variable first.
+    const read = [
+      `export const A = ({ x }: { x: boolean }) => <b title={x ? "daemon" : "app"} />;`,
+      `export const B = ({ x }: { x: boolean }) => <i aria-label={x ? "pack" : "tool"} />;`,
+      `export const C = ({ v }: { v?: string }) => <input placeholder={v || "mock"} />;`,
+      `export const D = ({ n }: { n: number }) => { const noun = n === 1 ? "pane" : "panes"; return <span>{n} {noun}</span>; };`,
+    ];
+    for (const src of read) expect(retiredHits("probe.tsx", src).length, src).toBeGreaterThan(0);
+    // Skipped: a hidden attribute stays hidden behind a template or a ternary.
+    const skipped = [
+      `export const E = ({ x }: { x: string }) => <div className={\`pane-rail \${x}\`} />;`,
+      `export const F = ({ x }: { x: boolean }) => <div className={x ? "pane on" : "pane"} />;`,
+      `export const G = ({ x }: { x: string }) => <div data-testid={\`pane \${x}\`} />;`,
+      `export const H = ({ id }: { id: string }) => <a href={\`/agents?mission=\${id}\`}>Open</a>;`,
+    ];
+    for (const src of skipped) expect(retiredHits("probe.tsx", src), src).toEqual([]);
+  });
+
   it("covers every retired word the canon names", () => {
     const words = RETIRED.map((r) => r.word);
     for (const w of ["pack", "connector", "memory source", "brain", "mission", "daemon", "mock", "pane", "job"]) {

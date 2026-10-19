@@ -51,7 +51,9 @@ def test_the_pane_offers_a_capable_launch_door():
 def test_the_door_says_it_opens_a_new_pane():
     """The button must not look like the row above it, which behaves differently."""
     src = _read(PANE)
-    assert "With Jarvis capabilities — opens a new pane" in src, (
+    # v1.357.0 (G76): the canon's word for a Build window is "terminal"
+    # (VOCABULARY.md); the promise the label makes is unchanged.
+    assert "With Jarvis capabilities — opens a new terminal" in src, (
         "the capable-launch section does not tell the user it creates a pane. Two "
         "buttons that look alike and behave differently is the worse half of a "
         "surface that lies"
