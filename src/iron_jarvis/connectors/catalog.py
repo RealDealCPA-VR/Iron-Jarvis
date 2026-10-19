@@ -1,4 +1,6 @@
-"""The Connector Marketplace catalog (CX-01).
+"""The Connector Marketplace catalog (CX-01) — and, since v1.357.0 (G82), the
+ONE catalog of packs: the Tools page's ``GET /mcp/catalog`` is built from it
+(:func:`mcp_catalog_rows`).
 
 A single, curated gallery of everything Iron Jarvis can connect to — MCP servers
 (Slack/GitHub/Postgres/…), OAuth apps (Drive/Dropbox/…), and API-key services
@@ -120,6 +122,17 @@ class Connector:
     signin_args: list[str] = field(default_factory=list)
     # Whose account the sign-in is for, in the press's words ("Microsoft").
     signin_name: str = ""
+    # -- v1.357.0 (G82): the Tools page's catalog is built from THIS file --
+    # The id of this pack's row in ``GET /mcp/catalog`` (the name the Tools
+    # page saves the pack under), "" when the Tools page does not offer it.
+    # Usually the card's own id; Sequential Thinking's Tools row has always
+    # been "sequentialthinking" (``connectors.service.PACK_ALIASES`` lights
+    # this card from a pack saved under that name).
+    tools_id: str = ""
+    # Where the server comes from, as the Tools card's source chip says it:
+    # "reference" (an official reference server) or "integration" (the
+    # company's own). Read only for a row the Tools page shows.
+    provenance: str = ""
 
 
 def is_remote(connector: "Connector") -> bool:
@@ -148,8 +161,8 @@ _GH = "https://github.com/settings/tokens"
 #: (2026-10-19): `"type": "http", "url": "https://api.githubcopilot.com/mcp/"`
 #: with `"Authorization": "Bearer <personal access token>"`. The reference
 #: @modelcontextprotocol/server-github it replaces is "no longer supported" on
-#: npm. Nothing to install on this PC. The Tools page's catalog
-#: (daemon/app.py ``_MCP_CATALOG``) names the same address.
+#: npm. Nothing to install on this PC. The Tools page's catalog is built from
+#: this same card (v1.357.0, G82: :func:`mcp_catalog_rows`).
 GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
 #: The reference package the GitHub card ran before (G43's "older package").
 GITHUB_OLD_PACKAGE = "@modelcontextprotocol/server-github"
@@ -237,6 +250,8 @@ CATALOG: list[Connector] = [
         url=GITHUB_MCP_URL,
         auth_field="GITHUB_PERSONAL_ACCESS_TOKEN",
         replaces=[GITHUB_OLD_PACKAGE],
+        tools_id="github",
+        provenance="integration",
     ),
     Connector(
         id="postgres",
@@ -263,7 +278,9 @@ CATALOG: list[Connector] = [
     ),
     Connector(
         id="filesystem",
-        name="Filesystem",
+        # v1.357.0 (G82): one name on both surfaces — the Tools page's plain
+        # words ("Filesystem" was this card's alone).
+        name="Files & folders",
         category="Developer",
         glyph="📁",
         blurb="Read & write files in a folder you choose.",
@@ -275,6 +292,8 @@ CATALOG: list[Connector] = [
         command="npx",
         args=["-y", "@modelcontextprotocol/server-filesystem", "<folder>"],
         fields=[Field("folder", "Folder path", help="Absolute path to allow", kind="arg")],
+        tools_id="filesystem",
+        provenance="reference",
     ),
     Connector(
         id="sentry",
@@ -488,11 +507,13 @@ CATALOG: list[Connector] = [
             Field("BOX_CLIENT_ID", "Box client id", help="From a Box custom app."),
             Field("BOX_CLIENT_SECRET", "Box client secret", help="From a Box custom app."),
         ],
+        tools_id="box",
+        provenance="integration",
     ),
     # ---------------- Data & Web ----------------
     Connector(
         id="fetch",
-        name="Web Fetch",
+        name="Fetch web pages",
         category="Data & Web",
         glyph="🌐",
         blurb="Fetch & clean web pages.",
@@ -503,6 +524,8 @@ CATALOG: list[Connector] = [
         docs_url="https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
         command="uvx",
         args=["mcp-server-fetch"],
+        tools_id="fetch",
+        provenance="reference",
     ),
     Connector(
         id="brave_search",
@@ -523,7 +546,9 @@ CATALOG: list[Connector] = [
     ),
     Connector(
         id="memory",
-        name="Knowledge Graph Memory",
+        # "Long-term memory" is the app's OWN memory (the Memory page); this
+        # pack is a separate graph (v1.355.0) — one name on both surfaces.
+        name="Knowledge graph",
         category="Data & Web",
         glyph="🧠",
         blurb="A persistent knowledge graph.",
@@ -534,10 +559,12 @@ CATALOG: list[Connector] = [
         docs_url="https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
         command="npx",
         args=["-y", "@modelcontextprotocol/server-memory"],
+        tools_id="memory",
+        provenance="reference",
     ),
     Connector(
         id="sequential_thinking",
-        name="Sequential Thinking",
+        name="Step-by-step reasoning",
         category="Data & Web",
         glyph="🪜",
         blurb="Structured step-by-step reasoning.",
@@ -548,6 +575,9 @@ CATALOG: list[Connector] = [
         docs_url="https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
         command="npx",
         args=["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        # The Tools page has always saved this pack as "sequentialthinking".
+        tools_id="sequentialthinking",
+        provenance="reference",
     ),
     # ---------------- Payments ----------------
     Connector(
@@ -753,3 +783,161 @@ def connector_dict(c: Connector) -> dict:
         "href": c.href,
         "action": c.action,
     }
+
+
+# --------------------------------------------------------------------------- #
+# v1.357.0 (G82): the Tools page's catalog (GET /mcp/catalog) is built HERE.
+#
+# There used to be a second table in daemon/app.py (``_MCP_CATALOG``) naming
+# the same packs with other names, other copy and, once, a package npm never
+# had (v1.350.1). Now every row the Tools page offers is a card in this file:
+# a Directory card with ``tools_id`` set, or one of :data:`TOOLS_ONLY` below.
+# A pack on both surfaces is ONE entry, so its name and words cannot drift.
+#
+# What the Tools page does NOT list, and why (pinned in
+# tests/test_one_catalog_v13570.py): its add form takes typed values only — no
+# account choice, no sign-in, no outside setup sentence — so a card that needs
+# one of those (Gmail's Google developer setup, Microsoft 365's account choice
+# and sign-in) and the apps that are not packs at all (sign-in drives, keys,
+# the browser add-on link) live in the Directory alone. The Directory's other
+# app cards are offered by the Tools page's "Add a tool" door (any package).
+# --------------------------------------------------------------------------- #
+
+#: Rows the Tools page offers that are NOT Directory cards — kept out of
+#: :data:`CATALOG` on purpose (like :data:`LINK_CARDS`), so the Directory, the
+#: chat's app matcher (``connectors.app_names``) and ``app_connect`` never see
+#: them. Each says why in its comment.
+TOOLS_ONLY: list[Connector] = [
+    Connector(
+        # A developer pack about this PC's own repositories, not an app the
+        # user signs in to; chat's app matcher must not read "git" as an app.
+        id="git",
+        name="Git repositories",
+        category="Developer",
+        glyph="🌿",
+        blurb="Read a local git repository.",
+        unlocks="Read the history, diffs, and branches of a local git repo.",
+        connect_via="mcp",
+        docs_url="https://github.com/modelcontextprotocol/servers/tree/main/src/git",
+        command="uvx",
+        args=["mcp-server-git", "--repository", "<repo-path>"],
+        tools_id="git",
+        provenance="reference",
+    ),
+    Connector(
+        # The Tools page's "Verify setup" action (a harmless test server), a
+        # diagnostic rather than a capability.
+        id="everything",
+        name="Demo / connection test",
+        category="Developer",
+        glyph="🧪",
+        blurb="A harmless test server.",
+        unlocks="Exercises every MCP feature — handy to confirm the plumbing works "
+        "before adding a real one.",
+        connect_via="mcp",
+        docs_url="https://github.com/modelcontextprotocol/servers/tree/main/src/everything",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-everything"],
+        tools_id="everything",
+        provenance="reference",
+    ),
+    Connector(
+        # The Directory's browser door is the user's own browser through the
+        # add-on (the "browser_addon" LINK card, v1.353.0 G43); a second
+        # browser card there would ask a new user to pick between two.
+        id="playwright",
+        name="Browser control (Playwright)",
+        category="Data & Web",
+        glyph="🎭",
+        blurb="Drive a separate browser.",
+        unlocks="Drive a real browser — open pages, click, fill forms, screenshot. "
+        "Microsoft's official Playwright MCP.",
+        connect_via="mcp",
+        docs_url="https://github.com/microsoft/playwright-mcp",
+        command="npx",
+        args=["-y", "@playwright/mcp@latest"],
+        tools_id="playwright",
+        provenance="integration",
+    ),
+]
+
+#: The Tools page's row order (its grid keeps it inside "Enabled" and
+#: "Available to add"). Every row's ``tools_id`` appears exactly once.
+TOOLS_ORDER: tuple[str, ...] = (
+    "filesystem",
+    "fetch",
+    "memory",
+    "sequentialthinking",
+    "git",
+    "everything",
+    "github",
+    "playwright",
+    "box",
+)
+
+#: The helper program a row's command needs, in the Tools card's words (its
+#: chip reads "Needs Node"; the dashboard's ``Runtime`` type is exactly these).
+TOOLS_RUNTIME: dict[str, str] = {"npx": "Node", "uvx": "Python (uv)"}
+
+
+def tools_twin(c: Connector) -> str:
+    """The id shared by a Directory card and the Tools row that saves the SAME
+    pack under the SAME name, else "" (Sequential Thinking's two doors save it
+    under two names, so they are not twins — the card lights from either)."""
+    return c.id if (c.tools_id and c.tools_id == c.id and c in CATALOG) else ""
+
+
+def _needs_line(c: Connector) -> str:
+    """What the Tools page's add form will ask for, in the card's own field
+    labels: "Needs your Box client id and Box client secret." ("" when the
+    card asks for nothing typed by name — a folder is asked for in place)."""
+    labels = [f.label for f in c.fields if f.kind in ("secret", "env") and not f.optional]
+    if not labels:
+        return ""
+    words = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+    return f"Needs your {words}."
+
+
+def tools_description(c: Connector) -> str:
+    """The Tools card's words: the card's own ``unlocks`` (the same sentence
+    the Directory shows) plus what the add form will ask for."""
+    return " ".join(p for p in (c.unlocks.strip(), _needs_line(c)) if p)
+
+
+def tools_row(c: Connector) -> dict:
+    """One ``GET /mcp/catalog`` row, the shape the Tools page reads (the route
+    adds ``runtime_ready``): id, name, description, command, args,
+    ``env_keys`` (only when the form asks for any), ``transport``/``url``/
+    ``auth_field`` for a server reached over the network, ``category`` (the
+    source chip), ``needs`` (the helper program) and ``directory_twin``."""
+    row: dict = {
+        "id": c.tools_id,
+        "name": c.name,
+        "description": tools_description(c),
+        "command": c.command,
+        "args": list(c.args),
+    }
+    if is_remote(c):
+        row.update({"transport": c.transport, "url": c.url, "auth_field": c.auth_field})
+    keys = [f.name for f in c.fields if f.kind in ("secret", "env")]
+    if keys:
+        row["env_keys"] = keys
+    row["category"] = c.provenance
+    row["needs"] = "" if is_remote(c) else TOOLS_RUNTIME.get(c.command, c.command)
+    # The Directory card that adds this same pack under the same name ("" for
+    # a Tools-only row) — the Tools page's "Also in the Directory" link.
+    row["directory_twin"] = tools_twin(c)
+    return row
+
+
+def tools_entries() -> list[Connector]:
+    """Every entry the Tools page offers, in :data:`TOOLS_ORDER`."""
+    by_id = {c.tools_id: c for c in [*CATALOG, *TOOLS_ONLY] if c.tools_id}
+    return [by_id[t] for t in TOOLS_ORDER if t in by_id]
+
+
+def mcp_catalog_rows() -> list[dict]:
+    """The Tools page's catalog (``GET /mcp/catalog``), built from this file.
+    Fresh dicts on every call — the route copies rows, but a caller that keeps
+    the list can never write into a card."""
+    return [tools_row(c) for c in tools_entries()]

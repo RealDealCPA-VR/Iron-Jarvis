@@ -160,7 +160,9 @@ def test_the_running_sequentialthinking_pack_lights_its_own_card(client, monkeyp
         _PackTool("mcp__sequentialthinking__sequentialthinking", "Think step by step."), mcp=True
     )
     rows = _rows(client)
-    lit = [r for r in rows if r["name"] == "Sequential Thinking"]
+    # v1.357.0 (G82, moved on purpose): the card took the Tools page's name
+    # (one catalog, one name) — it read "Sequential Thinking" here alone.
+    lit = [r for r in rows if r["name"] == "Step-by-step reasoning"]
     assert len(lit) == 1, "one card, not a card plus a stranger"
     card = lit[0]
     assert card["status"] == "connected" and card["connected"] is True and card["tools_loaded"] == 1

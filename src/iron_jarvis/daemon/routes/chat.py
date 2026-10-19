@@ -3506,6 +3506,19 @@ async def chat_stream(
             ask_armed += [t for t in _app_ask if d.platform.registry.get(t)]
             if _app_drop:
                 ask_armed = [t for t in ask_armed if t != "app_connect"]
+            # REST HOOKUPS BY NAME (v1.357.0, G84): a message that names one
+            # of the user's saved REST hookups ("get contact 42 from Acme
+            # CRM") ASK-arms `rest_call` — the mirror of the apps rule above:
+            # visible, never granted (every call shows the card; a call that
+            # changes something asks every time), not in low trust / local
+            # only. THIS LANE ONLY: the POST lane never arms it by name.
+            from ...integrations.hookups import named_hookup_ask_tools
+
+            ask_armed += named_hookup_ask_tools(
+                d.platform, _last_user_text(body.messages), armed, ask_armed,
+                low_trust=_trust_state["low"],
+                local_only=_egress.current_scope().on,
+            )
             # WORKSPACE ASK (v1.210.0): a chat BOUND to a folder (the
             # Build pane) is a coding surface — `shell` joins the ask tier
             # so the model can propose a command without the user typing

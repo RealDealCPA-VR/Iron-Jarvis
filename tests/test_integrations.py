@@ -118,7 +118,8 @@ def test_rest_integration_uses_injected_http_client(tmp_path):
     assert calls["url"] == "https://api.example.com/health"
     # no auth secret configured -> no Authorization header, no real network
     assert "Authorization" not in calls["headers"]
-    assert integ.capabilities() == ["rest.get"]
+    # v1.357.0 (G84, moved on purpose): a hookup can also be CALLED (rest_call).
+    assert integ.capabilities() == ["rest.get", "rest.call"]
 
 
 def test_secret_resolver_binding_supplies_token(tmp_path):

@@ -3141,7 +3141,12 @@ def named_app_ask_tools(
     ``app_connect`` (armed by the same app name) is dropped when every named
     app is already connected and the message asks for no connecting or
     re-signing — its card would only answer "already connected". Never
-    raises: a fault arms nothing and drops nothing."""
+    raises: a fault arms nothing and drops nothing.
+
+    Its twin for the user's REST hookups (v1.357.0, G84) is
+    ``integrations.hookups.named_hookup_ask_tools`` — ``rest_call``, called
+    right after this in the stream lane, under the same rules. This lane
+    (``run_chat_turn``) calls neither."""
     try:
         named = list(getattr(grounding, "apps_named", None) or [])
         if not named:

@@ -44,19 +44,23 @@ def _src(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
-def test_the_bad_name_is_gone_from_every_catalog_and_both_name_the_real_package():
+def test_the_bad_name_is_gone_and_there_is_one_catalog_that_names_the_real_package():
+    """v1.357.0 (G82, moved on purpose): this pin compared the TWO catalogs
+    (daemon/app.py's table and connectors/catalog.py) because their drift
+    shipped the bad name. There is one catalog now: app.py names no package
+    at all and the Tools page's rows are built from connectors/catalog.py."""
     app_src = _src("src/iron_jarvis/daemon/app.py")
     cat_src = _src("src/iron_jarvis/connectors/catalog.py")
     assert BAD not in app_src and BAD not in cat_src
-    assert GOOD in app_src and GOOD in cat_src
-    # Every @modelcontextprotocol package the two catalogs share is spelled
-    # the same in both (the drift that shipped the bad name).
-    pkg = re.compile(r'"(@modelcontextprotocol/[\w.-]+)"')
-    names_app, names_cat = set(pkg.findall(app_src)), set(pkg.findall(cat_src))
-    for name in names_app:
-        tail = name.split("/")[-1].replace("-", "")
-        twins = {n for n in names_cat if n.split("/")[-1].replace("-", "") == tail}
-        assert not twins or twins == {name}, (name, twins)
+    assert GOOD in cat_src
+    # No second table: app.py spells no MCP package and hands the route the
+    # one catalog's rows.
+    assert not re.findall(r'"(@modelcontextprotocol/[\w.-]+)"', app_src)
+    assert "_MCP_CATALOG = _mcp_catalog_rows()" in app_src
+    from iron_jarvis.connectors.catalog import mcp_catalog_rows
+
+    (row,) = [r for r in mcp_catalog_rows() if r["id"] == "sequentialthinking"]
+    assert GOOD in row["args"]
 
 
 class _Cfg:

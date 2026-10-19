@@ -18,9 +18,12 @@ ONE matcher, built from the catalog itself (:data:`connectors.catalog.CATALOG`
 
 Rules that keep it honest:
 
-* An app whose NAME is an everyday word (:data:`GENERIC` — Knowledge Graph
-  Memory, Web Fetch, Filesystem, Box, Sequential Thinking) counts only beside
-  a connect / set-up verb ("connect Box"), never in "put it in a box".
+* An app whose NAME is an everyday word (:data:`GENERIC` — Knowledge graph,
+  Fetch web pages, Files & folders, Box, Step-by-step reasoning) counts only
+  beside a connect / set-up verb ("connect Box"), never in "put it in a box".
+  v1.357.0 (G82): those four took the Tools page's names (one catalog, one
+  name); the names they had before stay in :data:`ALIASES`, so "set up
+  sequential thinking" and "connect the filesystem" still name them.
 * "my email" / "my inbox" mean Gmail only when no other mail service is named
   ("check my Outlook inbox" names no catalog app).
 * Claude Code and Codex are not catalog apps; :func:`clis_named` finds them so
@@ -56,7 +59,13 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "onedrive": (r"one\s*drive",),
     "dropbox": (r"drop\s*box",),
     "brave_search": (r"brave\s*search",),
-    "filesystem": (r"file\s+system",),
+    # v1.357.0 (G82): the names these cards had before they took the Tools
+    # page's ("Filesystem", "Web Fetch", "Knowledge Graph Memory",
+    # "Sequential Thinking") — still the words people use for them.
+    "filesystem": (r"file\s*system",),
+    "fetch": (r"web\s*fetch",),
+    "memory": (r"knowledge\s+graph\s+memory",),
+    "sequential_thinking": (r"sequential\s*thinking",),
     # v1.356.0 integrate (G60, lane 6D's note): "what's on my calendar
     # tomorrow?" and "check my Outlook inbox" name Microsoft 365 (Outlook, the
     # calendar, OneDrive). "Outlook" only capitalised ("an outlook on the

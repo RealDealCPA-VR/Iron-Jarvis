@@ -107,6 +107,10 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         # a hosted service and sends the prompt there — flagged content must
         # never buy anything or ship its words out.
         "generate_media",
+        # v1.357.0 (G84): a call to one of the user's REST hookups goes out
+        # with the user's saved key — flagged content must never read their
+        # records out of it, or write to it.
+        "rest_call",
     }
 )
 

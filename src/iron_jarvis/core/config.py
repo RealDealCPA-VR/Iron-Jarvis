@@ -86,6 +86,12 @@ def default_permissions() -> dict[str, str]:
         "secret_set": "ask",
         "integration_list": "allow",
         "integration_test": "ask",
+        # v1.357.0 (G84): ONE call to a path on one of the user's REST
+        # hookups, with its saved key — it reaches the user's own service, so
+        # it asks on the ordinary card (and a call that CHANGES something asks
+        # every time: its spend check). Denied under low trust
+        # (core/trust.LOW_TRUST_DENY).
+        "rest_call": "ask",
         "notify": "ask",
         "file_search": "allow",
         "recall": "allow",  # semantic recall across indexed roots + long-term memory

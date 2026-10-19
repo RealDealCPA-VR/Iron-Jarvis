@@ -60,13 +60,14 @@ def _server_cfg(platform, connector_id: str) -> "dict | None":
 USER_CATEGORY = "Added by you"
 
 #: v1.353.0 (G43): OTHER names the SAME pack is installed under. The Tools
-#: page's prebuilt catalog (daemon/app.py) adds Sequential Thinking as
-#: "sequentialthinking" while this catalog's id is "sequential_thinking", so a
-#: running pack showed under Custom beside its own card reading "not
-#: connected". A catalog card lights from the first alias that is configured
-#: (only when its own id is not), and that pack is not listed a second time.
+#: page's catalog adds Sequential Thinking as "sequentialthinking" while this
+#: card's id is "sequential_thinking", so a running pack showed under Custom
+#: beside its own card reading "not connected". A catalog card lights from the
+#: first alias that is configured (only when its own id is not), and that pack
+#: is not listed a second time. v1.357.0 (G82): read off the one catalog —
+#: a card whose Tools row (``tools_id``) saves the pack under another name.
 PACK_ALIASES: dict[str, tuple[str, ...]] = {
-    "sequential_thinking": ("sequentialthinking",),
+    c.id: (c.tools_id,) for c in CATALOG if c.tools_id and c.tools_id != c.id
 }
 
 

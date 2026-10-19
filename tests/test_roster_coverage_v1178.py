@@ -214,6 +214,14 @@ _OFF_ROSTER_BY_DESIGN = {
     # inherits the chat's armed tools, with the chat's thread id so the
     # media comes home (tests/test_generate_media_tool_v1346.py).
     "generate_media",
+    # A REST HOOKUP JARVIS CAN CALL (v1.357.0, G84): `rest_call` reaches the
+    # user's own service with their saved key, and every call needs a card
+    # (a call that changes something asks every time) - the same reasoning
+    # as the acting browser tools: a card needs somebody in front of it. The
+    # stream chat lane ASK-arms it when a message names a saved hookup
+    # (integrations/hookups.named_hookup_ask_tools); pinned by
+    # tests/test_rest_call_v13570.py.
+    "rest_call",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

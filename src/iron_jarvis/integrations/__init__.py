@@ -21,6 +21,7 @@ from .registry import Factory, IntegrationRegistry
 from .tools import (
     IntegrationListTool,
     IntegrationTestTool,
+    RestCallTool,
     integration_tools,
 )
 
@@ -38,5 +39,6 @@ __all__ = [
     "register_builtins",
     "IntegrationListTool",
     "IntegrationTestTool",
+    "RestCallTool",
     "integration_tools",
 ]

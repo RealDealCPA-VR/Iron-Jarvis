@@ -107,6 +107,18 @@ GENERATES_MEDIA_TOOLS: frozenset[str] = frozenset({
     "generate_media",
 })
 
+#: Tools that call one of the user's own web services with its saved key
+#: (v1.357.0, G84: ``rest_call`` and the REST hookups). NOT in
+#: :data:`INTERNET_TOOLS`, for the reason media is not: the user named the
+#: service in the chat, so a local-only turn that has the tool keeps it and
+#: CARDS every call ("Allow once") — the one-message OK is the consent for
+#: that request to leave this PC. A hookup on this network is carded too:
+#: what the address points at is the user's saved setting, not a judgement
+#: this list makes.
+CALLS_YOUR_SERVICES_TOOLS: frozenset[str] = frozenset({
+    "rest_call",
+})
+
 #: The words a person knows each cloud provider by. Anything not here reads as
 #: its id (a fleet node reads as the label the user gave it).
 _FRIENDLY: dict[str, str] = {
@@ -508,6 +520,7 @@ def reaches_outside(tool: Any, registry: Any = None) -> bool:
             name in RUNS_COMMANDS_TOOLS
             or name in SETS_OUTSIDE_ADDRESS_TOOLS
             or name in GENERATES_MEDIA_TOOLS
+            or name in CALLS_YOUR_SERVICES_TOOLS
         ):
             return True
         if _browser_reaches_out(tool):
@@ -714,6 +727,7 @@ __all__ = [
     "RUNS_COMMANDS_TOOLS",
     "SETS_OUTSIDE_ADDRESS_TOOLS",
     "GENERATES_MEDIA_TOOLS",
+    "CALLS_YOUR_SERVICES_TOOLS",
     "ask_first_tools",
     "asks_first",
     "check_egress",
