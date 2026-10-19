@@ -922,7 +922,10 @@ function HttpDoor({ onAdded }: { onAdded: () => void }) {
         </summary>
         <div className="mt-2 space-y-2 pl-4">
           <label className="block">
-            <span className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">Server type</span>
+            {/* v1.356.0 (G74, review): the same words the editor uses
+                (EditPack "How it connects"); the protocol names ride the
+                title for anyone matching them to a server's docs. */}
+            <span className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">How it connects</span>
             <select
               data-testid="add-pack-http-transport"
               value={pick}
@@ -931,11 +934,12 @@ function HttpDoor({ onAdded }: { onAdded: () => void }) {
                 setPick(v === "sse" ? "sse" : v === "http" ? "http" : "auto");
               }}
               className="field sm:w-72"
-              aria-label="Server type"
+              aria-label="How it connects"
+              title="Automatic, a web address (Streamable HTTP) or an older web address (SSE)"
             >
               <option value="auto">Automatic (read from the address)</option>
-              <option value="http">HTTP</option>
-              <option value="sse">SSE (older servers)</option>
+              <option value="http">A web address</option>
+              <option value="sse">A web address (older servers)</option>
             </select>
           </label>
           <div>

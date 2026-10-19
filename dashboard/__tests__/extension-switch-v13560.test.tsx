@@ -74,12 +74,25 @@ vi.mock("@/lib/api", () => ({
     const name = decodeURIComponent(path.split("/").pop() ?? "");
     const b = (body ?? {}) as { enabled?: boolean };
     if (typeof b.enabled === "boolean") {
-      // The daemon's answer: the row, now on/off.
-      api.servers = api.servers.map((s) =>
-        s.name === name ? { ...s, enabled: b.enabled, state: b.enabled ? "ok" : "off" } : s,
-      );
+      const answer = api.switchAnswer ? api.switchAnswer(name, b.enabled) : { name, enabled: b.enabled };
+      // The daemon's re-read row, as it really answers it: a switched-off
+      // pack holds NO tools (mcp_server_row: state "off", tools_loaded 0 —
+      // review: a row that kept its 3 tools hid a Retry on an off row);
+      // switched on, the tools the switch answer says came back.
+      api.servers = api.servers.map((s) => {
+        if (s.name !== name) return s;
+        if (!b.enabled) return { ...s, enabled: false, state: "off", tools_loaded: 0, tool_names: [] };
+        const a = answer as { tools_loaded?: unknown; tool_names?: unknown };
+        return {
+          ...s,
+          enabled: true,
+          state: "ok",
+          tools_loaded: typeof a.tools_loaded === "number" ? a.tools_loaded : s.tools_loaded,
+          tool_names: Array.isArray(a.tool_names) ? a.tool_names : s.tool_names,
+        };
+      });
       api.connectors = api.connectors.map((c) => (c.id === name ? { ...c, enabled: b.enabled } : c));
-      return api.switchAnswer ? api.switchAnswer(name, b.enabled) : { name, enabled: b.enabled };
+      return answer;
     }
     return {};
   },
@@ -246,8 +259,9 @@ describe("a Tools row switches its extension off and on without losing it", () =
     expect(within(r).queryByTestId("mcp-last-error-slack")).toBeNull();
     expect(within(r).queryByTestId("mcp-no-tools-slack")).toBeNull();
     expect(screen.getByTestId("mcp-switch-slack").getAttribute("aria-checked")).toBe("false");
-    // The summary does not count a switched-off extension as enabled.
-    expect(screen.getByTestId("tools-summary").textContent).toContain("0 extensions");
+    // The summary does not count a switched-off extension as enabled (the
+    // "Enabled:" line itself — the box holds other counts too).
+    expect(screen.getByTestId("tools-summary").textContent).toMatch(/built-in · 0 extensions ·/);
 
     // On again: one press, nothing typed; the note counts the tools.
     await act(async () => {
@@ -289,6 +303,18 @@ describe("a Tools row switches its extension off and on without losing it", () =
     expect(cardEl.className).not.toMatch(/emerald/);
     // Removal says Remove on the card too.
     expect(within(cardEl).getByTestId("pack-remove-slack").textContent).toContain("Remove");
+  });
+
+  it("a row the daemon reads as off (no tools) offers no Retry and no 'No tools loaded' (review)", async () => {
+    api.servers = [SLACK_OFF];
+    render(<ToolsPage />);
+    await waitFor(() => expect(screen.getByTestId("mcp-state-slack").textContent).toBe("Off"));
+    const r = rowOf("slack");
+    expect(within(r).getByTestId("mcp-off-slack").textContent).toBe(words.PACK_OFF_LINE);
+    expect(within(r).queryByTestId("mcp-retry-slack")).toBeNull();
+    expect(within(r).queryByTestId("mcp-no-tools-slack")).toBeNull();
+    expect(within(r).queryByTestId("mcp-last-error-slack")).toBeNull();
+    expect(within(r).getByTestId("mcp-switch-slack").getAttribute("aria-checked")).toBe("false");
   });
 
   it("an edit saved while it is off says so, never 'didn't start'", async () => {
@@ -515,6 +541,24 @@ describe("ACCEPTANCE: add, edit and remove an extension without reading MCP, std
     fireEvent.click(await screen.findByTestId("mcp-edit-remote"));
     await screen.findByTestId("edit-pack-remote");
     expect(engineWordsIn(visibleText(document.body))).toEqual([]);
+  });
+
+  it("adding by address, its More options opened, says how it connects in words (review)", async () => {
+    api.servers = [];
+    render(<ToolsPage />);
+    const area = await screen.findByTestId("add-pack");
+    fireEvent.click(within(area).getByTestId("add-pack-door-http"));
+    const door = await screen.findByTestId("add-pack-http-door");
+    const more = within(door).getByTestId("add-pack-http-more") as HTMLDetailsElement;
+    more.open = true;
+    const select = within(door).getByTestId("add-pack-http-transport") as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+      "Automatic (read from the address)",
+      "A web address",
+      "A web address (older servers)",
+    ]);
+    expect(select.getAttribute("aria-label")).toBe("How it connects");
+    expect(engineWordsIn(visibleText(door))).toEqual([]);
   });
 
   it("the Directory (a connected app, a switched-off app)", async () => {
