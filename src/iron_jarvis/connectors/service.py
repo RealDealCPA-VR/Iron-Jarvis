@@ -15,7 +15,11 @@ from routes and tests alike. No secret value is ever returned.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
+import threading
 from typing import Any
 
 from ..core.config import persist_config_values
@@ -281,6 +285,138 @@ def signin_row(connector, cfg: "dict | None") -> "dict[str, str] | None":
     }
 
 
+#: v1.358.0 (lane 8D): the card status of a saved app that signs in on this
+#: PC (Microsoft 365) whose tools loaded but whose OWN sign-in has not been
+#: seen to land yet (``connectors.signin_seen``). ``connected`` stays true (the
+#: app is saved, as for every saved pack); the card is never green on it.
+STATUS_SIGNIN = "signin"
+
+
+def signin_needed_line(connector) -> str:
+    """What a saved app that is not signed in yet says on its card (v1.358.0,
+    lane 8D): "Sign in to Microsoft to finish." - the same words as its
+    Sign in press (``signin_row``'s label)."""
+    return f"Sign in to {connector.signin_name or connector.name} to finish."
+
+
+def signin_identity(cfg: "dict | None") -> str:
+    """Which saved app a sign-in verdict is about (v1.358.0): its command,
+    arguments and plain settings (the account kind is one of them), so an app
+    saved again with another answer is asked again. Never a secret: a vaulted
+    value is not in ``env``."""
+    if not isinstance(cfg, dict):
+        return ""
+    try:
+        return json.dumps(
+            {
+                "command": str(cfg.get("command") or ""),
+                "args": [str(a) for a in (cfg.get("args") or [])],
+                "env": {str(k): str(v) for k, v in dict(cfg.get("env") or {}).items()},
+            },
+            sort_keys=True,
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _signin_state(platform, connector, server: str, cfg: "dict | None", row: dict[str, Any]) -> None:
+    """v1.358.0 (lane 8D): a saved, switched-on app that signs in on this PC
+    and whose tools loaded is GREEN only once its own sign-in check (or a
+    successful call) says signed in (``connectors.signin_seen`` - cached, never
+    blocks; a stale answer is re-checked behind this read). Until then the row
+    reads ``status: "signin"`` with the plain line, so the card says "Sign in
+    to Microsoft to finish" above the existing Sign in press - never
+    "Connected" with 24 tools. ``signed_in`` rides the row either way."""
+    if row.get("status") != "connected":
+        return
+    try:
+        from . import signin_seen
+
+        verdict = signin_seen.seen(platform, server, signin_identity(cfg))
+    except Exception:  # noqa: BLE001 - unsure is "not signed in yet"
+        verdict = None
+    if verdict is not None and verdict.signed_in:
+        row["signed_in"] = True
+        if verdict.account:
+            row["account"] = verdict.account
+        return
+    row["signed_in"] = False
+    row["status"] = STATUS_SIGNIN
+    row["detail"] = signin_needed_line(connector)
+
+
+# --------------------------------------------------------------------------- #
+# v1.358.0 (lane 8D): an API key is checked when it is saved.
+# --------------------------------------------------------------------------- #
+#: provider -> (fingerprint of the key that was checked, ok, the check's own
+#: words). Process memory only; the key itself is never kept here - a short
+#: hash tells "the key checked" from a key changed since (the Connections
+#: page, the chat's card), whose verdict is then unknown again.
+_KEY_CHECKS: dict[str, tuple[str, bool, str]] = {}
+_KEY_LOCK = threading.Lock()
+
+
+def _key_fingerprint(platform, provider: str) -> str:
+    """A short hash of the key this provider holds right now ("" when none)
+    - the same key the registry's Test probes (its own key, else Pixio's
+    environment variable)."""
+    try:
+        cred = platform.connections.credential(provider) or ""
+    except Exception:  # noqa: BLE001
+        cred = ""
+    if not cred and provider == "pixio":
+        cred = os.environ.get("PIXIO_API_KEY", "").strip()
+    if not cred:
+        return ""
+    return hashlib.sha256(str(cred).encode("utf-8")).hexdigest()[:16]
+
+
+def note_key_check(platform, provider: str, result: "dict | None") -> None:
+    """Remember what checking this provider's key just answered (the
+    Directory's save and Test, and the Connections page's Test), so the
+    Directory card says the same thing until the key changes. Never raises."""
+    try:
+        if not isinstance(result, dict):
+            return
+        fp = _key_fingerprint(platform, provider)
+        if not fp:
+            return
+        with _KEY_LOCK:
+            _KEY_CHECKS[provider] = (fp, bool(result.get("ok")), str(result.get("detail") or ""))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def forget_key_check(provider: str) -> None:
+    """Drop what was learned about a provider's key (it was removed)."""
+    with _KEY_LOCK:
+        _KEY_CHECKS.pop(provider, None)
+
+
+def key_check(platform, provider: str) -> "tuple[bool, str] | None":
+    """``(ok, the check's words)`` for the key this provider holds NOW, or
+    None when that key was never checked here."""
+    with _KEY_LOCK:
+        entry = _KEY_CHECKS.get(provider)
+    if entry is None:
+        return None
+    if entry[0] != _key_fingerprint(platform, provider):
+        return None
+    return entry[1], entry[2]
+
+
+def key_check_line(connector, ok: bool, detail: str) -> str:
+    """The card's sentence for a key check, in plain words (the probe's own
+    text names the provider by its id and an HTTP code)."""
+    name = connector.name
+    if ok:
+        return f"{name} accepted the key."
+    low = (detail or "").lower()
+    if "could not reach" in low or "probe failed" in low:
+        return f"Couldn't reach {name} to check the key. Press Test to try again."
+    return f"{name} didn't accept this key. Remove it and connect again with a working key."
+
+
 def auto_approve_on(platform) -> bool:
     """Do pack tools run WITHOUT asking? The rule the boot resolver applies
     (platform.py: the global "Run app tools without asking" OR any pack's own
@@ -384,6 +520,9 @@ def _status_for(
             # in press opens (None until it is saved, or when the saved pack
             # no longer runs what the sign-in runs).
             row["signin"] = signin_row(connector, cfg)
+            if server and on:
+                # v1.358.0 (lane 8D): green only once it is signed in.
+                _signin_state(platform, connector, server, cfg, row)
         if server:
             # v1.355.0 (G70): what the connected pack can actually do.
             row.update(
@@ -422,6 +561,19 @@ def _status_for(
         }
     else:
         row = {"connected": False, "status": "disconnected", "tools_loaded": 0, "account": ""}
+    if connector.connect_via == "api_key" and row["connected"]:
+        # v1.358.0 (lane 8D): a key that was CHECKED and refused (on save, or
+        # by a Test here or on the Connections page) is never a green card:
+        # the row says so in the check's plain words until the key changes.
+        checked = key_check(platform, connector.provider)
+        if checked is not None:
+            ok, raw = checked
+            row["checked"] = True
+            if not ok:
+                row["status"] = "failed"
+                row["detail"] = key_check_line(connector, False, raw)
+                row["reason"] = row["detail"]
+                row["technical"] = raw
     if connector.connect_via == "oauth":
         # v1.353.0 (G45): could a sign-in START right now? The registry's own
         # answer (the same lookup start_oauth makes); the card says the
@@ -813,11 +965,30 @@ def _connect_mcp(platform, connector, values: dict[str, Any]) -> dict[str, Any]:
 
 
 def _connect_api_key(platform, connector, values: dict[str, Any]) -> dict[str, Any]:
+    """Save the key, then CHECK it the way the Connections page does on save
+    (v1.358.0, lane 8D): the registry's own Test (``connections.test`` - the
+    live probe the platform wires, one cheap read with a short timeout; this
+    runs on the threadpool, never on the loop). The answer carries ``test``
+    ``{ok, detail}`` in plain words; a refused key is still saved (the user
+    may fix it at the service) but its card reads "Needs attention" with
+    those words, never green."""
     key = str(values.get("key") or values.get("api_key") or "").strip()
     if not key:
         raise ValueError("an API key is required")
     platform.connections.set_api_key(connector.provider, key)
-    return {"ok": True, "connector": connector.id}
+    try:
+        result = platform.connections.test(connector.provider)
+    except Exception as exc:  # noqa: BLE001 - a check that broke is not a pass
+        result = {"ok": False, "detail": f"probe failed ({type(exc).__name__})"}
+    if not isinstance(result, dict):
+        result = {"ok": False, "detail": "probe failed"}
+    note_key_check(platform, connector.provider, result)
+    ok = bool(result.get("ok"))
+    return {
+        "ok": True,
+        "connector": connector.id,
+        "test": {"ok": ok, "detail": key_check_line(connector, ok, str(result.get("detail") or ""))},
+    }
 
 
 def _connect_oauth(platform, connector) -> dict[str, Any]:
@@ -907,8 +1078,35 @@ def test(platform, connector_id: str) -> dict[str, Any]:
         cfg = _server_cfg(platform, server) if server else None
         if cfg is None:
             return {"ok": False, "error": "not connected yet"}
-        return _probe_mcp(platform, cfg)
-    return platform.connections.test(connector.provider)
+        result = _probe_mcp(platform, cfg)
+        if result.get("ok") and getattr(connector, "signin_args", None) and pack_on(cfg):
+            # v1.358.0 (lane 8D): its tools starting is not the app working -
+            # Test asks the app's own sign-in check too (bounded), and says
+            # so in the card's words when nobody has signed in yet.
+            from . import signin_seen
+
+            verdict = signin_seen.check_now(platform, server, signin_identity(cfg))
+            if not verdict.signed_in:
+                press = signin_row(connector, cfg)
+                return {
+                    **result,
+                    "ok": False,
+                    "error": signin_needed_line(connector),
+                    "reason": "",
+                    "fix": (
+                        f"Press {press['label']} on this card and finish in the window it opens."
+                        if press
+                        else ""
+                    ),
+                }
+            if verdict.account:
+                result = {**result, "account": verdict.account}
+        return result
+    result = platform.connections.test(connector.provider)
+    if connector.connect_via == "api_key":
+        # v1.358.0 (lane 8D): the card keeps saying what this check said.
+        note_key_check(platform, connector.provider, result)
+    return result
 
 
 def _disconnect_mcp_server(platform, server_id: str) -> dict[str, Any]:
@@ -921,6 +1119,12 @@ def _disconnect_mcp_server(platform, server_id: str) -> dict[str, Any]:
     from ..mcp.pack_door import PackDoorError, forget_legacy_refs, remove_pack
 
     removed = _server_cfg(platform, server_id)
+    try:
+        from . import signin_seen
+
+        signin_seen.forget(server_id)  # v1.358.0: a new connect is asked afresh
+    except Exception:  # noqa: BLE001
+        pass
     try:
         remove_pack(platform, server_id, persist=_persist(platform))
     except PackDoorError:
@@ -955,4 +1159,5 @@ def disconnect(platform, connector_id: str) -> dict[str, Any]:
         # v1.353.0 (G43): the pack the card shows, even under an alias.
         return _disconnect_mcp_server(platform, _configured_name(platform, connector.id) or connector.id)
     platform.connections.disconnect(connector.provider)
+    forget_key_check(connector.provider)  # v1.358.0: no verdict outlives its key
     return {"ok": True, "disconnected": connector.id}

@@ -52,6 +52,7 @@ import {
   switchedNote,
   type SwitchAnswer,
 } from "@/lib/extensionWords";
+import { attentionWords, cardHealth, healthCounts, keySaveNote } from "@/lib/directoryHealth";
 
 /* -------------------------------------------------------------------------- */
 /*  Types (local — lib/types.ts is intentionally untouched)                    */
@@ -129,6 +130,18 @@ interface Connector {
    *  with its key, never loaded). The daemon's connectors rows carry it
    *  (the pack's `mcp_servers` entry `enabled`); absent = on. */
   enabled?: boolean | null;
+  /** v1.358.0 (lane 8D): a SEPARATE version of something built in, in the
+   *  built-in line's words ("Files & documents"), and how it differs. Such
+   *  a card lives under its own fold, never beside the apps. */
+  built_in?: string | null;
+  built_in_note?: string | null;
+  /** v1.358.0 (lane 8D): an app that signs in on this PC — true once its own
+   *  sign-in check (or a successful call) says signed in. */
+  signed_in?: boolean | null;
+  /** v1.358.0 (lane 8D): a key card's check said what (`technical` = the
+   *  check's own text, shown only on hover). */
+  checked?: boolean | null;
+  technical?: string | null;
 }
 
 interface ConnectorsResponse {
@@ -147,6 +160,12 @@ interface OAuthConnectResult {
   ok: boolean;
   connector: string;
   oauth?: { authorization_url: string; state: string };
+}
+/** v1.358.0 (lane 8D): a key card's save answers the check run on save. */
+interface KeyConnectResult {
+  ok: boolean;
+  connector: string;
+  test?: { ok?: boolean; detail?: string } | null;
 }
 
 /* --- POST /connectors/{id}/test response variants ------------------------ */
@@ -317,8 +336,15 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
     setTestResult(null);
     try {
       if (c.connect_via === "api_key") {
-        await post(connectPath, { values: { key: (values.key ?? "").trim() } });
-        setSuccess(`${c.name} connected.`);
+        // v1.358.0 (lane 8D): the daemon CHECKS the key on save (the
+        // Connections page's own check) and says what it answered; a key it
+        // refused is saved but said so, never "connected" on its own word.
+        const res = await post<KeyConnectResult>(connectPath, {
+          values: { key: (values.key ?? "").trim() },
+        });
+        const said = keySaveNote(c.name, res?.test);
+        if (said.ok) setSuccess(said.text);
+        else setNote(said.text);
         setOpen(false);
         setValues({});
         onChanged();
@@ -522,9 +548,16 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
   // v1.356.0 (G78): a saved app the user switched off is neither working nor
   // broken: "Off", no Retry, its switch says how to turn it back on. Read off
   // the row's `enabled` (absent = on), whatever its status says.
-  const off = c.connect_via === "mcp" && c.connected && isPackOff({ enabled: c.enabled });
-  const healthy = !off && c.connected && c.status === "connected";
-  const attention = !off && c.connected && !healthy;
+  // v1.358.0 (lane 8D): ONE reading (lib/directoryHealth), the same the
+  // page's "N connected" count and its connected-only filter use. A saved
+  // app whose own sign-in has not landed yet (Microsoft 365) is its own
+  // state: never green, the line says what to do and the Sign in press is
+  // right under it.
+  const health = cardHealth(c);
+  const off = health === "off";
+  const healthy = health === "working";
+  const signinNeeded = health === "signin";
+  const attention = health === "attention";
   // v1.353.0 (G45): the needs said before Connect.
   const setupNeeds = (c.needs ?? "").trim();
   const runtimeMissing = c.runtime_ready === false && Boolean((c.runtime ?? "").trim());
@@ -542,12 +575,12 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
   return (
     <div
       data-testid={`connector-card-${c.id}`}
-      data-health={healthy ? "connected" : attention ? "attention" : "off"}
+      data-health={healthy ? "connected" : signinNeeded ? "signin" : attention ? "attention" : "off"}
       data-switched-off={off ? "1" : undefined}
       className={`card-surface relative flex flex-col gap-3.5 p-5 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover hover:ring-1 hover:ring-accent/20 ${
         healthy
           ? "ring-1 ring-emerald-500/25 shadow-[0_0_24px_-10px_rgba(52,211,153,0.35)]"
-          : attention
+          : attention || signinNeeded
             ? "ring-1 ring-tone-warn/30"
             : ""
       }`}
@@ -569,6 +602,17 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
         {healthy ? (
           <span className="shrink-0">
             <Badge value="Connected" tone="green" />
+          </span>
+        ) : signinNeeded ? (
+          /* v1.358.0 (lane 8D): saved and loaded, but nobody signed in to
+             its account yet — never the green "Connected". */
+          <span className="shrink-0">
+            <Badge
+              value="Sign in to finish"
+              tone="amber"
+              keepCase
+              data-testid={`connector-signin-needed-${c.id}`}
+            />
           </span>
         ) : attention ? (
           <span className="shrink-0">
@@ -595,6 +639,14 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
 
       {/* Blurb */}
       <p className="text-[13px] text-zinc-400">{c.blurb}</p>
+
+      {/* v1.358.0 (lane 8D): a separate version of something built in says
+          so, in the daemon's words, before anything else. */}
+      {(c.built_in_note ?? "").trim() && (
+        <p data-testid={`connector-built-in-note-${c.id}`} className="text-[11px] text-zinc-500">
+          {c.built_in_note}
+        </p>
+      )}
 
       {/* v1.353.0 (G45): what it needs, said BEFORE Connect — a one-time
           setup outside Iron Jarvis (Gmail; a drive with no OAuth client yet)
@@ -672,6 +724,22 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
             <p data-testid={`connector-off-line-${c.id}`} className="text-[12px] text-zinc-400">
               {PACK_OFF_LINE}
             </p>
+          ) : signinNeeded ? (
+            /* v1.358.0 (lane 8D): the daemon's own words ("Sign in to
+               Microsoft to finish."), right above the card's Sign in press. */
+            <p data-testid={`connector-signin-line-${c.id}`} className="text-[12px] text-tone-warn">
+              {(c.detail ?? "").trim() || "Sign in to finish."}
+            </p>
+          ) : c.connect_via === "api_key" && c.status === "failed" ? (
+            /* v1.358.0 (lane 8D): a key checked and refused says so here
+               (the check's own text on hover), never "Ready to use". */
+            <p
+              data-testid={`connector-key-failed-${c.id}`}
+              title={(c.technical ?? "").trim() || undefined}
+              className="text-[12px] text-tone-warn"
+            >
+              {(c.detail ?? "").trim() || "The key didn't work."}
+            </p>
           ) : c.connect_via === "mcp" && (c.status === "no_tools" || c.status === "failed") ? (
             <div
               data-testid={`connector-status-${c.id}`}
@@ -737,8 +805,17 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
           {/* v1.356.0 (G60): an app that signs in on this PC (Microsoft 365):
               its Sign in opens a Build pane running the app's own sign-in,
               which shows a web address and a code. */}
-          {c.connect_via === "mcp" && c.signin && !off && <AppSignIn id={c.id} signin={c.signin} />}
-          {c.connect_via === "mcp" && !off && (c.tool_names?.length ?? 0) > 0 && (
+          {c.connect_via === "mcp" && c.signin && !off && (
+            <AppSignIn
+              id={c.id}
+              signin={c.signin}
+              signedIn={c.signed_in === true}
+              account={c.account ?? ""}
+            />
+          )}
+          {/* v1.358.0 (lane 8D): no tool list while its sign-in is still to
+              finish — every one of them would fail until then. */}
+          {c.connect_via === "mcp" && !off && !signinNeeded && (c.tool_names?.length ?? 0) > 0 && (
             <div className="flex flex-wrap gap-1">
               {c.tool_names!.map((n) => (
                 <span
@@ -1172,8 +1249,17 @@ function ImportFromApps({ onImported }: { onImported: () => void }) {
   );
 }
 
-/** What works with nothing to connect (built-in tools). */
+/** What works with nothing to connect (built-in tools). v1.358.0: the
+ *  daemon's `connectors/catalog.BUILT_IN_TOOLS` says the same words (pinned
+ *  equal), and a card whose `built_in` names one of them is a separate
+ *  version of it, folded apart (`isBuiltInExtra`). */
 const BUILT_IN = ["Files & documents", "Web", "Images", "Spreadsheets", "Memory"];
+
+/** v1.358.0 (lane 8D): a card that offers a SEPARATE version of something
+ *  built in (the daemon names it in `built_in`). */
+function isBuiltInExtra(c: Pick<Connector, "built_in">): boolean {
+  return Boolean((c.built_in ?? "").trim());
+}
 
 /** v1.353.0 (G42): the other doors, so this page is the one place to start. */
 const MORE_WAYS: readonly { label: string; href: string; title: string }[] = [
@@ -1239,11 +1325,16 @@ export default function MarketplacePage() {
   const [connectedOnly, setConnectedOnly] = useState(false);
 
   const total = connectors.length;
-  const connectedCount = connectors.filter((c) => c.connected).length;
+  // v1.358.0 (lane 8D): the count, the filter and "tools live" read each
+  // card's OWN health (lib/directoryHealth) — `connected` stays true for an
+  // app the user switched off or that did not start, so "3 connected" used to
+  // sit over cards reading Off and Needs attention. Those are said apart.
+  const counts = useMemo(() => healthCounts(connectors), [connectors]);
+  const connectedCount = counts.working;
   const toolsLive = useMemo(
     () =>
       connectors
-        .filter((c) => c.connected)
+        .filter((c) => cardHealth(c) === "working")
         .reduce((n, c) => n + (c.tools_loaded || 0), 0),
     [connectors],
   );
@@ -1252,7 +1343,7 @@ export default function MarketplacePage() {
   const visible = useMemo(
     () =>
       connectors.filter((c) => {
-        if (connectedOnly && !c.connected) return false;
+        if (connectedOnly && cardHealth(c) !== "working") return false;
         const inCat = activeCat === "All" || c.category === activeCat;
         const inSearch =
           !q ||
@@ -1264,6 +1355,20 @@ export default function MarketplacePage() {
     [connectors, activeCat, q, connectedOnly],
   );
 
+  // v1.358.0 (lane 8D): a separate version of something built in (Files &
+  // folders, Fetch web pages, Knowledge graph) never sits among the apps
+  // under the "Built in, nothing to connect" line as if it were missing: it
+  // lives in its own fold at the end ("Separate versions of built-in tools").
+  const mainVisible = useMemo(() => visible.filter((c) => !isBuiltInExtra(c)), [visible]);
+  const extrasVisible = useMemo(() => visible.filter(isBuiltInExtra), [visible]);
+  // The fold opens by itself while a search is typed (its cards answer it) or
+  // when one of them is saved (it must be findable); otherwise the user's own
+  // press decides (null = not pressed yet: closed).
+  const [extrasChoice, setExtrasChoice] = useState<boolean | null>(null);
+  const extrasOpen = q
+    ? true
+    : (extrasChoice ?? extrasVisible.some((c) => Boolean(c.connected)));
+
   // Group visible connectors by category, honoring the returned category order.
   // Any category not listed falls to the end (defensive).
   const grouped = useMemo(() => {
@@ -1271,13 +1376,13 @@ export default function MarketplacePage() {
       ? categories
       : Array.from(new Set(connectors.map((c) => c.category)));
     const seen = new Set(order);
-    const extra = Array.from(new Set(visible.map((c) => c.category))).filter(
+    const extra = Array.from(new Set(mainVisible.map((c) => c.category))).filter(
       (cat) => !seen.has(cat),
     );
     return [...order, ...extra]
-      .map((cat) => ({ cat, items: visible.filter((c) => c.category === cat) }))
+      .map((cat) => ({ cat, items: mainVisible.filter((c) => c.category === cat) }))
       .filter((g) => g.items.length > 0);
-  }, [categories, connectors, visible]);
+  }, [categories, connectors, mainVisible]);
 
   // v1.353.0: a group the daemon's category list does not name yet (a card's
   // own category, e.g. "Added by you") still gets its chip, after the rest —
@@ -1348,6 +1453,22 @@ export default function MarketplacePage() {
               <CheckCircle2 size={13} aria-hidden="true" />
               {connectedCount} connected
             </button>
+            {/* v1.358.0 (lane 8D): saved but not working, said apart from
+                the count — never folded into "connected". */}
+            {counts.off > 0 && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span data-testid="directory-count-off">{counts.off} off</span>
+              </>
+            )}
+            {counts.attention > 0 && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span data-testid="directory-count-attention" className="text-tone-warn">
+                  {attentionWords(counts.attention)}
+                </span>
+              </>
+            )}
             <span aria-hidden="true">·</span>
             <span>{total} available</span>
             <span aria-hidden="true">·</span>
@@ -1433,7 +1554,7 @@ export default function MarketplacePage() {
             ))}
           </div>
         </Reveal>
-      ) : offline ? null : visible.length === 0 ? (
+      ) : offline ? null : mainVisible.length === 0 && extrasVisible.length === 0 ? (
         <Reveal>
           <Empty icon={<Search size={24} />}>
             {connectedOnly && !q && activeCat === "All"
@@ -1473,6 +1594,33 @@ export default function MarketplacePage() {
             </section>
           </Reveal>
         ))
+      )}
+
+      {/* v1.358.0 (lane 8D): separate versions of what is built in, folded
+          apart so the "Built in, nothing to connect" line above stays true:
+          nothing here is needed for files, the web or memory to work. A
+          quiet native fold (keyboard and screen reader for free), no box. */}
+      {!offline && !(loading && !data) && extrasVisible.length > 0 && (
+        <Reveal>
+          <details
+            data-testid="directory-built-in-extras"
+            open={extrasOpen}
+            onToggle={(e) => setExtrasChoice((e.currentTarget as HTMLDetailsElement).open)}
+          >
+            <summary className="cursor-pointer select-none text-[12px] font-medium text-zinc-500 transition-colors hover:text-zinc-300">
+              Separate versions of built-in tools ({extrasVisible.length})
+            </summary>
+            <p className="mt-2 text-[12px] text-zinc-500">
+              Iron Jarvis already does these with nothing to connect. Add one only if you want a
+              separate version for an advanced setup.
+            </p>
+            <div className="mt-3.5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {extrasVisible.map((c) => (
+                <ConnectorCard key={c.id} c={c} onChanged={reload} />
+              ))}
+            </div>
+          </details>
+        </Reveal>
       )}
 
       {/* v1.353.0 (G42): the doors that live elsewhere, named here so this

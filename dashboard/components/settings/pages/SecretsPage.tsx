@@ -20,6 +20,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { PageGrid } from "@/components/PageGrid";
 import { timeAgo } from "@/lib/format";
+import { secretDescription, secretWords, type SecretApp } from "@/lib/secretLabels";
 
 const KINDS = ["api_key", "oauth", "token", "password", "generic"];
 
@@ -39,6 +40,11 @@ export default function SecretsPage() {
   const { data, error, loading, reload } = useApi<{ secrets: SecretMeta[] }>("/secrets");
   const offline = error && error.status === 0;
   const secrets = data?.secrets ?? [];
+  // v1.358.0 (lane 8D): an app's key reads "<App>: <field label>" — the
+  // names and labels from the Directory's own rows (one read; a failed one
+  // leaves the rows as stored, never blank).
+  const appsRead = useApi<{ connectors?: SecretApp[] }>("/connectors");
+  const apps: SecretApp[] = Array.isArray(appsRead.data?.connectors) ? appsRead.data!.connectors! : [];
 
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
@@ -203,32 +209,45 @@ export default function SecretsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {secrets.map((s) => (
-                        <tr
-                          key={s.name}
-                          className="border-b border-white/[0.04] align-middle last:border-0 hover:bg-white/[0.02]"
-                        >
-                          <td className="px-2 py-2.5 font-mono text-zinc-100">{s.name}</td>
-                          <td className="px-2 py-2.5">
-                            <span title={`Kind: ${s.kind}`}>
-                              <Badge value={kindLabel(s.kind)} tone="cyan" keepCase />
-                            </span>
-                          </td>
-                          <td className="max-w-xs truncate px-2 py-2.5 text-zinc-400">
-                            {s.description || <span className="text-zinc-600">—</span>}
-                          </td>
-                          <td className="px-2 py-2.5 text-zinc-500">
-                            {s.updated_at ? timeAgo(s.updated_at) : "—"}
-                          </td>
-                          <td className="px-2 py-2.5 text-right">
-                            <ConfirmButton
-                              onConfirm={() => remove(s.name)}
-                              label="Delete"
-                              title={`Delete secret "${s.name}" — this cannot be undone`}
-                            />
-                          </td>
-                        </tr>
-                      ))}
+                      {secrets.map((s) => {
+                        // v1.358.0 (lane 8D): plain words for an app's key;
+                        // the stored name (unchanged on disk) is its tooltip.
+                        const words = secretWords(s.name, apps);
+                        const description = secretDescription(s.description ?? "", words);
+                        return (
+                          <tr
+                            key={s.name}
+                            data-testid={`secret-row-${s.name}`}
+                            className="border-b border-white/[0.04] align-middle last:border-0 hover:bg-white/[0.02]"
+                          >
+                            {words ? (
+                              <td className="px-2 py-2.5 text-zinc-100" title={s.name}>
+                                {words.label}
+                              </td>
+                            ) : (
+                              <td className="px-2 py-2.5 font-mono text-zinc-100">{s.name}</td>
+                            )}
+                            <td className="px-2 py-2.5">
+                              <span title={`Kind: ${s.kind}`}>
+                                <Badge value={kindLabel(s.kind)} tone="cyan" keepCase />
+                              </span>
+                            </td>
+                            <td className="max-w-xs truncate px-2 py-2.5 text-zinc-400">
+                              {description || <span className="text-zinc-600">—</span>}
+                            </td>
+                            <td className="px-2 py-2.5 text-zinc-500">
+                              {s.updated_at ? timeAgo(s.updated_at) : "—"}
+                            </td>
+                            <td className="px-2 py-2.5 text-right">
+                              <ConfirmButton
+                                onConfirm={() => remove(s.name)}
+                                label="Delete"
+                                title={`Delete secret "${words ? words.label : s.name}" — this cannot be undone`}
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

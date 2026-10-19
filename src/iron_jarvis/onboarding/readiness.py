@@ -66,6 +66,19 @@ def _ollama_press_connects(cfg) -> bool:
         return False
 
 
+def _local_servers_press_ready(cfg) -> list:
+    """v1.358.0 (lane 8D): LM Studio / llama.cpp answering on this PC that
+    one ``POST /onboarding/use-model`` press can connect and choose
+    (``providers/local_servers_seen.press_ready``: a chat model listed, the
+    model-server slot free). Never blocks; never breaks the Overview."""
+    try:
+        from ..providers import local_servers_seen
+
+        return list(local_servers_seen.press_ready(cfg))
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def end_user_checks() -> dict:
     """The machine checks a NON-developer should see (v1.310.0, W2-2).
 
@@ -137,6 +150,20 @@ def model_choice(platform) -> dict:
                     "local": name in USE_MODEL_LOCAL,
                 }
             )
+        # v1.358.0 (lane 8D): LM Studio / llama.cpp answering on this PC with
+        # the model-server slot free are offered in ONE press like a detected
+        # Ollama (the press saves the address and chooses it). Placed after
+        # the local rows, before the cloud ones; the cached probe only.
+        detected = [
+            {"provider": s.key, "label": s.label, "local": True}
+            for s in _local_servers_press_ready(cfg)
+        ]
+        if detected:
+            at = max(
+                (i + 1 for i, r in enumerate(usable) if r["provider"] in USE_MODEL_LOCAL),
+                default=sum(1 for r in usable if r["provider"] in USE_MODEL_CLIS),
+            )
+            usable[at:at] = detected
     except Exception:  # noqa: BLE001 — the Overview never breaks on health
         usable = []
     return {

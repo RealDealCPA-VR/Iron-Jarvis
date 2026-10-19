@@ -232,8 +232,16 @@ def test_missing_required_field_400(tmp_path):
 # --------------------------------------------------------------------------- #
 def test_api_key_connect(tmp_path):
     with TestClient(create_app(str(tmp_path))) as client:
+        # v1.358.0 (lane 8D, moved on purpose): a saved key is now CHECKED on
+        # save with the registry's own Test — a stand-in prober keeps this
+        # offline (the live one would call Pixio).
+        client.app.state.platform.connections._prober = lambda provider, cred: (
+            True,
+            f"{provider} reachable — credential accepted",
+        )
         r = client.post("/connectors/pixio/connect", json={"values": {"key": "pxio_test"}})
         assert r.status_code == 200, r.text
+        assert r.json()["test"] == {"ok": True, "detail": "Pixio accepted the key."}
         assert _row(client, "pixio")["connected"] is True
 
 

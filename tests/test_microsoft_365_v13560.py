@@ -331,7 +331,10 @@ def test_sign_in_opens_a_pane_running_the_packs_own_program_with_its_settings(
     monkeypatch.delenv("IRONJARVIS_PANE_CLI", raising=False)
     assert _connect(client, answer).status_code == 200
     row = _row(client)
-    assert row["status"] == "connected" and row["tools_loaded"] == 24
+    # v1.358.0 (lane 8D, moved on purpose): its tools load, but nobody has
+    # signed in to Microsoft yet, so the card reads "signin" — never the
+    # green "connected" it read here before (tests/test_connections_honest_v13580.py).
+    assert row["status"] == "signin" and row["tools_loaded"] == 24
     signin = row["signin"]
     key = "personal" if answer == "consumers" else "work"
     assert signin == {

@@ -144,7 +144,39 @@ export type HealthRow = ProviderHealth & {
   detected?: boolean;
   /** v1.353.0 (ollama row only): the user saved an Ollama address. */
   address_saved?: boolean;
+  /** v1.358.0 (lane 8D, the `custom` row only): LM Studio / llama.cpp
+   *  answering on this PC with the model-server slot free — what ONE press
+   *  (`POST /onboarding/use-model {provider: key}`) connects and chooses
+   *  (providers/local_servers_seen.health_field). Absent on an older daemon. */
+  detected_servers?: { key: string; label?: string; base_url?: string }[];
 };
+
+/** v1.358.0 (lane 8D): the press names of the two model servers people run on
+ *  their own PC, in the daemon's words (local_servers_seen.SERVERS labels).
+ *  A press posts the KEY; the daemon saves the address and chooses it. */
+export const LOCAL_SERVER_PRESS_LABELS: Readonly<Record<string, string>> = {
+  lmstudio: "LM Studio (on this PC)",
+  llamacpp: "llama.cpp (on this PC)",
+};
+
+/** v1.358.0 (lane 8D): the presses `POST /onboarding/use-model` takes for
+ *  them — keep a press list (ConnectDoors' ONE_PRESS) in step with this. */
+export const LOCAL_SERVER_PROVIDERS: readonly string[] = Object.keys(LOCAL_SERVER_PRESS_LABELS);
+
+/** v1.358.0 (lane 8D): LM Studio / llama.cpp the daemon's cached probe found
+ *  answering on this PC, ready for the one press (the `custom` row's
+ *  `detected_servers`); [] on an older daemon or when none answers. */
+export function localServersDetected(health: Health | null | undefined): { provider: string; label: string }[] {
+  const row = healthRow(health, "custom");
+  const list = Array.isArray(row?.detected_servers) ? row!.detected_servers! : [];
+  const out: { provider: string; label: string }[] = [];
+  for (const s of list) {
+    const key = s && typeof s.key === "string" ? s.key : "";
+    if (!key || !(key in LOCAL_SERVER_PRESS_LABELS) || out.some((o) => o.provider === key)) continue;
+    out.push({ provider: key, label: LOCAL_SERVER_PRESS_LABELS[key] });
+  }
+  return out;
+}
 
 /**
  * v1.313.0 (contract U1-1): THE one truth for "replies are a scripted demo".
@@ -195,6 +227,9 @@ const FRIENDLY: Record<string, string> = {
   openrouter: "OpenRouter",
   ollama: "Ollama",
   custom: "your own endpoint",
+  // v1.358.0 (lane 8D): the one-press names of the two local model servers.
+  lmstudio: "LM Studio",
+  llamacpp: "llama.cpp",
 };
 
 /** A plain name for a provider id ("claude-cli" → "Claude Code"). */
@@ -267,6 +302,9 @@ const WHERE: Record<string, string> = {
   "grok-cli": "goes to xAI",
   openrouter: "goes to OpenRouter",
   ollama: "stays on this PC",
+  // v1.358.0 (lane 8D): found on THIS PC's own address (localhost).
+  lmstudio: "stays on this PC",
+  llamacpp: "stays on this PC",
 };
 
 /** Rank: a key the user pasted, then a model served through a signed-in CLI,
@@ -297,12 +335,22 @@ export function answerCandidates(health: Health | null | undefined): AnswerCandi
   const names = new Set(rows.map((r) => r.provider));
   const out: AnswerCandidate[] = [];
   const seen = new Set<string>();
-  for (const row of [...rows].sort((a, b) => rank(a) - rank(b))) {
+  // v1.358.0 (lane 8D): LM Studio / llama.cpp answering on this PC rank with
+  // the local servers (after a pasted key and a signed-in CLI, before a bare
+  // CLI) — each its own press, never chosen on its own.
+  const ranked: { rank: number; name: string; label: string }[] = [];
+  for (const row of rows) {
     const name =
       row.inherited_from && names.has(row.inherited_from) ? row.inherited_from : row.provider;
-    if (seen.has(name)) continue;
-    seen.add(name);
-    out.push({ provider: name, label: friendlyProvider(name), where: WHERE[name] ?? "" });
+    ranked.push({ rank: rank(row), name, label: friendlyProvider(name) });
+  }
+  for (const s of localServersDetected(health)) {
+    ranked.push({ rank: 2, name: s.provider, label: s.label });
+  }
+  for (const r of ranked.sort((a, b) => a.rank - b.rank)) {
+    if (seen.has(r.name)) continue;
+    seen.add(r.name);
+    out.push({ provider: r.name, label: r.label, where: WHERE[r.name] ?? "" });
   }
   return out;
 }

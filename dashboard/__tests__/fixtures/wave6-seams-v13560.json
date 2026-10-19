@@ -4,6 +4,8 @@
     "action": "",
     "asks_first": true,
     "blurb": "Read channels and post messages.",
+    "built_in": "",
+    "built_in_note": "",
     "can_change": 0,
     "category": "Communication",
     "connect_via": "mcp",

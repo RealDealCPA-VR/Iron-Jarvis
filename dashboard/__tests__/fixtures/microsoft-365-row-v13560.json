@@ -54,7 +54,7 @@
         ]
       }
     ],
-    "status": "connected",
+    "status": "signin",
     "connected": true,
     "enabled": true,
     "signin": {

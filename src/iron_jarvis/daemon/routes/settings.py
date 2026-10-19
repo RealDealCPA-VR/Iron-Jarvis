@@ -162,6 +162,58 @@ def _adopt_local_ollama(d) -> bool:
     return True
 
 
+def adopt_local_server(d, key: str) -> "tuple[str, str | None]":
+    """The user pressed for LM Studio or llama.cpp on THIS PC (v1.358.0, lane
+    8D): the ``_adopt_local_ollama`` rule for the two other model servers.
+    Returns ``(model, refusal)`` — the model it will answer with, or one plain
+    sentence saying why nothing changed.
+
+    A FRESH probe first (``providers/local_servers_seen.probe_now`` — one
+    read-only GET of its model list, ≤ 1.5 s; the routes that call this are
+    sync, so it runs on the threadpool, never on the loop). Then, only when the
+    one "your own model server" slot (``custom_base_url``) is EMPTY, its
+    documented address and its first chat model are saved through the one
+    settings writer (journaled with Undo, the provider re-pointed live). A
+    slot already holding THIS address keeps the user's own model choice when
+    the server still lists it; a slot holding ANOTHER address is never
+    replaced (the refusal says where to add it instead). Nothing is ever
+    chosen here: the caller decides whether the press also makes it the
+    default."""
+    from ...providers import local_servers_seen as lss
+
+    server = lss.server_for(key)
+    if server is None:
+        return "", "I don't know that model server, so nothing changed."
+    cfg = d.platform.config
+    slot = lss.slot_state(cfg, server)
+    if slot == "taken":
+        return "", (
+            f"Your own model server is already set to {cfg.custom_base_url}, so "
+            f"nothing changed. Add {server.name} on the Connections page instead "
+            f"(Add an endpoint, then {server.name} on this PC)."
+        )
+    seen = lss.probe_now((key,)).get(key)
+    if seen is None or not seen.answering:
+        return "", (
+            f"{server.name} isn't answering on this PC with a model to use, so "
+            f"nothing changed. Start {server.name}'s server and load a model, then "
+            "press again."
+        )
+    saved_model = str(getattr(cfg, "custom_model", "") or "").strip()
+    model = saved_model if slot == "saved" and saved_model in seen.models else seen.models[0]
+    if slot == "free":
+        try:
+            config_writer(d).apply(
+                {"custom_base_url": server.base_url, "custom_model": model},
+                actor="onboarding_press",
+            )
+        except Exception:  # noqa: BLE001 — the refusal says it plainly
+            log.debug("saving the local %s address for the press failed", server.name, exc_info=True)
+            return "", f"I couldn't save {server.name}'s address, so nothing changed. Try again."
+        log.info("%s on this PC connected by the user's press: %s", server.name, server.base_url)
+    return model, None
+
+
 def _first_local_model(d, name: str) -> str:
     """The FIRST model a configured local endpoint lists ('' when none).
 
@@ -835,6 +887,20 @@ def register(app: FastAPI, d) -> None:
             }
 
         name = (body.provider or "").strip().lower()
+        # v1.358.0 (lane 8D): LM Studio / llama.cpp answering on this PC are
+        # chosen in one press like a detected Ollama: the press connects the
+        # server into the "your own model server" slot (never replacing a
+        # saved one) and then promotes it like any custom endpoint.
+        from ...providers.local_servers_seen import KEYS as _LOCAL_SERVER_KEYS
+
+        adopted_model = ""
+        if name in _LOCAL_SERVER_KEYS:
+            if not default_is_mock(d.platform):
+                return already_chose()
+            adopted_model, adopt_refusal = adopt_local_server(d, name)
+            if adopt_refusal is not None:
+                raise HTTPException(status_code=409, detail=adopt_refusal)
+            name = "custom"
         if name == "ollama":
             # v1.353.0 integrate: a press that will change nothing (the user
             # already chose a model -- a second window's press) saves nothing
@@ -865,7 +931,7 @@ def register(app: FastAPI, d) -> None:
             else:
                 target, model = name, "subscription"
         elif name in ("ollama", "custom"):
-            target, model = name, _first_local_model(d, name)
+            target, model = name, (adopted_model or _first_local_model(d, name))
             if not model:
                 hint = " (for example `ollama pull llama3.2`)" if name == "ollama" else ""
                 raise HTTPException(

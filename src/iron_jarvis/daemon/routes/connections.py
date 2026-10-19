@@ -1084,9 +1084,59 @@ def register(app: FastAPI, d) -> None:
         # test() may do a real network probe (when wired) → run it off the event
         # loop so a slow provider can't stall the daemon.
         try:
-            return await asyncio.to_thread(d.platform.connections.test, provider)
+            result = await asyncio.to_thread(d.platform.connections.test, provider)
+            # v1.358.0 (lane 8D): the Directory's key card says what THIS
+            # check said (the same key, one verdict on both pages).
+            try:
+                from ...connectors.service import note_key_check
+
+                await asyncio.to_thread(note_key_check, d.platform, provider, result)
+            except Exception:  # noqa: BLE001 — a status note never fails a Test
+                pass
+            return result
         finally:
             invalidate_model_catalog()  # v1.332.0: a test can change a status
+
+    # --- v1.358.0 (lane 8D): model servers already running on this PC ------
+    @app.get("/connections/local-servers")
+    def local_servers() -> dict[str, Any]:
+        """LM Studio and llama.cpp on this PC (``providers/local_servers_seen``):
+        ``{servers: [{key, name, label, base_url, running, models, slot}]}``.
+        The cached probe only — never waits on a port; a stale answer is
+        re-asked behind this read."""
+        from ...providers import local_servers_seen
+
+        return {"servers": local_servers_seen.rows(d.platform.config)}
+
+    @app.post("/connections/local-servers/{key}/connect")
+    def local_server_connect(key: str) -> dict[str, Any]:
+        """The Accounts row's one press: connect a model server running on this
+        PC into the "your own model server" slot (the same helper as the
+        first-run press, ``routes.settings.adopt_local_server``: a fresh
+        bounded probe, saved through the one settings writer, never replacing
+        another address). It connects; which model answers stays the user's
+        choice (the Ollama row's rule). Sync: the probe runs on the threadpool."""
+        from ...providers import local_servers_seen
+        from .settings import adopt_local_server
+
+        server = local_servers_seen.server_for(key)
+        if server is None:
+            raise HTTPException(status_code=404, detail="no such model server")
+        model, refusal = adopt_local_server(d, key)
+        if refusal is not None:
+            raise HTTPException(status_code=409, detail=refusal)
+        invalidate_model_catalog(discovery=True, provider="custom")
+        return {
+            "ok": True,
+            "key": key,
+            "name": server.name,
+            "base_url": server.base_url,
+            "model": model,
+            "detail": (
+                f"{server.name} is connected. Pick it in any model menu as your own "
+                "model server."
+            ),
+        }
 
     @app.delete("/connections/{provider}")
     def connect_disconnect(provider: str) -> dict[str, Any]:

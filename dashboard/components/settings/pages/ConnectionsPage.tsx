@@ -41,6 +41,7 @@ import {
   type EndpointProtocol,
 } from "@/components/connections/EndpointModelPicker";
 import { LocalServerChips, useFetchModelsSoon } from "@/components/connections/LocalServerChips";
+import { LocalServerRows } from "@/components/connections/LocalServerRows";
 import type { LocalServerPreset } from "@/lib/localServerPresets";
 import { useApi } from "@/lib/useApi";
 import { useFocusRef } from "@/lib/useFocusRef";
@@ -2427,6 +2428,9 @@ export default function ConnectionsPage() {
                 envelopeModels={envelopeModelsFor(info.provider)}
               />
             ))}
+            {/* v1.358.0 (lane 8D): LM Studio / llama.cpp running on this PC,
+                under Local Ollama and offered the same one press. */}
+            <LocalServerRows />
           </div>
           <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
             These use plans you already pay for, so no API keys are needed. Pick them in any model picker.

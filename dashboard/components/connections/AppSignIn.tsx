@@ -105,9 +105,10 @@ export function ChoiceField({
   );
 }
 
-/** The one sentence under a saved app, beside the press. True before AND
- *  after a sign-in: the daemon cannot see the app's sign-in without asking
- *  the app, so the card never claims either way. */
+/** The one sentence under a saved app, beside the press, while its sign-in
+ *  has not been seen to land (v1.358.0: the daemon now ASKS the app —
+ *  connectors/signin_seen — and the card reads "Sign in to … to finish"
+ *  above this line until it says signed in). */
 export function signInLine(signin: Pick<AppSigninRow, "account">): string {
   const who = (signin.account ?? "").trim();
   return who
@@ -115,12 +116,32 @@ export function signInLine(signin: Pick<AppSigninRow, "account">): string {
     : "It works once you sign in.";
 }
 
+/** v1.358.0 (lane 8D): the line once the app's own check says signed in —
+ *  the account it names, when it names one (its sign-in address). */
+export function signedInLine(account?: string | null): string {
+  const who = (account ?? "").trim();
+  return who ? `Signed in as ${who}.` : "Signed in.";
+}
+
 /** What the pane shows, said after the press. */
 export const PANE_OPENED_LINE =
   "A Build terminal opened with a web address and a code. Open the address, type the code and sign in there.";
 
-/** The card's Sign in press. `id` is the card's id (test ids). */
-export function AppSignIn({ id, signin }: { id: string; signin: AppSigninRow }) {
+/** The card's Sign in press. `id` is the card's id (test ids). `signedIn`
+ *  (v1.358.0): the daemon's check says the app is signed in — the line says
+ *  so (and who), and the press stays for signing in again with another
+ *  account. */
+export function AppSignIn({
+  id,
+  signin,
+  signedIn = false,
+  account = "",
+}: {
+  id: string;
+  signin: AppSigninRow;
+  signedIn?: boolean;
+  account?: string;
+}) {
   const [busy, setBusy] = useState(false);
   // undefined = not pressed yet; null = opened, pane id unknown.
   const [paneId, setPaneId] = useState<string | null | undefined>(undefined);
@@ -150,7 +171,9 @@ export function AppSignIn({ id, signin }: { id: string; signin: AppSigninRow }) 
         </span>
       ) : (
         <>
-          <span className="block">{signInLine(signin)}</span>
+          <span className="block" data-testid={`connector-signin-state-${id}`}>
+            {signedIn ? signedInLine(account) : signInLine(signin)}
+          </span>
           <button
             type="button"
             data-testid={`connector-signin-press-${id}`}
@@ -163,7 +186,7 @@ export function AppSignIn({ id, signin }: { id: string; signin: AppSigninRow }) 
             ) : (
               <LogIn size={13} aria-hidden />
             )}
-            {signin.label}
+            {signedIn ? `${signin.label} again` : signin.label}
           </button>
         </>
       )}

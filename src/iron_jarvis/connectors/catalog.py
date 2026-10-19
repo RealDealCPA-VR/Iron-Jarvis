@@ -133,6 +133,22 @@ class Connector:
     # "reference" (an official reference server) or "integration" (the
     # company's own). Read only for a row the Tools page shows.
     provenance: str = ""
+    # -- v1.358.0 (lane 8D): a SEPARATE version of something built in --
+    # The Directory says "Built in, nothing to connect: Files & documents,
+    # Web, …" (:data:`BUILT_IN_TOOLS`); a card that offers a second, separate
+    # way to do one of those things names it here, in that line's own words,
+    # and says how it differs (``built_in_note``). The Directory shows such a
+    # card under its own fold ("Separate versions of built-in tools"), never
+    # beside the apps as if the thing were missing until connected.
+    built_in: str = ""
+    built_in_note: str = ""
+
+
+#: v1.358.0 (lane 8D): what works with nothing to connect, in the words the
+#: Directory's "Built in, nothing to connect" line says them
+#: (``DirectoryPage.tsx``'s ``BUILT_IN``; pinned equal). A card's
+#: ``built_in`` is one of these.
+BUILT_IN_TOOLS: tuple[str, ...] = ("Files & documents", "Web", "Images", "Spreadsheets", "Memory")
 
 
 def is_remote(connector: "Connector") -> bool:
@@ -294,6 +310,12 @@ CATALOG: list[Connector] = [
         fields=[Field("folder", "Folder path", help="Absolute path to allow", kind="arg")],
         tools_id="filesystem",
         provenance="reference",
+        # v1.358.0 (lane 8D): files are built in; this is a second, fenced one.
+        built_in="Files & documents",
+        built_in_note=(
+            "Iron Jarvis already reads and writes your files without this. "
+            "This is a separate folder tool, fenced to the one folder you pick."
+        ),
     ),
     Connector(
         id="sentry",
@@ -526,6 +548,13 @@ CATALOG: list[Connector] = [
         args=["mcp-server-fetch"],
         tools_id="fetch",
         provenance="reference",
+        # v1.358.0 (lane 8D): reading the web is built in; this is a second
+        # page reader.
+        built_in="Web",
+        built_in_note=(
+            "Iron Jarvis already searches the web and reads pages without this. "
+            "This is a separate page reader."
+        ),
     ),
     Connector(
         id="brave_search",
@@ -561,6 +590,13 @@ CATALOG: list[Connector] = [
         args=["-y", "@modelcontextprotocol/server-memory"],
         tools_id="memory",
         provenance="reference",
+        # v1.358.0 (lane 8D): memory is built in; this is a second, separate
+        # store.
+        built_in="Memory",
+        built_in_note=(
+            "Iron Jarvis already remembers things in its own memory without this. "
+            "This is a separate knowledge graph."
+        ),
     ),
     Connector(
         id="sequential_thinking",
@@ -782,6 +818,10 @@ def connector_dict(c: Connector) -> dict:
         # A LINK card's one action (both "" for every other card).
         "href": c.href,
         "action": c.action,
+        # v1.358.0 (lane 8D): a separate version of something built in, and
+        # how it differs ("" for every other card) — the Directory folds it.
+        "built_in": c.built_in,
+        "built_in_note": c.built_in_note,
     }
 
 
