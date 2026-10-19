@@ -81,7 +81,10 @@ JSX text node in `dashboard/app`, `components` and `lib` is read through the
 TypeScript parser (`__tests__/helpers/retiredWords.ts`) and a retired word in
 anything a user can read fails the test. Comments, ids, test ids, routes,
 object keys, comparisons, matcher arguments and search aliases are not prose
-and are skipped by rule. The few deliberate uses are listed in the test's
+and are skipped by rule. One shape cannot be told from an id and is not read:
+a single lower-case word kept in a variable or an object value and shown
+later (`{ mcp: "pack" }` then `{LABEL[k]}`) — write a label capitalised or in
+a sentence and the scan sees it. The few deliberate uses are listed in the test's
 allowlist, each with a one-line reason, and an allowlist entry that no longer
 matches anything fails too (so a fixed line takes its entry with it).
 
