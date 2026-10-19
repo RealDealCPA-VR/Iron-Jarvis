@@ -269,7 +269,7 @@ describe("Change key on a connected card (G69)", () => {
         body: { auth: { header: "Authorization", format: "Bearer {value}", value: NEW_TOKEN } },
       },
     ]);
-    expect(api.dels).toEqual([], "Change key never disconnects");
+    expect(api.dels, "Change key never disconnects").toEqual([]);
     expect(screen.queryByTestId("edit-pack-github")).toBeNull();
     // The card re-reads the gallery and is green again.
     await waitFor(() => expect(card("github").getAttribute("data-health")).toBe("connected"));

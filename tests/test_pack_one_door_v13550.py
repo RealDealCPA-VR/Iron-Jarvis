@@ -397,6 +397,25 @@ def test_a_token_pasted_on_the_chat_card_reaches_an_older_pack(tmp_path, monkeyp
     assert records.app_waiting_for(p, "notion") == []
 
 
+def test_a_loader_fault_names_its_reason_without_a_secret_value(tmp_path, monkeypatch):
+    """Review fix: a fault OUTSIDE the per-pack load (the loader itself
+    raising) used to read "it connected but advertised no tools" — the door
+    now names it in the add note, which reaches the browser, so its text is
+    masked exactly as a per-pack load failure's is."""
+    secret = "ghp_REVIEW5B0123456789abcdefNEVERSHOWN"
+
+    def _boom(*_a, **_k):
+        raise RuntimeError(f"upstream refused Authorization: Bearer {secret}")
+
+    monkeypatch.setattr(mcp_tools_mod, "mcp_tools", _boom)
+    client = TestClient(create_app(str(tmp_path)))
+    res = client.post("/mcp/servers", json={"name": "faulty", "command": "ij-no-such-launcher-v13550"})
+    assert res.status_code == 200, res.text
+    note = res.json()["note"] or ""
+    assert note.startswith("saved, but it did not start: RuntimeError"), note
+    assert secret not in res.text and secret not in note
+
+
 # --------------------------------------------------------------------------- #
 # One door, by construction.
 # --------------------------------------------------------------------------- #

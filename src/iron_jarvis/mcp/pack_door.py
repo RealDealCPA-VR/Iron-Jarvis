@@ -123,7 +123,10 @@ def load_config(
             platform.registry.register(tool, mcp=True)
             loaded += 1
     except Exception as exc:  # noqa: BLE001 — the row is saved; say why it did not start
-        errs.setdefault(name, {"error": f"{type(exc).__name__}: {exc}", "reason": f"{type(exc).__name__}: {exc}"})
+        # The text rides the add answer's note (the browser): secret VALUES
+        # masked, as the per-pack load failure masks them (mcp.tools).
+        text = _tools._mask_text(f"{type(exc).__name__}: {exc}")
+        errs.setdefault(name, {"error": text, "reason": text})
         log.warning("pack %s: tools did not load (%s)", name, type(exc).__name__)
         loaded = 0
     return loaded
