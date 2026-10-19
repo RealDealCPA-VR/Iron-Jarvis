@@ -318,6 +318,16 @@ RESEARCH = [
     "is Dropbox better than Google Drive?",
     "tell me about Stripe",
     "search the web for Dropbox",
+    # v1.359.0 review: the everyday comparison and price questions a new
+    # user asks before choosing an app (each offered a door before the fix).
+    "what's the difference between Dropbox and Google Drive",
+    "should I use Dropbox or Google Drive?",
+    "which is better, Notion or Obsidian?",
+    "which one is cheaper, Dropbox or Box?",
+    "how much does Dropbox cost?",
+    "how much would Slack charge us for 10 seats",
+    "who founded Dropbox",
+    "who owns GitHub now?",
 ]
 
 #: The wave-8 probe table's own-data rows plus G41's own phrasings.
@@ -340,6 +350,15 @@ OWN = [
     # it: "my Notion templates" are the user's, not Notion's.
     ("search my notion templates for the client one", ["notion"]),
     ("check my gmail online for the receipt", ["gmail"]),
+    # v1.359.0 review: the comparison / price / company readings stay off the
+    # user's own data — a possessive still wins, and a question about what is
+    # IN the app is not a question about the app.
+    ("should I use my Dropbox or my Google Drive for this?", ["google_drive", "dropbox"]),
+    ("who created this file in my Dropbox?", ["dropbox"]),
+    ("who created the folder in Dropbox?", ["dropbox"]),
+    ("how much space is left in Dropbox?", ["dropbox"]),
+    ("which folder in Dropbox has the best photos", ["dropbox"]),
+    ("find the differences between the two leases in my Google Drive", ["google_drive"]),
 ]
 
 

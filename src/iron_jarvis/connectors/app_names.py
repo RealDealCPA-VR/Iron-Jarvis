@@ -241,20 +241,40 @@ _WHAT_IS_RX = re.compile(
     r"\bwhat(?:\s+(?:is|are|does|do)|['’]s)\s+(?:the\s+|an?\s+)?\Z", re.IGNORECASE
 )
 #: Research words right before the app ("news about GitHub", "reviews of
-#: Notion", "alternatives to Slack", "apps like Notion", "cheaper than Box").
+#: Notion", "alternatives to Slack", "apps like Notion", "cheaper than Box",
+#: and — v1.359.0 review — the company itself: "who founded Dropbox").
 _RESEARCH_BEFORE_RX = re.compile(
     r"(?:\babout"
     r"|\b(?:reviews?|alternatives?|competitors?|history|pricing|prices?|costs?|docs"
     r"|documentation|features?|tutorials?|guides?|news)\s+(?:of|for|to|on|about)"
-    r"|\b(?:vs\.?|versus|than|compared\s+(?:to|with)|instead\s+of|like|similar\s+to))"
+    r"|\b(?:vs\.?|versus|than|compared\s+(?:to|with)|instead\s+of|like|similar\s+to)"
+    r"|\bwho\s+(?:founded|owns|owned|made|makes|created|runs|bought|acquired))"
     r"\s+(?:the\s+)?\Z",
     re.IGNORECASE,
 )
 #: A comparison anywhere in the app's sentence ("is Dropbox better than
-#: Google Drive?", "compare Notion and Evernote") — research about the apps.
+#: Google Drive?", "compare Notion and Evernote", and — v1.359.0 review —
+#: "what's the difference between Dropbox and Google Drive", "which is
+#: better, Notion or Obsidian?", "should I use Dropbox or Google Drive?") —
+#: research about the apps. A possessive is read first, so "should I use my
+#: Dropbox or my Drive for this?" stays the user's own.
 _COMPARE_RX = re.compile(
     r"\b(?:better|worse|cheaper|pricier|faster|slower|safer|easier|harder)\s+than\b"
-    r"|\bcompar(?:e|ed|es|ing|ison)\b|\bvs\.?(?!\w)|\bversus\b|\bpros\s+and\s+cons\b",
+    r"|\bcompar(?:e|ed|es|ing|ison)\b|\bvs\.?(?!\w)|\bversus\b|\bpros\s+and\s+cons\b"
+    r"|\bdifferences?\s+between\b"
+    r"|\bwhich\s+(?:one\s+)?(?:is|are|was|would\s+be)\s+(?:the\s+)?"
+    r"(?:better|best|cheaper|cheapest|faster|fastest|safer|safest|easier|easiest)\b"
+    r"|\bshould\s+(?:i|we)\s+(?:use|pick|choose|get|go\s+with|switch\s+to)\b"
+    r"[^.!?\n]{0,60}?\bor\b",
+    re.IGNORECASE,
+)
+#: What the app COSTS, asked in its sentence ("how much does Dropbox cost?",
+#: "how much would Slack charge us") — research about the app (v1.359.0
+#: review: "Dropbox pricing" was already research, its question form was
+#: not). Needs a cost word, so "how much space is left in Dropbox" stays own.
+_PRICE_RX = re.compile(
+    r"\bhow\s+much\s+(?:does|do|is|are|would|will)\b[^.!?\n]{0,60}?"
+    r"\b(?:costs?|costing|charges?|charging)\b",
     re.IGNORECASE,
 )
 _SENTENCE_BREAK_RX = re.compile(r"[.!?\n]")
@@ -296,8 +316,9 @@ def _for_own_data(t: str, start: int, end: int, blanked: str) -> bool:
     * the app's public things after its name ("the Stripe API docs", "Notion
       templates", "the Dropbox desktop app"), research words before it
       ("reviews of Notion", "alternatives to Slack", "news about GitHub") or
-      a comparison in its sentence ("stripe vs square", "is Dropbox better
-      than Google Drive?") → research;
+      a comparison or a price question in its sentence ("stripe vs square",
+      "should I use Dropbox or Google Drive?", "how much does Dropbox
+      cost?") → research;
     * a web search said in so many words ("search online for …") → research;
     * anything else ("find my tax files in Google Drive", "post it to Slack",
       "search github for issues about login") → own: with the app not
@@ -320,7 +341,8 @@ def _for_own_data(t: str, start: int, end: int, blanked: str) -> bool:
         return False
     if _RESEARCH_BEFORE_RX.search(clause):
         return False
-    if _COMPARE_RX.search(_sentence_of(t, start, end)):
+    sentence = _sentence_of(t, start, end)
+    if _COMPARE_RX.search(sentence) or _PRICE_RX.search(sentence):
         return False
     return _WEB_SEARCH_RX.search(blanked) is None
 
