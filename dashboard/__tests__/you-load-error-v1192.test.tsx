@@ -126,7 +126,7 @@ describe("/you when the profile cannot be loaded", () => {
     render(<YouPage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Daemon offline or unreachable\./)).toBeInTheDocument();
+      expect(screen.getByText(/Iron Jarvis isn't responding\./)).toBeInTheDocument();
     });
 
     // The form is gone: nothing to type into, so nothing to lose — and no
@@ -144,7 +144,7 @@ describe("/you when the profile cannot be loaded", () => {
     await waitFor(() => {
       expect(screen.getByText(/profile store unavailable/)).toBeInTheDocument();
     });
-    expect(screen.queryByText(/Daemon offline or unreachable\./)).toBeNull();
+    expect(screen.queryByText(/Iron Jarvis isn't responding\./)).toBeNull();
     expect(screen.queryByPlaceholderText(ABOUT_PLACEHOLDER)).toBeNull();
     expect(screen.queryByRole("button", { name: /^Save/ })).toBeNull();
   });
@@ -154,7 +154,7 @@ describe("/you when the profile cannot be loaded", () => {
     render(<YouPage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Daemon offline or unreachable\./)).toBeInTheDocument();
+      expect(screen.getByText(/Iron Jarvis isn't responding\./)).toBeInTheDocument();
     });
 
     hooks.failStatus = null;
@@ -164,7 +164,7 @@ describe("/you when the profile cannot be loaded", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("I run a small CPA firm.")).toBeInTheDocument();
     });
-    expect(screen.queryByText(/Daemon offline or unreachable\./)).toBeNull();
+    expect(screen.queryByText(/Iron Jarvis isn't responding\./)).toBeNull();
   });
 });
 

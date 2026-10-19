@@ -114,7 +114,7 @@ describe("FP5 — an abort is not an outage", () => {
     const p = api("/metrics", { timeoutMs: 1000 });
     const settled = expect(p).rejects.toMatchObject({
       status: 0,
-      message: "daemon offline",
+      message: "Iron Jarvis isn't responding",
       cancelled: false,
     });
     await vi.advanceTimersByTimeAsync(1000);
@@ -200,7 +200,7 @@ describe("FP4 — a steady offline banner", () => {
     await step(0);
     expect(probe()).toContain("online epoch=1"); // never left online, epoch untouched
     expect(commits).not.toContain("offline"); // no offline render was ever committed...
-    expect(screen.queryByText("Daemon offline.")).toBeNull(); // ...so the banner never mounted
+    expect(screen.queryByText("Iron Jarvis isn't responding.")).toBeNull(); // ...so the banner never mounted
     await step(5_000); // and the regular cadence resumes
     expect(healthCalls()).toBe(4);
     expect(probe()).toContain("online epoch=1");
@@ -215,14 +215,14 @@ describe("FP4 — a steady offline banner", () => {
     await step(0);
     await step(5_000);
     await step(5_000);
-    expect(screen.queryByText("Daemon offline.")).toBeNull(); // t=10: nothing yet
+    expect(screen.queryByText("Iron Jarvis isn't responding.")).toBeNull(); // t=10: nothing yet
     await step(3_100); // t=13.1: miss 1 -> still online, confirming
     expect(probe()).toContain("online epoch=1");
-    expect(screen.queryByText("Daemon offline.")).toBeNull();
+    expect(screen.queryByText("Iron Jarvis isn't responding.")).toBeNull();
     expect(healthCalls()).toBe(3);
     await step(8_000); // t=21.1: confirmation aborted -> miss 2 -> offline
     expect(probe()).toContain("offline");
-    expect(screen.getByText("Daemon offline.")).toBeInTheDocument();
+    expect(screen.getByText("Iron Jarvis isn't responding.")).toBeInTheDocument();
     await step(5_000); // t=26.1: #4 (t25) hangs; still offline
     expect(probe()).toContain("offline");
     await step(10_000); // t=36.1: #4 aborted at 33; #5 (t35) hangs

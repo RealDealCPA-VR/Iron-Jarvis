@@ -35,6 +35,8 @@ import { FirstRunStrip } from "@/components/onboarding/FirstRunStrip";
 // v1.313.0 (U1-1): `noModelChosen` is the ONE "replies are a scripted demo"
 // rule (lib/onboarding); this page used to keep its own copy.
 import { isDemoDefault, noModelChosen } from "@/lib/onboarding";
+// v1.354.0 (G30): the outage in the app's own name, never "Daemon offline".
+import { OFFLINE_WORDS } from "@/lib/offlineWords";
 import { InterruptedJobsNote } from "@/components/InterruptedJobs";
 import { PageShell, Reveal } from "@/components/motion";
 import { Heartbeat, MapLegend, SystemMap, type SystemMapData } from "@/components/overview/SystemMap";
@@ -154,7 +156,7 @@ export default function OverviewPage({ embedded = false }: { embedded?: boolean 
   // tools; named here with a way to the Retry.
   const failedPacks = status?.failing_packs ?? [];
   const statusLine = offline
-    ? "Daemon offline"
+    ? OFFLINE_WORDS
     : runningCount > 0
       ? `Working on ${runningCount} task${runningCount === 1 ? "" : "s"}`
       : failingLoops.length > 0

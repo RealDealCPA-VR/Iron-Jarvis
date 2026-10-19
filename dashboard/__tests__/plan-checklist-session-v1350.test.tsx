@@ -210,7 +210,9 @@ describe("sessions/[id]: the plan checklist in the Live run card", () => {
     H.responses[PLAN] = { steps: GOALS.map((goal, i) => ({ goal, state: i === 0 ? "running" : "waiting" })) };
     renderPage("running");
     await waitFor(() => expect(states()).toEqual(["running", "waiting", "waiting"]));
-    expect(screen.getByText("streaming")).toBeTruthy(); // anti-vacuity: no phase line yet
+    // anti-vacuity: no phase line yet. v1.354.0 (G20): before the daemon names
+    // a phase the card says "Working…" (it said the engine word "streaming").
+    expect(screen.getByTestId("live-run-phase").textContent).toBe("Working…");
   });
 
   it("the events alone make the checklist when the page saw the plan made (no daemon copy needed)", async () => {

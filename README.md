@@ -100,7 +100,7 @@ Iron Jarvis inherits your subscription through the logged-in CLI. It never perfo
 - **Updates install themselves.** New versions download in the background and install when you click **Restart to update**.
 - **Your data lives in `%APPDATA%\Iron Jarvis`** and survives updates and reinstalls.
 
-**If something looks wrong:** *"Daemon offline"* only appears after two missed polls. If it stays, quit from the tray and relaunch (or tray → **Restart Iron Jarvis**), then go to **Settings → Maintenance → Copy diagnostics / Open logs folder** to see why. `ironjarvis doctor`, `repair`, `rollback`, `reset-config` and `backup`/`restore` are one-command recoveries that work even when the daemon won't start.
+**If something looks wrong:** *"Iron Jarvis isn't responding"* only appears after two missed polls, and your chats and files are saved while it shows. When it comes back you see *"Iron Jarvis is back."* for a few seconds, and anything a restart stopped waits in the bell with **Continue**. If it stays, quit from the tray and relaunch (or tray → **Restart Iron Jarvis**), then go to **Settings → Maintenance → Copy diagnostics / Open logs folder** to see why. `ironjarvis doctor`, `repair`, `rollback`, `reset-config` and `backup`/`restore` are one-command recoveries that work even when the background service won't start.
 
 ### 💻 From source (macOS / Linux / Windows)
 

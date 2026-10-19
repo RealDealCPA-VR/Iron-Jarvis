@@ -64,7 +64,7 @@ export function PreflightNote({
           : signedOutCase
             ? `${provider} is installed but not signed in. This turn will fail. ${signInWords[0].toUpperCase()}${signInWords.slice(1)}, then Test on Connections.`
           : stale
-            ? `${provider} may be offline. The last check couldn't reach the daemon. Pick another model or check the endpoint.`
+            ? `${provider} may be offline. The last check couldn't reach Iron Jarvis. Pick another model or check the endpoint.`
             : `${provider} isn't reachable right now. This turn will fail. Pick another model or bring the endpoint back.`}
       </span>
     </div>

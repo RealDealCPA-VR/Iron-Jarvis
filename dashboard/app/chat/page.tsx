@@ -395,6 +395,12 @@ import { AT_MENU_ROOMY_PX, squeezedLeadRows, useAtMenuFit } from "@/lib/chatRefs
 import { useThreadListPoll } from "@/lib/threadListPoll";
 import { appendDictation } from "@/components/VoiceInput";
 import { ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
+// v1.354.0 (G20): the run phase words, shared with the run's own page.
+import { phaseLabel } from "@/lib/stepWords";
+// v1.354.0 (G30/G31): the app's own words for an outage, and the reconnect
+// edge alone (lib/daemonEpoch, never the whole /health context).
+import { OFFLINE_WORDS } from "@/lib/offlineWords";
+import { useDaemonEpoch } from "@/lib/daemonEpoch";
 import { ModuleTitle } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 
@@ -989,16 +995,6 @@ function adaptedFrom(raw: unknown): TurnAdapted | null {
     changes,
   };
 }
-
-/** Human wording for a run phase (v1.149.0). An unknown phase falls through to
- *  its raw name rather than a generic label — a new phase the daemon adds
- *  should read oddly, not silently look like every other one. */
-const PHASE_LABEL: Record<string, string> = {
-  planning: "Planning the work…",
-  running: "Working…",
-  verifying: "Checking its work…",
-  assembling: "Writing up the result…",
-};
 
 /**
  * Composer context gauge (v1.146.0).
@@ -3878,6 +3874,23 @@ export default function ChatPage() {
   // the cursor is — mid-sentence "/" is the whole point of that change.
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
+  // v1.354.0 (G31): the chat's own offline hint clears BY ITSELF when Iron
+  // Jarvis answers again. It used to stay until the user sent, retried or
+  // switched chats, because nothing here read the reconnect edge. The edge
+  // alone (lib/daemonEpoch — never the whole /health context, so the page
+  // re-renders on a reconnect and on nothing else); the first value is not
+  // an edge, and a page that was never offline does nothing.
+  const daemonEpoch = useDaemonEpoch();
+  const epochSeenRef = useRef(daemonEpoch);
+  useEffect(() => {
+    if (epochSeenRef.current === daemonEpoch) return;
+    epochSeenRef.current = daemonEpoch;
+    if (!offline) return;
+    setOffline(false);
+    // The list the outage left empty (or stale) is read again now.
+    void refreshThreads();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [daemonEpoch]);
   // Threads sidebar: the saved-conversation list + which one is loaded.
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -9757,7 +9770,7 @@ export default function ChatPage() {
       if (!stillHere()) return; // the open conversation is somebody else's now
       setPanelLive(null);
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
-      setError(err.status === 0 ? "Daemon offline. The panel didn't run." : err.message);
+      setError(err.status === 0 ? `${OFFLINE_WORDS}. The panel didn't run.` : err.message);
       composer.setText(message); // never lose the typed message
       if (atts.length) setAttachments(atts); // ...nor the files (never cleared before the POST landed)
       setMessages(before);
@@ -11994,11 +12007,7 @@ export default function ChatPage() {
                             since={runSince && runSince.id === awaitingId ? runSince.at : null}
                             progress={progress}
                             tools={runStream.tools}
-                            phaseTitle={
-                              runStream.phase
-                                ? PHASE_LABEL[runStream.phase.phase] ?? runStream.phase.phase
-                                : null
-                            }
+                            phaseTitle={runStream.phase ? phaseLabel(runStream.phase.phase) : null}
                             phaseDetail={runStream.phase?.detail || null}
                             plan={livePlan}
                           />

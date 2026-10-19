@@ -42,7 +42,7 @@ describe("streamSSE reader-loop failure (v1.226.0)", () => {
     );
     const events = await collect();
     expect(events).toEqual([
-      { type: "error", detail: "daemon offline", status: 0, offline: true },
+      { type: "error", detail: "Iron Jarvis isn't responding", status: 0, offline: true },
     ]);
   });
 
@@ -60,7 +60,7 @@ describe("streamSSE reader-loop failure (v1.226.0)", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ type: "error" });
     expect((events[0] as { offline?: boolean }).offline).toBeUndefined();
-    expect((events[0] as { detail: string }).detail).not.toBe("daemon offline");
+    expect((events[0] as { detail: string }).detail).not.toBe("Iron Jarvis isn't responding");
   });
 
   it("a non-ok response with a list-shaped 422 detail is flattened (C4)", async () => {
@@ -92,7 +92,7 @@ describe("streamSSE reader-loop failure (v1.226.0)", () => {
     );
     const events = await collect();
     expect(events).toEqual([
-      { type: "error", detail: "daemon offline", status: 0, offline: true },
+      { type: "error", detail: "Iron Jarvis isn't responding", status: 0, offline: true },
     ]);
   });
 });

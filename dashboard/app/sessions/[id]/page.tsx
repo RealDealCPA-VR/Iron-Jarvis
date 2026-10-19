@@ -1,10 +1,11 @@
 "use client";
 
-import { use, useEffect, useMemo, useRef, useState } from "react";
+import { use, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
+  ChevronRight,
   FileText,
   Gauge,
   ListTree,
@@ -24,15 +25,14 @@ import { useEvents } from "@/lib/useEvents";
 import { useDocumentVisible } from "@/lib/useDocumentVisible";
 import { useRunStream } from "@/lib/useRunStream";
 import { useTTS } from "@/lib/useTTS";
-import { post, del, API_BASE, ijToken, ApiError } from "@/lib/api";
+import { useModels } from "@/lib/useModels";
+import { get, post, del, API_BASE, ijToken, ApiError } from "@/lib/api";
 import { Markdown, CopyIconButton } from "@/components/Markdown";
-import { providerDisplay } from "@/lib/onboarding";
 import type {
   SessionDetail,
   SessionView,
   Evaluation,
   Review,
-  IJEvent,
 } from "@/lib/types";
 import {
   Card,
@@ -60,13 +60,26 @@ import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { ReviewPanel } from "@/components/ReviewPanel";
 import { TracesPanel } from "@/components/TracesPanel";
-import { stepLabel } from "@/components/chat/stepLabel";
 import { PlanChecklist, useLivePlan } from "@/components/chat/PlanChecklist";
+import { LiveToolRows } from "@/components/chat/WorkLine";
+import { secondsText } from "@/components/chat/TurnReceipt";
 import { SessionFeedback } from "@/components/SessionFeedback";
 import { TimeTravelFeed } from "@/components/TimeTravelFeed";
+import { InterruptedJobActions, CONTINUE_AFTER_RESTART } from "@/components/InterruptedJobs";
 import { PageShell, Reveal } from "@/components/motion";
-import { pct, num, clockTime, shortId } from "@/lib/format";
-import { agentDisplayName } from "@/lib/agentWorlds";
+import { pct, num, clockTime, shortId, normalizeIso } from "@/lib/format";
+import { agentDisplayName, bareMemberName } from "@/lib/agentWorlds";
+import { isMissionRow } from "@/lib/missionLinks";
+import { tookMs } from "@/lib/ranOnWords";
+import { phaseLabel } from "@/lib/stepWords";
+import {
+  findContinuation,
+  liveEventWords,
+  runModelWords,
+  runTitle,
+  RUN_TITLE_FALLBACK,
+  type ContinuationRow,
+} from "@/components/sessions/runPageWords";
 
 /** Session statuses that represent in-flight work (cancellable). "queued"
  *  (v1.166.0) is parked behind the concurrency cap — not yet running, but
@@ -133,6 +146,32 @@ export default function SessionDetailPage({
   // Queued = parked, not running: no token stream exists yet, and the badge
   // must not read like "Running now".
   const isQueued = status === "queued";
+  // v1.354.0 (G20): a run a RESTART cut off (an update, a crash) is not a
+  // failure the user should read in red: the boot reconcile tags it, and it
+  // can pick its own conversation back up. The tag clears once continued or
+  // dismissed.
+  const interrupted = status === "failed" && !!session?.interrupted_at;
+
+  /* ---- The receipt's words (v1.354.0, G20) -------------------------------
+   * The task's first line is the title (the id sits behind a copy button);
+   * the model server reads by the name the model menu gives it. */
+  const { models: catalog } = useModels();
+  const heading = session ? runTitle(session.task) : { title: RUN_TITLE_FALLBACK, full: null };
+  const took = session ? secondsText(tookMs(session.created_at, session.finished_at)) : null;
+  // The live line's clock counts the whole run, from the daemon's own stamp
+  // (read as UTC — an unzoned stamp parsed as local time would be hours off).
+  const runSince = session?.created_at ? Date.parse(normalizeIso(session.created_at)) : NaN;
+  const agentRaw = (session?.agent_name ?? "").trim();
+  const agentShown = session
+    ? agentRaw
+      ? agentDisplayName(bareMemberName(agentRaw), session.origin)
+      : agentDisplayName(session.agent_type, session.origin)
+    : "";
+  // A custom or remote agent's name is shown as the user typed it; a
+  // built-in id is cased by CSS (v1.315.0).
+  const agentCustom = agentRaw.startsWith("custom:") || agentRaw.startsWith("remote:");
+  const recordId = useId();
+  const [recordOpen, setRecordOpen] = useState(false);
 
   /* ---- Live run stream (v1.166.0, B2): tokens + tool activity over SSE ----
    * `GET /sessions/{id}/stream` via the same hook chat uses for its agent
@@ -317,12 +356,44 @@ export default function SessionDetailPage({
       const s = await post<SessionView>(`/sessions/${id}/continue`, {
         message: followup.trim(),
         wait: false,
+        // v1.354.0 (G20): a follow-up to a run a restart cut off RESUMES its
+        // own conversation (v1.337.0), the same as the restart Continue —
+        // the run picks up where it was, with these words added.
+        ...(interrupted ? { resume: true } : {}),
       });
       if (s?.id) router.push(`/sessions/${s.id}`);
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : String(err));
       setActing(null);
     }
+  }
+
+  /* v1.354.0 (G20): the restart Continue is the bell's and the Overview's own
+   * (InterruptedJobActions: Continue with `resume: true`, or Dismiss). It
+   * answers only "gone", and a continuation is a NEW run, so the page reads
+   * the newest runs back and follows the one that Continue just started
+   * (components/sessions/runPageWords.findContinuation — never a guess); a
+   * mission is already on its way to its own screen; anything else (a
+   * Dismiss) re-reads this run. */
+  const interruptedPressRef = useRef(0);
+  function onInterruptedGone() {
+    if (!session || isMissionRow(session)) {
+      detail.reload();
+      return;
+    }
+    const since = interruptedPressRef.current || Date.now();
+    const workspace = session.workspace_path;
+    void (async () => {
+      let next: string | null = null;
+      try {
+        const res = await get<{ sessions?: ContinuationRow[] }>("/sessions?limit=10");
+        next = findContinuation(res?.sessions, { id, workspace, since });
+      } catch {
+        next = null;
+      }
+      if (next) router.push(`/sessions/${encodeURIComponent(next)}`);
+      else detail.reload();
+    })();
   }
 
   async function remove() {
@@ -346,16 +417,34 @@ export default function SessionDetailPage({
   return (
     <PageShell>
       <Reveal>
+        {/* v1.354.0 (G20): the run is titled by what it was asked (its first
+            line, plain text, clipped; the whole task on demand), never
+            "Session / session_7b32…" — the id sits behind a copy button.
+            Back goes back to where the user came from (a chat, the board)
+            when there is somewhere to go, else to the list of runs. */}
         <PageHeader
-          title="Session"
-          subtitle={id}
+          title={heading.title}
+          subtitle={heading.full ?? undefined}
           actions={
-            <Link
-              href="/sessions"
-              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:border-white/20 hover:text-zinc-100"
-            >
-              <ArrowLeft size={14} /> All sessions
-            </Link>
+            <>
+              <CopyIconButton text={id} title="Copy run id" />
+              <Link
+                href="/sessions"
+                data-testid="run-back"
+                title="Back to where you were"
+                onClick={(e) => {
+                  if (e.defaultPrevented || e.button !== 0) return;
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                  if (typeof window === "undefined" || window.history.length <= 1) return;
+                  if (typeof router.back !== "function") return;
+                  e.preventDefault();
+                  router.back();
+                }}
+                className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:border-white/20 hover:text-zinc-100"
+              >
+                <ArrowLeft size={14} /> Back
+              </Link>
+            </>
           }
         />
       </Reveal>
@@ -447,6 +536,8 @@ export default function SessionDetailPage({
                   {/* Amber "Waiting for you · tool" / "Completed · needs you"
                       / "Completed · with failures" (v1.227.0); the plain
                       status badge only when it tells the truth. */}
+                  {/* v1.354.0 (G20): a run a restart cut off reads
+                      "Interrupted" (the badge reads `interrupted_at`). */}
                   <SessionStatusBadge
                     session={session}
                     tone={isQueued ? "violet" : undefined}
@@ -458,6 +549,39 @@ export default function SessionDetailPage({
                 <StatusDot status={session.status} className="mt-1.5" />
                 <span>{session.task}</span>
               </div>
+              {/* v1.354.0 (G20): a run a restart cut off says so in words, in
+                  the warn tone (never a red failure), with the same Continue /
+                  Dismiss the bell and the Overview offer. Continue RESUMES the
+                  run's own conversation; the page then follows the new run. */}
+              {interrupted && (
+                <div
+                  data-testid="session-interrupted"
+                  role="status"
+                  className="mb-4 text-[13px]"
+                  onClickCapture={() => {
+                    interruptedPressRef.current = Date.now();
+                  }}
+                >
+                  <div className="flex items-center gap-2 font-medium text-tone-warn">
+                    <History size={14} aria-hidden="true" className="shrink-0" />
+                    <span>Stopped when Iron Jarvis restarted</span>
+                  </div>
+                  <p className="mt-0.5 text-zinc-400">
+                    Continue picks up its own conversation where it left off.
+                  </p>
+                  <InterruptedJobActions
+                    job={{
+                      id: session.id,
+                      task: session.task,
+                      agentType: session.agent_type,
+                      interruptedAt: session.interrupted_at ?? "",
+                      origin: session.origin ?? null,
+                      projectId: session.project_id ?? null,
+                    }}
+                    onGone={onInterruptedGone}
+                  />
+                </div>
+              )}
               {session.summary && (
                 // The summary is model-written markdown (v1.230.0, U2): it
                 // renders through the shared chat renderer, never as raw text
@@ -475,29 +599,39 @@ export default function SessionDetailPage({
                 {/* v1.315.0 (one AI identity): a mission's coordinator is
                     "Jarvis"; any other id keeps its text, title-cased by CSS;
                     the raw id stays in the title. */}
+                {/* v1.354.0 (G20): the roster name the door recorded
+                    (`agent_name`, "custom:tax-preparer" → "tax-preparer"),
+                    never only the base type a custom agent runs on; the raw
+                    name stays in the title. */}
                 <Meta
                   label="Agent"
                   value={
-                    <span title={session.agent_type} className="capitalize">
-                      {agentDisplayName(session.agent_type, session.origin)}
+                    <span
+                      title={agentRaw || session.agent_type}
+                      className={agentCustom ? undefined : "capitalize"}
+                    >
+                      {agentShown}
                     </span>
                   }
                 />
                 {/* v1.314.0: the model in words ("Demo model (scripted)",
                     "OpenAI · gpt-x"); the raw provider / model is the record
-                    of what ran, so it stays in the title. */}
+                    of what ran, so it stays in the title. v1.354.0 (G20): a
+                    model server the user set up reads by the name the model
+                    menu gives it, not "fleet-a1b2c3". */}
                 <Meta
                   label="Model"
                   value={
                     <span title={`${session.provider} / ${session.model}`}>
-                      {session.provider === "mock"
-                        ? providerDisplay(session.provider)
-                        : `${providerDisplay(session.provider)} · ${session.model}`}
+                      {runModelWords(session.provider, session.model, catalog)}
                     </span>
                   }
                 />
                 <Meta label="Created" value={clockTime(session.created_at)} />
                 <Meta label="Finished" value={clockTime(session.finished_at)} />
+                {/* v1.354.0 (G20): how long it took, in the chat receipt's
+                    clock words ("2 min 5 s"); nothing while it runs. */}
+                {took && <Meta label="Took" value={<span data-testid="run-took">{took}</span>} />}
                 {/* v1.314.0: one truncated line (it used to wrap to three)
                     — the full path in the title and one press to copy. */}
                 <Meta
@@ -717,39 +851,33 @@ export default function SessionDetailPage({
                 title="Live run"
                 icon={<Radio size={15} />}
                 right={
+                  /* v1.354.0 (G20): the run's phase in the chat's words
+                     (lib/stepWords.phaseLabel — "Planning the work", never
+                     the raw "planning"); before the daemon names one, it is
+                     simply working. */
                   runStream.phase ? (
-                    <span className="text-[11px] capitalize text-accent-soft/80">
-                      {runStream.phase.phase}
+                    <span data-testid="live-run-phase" className="text-[11px] text-accent-soft/80">
                       {runStream.phase.detail
-                        ? ` — ${runStream.phase.detail}`
-                        : ""}
+                        ? `${phaseLabel(runStream.phase.phase).replace(/…$/, "")} — ${runStream.phase.detail}`
+                        : phaseLabel(runStream.phase.phase)}
                     </span>
                   ) : (
-                    <span className="text-[11px] text-zinc-500">streaming</span>
+                    <span data-testid="live-run-phase" className="text-[11px] text-zinc-500">
+                      Working…
+                    </span>
                   )
                 }
               >
                 {livePlan ? <PlanChecklist plan={livePlan} className="mb-2.5" /> : null}
+                {/* v1.354.0 (G20): the run's steps as the chat's quiet rows
+                    ("Working for 12 s · read 2 files", then the newest steps
+                    in words), never a row of monospace tool-id chips. */}
                 {runStream.tools.length > 0 && (
-                  <div className="mb-2.5 flex flex-wrap gap-1.5">
-                    {runStream.tools.map((t) => (
-                      <span
-                        key={t.id}
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-mono text-[11px] ${
-                          t.status === "running"
-                            ? "border-accent/30 text-accent-soft"
-                            : t.ok === false
-                              ? "border-rose-500/30 text-rose-300"
-                              : "border-white/10 text-zinc-400"
-                        }`}
-                      >
-                        {t.status === "running" ? (
-                          <LoaderInline label={t.name} />
-                        ) : (
-                          <>{t.ok === false ? `${t.name} — failed` : t.name}</>
-                        )}
-                      </span>
-                    ))}
+                  <div className="mb-2.5">
+                    <LiveToolRows
+                      cards={runStream.tools}
+                      since={Number.isFinite(runSince) ? runSince : null}
+                    />
                   </div>
                 )}
                 {runStream.text ? (
@@ -769,7 +897,7 @@ export default function SessionDetailPage({
                   </pre>
                 ) : (
                   <div className="text-xs text-zinc-500">
-                    Connected — waiting for the first token…
+                    Started — waiting for its first words…
                   </div>
                 )}
               </Card>
@@ -807,72 +935,40 @@ export default function SessionDetailPage({
                   </Empty>
                 ) : (
                   <p className="text-xs text-zinc-500">
-                    This run has finished — every step it took is in Time-travel below.
+                    This run has finished — every step it took is in the Full record below.
                   </p>
                 )
               ) : (
                 <div className="max-h-72 space-y-1 overflow-y-auto font-mono text-xs">
-                  {sessionEvents.slice(0, 30).map((e) => (
-                    <div
-                      key={e.id}
-                      className="flex items-start gap-2 rounded-lg border border-white/[0.04] bg-white/[0.015] px-2.5 py-1.5"
-                    >
-                      <span className="shrink-0 text-zinc-600">{clockTime(e.ts)}</span>
-                      {/* v1.232.0 (audit U9): the human label chat already
-                          uses for the same events; the raw type stays on
-                          hover for anyone who wants it. */}
-                      <span className="shrink-0 text-accent-soft/80" title={e.type}>
-                        {stepLabel(e) ?? e.type}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-zinc-400">
-                        {summarizeEvent(e)}
-                      </span>
-                    </div>
-                  ))}
+                  {sessionEvents.slice(0, 30).map((e) => {
+                    // v1.232.0 (audit U9): the human label chat already uses
+                    // for the same events; the raw type stays on hover for
+                    // anyone who wants it. v1.354.0 (G20): a tool step in the
+                    // chat's step words and every other event in the
+                    // Time-travel feed's words — never the payload as JSON.
+                    const words = liveEventWords(e);
+                    return (
+                      <div
+                        key={e.id}
+                        data-testid="live-activity-row"
+                        className="flex items-start gap-2 rounded-lg border border-white/[0.04] bg-white/[0.015] px-2.5 py-1.5"
+                      >
+                        <span className="shrink-0 text-zinc-600">{clockTime(e.ts)}</span>
+                        <span className="shrink-0 text-accent-soft/80" title={e.type}>
+                          {words.label}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-zinc-400">{words.detail}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
-            </Card>
-          </Reveal>
-
-          {/* Time-travel — replay every action/token/decision, undo what allows */}
-          <Reveal>
-            <Card
-              title="Time-travel"
-              icon={<History size={15} />}
-              right={
-                <span className="text-[11px] text-zinc-500">
-                  every action this run took, newest first — undo what allows it
-                </span>
-              }
-            >
-              <TimeTravelFeed sessionId={id} />
             </Card>
           </Reveal>
 
           {/* Feedback — how did I do? */}
           <Reveal>
             <SessionFeedback sessionId={id} />
-          </Reveal>
-
-          {/* Evaluation */}
-          <Reveal>
-            <Card title="Evaluation" icon={<Gauge size={15} />}>
-              {evaluation.error && evaluation.error.status === 404 ? (
-                <Empty icon={<Gauge size={22} />}>No evaluation recorded for this session.</Empty>
-              ) : evaluation.loading && !evaluation.data ? (
-                <SkeletonRows rows={2} />
-              ) : evaluation.data ? (
-                <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
-                  <Stat label="Completion" value={pct(evaluation.data.completion)} accent />
-                  <Stat label="Tool success" value={pct(evaluation.data.tool_success_rate)} />
-                  <Stat label="Tool calls" value={evaluation.data.tool_calls} />
-                  <Stat label="Steps" value={evaluation.data.step_count} />
-                  <Stat label="Latency" value={`${num(evaluation.data.latency_s)}s`} />
-                </div>
-              ) : (
-                <Empty>No evaluation.</Empty>
-              )}
-            </Card>
           </Reveal>
 
           {/* Review (only when present) */}
@@ -889,117 +985,159 @@ export default function SessionDetailPage({
             </Reveal>
           )}
 
-          {/* Transcript: agent runs */}
+          {/* THE FULL RECORD (v1.354.0, G20). Everything above is the receipt:
+              what was asked, what it said, what it made, how long it took.
+              The raw record — every action (Time-travel, with its undo), the
+              evaluation, the agent-run and tool tables, the model calls — is
+              one quiet chevron below it, closed until asked for. The cards
+              are the same cards; only the fold is new. */}
           <Reveal>
-            <Card title={`Agent runs · ${runs.length}`} icon={<ListTree size={15} />}>
-              {runs.length === 0 ? (
-                <Empty>No agent runs.</Empty>
-              ) : (
-                <div className="-mx-1 overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead>
-                      <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                        <th className="px-2 py-2.5 font-medium">Run</th>
-                        <th className="px-2 py-2.5 font-medium">Agent</th>
-                        <th className="px-2 py-2.5 font-medium">State</th>
-                        <th className="px-2 py-2.5 font-medium">Steps</th>
-                        <th className="px-2 py-2.5 font-medium">Parent</th>
-                        <th className="px-2 py-2.5 font-medium">Result</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {runs.map((r) => (
-                        <tr
-                          key={r.id}
-                          className="border-b border-white/[0.04] align-top last:border-0 hover:bg-white/[0.02]"
-                        >
-                          <td className="px-2 py-2.5 font-mono text-[11px] text-zinc-500">
-                            {shortId(r.id)}
-                          </td>
-                          <td className="px-2 py-2.5 text-zinc-300">{r.agent_type}</td>
-                          <td className="px-2 py-2.5">
-                            <Badge value={r.state} />
-                          </td>
-                          <td className="px-2 py-2.5 text-zinc-400">{r.steps}</td>
-                          <td className="px-2 py-2.5 font-mono text-[11px] text-zinc-600">
-                            {r.parent_id ? shortId(r.parent_id) : "—"}
-                          </td>
-                          <td className="max-w-sm px-2 py-2.5 text-zinc-400">
-                            <span className="line-clamp-2">{r.result || "—"}</span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </Card>
+            <button
+              type="button"
+              data-testid="full-record-toggle"
+              aria-expanded={recordOpen}
+              aria-controls={recordId}
+              onClick={() => setRecordOpen((v) => !v)}
+              className="flex min-w-0 items-center gap-2 text-left text-[13px] leading-5 text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:underline focus-visible:underline-offset-[3px] focus-visible:outline-none motion-reduce:transition-none"
+            >
+              <ChevronRight
+                size={14}
+                aria-hidden="true"
+                className={`shrink-0 transition-transform motion-reduce:transition-none ${recordOpen ? "rotate-90" : ""}`}
+              />
+              <span className="font-medium text-zinc-400">Full record</span>
+              <span className="min-w-0 truncate">
+                · every action, with undo, the checks and the raw tables
+              </span>
+            </button>
           </Reveal>
+          {recordOpen && (
+            <div id={recordId} data-testid="full-record" className="space-y-6">
+              {/* Time-travel — replay every action/token/decision, undo what allows */}
+              <Card
+                title="Time-travel"
+                icon={<History size={15} />}
+                right={
+                  <span className="text-[11px] text-zinc-500">
+                    every action this run took, newest first — undo what allows it
+                  </span>
+                }
+              >
+                <TimeTravelFeed sessionId={id} />
+              </Card>
 
-          {/* Transcript: tool invocations */}
-          <Reveal>
-            <Card title={`Tool invocations · ${tools.length}`} icon={<Wrench size={15} />}>
-              {tools.length === 0 ? (
-                <Empty>No tool invocations.</Empty>
-              ) : (
-                <div className="-mx-1 overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead>
-                      <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                        <th className="px-2 py-2.5 font-medium">Tool</th>
-                        <th className="px-2 py-2.5 font-medium">Verdict</th>
-                        <th className="px-2 py-2.5 font-medium">OK</th>
-                        <th className="px-2 py-2.5 font-medium">Output</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tools.map((t) => (
-                        <tr
-                          key={t.id}
-                          className="border-b border-white/[0.04] align-top last:border-0 hover:bg-white/[0.02]"
-                        >
-                          <td className="px-2 py-2.5 font-mono text-zinc-200">{t.tool}</td>
-                          <td className="px-2 py-2.5">
-                            <Badge value={t.verdict} />
-                          </td>
-                          <td className="px-2 py-2.5">
-                            <Badge value={t.ok ? "ok" : "failed"} />
-                          </td>
-                          <td className="max-w-md px-2 py-2.5">
-                            <span className="line-clamp-2 font-mono text-xs text-zinc-400">
-                              {t.output || "—"}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </Card>
-          </Reveal>
+              {/* Evaluation */}
+              <Card title="Evaluation" icon={<Gauge size={15} />}>
+                {evaluation.error && evaluation.error.status === 404 ? (
+                  <Empty icon={<Gauge size={22} />}>No evaluation recorded for this session.</Empty>
+                ) : evaluation.loading && !evaluation.data ? (
+                  <SkeletonRows rows={2} />
+                ) : evaluation.data ? (
+                  <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
+                    <Stat label="Completion" value={pct(evaluation.data.completion)} accent />
+                    <Stat label="Tool success" value={pct(evaluation.data.tool_success_rate)} />
+                    <Stat label="Tool calls" value={evaluation.data.tool_calls} />
+                    <Stat label="Steps" value={evaluation.data.step_count} />
+                    <Stat label="Latency" value={`${num(evaluation.data.latency_s)}s`} />
+                  </div>
+                ) : (
+                  <Empty>No evaluation.</Empty>
+                )}
+              </Card>
 
-          <Reveal>
-            <TracesPanel sessionId={id} />
-          </Reveal>
+              {/* Transcript: agent runs */}
+              <Card title={`Agent runs · ${runs.length}`} icon={<ListTree size={15} />}>
+                {runs.length === 0 ? (
+                  <Empty>No agent runs.</Empty>
+                ) : (
+                  <div className="-mx-1 overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead>
+                        <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                          <th className="px-2 py-2.5 font-medium">Run</th>
+                          <th className="px-2 py-2.5 font-medium">Agent</th>
+                          <th className="px-2 py-2.5 font-medium">State</th>
+                          <th className="px-2 py-2.5 font-medium">Steps</th>
+                          <th className="px-2 py-2.5 font-medium">Parent</th>
+                          <th className="px-2 py-2.5 font-medium">Result</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {runs.map((r) => (
+                          <tr
+                            key={r.id}
+                            className="border-b border-white/[0.04] align-top last:border-0 hover:bg-white/[0.02]"
+                          >
+                            <td className="px-2 py-2.5 font-mono text-[11px] text-zinc-500">
+                              {shortId(r.id)}
+                            </td>
+                            <td className="px-2 py-2.5 text-zinc-300">{r.agent_type}</td>
+                            <td className="px-2 py-2.5">
+                              <Badge value={r.state} />
+                            </td>
+                            <td className="px-2 py-2.5 text-zinc-400">{r.steps}</td>
+                            <td className="px-2 py-2.5 font-mono text-[11px] text-zinc-600">
+                              {r.parent_id ? shortId(r.parent_id) : "—"}
+                            </td>
+                            <td className="max-w-sm px-2 py-2.5 text-zinc-400">
+                              <span className="line-clamp-2">{r.result || "—"}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Card>
+
+              {/* Transcript: tool invocations */}
+              <Card title={`Tool invocations · ${tools.length}`} icon={<Wrench size={15} />}>
+                {tools.length === 0 ? (
+                  <Empty>No tool invocations.</Empty>
+                ) : (
+                  <div className="-mx-1 overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead>
+                        <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                          <th className="px-2 py-2.5 font-medium">Tool</th>
+                          <th className="px-2 py-2.5 font-medium">Verdict</th>
+                          <th className="px-2 py-2.5 font-medium">OK</th>
+                          <th className="px-2 py-2.5 font-medium">Output</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tools.map((t) => (
+                          <tr
+                            key={t.id}
+                            className="border-b border-white/[0.04] align-top last:border-0 hover:bg-white/[0.02]"
+                          >
+                            <td className="px-2 py-2.5 font-mono text-zinc-200">{t.tool}</td>
+                            <td className="px-2 py-2.5">
+                              <Badge value={t.verdict} />
+                            </td>
+                            <td className="px-2 py-2.5">
+                              <Badge value={t.ok ? "ok" : "failed"} />
+                            </td>
+                            <td className="max-w-md px-2 py-2.5">
+                              <span className="line-clamp-2 font-mono text-xs text-zinc-400">
+                                {t.output || "—"}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Card>
+
+              <TracesPanel sessionId={id} />
+            </div>
+          )}
         </>
       ) : null}
     </PageShell>
   );
-}
-
-/** Compact, human-readable one-liner for a live event row. */
-function summarizeEvent(e: IJEvent): string {
-  const p = (e.payload || {}) as Record<string, unknown>;
-  const s = (k: string) => (p[k] == null ? "?" : String(p[k]));
-  if (e.type === "tool.executed") return `${s("tool")} → ${p.ok ? "ok" : "failed"}`;
-  if (e.type === "agent.state_changed") return `${s("from")} → ${s("to")}`;
-  if (e.type === "session.completed") return `status: ${s("status")}`;
-  try {
-    return JSON.stringify(p);
-  } catch {
-    return "";
-  }
 }
 
 function Meta({

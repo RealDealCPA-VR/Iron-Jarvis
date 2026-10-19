@@ -11,7 +11,8 @@ import {
  *  - a 401/403 fires the "unauthorized" signal (stale/missing bearer token),
  *  - a >=500 fires the "request error" signal (avoids a false "empty install"),
  *  - a successful DATA request clears both,
- *  - a network throw becomes `ApiError(status: 0)` ("daemon offline").
+ *  - a network throw becomes `ApiError(status: 0)` ("Iron Jarvis isn't responding" since
+ *    v1.354.0, G30; it said "daemon offline").
  * All offline: global fetch is stubbed, never touching the network.
  */
 
@@ -74,7 +75,7 @@ describe("api.ts error + auth signals", () => {
     offErr();
   });
 
-  it("maps a network failure to ApiError(status 0) 'daemon offline'", async () => {
+  it("maps a network failure to ApiError(status 0) 'Iron Jarvis isn't responding' (v1.354.0, G30)", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -84,7 +85,7 @@ describe("api.ts error + auth signals", () => {
 
     await expect(api("/health-ish")).rejects.toMatchObject({
       status: 0,
-      message: "daemon offline",
+      message: "Iron Jarvis isn't responding",
     });
   });
 });

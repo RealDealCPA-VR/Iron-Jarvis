@@ -12,6 +12,13 @@ import {
 } from "react";
 import Link from "next/link";
 import { DESKTOP_OFFLINE_HINT, isDesktopShell } from "@/lib/desktopShell";
+import { OFFLINE_SAVED_SENTENCE, OFFLINE_TITLE } from "@/lib/offlineWords";
+
+/** v1.354.0 (G30): the app's own words for an outage ("Iron Jarvis isn't
+ *  responding"), never "the daemon". Defined in lib/offlineWords (lib/api
+ *  and the chat stream need them too, and a lib must not import a
+ *  component); re-exported here beside the primitives that say them. */
+export { OFFLINE_WORDS, OFFLINE_TITLE, OFFLINE_SAVED_SENTENCE } from "@/lib/offlineWords";
 import {
   CircleCheck,
   CircleX,
@@ -494,7 +501,8 @@ export function OfflineHint({ detail }: { detail?: string }) {
     >
       <ServerCrash size={18} className="notice-warn-icon mt-0.5 shrink-0" aria-hidden="true" />
       <div className="text-sm">
-        <div className="notice-warn-title font-semibold">Daemon offline or unreachable.</div>
+        {/* v1.354.0 (G30): the app's name, never "Daemon offline". */}
+        <div className="notice-warn-title font-semibold">{OFFLINE_TITLE}</div>
         <div className="notice-warn-body mt-1">
           {/* v1.226.0: inside the desktop shell the daemon is supervised by
               Electron — the CLI line is wrong advice there. */}
@@ -509,6 +517,10 @@ export function OfflineHint({ detail }: { detail?: string }) {
             </>
           )}
           {detail ? ` — ${detail}` : null}
+          {/* v1.354.0 (G30): what was NOT affected. */}
+          <span data-testid="offline-saved" className="mt-1 block">
+            {OFFLINE_SAVED_SENTENCE}
+          </span>
         </div>
       </div>
     </div>

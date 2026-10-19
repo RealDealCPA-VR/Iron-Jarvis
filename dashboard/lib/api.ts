@@ -2,6 +2,9 @@
 // so `next build` never touches the daemon.
 
 import { NOT_MODIFIED, rememberEtag } from "./etag";
+// v1.354.0 (G30): a status-0 error says the app's name, never "daemon
+// offline" — every surface that prints `err.message` shows it.
+import { OFFLINE_WORDS } from "./offlineWords";
 
 export const API_BASE = (
   process.env.NEXT_PUBLIC_IJ_API || "http://127.0.0.1:8787"
@@ -190,7 +193,7 @@ export async function api<T>(path: string, init?: ApiInit): Promise<T> {
     // The /health poll is DaemonProvider's own probe: it judges misses itself
     // (FP4, two in a row), so its timeout must not restart that loop from here.
     if (path !== "/health") signalNetworkError();
-    throw new ApiError("daemon offline", 0);
+    throw new ApiError(OFFLINE_WORDS, 0);
   } finally {
     if (timer) clearTimeout(timer);
   }

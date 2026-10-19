@@ -231,3 +231,21 @@ export function stepPhraseText(p: StepPhrase): string {
   if (p.subject) return `${p.words} ${p.subject}`;
   return p.hint ? `${p.words} · ${p.hint}` : p.words;
 }
+
+/** Human wording for an agent run's phase (v1.149.0). An unknown phase falls
+ *  through to its raw name rather than a generic label — a new phase the
+ *  daemon adds should read oddly, not silently look like every other one.
+ *
+ *  v1.354.0 (G20): lifted out of the chat page so the run's own page says
+ *  the same words as the chat's helper-agent row ("Planning the work…",
+ *  never the raw "planning"). */
+export const PHASE_LABEL: Readonly<Record<string, string>> = {
+  planning: "Planning the work…",
+  running: "Working…",
+  verifying: "Checking its work…",
+  assembling: "Writing up the result…",
+};
+
+export function phaseLabel(phase: string): string {
+  return PHASE_LABEL[phase] ?? phase;
+}

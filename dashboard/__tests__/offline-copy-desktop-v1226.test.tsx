@@ -97,7 +97,7 @@ describe("offline copy inside the desktop shell (v1.226.0)", () => {
     D.online = false;
     setDesktop(true);
     render(<DaemonBanner />);
-    expect(screen.getByText(/Daemon offline\./)).toBeInTheDocument();
+    expect(screen.getByText(/Iron Jarvis isn't responding\./)).toBeInTheDocument();
     expect(screen.getByText(/restarting its local service/)).toBeInTheDocument();
     expect(screen.queryByText(/uv run ironjarvis serve/)).toBeNull();
     cleanup();

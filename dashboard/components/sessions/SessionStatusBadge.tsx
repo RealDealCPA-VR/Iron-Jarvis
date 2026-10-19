@@ -28,6 +28,21 @@ export interface OutcomeSource {
   status: string;
   outcome?: SessionOutcome | null;
   waiting_on?: SessionWaitingOn | null;
+  /** v1.354.0 (G20): set by the boot reconcile when a restart cut the run
+   *  off; cleared once it is continued or dismissed. */
+  interrupted_at?: string | null;
+}
+
+/** v1.354.0 (G20): "Interrupted" for a run a RESTART cut off (an update or a
+ *  crash), else null. The boot reconcile marks such a run failed and tags it
+ *  `interrupted_at`; it did not fail at its job, and it can be continued, so
+ *  it never wears a failure's red "Failed" while the tag stands. */
+export const INTERRUPTED_WORD = "Interrupted";
+
+export function interruptedLabel(session: OutcomeSource): string | null {
+  const s = (session.status ?? "").trim().toLowerCase();
+  if (s !== "failed") return null;
+  return session.interrupted_at ? INTERRUPTED_WORD : null;
 }
 
 /** "Done · needs you" / "Done · part failed", or null when the plain status
@@ -84,6 +99,14 @@ export function SessionStatusBadge({
     return (
       <span data-testid="session-waiting-chip" className="contents">
         <Badge value={waiting} tone="amber" keepCase variant={variant} />
+      </span>
+    );
+  }
+  const cut = interruptedLabel(session);
+  if (cut) {
+    return (
+      <span data-testid="session-interrupted-chip" className="contents">
+        <Badge value={cut} tone="amber" keepCase variant={variant} />
       </span>
     );
   }

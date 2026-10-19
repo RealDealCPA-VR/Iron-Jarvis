@@ -167,10 +167,16 @@ describe("U8 — chat controls explain themselves", () => {
 /* ---- U9 Sessions --------------------------------------------------------- */
 describe("U9 — sessions speak the user's words", () => {
   it("live-activity rows render the stepLabel words with the raw type on hover", () => {
+    // v1.354.0 (G20): the row's words come from ONE helper
+    // (components/sessions/runPageWords.liveEventWords), which still leads
+    // with stepLabel for the events it knows and puts a tool step in the
+    // chat's step words; the raw type stays on hover. Moved on purpose.
     const page = src("app/sessions/[id]/page.tsx");
-    expect(page).toContain('import { stepLabel } from "@/components/chat/stepLabel";');
-    expect(page).toContain("{stepLabel(e) ?? e.type}");
-    expect(page).toMatch(/title=\{e\.type\}>\s*\{stepLabel\(e\) \?\? e\.type\}/);
+    expect(page).toContain("const words = liveEventWords(e);");
+    expect(page).toMatch(/title=\{e\.type\}>\s*\{words\.label\}/);
+    const helper = src("components/sessions/runPageWords.ts");
+    expect(helper).toContain('import { stepLabel } from "@/components/chat/stepLabel";');
+    expect(helper).toContain("stepLabel(e) ?? humanSummary(e.type)");
   });
 
   it("Time-travel keeps its name and gains a one-line hint", () => {

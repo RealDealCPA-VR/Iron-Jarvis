@@ -477,6 +477,20 @@ Failed and its card says **Stopped** (grey, not red).
   up leftover folders** (the git worktrees failed or deleted sessions left
   behind). A session with no pending review no longer logs a 404 on every
   visit — the daemon answers `{"review": null}`.
+- **A run's page reads as a receipt** (v1.354.0): opening a run (from chat,
+  the board or the bell) shows what it was asked as the title — the run's
+  id sits behind a copy button — then what it said, what it made, which
+  agent and model ran it (a custom agent by its own name, a model server
+  you set up by the name the model menu gives it) and **Took 2 min 5 s**.
+  The live phase and steps use the chat's words ("Planning the work…",
+  "Read · read_file"), never raw ids or JSON. Time-travel, Evaluation,
+  the Agent runs and Tool invocations tables and Model calls sit under one
+  collapsed **Full record** chevron. **Back** returns to where you came
+  from. A run a restart (an update or a crash) cut off reads
+  **Interrupted** and says **Stopped when Iron Jarvis restarted**, with the
+  same **Continue** / **Dismiss** the bell offers: Continue resumes the
+  run's own conversation and the page follows the new run; a follow-up
+  typed in the box resumes it too.
 
 ### Documents
 Read/extract (PDF incl. scans — read on this PC first, a vision model only for
@@ -1723,7 +1737,8 @@ now it stops while you are not looking and catches up the moment you come back.
    render or a cold OneDrive folder can't freeze the app. Since v1.226.0 that
    includes notifications going out, project-knowledge lookups, and every
    run-record write, so a slow Slack or a busy database never shows up as
-   "Daemon offline".
+   "Iron Jarvis isn't responding" (the banner said "Daemon offline" before
+   v1.354.0).
 7. **Self-healing supervision (v1.226.0).** The desktop app watches the
    daemon's health every 30 s, not just its process: a daemon that is alive but
    wedged is restarted, a crash-restart gets the full boot grace, and a daemon
@@ -1784,7 +1799,11 @@ reads; it never writes, runs commands, or starts work on its own.
   type. Installed is not
   connected: the app asks the CLI itself (`claude auth status`, `codex
   login status`) and re-checks every couple of minutes.
-- **"Daemon offline"** → the desktop app restarts a crashed daemon by
+- **"Iron Jarvis isn't responding"** (it said "Daemon offline" before
+  v1.354.0; your chats and files are saved while it shows, and when the
+  service answers again the banner says **"Iron Jarvis is back."** for a
+  few seconds — plus "Anything it stopped is in the bell." when a restart
+  cut work off) → the desktop app restarts a crashed daemon by
   itself, and the banner needs two missed polls before it shows (one slow
   request never shows it; a search you superseded by typing is not counted
   as a miss). If it stays: quit from the tray and relaunch (or tray →

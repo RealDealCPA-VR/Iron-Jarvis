@@ -548,7 +548,7 @@ describe("honest failure states", () => {
     D.daemon.online = false;
     render(<PaneChat paneId="p1" cwd={CWD} />);
     expect(
-      screen.getByText(/Daemon offline or unreachable/i),
+      screen.getByText(/Iron Jarvis isn't responding/i),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Message")).toBeDisabled();
     expect(screen.getByLabelText("Send")).toBeDisabled();

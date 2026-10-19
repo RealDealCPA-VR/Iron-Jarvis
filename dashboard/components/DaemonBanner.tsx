@@ -4,11 +4,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // v1.250.0 (S-08): `m` + the layout's LazyMotion, so this banner no longer
 // pulls framer-motion's whole feature set into the shared chunk.
 import { AnimatePresence, m } from "framer-motion";
-import { FolderOpen, RefreshCw, RotateCcw, ServerCrash, ShieldAlert, X } from "lucide-react";
+import { CircleCheck, FolderOpen, RefreshCw, RotateCcw, ServerCrash, ShieldAlert, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { API_BASE } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
+import { useInterruptedJobs } from "@/components/InterruptedJobs";
+import {
+  BACK_LINGER_MS,
+  BACK_STOPPED_LINE,
+  BACK_TITLE,
+  OFFLINE_SAVED_SENTENCE,
+  OFFLINE_TITLE,
+  PART_FAILED_TITLE,
+  SIGNED_OUT_TITLE,
+} from "@/lib/offlineWords";
 import {
   DESKTOP_NOT_ANSWERING_HINT,
   DESKTOP_OFFLINE_HINT,
@@ -97,6 +107,20 @@ function DesktopOfflineWords({
   );
 }
 
+/** v1.354.0 (G31): "Anything it stopped is in the bell." — only when the
+ *  restart really cut work off. Mounted only while the "back" line shows, so
+ *  it reads GET /sessions/interrupted once (the bell's own list and hook —
+ *  never a second source), and says nothing when there is nothing. */
+function BackStoppedLine() {
+  const { jobs } = useInterruptedJobs();
+  if (!jobs.length) return null;
+  return (
+    <span data-testid="daemon-banner-back-bell" className="text-zinc-400">
+      {BACK_STOPPED_LINE}
+    </span>
+  );
+}
+
 /**
  * A single, app-wide banner shown when the daemon can't be reached. Dismissible
  * for the current view; reappears on the next route load if still offline.
@@ -143,6 +167,30 @@ export function DaemonBanner() {
   useEffect(() => {
     if (online) setRetrying(false);
   }, [online]);
+
+  // v1.354.0 (G31): COMING BACK IS VISIBLE. The banner used to just vanish
+  // when the service answered again, so a user who had watched it go down
+  // never saw it return. Only a real outage counts: the first /health of a
+  // page load (still `checking`) is not a return, and neither is a token or
+  // request problem.
+  const wasOfflineRef = useRef(false);
+  const [back, setBack] = useState(false);
+  useEffect(() => {
+    if (state === "offline") {
+      wasOfflineRef.current = true;
+      setBack(false);
+      return;
+    }
+    if (online && !checking && wasOfflineRef.current) {
+      wasOfflineRef.current = false;
+      setBack(true);
+    }
+  }, [state, online, checking]);
+  useEffect(() => {
+    if (!back) return;
+    const t = window.setTimeout(() => setBack(false), BACK_LINGER_MS);
+    return () => window.clearTimeout(t);
+  }, [back]);
 
   // Gate on the dismissed-state too, or the X buttons do nothing (the useEffect
   // above re-shows the banner when a DIFFERENT problem appears by clearing dismiss).
@@ -238,6 +286,28 @@ export function DaemonBanner() {
 
   return (
     <AnimatePresence>
+      {/* v1.354.0 (G31): one quiet line for a few seconds when Iron Jarvis
+          answers again after an outage — no box, the theme's success tone on
+          the icon only. A screen reader hears it (role=status, polite). */}
+      {back && !state && (
+        <m.div
+          key="daemon-back"
+          role="status"
+          aria-live="polite"
+          data-testid="daemon-banner-back"
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: "auto", opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+          className="overflow-hidden border-b hairline"
+        >
+          <div className="flex items-center gap-2.5 px-6 py-2 text-sm lg:px-10">
+            <CircleCheck size={15} className="shrink-0 text-tone-success" aria-hidden="true" />
+            <span className="font-medium text-zinc-200">{BACK_TITLE}</span>
+            <BackStoppedLine />
+          </div>
+        </m.div>
+      )}
       {showOffline && (
         <m.div
           role="status"
@@ -253,7 +323,8 @@ export function DaemonBanner() {
           <div className="flex items-center gap-3 px-6 py-2.5 lg:px-10">
             <ServerCrash size={16} className="notice-warn-icon shrink-0" aria-hidden="true" />
             <div className="min-w-0 flex-1 text-sm">
-              <span className="notice-warn-title font-semibold">Daemon offline.</span>{" "}
+              {/* v1.354.0 (G30): the app's own name, never "Daemon offline." */}
+              <span className="notice-warn-title font-semibold">{OFFLINE_TITLE}</span>{" "}
               <span className="notice-warn-body">
                 {/* v1.226.0: the packaged app supervises its own daemon — the
                     CLI line only makes sense in a browser tab. */}
@@ -266,7 +337,9 @@ export function DaemonBanner() {
                       uv run ironjarvis serve --port {port} --root .
                     </code>
                   </>
-                )}
+                )}{" "}
+                {/* v1.354.0 (G30): what was NOT affected, in every state. */}
+                <span data-testid="daemon-banner-saved">{OFFLINE_SAVED_SENTENCE}</span>
                 {shellNote && (
                   <span data-testid="daemon-restart-note" className="mt-1 block">
                     {shellNote}
@@ -340,12 +413,13 @@ export function DaemonBanner() {
           <div className="flex items-center gap-3 px-6 py-2.5 lg:px-10">
             <ShieldAlert size={16} className="shrink-0 text-rose-300" aria-hidden="true" />
             <div className="min-w-0 flex-1 text-sm text-rose-100/90">
-              <span className="font-semibold text-rose-200">Daemon rejected your token.</span>{" "}
+              {/* v1.354.0 (G30): was "Daemon rejected your token." */}
+              <span className="font-semibold text-rose-200">{SIGNED_OUT_TITLE}</span>{" "}
               <span className="text-rose-100/70">
                 {isDesktopShell() ? (
                   <>
-                    The daemon is running but your access token is missing or stale — data
-                    below may look empty. Re-enter it to reconnect.
+                    Iron Jarvis is running, but this window&apos;s access token is missing or
+                    out of date — data below may look empty. Re-enter it to reconnect.
                   </>
                 ) : (
                   /* v1.264.0: the add-on's Open Jarvis button lands here — a
@@ -399,10 +473,10 @@ export function DaemonBanner() {
           <div className="flex items-center gap-3 px-6 py-2.5 lg:px-10">
             <ServerCrash size={16} className="shrink-0 text-amber-300" aria-hidden="true" />
             <div className="min-w-0 flex-1 text-sm text-amber-100/90">
-              <span className="font-semibold text-amber-200">A request to the daemon failed.</span>{" "}
+              {/* v1.354.0 (G30): was "A request to the daemon failed." */}
+              <span className="font-semibold text-amber-200">{PART_FAILED_TITLE}</span>{" "}
               <span className="text-amber-100/70">
-                Some data below may be incomplete or out of date. It will refresh on the
-                next poll — reload if it persists.
+                Some of what is below may be out of date — reload if it stays.
               </span>
             </div>
             <button

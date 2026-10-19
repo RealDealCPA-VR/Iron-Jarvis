@@ -50,7 +50,7 @@ describe("ApiError message for a pydantic 422 (v1.226.0)", () => {
         throw new TypeError("Failed to fetch");
       }),
     );
-    await expect(api("/settings")).rejects.toMatchObject({ status: 0, message: "daemon offline" });
+    await expect(api("/settings")).rejects.toMatchObject({ status: 0, message: "Iron Jarvis isn't responding" });
     expect(fired).toBe(1);
     off();
     // A 500 is NOT a network error — the listener stays quiet.

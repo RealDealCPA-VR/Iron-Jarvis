@@ -495,8 +495,11 @@ def test_the_reload_wait_loops_on_the_error_page_pauses_when_capped_and_rearms_o
 
 def test_the_handbook_troubleshooting_bullet_names_the_cap_and_the_tray_restart():
     hb = (_ROOT / "docs" / "HANDBOOK.md").read_text(encoding="utf-8")
-    m = re.search(r'\*\*"Daemon offline"\*\*(.{0,1600}?)\n- \*\*', hb, re.S)
-    assert m, "the 'Daemon offline' troubleshooting bullet moved"
+    # v1.354.0 (G30): the banner, and so the bullet, says "Iron Jarvis isn't
+    # responding" (it said "Daemon offline"); the bullet grew the back-online
+    # words, so the window grew with it.
+    m = re.search(r'\*\*"Iron Jarvis isn\'t responding"\*\*(.{0,2200}?)\n- \*\*', hb, re.S)
+    assert m, "the 'Iron Jarvis isn't responding' troubleshooting bullet moved"
     bullet = m.group(1)
     assert "Restart Iron Jarvis" in bullet, "the tray Restart item is not documented"
     assert "10" in bullet and "15 minutes" in bullet, "the cap is not documented"

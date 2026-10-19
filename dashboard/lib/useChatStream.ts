@@ -32,6 +32,8 @@
 
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { API_BASE, ApiError, flattenDetail, ijToken } from "./api";
+// v1.354.0 (G30): a chat bubble says "Iron Jarvis", never "the daemon".
+import { OFFLINE_WORDS } from "./offlineWords";
 import { turnUsageFrom, type TurnUsage, type WorkflowDraft } from "@/lib/types";
 import { decodeSuggestion, type ChatSuggestion } from "./preferences";
 import { decodeConfigCards, type ConfigCard } from "./configCards";
@@ -833,7 +835,7 @@ export const STREAM_PREP_MS = 10 * 60_000;
 
 export function stallDetail(ms: number): string {
   return (
-    `Nothing arrived from the daemon for ${Math.round(ms / 1000)} s, so this ` +
+    `Nothing came back from Iron Jarvis for ${Math.round(ms / 1000)} s, so this ` +
     "turn was stopped. Anything it already finished is kept — press Retry to " +
     "run it again."
   );
@@ -841,7 +843,7 @@ export function stallDetail(ms: number): string {
 
 export function prepDetail(ms: number): string {
   return (
-    `The daemon spent over ${Math.max(1, Math.round(ms / 60_000))} minutes ` +
+    `Iron Jarvis spent over ${Math.max(1, Math.round(ms / 60_000))} minutes ` +
     "preparing this turn without starting it, so it was stopped. Press Retry, " +
     "or attach fewer or smaller files."
   );
@@ -912,7 +914,7 @@ export async function* streamSSE(
       // A genuine transport failure (daemon unreachable) — flagged `offline` so the
       // caller can distinguish it from an in-band provider `error` frame (which also
       // carries status 0 but is NOT an offline condition).
-      yield { type: "error", detail: "daemon offline", status: 0, offline: true };
+      yield { type: "error", detail: OFFLINE_WORDS, status: 0, offline: true };
       return;
     } finally {
       clearTimeout(prepTimer);
@@ -976,7 +978,7 @@ export async function* streamSSE(
           // OfflineHint instead of raw transport text. Scoped to the transport
           // call only: a parser fault on a bad frame (below) is NOT offline.
           if (!isAbort(e)) {
-            yield { type: "error", detail: "daemon offline", status: 0, offline: true };
+            yield { type: "error", detail: OFFLINE_WORDS, status: 0, offline: true };
           }
           return;
         }

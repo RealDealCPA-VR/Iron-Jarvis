@@ -583,7 +583,7 @@ describe("Self-development — switched off reads as 'Turned off', not a config 
   it("daemon down: offline notice, never 'Turned off'", () => {
     S.errors["/self-dev"] = 0;
     render(<SelfDevPage />);
-    expect(screen.getByText(/Daemon offline or unreachable/)).toBeInTheDocument();
+    expect(screen.getByText(/Iron Jarvis isn't responding/)).toBeInTheDocument();
     expect(screen.queryByText("Turned off")).toBeNull();
   });
 

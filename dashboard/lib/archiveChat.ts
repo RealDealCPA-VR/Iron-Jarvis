@@ -13,6 +13,7 @@
 // export lists, and the page tests can stub this one request on its own.
 
 import { API_BASE, ApiError, ijToken, post } from "@/lib/api";
+import { OFFLINE_WORDS } from "@/lib/offlineWords";
 
 /** The archived chats, newest first (the daemon caps the list at 100). */
 export const ARCHIVED_THREADS_PATH = "/chat/threads?archived=only";
@@ -68,7 +69,7 @@ export async function archiveChat(id: string, stop = false): Promise<ArchiveOutc
       body: JSON.stringify(stop ? { stop: true } : {}),
     });
   } catch {
-    throw new ApiError("daemon offline", 0);
+    throw new ApiError(OFFLINE_WORDS, 0);
   }
   let body: Record<string, unknown> = {};
   try {
