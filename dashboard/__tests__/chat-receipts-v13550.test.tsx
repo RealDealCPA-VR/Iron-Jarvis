@@ -31,6 +31,7 @@ import {
 } from "@/lib/turnRecovery";
 import {
   NO_REPLY_BACK_MARK,
+  OLD_NO_REPLY_BACK_MARK,
   isNoReplyBack,
   panelAskedAt,
   panelReplyMs,
@@ -366,5 +367,27 @@ describe("G62: agent replies get a receipt line and a pending state", () => {
       "utf8",
     ).replace(/\r\n/g, "\n");
     expect(py).toContain(`NO_REPLY_BACK_MARK = "${NO_REPLY_BACK_MARK}"`);
+  });
+
+  it("fix round: the daemon no longer says the old message-back-off words anywhere", () => {
+    // The page reads OLD_NO_REPLY_BACK_MARK as "this answer will never come
+    // back" so a chat saved by v1.285.0-v1.354.0 never waits forever. That
+    // is only safe while the daemon's LIVE lines never use those words: a
+    // message-back-ON line that did would never show its wait.
+    const py = readFileSync(
+      join(process.cwd(), "..", "src", "iron_jarvis", "agents", "threads.py"),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    expect(OLD_NO_REPLY_BACK_MARK).toBe("will report back on its own side");
+    expect(py).not.toContain("on its own side");
+    // The message-back-ON line the daemon writes today is not read as one.
+    expect(py).toContain('has the task and will report back here when it has "');
+    const on = {
+      role: "assistant",
+      panelWho: "remote:hermes",
+      panelKind: "progress",
+      content: "hermes has the task and will report back here when it has something.",
+    };
+    expect(isNoReplyBack(on)).toBe(false);
   });
 });
