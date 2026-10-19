@@ -326,6 +326,9 @@ def test_sign_in_opens_a_pane_running_the_packs_own_program_with_its_settings(
     the Microsoft authority the pack will use. MUTATION: drop the env hand-off
     in launch_pane -> the shell has no ENABLED_TOOLS (red)."""
     _program_on_path(monkeypatch)
+    # Whatever pane this suite itself runs in, the sign-in pane's CLI marker
+    # must come from the launch alone.
+    monkeypatch.delenv("IRONJARVIS_PANE_CLI", raising=False)
     assert _connect(client, answer).status_code == 200
     row = _row(client)
     assert row["status"] == "connected" and row["tools_loaded"] == 24
@@ -342,8 +345,15 @@ def test_sign_in_opens_a_pane_running_the_packs_own_program_with_its_settings(
     pane = r.json()
     assert pane["name"] == f"Microsoft sign-in · {account}"
     assert pane.get("agent_cli") in (None, ""), "an app sign-in is not an AI CLI"
+    # review: the row's `agent_cli` is the CLASSIFIER's answer (an unknown id
+    # reads as None either way), so pin what the launch STORED — the pane is
+    # a plain shell (no CLI marker, no Resume offer after a restart).
+    # MUTATION: the old `cat.get("agent_cli") or cli_id` -> red.
+    session = _platform(client).terminals.get(pane["id"])
+    assert session is not None and session.agent_cli is None
 
     shell = _backend_of(pane["id"])
+    assert "IRONJARVIS_PANE_CLI" not in shell.env
     cfg = _saved(client)
     assert shell.written == ["npx -y @softeria/ms-365-mcp-server --login\r"]
     assert shell.written[0].rstrip("\r").split(" ") == [cfg["command"], *cfg["args"], "--login"]
