@@ -3976,6 +3976,13 @@ export default function ChatPage() {
   // the connect doors use; a pane that opened refreshes /health so the
   // provider turns green by itself once the user finishes there.
   const { signIn: cliSignIns, start: startCliSignIn } = useCliSignIn(() => daemonRefreshForFix());
+  // v1.355.0 review (G29): the pane hint and a launch error belong to the
+  // FAILURE the press was made for. Each failure writes a NEW
+  // `errorTechRef` object, so its identity is that failure's: a later one (a
+  // Retry that failed again, a sign-in that expired again hours later)
+  // offers Sign in afresh instead of pointing at a pane that may be gone.
+  const [signInFor, setSignInFor] = useState<object | null>(null);
+  const signInHere = !!errFacts && signInFor === errFacts;
   const [offline, setOffline] = useState(false);
   // v1.354.0 (G31): the chat's own offline hint clears BY ITSELF when Iron
   // Jarvis answers again. It used to stay until the user sent, retried or
@@ -12395,15 +12402,18 @@ export default function ChatPage() {
                             consent). A refused key: a link to where keys
                             live. Retry stays beside it, unchanged. */}
                         {failedTurn && !busy && turnFix?.kind === "sign_in" &&
-                          cliSignIns[turnFix.cli.cli]?.paneId === undefined && (
+                          !(signInHere && cliSignIns[turnFix.cli.cli]?.paneId !== undefined) && (
                           <button
                             type="button"
                             data-testid="chat-turn-sign-in"
-                            onClick={() => void startCliSignIn(turnFix.cli)}
-                            disabled={!!cliSignIns[turnFix.cli.cli]?.busy}
+                            onClick={() => {
+                              setSignInFor(errFacts);
+                              void startCliSignIn(turnFix.cli);
+                            }}
+                            disabled={signInHere && !!cliSignIns[turnFix.cli.cli]?.busy}
                             className={CALM_GHOST_BTN}
                           >
-                            {cliSignIns[turnFix.cli.cli]?.busy ? (
+                            {signInHere && cliSignIns[turnFix.cli.cli]?.busy ? (
                               <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden />
                             ) : (
                               <LogIn size={13} aria-hidden />
@@ -12486,7 +12496,7 @@ export default function ChatPage() {
                         )}
                         {/* v1.355.0 (G29): after the Sign in press, what to do
                             in the pane it opened (per CLI), and the way to it. */}
-                        {failedTurn && !busy && turnFix?.kind === "sign_in" &&
+                        {failedTurn && !busy && turnFix?.kind === "sign_in" && signInHere &&
                           cliSignIns[turnFix.cli.cli]?.paneId !== undefined && (
                           <div data-testid="chat-turn-sign-in-hint" className="basis-full text-[12px] leading-5 text-zinc-400">
                             A Build pane opened with {turnFix.cli.name} running.{" "}
@@ -12508,7 +12518,7 @@ export default function ChatPage() {
                             </Link>
                           </div>
                         )}
-                        {failedTurn && !busy && turnFix?.kind === "sign_in" &&
+                        {failedTurn && !busy && turnFix?.kind === "sign_in" && signInHere &&
                           cliSignIns[turnFix.cli.cli]?.error && (
                           <div role="alert" className="basis-full text-[12px] leading-5 text-tone-danger">
                             {cliSignIns[turnFix.cli.cli]?.error}

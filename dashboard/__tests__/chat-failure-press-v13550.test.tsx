@@ -314,6 +314,28 @@ describe("G29: the failure line has a headline, folded details and the fix press
     await waitFor(() => expect(H.stream.bodies.length).toBe(before + 1));
   });
 
+  it("review: a failure after the pane opened offers Sign in again, never the old pane's hint", async () => {
+    H.api.postResponses["/terminals/launch"] = { id: "pane_9" };
+    render(<ChatPage />);
+    const signedOut = () => failure({ ...SIGNED_OUT, fixKind: "sign_in", fixProvider: "claude-cli" });
+    await failTurn(signedOut());
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude Code" }));
+    await screen.findByTestId("chat-turn-sign-in-hint");
+    expect(screen.queryByTestId("chat-turn-sign-in")).toBeNull();
+
+    // The user closed that pane without signing in and pressed Retry; the
+    // same refusal comes back. This is a NEW failure: the press is offered
+    // again, and nothing points at the pane the first press opened.
+    const before = H.stream.bodies.length;
+    fireEvent.click(screen.getByRole("button", { name: /^Retry$/ }));
+    await waitFor(() => expect(H.stream.bodies.length).toBe(before + 1));
+    await waitFor(() => expect(H.stream.settle).not.toBeNull());
+    act(() => H.stream.fail(signedOut()));
+    expect(await screen.findByRole("button", { name: "Sign in to Claude Code" })).toBeTruthy();
+    expect(screen.queryByTestId("chat-turn-sign-in-hint")).toBeNull();
+    expect(screen.getByTestId("chat-turn-error").textContent).toBe("Claude Code isn't signed in");
+  });
+
   it("with no typed press, /health saying the turn's CLI is signed out still offers Sign in", async () => {
     H.health.defaultProvider = "anthropic";
     H.daemon.health = {
