@@ -323,7 +323,7 @@ describe("the sidebar footer", () => {
     expect(screen.queryByRole("dialog", { name: "Running now" })).toBeNull();
   });
 
-  it("a run that starts while it is open is read at once (the orb's own in-flight rule)", async () => {
+  it("a run that starts while it is open is read at once (any new start frame re-reads the list)", async () => {
     seedRunning();
     wrap(<AppSidebar />);
     act(() => socket().open());
