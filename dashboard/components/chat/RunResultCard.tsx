@@ -15,9 +15,10 @@
  * says something is genuinely reversible.
  */
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   CheckCircle2,
+  CircleStop,
   XCircle,
   FilePlus2,
   FilePen,
@@ -31,6 +32,11 @@ import {
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import type { SessionOutcome } from "@/lib/types";
+import { atStepLimit } from "@/lib/agentRun";
+import { runActionLines, stepFailedWords } from "@/lib/runWords";
+import { friendlyModelName } from "@/lib/friendlyModelName";
+import { providerDisplay } from "@/lib/onboarding";
+import { secondsText } from "@/components/chat/TurnReceipt";
 
 export interface RunResult {
   found: boolean;
@@ -63,8 +69,9 @@ export interface RunResult {
    *  case: 24 rename calls "completed" with every one of them never approved,
    *  and this card said "Task complete". */
   unanswered_asks?: number;
-  // v1.351.0 (G18) — the receipt's who / on what / where / what it did. Not
-  // rendered yet (wave 2). On every result:
+  // v1.351.0 (G18) — the receipt's who / on what / where / what it did.
+  // v1.352.0 (G19): the card names the model and says the route note. On
+  // every result:
   /** The served provider and model the run's row recorded. */
   provider?: string;
   model?: string;
@@ -83,12 +90,30 @@ export interface RunResult {
   activity?: { at: string; who: string; session_id: string; text: string; tone: string }[];
 }
 
-const FAILED = new Set(["failed", "cancelled"]);
+/**
+ * v1.352.0 (G16): how the run ENDED, in one of four looks. A run the user
+ * STOPPED is not a failure: it reads "Stopped" with the neutral border and a
+ * quiet stop icon (the mission screen's word for the same state), where it
+ * used to arrive as a red "Task failed" over "Session cancelled by the
+ * user.". A run that ran out of steps reads "Stopped at its step limit" in
+ * the warn tone: the job is unfinished, but nothing broke. Only a FAILED run
+ * (and not at its step limit) is red.
+ */
+export type RunEnd = "failed" | "stopped" | "step_limit" | "other";
+
+export function runEnd(result: Pick<RunResult, "status" | "summary">): RunEnd {
+  if (result.status === "cancelled") return "stopped";
+  if (result.status === "failed") return atStepLimit(result.summary) ? "step_limit" : "failed";
+  return "other";
+}
 
 /** The headline, as a pure function so the words are testable. A "completed"
  *  status is NOT "Task complete" when the ledger says the job fell short. */
 export function resultHeadline(result: RunResult): string {
-  if (FAILED.has(result.status)) return "Task failed";
+  const end = runEnd(result);
+  if (end === "stopped") return "Stopped";
+  if (end === "step_limit") return "Stopped at its step limit";
+  if (end === "failed") return "Task failed";
   const asks = result.unanswered_asks ?? 0;
   if (asks > 0) {
     return `Finished — ${asks} call${asks === 1 ? " was" : "s were"} never approved`;
@@ -137,6 +162,53 @@ function Row({
   );
 }
 
+/**
+ * v1.352.0 (G19): the line under the headline, "answered by Opus 5.5 ·
+ * 2 min 5 s · 6 steps · 83 tool calls". Who served the run comes first, in
+ * the name the reply's own receipt uses (lib/friendlyModelName; the provider
+ * and the raw id stay in its title); the length reads like every other
+ * duration in the chat (TurnReceipt secondsText: "10 min 57 s", never
+ * "656.8s"). A run that did not finish "ran on" its model. An older result
+ * with no provider says nothing about who, exactly as before.
+ */
+export function RunMeta({ result }: { result: RunResult }) {
+  const parts: ReactNode[] = [];
+  const provider = (result.provider ?? "").trim();
+  const model = (result.model ?? "").trim();
+  const who =
+    provider === "mock"
+      ? providerDisplay("mock")
+      : model
+        ? friendlyModelName(model)
+        : providerDisplay(provider);
+  if (who) {
+    const title = [providerDisplay(provider), model].filter(Boolean).join(" · ");
+    parts.push(
+      <span data-testid="run-result-model" title={title || undefined}>
+        {result.status === "completed" ? "answered by" : "ran on"}{" "}
+        <span className="text-zinc-400">{who}</span>
+      </span>,
+    );
+  }
+  const dur =
+    typeof result.duration_s === "number" ? secondsText(result.duration_s * 1000) : null;
+  if (dur) parts.push(dur);
+  if (result.steps > 0) parts.push(`${result.steps} step${result.steps === 1 ? "" : "s"}`);
+  const calls = result.tools_used.reduce((n, t) => n + t.count, 0);
+  if (calls > 0) parts.push(`${calls} tool call${calls === 1 ? "" : "s"}`);
+  if (!parts.length) return null;
+  return (
+    <div data-testid="run-result-meta" className="mt-0.5 text-[12px] text-zinc-500">
+      {parts.map((p, i) => (
+        <span key={i}>
+          {i > 0 ? " · " : ""}
+          {p}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export function RunResultCard({
   result,
   onRetry,
@@ -153,15 +225,24 @@ export function RunResultCard({
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
 
-  const failed = FAILED.has(result.status);
+  const end = runEnd(result);
+  const failed = end === "failed";
+  const stopped = end === "stopped";
+  const atLimit = end === "step_limit";
+  // v1.352.0 (G16): a run that ended early (stopped, or at its step limit)
+  // is neither the red failure nor a "finished" run the notes below judge.
+  const endedEarly = failed || stopped || atLimit;
   const didNothing = !result.tools_used.length;
   const canRevert = result.revertable > 0;
   // Finished, but short of the job (v1.227.0): amber, never the green tick.
   const short =
-    !failed &&
+    !endedEarly &&
     ((result.unanswered_asks ?? 0) > 0 ||
       result.outcome === "needs_you" ||
       result.outcome === "completed_with_failures");
+
+  // v1.352.0 (G19): the run's work in words, counted per tool.
+  const actions = runActionLines(result.tools_used, result.tools_failed);
 
   async function revert() {
     setBusy("revert");
@@ -209,13 +290,23 @@ export function RunResultCard({
     >
       <div className="flex items-start gap-2.5 border-b border-white/[0.05] px-3.5 py-2.5">
         <span
+          data-testid="run-result-icon"
+          data-end={end}
           className={`mt-0.5 shrink-0 ${
-            failed ? "text-tone-danger" : short ? "text-tone-warn" : "text-tone-success"
+            failed
+              ? "text-tone-danger"
+              : stopped
+                ? "text-zinc-500"
+                : short || atLimit
+                  ? "text-tone-warn"
+                  : "text-tone-success"
           }`}
         >
           {failed ? (
             <XCircle size={15} />
-          ) : short ? (
+          ) : stopped ? (
+            <CircleStop size={15} />
+          ) : short || atLimit ? (
             <AlertTriangle size={15} />
           ) : (
             <CheckCircle2 size={15} />
@@ -225,21 +316,24 @@ export function RunResultCard({
           <div className="text-[13px] font-medium text-zinc-200" data-testid="run-result-headline">
             {resultHeadline(result)}
           </div>
-          <div className="mt-0.5 text-[12px] text-zinc-500">
-            {result.steps > 0 && `${result.steps} step${result.steps === 1 ? "" : "s"}`}
-            {result.duration_s != null && ` · ${result.duration_s.toFixed(1)}s`}
-            {result.tools_used.length > 0 &&
-              ` · ${result.tools_used.reduce((n, t) => n + t.count, 0)} tool call${
-                result.tools_used.reduce((n, t) => n + t.count, 0) === 1 ? "" : "s"
-              }`}
-          </div>
+          <RunMeta result={result} />
+          {/* v1.352.0 (G19): the run's model failed over or was refused, in
+              the mission screen's own sentence, under the headline. */}
+          {result.route_note ? (
+            <div
+              data-testid="run-result-route-note"
+              className="mt-0.5 text-[12px] leading-relaxed text-tone-warn"
+            >
+              {result.route_note}
+            </div>
+          ) : null}
         </div>
       </div>
 
       <div className="space-y-2.5 px-3.5 py-3">
         {/* The honesty case this card exists for: a run that completed without
             touching a single tool is an agent that TALKED about the work. */}
-        {didNothing && !failed && (
+        {didNothing && !endedEarly && (
           <div className="rounded-lg border border-tone-warn/25 bg-tone-warn/[0.06] px-2.5 py-2 text-[12px] leading-relaxed text-tone-warn">
             No tools ran and no files changed — this turn described the work
             rather than doing it. Ask again more concretely, or check that the
@@ -270,7 +364,7 @@ export function RunResultCard({
           total={result.files_changed_total}
         />
 
-        {result.tools_used.length > 0 && (
+        {actions.length > 0 && (
           <div className="flex gap-2">
             <span className="mt-0.5 shrink-0 text-zinc-500">
               <Wrench size={13} />
@@ -279,25 +373,26 @@ export function RunResultCard({
               <div className="text-[11px] uppercase tracking-[0.1em] text-zinc-500">
                 Tools
               </div>
+              {/* v1.352.0 (G19): what the steps DID, in words (lib/runWords:
+                  "Searched your chats 83 times"), the calls that failed
+                  counted apart ("One memory lookup failed"); the tool's own
+                  id stays in the chip's title, the record of what ran. */}
               <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-1">
-                {result.tools_used.map((t) => {
-                  const bad = result.tools_failed.find((f) => f.tool === t.tool);
-                  return (
-                    <span
-                      key={t.tool}
-                      className={`rounded px-1.5 py-0.5 font-mono text-[12px] ${
-                        bad
-                          ? "bg-tone-danger/10 text-tone-danger"
-                          : "bg-white/[0.04] text-zinc-300"
-                      }`}
-                      title={bad ? `${bad.count} failed` : undefined}
-                    >
-                      {t.tool}
-                      {t.count > 1 && ` ×${t.count}`}
-                      {bad && ` · ${bad.count} failed`}
-                    </span>
-                  );
-                })}
+                {actions.map((a, i) => (
+                  <span
+                    key={`${a.tool}-${a.failed ? "x" : "ok"}-${i}`}
+                    data-testid="run-result-tool"
+                    data-failed={a.failed ? "true" : undefined}
+                    className={`rounded px-1.5 py-0.5 text-[12px] ${
+                      a.failed
+                        ? "bg-tone-danger/10 text-tone-danger"
+                        : "bg-white/[0.04] text-zinc-300"
+                    }`}
+                    title={a.tool}
+                  >
+                    {a.text}
+                  </span>
+                ))}
               </div>
             </div>
           </div>
@@ -319,12 +414,24 @@ export function RunResultCard({
                 {result.errors.map((e, i) => (
                   <div
                     key={i}
+                    data-testid="run-result-error"
                     className="rounded-lg border border-tone-danger/20 bg-tone-danger/[0.05] px-2.5 py-1.5"
                   >
-                    <div className="font-mono text-[11px] text-tone-danger">{e.tool}</div>
-                    <div className="mt-0.5 whitespace-pre-wrap break-words text-[12px] text-zinc-400">
-                      {e.error}
-                    </div>
+                    {/* v1.352.0 (G19): the step in words first ("Memory
+                        lookup failed"); what the tool said stays one press
+                        away, folded (a native disclosure: Enter / Space open
+                        it, a screen reader hears it); its id in the title. */}
+                    <details>
+                      <summary title={e.tool} className="cursor-pointer text-[12px] text-tone-danger">
+                        {stepFailedWords(e.tool)}
+                      </summary>
+                      <div
+                        data-testid="run-result-error-raw"
+                        className="mt-0.5 whitespace-pre-wrap break-words text-[12px] text-zinc-400"
+                      >
+                        {e.error}
+                      </div>
+                    </details>
                   </div>
                 ))}
               </div>

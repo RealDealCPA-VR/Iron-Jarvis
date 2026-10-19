@@ -349,13 +349,17 @@ import { answeredModelName as answeredModelNameFor } from "@/lib/answeredModel";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 // v1.349.0 (lane B2): the helper-agent row (live + settled) and its facts.
 import { AgentRunLive, AgentRunSettled, HandOffLine } from "@/components/chat/AgentRunRow";
+// v1.352.0 (G19): what a settled run did, inside that row's opened body.
+import { AgentRunReceipt } from "@/components/chat/AgentRunReceipt";
 import {
   agentRunName,
   handOffFor,
   handOffSentence,
   readAgentRun,
+  remoteName,
   settleHandOff,
   stampMs,
+  stopHandOff,
   type AgentRunStamp,
 } from "@/lib/agentRun";
 // v1.350.0 (lane C1): the live plan checklist in that row.
@@ -572,6 +576,10 @@ interface ChatMessage {
    *  "your invoice-chaser agent") — only set when a NON-default roster target
    *  was actually chosen (v1.139.0), so the bubble names the specialist. */
   escalatedTo?: string;
+  /** v1.352.0 (G19): the REMOTE agent the chat picked for this hand-off,
+   *  when the pick could not be honoured (a remote has no session here): the
+   *  line says the work runs on this PC and names the @ that reaches it. */
+  droppedRemote?: string;
   /** v1.349.0: how the hand-off's run went (lib/agentRun AgentRunStamp),
    *  stamped by finalize and read back only through `readAgentRun`. */
   agentRun?: AgentRunStamp;
@@ -3086,12 +3094,18 @@ const MessageRow = memo(function MessageRow({
     // this page, the live row at the foot of the transcript stands in for
     // the line (HandOffLine steps aside). A message from before v1.349.0, or
     // a run another window is watching, keeps the line exactly as it was.
-    const said = handOffSentence(m.escalated, m.escalatedTo);
+    const said = handOffSentence(m.escalated, m.escalatedTo, m.droppedRemote);
     const run = readAgentRun(m);
+    // v1.352.0 (G16, G19): the settled row says how the run ended ("· part
+    // failed", "· stopped") and opens onto what it did, in words
+    // (AgentRunReceipt: "Searched your chats 83 times", the route note, the
+    // model, "in <folder> · Open folder"), all read off the saved stamp.
     if (run)
       return (
         <div className="group/msg">
-          <AgentRunSettled name={agentRunName(m.escalatedTo)} run={run} why={said} />
+          <AgentRunSettled name={agentRunName(m.escalatedTo)} run={run} why={said}>
+            <AgentRunReceipt run={run} />
+          </AgentRunSettled>
         </div>
       );
     return (
@@ -4406,11 +4420,26 @@ export default function ChatPage() {
     });
   }, [models]);
 
-  /** Badge for a provider row: where it runs, in one word. */
-  const KIND_BADGE: Record<string, { text: string; cls: string }> = {
-    local: { text: "local", cls: "text-tone-success" },
-    cli: { text: "included", cls: "text-tone-info" },
-    api: { text: "metered", cls: "text-zinc-500" },
+  /** Badge for a provider row: where it runs, and for a cloud model how it
+   *  is paid for (v1.352.0, G21: "included" was a billing word for a model
+   *  that runs in the cloud; the receipt under a reply says "local" /
+   *  "cloud" in the same words). The title says the cost in full. */
+  const KIND_BADGE: Record<string, { text: string; cls: string; title: string }> = {
+    local: {
+      text: "local",
+      cls: "text-tone-success",
+      title: "Runs on your own hardware: this PC or a machine on your network. No charge per message.",
+    },
+    cli: {
+      text: "cloud · on your plan",
+      cls: "text-tone-info",
+      title: "Runs in the cloud through a subscription you already have. No charge per message; your plan's limits apply.",
+    },
+    api: {
+      text: "cloud · pay per use",
+      cls: "text-zinc-500",
+      title: "Runs in the cloud on your API key. Each message is billed to that account.",
+    },
   };
   const modelLabel = useMemo(() => {
     if (!choice) {
@@ -7187,7 +7216,9 @@ export default function ChatPage() {
           // The wait is over: the mark on the question goes (as the compose
           // path strips it), and the server's array is what this window holds.
           // v1.349.0: its hand-off settles, saved (see above finalize).
-          const settled = settleHandOff(server, id, session, line.runResult?.steps, endedPlan);
+          // v1.352.0 (G19): with how the run ended and what it did, read off
+          // the daemon line's own receipt (the result it already carries).
+          const settled = settleHandOff(server, id, session, line.runResult?.steps, endedPlan, line.runResult);
           const adopted = stripAwaiting(settled);
           adoptThread(t, box, { force: true, messages: adopted });
           if (settled !== server) queueSave(adopted, box);
@@ -7201,11 +7232,16 @@ export default function ChatPage() {
         }
       }
       const summary = (session.summary || "").trim();
+      // v1.352.0 (G16): a run the user STOPPED is not a failure, and the
+      // words say which it was (agents/chat_delivery STOPPED_SENTENCE /
+      // FAILED_SENTENCE are the same two sentences, pinned).
       const content =
         status === "completed"
           ? summary || "(no response)"
           : summary ||
-            `The agent stopped before finishing (${status}). Please try again.`;
+            (status === "cancelled"
+              ? "The agent was stopped before it finished."
+              : "The agent could not finish this. Try again or open the run.");
       // WHAT ACTUALLY HAPPENED (v1.149.0). The message above is the model's own
       // account of the work; this is the LEDGER's. Fetched best-effort — a
       // result card is never worth losing the reply over — and attached to the
@@ -7230,7 +7266,8 @@ export default function ChatPage() {
       const who = awaitingWhoRef.current;
       awaitingWhoRef.current = null;
       // v1.349.0: the hand-off settles into its row (see above finalize).
-      const settled = settleHandOff(messagesRef.current, id, session, runResult?.steps, endedPlan);
+      // v1.352.0 (G19): with how the run ended and what it did.
+      const settled = settleHandOff(messagesRef.current, id, session, runResult?.steps, endedPlan, runResult);
       const full: ChatMessage[] = [
         ...stripAwaiting(settled), // the wait is over (v1.226.0)
         {
@@ -9176,6 +9213,10 @@ export default function ChatPage() {
       picked && !picked.includes(":") && picked !== "builder" ? picked : "";
     // The hand-off bubble names ONLY what will truly run.
     const target = customSlug ? picked : builtinPick || null;
+    // v1.352.0 (G19): a REMOTE pick has no run here, so the work goes to the
+    // default agent on this PC. That used to happen silently; the hand-off
+    // line now says so, and how to reach the remote ("@hermes").
+    const droppedRemote = wanted.toLowerCase().startsWith("remote:") ? remoteName(wanted) : "";
     const withBubble: ChatMessage[] = [
       ...messagesRef.current,
       esc
@@ -9187,6 +9228,7 @@ export default function ChatPage() {
             content: "",
             escalated: esc.reason,
             ...(target ? { escalatedTo: agentPhrase(target) } : {}),
+            ...(droppedRemote ? { droppedRemote } : {}),
           }
         : {
             role: "user" as const,
@@ -9793,8 +9835,17 @@ export default function ChatPage() {
     // empty, so reading it here would save "Stopped." over whatever the agent
     // had already written — losing the user's partial answer to a speed change.
     const partial = (runStream.textStore?.get() ?? runStream.text).trim();
+    // v1.352.0 (G16): the hand-off settles as STOPPED, from the run's own
+    // start (the clock the live row counted from) to now, so it reads "The
+    // researcher worked for 45 s · stopped" instead of still "Handing this
+    // to …". A run whose start was never read says "was stopped".
+    const stopped = stopHandOff(
+      messagesRef.current,
+      awaitingId,
+      runSince && runSince.id === awaitingId ? runSince.at : null,
+    );
     const full: ChatMessage[] = [
-      ...stripAwaiting(messagesRef.current), // the wait is over (v1.226.0)
+      ...stripAwaiting(stopped), // the wait is over (v1.226.0)
       {
         role: "assistant",
         content: partial || "Stopped.",
@@ -13456,6 +13507,12 @@ export default function ChatPage() {
                                         a list you can act on without knowing which of
                                         your providers costs money. */}
                                     <span
+                                      data-testid="model-kind-badge"
+                                      title={
+                                        p.available
+                                          ? (KIND_BADGE[p.kind] ?? KIND_BADGE.api).title
+                                          : undefined
+                                      }
                                       className={`shrink-0 text-[10px] ${
                                         (KIND_BADGE[p.kind] ?? KIND_BADGE.api).cls
                                       }`}

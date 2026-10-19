@@ -60,6 +60,7 @@ import {
   FileText,
   Gauge,
   Loader2,
+  MapPin,
   MessagesSquare,
   Route as RouteIcon,
   ScrollText,
@@ -196,6 +197,48 @@ export interface TurnRoute {
   /** v1.332.0: the user allowed this ONE message to leave this PC (the
    *  ask-first card's "Send once"); the receipt says "sent with your OK". */
   allowed_once?: boolean;
+  /** v1.351.0 (G14), read since v1.352.0 (G21): whether the model that
+   *  ANSWERED runs on the user's own network, this PC included (daemon
+   *  truth: `egress.stays_on_this_network`, the predicate the local-only
+   *  lock reads). Absent on every reply from before v1.351.0. */
+  on_this_network?: boolean;
+}
+
+/**
+ * v1.352.0 (G21): WHERE a reply ran, in the receipt's words, or null when
+ * the route does not say (a reply from before v1.351.0 shows nothing new):
+ *
+ *  - a fleet endpoint the user named: `on: "on DGX Spark"` ("answered by
+ *    GLM 4.6 on DGX Spark"), plus `tail: "cloud"` if that endpoint is NOT on
+ *    their network;
+ *  - else `tail: "local"` (this PC or a machine on the user's network: the
+ *    flag cannot tell the two apart, so never "this PC" on a guess, the
+ *    G14 rule) or `tail: "cloud"` ("answered by Opus 5.5 · cloud").
+ *
+ * The demo model says nothing here: its own amber line already says no
+ * real model ran.
+ */
+export interface ReplyWhere {
+  on: string | null;
+  tail: "local" | "cloud" | null;
+  title: string;
+}
+
+export const WHERE_LOCAL_TITLE =
+  "Ran on your own hardware: this PC or a machine on your network. Nothing left your network.";
+
+export function replyWhere(rt: TurnRoute | null | undefined): ReplyWhere | null {
+  if (!rt || typeof rt.on_this_network !== "boolean" || rt.provider === "mock") return null;
+  const label = typeof rt.label === "string" ? rt.label.replace(/\s+/g, " ").trim() : "";
+  const local = rt.on_this_network;
+  const cloudTitle = `Ran in the cloud: this message left your network for ${
+    providerDisplay(rt.provider) || "the provider"
+  }.`;
+  return {
+    on: label ? `on ${label}` : null,
+    tail: local ? (label ? null : "local") : "cloud",
+    title: local ? WHERE_LOCAL_TITLE : cloudTitle,
+  };
 }
 
 /** v1.330.0: the "no tools" part's words on hover, and the expanded line. */
@@ -719,6 +762,13 @@ export function TurnReceipt({
   // The collapsed line, assembled as parts joined by "·". The warning chip is
   // its own styled element so it reads as a WARNING, not just another word.
   const parts: ReactNode[] = [];
+  // v1.352.0 (G21): where the reply ran. In the reply's row a named endpoint
+  // joins the "answered by" words ("answered by GLM 4.6 on DGX Spark"); the
+  // local / cloud word is its own quiet part ("answered by Opus 5.5 ·
+  // cloud"). Elsewhere (the Build pane) the endpoint's name already IS who
+  // answered, so only the local / cloud word is added.
+  const where = replyWhere(rt);
+  const whereOnInline = !!(rt && !warning && inline && where?.on);
   if (rt) {
     parts.push(
       warning ? (
@@ -745,12 +795,34 @@ export function TurnReceipt({
           <span className="text-zinc-400">
             {answeredName(rt, modelName)}
           </span>
+          {whereOnInline ? (
+            <span data-testid="turn-where-on" title={where?.title}>
+              {" "}
+              {where?.on}
+            </span>
+          ) : null}
         </span>
       ) : (
         <span key="who" className="text-zinc-400" title={rawRoute(rt)}>
           {servedName(rt)}
         </span>
       ),
+    );
+  }
+  if (where && warning && where.on) {
+    // A substitute that answered from a named endpoint: say which, after the
+    // amber words (they already name the model and why).
+    parts.push(
+      <span key="where-on" data-testid="turn-where-on" title={where.title} className="text-zinc-500">
+        {where.on}
+      </span>,
+    );
+  }
+  if (where?.tail) {
+    parts.push(
+      <span key="where" data-testid="turn-where" title={where.title} className="text-zinc-500">
+        {where.tail}
+      </span>,
     );
   }
   if (rt?.allowed_once === true) {
@@ -953,6 +1025,17 @@ export function TurnReceipt({
                     <span className="text-zinc-500"> ({rt.reason})</span>
                   )
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* v1.352.0 (G21): where it ran, in words a phone can read too
+              (the collapsed line's title never shows without a pointer). */}
+          {where && (
+            <div className="flex items-start gap-2">
+              <MapPin size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+              <div data-testid="turn-where-detail" className="min-w-0 text-[12px] leading-relaxed text-zinc-400">
+                {where.title}
               </div>
             </div>
           )}

@@ -25,6 +25,26 @@
 import { normalizeIso } from "@/lib/format";
 import { readSavedPlan, toSavedPlan, type PlanView, type SavedPlan } from "@/lib/planChecklist";
 
+/** v1.352.0 (G16/G19): how a run ENDED, as the session row says it. */
+export type AgentRunStatus = "completed" | "failed" | "cancelled";
+
+/** v1.352.0 (G19): the ledger's verdict on a completed run's JOB
+ *  (lib/types SessionOutcome); "completed" says nothing more. */
+export type AgentRunOutcome = "completed" | "completed_with_failures" | "needs_you";
+
+/** v1.352.0 (G19): one tool's calls in the run, as the ledger counted them
+ *  (`tools_used` / `tools_failed` on GET /sessions/{id}/result): `count`
+ *  every call, `failed` the ones that failed. lib/runWords says them. */
+export interface AgentRunTool {
+  tool: string;
+  count: number;
+  failed: number;
+}
+
+/** At most this many tools are kept on a stamp (the newest-first order of a
+ *  ledger is first use, so the first ones are the run's opening moves). */
+export const STAMP_TOOLS_MAX = 20;
+
 /** What the settled row needs, stamped on the hand-off message by finalize. */
 export interface AgentRunStamp {
   /** The agent session that did the work (the row's "Open run" link). */
@@ -43,6 +63,25 @@ export interface AgentRunStamp {
    *  SavedPlan). Absent for a run that made no plan, and on every stamp from
    *  before v1.350.0, which read exactly as they did. */
   plan?: SavedPlan;
+  // v1.352.0 (G16, G19): the receipt's words, each ONLY when known, so a
+  // stamp from before this release keeps its old shape and reads as it did.
+  /** How the run ended (the session row's status): the settled row says
+   *  "· stopped" for a cancelled run and "· failed" for a failed one. */
+  status?: AgentRunStatus;
+  /** The ledger's verdict on a completed run: "· needs you" / "· part failed". */
+  outcome?: AgentRunOutcome;
+  /** The run ended at its step limit (a failed run whose summary says so):
+   *  "· hit its step limit", never a bare "failed". */
+  stepLimit?: true;
+  /** The provider and model that SERVED the run (the session row's pair). */
+  provider?: string;
+  model?: string;
+  /** One sentence when the run's model failed over or was refused. */
+  routeNote?: string;
+  /** The folder the run worked in (its workspace), for "Open folder". */
+  workspacePath?: string;
+  /** What it did, counted per tool (the ledger's own numbers). */
+  tools?: AgentRunTool[];
 }
 
 /** The fields of a chat message this file reads; the page's ChatMessage
@@ -51,6 +90,10 @@ export interface HandOffLike {
   escalated?: string;
   escalatedTo?: string;
   awaitingSession?: string;
+  /** v1.352.0 (G19): the remote agent the chat picked for this hand-off,
+   *  when its pick could not be honoured here (a remote has no local run):
+   *  the line says the work runs on this PC and how to reach that agent. */
+  droppedRemote?: string;
 }
 
 /** The key the stamp is saved under on the hand-off message. */
@@ -77,8 +120,120 @@ function countOrNull(v: unknown): number | null {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
 }
 
+/* ------------------------------------------- v1.352.0: the receipt's words */
+
+const STATUSES: readonly AgentRunStatus[] = ["completed", "failed", "cancelled"];
+const OUTCOMES: readonly AgentRunOutcome[] = ["completed", "completed_with_failures", "needs_you"];
+
+function oneOf<T extends string>(v: unknown, allowed: readonly T[]): T | null {
+  const s = typeof v === "string" ? v.trim().toLowerCase() : "";
+  return (allowed as readonly string[]).includes(s) ? (s as T) : null;
+}
+
+/** One line of plain text, cut to `max` characters, or "" (a saved thread is
+ *  untrusted: control characters out, whitespace collapsed). */
+function line(v: unknown, max: number): string {
+  if (typeof v !== "string") return "";
+  const flat = v.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/** A tool id fit to keep: one token of id characters (a connected app's
+ *  `mcp__<app>__<tool>` included). */
+const TOOL_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+
+/** A folder path fit to keep: one line, at most 1000 characters, no control
+ *  characters. Read back, never trusted further than "a path to offer". */
+function folderOrEmpty(v: unknown): string {
+  if (typeof v !== "string") return "";
+  const p = v.trim();
+  return p && p.length <= 1000 && !/[\u0000-\u001f\u007f]/.test(p) ? p : "";
+}
+
+/**
+ * The ledger's per-tool counts (`tools_used` + `tools_failed`, or a saved
+ * stamp's `tools`), checked entry by entry: at most STAMP_TOOLS_MAX tools,
+ * each a real id with whole counts and no more failures than calls.
+ */
+export function stampTools(
+  used: unknown,
+  failed?: unknown,
+): AgentRunTool[] {
+  const bad = new Map<string, number>();
+  for (const f of Array.isArray(failed) ? failed : []) {
+    const r = f as { tool?: unknown; count?: unknown } | null;
+    if (r && typeof r.tool === "string" && TOOL_ID.test(r.tool)) {
+      const n = countOrNull(r.count);
+      if (n !== null) bad.set(r.tool, n);
+    }
+  }
+  const out: AgentRunTool[] = [];
+  const seen = new Set<string>();
+  for (const u of Array.isArray(used) ? used : []) {
+    if (out.length >= STAMP_TOOLS_MAX) break;
+    const r = u as { tool?: unknown; count?: unknown; failed?: unknown } | null;
+    if (!r || typeof r.tool !== "string" || !TOOL_ID.test(r.tool) || seen.has(r.tool)) continue;
+    const count = countOrNull(r.count);
+    if (count === null || count === 0) continue;
+    seen.add(r.tool);
+    // A saved stamp carries `failed` on the entry; a ledger result carries
+    // a separate `tools_failed` list.
+    const nBad = countOrNull(r.failed) ?? bad.get(r.tool) ?? 0;
+    out.push({ tool: r.tool, count, failed: Math.min(nBad, count) });
+  }
+  return out;
+}
+
+/** The phrase a failed run's summary starts with when it ran out of steps
+ *  (agents/runtime.py: "stopped: reached max steps before completion"). */
+const STEP_LIMIT = /^stopped:\s*reached max steps/i;
+
+/** True when a run's summary says it stopped at its step limit. */
+export function atStepLimit(summary: unknown): boolean {
+  return typeof summary === "string" && STEP_LIMIT.test(summary.trim());
+}
+
+/** What finalize read about the run's END, beyond its times and step count:
+ *  the session row (status, outcome, the served pair, its folder, its
+ *  summary) and the ledger result (route note, per-tool counts). */
+export interface RunEndFacts {
+  status?: unknown;
+  outcome?: unknown;
+  summary?: unknown;
+  provider?: unknown;
+  model?: unknown;
+  workspacePath?: unknown;
+  routeNote?: unknown;
+  toolsUsed?: unknown;
+  toolsFailed?: unknown;
+}
+
+/** The v1.352.0 fields of a stamp, each only when known (an old stamp, or a
+ *  finalize with nothing to say, keeps the old shape exactly). */
+function endFields(f: RunEndFacts | null | undefined): Partial<AgentRunStamp> {
+  if (!f) return {};
+  const out: Partial<AgentRunStamp> = {};
+  const status = oneOf(f.status, STATUSES);
+  if (status) out.status = status;
+  const outcome = oneOf(f.outcome, OUTCOMES);
+  if (outcome && outcome !== "completed") out.outcome = outcome;
+  if (status === "failed" && atStepLimit(f.summary)) out.stepLimit = true;
+  const provider = line(f.provider, 80);
+  if (provider) out.provider = provider;
+  const model = line(f.model, 160);
+  if (model) out.model = model;
+  const routeNote = line(f.routeNote, 400);
+  if (routeNote) out.routeNote = routeNote;
+  const workspacePath = folderOrEmpty(f.workspacePath);
+  if (workspacePath) out.workspacePath = workspacePath;
+  const tools = stampTools(f.toolsUsed, f.toolsFailed);
+  if (tools.length) out.tools = tools;
+  return out;
+}
+
 /** Build the stamp from what finalize read: the session row's times and the
- *  ledger's step count. Junk in any field becomes null, never a guess. */
+ *  ledger's step count. Junk in any field becomes null, never a guess.
+ *  v1.352.0 (G19): plus how the run ended and what it did (`end`). */
 export function makeAgentRunStamp(input: {
   session: string;
   createdAt?: unknown;
@@ -86,6 +241,7 @@ export function makeAgentRunStamp(input: {
   steps?: unknown;
   /** The run's checklist as it ended (settled), or nothing for no plan. */
   plan?: PlanView | null;
+  end?: RunEndFacts | null;
 }): AgentRunStamp {
   const startedAt = stampMs(input.createdAt);
   let endedAt = stampMs(input.finishedAt);
@@ -100,6 +256,7 @@ export function makeAgentRunStamp(input: {
     steps: countOrNull(input.steps),
     // Only when there is one: a stamp with no plan keeps its old shape.
     ...(plan ? { plan } : {}),
+    ...endFields(input.end),
   };
 }
 
@@ -117,12 +274,25 @@ export function readAgentRun(m: unknown): AgentRunStamp | null {
   // v1.350.0: the saved plan, read as untrusted as the rest; a malformed one
   // is no plan, and the stamp around it still reads.
   const plan = toSavedPlan(readSavedPlan(r.plan));
+  // v1.352.0: the receipt's words, read as untrusted as the rest (the same
+  // checks the stamp was made with). `stepLimit` is kept only on a failed run.
+  const end = endFields({
+    status: r.status,
+    outcome: r.outcome,
+    provider: r.provider,
+    model: r.model,
+    routeNote: r.routeNote,
+    workspacePath: r.workspacePath,
+    toolsUsed: r.tools,
+  });
+  if (r.stepLimit === true && end.status === "failed") end.stepLimit = true;
   return {
     session: r.session,
     startedAt,
     endedAt,
     steps: countOrNull(r.steps),
     ...(plan ? { plan } : {}),
+    ...end,
   };
 }
 
@@ -161,32 +331,135 @@ export function stampHandOff<M extends HandOffLike>(
   return msgs.map((m) => (m === target ? { ...m, [AGENT_RUN_KEY]: stamp } : m));
 }
 
+/** The session row fields finalize reads (GET /sessions/{id}, SessionView). */
+export interface RunRowLike {
+  created_at?: unknown;
+  finished_at?: unknown;
+  status?: unknown;
+  outcome?: unknown;
+  summary?: unknown;
+  provider?: unknown;
+  model?: unknown;
+  workspace_path?: unknown;
+}
+
+/** The ledger result fields finalize reads (GET /sessions/{id}/result, or the
+ *  daemon line's `receipt`: components/chat/RunResultCard RunResult). */
+export interface RunResultLike {
+  steps?: unknown;
+  provider?: unknown;
+  model?: unknown;
+  route_note?: unknown;
+  tools_used?: unknown;
+  tools_failed?: unknown;
+}
+
 /** finalize's one call (both of its paths, the composed reply and the
  *  daemon's appended line): stamp the hand-off waiting on `session` from the
  *  session row it read (`created_at`, `finished_at`) and the ledger's step
- *  count, plus (v1.350.0) the run's settled plan checklist when it made one.
- *  The SAME array back when nothing waits on it (see stampHandOff). */
+ *  count, plus (v1.350.0) the run's settled plan checklist when it made one,
+ *  plus (v1.352.0, G19) how it ended and what it did: the row's status,
+ *  outcome, served model and folder, the result's route note and per-tool
+ *  counts (`result`, when the ledger read answered). The SAME array back when
+ *  nothing waits on it (see stampHandOff). */
 export function settleHandOff<M extends HandOffLike>(
   msgs: M[],
   session: string,
-  row: { created_at?: unknown; finished_at?: unknown } | null | undefined,
+  row: RunRowLike | null | undefined,
   steps?: unknown,
   plan?: PlanView | null,
+  result?: RunResultLike | null,
 ): M[] {
   return stampHandOff(
     msgs,
     session,
-    makeAgentRunStamp({ session, createdAt: row?.created_at, finishedAt: row?.finished_at, steps, plan }),
+    makeAgentRunStamp({
+      session,
+      createdAt: row?.created_at,
+      finishedAt: row?.finished_at,
+      steps,
+      plan,
+      end: {
+        status: row?.status,
+        outcome: row?.outcome,
+        summary: row?.summary,
+        // The row holds the SERVED pair once a run ends; the result carries
+        // the same two (G18), which stand in for a row that lacks them.
+        provider: row?.provider || result?.provider,
+        model: row?.model || result?.model,
+        workspacePath: row?.workspace_path,
+        routeNote: result?.route_note,
+        toolsUsed: result?.tools_used,
+        toolsFailed: result?.tools_failed,
+      },
+    }),
   );
+}
+
+/**
+ * v1.352.0 (G16): the user pressed Stop on the run. There is no finished
+ * session row to read yet (the cancel is still on its way), so the hand-off
+ * settles from what this window knows: the run's start (the session's own
+ * `created_at`, which the live row's clock already counted from) and now.
+ * Status "cancelled", so the row reads "The researcher worked for 45 s ·
+ * stopped" (or "… was stopped" when the start was never read) in place of
+ * the line that still said it was handing the work over. The SAME array back
+ * when nothing waits on `session`.
+ */
+export function stopHandOff<M extends HandOffLike>(
+  msgs: M[],
+  session: string,
+  startedAt: number | null | undefined,
+  now: number = Date.now(),
+): M[] {
+  const start = epochOrNull(startedAt);
+  const end = epochOrNull(now);
+  return stampHandOff(msgs, session, {
+    session,
+    startedAt: start,
+    endedAt: start !== null && end !== null && end >= start ? end : null,
+    steps: null,
+    status: "cancelled",
+  });
+}
+
+/** v1.352.0 (G19): a remote agent's name, fit for a sentence ("hermes-mac"),
+ *  or "" when it is not one. */
+export function remoteName(raw: unknown): string {
+  const s = typeof raw === "string" ? raw.trim() : "";
+  const name = s.toLowerCase().startsWith("remote:") ? s.slice("remote:".length).trim() : s;
+  return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(name) ? name : "";
 }
 
 /** The sentence the saved hand-off line says (unchanged since v1.139.0): the
  *  named specialist when one was chosen, else the plain hand-off. ONE source,
- *  for the line itself and for the row that settles it. */
-export function handOffSentence(escalated: string, escalatedTo?: string | null): string {
-  return escalatedTo
+ *  for the line itself and for the row that settles it.
+ *  v1.352.0 (G19): when the chat picked a REMOTE agent this page cannot run a
+ *  session for, the line says so instead of letting it run here silently:
+ *  "… Running on this PC. Reach hermes with @hermes." */
+export function handOffSentence(
+  escalated: string,
+  escalatedTo?: string | null,
+  droppedRemote?: string | null,
+): string {
+  const said = escalatedTo
     ? `Handing this to ${escalatedTo}: ${escalated}.`
     : `Taking this on properly: ${escalated}.`;
+  const remote = remoteName(droppedRemote);
+  return remote ? `${said} Running on this PC. Reach ${remote} with @${remote}.` : said;
+}
+
+/**
+ * v1.352.0 (G16, G19): how the run ended, as the settled row's last words:
+ * "stopped", "failed", "hit its step limit", "needs you", "part failed", or
+ * null for a clean finish (and for every stamp from before this release).
+ */
+export function runEndWords(run: Pick<AgentRunStamp, "status" | "outcome" | "stepLimit">): string | null {
+  if (run.status === "cancelled") return "stopped";
+  if (run.status === "failed") return run.stepLimit ? "hit its step limit" : "failed";
+  if (run.outcome === "needs_you") return "needs you";
+  if (run.outcome === "completed_with_failures") return "part failed";
+  return null;
 }
 
 /** The row's subject, at the start of a sentence: "the researcher" reads

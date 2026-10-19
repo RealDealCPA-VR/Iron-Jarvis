@@ -54,6 +54,7 @@ import {
   handOffSentence,
   liveRuns,
   runDurationMs,
+  runEndWords,
   type AgentRunStamp,
   type HandOffLike,
 } from "@/lib/agentRun";
@@ -105,12 +106,30 @@ export function stepsWords(steps: number | null): string | null {
 
 /** The settled row's words: "The researcher worked for 2 min 5 s · 6 steps".
  *  The length reads like the folded "Worked for …" line (TurnReceipt's
- *  secondsText); without one known it says only that the run finished. */
+ *  secondsText); without one known it says only that the run finished.
+ *
+ *  v1.352.0 (G16, G19): and how it ENDED, last, when it did not simply
+ *  finish: "· stopped" (the user pressed Stop), "· failed", "· hit its step
+ *  limit", "· needs you" (an ask went unanswered) or "· part failed" (a step
+ *  that changes things failed): "The researcher worked for 2 min 5 s · 6
+ *  steps · part failed". Without a known length a stopped run "was stopped"
+ *  and a failed one "could not finish". A stamp from before v1.352.0 has no
+ *  status and reads exactly as it did. */
 export function settledRunWords(name: string, run: AgentRunStamp): string {
   const dur = secondsText(runDurationMs(run));
-  const head = dur ? `${name} worked for ${dur}` : `${name} finished`;
+  const end = runEndWords(run);
+  let head: string;
+  let tail = end;
+  if (dur) head = `${name} worked for ${dur}`;
+  else if (run.status === "cancelled") {
+    head = `${name} was stopped`;
+    tail = null; // said already
+  } else if (run.status === "failed") {
+    head = run.stepLimit ? `${name} hit its step limit` : `${name} could not finish`;
+    tail = null;
+  } else head = `${name} finished`;
   const steps = stepsWords(run.steps);
-  return steps ? `${head} · ${steps}` : head;
+  return [head, steps, tail].filter(Boolean).join(" · ");
 }
 
 /* ------------------------------------------------------------ the registry */
@@ -264,7 +283,9 @@ export function AgentRunLive({
 
   const name = agentRunName(handOff?.escalatedTo);
   const current = currentStepWords({ phaseTitle, phaseDetail, progress: lines });
-  const why = handOff?.escalated ? handOffSentence(handOff.escalated, handOff.escalatedTo) : "";
+  const why = handOff?.escalated
+    ? handOffSentence(handOff.escalated, handOff.escalatedTo, handOff.droppedRemote)
+    : "";
   // ONE clock at a time (the v1.348.0 rule): open with tool rows listed, the
   // live work line under the header already counts the run ("Working for
   // 1 min 24 s · read 2 files"), from the same start.

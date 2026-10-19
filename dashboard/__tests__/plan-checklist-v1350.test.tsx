@@ -1118,7 +1118,9 @@ describe("finalize saves the plan as it ENDED on the hand-off", () => {
 it("the page hands the row its plan and finalize its ended plan (the call sites, CRLF-normalised)", () => {
   const page = readFileSync(path.join(__dirname, "..", "app", "chat", "page.tsx"), "utf8").replace(/\r\n/g, "\n");
   expect(page).toMatch(/<AgentRunLive[\s\S]{0,1200}?plan=\{livePlan\}[\s\S]{0,200}?\/>/);
-  expect(page.match(/settleHandOff\([^)]*endedPlan\)/g)).toHaveLength(2);
+  // v1.352.0 (G19), moved ON PURPOSE: both calls also hand over the ledger
+  // result they already read (how the run ended, what it did), after the plan.
+  expect(page.match(/settleHandOff\([^)]*endedPlan, [\w.?]*runResult\)/g)).toHaveLength(2);
   // The page holds the plan, never a per-token value: the hook reads the
   // events and the phase the page already had.
   expect(page).toMatch(/useLivePlan\(\{[\s\S]{0,300}?events,[\s\S]{0,200}?hint: runStream\.phase\?\.detail/);

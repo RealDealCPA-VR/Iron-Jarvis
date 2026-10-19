@@ -38,6 +38,7 @@ import pytest
 from iron_jarvis.agents import chat_delivery
 from iron_jarvis.agents.chat_delivery import (
     CHAT_THREAD_OPTION,
+    FAILED_SENTENCE,
     NO_RESPONSE,
     STOPPED_SENTENCE,
     content_for_session,
@@ -216,11 +217,15 @@ def test_the_line_mirrors_the_pages_finalize_words_and_keys():
     # the page's fallback words, by status
     empty_done = SimpleNamespace(id="s", status=SessionStatus.COMPLETED, summary="", agent_type=AgentType.BUILDER)
     assert content_for_session(empty_done) == NO_RESPONSE == "(no response)"
+    # v1.352.0 (G16), moved ON PURPOSE: a stop is not a failure, and the two
+    # endings read differently (the page's finalize says the same, pinned in
+    # test_integration_pins_v1345).
     failed = SimpleNamespace(id="s", status=SessionStatus.FAILED, summary=None, agent_type=AgentType.BUILDER)
-    assert content_for_session(failed) == STOPPED_SENTENCE.format(status="failed")
-    assert content_for_session(failed) == "The agent stopped before finishing (failed). Please try again."
+    assert content_for_session(failed) == FAILED_SENTENCE
+    assert content_for_session(failed) == "The agent could not finish this. Try again or open the run."
     cancelled = SimpleNamespace(id="s", status=SessionStatus.CANCELLED, summary="", agent_type=AgentType.BUILDER)
-    assert content_for_session(cancelled) == "The agent stopped before finishing (cancelled). Please try again."
+    assert content_for_session(cancelled) == STOPPED_SENTENCE
+    assert content_for_session(cancelled) == "The agent was stopped before it finished."
     # a summary wins over the fallback whatever the status (the page's `summary ||`)
     said = SimpleNamespace(id="s", status=SessionStatus.FAILED, summary="Session failed: boom", agent_type=AgentType.BUILDER)
     assert content_for_session(said) == "Session failed: boom"
@@ -267,7 +272,12 @@ async def test_a_session_asked_from_a_chat_appends_exactly_one_line_with_its_fil
     # the line IS the pure helper's answer for the same session + ledger,
     # stamped by the server (the integrator compares this with the page's own)
     row = _session_row(p.engine, s.id)
-    expected = line_for_session(row, session_result(p.engine, s.id), "builtin:builder")
+    # v1.352.0 (G19), moved ON PURPOSE: the line's card is the RECEIPT read
+    # (what GET /sessions/{id}/result answers), minus `on_this_network`,
+    # which the orchestrator's call cannot judge without the provider manager.
+    receipt = session_result(p.engine, s.id, receipt=True)
+    receipt.pop("on_this_network", None)
+    expected = line_for_session(row, receipt, "builtin:builder")
     assert line["at"].endswith("+00:00")
     assert {k: v for k, v in line.items() if k != "at"} == expected
     assert line["role"] == "assistant"

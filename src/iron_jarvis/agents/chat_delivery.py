@@ -24,12 +24,19 @@ integrator can pin that a daemon-appended line and a page-composed line are
 equal for the same session:
 
 * ``content`` — the page's words: on ``completed`` the summary (trimmed) or
-  ``"(no response)"``; otherwise the summary or
-  ``"The agent stopped before finishing (<status>). Please try again."``;
+  ``"(no response)"``; otherwise the summary or (v1.352.0, G16) the plain
+  sentence for HOW it ended — :data:`STOPPED_SENTENCE` for a run the user
+  stopped (``cancelled``), :data:`FAILED_SENTENCE` for any other end;
 * ``sessionId`` — the page's ``fromSession`` under the daemon's key (the
   page's ``lib/chatReread.adoptDaemonLines`` stands one in for the other);
 * ``receipt`` — the page's ``runResult``: the ``GET /sessions/{id}/result``
-  payload (``agents/outcome.session_result``), same adoption rule;
+  payload (``agents/outcome.session_result``), same adoption rule. Since
+  v1.352.0 (G19) it is that route's RECEIPT read (``receipt=True``: the
+  route note and the plain action lines ride along), so the card and the
+  settled helper-agent row say the same whichever of the two wrote the
+  line; ``on_this_network`` is kept only when the caller passed the
+  provider manager it needs (judged without the endpoint settings a local
+  model would read as cloud — absent beats wrong);
 * ``panelWho`` — the participant key the page stores on a hand-off reply
   (``awaitingWhoRef``): ``builtin:<agent type>`` for a builtin,
   ``dynamic:<name>`` for a custom agent (the page's ``sessionTargetOf`` maps
@@ -55,10 +62,14 @@ log = get_logger(__name__)
 #: The run option the chat thread id rides under (``Session.options_json``).
 CHAT_THREAD_OPTION = "chat_thread_id"
 
-#: The page's fallback words when a run that did not complete left no
-#: summary (``finalize()``: ``The agent stopped before finishing (${status}).
-#: Please try again.``). ``{status}`` is the lowercase session status.
-STOPPED_SENTENCE = "The agent stopped before finishing ({status}). Please try again."
+#: The page's fallback words when a run the user STOPPED (``cancelled``)
+#: left no summary (v1.352.0, G16: a stop is not a failure, so it no longer
+#: reads like one — the page's ``finalize()`` says the same, pinned).
+STOPPED_SENTENCE = "The agent was stopped before it finished."
+
+#: The page's fallback words when a run that FAILED (or ended any other way
+#: short of ``completed``) left no summary (v1.352.0, G16).
+FAILED_SENTENCE = "The agent could not finish this. Try again or open the run."
 
 #: The page's fallback words for a completed run with no summary.
 NO_RESPONSE = "(no response)"
@@ -122,7 +133,9 @@ def content_for_session(session: Any) -> str:
     summary = str(getattr(session, "summary", "") or "").strip()
     if status == "completed":
         return summary or NO_RESPONSE
-    return summary or STOPPED_SENTENCE.format(status=status)
+    if status == "cancelled":
+        return summary or STOPPED_SENTENCE
+    return summary or FAILED_SENTENCE
 
 
 def line_for_session(session: Any, result: Any, who: str) -> dict[str, Any]:
@@ -152,11 +165,38 @@ def line_for_session(session: Any, result: Any, who: str) -> dict[str, Any]:
     return line
 
 
-def deliver_session_line(engine: Any, session: Any, *, event_bus: Any = None) -> dict[str, Any]:
+def delivery_result(
+    engine: Any, session_id: str, *, manager: Any = None, config: Any = None
+) -> dict[str, Any]:
+    """The ledger card a delivered line carries (v1.352.0, G19): the RECEIPT
+    read ``GET /sessions/{id}/result`` answers (``receipt=True``), so the
+    line's card names the route note and the plain action lines the page's
+    own read would have. ``on_this_network`` needs the provider ``manager``
+    to read a local endpoint's address; without one it is DROPPED (a local
+    model judged with no settings reads as cloud — absent beats wrong).
+    BLOCKING. Raises what ``session_result`` raises (the caller catches)."""
+    from .outcome import session_result
+
+    result = session_result(engine, session_id, receipt=True, manager=manager, config=config)
+    if manager is None and isinstance(result, dict):
+        result.pop("on_this_network", None)
+    return result
+
+
+def deliver_session_line(
+    engine: Any,
+    session: Any,
+    *,
+    event_bus: Any = None,
+    manager: Any = None,
+    config: Any = None,
+) -> dict[str, Any]:
     """Append the session's line to the chat it was asked in. BLOCKING
     (SQLite reads + the append) — call it off the loop. Returns
     ``append_to_chat_thread``'s answer, or ``{"ok": False, "why": ...}``
     when the session carries no chat or the delivery faulted. Never raises.
+    ``manager`` / ``config`` (optional) let the receipt judge whether the
+    run's model stayed on this network (:func:`delivery_result`).
     """
     thread_id = chat_thread_of(session)
     if not thread_id:
@@ -169,9 +209,9 @@ def deliver_session_line(engine: Any, session: Any, *, event_bus: Any = None) ->
         from ..daemon import chat_append as _chat_append
 
         try:
-            from .outcome import session_result
-
-            result = session_result(engine, str(getattr(session, "id", "") or ""))
+            result = delivery_result(
+                engine, str(getattr(session, "id", "") or ""), manager=manager, config=config
+            )
         except Exception:  # noqa: BLE001 — the line still lands without its card
             log.exception("ledger read failed before chat delivery for %s", getattr(session, "id", ""))
             result = None

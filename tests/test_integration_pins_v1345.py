@@ -271,10 +271,19 @@ def _page_compose(session, run_result, who: str | None) -> dict:
     the words in step)."""
     status = session.status.value
     summary = (session.summary or "").strip()
+    # v1.352.0 (G16), moved ON PURPOSE: a stopped run and a failed one read
+    # differently (the page's ternary, transcribed).
     content = (
         (summary or "(no response)")
         if status == "completed"
-        else (summary or f"The agent stopped before finishing ({status}). Please try again.")
+        else (
+            summary
+            or (
+                "The agent was stopped before it finished."
+                if status == "cancelled"
+                else "The agent could not finish this. Try again or open the run."
+            )
+        )
     )
     line = {"role": "assistant", "content": content, "fromSession": session.id}
     if run_result:
@@ -328,8 +337,11 @@ def test_the_daemon_session_line_equals_the_pages_finalize_line(status, summary)
 def test_the_pages_finalize_words_are_the_daemons_constants():
     block = _page_block("finalize")
     assert f'"{chat_delivery.NO_RESPONSE}"' in block
-    ts = chat_delivery.STOPPED_SENTENCE.replace("{status}", "${status}")
-    assert f"`{ts}`" in block
+    # v1.352.0 (G16), moved ON PURPOSE: the stopped and the failed sentence,
+    # each a plain string literal in the page's compose.
+    assert f'"{chat_delivery.STOPPED_SENTENCE}"' in block
+    assert f'"{chat_delivery.FAILED_SENTENCE}"' in block
+    assert 'status === "cancelled"' in block
     # the page's compose keys, read off the source
     compose = block[block.index("const full: ChatMessage[] = [") : block.index("setMessages(full)")]
     assert "fromSession: id" in compose and "runResult" in compose and "panelWho: who" in compose

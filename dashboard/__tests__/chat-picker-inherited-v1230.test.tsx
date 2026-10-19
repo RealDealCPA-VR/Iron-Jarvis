@@ -176,15 +176,22 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("chat model picker — inherited login is 'included'", () => {
-  it("labels the inherited provider 'included' and the keyed API 'metered', inherited first", async () => {
+// v1.352.0 (G21), moved ON PURPOSE: "included" was a billing word on a model
+// that runs in the cloud. The badge now says where it runs AND how it is paid:
+// the inherited login reads "cloud · on your plan", the keyed API "cloud ·
+// pay per use" (each with the cost in its title). The v1.230.0 point stands:
+// the inherited login is never labelled as the metered one.
+describe("chat model picker — inherited login is 'on your plan'", () => {
+  it("labels the inherited provider 'cloud · on your plan' and the keyed API 'cloud · pay per use', inherited first", async () => {
     render(<ChatPage />);
     fireEvent.click(await screen.findByTitle("Switch model"));
     const anthropic = (await screen.findByText("Anthropic")).closest("button")!;
-    expect(anthropic.textContent).toContain("included");
-    expect(anthropic.textContent).not.toContain("metered");
+    expect(anthropic.textContent).toContain("cloud · on your plan");
+    expect(anthropic.textContent).not.toContain("pay per use");
+    expect(anthropic.textContent).not.toContain("included");
     const openai = screen.getByText("OpenAI").closest("button")!;
-    expect(openai.textContent).toContain("metered");
+    expect(openai.textContent).toContain("cloud · pay per use");
+    expect(openai.textContent).not.toContain("metered");
     // Flat-rate ranks above metered: the inherited row comes first.
     expect(
       anthropic.compareDocumentPosition(openai) & Node.DOCUMENT_POSITION_FOLLOWING,
