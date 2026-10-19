@@ -2426,8 +2426,23 @@ export default function ToolsPage() {
                             onChange={() => void toggleAutoApprove(s)}
                           />
                           <span>Ask before each use</span>
-                          <span className="text-zinc-500" data-testid={`mcp-ask-note-${s.name}`}>
-                            · changes apply after a restart
+                          {/* v1.356.0 ship fix: the switch is per extension, but
+                              "run without asking" is one shared rule — the
+                              global setting, or ANY switched-on extension set
+                              to run without asking, lets every extension run
+                              unasked. Say so beside a switch that reads On. */}
+                          <span
+                            className="text-zinc-500"
+                            data-testid={`mcp-ask-note-${s.name}`}
+                            title={
+                              autoApprove && !s.auto_approve
+                                ? "Run app tools without asking is on (in Settings > Permissions, or another extension is set to run without asking), so agents do not ask for this one either."
+                                : undefined
+                            }
+                          >
+                            {autoApprove && !s.auto_approve
+                              ? " · not in effect right now: app tools are set to run without asking"
+                              : " · changes apply after a restart"}
                           </span>
                         </div>
                         {/* v1.356.0 (G74): the launch line is folded under

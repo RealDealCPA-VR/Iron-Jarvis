@@ -50,6 +50,8 @@ const api = vi.hoisted(() => {
     sources: [] as Record<string, unknown>[],
     /** What POST /mcp/import/apply answers (review). */
     apply: null as null | Record<string, unknown>,
+    /** GET /mcp/servers' auto_approve_effective (ship fix: the shared rule). */
+    effective: false,
   };
 });
 
@@ -63,7 +65,7 @@ vi.mock("@/lib/api", () => ({
   onRequestErrorChange: () => () => {},
   get: async (path: string) => {
     api.gets.push(path);
-    if (path === "/mcp/servers") return { servers: api.servers };
+    if (path === "/mcp/servers") return { servers: api.servers, auto_approve_effective: api.effective };
     if (path === "/mcp/catalog") return { catalog: api.catalog };
     if (path === "/tools/custom") return { tools: [] };
     if (path === "/connectors") return { connectors: api.connectors, categories: ["Developer"] };
@@ -239,6 +241,7 @@ beforeEach(() => {
   api.preview = null;
   api.sources = [];
   api.apply = null;
+  api.effective = false;
 });
 afterEach(() => cleanup());
 
@@ -447,6 +450,30 @@ describe("a Tools row in plain words", () => {
     expect(api.patches).toEqual([{ path: "/mcp/servers/slack", body: { auto_approve: true } }]);
   });
 
+  it("ship fix: an On switch says it is not in effect while app tools run without asking", async () => {
+    // "Run without asking" is ONE shared rule (the global setting, or any
+    // switched-on extension set to run unasked): a row whose switch reads On
+    // must not promise agents will ask.
+    api.effective = true;
+    render(<ToolsPage />);
+    const ask = await screen.findByTestId("mcp-ask-slack");
+    expect(ask.getAttribute("aria-checked")).toBe("true");
+    const note = within(rowOf("slack")).getByTestId("mcp-ask-note-slack");
+    expect(note.textContent).toMatch(/not in effect right now: app tools are set to run without asking/);
+    expect(note.getAttribute("title") ?? "").toMatch(/Run app tools without asking/);
+    expect(note.textContent).not.toMatch(/after a restart/);
+  });
+
+  it("ship fix: the row that IS the reason keeps the plain restart note", async () => {
+    api.effective = true;
+    api.servers = [{ ...SLACK, auto_approve: true }];
+    render(<ToolsPage />);
+    await screen.findByTestId("mcp-ask-slack");
+    const note = within(rowOf("slack")).getByTestId("mcp-ask-note-slack");
+    await waitFor(() => expect(note.textContent).toMatch(/after a restart/));
+    expect(note.getAttribute("title")).toBeNull();
+  });
+
   it("an extension that runs without asking shows the switch OFF", async () => {
     api.servers = [{ ...SLACK, auto_approve: true }];
     render(<ToolsPage />);
@@ -520,6 +547,22 @@ describe("a Directory card switches its app off and on", () => {
     await waitFor(() =>
       expect(screen.getByTestId("connector-switch-slack").getAttribute("aria-checked")).toBe("false"),
     );
+  });
+
+  it("ship fix: a switched-off card offers no Sign in; switched on it does", async () => {
+    const signin = { cli: "microsoft-365-signin-work", label: "Sign in to Microsoft" };
+    api.connectors = [
+      connector("microsoft_365", "Microsoft 365", { enabled: false, status: "no_tools", tools_loaded: 0, signin }),
+    ];
+    render(<DirectoryPage />);
+    const c = await screen.findByTestId("connector-card-microsoft_365");
+    expect(within(c).getByTestId("connector-off-microsoft_365").textContent).toBe("Off");
+    expect(within(c).queryByTestId("connector-signin-press-microsoft_365")).toBeNull();
+    cleanup();
+    __resetApiCache();
+    api.connectors = [connector("microsoft_365", "Microsoft 365", { signin })];
+    render(<DirectoryPage />);
+    expect(await screen.findByTestId("connector-signin-press-microsoft_365")).toBeTruthy();
   });
 
   it("removal says Remove, not Disconnect", async () => {

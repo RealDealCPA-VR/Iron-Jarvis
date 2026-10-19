@@ -737,7 +737,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
           {/* v1.356.0 (G60): an app that signs in on this PC (Microsoft 365):
               its Sign in opens a Build pane running the app's own sign-in,
               which shows a web address and a code. */}
-          {c.connect_via === "mcp" && c.signin && <AppSignIn id={c.id} signin={c.signin} />}
+          {c.connect_via === "mcp" && c.signin && !off && <AppSignIn id={c.id} signin={c.signin} />}
           {c.connect_via === "mcp" && !off && (c.tool_names?.length ?? 0) > 0 && (
             <div className="flex flex-wrap gap-1">
               {c.tool_names!.map((n) => (

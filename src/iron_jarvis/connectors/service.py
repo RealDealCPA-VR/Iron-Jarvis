@@ -287,7 +287,9 @@ def auto_approve_on(platform) -> bool:
     page's switch reads (``auto_approve_effective``)."""
     if bool(getattr(platform.config, "mcp_auto_approve", False)):
         return True
-    return any(bool((s or {}).get("auto_approve")) for s in _mcp_servers(platform))
+    from ..mcp.tools import pack_grants_auto
+
+    return any(pack_grants_auto(s) for s in _mcp_servers(platform))
 
 
 def pack_powers(platform, server: str, loaded: list[str], *, asks_first: bool) -> dict[str, Any]:

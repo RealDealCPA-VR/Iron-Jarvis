@@ -3806,7 +3806,11 @@ def register(app: FastAPI, d) -> None:
         # a checkbox showing "off" while agents run tools unprompted would be
         # the dishonest kind of simple.
         _global = bool(getattr(d.platform.config, "mcp_auto_approve", False))
-        _effective = _global or any(bool(s.get("auto_approve")) for s in servers)
+        # v1.356.0 ship fix: a switched-off pack's flag grants nothing — the
+        # boot resolver's rule (mcp.tools.pack_grants_auto), read here too.
+        from ...mcp.tools import pack_grants_auto as _pack_grants_auto
+
+        _effective = _global or any(_pack_grants_auto(s) for s in servers)
         return {
             "servers": servers,
             "auto_approve_global": _global,

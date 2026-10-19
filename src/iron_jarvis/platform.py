@@ -1525,9 +1525,14 @@ def build_platform(
     # every connected MCP tool (applied at boot; add a server then restart).
     # v1.127.0: the Tools page checkbox persists as the GLOBAL flag; the older
     # per-server flags still grant too (either path opens the one shared key).
+    # v1.356.0 ship fix: a SWITCHED-OFF pack's own flag grants nothing (it has
+    # no tools loaded, and switching it off must not leave every OTHER pack
+    # running without asking) — the same rule as connectors.service.
+    # auto_approve_on and GET /mcp/servers' auto_approve_effective.
+    from .mcp.tools import pack_grants_auto as _pack_grants_auto
+
     _mcp_auto = bool(getattr(config, "mcp_auto_approve", False)) or any(
-        (s or {}).get("auto_approve")
-        for s in (getattr(config, "mcp_servers", None) or [])
+        _pack_grants_auto(s) for s in (getattr(config, "mcp_servers", None) or [])
     )
     # PACK-TOOL QUARANTINE (v1.299.0). The boot loader above registered each
     # pack's tools; now diff them against the pack's saved manifest

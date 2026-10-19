@@ -3619,7 +3619,17 @@ does not need a bump, stop and bump it.
   (every lane and integrator change mutation-checked red). Known: nothing was
   ever signed in to Microsoft for real (the stand-in lists the real server's
   tool names); a sign-in pane restored after a restart is a plain shell; a
-  REPL already running keeps the folders it started with.
+  REPL already running keeps the folders it started with. SHIP FIXES (from the
+  re-review's open points): `mcp.tools.pack_grants_auto(row)` is THE rule for
+  "does this row open run-without-asking" — its own `auto_approve` counts ONLY
+  while the pack is switched on (`mcp_call` is one shared key, so an Off pack's
+  flag kept every OTHER pack running unasked); the boot resolver
+  (`platform._mcp_auto`), `connectors.service.auto_approve_on` and GET
+  /mcp/servers' `auto_approve_effective` all read it — never re-derive it. The
+  Tools row's "Ask before each use" note says "not in effect right now" while
+  that shared rule is on and the row is not its reason; a switched-off card
+  offers no Sign in. Pins: `tests/test_wave6_ship_fixes_v13560.py`, the
+  "ship fix" cases in `extension-switch-v13560`.
 - **A failure carries its press on BOTH lanes; a pack has ONE add/remove
   door; an imported placeholder is ASKED, never stored** (v1.355.0,
   product-readiness Wave 5, G29/G32/G44/G46/G55/G62-G65/G69/G70/G72/G73;

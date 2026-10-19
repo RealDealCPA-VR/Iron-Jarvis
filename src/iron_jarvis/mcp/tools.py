@@ -980,6 +980,17 @@ PACK_OFF_ERROR = "switched off; turn it on to use it"
 _OFF_WORDS = frozenset({"false", "off", "no", "0"})
 
 
+def pack_grants_auto(cfg: Any) -> bool:
+    """Does this pack row open run-without-asking? (v1.356.0 ship fix.)
+
+    Its own ``auto_approve`` flag counts ONLY while the pack is switched on:
+    ``mcp_call`` is one shared permission key, so a switched-off pack's flag
+    would otherwise keep every OTHER pack running without asking after the
+    user turned the trusted one off. The boot resolver (platform.py), the
+    connectors service and GET /mcp/servers all read this one rule."""
+    return isinstance(cfg, dict) and bool(cfg.get("auto_approve")) and pack_enabled(cfg)
+
+
 def pack_enabled(cfg: Any) -> bool:
     """Whether a configured pack is switched ON (v1.356.0, G78).
 
