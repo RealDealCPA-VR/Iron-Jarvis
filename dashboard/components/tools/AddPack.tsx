@@ -45,7 +45,11 @@ import {
   PASTE_APP,
   TOOLS_ROWS_HREF,
   USE_IN_CHAT,
+  askHint,
+  askedNames,
   existsWords,
+  looksSecretName,
+  signedInWords,
   isOff,
   mentionsNode,
   offWords,
@@ -152,7 +156,9 @@ function PreviewList({
         const isHttp = row.transport === "http" || row.transport === "sse";
         const launcher = isHttp ? row.transport.toUpperCase() : (row.command ?? "").trim() || "stdio";
         const secretKeys = row.secret_keys ?? [];
-        const envKeys = (row.env_keys ?? []).filter((k) => !secretKeys.includes(k));
+        // v1.355.0: the secret keys plus every placeholder the config left.
+        const asked = askedNames(row);
+        const envKeys = (row.env_keys ?? []).filter((k) => !asked.includes(k));
         const headerNames = row.header_names ?? [];
         const off = isOff(row);
         return (
@@ -187,6 +193,12 @@ function PreviewList({
             <p className="mt-1 text-[12px] text-zinc-400" data-testid={`import-about-${row.name}`}>
               {rowAbout(row, app)}
             </p>
+            {/* v1.355.0: a sign-in of the same name is not this server. */}
+            {signedInWords(row) && (
+              <p className="mt-1 text-[12px] text-zinc-500" data-testid={`import-signed-in-${row.name}`}>
+                {signedInWords(row)}
+              </p>
+            )}
             {row.launcher_note && (
               <p className="mt-1 text-[12px] text-tone-warn" data-testid={`import-note-${row.name}`}>
                 {row.launcher_note}
@@ -199,7 +211,12 @@ function PreviewList({
               </p>
             )}
             {/* v1.354.0 (G49): the launch command and the key names, folded. */}
-            <details className="group mt-1" open={detailsOpen || undefined} data-testid={`import-details-${row.name}`}>
+            <details
+              className="group mt-1"
+              // v1.355.0: a row that needs a typed value opens on it.
+              open={detailsOpen || (row.asks?.length ?? 0) > 0 || undefined}
+              data-testid={`import-details-${row.name}`}
+            >
               <summary className={FOLD_SUMMARY}>
                 <ChevronRight size={12} className={FOLD_CHEVRON} aria-hidden />
                 Details
@@ -222,25 +239,27 @@ function PreviewList({
                   {headerNames.length > 0 && <span>headers {headerNames.join(", ")}</span>}
                 </p>
               )}
-              {secretKeys.length > 0 && (
+              {asked.length > 0 && (
                 <div className="mt-2 space-y-1">
-                  {secretKeys.map((key) => (
+                  {asked.map((key) => (
                     <label key={key} className="flex items-center gap-2">
                       <span className="w-44 shrink-0 truncate font-mono text-[11px] text-zinc-400">{key}</span>
                       <input
-                        type="password"
+                        type={secretKeys.includes(key) || looksSecretName(key) ? "password" : "text"}
                         autoComplete="off"
                         data-testid={`override-${row.name}-${key}`}
                         value={overrides[row.name]?.[key] ?? ""}
                         onChange={(e) => onOverride(row.name, key, e.target.value)}
-                        placeholder="Type a value if the config has none"
+                        placeholder={askHint(row, key)}
                         className="field flex-1 px-2 py-1 font-mono text-[12px]"
                       />
                     </label>
                   ))}
-                  <span className="block text-[11px] leading-relaxed text-zinc-500">
-                    Kept in the encrypted vault, never in the config file.
-                  </span>
+                  {asked.some((k) => secretKeys.includes(k) || looksSecretName(k)) && (
+                    <span className="block text-[11px] leading-relaxed text-zinc-500">
+                      Kept in the encrypted vault, never in the config file.
+                    </span>
+                  )}
                 </div>
               )}
             </details>

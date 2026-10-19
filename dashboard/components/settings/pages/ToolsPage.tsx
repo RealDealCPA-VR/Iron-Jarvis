@@ -70,6 +70,7 @@ import { mentionsNode } from "@/lib/addPackWords";
 import { EditPack, type EditSaved } from "@/components/tools/EditPack";
 import {
   LAUNCHER_CHOICES,
+  bearerAuth,
   buildLaunch,
   guessLauncher,
   safeName,
@@ -162,6 +163,18 @@ interface McpCatalogEntry {
    *  right now (the SAME resolution that starts the pack). Absent on an older
    *  daemon — then the card keeps the amber "Needs X" exactly as before. */
   runtime_ready?: boolean;
+  /** v1.355.0 (G44): a REMOTE pack (GitHub's own server) — "http" | "sse",
+   *  its address, and which of `env_keys` is the token sent as
+   *  "Authorization: Bearer". Such a row has no command; Add posts the http
+   *  body through the same POST /mcp/servers door. */
+  transport?: string;
+  url?: string;
+  auth_field?: string;
+}
+
+/** v1.355.0 (G44): a catalog row that is a server address, not a command. */
+function isRemoteEntry(entry: McpCatalogEntry): boolean {
+  return entry.transport === "http" || entry.transport === "sse";
 }
 
 /**
@@ -963,7 +976,10 @@ export default function ToolsPage() {
     setCfgEnv({});
   }
 
-  /** POST /mcp/servers and report tools_loaded / the restart note honestly. */
+  /** POST /mcp/servers and report tools_loaded / the restart note honestly.
+   *  v1.355.0 (G44): `remote` posts a server ADDRESS instead of a command
+   *  (GitHub's own server): `{name, transport, url, auth}` with the token as
+   *  "Authorization: Bearer" (the daemon vaults it; it never comes back). */
   async function addMcpServer(
     serverName: string,
     cmd: string,
@@ -971,6 +987,7 @@ export default function ToolsPage() {
     env: Record<string, string>,
     busyKey: string,
     launcher?: Launcher,
+    remote?: { transport: "http" | "sse"; url: string; token: string },
   ): Promise<boolean> {
     setMcpBusy(busyKey);
     setMcpError(null);
@@ -981,13 +998,23 @@ export default function ToolsPage() {
       // stamp would silently survive the user later unchecking the box.
       // v1.343.0: the npm door names its launcher; a catalog add sends none
       // and its body stays byte for byte what it was.
-      const res = await post<McpAddResult>("/mcp/servers", {
-        name: serverName,
-        command: cmd,
-        args,
-        env,
-        ...(launcher ? { launcher } : {}),
-      });
+      const res = await post<McpAddResult>(
+        "/mcp/servers",
+        remote
+          ? {
+              name: serverName,
+              transport: remote.transport,
+              url: remote.url,
+              ...(remote.token ? { auth: bearerAuth(remote.token) } : {}),
+            }
+          : {
+              name: serverName,
+              command: cmd,
+              args,
+              env,
+              ...(launcher ? { launcher } : {}),
+            },
+      );
       const approveNote = res.auto_approve
         ? " Autonomous agents may run MCP tools without asking after the next restart."
         : "";
@@ -1269,7 +1296,10 @@ export default function ToolsPage() {
             <span className="ml-1 font-mono text-zinc-600">{entry.id}</span>
           </summary>
           <div className="mt-2">
-            <ArgvChips argv={[entry.command, ...entry.args]} />
+            {/* v1.355.0 (G44): a remote pack starts from its address. */}
+            <ArgvChips
+              argv={isRemoteEntry(entry) ? [entry.url ?? ""] : [entry.command, ...entry.args]}
+            />
           </div>
         </details>
       </div>
@@ -1486,13 +1516,21 @@ export default function ToolsPage() {
       if (k.startsWith("ph:")) phValues[k.slice(3)] = v;
       else if (k.startsWith("env:")) env[k.slice(4)] = v;
     }
-    const ok = await addMcpServer(
-      entry.id,
-      entry.command,
-      substituteArgs(entry.args, phValues),
-      env,
-      entry.id,
-    );
+    // v1.355.0 (G44): a remote row (GitHub's own server) posts its address
+    // and sends its one key as the bearer token; every other row is a command.
+    const ok = isRemoteEntry(entry)
+      ? await addMcpServer(entry.id, "", [], {}, entry.id, undefined, {
+          transport: entry.transport === "sse" ? "sse" : "http",
+          url: entry.url ?? "",
+          token: entry.auth_field ? (env[entry.auth_field] ?? "") : "",
+        })
+      : await addMcpServer(
+          entry.id,
+          entry.command,
+          substituteArgs(entry.args, phValues),
+          env,
+          entry.id,
+        );
     if (!ok) {
       setPendingError("The extension could not be connected — see the note above.");
       return;

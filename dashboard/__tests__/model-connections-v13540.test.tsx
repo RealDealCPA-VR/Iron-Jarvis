@@ -301,6 +301,28 @@ describe("G47: a save whose check could not reach the server says so", () => {
     expect(c.textContent).not.toMatch(/Endpoint saved/);
   });
 
+  it("v1.355.0 integrate: a check that REACHED the server and got an error never says 'could not reach'", async () => {
+    seed(customRow());
+    hooks.verify = [
+      {
+        tool_use: null,
+        error: "ProviderError: fleet-x API error 404: model 'm' not found",
+        hint: "",
+        answered: true,
+      },
+    ];
+    const c = await card();
+    await saveEndpoint(c, "http://box:1234/v1");
+    const said =
+      "Saved. http://box:1234/v1 answered, but with an error: ProviderError: fleet-x API error 404: model 'm' not found. " +
+      "Check the model name and the key, then press Verify tools.";
+    await waitFor(() => expect(within(c).getByText(said)).toBeInTheDocument());
+    const note = within(c).getByText(said).closest("[data-tone]") as HTMLElement;
+    expect(note.getAttribute("data-tone")).toBe("warn");
+    expect(c.textContent).not.toMatch(/could not reach/);
+    expect(c.textContent).not.toMatch(/Endpoint saved/);
+  });
+
   it("a server that answers keeps the green note, with no warning", async () => {
     seed(customRow());
     hooks.verify = [{ tool_use: true, vision: false, error: "" }];

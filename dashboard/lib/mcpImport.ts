@@ -40,6 +40,17 @@ export interface PreviewRow {
   exists_as?: string | null;
   /** v1.354.0 (G49): the catalog's one line about the package ("" = none). */
   blurb?: string | null;
+  /** v1.355.0: names the config left as PLACEHOLDERS (VS Code's
+   *  `${input:token}`, a plugin's `${GITHUB_TOKEN}`, `Bearer ${TOKEN}`); the
+   *  door asks for each and the daemon fills it in. Absent when none. */
+  asks?: string[] | null;
+  /** v1.355.0: the SAME server is already added under this other spelling
+   *  (`brave_search` for an imported `brave-search`). Absent otherwise. */
+  exists_name?: string | null;
+  /** v1.355.0: the user is signed in to an app of this name here (a Google
+   *  Drive sign-in gives memory search, not this server's tools). Absent
+   *  otherwise. */
+  signed_in_app?: string | null;
 }
 
 /** POST /mcp/import/preview's answer. */

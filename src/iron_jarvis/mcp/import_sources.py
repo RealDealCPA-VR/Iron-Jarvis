@@ -265,6 +265,11 @@ def _with_plugin_root(spec: PackSpec, root: Path) -> PackSpec:
     spec.args = [_sub(a) for a in spec.args]
     spec.cwd = _sub(spec.cwd)
     spec.env = {k: _sub(v) for k, v in spec.env.items()}
+    # v1.355.0 integrate: a value with a placeholder the user is asked for is
+    # filled from its TEMPLATE (mcp/import_config.fill_placeholders), so the
+    # folder is written into the template too.
+    for fill in getattr(spec, "fills", None) or []:
+        fill["template"] = _sub(str(fill.get("template") or ""))
     return spec
 
 

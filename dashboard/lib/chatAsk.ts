@@ -4,9 +4,9 @@
  * rule). v1.355.0: lifted out of components/onboarding/FirstRunStrip so a
  * light surface (the chat home's line) can link a question without pulling
  * the onboarding card and its motion code into its bundle.
- * FirstRunStrip.chatAskHref builds the identical URL; pointing it at this
- * one (a re-export) is the v1.355.0 integrator's step, so the URL keeps ONE
- * definition. dashboard/__tests__/background-names-v13550 pins the two equal.
+ * FirstRunStrip.chatAskHref IS this function (a re-export since the v1.355.0
+ * integrate step), so the URL keeps ONE definition.
+ * dashboard/__tests__/background-names-v13550 pins the two equal.
  */
 export function chatAskHref(text: string): string {
   return `/chat?ask=${encodeURIComponent(text)}`;

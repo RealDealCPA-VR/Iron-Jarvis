@@ -711,7 +711,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
         <Link
           href="/tools"
           className="inline-flex w-fit items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
-          title="Tools lists this same extension with its launch command — adding it in either place is the same thing"
+          title="Tools lists this same extension with how it starts — adding it in either place is the same thing"
         >
           Also in Tools — advanced setup <ArrowRight size={11} aria-hidden="true" />
         </Link>

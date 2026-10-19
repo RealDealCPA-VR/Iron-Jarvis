@@ -26,7 +26,7 @@
  * loop or boot step the daemon can report has no row here (or a row names a
  * loop that no longer exists): a new loop ships with its words.
  *
- * Dependency-free apart from lib/mission (itself import-free): the bell is on
+ * Dependency-free apart from lib/mission (runtime-free: one type-only import): the bell is on
  * every page and ~71 test files mock lib/api wholesale.
  */
 

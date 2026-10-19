@@ -1892,6 +1892,80 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Every reply says what happened, and every app has one way in (v1.355.0)
+
+Replies now say what was left out, what you approved and how long they took;
+a failure comes with the button that fixes it; and each app you connect is
+added, changed and removed one way, wherever you start. The look of the app
+is the same.
+
+- **A failed answer has its fix beside it.** The line is the headline
+  ("Claude Code isn't signed in") with the one press that fixes it: **Sign in
+  to Claude Code** opens a sign-in window right there, and a refused key gets
+  **Update the key in Connections**. The service's own words are folded under
+  **Details**, **Retry** works as before, and "Your message is back in the
+  box." says your question was kept. This is the same whether the answer was
+  streaming or not.
+- **A reply says what it had to leave out.** On a very long chat a model can
+  refuse because it is too long. Iron Jarvis shortens it and asks once more,
+  and the reply's line says so: "Left out 12 older messages to fit this
+  model" (or "Shortened earlier tool results to fit this model" when nothing
+  was left out). Open the reply's line to see why, and every approval you
+  gave during it ("You approved: save a file (once)").
+- **A plain answer says how long it took.** "Answered in 2.1 s" sits quietly
+  above a reply that needed no steps.
+- **Agents you @-mention say when they answered.** A reply reads "from
+  hermes · 6 min 12 s". A remote agent still working says "· waiting 3 min"
+  until its answer arrives. One that cannot message back says so, and how to
+  turn **Let it message back** on.
+- **Background problems are named, with what still works.** Instead of an
+  internal task name, the bell and Everything › Status say "Slack messages
+  aren't arriving · Open", note what keeps working (chat and your other
+  channels), and **Open** goes to the page that fixes it. A task that keeps
+  retrying shows how long it has really been failing. The chat home offers
+  **Ask Jarvis** with "Why is a background task failing?" ready to send. When
+  nothing answered a background job, the notice says the same sentence the
+  job's own page says, adds "Nothing was changed in that step.", and offers
+  **See the job**.
+- **GitHub connects to GitHub's own server.** There is nothing to install:
+  paste a personal access token and it works, from the Directory or from
+  Tools (both store the same connection). An older GitHub connection keeps
+  working, and its card says how to switch.
+- **Change a key without disconnecting.** A connected app that holds a key
+  has **Change key** on its Directory card. Paste the new one and it reloads
+  in place. A key typed on the chat's secure card replaces the same key, and
+  **Undo** there puts the old one back.
+- **A connected app says what it can do.** "Can read · Can change (2 tools) ·
+  Asks before changing anything", read off the app's real tools.
+- **Disconnect removes everything.** The connection, its keys and what it
+  remembered all go, so connecting again is a clean start, and a failed
+  connect says the real reason.
+- **Bringing tools from your other apps asks for what they left blank.** VS
+  Code's `${input:…}` prompts and a plugin's `${TOKEN}` are not values: the
+  row opens on a box for each one, and a header like `Bearer ${TOKEN}` asks
+  for TOKEN and fills it in. A tool already added under a slightly different
+  name reads "already added as brave_search" only when it really is the same
+  tool. Being signed in to Google Drive here (that gives memory search) is
+  said on its own line, not as "already connected".
+- **Gemini takes a key.** Paste a key from Google AI Studio on the Google
+  card or in the first-run door. Its Test checks the key, the current Gemini
+  models are in the model menu, and the card says whether you connected by
+  key or by signing in.
+- **Local servers in one press.** The first-run door and Settings ›
+  Connections both call it **Model servers on your network**, with **LM
+  Studio on this PC** and **llama.cpp** as one-press choices that list the
+  server's own models. With Ollama, **Download a starter model** opens a
+  Build pane already downloading Llama 3.2. Saving a server that answered
+  with an error now says it answered ("Check the model name and the key"),
+  never that it couldn't be reached.
+- **Forms for work that runs on its own say how asks work.** New schedules,
+  goals and workflows say: "If a step needs your OK it waits 5 minutes (bell
+  and desktop notice); if nobody answers, that step is skipped."
+- **Two presses, everywhere.** Removing a link in the memory graph and ending
+  a Creative session take two presses like every other removal, with no
+  pop-up dialog.
+- **A Brave Search key saved from the Directory now powers web search too.**
+
 ## Plain words everywhere; chat knows your apps (v1.354.0)
 
 Iron Jarvis now says what happened in plain words, in the same words

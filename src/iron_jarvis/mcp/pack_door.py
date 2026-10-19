@@ -132,6 +132,32 @@ def load_config(
     return loaded
 
 
+def _server_identity(cfg: dict[str, Any]) -> tuple[str, str, str, str]:
+    """Which server a row launches or reaches: its transport, its address,
+    and (stdio) its command and the package it runs (the first argument that
+    is not a flag). A changed folder or key is the SAME server."""
+    transport = str(cfg.get("transport") or "stdio").lower()
+    if transport in ("http", "sse"):
+        return (transport, str(cfg.get("url") or ""), "", "")
+    package = next((str(a) for a in (cfg.get("args") or []) if not str(a).startswith("-")), "")
+    return ("stdio", "", str(cfg.get("command") or ""), package)
+
+
+def _forget_manifest(platform: Any, name: str) -> bool:
+    """Delete ``<home>/mcp/manifests/<name>.json`` (the next load is a first
+    load). Never raises."""
+    try:
+        from .manifest import PackManifest
+
+        path = PackManifest(platform.config.home).path(name)
+        if path.is_file():
+            path.unlink()
+            return True
+    except (OSError, AttributeError, TypeError) as exc:
+        log.warning("MCP pack %r: manifest could not be removed: %s", name, type(exc).__name__)
+    return False
+
+
 def install_config(
     platform: Any,
     cfg: dict[str, Any],
@@ -150,6 +176,13 @@ def install_config(
     if idx is None:
         servers.append(cfg)
     else:
+        if _server_identity(servers[idx]) != _server_identity(cfg):
+            # v1.355.0 integrate (lane 5B note 4): the row now names a
+            # DIFFERENT server (an older GitHub pack's stdio package replaced
+            # by GitHub's own http server). Its tools are not the old
+            # server's, so the old manifest would quarantine every write tool
+            # of the server the user just chose; a new server is a first load.
+            _forget_manifest(platform, name)
         servers[idx] = cfg
     platform.config.mcp_servers = servers
     (persist or persist_for(platform))(["mcp_servers"])

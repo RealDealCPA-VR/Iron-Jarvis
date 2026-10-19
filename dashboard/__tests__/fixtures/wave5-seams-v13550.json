@@ -1,0 +1,59 @@
+{
+  "_note": "written by tests/test_integrate_wave5_v13550.py (IJ_REGEN_WAVE5_SEAMS=1)",
+  "banner": {
+    "_raised_words": {
+      "fix": "Bring it back up, or pick another model for this chat, and retry.",
+      "technical": "Office Spark isn't connected right now, so this turn was not answered. No substitute was used on purpose. A stand-in answer would look like real work that never happened. Bring that endpoint back up, or pick another model for this chat, and retry.",
+      "title": "Office Spark isn't connected right now"
+    },
+    "event": {
+      "payload": {
+        "fix": "Bring it back up, or pick another model for this chat, and retry.",
+        "label": "Office Spark",
+        "reason": "not connected",
+        "requested": "fleet-fa2-anth",
+        "title": "Office Spark isn't connected right now",
+        "used": "none"
+      },
+      "session_id": "sess_wave5",
+      "type": "provider.downgraded"
+    },
+    "run_summary": "The run failed: Office Spark isn't connected right now. Bring it back up, or pick another model for this chat, and retry."
+  },
+  "refused_key": {
+    "post": {
+      "detail": "openrouter API error 401: No auth credentials found",
+      "fix": "Update it in Settings › Connections.",
+      "fix_kind": "key",
+      "fix_provider": "openrouter",
+      "technical": "openrouter API error 401: No auth credentials found",
+      "title": "OpenRouter refused your key"
+    },
+    "stream": {
+      "detail": "openrouter API error 401: No auth credentials found",
+      "fix": "Update it in Settings › Connections.",
+      "fix_kind": "key",
+      "fix_provider": "openrouter",
+      "technical": "openrouter API error 401: No auth credentials found",
+      "title": "OpenRouter refused your key"
+    }
+  },
+  "signed_out": {
+    "post": {
+      "detail": "claude-cli: Claude Code isn't signed in. Open a terminal, run `claude`, then `/login`, then click Test on Connections. (the CLI said: Not logged in · Please run /login)",
+      "fix": "Press Sign in beside Claude Code in Settings › Connections, then retry.",
+      "fix_kind": "sign_in",
+      "fix_provider": "claude-cli",
+      "technical": "claude-cli: Claude Code isn't signed in. Open a terminal, run `claude`, then `/login`, then click Test on Connections. (the CLI said: Not logged in · Please run /login)",
+      "title": "Claude Code isn't signed in"
+    },
+    "stream": {
+      "detail": "claude-cli: Claude Code isn't signed in. Open a terminal, run `claude`, then `/login`, then click Test on Connections. (the CLI said: Not logged in · Please run /login)",
+      "fix": "Press Sign in beside Claude Code in Settings › Connections, then retry.",
+      "fix_kind": "sign_in",
+      "fix_provider": "claude-cli",
+      "technical": "claude-cli: Claude Code isn't signed in. Open a terminal, run `claude`, then `/login`, then click Test on Connections. (the CLI said: Not logged in · Please run /login)",
+      "title": "Claude Code isn't signed in"
+    }
+  }
+}

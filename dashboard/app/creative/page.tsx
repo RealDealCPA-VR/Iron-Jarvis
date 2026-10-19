@@ -39,7 +39,6 @@ import {
   Search,
   Send,
   Share2,
-  Square,
   Star,
   Terminal,
   Trash2,
@@ -54,6 +53,7 @@ import { timeAgo } from "@/lib/format";
 import type { AiCli, Drive, FsEntry, FsListing, Skill } from "@/lib/types";
 import {
   Card,
+  ConfirmButton,
   Empty,
   ErrorNote,
   SuccessNote,
@@ -2623,8 +2623,9 @@ function StudioView({
   }, [booting, queuedBrief, session, alive, gone, phase]);
 
   const endSession = async () => {
+    // v1.355.0 integrate: the press is the two-press ConfirmButton below
+    // (it was a native confirm() dialog).
     if (!session || ending) return;
-    if (!window.confirm("End this session? The terminal will be closed.")) return;
     setEnding(true);
     try {
       await del(`/terminals/${session.terminalId}`);
@@ -2781,20 +2782,13 @@ function StudioView({
             >
               Open terminal in Build <ArrowRight size={12} />
             </Link>
-            <button
-              type="button"
-              onClick={endSession}
-              disabled={ending}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-rose-500/25 bg-rose-500/[0.06] px-3 py-1.5 text-xs font-medium text-rose-300 transition-colors hover:bg-rose-500/[0.12] disabled:opacity-50"
-            >
-              {ending ? (
-                <LoaderInline label="Ending…" />
-              ) : (
-                <>
-                  <Square size={12} /> End session
-                </>
-              )}
-            </button>
+            <ConfirmButton
+              onConfirm={endSession}
+              label="End session"
+              confirmLabel="End it? The terminal closes"
+              title="End this session — its terminal will be closed"
+              className="shrink-0 rounded-xl px-3 py-1.5"
+            />
           </div>
         </Reveal>
 

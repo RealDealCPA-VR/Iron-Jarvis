@@ -66,3 +66,31 @@ export function turnErrorTechnical(e: unknown): string {
   if (!failureSentence(f.title, f.fix)) return "";
   return text(f.technical);
 }
+
+/**
+ * v1.355.0 integrate (G29 joined to G28 on the POST lane): `POST /chat`
+ * answers a failed turn 502 with the SAME `{detail, title, fix, technical,
+ * fix_kind, fix_provider}` the stream's error frame carries (one
+ * `chat_turn.error_payload`, MIRROR NOTE), and `lib/api` keeps that JSON on
+ * `ApiError.body` — but the page read only `detail`. This reads the body
+ * into the fields a `StreamError` has (`fixKind` / `fixProvider` included),
+ * so `turnErrorText`, `turnErrorTechnical` and `failureActions.failureFacts`
+ * give the POST lane the stream lane's headline, folded details and press.
+ * An error with no such body keeps its own message. Read by shape.
+ */
+export function postFailureFields(
+  e: unknown,
+): FailureFields & { fixKind: string; fixProvider: string } {
+  const obj = e && typeof e === "object" ? (e as FailureFields & { body?: unknown }) : null;
+  const message = obj ? text(obj.message) : "";
+  const raw = obj?.body;
+  const b = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  return {
+    message: message || String(e),
+    title: text(b.title),
+    fix: text(b.fix),
+    technical: text(b.technical),
+    fixKind: text(b.fix_kind),
+    fixProvider: text(b.fix_provider),
+  };
+}

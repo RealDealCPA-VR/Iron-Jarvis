@@ -33,6 +33,7 @@ import { ArrowRight, FolderSearch, Mail, MessageSquare, ScrollText, Sparkles } f
 import type { ApiState } from "@/lib/useApi";
 import type { Onboarding } from "@/lib/types";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
+import { chatAskHref } from "@/lib/chatAsk";
 
 /** One-click, broadly-safe starter tasks that take a first-time user straight
  *  to a real result. Shared by the strip (as /chat?ask= links) and by the
@@ -69,10 +70,10 @@ export const FIRST_WIN_TASKS: {
   },
 ];
 
-/** Where a question goes: Chat, with the text waiting in the composer. */
-export function chatAskHref(text: string): string {
-  return `/chat?ask=${encodeURIComponent(text)}`;
-}
+/** Where a question goes: Chat, with the text waiting in the composer.
+ *  v1.355.0: ONE definition, lib/chatAsk (re-exported here for the callers
+ *  that import it from this module). */
+export { chatAskHref };
 
 export function FirstRunStrip({ onboarding }: { onboarding: ApiState<Onboarding> }) {
   return (

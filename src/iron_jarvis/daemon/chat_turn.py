@@ -647,7 +647,12 @@ def _shrink_to_window(d, msgs, system: str, provider: str, model: str, *, head: 
             keep_from += 1
     kept = list(msgs[keep_from:])
     new_head = head - keep_from
-    sent, sent_system = _fit_turn_transcript(d, kept, system2, provider, model, head=new_head)
+    # v1.355.0 integrate (lane 5A's note): the model is told older messages
+    # were left out ONLY when some were. A retry that only shortened this
+    # turn's own tool results (dropped 0) used to carry the note anyway,
+    # while the user's receipt says "No messages were left out".
+    fit_system = system2 if keep_from > 0 else system
+    sent, sent_system = _fit_turn_transcript(d, kept, fit_system, provider, model, head=new_head)
     # Still too big — including when nothing could be taken out, since an
     # unchanged request is over the learned window by construction: a retry
     # would be the same refusal again.

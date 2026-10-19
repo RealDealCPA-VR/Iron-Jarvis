@@ -27,10 +27,9 @@ runtime, the real app factory); only the network answer is faked.
 3. The card's method chip says how the credential was made: the registry's
    rows carry ``connected_via`` (the stored record's own method).
 
-Every pin that needs an edit in a file this lane does not own is a STRICT
-xfail naming the edit; the edits are one patch the integrator applies
-(``5d_integrator.patch`` from the lane's notes), after which each marker is
-taken off on purpose and the pin must pass.
+The edits in files the lane did not own (google.py, anthropic.py,
+runtime.py, dynamic.py, ModelSwitcher.tsx, registry.py) landed at the
+v1.355.0 integrate step; the strict-xfail markers were taken off then.
 """
 
 from __future__ import annotations
@@ -57,16 +56,6 @@ KEY = "AQ.Ab8RN6L-lane5d-tool-loop-key-0123456789"
 SIG = "CiQBcsjafE-lane5d-signature-A"
 SIG_B = "CiQBcsjafE-lane5d-signature-B"
 SKIP = "skip_thought_signature_validator"
-
-_PATCH = "the lane-5D integrator patch (5d_integrator.patch)"
-
-
-def _needs(edit: str):
-    return pytest.mark.xfail(
-        strict=True,
-        reason=f"INTEGRATOR: {edit} -- in {_PATCH}. Remove this marker when it lands.",
-    )
-
 
 def _read(path: Path) -> str:
     # CRLF on the CI runner, LF here: normalise at the READER.
@@ -166,7 +155,6 @@ def _round_two(resp, task: str = "read a.txt") -> list[LLMMessage]:
 # --------------------------------------------------------------------------- #
 # 1. The tool loop keeps its signatures
 # --------------------------------------------------------------------------- #
-@_needs("providers/adapters/google.py keeps each part's thoughtSignature (GEMINI_CARRIER) and replays it")
 @pytest.mark.parametrize("path", ["complete", "stream"])
 def test_round_two_of_a_gemini_3_tool_loop_carries_the_signature(path):
     """The reviewer's case: round one asks for a tool with a signature; round
@@ -200,7 +188,6 @@ def test_round_two_of_a_gemini_3_tool_loop_carries_the_signature(path):
     assert sent == [{"role": "model", "parts": first}]
 
 
-@_needs("providers/adapters/google.py replays a parallel turn's parts verbatim, in order")
 def test_parallel_calls_go_back_in_the_order_received_with_the_one_signature():
     """Parallel calls: "only the first functionCall part will contain the
     thought_signature" and the parts must come back in the order received."""
@@ -222,7 +209,6 @@ def test_parallel_calls_go_back_in_the_order_received_with_the_one_signature():
     assert _model_turns(fake.bodies[1]) == [{"role": "model", "parts": first}]
 
 
-@_needs("providers/adapters/google.py puts skip_thought_signature_validator on a rebuilt Gemini 3 turn")
 def test_a_turn_gemini_did_not_write_gets_googles_skip_value_on_its_first_call():
     """Another provider's turn after a failover, a resumed run: no carrier.
     Gemini 3 needs a signature on the first call of the step; Google documents
@@ -263,7 +249,6 @@ def test_control_an_older_gemini_turn_is_rebuilt_exactly_as_before():
     assert _model_turns({"contents": gmod.GoogleAdapter._to_contents(msgs)}) == [want]
 
 
-@_needs("providers/adapters/google.py never attaches a signature to a turn that was edited")
 def test_an_edited_turn_never_carries_a_signature_it_was_not_written_with():
     """The claude-cli rule: a turn whose calls changed since the model wrote
     them is rebuilt -- with Google's skip value, never the stale signature."""
@@ -280,7 +265,6 @@ def test_an_edited_turn_never_carries_a_signature_it_was_not_written_with():
     assert SIG not in json.dumps(turn)
 
 
-@_needs("providers/adapters/google.py writes no carrier when nothing was signed")
 def test_a_response_with_no_signature_or_no_call_carries_nothing():
     """Nothing to keep -> ``raw_blocks == []`` (every older fixture and every
     plain answer is unchanged)."""
@@ -300,7 +284,6 @@ def test_a_response_with_no_signature_or_no_call_carries_nothing():
     assert len(signed.raw_blocks) == 1 and signed.raw_blocks[0]["type"] == "gemini_native"
 
 
-@_needs("providers/adapters/anthropic.py _own_blocks leaves out the gemini_native carrier")
 def test_the_anthropic_adapter_never_replays_geminis_parts():
     """A turn that moves from Gemini to Claude (an Auto turn's failover) must
     not hand Gemini parts to the Messages API as content blocks."""
@@ -316,7 +299,6 @@ def test_the_anthropic_adapter_never_replays_geminis_parts():
 # --------------------------------------------------------------------------- #
 # The loop through the REAL agent runtime
 # --------------------------------------------------------------------------- #
-@_needs("agents/runtime.py copies resp.raw_blocks onto the assistant turn (+ google.py's carrier)")
 def test_an_agent_runs_gemini_tool_loop_sends_the_signature_back(tmp_path):
     """The real perceive->act loop with the real Gemini adapter the manager
     builds for a key: step one asks for read_file with a signature, step two
@@ -354,7 +336,6 @@ def test_an_agent_runs_gemini_tool_loop_sends_the_signature_back(tmp_path):
 _CURRENT = {"gemini-3.8-flash", "gemini-3.5-flash-lite"}
 
 
-@_needs("agents/dynamic.py KNOWN_MODELS google rows = gemini-3.8-flash, gemini-3.5-flash-lite")
 def test_the_model_menu_lists_only_current_geminis():
     """gemini-2.0-flash was shut down and gemini-1.5-pro retired; the two
     Google names "for any new projects" are both Stable (docs read 2026-10-19).
@@ -366,7 +347,6 @@ def test_the_model_menu_lists_only_current_geminis():
     assert GEMINI_DEFAULT_MODEL in google
 
 
-@_needs("dashboard/components/ModelSwitcher.tsx TIERS.google = 3.5-flash-lite / 3.8-flash / 3.8-flash")
 def test_the_quality_dial_names_current_geminis():
     src = _read(DASH / "components" / "ModelSwitcher.tsx")
     block = re.search(r"\n  google: \{\n(.*?)\n  \},", src, re.S)
@@ -405,7 +385,6 @@ def _row(c: TestClient, provider: str) -> dict:
     return rows[provider]
 
 
-@_needs("connections/registry.py status() rows carry connected_via (the record's own method)")
 def test_the_card_says_whether_google_was_connected_by_key_or_by_login(client):
     """``method`` is the spec's primary way ("api_key" for Google now), so a
     login-connected card read "API key". MUTATION: report ``spec.method`` as

@@ -7,6 +7,9 @@ import { useEvents } from "@/lib/useEvents";
 import type { IJEvent } from "@/lib/types";
 // v1.355.0 (G32): where a run opens (a mission on its screen, else its page).
 import { sessionHref } from "@/lib/missionLinks";
+// v1.355.0 integrate: the ONE sentence for a refusal's cause (the run's own
+// summary words, providers/failure_words via the daemon).
+import { failureSentence } from "@/lib/failureLine";
 
 /** The one /events type the banner reads (v1.311.0). */
 export const PROVIDER_DOWNGRADE_EVENT_TYPES: readonly string[] = ["provider.downgraded"];
@@ -67,10 +70,14 @@ export function downgradeNotice(e: IJEvent | null | undefined): DowngradeNotice 
     // The name exactly as the user gave it (a label is never re-cased).
     const name = String(p.label || p.requested || "the chosen model");
     const why = reason.trim().replace(/[.\s]+$/, "");
+    // v1.355.0 integrate: the daemon's failure_words sentence for this cause
+    // (title + fix) when it sends one -- the same words the job's own
+    // summary ends with. An older daemon keeps the reason clause below.
+    const plain = failureSentence(p.title, p.fix);
     return {
       kind: "refused",
       title: "Nothing answered a background job.",
-      detail: why ? `${name}: ${why}.` : `${name} did not answer.`,
+      detail: plain || (why ? `${name}: ${why}.` : `${name} did not answer.`),
       still: REFUSED_STILL,
       sessionId: runId,
     };

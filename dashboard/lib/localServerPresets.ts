@@ -5,7 +5,7 @@
  * had to know to add a custom endpoint, type `localhost:1234` and pick a
  * server type. These are the two presets the endpoint forms offer as chips —
  * Settings › Connections' "Add an endpoint" form and the first-run key door's
- * "Custom endpoint" — each filling the address and server type and then
+ * "Model servers on your network" — each filling the address and server type and then
  * pressing the form's EXISTING "Fetch available models"
  * (components/connections/EndpointModelPicker), so the server's own models are
  * listed to pick. Nothing is probed until the chip is pressed, and nothing is

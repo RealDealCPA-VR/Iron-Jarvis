@@ -9,7 +9,9 @@ callable, and the async HTTP client is injectable so tests stay offline.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import re
 from collections.abc import AsyncIterator
 from typing import Any, Callable
 
@@ -60,6 +62,120 @@ def _thinking_config(body: dict[str, Any], reasoning: str) -> None:
 def _is_thought(part: Any) -> bool:
     """A Gemini part that is the model's THOUGHT, not its answer (v1.323.0)."""
     return isinstance(part, dict) and part.get("thought") is True
+
+
+#: The ``raw_blocks`` entry this adapter writes for a model turn that asked
+#: for tools and carried a thought signature (v1.355.0): Gemini's OWN parts,
+#: verbatim, plus the projection (text + calls) they were written for.
+#: Gemini 3 answers 400 when a ``functionCall`` of the current turn comes back
+#: without the ``thoughtSignature`` it was sent with (Vertex AI "Thought
+#: signatures", read 2026-10-19: "If a required thought signature is not
+#: returned when using Gemini 3 models, the model will return a 400 error";
+#: the Gemini API thinking guide: "You MUST always resend all thought blocks
+#: exactly as they were received"), and the rebuilt turn dropped it -- so
+#: every tool loop failed at its second request. Same shape as the claude-cli
+#: carrier: replayed verbatim ONLY while the turn's current text + calls still
+#: equal the projection, so a signature never rides content it did not sign.
+#: Other adapters never replay it (anthropic.py's ``_own_blocks``).
+GEMINI_CARRIER = "gemini_native"
+
+#: Google's documented value for a ``functionCall`` part the API did not
+#: write -- "transferring history from a model that does not include thought
+#: signatures" (Vertex AI "Thought signatures", read 2026-10-19; "a last
+#: resort"). Put on the FIRST call of a REBUILT model turn (parallel calls:
+#: "only the first functionCall part will contain the thought_signature")
+#: for a Gemini 3+ model only: another provider's turn after a failover, a
+#: resumed run, an edited turn.
+SKIP_SIGNATURE = "skip_thought_signature_validator"
+
+_GEMINI_MAJOR = re.compile(r"gemini-(\d+)")
+
+
+def _signs_function_calls(model: str) -> bool:
+    """True for a Gemini 3+ model id (the family that validates signatures)."""
+    m = _GEMINI_MAJOR.search((model or "").lower())
+    return bool(m) and int(m.group(1)) >= 3
+
+
+def _signature(part: Any) -> str | None:
+    """The thought signature a part carries (REST spells it
+    ``thoughtSignature``; one Google example writes ``thought_signature``)."""
+    if not isinstance(part, dict):
+        return None
+    sig = part.get("thoughtSignature") or part.get("thought_signature")
+    return sig if isinstance(sig, str) and sig else None
+
+
+def _projection(text: str, calls: list[ToolCall]) -> str:
+    """What a model turn says, canonical: its text and its calls in order."""
+    return json.dumps(
+        {
+            "content": (text or "").strip(),
+            "tool_calls": [{"name": c.name, "args": c.arguments} for c in calls],
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _carrier(parts: list[dict[str, Any]], text: str, calls: list[ToolCall]) -> list[dict[str, Any]]:
+    """The ``raw_blocks`` for a response: ONE carrier when it asked for tools
+    and a part carries a signature, else ``[]`` (nothing to keep)."""
+    if not calls or not any(_signature(p) for p in parts):
+        return []
+    return [
+        {
+            "type": GEMINI_CARRIER,
+            "version": 1,
+            "parts": copy.deepcopy(parts),
+            "projection": _projection(text, calls),
+        }
+    ]
+
+
+def _replayable(message: LLMMessage) -> list[dict[str, Any]] | None:
+    """The native parts to replay for a model turn, or None to rebuild:
+    exactly one carrier, version 1, whose projection still equals the turn."""
+    found = [
+        b for b in (getattr(message, "raw_blocks", None) or [])
+        if isinstance(b, dict) and b.get("type") == GEMINI_CARRIER
+    ]
+    if len(found) != 1:
+        return None
+    entry = found[0]
+    parts = entry.get("parts")
+    if entry.get("version") != 1 or not isinstance(parts, list) or not parts:
+        return None
+    if not all(isinstance(p, dict) for p in parts):
+        return None
+    if entry.get("projection") != _projection(message.content, message.tool_calls):
+        return None
+    return copy.deepcopy(parts)
+
+
+def _fold_stream_part(raw: list[dict[str, Any]], part: dict[str, Any]) -> None:
+    """Add one STREAMED part to the turn's native parts: a ``functionCall``
+    part is kept whole (signature and all); text deltas join the text part
+    they continue (a thought and the answer kept apart), and a signature that
+    arrives on any of them -- or alone on an empty part -- stays on it."""
+    if part.get("functionCall"):
+        raw.append(copy.deepcopy(part))
+        return
+    text = part.get("text")
+    text = text if isinstance(text, str) else ""
+    sig = _signature(part)
+    if not text and not sig:
+        return
+    thought = _is_thought(part)
+    last = raw[-1] if raw else None
+    if last is None or "functionCall" in last or bool(last.get("thought")) != thought:
+        last = {"text": ""}
+        if thought:
+            last["thought"] = True
+        raw.append(last)
+    last["text"] = str(last.get("text") or "") + text
+    if sig:
+        last["thoughtSignature"] = sig
 
 
 def _finish(finish_reason: Any, has_calls: bool) -> str:
@@ -115,7 +231,9 @@ class GoogleAdapter(LLMAdapter):
 
     # -- request shaping ----------------------------------------------------
     @staticmethod
-    def _to_contents(messages: list[LLMMessage]) -> list[dict[str, Any]]:
+    def _to_contents(messages: list[LLMMessage], model: str = "") -> list[dict[str, Any]]:
+        """The ``contents`` of a request. ``model`` (v1.355.0) decides whether a
+        REBUILT tool-calling turn needs Google's skip placeholder (Gemini 3+)."""
         contents: list[dict[str, Any]] = []
         for m in messages:
             if m.role == "tool":
@@ -133,13 +251,22 @@ class GoogleAdapter(LLMAdapter):
                     }
                 )
             elif m.role == "assistant" and m.tool_calls:
+                # v1.355.0: the model's own parts, signatures included, when
+                # the turn is still what it wrote (see GEMINI_CARRIER).
+                native = _replayable(m)
+                if native is not None:
+                    contents.append({"role": "model", "parts": native})
+                    continue
                 parts: list[dict[str, Any]] = []
                 if m.content:
                     parts.append({"text": m.content})
-                for tc in m.tool_calls:
-                    parts.append(
-                        {"functionCall": {"name": tc.name, "args": tc.arguments}}
-                    )
+                for i, tc in enumerate(m.tool_calls):
+                    call: dict[str, Any] = {
+                        "functionCall": {"name": tc.name, "args": tc.arguments}
+                    }
+                    if i == 0 and _signs_function_calls(model):
+                        call["thoughtSignature"] = SKIP_SIGNATURE
+                    parts.append(call)
                 contents.append({"role": "model", "parts": parts})
             else:
                 role = "model" if m.role == "assistant" else "user"
@@ -248,6 +375,7 @@ class GoogleAdapter(LLMAdapter):
                     ToolCall(id=name, name=name, arguments=dict(fc.get("args") or {}))
                 )
         text = "".join(text_parts)
+        raw_parts = [p for p in parts if isinstance(p, dict)]
         if not text and not tool_calls:
             # No usable candidate: refuse honestly instead of returning a blank
             # reply that every layer above reads as a successful answer.
@@ -266,6 +394,10 @@ class GoogleAdapter(LLMAdapter):
             finish_reason=finish,
             usage=usage_dict,
             thinking="".join(thinking_parts),
+            # v1.355.0: the parts verbatim, so the next round of a tool loop
+            # sends each thought signature back (both chat lanes and the
+            # agent runtime copy raw_blocks onto the assistant turn).
+            raw_blocks=_carrier(raw_parts, text, tool_calls),
         )
 
     # -- the interface ------------------------------------------------------
@@ -286,7 +418,7 @@ class GoogleAdapter(LLMAdapter):
         # Resolve the credential off the event loop: an OAuth credential() may do
         # a blocking (up to 30s) httpx refresh, which must not stall the loop.
         key = await asyncio.to_thread(self._resolve_key)
-        body: dict[str, Any] = {"contents": self._to_contents(messages)}
+        body: dict[str, Any] = {"contents": self._to_contents(messages, self.model)}
         if system:
             body["system_instruction"] = {"parts": [{"text": system}]}
         if tools:
@@ -382,7 +514,7 @@ class GoogleAdapter(LLMAdapter):
         reasoning: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         key = await asyncio.to_thread(self._resolve_key)
-        body: dict[str, Any] = {"contents": self._to_contents(messages)}
+        body: dict[str, Any] = {"contents": self._to_contents(messages, self.model)}
         if system:
             body["system_instruction"] = {"parts": [{"text": system}]}
         if tools:
@@ -401,6 +533,8 @@ class GoogleAdapter(LLMAdapter):
 
         text_parts: list[str] = []
         thinking_parts: list[str] = []
+        #: v1.355.0: the turn's native parts as they stream (see _fold_stream_part).
+        raw_parts: list[dict[str, Any]] = []
         last_finish: Any = None
         tool_calls: list[ToolCall] = []
         usage_dict = {"input_tokens": 0, "output_tokens": 0}
@@ -450,6 +584,8 @@ class GoogleAdapter(LLMAdapter):
                 if candidate.get("finishReason"):
                     last_finish = candidate.get("finishReason")
                 for part in ((candidate.get("content") or {}).get("parts")) or []:
+                    if isinstance(part, dict):
+                        _fold_stream_part(raw_parts, part)
                     text = part.get("text")
                     if _is_thought(part):
                         # v1.323.0: a thought streams as `thinking` — never
@@ -495,5 +631,6 @@ class GoogleAdapter(LLMAdapter):
                 finish_reason=_finish(last_finish, bool(tool_calls)),
                 usage=usage_dict,
                 thinking="".join(thinking_parts),
+                raw_blocks=_carrier(raw_parts, text, tool_calls),
             ),
         }

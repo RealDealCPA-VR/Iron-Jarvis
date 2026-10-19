@@ -137,8 +137,8 @@ function ArcMark() {
  *     (Claude Code / Codex signed in on this PC), "Free & private on this PC"
  *     (Ollama), and "I have an API key" (the compact anthropic / openai /
  *     custom form) — because the old copy led with jargon a first-runner may
- *     not know. Gemini is OAuth-only, so it is a link to /connections, never
- *     a key form. Since v1.310.0 the doors are the shared ConnectDoors, and
+ *     not know. (Gemini takes an AI Studio key since v1.355.0, in the
+ *     shared key door's provider list.) Since v1.310.0 the doors are the shared ConnectDoors, and
  *     they stay up (with the explicit "Use it for answers" press on top)
  *     while the default is still the offline demo.
  *  2. Optional VOICE — test the mic through useDictation (greens on a non-empty

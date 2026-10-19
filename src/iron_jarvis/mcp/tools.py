@@ -779,7 +779,10 @@ def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict
     if "401" in raw or "403" in raw or "unauthorized" in low or "forbidden" in low:
         return {
             "reason": "the pack refused our credentials",
-            "fix": "Re-enter its key or token on Tools → Connected packs, then press Retry.",
+            "fix": (
+                "Change its key or token (Change key on its Directory card, or Edit "
+                "on Tools → Connected packs), then press Retry."
+            ),
         }
     if "connect" in low or "refused" in low or "unreachable" in low:
         return {

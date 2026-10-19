@@ -264,7 +264,7 @@ describe("G72: the key door's Custom endpoint", () => {
   it("'LM Studio on this PC' fills the address and lists the server's models to pick", async () => {
     render(<ConnectDoors />);
     openDoor(/I have an API key/);
-    fireEvent.click(screen.getByRole("button", { name: "Custom endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model servers on your network" }));
     expect(probes()).toHaveLength(0); // nothing is asked before the press
 
     fireEvent.click(screen.getByRole("button", { name: "LM Studio on this PC" }));
@@ -291,7 +291,7 @@ describe("G72: the key door's Custom endpoint", () => {
   it("'llama.cpp' asks llama-server's own port", async () => {
     render(<ConnectDoors />);
     openDoor(/I have an API key/);
-    fireEvent.click(screen.getByRole("button", { name: "Custom endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model servers on your network" }));
     fireEvent.click(screen.getByRole("button", { name: "llama.cpp" }));
     await screen.findByTestId("endpoint-model-picker");
     expect(probes().map((p) => (p.body as { base_url: string }).base_url)).toEqual(["http://localhost:8080/v1"]);
@@ -308,7 +308,7 @@ describe("G72: the key door's Custom endpoint", () => {
     });
     render(<ConnectDoors />);
     openDoor(/I have an API key/);
-    fireEvent.click(screen.getByRole("button", { name: "Custom endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model servers on your network" }));
     fireEvent.click(screen.getByRole("button", { name: "LM Studio on this PC" }));
     await waitFor(() =>
       expect((screen.getByTestId("endpoint-fetch-models") as HTMLButtonElement).disabled).toBe(true),
@@ -339,7 +339,7 @@ describe("G72: the key door's Custom endpoint", () => {
     };
     render(<ConnectDoors />);
     openDoor(/I have an API key/);
-    fireEvent.click(screen.getByRole("button", { name: "Custom endpoint" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model servers on your network" }));
     fireEvent.click(screen.getByRole("button", { name: "LM Studio on this PC" }));
     const err = await screen.findByTestId("endpoint-models-error");
     expect(err.textContent).toMatch(/server is running/);

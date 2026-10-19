@@ -77,7 +77,9 @@ export function packFailedBody(fix: unknown): string {
 }
 
 /** One /diagnostics → background_loops entry (daemon/app.py `_tick`). */
-type LoopHealth = { ok?: boolean; last_error?: string; error?: string; at?: string };
+/** v1.355.0: `since` = when the failing run STARTED (`at` = the latest
+ *  failure); an older daemon sends `at` only. */
+type LoopHealth = { ok?: boolean; last_error?: string; error?: string; at?: string; since?: string };
 
 /** v1.229.0 (audit OBS2): a background loop still failing after this long
  *  becomes a bell item. Shorter and a single blip (a fleet node rebooting)
@@ -99,8 +101,12 @@ function staleFailingLoops(
 ): FailingLoop[] {
   const out: FailingLoop[] = [];
   for (const [name, v] of Object.entries(loops ?? {})) {
-    if (!v || v.ok !== false || !v.at) continue;
-    const at = new Date(v.at).getTime();
+    // v1.355.0 integrate: age from the START of the failing run (`since`);
+    // `at` moves with every retry, so a loop retrying every few minutes
+    // never looked 5 minutes old.
+    const started = v?.since ?? v?.at;
+    if (!v || v.ok !== false || !started) continue;
+    const at = new Date(started).getTime();
     if (Number.isNaN(at)) continue;
     const age = now - at;
     if (age < LOOP_FAILING_AFTER_MS) continue;

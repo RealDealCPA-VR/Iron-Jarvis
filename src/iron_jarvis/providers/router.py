@@ -1200,12 +1200,26 @@ class ModelRouter:
                 " after failing repeatedly, so this turn was not sent to it"
             ),
         }.get(kind, "not connected")
+        # v1.355.0 integrate (G32 joined to G28): the ONE sentence for this
+        # cause -- failure_words' headline and fix for the very refusal this
+        # turn raises, the words a failed run's summary ends with -- so the
+        # banner and the run say the same thing. Wording only; never raises.
+        try:
+            words = _failure_words.friendly_error(
+                self._unavailable_error(wanted, False, kind=kind, retry_in=retry_in),
+                provider=wanted,
+                manager=self.manager,
+            )
+        except Exception:  # noqa: BLE001 — a banner's words never fail a turn
+            words = {}
         await self.event_bus.publish(
             EventType.PROVIDER_DOWNGRADED,
             {
                 "requested": wanted,
                 "used": "none",
                 "reason": reason,
+                "title": str(words.get("title") or ""),
+                "fix": str(words.get("fix") or ""),
                 "label": self._endpoint_label(wanted),
             },
             session_id=session_id,

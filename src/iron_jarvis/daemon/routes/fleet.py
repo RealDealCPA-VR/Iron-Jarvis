@@ -689,12 +689,24 @@ def register(app: FastAPI, d) -> None:
             node = d.fleet.get(node_id)
             if node is not None and not getattr(node, "routable", False):
                 hint = "turn on Routable for this node so it registers as a provider"
+            # v1.355.0 integrate: did the SERVER answer (with an HTTP error —
+            # a wrong model name, a refused key) or was it never reached?
+            # The router's one reading of a failure (failure_reason) decides,
+            # so the save note never says "could not reach" a server that
+            # answered.
+            from ...providers.router import failure_reason
+
+            try:
+                answered = failure_reason(exc).startswith("http ")
+            except Exception:  # noqa: BLE001 — wording only
+                answered = False
             return {
                 "node": _dump(node),
                 "tool_use": None,
                 "model": model,
                 "error": _err(exc),
                 "hint": hint,
+                "answered": answered,
             }
 
         # A response object with NO tool_calls attribute at all means we learned

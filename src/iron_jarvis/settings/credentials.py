@@ -64,8 +64,10 @@ def resolve_secret(name: str) -> tuple[schema.SecretDef, str, str]:
 def _resolve_app(name: str) -> tuple[schema.SecretDef, str, str]:
     """``app.<connector>`` (its one token) or ``app.<connector>__<FIELD>``
     (one of several) → the vault name the connector's MCP config reads
-    (``conn_<id>_<field>``, connectors.service) — so a token saved on the card
-    is the token the pack launches with (redesign S5)."""
+    (``connectors.service._secret_name``: ``mcp.<id>.<FIELD>``, or
+    ``mcp.<id>.auth.value`` for a remote card's token, since v1.355.0; it was
+    ``conn_<id>_<field>`` before) — so a token saved on the card is the token
+    the pack launches with (redesign S5)."""
     from ..connectors.catalog import get_connector
     from ..connectors.service import _secret_name
 
@@ -102,6 +104,14 @@ class CredentialStore:
         with self._lock:
             change_id = new_id("sec")
             prior = secrets.get(vault)
+            if not prior and name.startswith("app."):
+                # v1.355.0 integrate (lane 5B note 3): a pack saved before
+                # v1.355.0 reads its token from an OLDER row (``conn_*``);
+                # storing here points the pack at this row
+                # (records.adopt_card_secrets), so the value the pack used
+                # until now is THIS change's prior — an Undo puts it back into
+                # the row the pack now reads, instead of emptying it.
+                prior = self._pack_row_prior(arg, vault)
             backup = ""
             if prior:
                 backup = f"{BACKUP_PREFIX}{change_id}"
@@ -127,6 +137,30 @@ class CredentialStore:
             # and plain words only; never a value.
             out.update(self._app_outcome(arg))
         return out
+
+    def _pack_row_prior(self, connector_id: str, vault: str) -> str:
+        """The value the saved pack row reads for the field stored at
+        ``vault`` when that row names a DIFFERENT vault row (an older pack's
+        ``conn_<id>_<field>``); "" otherwise. Never raises, never logs a
+        value."""
+        try:
+            from ..connectors.catalog import get_connector
+            from ..connectors.service import _secret_name
+            from .records import _field_ref, snap_app
+
+            conn = get_connector(connector_id)
+            cfg = snap_app(self.platform, connector_id)
+            if conn is None or cfg is None:
+                return ""
+            for f in conn.fields:
+                if f.kind != "secret" or _secret_name(conn.id, f.name) != vault:
+                    continue
+                ref = _field_ref(cfg, conn, f.name)
+                if ref and ref != vault:
+                    return self.platform.secrets.get(ref) or ""
+        except Exception:  # noqa: BLE001 — a store must not fail on this read
+            log.warning("app %s: could not read the pack's older token row", connector_id, exc_info=True)
+        return ""
 
     def _app_outcome(self, connector_id: str) -> dict[str, Any]:
         """``{app, app_name, tools_loaded[, load_reason][, waiting_for]}`` for

@@ -54,7 +54,8 @@
  *
  *  - v1.355.0 (wave 5, lane 5D): the key door takes a Google Gemini key (an
  *    AI Studio key, G46; the old "Gemini connects with account login"
- *    pointer is gone); its Custom endpoint offers "LM Studio on this PC" and
+ *    pointer is gone); its model-server choice ("Model servers on your
+ *    network", the Connections card's words) offers "LM Studio on this PC" and
  *    "llama.cpp", which fill the address and list the server's models with
  *    the Connections form's own picker (G72); and the free-and-private door's
  *    step 2 is a "Download a starter model" press that opens a Build pane
@@ -84,6 +85,7 @@ import {
 } from "@/lib/onboarding";
 import type { ConnectionTestResult } from "@/lib/types";
 import { AnswerPressNote, useAnswerPress } from "./AnswerPress";
+import { MODEL_SERVERS_TITLE } from "@/lib/modelServers";
 
 type Door = "subscription" | "local" | "key";
 
@@ -127,7 +129,9 @@ const KEY_PROVIDERS: {
     keyUrl: "https://aistudio.google.com/apikey",
     keyLabel: "Google AI Studio",
   },
-  { id: "custom", label: "Custom endpoint", placeholder: "sk-… (optional)" },
+  // v1.355.0 integrate: the Connections card's own words for the same slot
+  // (lib/modelServers), so the first-run door and Settings say one thing.
+  { id: "custom", label: MODEL_SERVERS_TITLE, placeholder: "sk-… (optional)" },
 ];
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));

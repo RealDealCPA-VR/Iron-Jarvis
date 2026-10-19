@@ -710,7 +710,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 detail = f"{type(err).__name__}: {err}" if err is not None else "failed"
             except Exception:  # noqa: BLE001 — __str__ raised; keep the type
                 detail = f"{type(err).__name__}: <unprintable>"
-            loop_health[name] = {"ok": False, "last_error": detail[:300], "at": now}
+            # v1.355.0 integrate (lane 5C note 2): `since` keeps the START of
+            # the failing run while `at` moves with every failure. A loop that
+            # retries every few minutes (a revoked Slack token backs off to
+            # 300 s) never had an `at` older than the bell's 5-minute bar, so
+            # its row almost never showed; the bell reads `since` first.
+            prev = loop_health.get(name)
+            since = now
+            if isinstance(prev, dict) and prev.get("ok") is False:
+                since = str(prev.get("since") or prev.get("at") or now)
+            loop_health[name] = {"ok": False, "last_error": detail[:300], "at": now, "since": since}
         except Exception:  # noqa: BLE001 — health bookkeeping never kills a loop
             loop_health[name] = {"ok": bool(ok), "last_error": "unrecordable"}
 
@@ -2349,10 +2358,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     #: A sane default model per provider, used when auto-promoting the FIRST real
     #: connection away from the out-of-box "mock" default (see _maybe_autopromote).
+    from ..providers.manager import GEMINI_DEFAULT_MODEL
+
     _PROMOTE_DEFAULT_MODEL = {
         "anthropic": "claude-opus-4-8",
         "openai": "gpt-4o-mini",
-        "google": "gemini-1.5-flash",
+        # v1.355.0 (G46): the adapter's own default -- gemini-1.5-flash was
+        # retired, so connecting a key, "Use for answers" and the first-
+        # connect autopromote all wrote an id whose first chat 404'd.
+        "google": GEMINI_DEFAULT_MODEL,
         "xai": "grok-4-1-fast",
         "openrouter": "openrouter/auto",
     }

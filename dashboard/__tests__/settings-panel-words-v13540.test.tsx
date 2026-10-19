@@ -401,9 +401,11 @@ describe("G68: removing a writing sample takes two presses", () => {
 const KNOWN_NATIVE_CONFIRMS: Record<string, { count: number; why: string }> = {
   "app/chat/page.tsx": { count: 1, why: "undo of a chat's file change (confirmUndoPrompt says what it will do)" },
   "components/terminal/PaneChat.tsx": { count: 1, why: "undo of a pane's file change (paneUndoPrompt)" },
-  "app/creative/page.tsx": { count: 2, why: "publish to a public link (confirmPublish) and end a studio session" },
+  // v1.355.0 integrate: "End this session?" became a ConfirmButton.
+  "app/creative/page.tsx": { count: 1, why: "publish to a public link (confirmPublish)" },
   "components/chat/DocPreview.tsx": { count: 1, why: "replace a file of the same name when saving a copy" },
-  "components/memory/MemoryGraph.tsx": { count: 1, why: "remove or hide a memory-graph link (re-linkable)" },
+  // v1.355.0 integrate: removing / hiding a memory-graph link is a picked
+  // link + ConfirmButton in the rail now (no native dialog left there).
 };
 
 function sourceFiles(dir: string): string[] {

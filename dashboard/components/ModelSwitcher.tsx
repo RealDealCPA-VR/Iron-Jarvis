@@ -38,10 +38,13 @@ const TIERS: Record<string, Record<Tier, string>> = {
     // self-heals to whatever the backend serves if this is retired too.
     best: "gpt-5.5",
   },
+  // v1.355.0: 1.5/2.0 are retired or shut down. The two Stable models Google
+  // names for new projects (ai.google.dev/gemini-api/docs/models, read
+  // 2026-10-19); no Stable text Pro exists, so Best is 3.8 Flash too.
   google: {
-    fast: "gemini-1.5-flash",
-    balanced: "gemini-2.0-flash",
-    best: "gemini-1.5-pro",
+    fast: "gemini-3.5-flash-lite",
+    balanced: "gemini-3.8-flash",
+    best: "gemini-3.8-flash",
   },
   xai: {
     fast: "grok-code-fast-1",

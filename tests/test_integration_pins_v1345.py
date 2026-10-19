@@ -218,7 +218,13 @@ def test_the_daemon_panel_line_is_the_pages_roundmessages_shape():
     # the keys the page writes on an agent's panel line, read off the source
     page_keys = set(re.findall(r"^\s+(?:\.\.\.\(.*?\{ )?(\w+)(?=:|\s*\})", block[: block.index("];")], re.M))
     page_keys = {k for k in page_keys if k in chat_append.LINE_KEYS or k == "role"}
-    assert page_keys == {"role", "content", "panelWho", "panelThreadId", "panelError", "panelNote"}, page_keys
+    # v1.355.0 (G62), moved ON PURPOSE: the page's fallback copy now marks a
+    # remote that took the task (`pending`) as the daemon's own quiet
+    # "progress" line (panel_reply_lines' panelKind), so it shows the wait.
+    assert page_keys == {
+        "role", "content", "panelWho", "panelThreadId", "panelError", "panelNote", "panelKind"
+    }, page_keys
+    assert '...(e.pending ? { panelKind: "progress" } : {})' in block
     assert page_keys <= set(chat_append.LINE_KEYS)
     round_out = {
         "entries": [

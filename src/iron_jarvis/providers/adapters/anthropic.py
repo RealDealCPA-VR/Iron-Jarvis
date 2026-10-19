@@ -101,6 +101,9 @@ def _thinking_text(content: Any) -> str:
 #: ``claude_native.CARRIER``). Spelled here, not imported, so this adapter
 #: never loads the CLI transport.
 _CLI_CARRIER = "claude_cli_native"
+#: v1.355.0: the Gemini adapter's carrier (``google.GEMINI_CARRIER``), spelled
+#: here for the same reason. Gemini parts are not Anthropic content blocks.
+_FOREIGN_CARRIERS = frozenset({_CLI_CARRIER, "gemini_native"})
 
 
 def _own_blocks(m: LLMMessage) -> list[dict[str, Any]]:
@@ -111,7 +114,7 @@ def _own_blocks(m: LLMMessage) -> list[dict[str, Any]]:
     tool_calls like any other provider's."""
     return [
         b for b in (getattr(m, "raw_blocks", None) or [])
-        if not (isinstance(b, dict) and b.get("type") == _CLI_CARRIER)
+        if not (isinstance(b, dict) and b.get("type") in _FOREIGN_CARRIERS)
     ]
 
 

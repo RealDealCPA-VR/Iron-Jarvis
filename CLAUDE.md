@@ -3547,6 +3547,99 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A failure carries its press on BOTH lanes; a pack has ONE add/remove
+  door; an imported placeholder is ASKED, never stored** (v1.355.0,
+  product-readiness Wave 5, G29/G32/G44/G46/G55/G62-G65/G69/G70/G72/G73;
+  lanes 5A-5D + integrate). FAILURE PRESS (5A): `chat_turn.fix_action` reads
+  the typed facts `failure_words.classify` reads and `error_payload` adds
+  `fix_kind` ("sign_in" | "key") + `fix_provider` to the stream `error` frame
+  AND the POST 502 body (MIRROR NOTE); the page's line is the headline alone
+  when `lib/failureActions.failureAction` finds a press (Sign in through
+  `lib/cliSignIn`, keyed to the failure object `signInFor` so a later failure
+  offers it afresh; a key link to /connections), the technical text folded
+  under Details, "Your message is back in the box." (integrate) The POST
+  fallback lane reads the 502 body through `lib/failureLine.postFailureFields`
+  (`ApiError.body` → the StreamError's fields) — it showed `detail` alone.
+  RECEIPTS (5A): `_overflow_refit(record=)` → `refit {dropped}` on both lanes
+  (null when the turn fit; the page's "Left out N older messages to fit this
+  model", `lib/turnRecovery.refitTitle` says the dropped-0 case honestly, and
+  (integrate) `_shrink_to_window` adds `OVERFLOW_NOTE` to the MODEL's prompt
+  only when `keep_from > 0`); the stream lane's done frame carries `approved`
+  (one entry per answered card, names only; POST always `[]`); remote/@-agent
+  lines get `PanelReplyLine` ("from hermes · 6 min 12 s") and `PanelWaiting`
+  (ticks itself via `useNow`; the page never re-renders per second);
+  `threads.no_reply_back_line` when message-back is off. ONE DOOR (5B):
+  `mcp/pack_door.py` (`add_pack`, `remove_pack`, `install_config`,
+  `load_config`, `forget_legacy_refs`, `vault_refs`) is the body of POST /
+  DELETE /mcp/servers AND the Directory's Connect/Disconnect AND the chat's
+  `app_connect` + Undo (a service never imports a route module — pinned);
+  remove = row + every vault row + manifest + live tools + client + load
+  record; reconnect keeps the manifest, and (integrate) `install_config` drops
+  it when the row now names a DIFFERENT server (`_server_identity`: transport,
+  url, command, first package). Vault names: `connectors.service._secret_name`
+  = `mcp.<id>.<FIELD>` / `mcp.<id>.auth.value`; older `conn_*` rows are
+  adopted by `records.adopt_card_secrets` and (integrate) a chat-card store
+  over one backs up THAT value as its prior (`CredentialStore._pack_row_prior`)
+  so Undo restores the token the pack now reads; `tools/websearch.
+  _BRAVE_SECRET_NAMES` lists every door's Brave name. GitHub's card and the
+  Tools catalog row are GitHub's maintained server
+  (`catalog.GITHUB_MCP_URL`, Bearer; `is_remote`), and (integrate) ToolsPage
+  posts a remote row as `{name, transport, url, auth: bearerAuth(token)}`
+  (`isRemoteEntry`) — it 422'd; a connected card whose pack still runs a
+  `replaces` package says so (`_runs_replaced_package`). G69 Change key = the
+  Directory mounting the Tools page's `EditPack` (PATCH, never a delete);
+  G70 `pack_powers` → `can_change/asks_first/held_back/keyed`, worded by
+  `lib/packPowers`. IMPORT HONESTY (integrate): `mcp/import_config.
+  mark_placeholders` turns `${input:x}` / `${NAME}` (never
+  `${CLAUDE_PLUGIN_ROOT}`; `${X:-default}` is its default) into
+  `PackSpec.fills` + preview `asks` (only when present), blanking the value;
+  `routes/agents._body_from_spec` fills them from `overrides` on a COPY (an
+  untyped env/header is dropped; an untyped ARGUMENT skips the pack "type a
+  value for X first"); `import_sources._with_plugin_root` substitutes inside
+  fill templates too. `connection_index` (a `known_connections`-compatible
+  dict) carries `packs` / `others` / `signed_in`: an OAuth sign-in is never
+  "already connected" (row key `signed_in_app`), a differently SPELLED pack is
+  "already added" only for the same server (`exists_name`), and a Directory
+  MCP card never speaks for a different server. BACKGROUND (5C): `lib/
+  loopWords` is the ONE table loop_health name → label/problem/keeps/href
+  (`tests/test_background_names_v13550.py` fails on a loop with no row); the
+  bell, Everything › Status and HomeLine ("Ask Jarvis", `lib/chatAsk`, which
+  FirstRunStrip re-exports) read it; (integrate) `_tick` keeps `since` (start
+  of the failing run) beside `at` and the bell ages rows from `since`; the
+  downgrade banner's refusal reads `provider.downgraded` `title`/`fix` (the
+  router's `failure_words.friendly_error` of the refusal it raises, keys
+  before `label`, which stays LAST) through `failureLine.failureSentence` —
+  the job summary's own sentence. MODEL DOORS (5D): Google takes an AI Studio
+  key (`google_key.is_google_api_key` "AQ."/"AIza" → `x-goog-api-key`;
+  `probe.live_probe` → `probe_google_key`; `GEMINI_DEFAULT_MODEL`); Gemini 3
+  tool loops replay `raw_blocks` `gemini_native` carriers (signatures) only
+  while the turn's projection matches, else `skip_thought_signature_validator`
+  on a rebuilt 3+ turn's first call; the runtime copies `raw_blocks` like both
+  chat lanes; Anthropic skips foreign carriers; registry rows carry
+  `connected_via`; `LocalServerChips` (LM Studio / llama.cpp) press the
+  picker's own Fetch; `terminals/ai_clis.SETUP_LAUNCHES` "ollama-starter" via
+  `launch_entry`/`launch_line` (never the Launch menu); `UnattendedAskNote`
+  says the runtime's 5 minutes; (integrate) the first-run key door's model
+  server is `lib/modelServers.MODEL_SERVERS_TITLE`, and fleet `/verify`
+  answers `answered` (`router.failure_reason` "http …") so the save note is
+  `answeredWithErrorNote`, never "could not reach", for a server that
+  answered. Two-press: MemoryGraph link removal (picked link + ConfirmButton)
+  and Creative End session (settings-panel-words allow-list updated). THE RULE
+  A FUTURE CHANGE MUST KEEP: a failure's words AND press ride both chat lanes
+  from ONE `error_payload` and the page reads both lanes through the same
+  failureLine/failureActions helpers; a pack is added, changed or removed
+  ONLY through `mcp/pack_door`; a value an imported config left as a
+  placeholder is asked for, never written to the vault or config as text.
+  Pins: `tests/test_{chat_receipts,pack_one_door,background_names,
+  model_doors,gemini_tool_loop,integrate_wave5}_v13550.py`, `dashboard/
+  __tests__/{chat-receipts,chat-failure-press,directory-change-key,
+  background-names,chat-home,model-doors,unattended-ask-note,wave5-seams,
+  wave5-followups,wave5-tools-remote}-v13550.test.tsx` and `fixtures/
+  wave5-seams-v13550.json` (the REAL daemon's words; regenerate with
+  `IJ_REGEN_WAVE5_SEAMS=1`) (every lane and integrator change
+  mutation-checked red). Known: not proven against GitHub's or Gemini's live
+  servers (no keys here); `eval/pricing.py` has no rows for gemini-3.8-flash /
+  gemini-3.5-flash-lite.
 - **ONE sentence per cause, in the app's name, wherever the user meets it**
   (v1.354.0, product-readiness Wave 4, G20/G28/G30/G31/G39/G47-G50/G59/G67/
   G68; lanes 4A-4E + integrate). FAILURES (4A): `providers/failure_words.

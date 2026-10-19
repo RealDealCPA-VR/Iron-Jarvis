@@ -224,6 +224,17 @@ class ConnectionRegistry:
                     # had to register their own app. A BOOL, never the id —
                     # the same answer start_oauth would give. Additive.
                     "oauth_client_configured": self._oauth_client_configured(spec),
+                    # v1.355.0: HOW a stored credential was made (the record's
+                    # own method: "oauth" | "api_key"), "" otherwise. `method`
+                    # is the spec's primary way -- "api_key" for Google since it
+                    # takes an AI Studio key -- so a login-connected card read
+                    # "API key". Additive; the card's chip reads it.
+                    "connected_via": (
+                        record.method
+                        if record is not None and connected and source == "vault"
+                        and record.method in ("oauth", "api_key")
+                        else ""
+                    ),
                 }
             )
         return out

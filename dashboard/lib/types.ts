@@ -760,6 +760,11 @@ export interface Connection {
   /** Where "connected" comes from (v1.230.0): "vault", "environment",
    *  "inherited from claude-cli" / "codex-cli", or "" when not connected. */
   source?: string;
+  /** How a stored credential was made (v1.355.0): "oauth" | "api_key", ""
+   *  otherwise. `method` is the card's PRIMARY way (Google's is now
+   *  "api_key"), so the method chip reads this (ConnectionsPage
+   *  authMethodShown). Absent on an older daemon. */
+  connected_via?: string;
   scopes: string[];
 }
 

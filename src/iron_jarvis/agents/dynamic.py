@@ -53,8 +53,11 @@ KNOWN_MODELS: list[dict] = [
     # (claude -p / codex exec) — zero API keys; light up when the CLI is found.
     {"provider": "claude-cli", "model": "subscription"},
     {"provider": "codex-cli", "model": "subscription"},
-    {"provider": "google", "model": "gemini-2.0-flash"},
-    {"provider": "google", "model": "gemini-1.5-pro"},
+    # v1.355.0: gemini-2.0-flash was shut down and gemini-1.5-pro retired.
+    # The two Google names "for any new projects", both Stable
+    # (ai.google.dev/gemini-api/docs/models, read 2026-10-19).
+    {"provider": "google", "model": "gemini-3.8-flash"},
+    {"provider": "google", "model": "gemini-3.5-flash-lite"},
     # xAI (Grok) — current generation: the flagship, the fast agentic model,
     # and the two coding-agent models (grok-build-0.1 powers the Grok Build CLI).
     {"provider": "xai", "model": "grok-4"},

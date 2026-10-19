@@ -386,6 +386,74 @@ describe("G29: the failure line has a headline, folded details and the fix press
     expect(screen.queryByTestId("chat-turn-sign-in")).toBeNull();
   });
 
+  it("v1.355.0 integrate: the POST lane (no /chat/stream) reads the 502 body's headline, details and press", async () => {
+    // The stream endpoint is absent (an older daemon answers 404 and nothing
+    // was committed), so the page falls back to POST /chat. That 502's body is
+    // the SAME error_payload the stream's error frame carries; the page used
+    // to show its `detail` alone, with no headline, no Details and no press.
+    H.api.postResponses["/terminals/launch"] = { id: "pane_7" };
+    const refused = new H.FakeApiError(
+      "Claude Code isn't signed in, so this turn was not answered. Press Sign in beside Claude Code in Settings › Connections, then retry.",
+      502,
+    );
+    Object.assign(refused, {
+      body: {
+        detail: refused.message,
+        ...SIGNED_OUT,
+        fix_kind: "sign_in",
+        fix_provider: "claude-cli",
+      },
+    });
+    H.api.postResponses["/chat"] = refused;
+    render(<ChatPage />);
+    await startTurn("hello there");
+    act(() => H.stream.fail(new H.FakeStreamError("Not Found", 404)));
+    await waitFor(() => expect(H.api.posts.some((p) => p.path === "/chat")).toBe(true));
+
+    const line = await screen.findByTestId("chat-turn-error");
+    await waitFor(() => expect(line.textContent).toBe("Claude Code isn't signed in"));
+    expect(screen.getByRole("button", { name: "Sign in to Claude Code" })).toBeTruthy();
+    const toggle = screen.getByTestId("chat-turn-error-details-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("chat-turn-error-details").textContent).toBe(SIGNED_OUT.technical);
+    expect(screen.getByTestId("chat-turn-draft-back").textContent).toBe("Your message is back in the box.");
+  });
+
+  it("v1.355.0 integrate: a POST-lane failure with words but no press says the v1.354.0 sentence, never `detail`", async () => {
+    const busy = new H.FakeApiError("openrouter API error 503: overloaded", 502);
+    Object.assign(busy, {
+      body: {
+        detail: busy.message,
+        title: "OpenRouter is busy",
+        fix: "Try again shortly, or pick another model for this chat.",
+        technical: "openrouter API error 503: overloaded",
+      },
+    });
+    H.api.postResponses["/chat"] = busy;
+    render(<ChatPage />);
+    await startTurn("hello there");
+    act(() => H.stream.fail(new H.FakeStreamError("Not Found", 404)));
+    const line = await screen.findByTestId("chat-turn-error");
+    await waitFor(() =>
+      expect(line.textContent).toBe("OpenRouter is busy. Try again shortly, or pick another model for this chat."),
+    );
+    // The server's own words ride the hover, never the line.
+    expect(line.getAttribute("title")).toBe("openrouter API error 503: overloaded");
+    expect(screen.queryByTestId("chat-turn-sign-in")).toBeNull();
+  });
+
+  it("v1.355.0 integrate: a POST-lane failure with no words in its body keeps its message exactly", async () => {
+    H.api.postResponses["/chat"] = new H.FakeApiError("the provider's own detail", 502);
+    render(<ChatPage />);
+    await startTurn("hello there");
+    act(() => H.stream.fail(new H.FakeStreamError("Not Found", 404)));
+    const line = await screen.findByTestId("chat-turn-error");
+    await waitFor(() => expect(line.textContent).toBe("the provider's own detail"));
+    expect(screen.queryByTestId("chat-turn-sign-in")).toBeNull();
+    expect(screen.queryByTestId("chat-turn-error-details-toggle")).toBeNull();
+  });
+
   it("with no press the line is the v1.354.0 sentence, exactly", async () => {
     render(<ChatPage />);
     await failTurn(failure({ title: "OpenRouter is busy", fix: "Try again shortly, or pick another model for this chat." }));

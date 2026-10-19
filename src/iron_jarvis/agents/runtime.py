@@ -3061,7 +3061,14 @@ class AgentRuntime:
 
             messages.append(
                 LLMMessage(
-                    role="assistant", content=resp.text, tool_calls=resp.tool_calls
+                    role="assistant",
+                    content=resp.text,
+                    tool_calls=resp.tool_calls,
+                    # v1.355.0: the provider-native blocks ride the turn, as
+                    # in both chat lanes -- a Gemini 3 tool loop must send its
+                    # thought signatures back (google.GEMINI_CARRIER), and
+                    # Anthropic thinking its signed blocks (v1.263.0).
+                    raw_blocks=list(getattr(resp, "raw_blocks", None) or []),
                 )
             )
             # v1.337.0: the conversation is kept as the tools START (and again

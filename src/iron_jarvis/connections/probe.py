@@ -51,6 +51,16 @@ def live_probe(provider: str, credential: str) -> tuple[bool, str]:
             "openai connected via ChatGPT account (Codex backend) — "
             "run a session to verify inference"
         )
+    # v1.355.0 (G46): a Google API key (an AI Studio key: "AQ." or "AIza")
+    # cannot be checked at tokeninfo -- that answers 400 for every key, and
+    # it would put the key in a URL. Its Test lists one model with the key in
+    # a header (providers/google_key, the rule the adapter's header uses). A
+    # login token keeps the tokeninfo check below, byte-identical.
+    if provider == "google":
+        from ..providers.google_key import is_google_api_key, probe_google_key
+
+        if is_google_api_key(credential):
+            return probe_google_key(credential)
     url, style = spec
     import httpx  # lazy: only when a real probe runs
 

@@ -52,6 +52,7 @@ import {
   connectionTitle,
   isOwnEndpoint,
   unreachableNote,
+  answeredWithErrorNote,
 } from "@/lib/modelServers";
 import type { Connection, ConnectionTestResult, OAuthStart } from "@/lib/types";
 
@@ -94,6 +95,8 @@ interface VerifyResult {
   tool_use: boolean | null;
   vision?: boolean | null;
   error?: string;
+  /** v1.355.0: the server ANSWERED with an error (it was reached). */
+  answered?: boolean;
 }
 import {
   Badge,
@@ -853,6 +856,8 @@ function ConnectionCard({
         // server. It used to be dropped, so a mistyped address still got a
         // green "Endpoint saved" and nothing said why no reply ever came.
         let unreachable: string | null = null;
+        // v1.355.0 integrate: the server answered, with an error.
+        let answeredError: string | null = null;
         if (nodeId) {
           try {
             const v = await post<VerifyResult>(
@@ -860,7 +865,8 @@ function ConnectionCard({
               { model: model.trim() },
             );
             if (v.tool_use === null && v.error) {
-              unreachable = v.error;
+              if (v.answered === true) answeredError = v.error;
+              else unreachable = v.error;
             } else {
               verifyNote =
                 v.tool_use === true
@@ -873,7 +879,9 @@ function ConnectionCard({
             unreachable = verr instanceof ApiError ? verr.message : String(verr);
           }
         }
-        if (unreachable !== null) {
+        if (answeredError !== null) {
+          setSaveWarn(answeredWithErrorNote(address, answeredError));
+        } else if (unreachable !== null) {
           setSaveWarn(unreachableNote(address, unreachable));
         } else {
           setTest({

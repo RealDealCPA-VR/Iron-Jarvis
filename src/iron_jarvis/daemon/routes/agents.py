@@ -411,18 +411,43 @@ def _fold_name(name: Any) -> str:
     return re.sub(r"[\s_-]+", "", str(name or "").strip().lower())
 
 
-def known_connections(d) -> dict[str, str]:
-    """What is ALREADY connected here, by folded name → how (v1.354.0, G50):
-    ``"pack"`` (a pack in ``config.mcp_servers``), ``"app"`` (a Directory
-    connection that is live — an OAuth drive, a key, a catalog pack under
-    its catalog id) or ``"memory"`` (a memory source, e.g. a brain served by
-    a tool). Read through ``connectors.service.list_connectors`` — the
-    Directory's own list — ONCE per answer; a list that cannot be read
-    leaves the packs alone answering, never an error."""
-    known: dict[str, str] = {}
+class ConnectionIndex(dict):
+    """What is ALREADY connected here, by folded name (v1.354.0, G50): the
+    mapping itself is folded name -> how (``"pack"`` | ``"app"`` |
+    ``"memory"``, a pack first) -- :func:`known_connections`' answer -- and
+    (v1.355.0 integrate) the facts the import preview needs to say it
+    HONESTLY:
+
+    * ``packs`` -- folded name -> the stored pack rows of that folded name, so
+      a differently SPELLED name (``brave-search`` vs ``brave_search``) is
+      "already added" only when that row runs the same server
+      (:func:`_same_server`), and says under which name;
+    * ``others`` -- folded name -> ``"app"`` / ``"memory"`` ignoring packs
+      (what a name means when its pack is a different server);
+    * ``signed_in`` -- folded name -> the card name of an OAuth sign-in. A
+      Google Drive / OneDrive / Dropbox sign-in gives MEMORY SEARCH, not
+      that server's tools, so it is never "already connected" for an
+      imported server of the same name; the row says the sign-in instead.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.packs: dict[str, list[dict[str, Any]]] = {}
+        self.others: dict[str, str] = {}
+        self.signed_in: dict[str, str] = {}
+
+
+def connection_index(d) -> ConnectionIndex:
+    """Build the :class:`ConnectionIndex`: ``config.mcp_servers`` plus the
+    Directory's own list (``connectors.service.list_connectors``) read ONCE;
+    a list that cannot be read leaves the packs alone answering, never an
+    error."""
+    index = ConnectionIndex()
     for s in getattr(d.platform.config, "mcp_servers", None) or []:
         if isinstance(s, dict) and _fold_name(s.get("name")):
-            known.setdefault(_fold_name(s.get("name")), "pack")
+            fold = _fold_name(s.get("name"))
+            index.setdefault(fold, "pack")
+            index.packs.setdefault(fold, []).append(s)
     try:
         from ...connectors.service import list_connectors
 
@@ -436,12 +461,84 @@ def known_connections(d) -> dict[str, str]:
         if via == "memory":
             for key in (row.get("id"), row.get("name")):
                 if _fold_name(key):
-                    known.setdefault(_fold_name(key), "memory")
-        elif via in ("mcp", "oauth", "api_key") and row.get("connected") is True:
+                    index.setdefault(_fold_name(key), "memory")
+                    index.others.setdefault(_fold_name(key), "memory")
+        elif via == "oauth" and row.get("connected") is True:
+            # v1.355.0 integrate: a SIGN-IN is not the server. It gives
+            # memory search; the imported server gives its own tools.
             for key in (row.get("id"), row.get("catalog_id")):
                 if _fold_name(key):
-                    known.setdefault(_fold_name(key), "app")
-    return known
+                    index.signed_in.setdefault(_fold_name(key), str(row.get("name") or key))
+        elif via in ("mcp", "api_key") and row.get("connected") is True:
+            for key in (row.get("id"), row.get("catalog_id")):
+                if _fold_name(key):
+                    index.setdefault(_fold_name(key), "app")
+                    # A Directory MCP card IS a pack (its row in
+                    # config.mcp_servers): it never speaks for a DIFFERENT
+                    # server of a similar name. A key connection (Pixio) does.
+                    if via == "api_key":
+                        index.others.setdefault(_fold_name(key), "app")
+    return index
+
+
+def known_connections(d) -> dict[str, str]:
+    """What is ALREADY connected here, by folded name -> how (v1.354.0, G50):
+    ``"pack"`` (a pack in ``config.mcp_servers``), ``"app"`` (a Directory
+    connection that is live: a key, a catalog pack under its catalog id) or
+    ``"memory"`` (a memory source, e.g. a brain served by a tool). Since
+    v1.355.0 an OAuth sign-in is NOT listed (see :class:`ConnectionIndex`).
+    Read through ``connectors.service.list_connectors`` -- the Directory's
+    own list -- ONCE per answer."""
+    return connection_index(d)
+
+
+def _server_key(transport: Any, command: Any, args: Any, url: Any) -> tuple[str, str]:
+    """Which server a pack runs, for "is this the SAME server": an http/sse
+    pack by its address (case and a trailing ``/`` ignored), a stdio pack by
+    its first package (:func:`_package_key`), else its program's name."""
+    kind = str(transport or "stdio").strip().lower()
+    if kind in ("http", "sse", "streamable-http", "streamable_http"):
+        return ("url", str(url or "").strip().rstrip("/").lower())
+    package = _first_package(args)
+    if package:
+        return ("pkg", package)
+    base = re.split(r"[\\/]", str(command or "").strip().lower())[-1]
+    for ext in (".cmd", ".exe", ".bat"):
+        base = base.removesuffix(ext)
+    return ("cmd", base)
+
+
+def _same_server(cfg: dict[str, Any], spec: Any) -> bool:
+    return _server_key(
+        cfg.get("transport"), cfg.get("command"), cfg.get("args"), cfg.get("url")
+    ) == _server_key(
+        getattr(spec, "transport", "stdio"),
+        getattr(spec, "command", ""),
+        getattr(spec, "args", []),
+        getattr(spec, "url", ""),
+    )
+
+
+def _exists_for(spec: Any, known: dict[str, str]) -> tuple[str, str]:
+    """``(exists_as, exists_name)`` for one preview spec (v1.355.0
+    integrate): a pack of the EXACT name is "pack"; a pack whose name differs
+    only in spelling is "pack" only when it runs the same server (and
+    ``exists_name`` says its name), else what the name means otherwise. A
+    plain dict (an older caller) keeps the v1.354.0 answer."""
+    name = str(getattr(spec, "name", "") or "")
+    if not name:
+        return "", ""
+    fold = _fold_name(name)
+    exists_as = known.get(fold, "")
+    if exists_as != "pack" or not isinstance(known, ConnectionIndex):
+        return exists_as, ""
+    rows = known.packs.get(fold, [])
+    if any(r.get("name") == name for r in rows):
+        return "pack", ""
+    same = next((r for r in rows if _same_server(r, spec)), None)
+    if same is not None:
+        return "pack", str(same.get("name") or "")
+    return known.others.get(fold, ""), ""
 
 
 _PKG_PREFIX_RX = re.compile(r"^(?:npm|pip|pypi):", re.IGNORECASE)
@@ -565,12 +662,22 @@ def preview_rows(
             note = launcher_note(cmd, ready)
         else:
             ready, note = True, ""
-        exists_as = known.get(_fold_name(spec.name), "") if spec.name else ""
+        exists_as, exists_name = _exists_for(spec, known)
         row["exists"] = bool(exists_as)
         row["runtime_ready"] = ready
         row["launcher_note"] = note
         row["exists_as"] = exists_as
         row["blurb"] = _blurb_for(spec, blurbs)
+        # v1.355.0 integrate (two keys, present only when they say
+        # something): the name the SAME server is already added under, and
+        # an OAuth sign-in of the same name (memory search, not these tools).
+        if exists_name and exists_name != spec.name:
+            row["exists_name"] = exists_name
+        signed_in = (
+            getattr(known, "signed_in", {}).get(_fold_name(spec.name), "") if spec.name else ""
+        )
+        if signed_in and not exists_as:
+            row["signed_in_app"] = signed_in
         rows.append(row)
     return rows
 
@@ -582,12 +689,28 @@ def _body_from_spec(spec: Any, overrides: dict[str, str], auto_approve: bool) ->
     does not validate (the caller reports it as a skip)."""
     from ..schemas import McpAuthBody
 
+    overrides = {str(k): ("" if v is None else str(v)) for k, v in dict(overrides or {}).items()}
+    asks = list(getattr(spec, "asks", None) or [])
+    if asks:
+        # v1.355.0 integrate: a value the config left as a placeholder
+        # (``${input:token}``, ``Bearer ${TOKEN}``) is filled with what the
+        # user typed for its name — on a COPY, so a refused add leaves the
+        # parsed spec as it was.
+        import copy as _copy
+
+        from ...mcp.import_config import fill_placeholders
+
+        spec = _copy.deepcopy(spec)
+        missing = fill_placeholders(spec, overrides)
+        if missing:
+            raise ValueError(f"type a value for {', '.join(missing)} first")
+        overrides = {k: v for k, v in overrides.items() if k not in asks}
     env = dict(spec.env)
     headers = dict(spec.headers)
     auth = dict(spec.auth) if spec.auth else None
-    for key, value in dict(overrides or {}).items():
+    for key, value in overrides.items():
         k = str(key)
-        v = "" if value is None else str(value)
+        v = value
         if spec.transport == "stdio":
             env[k] = v
         elif k.lower() in ("auth", "auth.value", "token"):
@@ -3512,7 +3635,7 @@ def register(app: FastAPI, d) -> None:
             # v1.354.0: what is already connected and the catalog's lines
             # are read ONCE for every file, not once per file.
             try:
-                known = known_connections(d)
+                known = connection_index(d)
             except Exception:  # noqa: BLE001
                 known = {}
             try:

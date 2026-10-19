@@ -343,7 +343,7 @@ import {
   type PriorToolResult,
 } from "@/lib/useChatStream";
 import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
-import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
+import { postFailureFields, turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
 import { adoptDaemonLines, daemonLineFor, panelWorkingLabel, threadIsNewer } from "@/lib/chatReread";
 import { settledSplit } from "@/lib/streamSplit";
 import { useModels } from "@/lib/useModels";
@@ -8865,7 +8865,12 @@ export default function ChatPage() {
       // the provider's own message, e.g. a rate limit, in `detail`). Remember
       // the exact turn (history + attachments) so Retry can re-send it — the
       // attachments are NOT consumed on failure.
-      const postLine = e instanceof ApiError ? e.message : String(e);
+      // v1.355.0 integrate (G29 + G28 on this lane): the 502 body carries the
+      // SAME title / fix / technical / fix_kind the stream's error frame
+      // does; read them so this lane's line is the stream lane's headline,
+      // folded details and press (it showed `detail` alone). MIRROR NOTE.
+      const postFail = postFailureFields(e);
+      const postLine = turnErrorText(postFail);
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(postLine);
       setLocalRefusal(localOnlyRefusalFrom(e)); // v1.332.0: the POST lane's 409
@@ -8873,11 +8878,12 @@ export default function ChatPage() {
       // Persist the typed message so navigating away doesn't lose it, and
       // restore it to the composer for an immediate edit/resend.
       queueSave(history);
-      // v1.355.0 (G29): and say so on this path's own line (no hover rides
-      // it — this lane's words carry no technical text).
+      // v1.355.0 (G29): and say so on this path's own line; the 502's
+      // technical text rides the hover / Details exactly as on the stream.
       errorTechRef.current = {
         text: postLine,
-        technical: "",
+        technical: turnErrorTechnical(postFail),
+        ...failureFacts(postFail),
         ...(restoreComposerDraft(history) ? { draftBack: true } : {}),
       };
     } finally {

@@ -81,6 +81,9 @@ export default function MemoryGraph() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
   const [busy, setBusy] = useState(false); // link/unlink/delete in flight
+  // v1.355.0 integrate: a clicked link is PICKED, and the rail offers the
+  // two-press Remove / Hide (it was a native confirm() over the canvas).
+  const [pickedLink, setPickedLink] = useState<{ a: string; b: string; kind: string } | null>(null);
   const [find, setFind] = useState("");
   // Sidecar contents (v1.116.0): the graph payload only carries a ~220-char
   // snippet per node, so selecting fetches the FULL text. Keyed by id so a
@@ -189,27 +192,31 @@ export default function MemoryGraph() {
     [linkFrom, connectTo],
   );
 
-  const clickLink = useCallback(
-    async (l: Link3D) => {
-      const a = typeof l.source === "string" ? l.source : l.source.id;
-      const b = typeof l.target === "string" ? l.target : l.target.id;
-      const what =
-        l.kind === "manual"
-          ? "Remove this link?"
-          : "Hide this similarity link? It stays hidden (blocked) until you re-link them.";
-      if (!window.confirm(what)) return;
-      setBusy(true);
-      try {
-        await post("/memory/graph/unlink", { a, b });
-        await load();
-      } catch (e) {
-        setError(e instanceof ApiError ? e.message : String(e));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [load],
+  const clickLink = useCallback((l: Link3D) => {
+    const a = typeof l.source === "string" ? l.source : l.source.id;
+    const b = typeof l.target === "string" ? l.target : l.target.id;
+    setPickedLink({ a, b, kind: String(l.kind ?? "") });
+  }, []);
+
+  /** A node's words for the picked-link line (its id when not loaded). */
+  const nodeLabel = useCallback(
+    (id: string) => data.nodes.find((n) => n.id === id)?.label ?? id,
+    [data.nodes],
   );
+
+  const unlinkPicked = useCallback(async () => {
+    if (!pickedLink) return;
+    setBusy(true);
+    try {
+      await post("/memory/graph/unlink", { a: pickedLink.a, b: pickedLink.b });
+      setPickedLink(null);
+      await load();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [pickedLink, load]);
 
   const deleteSelected = useCallback(async () => {
     if (!selectedId) return;
@@ -263,7 +270,7 @@ export default function MemoryGraph() {
                 selectedId={selectedId}
                 linkFromId={linkFrom}
                 onNodeClick={pickNode}
-                onLinkClick={(l) => void clickLink(l)}
+                onLinkClick={clickLink}
                 onBackgroundClick={() => {
                   if (linkFrom) setLinkFrom(null);
                   else setSelectedId(null);
@@ -338,6 +345,39 @@ export default function MemoryGraph() {
                   );
                 })}
               </ul>
+            )}
+
+            {/* v1.355.0 integrate: a picked link, said in words, with the
+                two-press Remove / Hide (no native dialog). */}
+            {pickedLink && (
+              <div data-testid="memory-link-picked" className="space-y-2 text-[12px] leading-relaxed text-zinc-400">
+                <p>
+                  {pickedLink.kind === "manual" ? "Your link" : "A similarity link"} between{" "}
+                  <span className="text-zinc-200">{nodeLabel(pickedLink.a)}</span> and{" "}
+                  <span className="text-zinc-200">{nodeLabel(pickedLink.b)}</span>.
+                  {pickedLink.kind === "manual" ? "" : " Hiding it keeps it hidden until you link them again."}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <ConfirmButton
+                    onConfirm={unlinkPicked}
+                    label={pickedLink.kind === "manual" ? "Remove link" : "Hide link"}
+                    confirmLabel={pickedLink.kind === "manual" ? "Really remove?" : "Really hide?"}
+                    title={
+                      pickedLink.kind === "manual"
+                        ? "Remove this link — the two memories stay"
+                        : "Hide this similarity link — it stays hidden until you link them again"
+                    }
+                    className="px-2.5 py-1.5 text-[12px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setPickedLink(null)}
+                    className="btn-ghost px-2.5 py-1.5 text-[12px]"
+                  >
+                    Keep it
+                  </button>
+                </div>
+              </div>
             )}
 
             {selected ? (

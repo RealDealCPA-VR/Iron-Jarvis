@@ -29,9 +29,11 @@ with no network.
 
 Optional provider hook: a Brave Search API key is looked up via the injected
 ``secret_resolver`` under ``brave_api_key`` / ``brave_search_api_key`` /
-``brave_token`` / ``conn_brave_search_brave_api_key`` (the last is what the
-Connections card mints — ``connectors/service.py::_secret_name``). DuckDuckGo
-stays the zero-config default.
+``brave_token`` / ``mcp.brave_search.BRAVE_API_KEY`` (what the Directory card
+stores since v1.355.0 — ``connectors/service.py::_secret_name``; a pack added
+from Tools or an import stores ``mcp.brave-search.BRAVE_API_KEY``) /
+``conn_brave_search_brave_api_key`` (the card's name before v1.355.0, kept for
+packs saved then). DuckDuckGo stays the zero-config default.
 """
 
 from __future__ import annotations
@@ -53,12 +55,16 @@ SecretResolver = Callable[[str], "str | None"]
 _DDG_ENDPOINT = "https://html.duckduckgo.com/html/"
 _DDG_LITE_ENDPOINT = "https://lite.duckduckgo.com/lite/"
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
-# ``conn_brave_search_brave_api_key`` is the vault name the Connections card
-# mints for the Brave Search card (connectors/service.py::_secret_name).
+# The vault names a Brave key is saved under, by door: the Directory card
+# (``mcp.<id>.<FIELD>``, connectors/service.py::_secret_name, v1.355.0), a pack
+# added from Tools / an import (``mcp/secrets.vault_name`` under the pack's
+# ``safe_name``), and the card's pre-v1.355.0 name (packs saved before then).
 _BRAVE_SECRET_NAMES = (
     "brave_api_key",
     "brave_search_api_key",
     "brave_token",
+    "mcp.brave_search.BRAVE_API_KEY",
+    "mcp.brave-search.BRAVE_API_KEY",
     "conn_brave_search_brave_api_key",
 )
 _UA = (

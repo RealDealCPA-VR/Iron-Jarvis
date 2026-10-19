@@ -202,6 +202,23 @@ describe("NotificationBell: a loop failing for 5+ min is an item (v1.229.0)", ()
     expect(String(notifyMock.mock.calls[0][1])).toContain("Your model servers can't be checked");
   });
 
+  it("v1.355.0 integrate: a loop that keeps RETRYING is aged from the start of its failing run (`since`), not its latest retry (`at`)", async () => {
+    // A revoked Slack token retries with backoff capped at 300 s, so `at`
+    // was never more than ~5 min old and the row almost never showed.
+    diagRef.current = {
+      pending_reviews: 0,
+      background_loops: {
+        slack_socket: { ok: false, last_error: SLACK_ERR, at: minutesAgo(1), since: minutesAgo(40) },
+      },
+    };
+    render(<NotificationBell />);
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith("/diagnostics"));
+    fireEvent.click(await screen.findByLabelText("1 notifications"));
+    const rows = await screen.findAllByTestId("bell-loop-failing");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain("For 40 min");
+  });
+
   it("no stale failing loop: no item, badge absent", async () => {
     diagRef.current = {
       pending_reviews: 0,

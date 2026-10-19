@@ -63,11 +63,50 @@ export function offWords(app: string): string {
   return `turned off in ${app || "its app"}`;
 }
 
-/** The badge for a row that is already here, by how it is here. */
+/** The badge for a row that is already here, by how it is here. v1.355.0:
+ *  a pack added under another spelling of the name says that name. */
 export function existsWords(row: ImportRow): string {
   if (row.exists_as === "app") return "already connected";
   if (row.exists_as === "memory") return "already a memory source";
+  const other = typeof row.exists_name === "string" ? row.exists_name.trim() : "";
+  if (other && other !== row.name) return `already added as ${other}`;
   return "already added";
+}
+
+/** v1.355.0: a name that reads as a secret gets a hidden input — the twin
+ *  of mcp/secrets.SECRET_KEY_RX (a key, a token, a password, an auth header,
+ *  a connection string or a `_URL`). */
+const SECRET_NAME_RX = /(token|key|secret|passw|auth|credential|dsn|connection|(?:^|[_.-])pat(?:$|[_.-])|_url$)/i;
+
+export function looksSecretName(name: string): boolean {
+  return SECRET_NAME_RX.test(name ?? "");
+}
+
+/** v1.355.0: the names a row's inputs ask for — the secret env keys, then
+ *  every placeholder the config left (`asks`), each once. */
+export function askedNames(row: ImportRow): string[] {
+  const out: string[] = [];
+  for (const n of [...(row.secret_keys ?? []), ...(row.asks ?? [])]) {
+    if (typeof n === "string" && n && !out.includes(n)) out.push(n);
+  }
+  return out;
+}
+
+/** The hint inside one input: a placeholder must be typed; a secret key the
+ *  config may already hold is optional. */
+export function askHint(row: ImportRow, name: string): string {
+  return (row.asks ?? []).includes(name)
+    ? "Type its value (the config left a placeholder)"
+    : "Type a value if the config has none";
+}
+
+/** v1.355.0: a sign-in of the same name is NOT this server (a Google Drive
+ *  sign-in gives memory search; the server gives its own tools). One quiet
+ *  line under the row; "" when there is none. */
+export function signedInWords(row: ImportRow): string {
+  const app = typeof row.signed_in_app === "string" ? row.signed_in_app.trim() : "";
+  if (!app || row.exists) return "";
+  return `You're signed in to ${app} here for memory search; this adds the server's own tools.`;
 }
 
 /** A row ticked when the door opens: new here and switched on in its app. */

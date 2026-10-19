@@ -188,11 +188,14 @@ def launch_pane(
     snapshot), so "continue on the next account" carries exactly that
     conversation and Resume reopens it by id. ``claude_session_id`` records
     the id a ``command`` already names (``claude --resume <id>``)."""
-    from ...terminals.ai_clis import AI_CLIS
+    from ...terminals.ai_clis import launch_entry, launch_line
     from ...terminals.pane_accounts import CLI_PROVIDER, PaneAccountRefused
 
     cli_id = (body.cli or "").strip().lower()
-    cat = next((c for c in AI_CLIS if c["id"] == cli_id), None)
+    # v1.355.0 (G73): a Launch-menu CLI OR a one-press set-up job
+    # (terminals/ai_clis.SETUP_LAUNCHES, e.g. "ollama-starter") -- still
+    # ONLY catalog ids, so no arbitrary command is ever accepted here.
+    cat = launch_entry(cli_id)
     if cat is None:
         raise HTTPException(
             status_code=400, detail=f'"{body.cli}" is not a CLI on the Launch menu.'
@@ -236,7 +239,8 @@ def launch_pane(
                 cols=body.cols,
                 rows=body.rows,
                 name=name,
-                agent_cli=cli_id,
+                # A set-up job's pane is labelled as the CLI it runs.
+                agent_cli=cat.get("agent_cli") or cli_id,
                 accounts=accounts,
                 claude_session_id=claude_session_id,
             )
@@ -249,7 +253,9 @@ def launch_pane(
     if command is not None:
         session.write(command + "\r")
         return session
-    command = cat["command"]
+    # v1.355.0 (G73): byte-identical for every Launch-menu CLI; a set-up job
+    # is typed by full path when the daemon's PATH predates the install.
+    command = launch_line(cat, session.shell)
     session.write(command if command.endswith(" ") else command + "\r")
     return session
 

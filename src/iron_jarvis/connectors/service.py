@@ -20,7 +20,7 @@ from typing import Any
 
 from ..core.config import persist_config_values
 from ..mcp.tools import mcp_tools, unload_pack_tools
-from .catalog import CATALOG, LINK_CARDS, connector_dict, get_connector, is_remote
+from .catalog import CATALOG, LINK_CARDS, OLDER_PACKAGE_NOTE, connector_dict, get_connector, is_remote
 
 
 def _mcp_servers(platform) -> list[dict]:
@@ -241,6 +241,19 @@ def pack_powers(platform, server: str, loaded: list[str], *, asks_first: bool) -
     return {"can_change": can_change, "asks_first": bool(asks_first), "held_back": held, "keyed": keyed}
 
 
+def _runs_replaced_package(cfg: "dict | None", connector) -> bool:
+    """True when a saved pack row still launches a package this card
+    ``replaces`` (an exact argument, or one with an ``@version`` suffix)."""
+    replaced = list(getattr(connector, "replaces", None) or [])
+    if not cfg or not replaced:
+        return False
+    for arg in cfg.get("args") or []:
+        text = str(arg)
+        if any(text == pkg or text.startswith(pkg + "@") for pkg in replaced):
+            return True
+    return False
+
+
 def _status_for(
     platform,
     connector,
@@ -279,6 +292,15 @@ def _status_for(
                     loaded,
                     asks_first=(not auto_approve_on(platform)) if asks_first is None else asks_first,
                 )
+            )
+        if server and _runs_replaced_package(_server_cfg(platform, server), connector):
+            # v1.355.0 integrate (lane 5B note 4): a pack saved before the card
+            # moved to its maker's own server (GitHub's) still runs the older
+            # package and is never moved for the user; its card says so, and
+            # says how to switch.
+            row["package_note"] = (
+                f"{OLDER_PACKAGE_NOTE} Disconnect and connect again to use "
+                f"{connector.name}'s own server."
             )
         if server and server != connector.id:
             # v1.353.0 (G43): lit by an ALIAS. The row takes the pack's real

@@ -34,6 +34,18 @@ export function isOwnEndpoint(conn: { connected?: boolean; source?: string | nul
  * never the green "Endpoint saved" it used to be, and it keeps the check's
  * own error so a mistyped address says what went wrong.
  */
+/** v1.355.0 integrate: the note after a save whose check REACHED the server
+ *  and got an error back (a wrong model name, a refused key). It must never
+ *  say "could not reach" — the server answered. */
+export function answeredWithErrorNote(address: string, error: string): string {
+  const where = address.trim() || "The server";
+  const why = error.trim().replace(/[.\s]+$/, "");
+  return (
+    `Saved. ${where} answered, but with an error${why ? `: ${why}` : ""}. ` +
+    "Check the model name and the key, then press Verify tools."
+  );
+}
+
 export function unreachableNote(address: string, error: string): string {
   const where = address.trim() || "the server";
   const why = error.trim().replace(/[.\s]+$/, "");

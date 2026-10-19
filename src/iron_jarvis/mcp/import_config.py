@@ -192,6 +192,27 @@ class PackSpec:
     #: a server the user ticks anyway is added like any other — the press is
     #: the choice.
     disabled: bool = False
+    #: v1.355.0 integrate: where the imported config held a PLACEHOLDER
+    #: instead of a value (VS Code's ``${input:token}``, a plugin's
+    #: ``${GITHUB_TOKEN}``; never ``${CLAUDE_PLUGIN_ROOT}``, which the import
+    #: writes in). Each entry ``{"where": "env"|"header"|"arg", "key": <env
+    #: key | header name | arg index>, "template": <the original text>,
+    #: "names": {<placeholder text>: <the name the user types>}}``; the value
+    #: itself is blanked in ``env`` / ``headers`` so a placeholder never
+    #: reaches the vault as if it were the secret. NOT stored: the import
+    #: door asks for every name (:attr:`asks`) and fills the template
+    #: (:func:`fill_placeholders`).
+    fills: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def asks(self) -> list[str]:
+        """The names the import door asks the user to type, in order."""
+        out: list[str] = []
+        for fill in self.fills:
+            for name in dict(fill.get("names") or {}).values():
+                if name and name not in out:
+                    out.append(str(name))
+        return out
 
     # -- normalisation -------------------------------------------------- #
     def __post_init__(self) -> None:
@@ -305,7 +326,148 @@ class PackSpec:
             "origin": self.origin,
             # v1.354.0 (G50): switched off in the app it came from.
             "disabled": bool(self.disabled),
+            # v1.355.0 integrate: names the config left as placeholders.
+            **({"asks": self.asks} if self.fills else {}),
         }
+
+
+# --------------------------------------------------------------------------- #
+# Placeholders (v1.355.0 integrate, the wave-4 follow-up): a value the other
+# app fills in at launch is not a value. VS Code asks for ``${input:id}`` and
+# reads ``${env:NAME}``; a Claude Code plugin's ``.mcp.json`` reads
+# ``${NAME}`` (``${NAME:-default}`` uses the default when NAME is unset).
+# ``${CLAUDE_PLUGIN_ROOT}`` is the plugin's folder and the import writes it in
+# (import_sources._with_plugin_root), so it is never a question.
+# --------------------------------------------------------------------------- #
+
+_PLACEHOLDER_RX = re.compile(r"\$\{([^{}]+)\}")
+#: Placeholders the import resolves itself.
+_RESOLVED_PLACEHOLDERS: frozenset[str] = frozenset({"CLAUDE_PLUGIN_ROOT"})
+
+
+def _placeholder_name(inner: str) -> tuple[str, str]:
+    """``(name, default)`` of one ``${...}``'s inside: ``input:gh_token`` →
+    ``("gh_token", "")``, ``env:HOME`` → ``("HOME", "")``, ``TOKEN:-x`` →
+    ``("TOKEN", "x")``."""
+    body = inner.strip()
+    default = ""
+    if ":-" in body:
+        body, default = body.split(":-", 1)
+    for prefix in ("input:", "env:", "config:"):
+        if body.lower().startswith(prefix):
+            body = body[len(prefix):]
+            break
+    return body.strip(), default
+
+
+def _with_defaults(text: str) -> str:
+    """Write in every ``${NAME:-default}`` that has a default (what the
+    other app does when NAME is unset); other placeholders stay."""
+
+    def _sub(m: "re.Match[str]") -> str:
+        name, default = _placeholder_name(m.group(1))
+        if name in _RESOLVED_PLACEHOLDERS or not default:
+            return m.group(0)
+        return default
+
+    return _PLACEHOLDER_RX.sub(_sub, text)
+
+
+def _open_placeholders(text: str) -> list[tuple[str, str]]:
+    """``[(placeholder text, name)]`` still open in ``text`` (defaults
+    already written in; ``${CLAUDE_PLUGIN_ROOT}`` is never open)."""
+    out: list[tuple[str, str]] = []
+    for m in _PLACEHOLDER_RX.finditer(text):
+        name, _default = _placeholder_name(m.group(1))
+        if name and name not in _RESOLVED_PLACEHOLDERS:
+            out.append((m.group(0), name))
+    return out
+
+
+def mark_placeholders(spec: PackSpec) -> PackSpec:
+    """Turn every placeholder in ``spec``'s env values, header values and
+    args into a :attr:`PackSpec.fills` entry the import door asks for.
+
+    A value that is WHOLLY one placeholder is asked by its own name (the env
+    key, the header name; an argument has none, so its placeholder's name)
+    and blanked; a value with text around a placeholder (``Bearer ${TOKEN}``)
+    asks for the placeholder's name and keeps the template, so the typed
+    value is filled in where it stood. Never raises."""
+    try:
+        fills: list[dict[str, Any]] = []
+        for key in list(spec.env):
+            text = _with_defaults(spec.env[key])
+            spec.env[key] = text
+            found = _open_placeholders(text)
+            if not found:
+                continue
+            whole = len(found) == 1 and text.strip() == found[0][0]
+            names = {found[0][0]: key} if whole else {ph: name for ph, name in found}
+            fills.append({"where": "env", "key": key, "template": text, "names": names})
+            spec.env[key] = ""
+        for key in list(spec.headers):
+            text = _with_defaults(spec.headers[key])
+            spec.headers[key] = text
+            found = _open_placeholders(text)
+            if not found:
+                continue
+            whole = len(found) == 1 and text.strip() == found[0][0]
+            names = {found[0][0]: key} if whole else {ph: name for ph, name in found}
+            fills.append({"where": "header", "key": key, "template": text, "names": names})
+            spec.headers[key] = ""
+        for i, arg in enumerate(list(spec.args)):
+            text = _with_defaults(arg)
+            spec.args[i] = text
+            found = _open_placeholders(text)
+            if found:
+                fills.append(
+                    {"where": "arg", "key": i, "template": text, "names": {ph: name for ph, name in found}}
+                )
+        spec.fills = fills
+    except Exception:  # noqa: BLE001 — a parser never raises into a route
+        pass
+    return spec
+
+
+def fill_placeholders(spec: PackSpec, typed: dict[str, str]) -> list[str]:
+    """Fill ``spec``'s placeholders from the values the user ``typed`` (by
+    ask name) and answer the names still missing where the pack cannot do
+    without them: an ARGUMENT's (it is positional). An env value or a header
+    left untyped is dropped (the pack starts without it, as with no
+    config value), never sent as the placeholder's text."""
+    missing: list[str] = []
+    for fill in spec.fills:
+        names = dict(fill.get("names") or {})
+        text = str(fill.get("template") or "")
+        complete = True
+        for ph, name in names.items():
+            value = typed.get(name)
+            if value is None or value == "":
+                complete = False
+                continue
+            text = text.replace(ph, str(value))
+        where = fill.get("where")
+        key = fill.get("key")
+        if where == "env":
+            if complete:
+                spec.env[str(key)] = text
+            else:
+                spec.env.pop(str(key), None)
+        elif where == "header":
+            if complete:
+                spec.headers[str(key)] = text
+            else:
+                spec.headers.pop(str(key), None)
+        elif where == "arg" and isinstance(key, int) and 0 <= key < len(spec.args):
+            if complete:
+                spec.args[key] = text
+            else:
+                missing.extend(n for ph, n in names.items() if not typed.get(n) and n not in missing)
+    return missing
+
+
+def _with_asks(specs: list[PackSpec]) -> list[PackSpec]:
+    return [mark_placeholders(sp) for sp in specs]
 
 
 # --------------------------------------------------------------------------- #
@@ -946,7 +1108,7 @@ def _parse_text(text: Any, *, source: str = "", origin: str = "paste", kind_hint
             if isinstance(obj, dict):
                 specs, recognised = _specs_from_json(obj, source=source, origin=origin)
                 if recognised:
-                    return _unique_names(specs), True
+                    return _with_asks(_unique_names(specs)), True
         if kind_hint == "toml" or "mcp_servers" in raw:
             import tomllib
 
@@ -957,11 +1119,11 @@ def _parse_text(text: Any, *, source: str = "", origin: str = "paste", kind_hint
             if isinstance(data, dict):
                 specs, recognised = _specs_from_toml(data, source=source, origin=origin)
                 if recognised:
-                    return _unique_names(specs), True
+                    return _with_asks(_unique_names(specs)), True
         if kind_hint in ("", "paste"):
             specs, recognised = _specs_from_lines(raw, source=source, origin=origin)
             if recognised:
-                return _unique_names(specs), True
+                return _with_asks(_unique_names(specs)), True
         return [], False
     except Exception:  # noqa: BLE001 — a parser never raises into a route
         return [], False

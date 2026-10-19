@@ -17,9 +17,8 @@ the real helpers — never a stub of the thing under test:
   kept out of the Build Launch list and out of AI_CLIS, typed by full path when
   the daemon's PATH predates the Ollama install.
 
-Three pins need an edit in a file this lane does not own; each is a STRICT
-xfail naming the edit, so it turns red (XPASS) the moment the integrator lands
-it and the marker is taken off on purpose:
+Three pins needed an edit in a file this lane did not own (the strict-xfail
+markers came off at the v1.355.0 integrate step, when the edits landed):
 ``connections/probe.py`` (a key's Test), ``daemon/routes/terminals.py``
 (``launch_pane`` reads ``launch_entry``) and ``daemon/app.py``
 (``_PROMOTE_DEFAULT_MODEL["google"]``). The three edits (and the fix round's
@@ -358,14 +357,6 @@ def test_a_login_tokens_test_is_unchanged(monkeypatch):
     assert seen == ["https://www.googleapis.com/oauth2/v3/tokeninfo"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "INTEGRATOR: connections/probe.py live_probe must send a Google API key to "
-        "providers.google_key.probe_google_key (tokeninfo answers 400 for every key). "
-        "Remove this marker when that edit lands."
-    ),
-)
 @pytest.mark.parametrize("key", [NEW_KEY, KEY], ids=["auth-key-AQ", "standard-key-AIza"])
 def test_connections_test_turns_green_for_a_pasted_key(client, monkeypatch, key):
     """The acceptance line: paste the key on the card, press Test, it is green.
@@ -384,14 +375,6 @@ def test_connections_test_turns_green_for_a_pasted_key(client, monkeypatch, key)
     assert result["ok"] is True, result
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "INTEGRATOR: daemon/app.py _PROMOTE_DEFAULT_MODEL['google'] is the retired "
-        "gemini-1.5-flash; set it to providers.manager.GEMINI_DEFAULT_MODEL. "
-        "Remove this marker when that edit lands."
-    ),
-)
 def test_choosing_gemini_for_answers_picks_a_current_model(client):
     """Make default / "Use Google (Gemini) for answers" write this id as the
     default model; the retired one 404s on the first chat."""
@@ -526,14 +509,6 @@ def test_the_launch_menu_route_never_offers_the_download(client):
     assert "ollama" in clis
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "INTEGRATOR: daemon/routes/terminals.py launch_pane must look the id up with "
-        "terminals.ai_clis.launch_entry, record agent_cli=cat.get('agent_cli') or cli_id, "
-        "and type launch_line(cat, session.shell). Remove this marker when that edit lands."
-    ),
-)
 def test_download_a_starter_model_opens_a_pane_running_the_download(client, monkeypatch):
     """The acceptance line, through the real route: one press, a NEW pane,
     the download typed AND started (Enter), no command for the user to copy."""
