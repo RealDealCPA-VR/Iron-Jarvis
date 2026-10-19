@@ -189,13 +189,19 @@ describe("a failed app step offers 'Fix in Tools'", () => {
     expect(link.className).not.toMatch(/(^|\s)(border|bg-|shadow|rounded-(lg|xl))/);
   });
 
-  it("on a live failed app call too; never on a live failed built-in", () => {
+  it("on a live failed app call too; never on a live failed built-in, nor on a live app call that worked or still runs", () => {
     const cards: ToolCard[] = [
       { id: "a", name: GMAIL, status: "done", ok: false, output: "401 token expired" },
       { id: "b", name: "write_file", status: "done", ok: false, args: { path: "C:\\work\\out.md" } },
+      // v1.352.0 review: the live row's "only a FAILED app step" rule, pinned
+      // (offering the link on every app call survived the doer's pins).
+      { id: "c", name: "mcp__github__list_issues", status: "done", ok: true, startedAt: 1_000, endedAt: 1_300 },
+      { id: "d", name: "mcp__calendar__list_events", status: "running" },
     ];
     render(<LiveToolRows cards={cards} />);
-    expect(screen.getAllByRole("link", { name: "Fix in Tools" })).toHaveLength(1);
+    const links = screen.getAllByRole("link", { name: "Fix in Tools" });
+    expect(links).toHaveLength(1);
+    expect(links[0].getAttribute("title")).toBe("Open Tools to check gmail");
   });
 
   it("an app step that opens (it has a detail) keeps the link outside its button", () => {
