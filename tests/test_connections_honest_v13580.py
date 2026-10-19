@@ -620,6 +620,43 @@ def test_health_field_offers_only_what_one_press_can_connect(servers):
     assert lss.health_field(SimpleNamespace(custom_base_url="http://192.168.1.50:8000/v1")) == []
 
 
+def test_the_probe_honours_its_own_timeout_knob(monkeypatch):
+    """``PROBE_TIMEOUT_S`` is read when a probe RUNS, so the knob bounds the
+    GET as it bounds ``probe_now``'s join. MUTATION: put the import-time
+    default back (``timeout_s: float = PROBE_TIMEOUT_S``) -> the GET keeps
+    1.5 s while the knob says 7.25 (red). An explicit ``timeout_s`` still
+    wins."""
+    from iron_jarvis.core import http as core_http
+
+    asked: list[float] = []
+
+    def _client(*, timeout, **_kw):
+        asked.append(timeout)
+        raise OSError("refused")  # what a closed port answers
+
+    monkeypatch.setattr(lss, "PROBE_FORCED_OFF", False)
+    monkeypatch.setattr(core_http, "client", _client)
+    monkeypatch.setattr(lss, "PROBE_TIMEOUT_S", 7.25)
+    server = lss.LocalServer("lmstudio", "LM Studio", "LM Studio (on this PC)", "http://localhost:1234/v1")
+    assert lss.probe_one(server) == ()
+    assert lss.probe_one(server, timeout_s=0.5) == ()
+    assert asked == [7.25, 0.5]
+
+
+def test_the_dashboards_press_names_are_the_daemons_labels():
+    """lib/onboarding.ts LOCAL_SERVER_PRESS_LABELS (what ConnectDoors,
+    ModelSuggestChip and answerCandidates call each press) and the daemon's
+    labels (GET /onboarding usable rows, /health detected_servers, the
+    Accounts rows) are one table: the Overview card and the chat's doors must
+    never name one server two ways. MUTATION: rename a label on either side
+    (red)."""
+    ts = _src("dashboard/lib/onboarding.ts")
+    block = re.search(r"LOCAL_SERVER_PRESS_LABELS[^=]*=\s*\{(.*?)\};", ts, flags=re.S)
+    assert block, "LOCAL_SERVER_PRESS_LABELS is gone from lib/onboarding.ts"
+    labels = dict(re.findall(r'(\w+):\s*"([^"]+)"', block.group(1)))
+    assert labels == {s.key: s.label for s in lss.SERVERS}
+
+
 def test_the_endpoint_forms_chips_name_the_same_addresses():
     """lib/localServerPresets.ts (the endpoint forms' chips) and the probe
     name each server at the same documented address."""

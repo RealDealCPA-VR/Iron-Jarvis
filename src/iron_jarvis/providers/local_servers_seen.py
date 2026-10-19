@@ -120,11 +120,16 @@ def _chat_models(body: Any, owned_by: str = "") -> tuple[str, ...]:
     return tuple(out)
 
 
-def probe_one(server: LocalServer, *, timeout_s: float = PROBE_TIMEOUT_S) -> tuple[str, ...]:
+def probe_one(server: LocalServer, *, timeout_s: float | None = None) -> tuple[str, ...]:
     """The chat models ``server`` lists right now (``()`` when it does not
-    answer that way). One read-only GET, bounded; never raises."""
+    answer that way). One read-only GET, bounded by ``timeout_s`` — else
+    :data:`PROBE_TIMEOUT_S` read when it RUNS (a default bound at import
+    would ignore the module's own knob, which :func:`probe_now`'s join
+    honours); never raises."""
     if PROBE_FORCED_OFF:
         return ()
+    if timeout_s is None:
+        timeout_s = PROBE_TIMEOUT_S
     try:
         from ..core import http as _http
 
