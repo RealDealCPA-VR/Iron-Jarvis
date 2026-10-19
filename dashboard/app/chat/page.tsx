@@ -10464,7 +10464,8 @@ export default function ChatPage() {
           title={
             activeProject
               ? `Project: ${activeProject.name}. Its folder, files and knowledge`
-              : "Pick a project (or just a folder). Armed file tools run there"
+              : // v1.356.0 re-review (G75): the folder hovers' own words.
+                "Pick a project (or just a folder). Jarvis works on files in that folder."
           }
           className={`inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[13px] transition-colors hover:bg-white/[0.06] hover:text-zinc-100 ${
             workspaceOpen ? "bg-white/[0.06] text-zinc-100" : "text-zinc-400"

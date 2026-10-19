@@ -1515,6 +1515,27 @@ def _oauth_signed_in(platform: Any, provider: str) -> bool:
         return False
 
 
+def signin_hint(conn: Any) -> str:
+    """The sentence an app that SIGNS IN on this PC (Microsoft 365) adds to
+    a chat connect, or ``""`` for every other app (v1.356.0 re-review, G60).
+
+    The Directory card says "It works once you sign in…" beside its press;
+    the chat's door said only "Connected", so the model reported the app
+    ready and the next calendar question failed on a pack nobody had signed
+    in to. The words are the card's own press ("Sign in to Microsoft") and
+    where it is — never a command line."""
+    if not getattr(conn, "signin_args", None):
+        return ""
+    from ..connectors.app_names import APPS_PLACE
+
+    who = getattr(conn, "signin_name", "") or getattr(conn, "name", "")
+    return (
+        f' It works once the user signs in: "Sign in to {who}" on its card in'
+        f" {APPS_PLACE} opens a pane with a web address and a code; tell the"
+        " user to press it."
+    )
+
+
 class AppConnectTool(_RecordTool):
     name = "app_connect"
     RECORD = "app"
@@ -1695,6 +1716,7 @@ class AppConnectTool(_RecordTool):
                         f"{conn.name} is already connected ({live} {'tool' if live == 1 else 'tools'}). "
                         "It is on for this chat now; its tools can be used from the next message."
                         + _renew
+                        + signin_hint(conn)
                     ),
                     data={"app": conn.id, "already_connected": True, "tools_loaded": live},
                 )
@@ -1807,7 +1829,13 @@ class AppConnectTool(_RecordTool):
             )
         return ToolResult(
             ok=True,
-            output=f"Connected {conn.name} ({state}). Never ask for a token in chat.{_needs}",
+            # v1.356.0 re-review (G60): an app that signs in on this PC says
+            # what is still to do, and where (only when nothing is waiting for
+            # a token — the secure card comes first then).
+            output=(
+                f"Connected {conn.name} ({state}). Never ask for a token in chat.{_needs}"
+                + ("" if requests else signin_hint(conn))
+            ),
             data={
                 "record_change": self._card(
                     "App connected", conn.name, "connected" if before else None, state, f"app.{conn.id}"
