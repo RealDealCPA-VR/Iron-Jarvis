@@ -23,6 +23,10 @@ export type SurfaceGroup = "primary" | "work" | "automations" | "knowledge" | "s
 
 export interface Surface extends NavEntry {
   group: SurfaceGroup;
+  /** v1.353.0 (G66): a page for people who build on Iron Jarvis rather than
+   *  with it. Everything lists these after the everyday entries, under its
+   *  column's "More"; the filter, Ctrl K and pins treat them like any other. */
+  advanced?: boolean;
 }
 
 /** The sidebar's four items, in order (T1: at most four). */
@@ -97,10 +101,23 @@ const EXTRA_ENTRIES: NavEntry[] = [
   },
 ];
 
+/** v1.353.0 (G66): the developer pages. Everything listed thirty surfaces as
+ *  equals, with these beside Documents; a new user could not tell which ones
+ *  were for them. They stay one press from Everything (T2: two clicks from
+ *  home), under each column's "More". */
+export const ADVANCED_HREFS: ReadonlySet<string> = new Set([
+  "/self-dev",
+  "/webhooks",
+  "/fleet",
+  "/secrets",
+  "/artifacts",
+  "/kanban",
+]);
+
 export const SURFACES: Surface[] = [...NAV_ENTRIES, ...NON_RAIL_ENTRIES, ...EXTRA_ENTRIES]
   .filter((e, i, all) => all.findIndex((x) => x.href === e.href) === i)
   .filter((e) => GROUP_OF[e.href] !== undefined)
-  .map((e) => ({ ...e, group: GROUP_OF[e.href] }));
+  .map((e) => ({ ...e, group: GROUP_OF[e.href], ...(ADVANCED_HREFS.has(e.href) ? { advanced: true } : {}) }));
 
 /** Hrefs the manifest knows about but has not grouped (the T2 test asserts
  *  this is empty against every catalogue entry). */

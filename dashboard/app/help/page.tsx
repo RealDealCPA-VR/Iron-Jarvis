@@ -27,7 +27,6 @@ import {
   GraduationCap,
   LifeBuoy,
   Megaphone,
-  Wifi,
   KeyRound,
   ShieldCheck,
   BookOpen,
@@ -48,6 +47,9 @@ interface Subsystem {
   icon: LucideIcon;
   desc: string;
 }
+
+/** The question the "Something not working?" card types into a new chat. */
+const HEALTH_QUESTION = "Something is broken. Can you check what's wrong?";
 
 const SUBSYSTEMS: Subsystem[] = [
   // The four HERO surfaces lead — the exact pages the default Simple-mode nav
@@ -152,6 +154,18 @@ const SUBSYSTEMS: Subsystem[] = [
     // the sentence — it is the safety promise of this page (self-dev/page.tsx:
     // "every change is review-gated and never merges on its own").
     desc: "Let a Maintainer agent improve Iron Jarvis's own code in a separate copy — every change waits for your review and never merges on its own.",
+  },
+  {
+    // v1.353.0 (G66): self-care was never mentioned anywhere a new user looks.
+    // Since v1.344.0 chat can read Jarvis's own health (app_health,
+    // pack_status, run_doctor) and offer a restart/rescan you approve; this
+    // opens a chat with the question typed, never sent. The sentence is one
+    // the failure vocabulary ARMS (tests/test_help_selfcare_v13530.py drives
+    // select_auto_tools on the exact words read from this file).
+    href: `/chat?ask=${encodeURIComponent(HEALTH_QUESTION)}`,
+    title: "Something not working?",
+    icon: LifeBuoy,
+    desc: "Ask Jarvis what's wrong. It checks its own health, add-ons and recent errors, and any fix it offers waits for your OK.",
   },
 ];
 
@@ -752,17 +766,27 @@ export default function HelpPage() {
         <GuidesCard />
       </Reveal>
 
-      {/* On your phone or another device */}
+      {/* On your phone or another device. v1.353.0 (G58): the supported way
+          leads — message Iron Jarvis through a two-way destination, and answer
+          its asks there. The dashboard on a phone is marked Advanced and says
+          what it really takes: the desktop app keeps the daemon and this
+          dashboard on 127.0.0.1 (desktop/main.js) and the dashboard calls
+          http://127.0.0.1:8787 (lib/api.ts), so "open 100.x.y.z:8788 with
+          nothing to change on the daemon" could not work on a packaged install. */}
       <Reveal>
         <Card title="On your phone or another device" icon={<Smartphone size={15} />}>
-          <p className="text-[13px] leading-relaxed text-zinc-400">
-            Two ways to take Iron Jarvis with you: chat with it over{" "}
-            <span className="text-zinc-300">Telegram</span> — the easiest by far — or open the full
-            dashboard on the go.
+          <p className="text-[13px] leading-relaxed text-zinc-400" data-testid="help-phone-lead">
+            The way to use Iron Jarvis from your phone is to{" "}
+            <span className="text-zinc-300">message it</span>: a Telegram bot becomes a two-way
+            conversation with the same Iron Jarvis, and when a job needs your OK it asks you there.
+            Opening this dashboard itself on a phone is an advanced setup, further down.
           </p>
 
-          {/* Easiest: a two-way destination (v1.136.0) */}
-          <div className="relative mt-5 rounded-2xl border border-accent/20 bg-accent/[0.04] px-4 py-4">
+          {/* Start here: a two-way destination (v1.136.0) */}
+          <div
+            className="relative mt-5 rounded-2xl border border-accent/20 bg-accent/[0.04] px-4 py-4"
+            data-testid="help-phone-chat"
+          >
             <div className="flex items-center gap-3">
               <span className="grid h-9 w-9 place-items-center rounded-xl border border-accent/25 bg-accent/[0.08] text-accent-soft">
                 <MessageCircle size={17} />
@@ -772,7 +796,7 @@ export default function HelpPage() {
                   Chat over Telegram — a two-way destination
                 </div>
                 <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-accent-soft/70">
-                  Easiest
+                  Start here
                 </div>
               </div>
             </div>
@@ -796,12 +820,12 @@ export default function HelpPage() {
                 <Kbd>Detect my chat ID</Kbd>.
               </li>
               <li>
-                <span className="text-zinc-300">2.</span> Under{" "}
-                <span className="text-zinc-200">Advanced</span>, turn on{" "}
+                <span className="text-zinc-300">2.</span> Tick{" "}
                 <span className="text-zinc-200">
                   &ldquo;Chat with Iron Jarvis from this destination&rdquo;
                 </span>{" "}
-                and add your Telegram user id to the allowed senders list.
+                right under the chat ID. Your detected chat ID goes into the allowed senders list
+                for you.
               </li>
               <li>
                 <span className="text-zinc-300">3.</span> Message your bot. Replies come back on
@@ -810,9 +834,10 @@ export default function HelpPage() {
               </li>
             </ol>
             <p className="mt-3 text-[12px] leading-relaxed text-zinc-500">
-              Send <Code>/new</Code> to start a fresh conversation (the old one stays in your
-              desktop thread list). A waiting workflow can ask you a question there too — reply
-              with a number or <Code>/answer</Code>.
+              When a job needs your OK, the bot asks you: reply <Code>approve</Code> or{" "}
+              <Code>deny</Code>. Send <Code>/new</Code> to start a fresh conversation (the old one
+              stays in your desktop thread list). A waiting workflow can ask you a question there
+              too — reply with a number or <Code>/answer</Code>.
             </p>
             <div className="mt-3 flex items-start gap-3 rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3.5">
               <ShieldCheck size={18} className="mt-0.5 shrink-0 text-amber-300" aria-hidden="true" />
@@ -820,100 +845,76 @@ export default function HelpPage() {
                 <span className="font-semibold text-amber-200">
                   The allowed senders list fails closed.
                 </span>{" "}
-                An empty list allows nobody — only the Telegram user ids you add can talk to Iron
+                An empty list allows nobody — only the Telegram user ids on it can talk to Iron
                 Jarvis, and everyone else is silently ignored.
               </div>
             </div>
           </div>
 
-          {/* The full dashboard on the go */}
-          <p className="mt-6 text-[13px] leading-relaxed text-zinc-400">
-            <span className="font-semibold text-zinc-200">The full dashboard on the go.</span>{" "}
-            Iron Jarvis already runs a local web app — this dashboard — and installs as a{" "}
-            <span className="text-zinc-300">PWA</span>, so it behaves like a native app on any
-            device. To reach it from your phone, both devices need to be on the same network and
-            the phone has to hold the same per-install token the desktop app stores. There are two
-            ways to get there.
-          </p>
-
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            {/* Recommended: Tailscale */}
-            <div className="relative rounded-2xl border border-accent/20 bg-accent/[0.04] px-4 py-4">
-              <div className="flex items-center gap-3">
-                <span className="grid h-9 w-9 place-items-center rounded-xl border border-accent/25 bg-accent/[0.08] text-accent-soft">
-                  <Wifi size={17} />
-                </span>
-                <div>
-                  <div className="text-sm font-semibold text-zinc-100">
-                    Easy &amp; secure — a mesh VPN
-                  </div>
-                  <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-accent-soft/70">
-                    Recommended
-                  </div>
+          {/* The full dashboard on a phone: advanced, with what it really takes */}
+          <div
+            className="relative mt-4 rounded-2xl border border-white/[0.05] bg-white/[0.02] px-4 py-4"
+            data-testid="help-phone-dashboard"
+          >
+            <div className="flex items-center gap-3">
+              <span className="grid h-9 w-9 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-accent-soft">
+                <KeyRound size={17} />
+              </span>
+              <div>
+                <div className="text-sm font-semibold text-zinc-100">
+                  The full dashboard on a phone
+                </div>
+                <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-500">
+                  Advanced
                 </div>
               </div>
-              <ol className="mt-3 space-y-2 text-[13px] leading-relaxed text-zinc-400">
-                <li>
-                  <span className="text-zinc-300">1.</span> Install{" "}
-                  <span className="text-zinc-200">Tailscale</span> (or a similar mesh VPN) on both
-                  your PC and your phone, and sign both into the same account.
-                </li>
-                <li>
-                  <span className="text-zinc-300">2.</span> On the PC, note its Tailscale IP — it
-                  looks like <Code>100.x.y.z</Code>.
-                </li>
-                <li>
-                  <span className="text-zinc-300">3.</span> On the phone&apos;s browser, open{" "}
-                  <Code>http://100.x.y.z:8788</Code> and enter your per-install token when asked.
-                </li>
-              </ol>
-              <p className="mt-3 text-[12px] leading-relaxed text-zinc-500">
-                The VPN keeps the connection private and encrypted without exposing anything to your
-                local network or the internet — no daemon settings to change.
-              </p>
             </div>
-
-            {/* Advanced: LAN allowlist */}
-            <div className="relative rounded-2xl border border-white/[0.05] bg-white/[0.02] px-4 py-4">
-              <div className="flex items-center gap-3">
-                <span className="grid h-9 w-9 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-accent-soft">
-                  <KeyRound size={17} />
-                </span>
-                <div>
-                  <div className="text-sm font-semibold text-zinc-100">
-                    Direct LAN access
-                  </div>
-                  <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-500">
-                    Advanced
-                  </div>
-                </div>
-              </div>
-              <p className="mt-3 text-[13px] leading-relaxed text-zinc-400">
-                The daemon binds to loopback by default for safety. To let another device in, set
-                two environment variables before you start it (nothing here is applied for you —
-                copy, paste, and adjust):
-              </p>
-              <ul className="mt-3 space-y-2 text-[13px] leading-relaxed text-zinc-400">
-                <li>
-                  Add your PC&apos;s LAN name/IP to the host guard —{" "}
-                  <Kbd>IRONJARVIS_HOST_ALLOWLIST</Kbd>
-                </li>
-                <li>
-                  Allow the phone&apos;s origin for the browser —{" "}
-                  <Kbd>IRONJARVIS_CORS_ORIGINS</Kbd>
-                </li>
-              </ul>
-              <pre className="mt-3 overflow-x-auto rounded-xl border border-white/[0.06] bg-black/40 p-3 font-mono text-[11px] leading-relaxed text-zinc-300">
-                <span className="text-zinc-500"># set these, then restart the daemon</span>
-                {"\n"}IRONJARVIS_HOST_ALLOWLIST=my-pc.local,192.168.1.42
-                {"\n"}IRONJARVIS_CORS_ORIGINS=http://192.168.1.42:8788
-              </pre>
-              <p className="mt-3 text-[12px] leading-relaxed text-zinc-500">
-                Then restart the daemon and, on the phone, open{" "}
-                <Code>http://192.168.1.42:8788</Code>. The per-install token is still required — the
-                desktop app stores it, but a phone has to send it too.
-              </p>
-            </div>
+            <p className="mt-3 text-[13px] leading-relaxed text-zinc-400">
+              The desktop app keeps both of its servers on this PC only: the daemon listens on{" "}
+              <Code>127.0.0.1:8787</Code> and this dashboard on <Code>127.0.0.1:8788</Code>, and
+              the dashboard calls the daemon at <Code>http://127.0.0.1:8787</Code> — which, on a
+              phone, is the phone itself. So the installed app cannot be opened from a phone, over
+              Wi-Fi or a VPN, until all of this is in place (nothing here is applied for you):
+            </p>
+            <ol className="mt-3 space-y-2 text-[13px] leading-relaxed text-zinc-400">
+              <li>
+                <span className="text-zinc-300">1.</span>{" "}
+                <span className="text-zinc-200">Both servers listening beyond 127.0.0.1.</span> Run
+                Iron Jarvis from source (<Code>ironjarvis serve --host 0.0.0.0</Code>, and the
+                dashboard started with <Code>-H 0.0.0.0</Code>), or put a tunnel or reverse proxy
+                in front of both.
+              </li>
+              <li>
+                <span className="text-zinc-300">2.</span>{" "}
+                <span className="text-zinc-200">The dashboard&apos;s API address pointing at the PC.</span>{" "}
+                Build the dashboard with <Code>NEXT_PUBLIC_IJ_API=http://&lt;your PC&gt;:8787</Code>,
+                or serve both under one address through the proxy.
+              </li>
+              <li>
+                <span className="text-zinc-300">3.</span>{" "}
+                <span className="text-zinc-200">The daemon letting the phone in.</span> Add the
+                PC&apos;s name or address to <Kbd>IRONJARVIS_HOST_ALLOWLIST</Kbd> and the phone&apos;s
+                page address to <Kbd>IRONJARVIS_CORS_ORIGINS</Kbd>.
+              </li>
+              <li>
+                <span className="text-zinc-300">4.</span>{" "}
+                <span className="text-zinc-200">A token.</span> Set <Kbd>IRONJARVIS_TOKEN</Kbd>{" "}
+                before you start the daemon and enter it on the phone: a daemon started without
+                one answers anyone who can reach it.
+              </li>
+            </ol>
+            <pre className="mt-3 overflow-x-auto rounded-xl border border-white/[0.06] bg-black/40 p-3 font-mono text-[11px] leading-relaxed text-zinc-300">
+              <span className="text-zinc-500"># set these, then start the daemon</span>
+              {"\n"}IRONJARVIS_HOST_ALLOWLIST=my-pc.local,192.168.1.42
+              {"\n"}IRONJARVIS_CORS_ORIGINS=http://192.168.1.42:8788
+              {"\n"}IRONJARVIS_TOKEN=&lt;a long random string&gt;
+            </pre>
+            <p className="mt-3 text-[12px] leading-relaxed text-zinc-500">
+              A private network such as Tailscale keeps this off the internet (the PC is then
+              reached at its <Code>100.x.y.z</Code> address), but it does not remove any step
+              above. This setup has not been tried from a phone yet; messaging your bot is the
+              supported way.
+            </p>
           </div>
 
           {/* Safety */}
@@ -922,7 +923,7 @@ export default function HelpPage() {
             <div className="text-[13px] leading-relaxed text-amber-100/90">
               <span className="font-semibold text-amber-200">Only over a trusted network.</span>{" "}
               The local daemon can run tools on your machine, so expose it only over a network or VPN
-              you trust — never the open internet. When in doubt, use the mesh-VPN option above.
+              you trust — never the open internet. When in doubt, message your bot instead.
             </div>
           </div>
         </Card>

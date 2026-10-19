@@ -139,7 +139,10 @@ function NavRow({
           recordOpen(s.href);
           onNavigate?.();
         }}
-        title={collapsed ? s.label : undefined}
+        // v1.353.0 (G66): hovering a row says what the place is for (its
+        // one line from lib/nav) — "Build" alone told a new user nothing.
+        // Collapsed to icons, the name is the only words, so it stays.
+        title={collapsed ? s.label : s.blurb}
         className={`relative flex items-center rounded-lg py-2 text-sm transition-colors ${
           collapsed ? "justify-center px-0" : "gap-3 px-2.5"
         } ${active ? "bg-accent/[0.08] text-accent-soft" : "text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100"}`}

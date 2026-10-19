@@ -111,6 +111,9 @@ describe("Everything", () => {
 
   it("pins up to three entries, refuses a fourth and says so", () => {
     render(<EverythingPage />);
+    // v1.353.0 (G66): Local fleet is a developer page, listed under System's
+    // "More"; its row (and so its pin door) shows once that is opened.
+    fireEvent.click(screen.getByRole("button", { name: "More System pages" }));
     for (const label of ["Usage", "Local fleet", "Connections"]) {
       fireEvent.click(screen.getByLabelText(`Pin ${label} to the sidebar`));
     }

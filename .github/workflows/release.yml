@@ -171,6 +171,23 @@ jobs:
     needs: suite
     runs-on: windows-latest
     timeout-minutes: 60
+    # v1.353.0 (G37): THE RELEASE PAGE SAYS WHICH FILE TO TAKE AND WHAT TO
+    # PRESS AT THE WINDOWS WARNING. Someone sent the latest-release link saw
+    # three files and "installer built and uploaded by CI"; only the README said
+    # which one and that the unsigned installer trips SmartScreen. One text,
+    # the README's words: the create step uses it for a new release and the
+    # publish step passes it again, so a release a dead run left as a draft
+    # gets it too. @VERSION@ is replaced in bash (`${RELEASE_NOTES//@VERSION@/$ver}`).
+    # tests/test_release_notes_v13530.py pins both steps and the words.
+    env:
+      RELEASE_NOTES: |
+        **Iron Jarvis @VERSION@ for Windows**
+
+        **Which file to download:** `Iron-Jarvis-Setup-@VERSION@.exe` in the Assets list below. Ignore the `.blockmap` and `latest.yml` files; the app's updater reads those.
+
+        **The Windows warning:** the installer isn't code-signed yet, so Windows may say "Windows protected your PC". Press **More info**, then **Run anyway**. It happens once per download, not every launch. [Why it isn't signed yet](${{ github.server_url }}/${{ github.repository }}/blob/master/docs/SIGNING.md)
+
+        **Already using Iron Jarvis?** There is nothing to download: the app fetches each update by itself and installs it when you press **Restart to update**.
     steps:
       - uses: actions/checkout@v4
 
@@ -218,9 +235,10 @@ jobs:
           # drafts, so the app's updater never sees an assetless "newest"
           # release (live-hit: rapid releases kept update checks landing inside
           # the upload window — "files are still uploading" for hours).
+          notes="${RELEASE_NOTES//@VERSION@/$ver}"
           gh release view "v$ver" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
             gh release create "v$ver" --repo "$GITHUB_REPOSITORY" --draft --title "$ver" \
-              --notes "Iron Jarvis $ver — installer built and uploaded by CI."
+              --notes "$notes"
 
       - name: Set up Python 3.12
         if: steps.gate.outputs.publish == 'true'
@@ -295,7 +313,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ver="${{ steps.gate.outputs.version }}"
-          gh release edit "v$ver" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          # The same notes again: a draft an earlier run created keeps its old
+          # body otherwise (the create above is skipped when it exists).
+          notes="${RELEASE_NOTES//@VERSION@/$ver}"
+          gh release edit "v$ver" --repo "$GITHUB_REPOSITORY" --draft=false --latest --notes "$notes"
 
       # v1.260.0: THE FEED-INDEPENDENT UPDATE SOURCE. The installed app reads
       # raw.githubusercontent.com/<repo>/updates/latest.yml FIRST and only falls

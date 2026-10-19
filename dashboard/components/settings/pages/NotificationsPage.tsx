@@ -36,6 +36,7 @@ import { PageShell, Reveal } from "@/components/motion";
 import { ChooserTiles } from "@/components/ChooserTiles";
 import { PageGrid } from "@/components/PageGrid";
 import { useFocusRef } from "@/lib/useFocusRef";
+import { withPhoneChat } from "@/lib/phoneChat";
 
 /** A configured outbound channel. Shape changed from string[] → object list. */
 interface ChannelInfo {
@@ -183,11 +184,16 @@ const DEST_META: Record<
 };
 
 /** Which fields form the EASY path per type; everything else is Advanced.
- * null = no split (email is all-primary — it is honest about being technical). */
+ * null = no split (email is all-primary — it is honest about being technical).
+ * v1.353.0 (G56): Telegram's chat switch and its allowed senders are on the
+ * easy path — chatting from your phone is the reason most people add a bot,
+ * and it used to need the Advanced fold and a typed user id (lib/phoneChat
+ * fills the id from the detected chat). Listening stays under Advanced: chat
+ * turns it on by itself. */
 const PRIMARY_KEYS: Record<string, string[] | null> = {
   slack: ["webhook_url"],
   discord: ["webhook_url"],
-  telegram: ["token", "chat_id"],
+  telegram: ["token", "chat_id", "chat_enabled", "allowed_senders"],
   email: null,
 };
 
@@ -218,7 +224,7 @@ const TELEGRAM_FIELD_COPY: Record<string, { label?: string; help?: string }> = {
   chat_enabled: {
     label: "Chat with Iron Jarvis from this destination",
     help:
-      "Message your bot and talk to the full Iron Jarvis. Replies land on your phone AND in a shared conversation on the desktop Chat page. Needs the allowed senders list — it fails closed, so an empty list allows nobody.",
+      "Message your bot and talk to the full Iron Jarvis. Replies land on your phone AND in a shared conversation on the desktop Chat page. Ticking this also turns on listening and puts your detected chat ID in the allowed senders below.",
   },
   inbound_enabled: {
     label: "Listen for incoming messages",
@@ -228,7 +234,7 @@ const TELEGRAM_FIELD_COPY: Record<string, { label?: string; help?: string }> = {
   allowed_senders: {
     label: "Allowed senders",
     help:
-      "Comma-separated Telegram user ids allowed to talk to Iron Jarvis. Fails closed — empty allows nobody. In a private chat with your bot, the detected chat ID above is usually also your user id.",
+      "Telegram user ids allowed to talk to Iron Jarvis, separated by commas. In a private chat with your bot the chat ID above is your user id, so ticking chat fills it in. The list fails closed: empty allows nobody.",
   },
 };
 
@@ -294,8 +300,9 @@ export default function ChannelsPage() {
           { token },
         );
         if (r.chats.length === 1) {
-          // One chat answered — that's you. Fill and stop.
-          setAddValues((v) => ({ ...v, chat_id: String(r.chats[0].id) }));
+          // One chat answered — that's you. Fill and stop. With chat already
+          // ticked, the id also becomes the allowed sender (lib/phoneChat).
+          setAddValues((v) => withPhoneChat({ ...v, chat_id: String(r.chats[0].id) }));
           stopDetect();
         } else if (r.chats.length > 1) {
           setDetectChats(r.chats); // several chats — let the user pick
@@ -552,8 +559,12 @@ export default function ChannelsPage() {
                     <>
                       {" "}
                       The allowed senders list starts blank here too — re-enter
-                      it under Advanced, or saving clears it (it fails closed:
-                      empty allows nobody).
+                      it{" "}
+                      {(PRIMARY_KEYS[addType] ?? []).includes("allowed_senders")
+                        ? "below (with chat on, your chat ID fills it in)"
+                        : "under Advanced"}
+                      , or saving clears it (it fails closed: empty allows
+                      nobody).
                     </>
                   )}
                 </div>
@@ -653,10 +664,12 @@ export default function ChannelsPage() {
                           type="checkbox"
                           checked={on}
                           onChange={() =>
-                            setAddValues((v) => ({
-                              ...v,
-                              [f.key]: on ? "false" : "true",
-                            }))
+                            setAddValues((v) => {
+                              const next = { ...v, [f.key]: on ? "false" : "true" };
+                              // v1.353.0 (G56): ticking chat turns listening on
+                              // and lets the detected chat ID in (lib/phoneChat).
+                              return f.key === "chat_enabled" ? withPhoneChat(next) : next;
+                            })
                           }
                           aria-label={label}
                           className="mt-0.5 accent-accent"
@@ -685,6 +698,13 @@ export default function ChannelsPage() {
                       value={addValues[f.key] ?? ""}
                       onChange={(e) =>
                         setAddValues((v) => ({ ...v, [f.key]: e.target.value }))
+                      }
+                      // A chat ID typed by hand counts once the box is left
+                      // (never per keystroke: "1", "12"… are not senders).
+                      onBlur={
+                        addType === "telegram" && f.key === "chat_id"
+                          ? () => setAddValues((v) => withPhoneChat(v))
+                          : undefined
                       }
                       aria-label={label}
                       autoComplete="off"
@@ -725,7 +745,7 @@ export default function ChannelsPage() {
                                 key={c.id}
                                 type="button"
                                 onClick={() => {
-                                  setAddValues((v) => ({ ...v, chat_id: String(c.id) }));
+                                  setAddValues((v) => withPhoneChat({ ...v, chat_id: String(c.id) }));
                                   setDetectChats([]);
                                 }}
                                 className="rounded-full border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-[11.5px] text-accent-soft transition-colors hover:bg-accent/[0.14]"
@@ -917,8 +937,10 @@ export default function ChannelsPage() {
                       d: "Create a bot with @BotFather, paste its token here, and use Detect my chat ID.",
                     },
                     {
+                      // v1.353.0 (G56): no Advanced fold and no typed id —
+                      // the switch sits under the chat ID and fills the list.
                       t: "Turn on “Chat with Iron Jarvis from this destination”",
-                      d: "It's under Advanced. Add your Telegram user id to the allowed senders list — it fails closed, so an empty list allows nobody.",
+                      d: "Tick it right under the chat ID. Your detected chat ID goes into the allowed senders for you; that list fails closed, so only the ids on it can talk to Iron Jarvis.",
                     },
                     {
                       t: "Message your bot",

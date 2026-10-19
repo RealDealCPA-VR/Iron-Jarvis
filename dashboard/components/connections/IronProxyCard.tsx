@@ -153,6 +153,14 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** v1.353.0 (G66): the card says what the feature IS before its brand —
+ *  "Iron-Proxy accounts" named a product a new user had never heard of. */
+export const CARD_TITLE = "Several accounts (Iron-Proxy)";
+/** What happens with the switch off, in words (it said "each CLI's own
+ *  sign-in", which assumed the reader knew what a CLI sign-in is). */
+export const OFF_WORDS =
+  "Off. Claude Code, Codex and Grok each use the one account they're signed in with on this PC.";
+
 export function IronProxyCard() {
   // `waiting` = the user switched it on and we have not yet seen a snapshot
   // taken AFTER that POST that says running (or says why not).
@@ -224,7 +232,7 @@ export function IronProxyCard() {
     if (!error || error.status === 0) return null; // loading / offline
     return (
       <div id="iron-proxy-card">
-        <Card title="Iron-Proxy accounts" icon={<Users size={15} />}>
+        <Card title={CARD_TITLE} icon={<Users size={15} />}>
           <ErrorNote>Could not load Iron-Proxy: {error.message}</ErrorNote>
         </Card>
       </div>
@@ -418,7 +426,7 @@ function IronProxyBody({
 
   return (
     <div id="iron-proxy-card">
-      <Card title="Iron-Proxy accounts" icon={<Users size={15} />} right={toggleEl}>
+      <Card title={CARD_TITLE} icon={<Users size={15} />} right={toggleEl}>
         {/* Status line */}
         <div data-testid="iron-proxy-status" className="text-xs text-zinc-400">
           {status.running ? (
@@ -434,7 +442,7 @@ function IronProxyBody({
             <LoaderInline label="Starting…" />
           ) : status.enabled && status.error ? null : (
             <span className="text-zinc-500">
-              Off. Iron Jarvis uses each CLI&apos;s own sign-in.
+              {OFF_WORDS}
             </span>
           )}
         </div>

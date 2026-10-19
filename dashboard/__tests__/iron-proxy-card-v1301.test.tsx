@@ -236,8 +236,9 @@ describe("the switch and the status line", () => {
     await mountWith(snap({ enabled: false, running: false, owned: false, version: null }));
     const toggle = document.getElementById("iron-proxy-toggle")!;
     expect(toggle.getAttribute("aria-checked")).toBe("false");
+    // v1.353.0 (G66): the off line names the tools, not "each CLI's sign-in".
     expect(screen.getByTestId("iron-proxy-status").textContent).toMatch(
-      /Off\. Iron Jarvis uses each CLI's own sign-in/,
+      /Off\. Claude Code, Codex and Grok each use the one account they're signed in with on this PC\./,
     );
     expect(screen.queryByRole("button", { name: /Add account/ })).toBeNull();
   });

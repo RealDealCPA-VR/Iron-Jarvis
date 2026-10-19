@@ -11,12 +11,19 @@
  *
  * The list comes from the surface manifest (lib/surfaces.ts), never a copy.
  * A pin (up to three, Q11) puts an entry under the sidebar's four items.
+ *
+ * v1.353.0 (G66): TIERED. Each column lists its everyday entries first; the
+ * developer pages (`Surface.advanced`) sit under the column's "More". Folded,
+ * "More" is one quiet line that still NAMES them as links (hover says what
+ * each is for) — so every surface stays two clicks from home (T2, e2e
+ * calm-ui.spec) — and pressing it shows their rows with lines and pins.
+ * While the filter has text every match shows as a full row, "More" included.
  */
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
-import { Pin, PinOff, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Pin, PinOff, Search } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { recordOpen } from "@/lib/appTiles";
@@ -88,13 +95,61 @@ export default function EverythingPage() {
     };
   }, []);
 
+  // Columns whose "More" the person opened (this visit only).
+  const [moreOpen, setMoreOpen] = useState<ReadonlySet<string>>(new Set());
+  const filtering = q.trim().length > 0;
+
   const columns = useMemo(
     () =>
-      EVERYTHING_GROUPS.map((g) => ({ ...g, items: surfacesIn(g.key).filter((s) => matches(s, q.trim())) })).filter(
-        (g) => g.items.length > 0,
-      ),
+      EVERYTHING_GROUPS.map((g) => {
+        const found = surfacesIn(g.key).filter((s) => matches(s, q.trim()));
+        return { ...g, items: found.filter((s) => !s.advanced), more: found.filter((s) => s.advanced) };
+      }).filter((g) => g.items.length + g.more.length > 0),
     [q],
   );
+
+  function toggleMore(key: string) {
+    setMoreOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  /** One full entry: icon, name, one line, and the pin door. */
+  function entryRow(s: Surface) {
+    const Icon = s.icon;
+    const pinned = pins.includes(s.href);
+    return (
+      <li key={s.href} className="group/entry flex items-start gap-1">
+        <Link
+          href={s.href}
+          onClick={() => recordOpen(s.href)}
+          data-testid={`everything-link-${s.href.slice(1)}`}
+          className="flex min-w-0 flex-1 items-start gap-2.5 rounded-lg px-2 py-1.5 hover:bg-white/[0.04]"
+        >
+          <Icon size={15} className="mt-0.5 shrink-0 text-accent-soft" aria-hidden />
+          <span className="min-w-0">
+            <span className="block text-[13px] text-zinc-100">{s.label}</span>
+            <span className="block text-[12px] leading-snug text-zinc-500">{s.blurb}</span>
+          </span>
+        </Link>
+        <button
+          type="button"
+          onClick={() => onPin(s)}
+          aria-pressed={pinned}
+          aria-label={pinned ? `Unpin ${s.label} from the sidebar` : `Pin ${s.label} to the sidebar`}
+          title={pinned ? "Unpin from the sidebar" : "Pin to the sidebar"}
+          className={`mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-500 hover:text-zinc-200 ${
+            pinned ? "text-accent-soft" : "[@media(hover:hover)]:opacity-0 group-hover/entry:opacity-100 focus-visible:opacity-100"
+          }`}
+        >
+          {pinned ? <PinOff size={13} /> : <Pin size={13} />}
+        </button>
+      </li>
+    );
+  }
 
   function onPin(s: Surface) {
     if (!togglePin(s.href)) {
@@ -168,40 +223,55 @@ export default function EverythingPage() {
                   {g.label}
                 </h2>
                 <p className="mb-2 text-[12px] text-zinc-500">{g.hint}</p>
-                <ul className="space-y-1">
-                  {g.items.map((s) => {
-                    const Icon = s.icon;
-                    const pinned = pins.includes(s.href);
-                    return (
-                      <li key={s.href} className="group/entry flex items-start gap-1">
-                        <Link
-                          href={s.href}
-                          onClick={() => recordOpen(s.href)}
-                          data-testid={`everything-link-${s.href.slice(1)}`}
-                          className="flex min-w-0 flex-1 items-start gap-2.5 rounded-lg px-2 py-1.5 hover:bg-white/[0.04]"
-                        >
-                          <Icon size={15} className="mt-0.5 shrink-0 text-accent-soft" aria-hidden />
-                          <span className="min-w-0">
-                            <span className="block text-[13px] text-zinc-100">{s.label}</span>
-                            <span className="block text-[12px] leading-snug text-zinc-500">{s.blurb}</span>
-                          </span>
-                        </Link>
-                        <button
-                          type="button"
-                          onClick={() => onPin(s)}
-                          aria-pressed={pinned}
-                          aria-label={pinned ? `Unpin ${s.label} from the sidebar` : `Pin ${s.label} to the sidebar`}
-                          title={pinned ? "Unpin from the sidebar" : "Pin to the sidebar"}
-                          className={`mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-500 hover:text-zinc-200 ${
-                            pinned ? "text-accent-soft" : "[@media(hover:hover)]:opacity-0 group-hover/entry:opacity-100 focus-visible:opacity-100"
-                          }`}
-                        >
-                          {pinned ? <PinOff size={13} /> : <Pin size={13} />}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
+                {g.items.length > 0 && <ul className="space-y-1">{g.items.map(entryRow)}</ul>}
+                {g.more.length > 0 && (() => {
+                  const open = filtering || moreOpen.has(g.key);
+                  const regionId = `everything-more-${g.key}`;
+                  const Chevron = open ? ChevronDown : ChevronRight;
+                  // The fold: quiet grey words, no box. Folded, the developer
+                  // pages are still named (and linked) on one line.
+                  const toggle = filtering ? (
+                    <span className="inline-flex items-center gap-1 px-2 text-[12px] text-zinc-500">More</span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => toggleMore(g.key)}
+                      aria-expanded={open}
+                      aria-controls={regionId}
+                      aria-label={`More ${g.label} pages`}
+                      data-testid={`everything-more-toggle-${g.key}`}
+                      className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[12px] text-zinc-500 hover:text-zinc-200"
+                    >
+                      <Chevron size={13} aria-hidden />
+                      More
+                    </button>
+                  );
+                  // The toggle keeps ONE place in the tree whether open or
+                  // folded, so a keyboard press never loses focus.
+                  return (
+                    <div id={regionId} data-testid={regionId} data-open={open ? "true" : "false"} className="mt-2">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-zinc-500">
+                        {toggle}
+                        {!open &&
+                          g.more.map((s, i) => (
+                            <span key={s.href} className="inline-flex items-center gap-2">
+                              <Link
+                                href={s.href}
+                                onClick={() => recordOpen(s.href)}
+                                title={s.blurb}
+                                data-testid={`everything-link-${s.href.slice(1)}`}
+                                className="rounded text-zinc-400 hover:text-zinc-200"
+                              >
+                                {s.label}
+                              </Link>
+                              {i < g.more.length - 1 && <span aria-hidden>·</span>}
+                            </span>
+                          ))}
+                      </div>
+                      {open && <ul className="mt-1 space-y-1">{g.more.map(entryRow)}</ul>}
+                    </div>
+                  );
+                })()}
               </section>
             ))}
           </div>

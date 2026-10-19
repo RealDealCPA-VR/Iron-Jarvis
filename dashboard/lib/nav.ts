@@ -132,7 +132,9 @@ export const NAV: NavSectionDef[] = [
         label: "Sessions",
         icon: Boxes,
         aliases: ["runs", "past work", "history", "agent runs", "transcript", "what the agent did"],
-        blurb: "Run agents and inspect past sessions.",
+        // v1.353.0 (G66): Sessions and Agents read as the same thing; this
+        // one is the record of what ran, Agents is where a job is given.
+        blurb: "Every task an agent ran, step by step.",
       },
       {
         href: "/activity",
@@ -208,7 +210,8 @@ export const NAV: NavSectionDef[] = [
           "subagents",
           "assistants",
         ],
-        blurb: "Give Jarvis one objective; your team of agents works it and the result comes back here.",
+        blurb:
+          "For jobs bigger than one chat: give Jarvis one objective, your team of agents works it, and the result comes back here.",
       },
       {
         href: "/tools",
@@ -228,7 +231,9 @@ export const NAV: NavSectionDef[] = [
           "extensions",
           "capabilities",
         ],
-        blurb: "What agents can DO — plus per-tool approval and extensions (MCP).",
+        // v1.353.0 (G66): what it is for, in words — "extensions (MCP)" named
+        // the protocol. "mcp" stays an alias above for people who know it.
+        blurb: "Add abilities like GitHub, a database or your own scripts, and choose which ones ask first.",
       },
       {
         href: "/autonomy",
@@ -269,7 +274,8 @@ export const NAV: NavSectionDef[] = [
         label: "Webhooks",
         icon: Webhook,
         aliases: ["callbacks", "incoming url", "http hooks", "integrations", "post to a url"],
-        blurb: "Inbound and outbound webhook registrations.",
+        // v1.353.0 (G66): what a webhook is FOR, not what it is called.
+        blurb: "Let another app start work here, or get told when work finishes.",
       },
       {
         href: "/reflex",
@@ -472,6 +478,9 @@ export const NAV: NavSectionDef[] = [
         icon: Megaphone,
         // "channels" stays an alias: the page carried that name until v1.113.0
         // and search must keep answering the old vocabulary forever.
+        // v1.353.0 (G56): this is also where two-way chat lives — "phone"
+        // used to find a row that only said "alerts", so nobody learned they
+        // could talk to Jarvis from their phone. The blurb is Help's sentence.
         aliases: [
           "notify me",
           "email",
@@ -482,8 +491,12 @@ export const NAV: NavSectionDef[] = [
           "alerts to phone",
           "channels",
           "add a destination",
+          "phone",
+          "chat from my phone",
+          "two-way",
+          "message jarvis from my phone",
         ],
-        blurb: "Where Iron Jarvis sends alerts, with a test send for each.",
+        blurb: "Where alerts go, and how you chat with Iron Jarvis from your phone.",
       },
     ],
   },
