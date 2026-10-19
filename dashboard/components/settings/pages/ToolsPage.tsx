@@ -68,6 +68,20 @@ import { PermissionsPanel } from "@/components/tools/PermissionsPanel";
 import { AddPack } from "@/components/tools/AddPack";
 import { mentionsNode } from "@/lib/addPackWords";
 import { EditPack, type EditSaved } from "@/components/tools/EditPack";
+import { PackSwitch } from "@/components/tools/PackSwitch";
+import {
+  KEYS_KEPT_HINT,
+  PACK_FAILING_CONSEQUENCE,
+  PACK_OFF_LINE,
+  PACK_OFF_WORD,
+  humanFieldLabel,
+  isPackOff,
+  packSwitchLabel,
+  packSwitchTitle,
+  savedWhileOff,
+  switchedNote,
+  type SwitchAnswer,
+} from "@/lib/extensionWords";
 import {
   LAUNCHER_CHOICES,
   bearerAuth,
@@ -303,14 +317,20 @@ interface McpServer {
   /** v1.343.0: the auth shape with `value_set`, never the value. */
   auth?: Record<string, unknown> | null;
   cwd?: string | null;
+  /** v1.356.0 (G78): false = the user switched it off (its row reads
+   *  `state: "off"`): kept with its settings and keys, never loaded. Absent
+   *  on an older daemon = on. */
+  enabled?: boolean | null;
 }
 
 /** v1.342.0: the four states of a pack's load record. An older daemon sends
  *  no `state`: a row with an error reads as failed, every other as ok, so the
- *  v1.229.0 rows render as they always did. */
-type PackState = "starting" | "ok" | "failed" | "failing";
+ *  v1.229.0 rows render as they always did. v1.356.0 (G78): "off" = the user
+ *  switched it off (no load record by design). */
+type PackState = "starting" | "ok" | "failed" | "failing" | "off";
 
 function packState(s: McpServer): PackState {
+  if (isPackOff(s)) return "off";
   const st = s.state;
   if (st === "starting" || st === "ok" || st === "failed" || st === "failing") return st;
   return s.last_error ? "failed" : "ok";
@@ -398,12 +418,12 @@ interface McpSuggestion {
 
 const MCP_PLACEHOLDER_RE = /<[^>]+>/g;
 
-/** v1.342.0: what happens to an env value the user types. The daemon splits
+/** v1.342.0: what happens to a value the user types. The daemon splits
  *  secrets by KEY name (token, key, secret, password, auth, credential) into
  *  the encrypted vault; the config file keeps only the vault name. One
- *  sentence, said beside every box that takes a KEY=value. */
-const SECRET_ENV_HINT =
-  "Passed to the extension as an environment variable. A key that looks like a token, key, secret or password is kept in the encrypted vault, not in the config file.";
+ *  sentence, said beside every box that takes a NAME=value. v1.356.0 (G74):
+ *  in plain words (it named an "environment variable"). */
+const SECRET_ENV_HINT = KEYS_KEPT_HINT;
 
 /** Distinct "<placeholder>" tokens appearing in a catalog entry's args. */
 function placeholdersOf(args: string[]): string[] {
@@ -838,6 +858,7 @@ export default function ToolsPage() {
     auto_approve_effective?: boolean;
   }>("/mcp/servers", 10000);
   const servers = mcpData?.servers ?? [];
+  const serversOn = servers.filter((s) => !isPackOff(s)).length;
   const serverNames = new Set(servers.map((s) => s.name));
   const serverByName = new Map(servers.map((s) => [s.name, s] as const));
 
@@ -1016,7 +1037,7 @@ export default function ToolsPage() {
             },
       );
       const approveNote = res.auto_approve
-        ? " Autonomous agents may run MCP tools without asking after the next restart."
+        ? " Autonomous agents may run its tools without asking after the next restart."
         : "";
       if (packDidNotStart(res)) {
         // v1.351.0 (G08): saved, but it loaded nothing: say so in the warn
@@ -1085,6 +1106,27 @@ export default function ToolsPage() {
     }
   }
 
+  /** v1.356.0 (G78): PATCH /mcp/servers/{name} {enabled} — switch a pack
+   *  OFF without losing it (its tools leave chats and agents at once; its
+   *  settings and keys stay) or back ON (the daemon reloads it the way Retry
+   *  does; nothing is typed again). The note says what happened in words. */
+  async function setPackOn(server: McpServer, next: boolean) {
+    setMcpBusy(`switch:${server.name}`);
+    setMcpError(null);
+    setMcpOk(null);
+    try {
+      const res = await patch<SwitchAnswer>(`/mcp/servers/${encodeURIComponent(server.name)}`, {
+        enabled: next,
+      });
+      setMcpNote(switchedNote(server.name, next, res));
+      reloadServers();
+    } catch (err) {
+      setMcpError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setMcpBusy(null);
+    }
+  }
+
   async function removeServer(serverName: string) {
     setMcpError(null);
     setMcpOk(null);
@@ -1126,6 +1168,13 @@ export default function ToolsPage() {
   function onPackEdited(serverName: string, res: EditSaved) {
     setEditing(null);
     setMcpError(null);
+    // v1.356.0 (G78): an edit to a switched-off pack is saved and stays off
+    // (the daemon loads nothing behind the switch) — not a failure.
+    if (isPackOff(res as { enabled?: boolean | null; state?: string | null })) {
+      setMcpOk(savedWhileOff(serverName));
+      reloadServers();
+      return;
+    }
     // v1.351.0 integrate (G08): an edit whose pack did not reload is SAVED,
     // not working — the warn note with the daemon's reason, never the green.
     if (res.reloaded === false) {
@@ -1192,12 +1241,14 @@ export default function ToolsPage() {
     const row = connected ? serverByName.get(entry.id) : undefined;
     const rowState = row ? packState(row) : null;
     const broken = rowState === "failed" || rowState === "failing";
+    // v1.356.0 (G78): added but switched off — kept, not in use; never green.
+    const off = rowState === "off";
     return (
       <div
         key={entry.id}
         data-pack={entry.id}
         className={`flex flex-col rounded-xl border p-4 transition-colors ${
-          connected && !broken
+          connected && !broken && !off
             ? "border-emerald-500/20 bg-emerald-500/[0.03] hover:border-emerald-500/30"
             : "border-white/[0.06] bg-white/[0.015] hover:border-white/10 hover:bg-white/[0.03]"
         }`}
@@ -1210,7 +1261,16 @@ export default function ToolsPage() {
           </span>
           {/* 2. STATUS — including the runtime, promoted from a grey pill to
               a real state the user can act on. */}
-          {broken ? (
+          {off ? (
+            <Badge
+              value={PACK_OFF_WORD}
+              tone="slate"
+              variant="calm"
+              keepCase
+              data-testid="status-off"
+              title={PACK_OFF_LINE}
+            />
+          ) : broken ? (
             <Badge
               value={rowState === "failing" ? "Failing" : "Didn’t start"}
               tone="amber"
@@ -1248,11 +1308,13 @@ export default function ToolsPage() {
         {/* 4. ACTION. */}
         <div className="mt-auto pt-3">
           {connected ? (
+            /* v1.356.0 (G74): one word for taking an extension away, the
+               same on this card, its row below and the Directory: Remove. */
             <PrimaryAction
               tone="quiet"
-              label="Disconnect"
+              label="Remove"
               icon={<X size={13} />}
-              title={`Disconnect "${entry.name}"`}
+              title={`Remove "${entry.name}" and its saved settings`}
               testId={`pack-remove-${entry.id}`}
               disabled={mcpBusy === `del:${entry.id}`}
               onClick={() => void removeServer(entry.id)}
@@ -1480,10 +1542,14 @@ export default function ToolsPage() {
         needs: entry.needs,
         official: isOfficial(entry.category),
         offerAutoApprove: true,
+        // v1.356.0 (G74): each field labelled in words ("Folder", "GitHub
+        // personal access token"); the raw placeholder or key stays in its
+        // title, where someone matching it to the docs can still find it.
         fields: [
           ...phs.map((ph) => ({
             key: `ph:${ph}`,
-            label: ph,
+            label: humanFieldLabel(ph),
+            title: ph,
             kind: /path|dir|folder|root/i.test(ph) ? ("path" as const) : ("text" as const),
             hint: /path|dir|folder|root/i.test(ph)
               ? "The extension may only work inside this folder."
@@ -1491,7 +1557,8 @@ export default function ToolsPage() {
           })),
           ...envKeys.map((k) => ({
             key: `env:${k}`,
-            label: k,
+            label: humanFieldLabel(k),
+            title: k,
             kind: "text" as const,
             hint: SECRET_ENV_HINT,
           })),
@@ -1586,9 +1653,10 @@ export default function ToolsPage() {
           className="rounded-2xl border border-white/[0.06] bg-white/[0.015] p-4"
         >
           <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            {/* v1.356.0 (G78): a switched-off extension is kept, not enabled. */}
             <span className="text-[13px] font-semibold tracking-wide text-zinc-200">
               Enabled: {enabledBuiltins} built-in ·{" "}
-              {servers.length} extension{servers.length === 1 ? "" : "s"} ·{" "}
+              {serversOn} extension{serversOn === 1 ? "" : "s"} ·{" "}
               {tools.length} of your own
             </span>
             {/* v1.314.0: "all your agents", not "every agent in this fleet" (jargon). */}
@@ -1629,7 +1697,7 @@ export default function ToolsPage() {
               (MCP — needs Node or Python)"). */}
           <p className="mb-4 text-sm text-zinc-400">
             <span className="text-zinc-300">Built-in tools work immediately</span>{" "}
-            — no runtime, no setup. One-click helpers for everyday jobs: checking
+            — nothing to install, no setup. One-click helpers for everyday jobs: checking
             a website, zipping a folder, seeing what&apos;s eating your disk.
           </p>
           {suiteOk && (
@@ -2087,13 +2155,14 @@ export default function ToolsPage() {
               </label>
               <label className="mt-2 block">
                 <span className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                  Environment variables (optional)
+                  Settings it needs (optional)
                 </span>
                 <textarea
                   value={srcEnvText}
                   onChange={(e) => setSrcEnvText(e.target.value)}
                   rows={2}
-                  placeholder="KEY=value — one per line, e.g. API_TOKEN=..."
+                  placeholder="NAME=value, one per line (e.g. API_TOKEN=...)"
+                  title="Passed to the extension as environment variables"
                   className="field resize-y font-mono text-xs"
                 />
                 <span
@@ -2246,12 +2315,17 @@ export default function ToolsPage() {
                 // (today's rule needed an error text, so a pack that loaded
                 // nothing without one had no way back).
                 const state = packState(s);
+                // v1.356.0 (G78): switched off — kept with its settings and
+                // keys, never loaded, so never "broken" and never a Retry.
+                const off = state === "off";
                 const failures = typeof s.failures === "number" && s.failures > 0 ? s.failures : 0;
                 const broken = state === "failed" || state === "failing";
-                const problem = broken || !!s.last_error;
-                const showRetry = broken || loaded === 0;
+                const problem = !off && (broken || !!s.last_error);
+                const showRetry = !off && (broken || loaded === 0);
                 const stateWords =
-                  state === "starting"
+                  off
+                    ? PACK_OFF_WORD
+                    : state === "starting"
                     ? "Starting"
                     : state === "failed"
                       ? "Didn’t start"
@@ -2260,6 +2334,7 @@ export default function ToolsPage() {
                         : `${loaded} tool${loaded === 1 ? "" : "s"}`;
                 const stateTone =
                   state === "ok" ? (loaded > 0 ? "green" : "slate") : broken ? "amber" : "slate";
+                const switching = mcpBusy === `switch:${s.name}`;
                 const cause = s.reason || s.last_error || "";
                 const envKeys = envKeysOf(s);
                 const secretKeys = secretKeysOf(s);
@@ -2296,46 +2371,24 @@ export default function ToolsPage() {
                             keepCase
                             data-testid={`mcp-state-${s.name}`}
                             title={
-                              state === "failing"
+                              off
+                                ? PACK_OFF_LINE
+                                : state === "failing"
                                 ? "Loaded, but its calls fail. It is restarted on the next call."
                                 : state === "starting"
                                   ? "Starting this extension…"
                                   : undefined
                             }
                           />
-                          {/* A TOGGLE, not a badge (v1.103.0). auto-approve
-                              could only be set at connect time, so changing
-                              your mind meant deleting the pack and re-adding
-                              it — and the checkbox above the catalog is a form
-                              field for the NEXT connect, which is why it never
-                              reflected or saved this. */}
-                          <button
-                            type="button"
-                            onClick={() => void toggleAutoApprove(s)}
-                            disabled={mcpBusy === `auto:${s.name}`}
-                            title={
-                              s.auto_approve
-                                ? "Autonomous agents may run MCP tools without asking. Click to require approval again."
-                                : "Agents ask before each MCP tool call. Click to let this extension run without asking (takes effect after a restart)."
-                            }
-                            className={`rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
-                              s.auto_approve
-                                ? "border-amber-400/30 bg-amber-400/[0.08] text-amber-200/90 hover:bg-amber-400/[0.14]"
-                                : "border-white/10 text-zinc-500 hover:border-white/20 hover:text-zinc-300"
-                            }`}
-                          >
-                            {mcpBusy === `auto:${s.name}`
-                              ? "…"
-                              : s.auto_approve
-                                ? "auto-approve on"
-                                : "auto-approve off"}
-                          </button>
                           {/* v1.342.0: KEY names only; the GET carries no
-                              values, and the vault's keys are named apart. */}
+                              values, and the vault's keys are named apart.
+                              v1.356.0 (G74): counted as "settings" (it read
+                              "N env"); the names stay in the tooltip. */}
                           {envKeys.length > 0 && (
                             <Badge
-                              value={`${envKeys.length} env`}
+                              value={`${envKeys.length} setting${envKeys.length === 1 ? "" : "s"}`}
                               tone="violet"
+                              keepCase
                               data-testid={`mcp-env-keys-${s.name}`}
                               title={envKeys.join(", ")}
                             />
@@ -2350,18 +2403,67 @@ export default function ToolsPage() {
                             />
                           )}
                         </div>
-                        <div className="mt-1 overflow-x-auto">
-                          {/* v1.343.0: an http/sse pack has no command line; its
-                              row says the transport and the URL instead. */}
-                          <code
-                            className="whitespace-pre font-mono text-[11px] text-zinc-500"
-                            data-testid={`mcp-launch-${s.name}`}
-                          >
-                            {s.transport === "http" || s.transport === "sse"
-                              ? `${s.transport.toUpperCase()} ${s.url ?? ""}`
-                              : [s.command, ...(s.args ?? [])].join(" ")}
-                          </code>
+                        {/* v1.356.0 (G74): "Ask before each use" is a labelled
+                            switch (it was an "auto-approve on/off" pill that
+                            read like a status). On = agents ask before each
+                            call; off = this extension runs without asking.
+                            The daemon's resolver is built at boot, so the
+                            change says, in sight, that it applies after a
+                            restart. */}
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-400">
+                          <PackSwitch
+                            size="sm"
+                            on={!s.auto_approve}
+                            label={`Ask before each use of ${s.name}`}
+                            busy={mcpBusy === `auto:${s.name}`}
+                            testId={`mcp-ask-${s.name}`}
+                            title={
+                              s.auto_approve
+                                ? "Off: autonomous agents may run its tools without asking. Switch on to require your approval again."
+                                : "On: agents ask before each of its tools runs. Switch off to let it run without asking."
+                            }
+                            onChange={() => void toggleAutoApprove(s)}
+                          />
+                          <span>Ask before each use</span>
+                          <span className="text-zinc-500" data-testid={`mcp-ask-note-${s.name}`}>
+                            · changes apply after a restart
+                          </span>
                         </div>
+                        {/* v1.356.0 (G74): the launch line is folded under
+                            "Show command" (an address: "Show address"), like
+                            the catalog cards; a first-time reader never meets
+                            a raw command or transport name. */}
+                        <details className="group mt-1" data-testid={`mcp-launch-fold-${s.name}`}>
+                          <summary className="flex cursor-pointer select-none items-center gap-1 text-[11px] font-medium text-zinc-500 transition-colors hover:text-zinc-300 [&::-webkit-details-marker]:hidden">
+                            <ChevronRight
+                              size={12}
+                              className="transition-transform duration-200 group-open:rotate-90 motion-reduce:transition-none"
+                            />
+                            {s.transport === "http" || s.transport === "sse" ? "Show address" : "Show command"}
+                          </summary>
+                          <div className="mt-1 overflow-x-auto">
+                            {/* v1.343.0: an http/sse pack has no command line; its
+                                row says the transport and the URL instead. */}
+                            <code
+                              className="whitespace-pre font-mono text-[11px] text-zinc-500"
+                              data-testid={`mcp-launch-${s.name}`}
+                            >
+                              {s.transport === "http" || s.transport === "sse"
+                                ? `${s.transport.toUpperCase()} ${s.url ?? ""}`
+                                : [s.command, ...(s.args ?? [])].join(" ")}
+                            </code>
+                          </div>
+                        </details>
+                        {/* v1.356.0 (G78): a switched-off pack says what off
+                            means and that nothing is lost; no Retry. */}
+                        {off && (
+                          <p
+                            data-testid={`mcp-off-${s.name}`}
+                            className="mt-1.5 text-[12px] text-zinc-400"
+                          >
+                            {PACK_OFF_LINE}
+                          </p>
+                        )}
                         {/* v1.229.0 (audit U4): the REASON a pack holds no tools.
                             "0 tools loaded" alone read as a fact of life; the
                             daemon had the exception text all along. */}
@@ -2379,7 +2481,10 @@ export default function ToolsPage() {
                               {state === "failing"
                                 ? `Failing: ${cause || "its calls fail"}`
                                 : `Didn’t start: ${cause || "it gave no reason"}`}
+                              {/[.!?]$/.test(cause.trim()) ? "" : "."}
                             </span>
+                            {/* v1.356.0 (G77): what a broken pack costs. */}
+                            <span data-testid={`mcp-consequence-${s.name}`}>{PACK_FAILING_CONSEQUENCE}</span>
                             {retryButton}
                             {/* v1.354.0: the add area's outcome offers this link
                                 beside a Node.js reason; the row says it too. */}
@@ -2421,6 +2526,18 @@ export default function ToolsPage() {
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
+                        {/* v1.356.0 (G78): On / Off without losing it. Off
+                            takes its tools out of every chat and agent at
+                            once and keeps its settings and keys; on loads it
+                            again with nothing typed. */}
+                        <PackSwitch
+                          on={!off}
+                          label={packSwitchLabel(s.name)}
+                          title={packSwitchTitle(!off)}
+                          busy={switching}
+                          testId={`mcp-switch-${s.name}`}
+                          onChange={(next) => void setPackOn(s, next)}
+                        />
                         {/* v1.343.0: Edit opens the inline editor below the
                             row; it is prefilled from THIS row (names only). */}
                         <button
@@ -2448,10 +2565,13 @@ export default function ToolsPage() {
                             </>
                           )}
                         </button>
+                        {/* v1.356.0 (G74): "Remove", the same word as the
+                            catalog card and the Directory (it read Delete
+                            here, Disconnect there). */}
                         <ConfirmButton
                           onConfirm={() => removeServer(s.name)}
-                          label="Delete"
-                          title={`Disconnect tool pack "${s.name}"`}
+                          label="Remove"
+                          title={`Remove "${s.name}" and its saved settings (to pause it instead, switch it off)`}
                         />
                       </div>
                     </div>

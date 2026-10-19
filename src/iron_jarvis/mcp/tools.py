@@ -964,6 +964,41 @@ def note_call_success(name: str) -> None:
 #: The load-record state while a pack's handshake has not finished (v1.311.0).
 STATE_STARTING = "starting"
 
+#: v1.356.0 (G78): the ROW state (``GET /mcp/servers``) of a pack the user
+#: switched off. Never written to a load record: a switched-off pack has none.
+STATE_OFF = "off"
+
+#: v1.356.0 (G78): what a switched-off pack says when something asks it to
+#: start (the Retry route, the chat's ``pack_restart``) — plain words, the
+#: place to turn it back on, never a failure.
+PACK_OFF_REASON = "It's switched off, so its tools are not loaded."
+PACK_OFF_FIX = "Turn it on in Settings › Tools (or its Directory card) to use it again."
+PACK_OFF_ERROR = "switched off; turn it on to use it"
+
+#: The values an ``enabled`` key may be written with that mean OFF. TOML
+#: gives a real ``false``; a hand-edited or imported row may carry a word.
+_OFF_WORDS = frozenset({"false", "off", "no", "0"})
+
+
+def pack_enabled(cfg: Any) -> bool:
+    """Whether a configured pack is switched ON (v1.356.0, G78).
+
+    A pack row is ON unless it carries ``enabled = false`` (or a word that
+    says the same). Absent means on, so every row saved before this release
+    is unchanged. A switched-off pack KEEPS its config row and every vault
+    secret it names — only its loading stops: the loader skips it (no tools
+    registered, so chat, agents and an ``mcp:*`` allowlist hold none of
+    them) and no load record is written for it (nothing reads "failed" or
+    "starting" for a pack the user turned off)."""
+    if not isinstance(cfg, dict):
+        return True
+    value = cfg.get("enabled", True)
+    if value is False:
+        return False
+    if isinstance(value, str) and value.strip().lower() in _OFF_WORDS:
+        return False
+    return True
+
 
 def mark_starting(server_configs: "list[dict[str, Any]] | None") -> list[str]:
     """Record every configured pack as ``state: "starting"`` (v1.311.0).
@@ -985,6 +1020,10 @@ def mark_starting(server_configs: "list[dict[str, Any]] | None") -> list[str]:
     names: list[str] = []
     for cfg in server_configs or []:
         if not isinstance(cfg, dict):
+            continue
+        # v1.356.0 (G78): a switched-off pack is never loaded, so it must
+        # never read "starting" either (nothing would ever replace it).
+        if not pack_enabled(cfg):
             continue
         name = cfg.get("name") or "mcp"
         _LOAD_STATUS[name] = {
@@ -1258,6 +1297,31 @@ def unload_pack_tools(registry: Any, name: str) -> int:
     return count
 
 
+def switch_off_pack(registry: Any, name: str) -> int:
+    """Take a switched-off pack out of every running surface (v1.356.0, G78)
+    and return how many tools went.
+
+    The live half of :func:`iron_jarvis.mcp.pack_door.remove_pack`, WITHOUT
+    the config row, the vault rows or the manifest (switching it back on must
+    not ask for the token again, and its tools are the ones it had): its
+    registered tools are unregistered AND their client closed
+    (:func:`unload_pack_tools`), its live client is forgotten (its prompts and
+    resources go too), and its load record is dropped, so no surface reads
+    "failed", "failing" or "starting" for a pack the user turned off.
+    Never raises."""
+    unloaded = 0
+    try:
+        unloaded = unload_pack_tools(registry, name)
+    except Exception as exc:  # noqa: BLE001 — the switch still lands
+        log.warning("switching off MCP pack %r: tools not unloaded: %s", name, type(exc).__name__)
+    forget_live_client(name)
+    forget_load_record(name)
+    with _STATUS_LOCK:
+        _ANNOUNCED.discard(name)
+        _LOAD_CFGS.pop(name, None)
+    return unloaded
+
+
 #: The words a reload answers when the pack connected and listed nothing
 #: (the v1.229.0 Retry route's sentence, kept byte for byte).
 NO_TOOLS_ADVERTISED = "connected but the server advertised no tools"
@@ -1284,6 +1348,21 @@ def reload_pack(platform: Any, name: str, *, home: "str | Path | None" = None) -
     if cfg is None:
         raise KeyError(name)
     registry = platform.registry
+    if not pack_enabled(cfg):
+        # v1.356.0 (G78): a Retry (or the chat's pack_restart) on a pack the
+        # user switched off does not start it behind the switch's back; it
+        # says it is off and where to turn it on. Anything it still held is
+        # taken out the way the switch takes it out.
+        switch_off_pack(registry, name)
+        return {
+            "ok": False,
+            "tools_loaded": 0,
+            "last_error": PACK_OFF_ERROR,
+            "reason": PACK_OFF_REASON,
+            "fix": PACK_OFF_FIX,
+            "stderr_tail": "",
+            "off": True,
+        }
     replaced = []
     for tool_name in registry.mcp_names(name):
         live = registry.get(tool_name)
@@ -1437,6 +1516,23 @@ def mcp_tools(
     if not server_configs:
         return []
 
+    # v1.356.0 (G78): a pack the user switched OFF (``enabled = false``) is
+    # never LOADED: none of its tools reach the registry, so chat, agents and
+    # an ``mcp:*`` allowlist hold none of them, and its load record is dropped
+    # so nothing reads "failed" for it. A probe (``record=False``: the Test
+    # route, the Directory's Test) still connects to it on purpose — a press
+    # that registers nothing.
+    if record and any(isinstance(c, dict) and not pack_enabled(c) for c in server_configs):
+        kept: list[dict[str, Any]] = []
+        for cfg in server_configs:
+            if isinstance(cfg, dict) and not pack_enabled(cfg):
+                forget_load_record(cfg.get("name") or "mcp")
+                continue
+            kept.append(cfg)
+        server_configs = kept
+        if not server_configs:
+            return []
+
     # Resolved ONCE and shared by every worker, so the bound stays PER PACK and
     # is never summed — a slow pack cannot eat another pack's budget.
     timeout = _mcp_connect_timeout()
@@ -1485,6 +1581,12 @@ __all__ = [
     "load_status",
     "load_statuses",
     "mark_starting",
+    "pack_enabled",
+    "switch_off_pack",
+    "STATE_OFF",
+    "PACK_OFF_REASON",
+    "PACK_OFF_FIX",
+    "PACK_OFF_ERROR",
     "starting_packs",
     "wait_for_starting_packs",
     "packs_starting_note",

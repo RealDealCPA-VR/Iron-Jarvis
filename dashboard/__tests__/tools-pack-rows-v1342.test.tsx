@@ -432,7 +432,8 @@ describe("env is shown by KEY name only", () => {
     ];
     render(<ToolsPage />);
     const env = await screen.findByTestId("mcp-env-keys-keyed");
-    expect(env.textContent).toContain("2 env");
+    // v1.356.0 (G74, changed on purpose): counted as "settings", never "env".
+    expect(env.textContent).toContain("2 settings");
     expect(env.getAttribute("title")).toBe("BRAVE_API_KEY, REGION");
     const vault = screen.getByTestId("mcp-secret-keys-keyed");
     expect(vault.textContent).toContain("1 in vault");
@@ -443,7 +444,7 @@ describe("env is shown by KEY name only", () => {
   it("an older daemon with only an `env` map still shows the count by its keys", async () => {
     api.servers = [row("older", { env_keys: undefined, secret_keys: undefined, env: { A: "1" } })];
     render(<ToolsPage />);
-    expect((await screen.findByTestId("mcp-env-keys-older")).textContent).toContain("1 env");
+    expect((await screen.findByTestId("mcp-env-keys-older")).textContent).toContain("1 setting");
   });
 
   it("the KEY=value box says keys that look like tokens are kept in the vault", async () => {
@@ -453,16 +454,19 @@ describe("env is shown by KEY name only", () => {
       target: { value: "@scope/some-mcp" },
     });
     const hint = await screen.findByTestId("mcp-env-vault-hint");
+    // v1.356.0 (G74, changed on purpose): plain words, no "environment variable".
     expect(hint.textContent).toMatch(/token/i);
-    expect(hint.textContent).toMatch(/encrypted vault/);
+    expect(hint.textContent).toMatch(/kept encrypted on this PC/);
   });
 });
 
-describe("Delete says Removed, not restart", () => {
+// v1.356.0 (G74, changed on purpose): the row's button says Remove, the
+// same word as the catalog card and the Directory.
+describe("Remove says Removed, not restart", () => {
   it("two presses remove the pack; the note says Removed and never asks for a restart", async () => {
     render(<ToolsPage />);
     await screen.findByTestId("mcp-state-filesystem");
-    const del = within(rowOf("filesystem")).getByRole("button", { name: /Delete/ });
+    const del = within(rowOf("filesystem")).getByRole("button", { name: /Remove/ });
     fireEvent.click(del);
     fireEvent.click(within(rowOf("filesystem")).getByRole("button", { name: /Confirm/ }));
     await waitFor(() => expect(api.dels).toContain("/mcp/servers/filesystem"));

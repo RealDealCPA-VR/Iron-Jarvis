@@ -236,7 +236,8 @@ describe("sessions/[id] — Shell ran unconfined", () => {
     await act(async () => {});
     const chips = screen.getAllByTestId("confinement-chip");
     expect(chips).toHaveLength(1);
-    expect(chips[0]).toHaveTextContent("Shell ran unconfined (Docker unavailable)");
+    // v1.356.0 (G74, changed on purpose): plain words.
+    expect(chips[0]).toHaveTextContent("Ran without the safety box (Docker wasn't running)");
   });
 
   it("renders nothing when every call was sandboxed or had no runtime to report", async () => {

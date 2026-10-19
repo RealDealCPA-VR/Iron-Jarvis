@@ -163,7 +163,8 @@ describe("Edit on a pack row", () => {
     const edit = screen.getByTestId("mcp-edit-brave");
     const group = edit.parentElement as HTMLElement;
     expect(within(group).getByText("Test")).toBeTruthy();
-    expect(within(group).getByText("Delete")).toBeTruthy();
+    // v1.356.0 (G74, changed on purpose): the removal button says Remove.
+    expect(within(group).getByText("Remove")).toBeTruthy();
     expect(edit.getAttribute("aria-pressed")).toBe("true");
     // prefilled
     expect((within(form).getByTestId("edit-command-brave") as HTMLInputElement).value).toBe("npx");

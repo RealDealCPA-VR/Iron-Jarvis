@@ -110,6 +110,12 @@ def load_config(
     from . import tools as _tools
 
     name = str(cfg.get("name") or "")
+    if not _tools.pack_enabled(cfg):
+        # v1.356.0 (G78): a row the user switched off is saved, never loaded
+        # (an Undo putting a switched-off row back, a reconnect of one): its
+        # live tools, client and load record go; nothing fails.
+        _tools.switch_off_pack(platform.registry, name)
+        return 0
     _tools.unload_pack_tools(platform.registry, name)
     errs: dict[str, dict[str, Any]] = errors if errors is not None else {}
     loaded = 0
@@ -199,6 +205,7 @@ def add_pack(
     persist: Persist | None = None,
     secret_keys: Iterable[str] = (),
     replace: bool = False,
+    enabled: bool = True,
 ) -> dict[str, Any]:
     """Register an external MCP server (persisted; loaded live best-effort,
     guaranteed on the next restart). The body of ``routes/agents.
@@ -209,6 +216,13 @@ def add_pack(
     ``secret_keys`` (v1.355.0): env keys that go to the vault even when their
     NAME does not say secret (the Directory's Box "client id" field is kind
     "secret"). ``replace`` (v1.355.0): a reconnect — see the module doc.
+
+    ``enabled`` (v1.356.0, G78): ``False`` saves the pack SWITCHED OFF (the
+    import door, for a server its app had turned off and the user ticked):
+    the row and its vault secrets are stored exactly as an add stores them,
+    plus ``enabled = false``, and nothing is loaded. The answer then carries
+    ``enabled: false`` and a note saying so; an ordinary add's answer is
+    unchanged byte for byte.
     """
     persist = persist or persist_for(platform)
     name = (body.name or "").strip()
@@ -361,6 +375,10 @@ def add_pack(
             **({"cwd": body.cwd} if body.cwd else {}),
             **({"auto_approve": True} if body.auto_approve else {}),
         }
+    if not enabled:
+        # v1.356.0 (G78): saved switched off — `install_config` stores it and
+        # `load_config` loads nothing for it.
+        cfg["enabled"] = False
     # Best-effort LIVE load so its tools appear without a restart. Registered
     # with mcp=True so the ``mcp:*`` sentinel reaches them from the agent loop
     # and they survive the next restart (boot re-registers the same way).
@@ -385,7 +403,9 @@ def add_pack(
     # added live with auto_approve won't be trusted by headless agents until
     # the next restart — be honest about that.
     note = None
-    if not loaded:
+    if not enabled:
+        note = PACK_SAVED_OFF_NOTE
+    elif not loaded:
         failure = errors.get(name)
         if failure is not None:
             reason = failure.get("reason") or failure.get("error") or "it did not start"
@@ -410,7 +430,75 @@ def add_pack(
         # v1.343.0 (lane J): the npm door's effective launcher (the one named,
         # else the guess); absent for every other door.
         **({"launcher": body.launcher} if npm_door else {}),
+        # v1.356.0 (G78): present only for a pack saved switched off.
+        **({"enabled": False} if not enabled else {}),
     }
+
+
+# --------------------------------------------------------------------------- #
+# On / off (v1.356.0, G78).
+# --------------------------------------------------------------------------- #
+#: The add answer's note for a pack saved switched off (the import door).
+PACK_SAVED_OFF_NOTE = "saved switched off, as it was in the app it came from; turn it on to use it"
+
+
+def set_pack_enabled(
+    platform: Any,
+    name: str,
+    enabled: bool,
+    *,
+    persist: Persist | None = None,
+) -> dict[str, Any]:
+    """Switch a configured pack ON or OFF without losing it (v1.356.0, G78).
+
+    OFF: the row stays where it is with ``enabled = false`` (persisted), every
+    vault row it names and its manifest stay untouched, and the live half of
+    a removal runs (``mcp.tools.switch_off_pack``): its tools are unregistered
+    and their client closed — so chat, agents and an ``mcp:*`` allowlist lose
+    them at once — its live client is forgotten and its load record dropped
+    (nothing reads "failed"). The loader skips it from now on, boot included.
+
+    ON: the ``enabled`` key is taken off the row (absent = on, the stored row
+    is byte for byte what it was before the switch) and the pack is reloaded
+    through the SAME reload a Retry uses (``mcp.tools.reload_pack``) — the
+    stored vault names resolve at launch, so no token is typed again; the
+    manifest is re-diffed (a tool that arrived meanwhile is held back).
+
+    Switching to the state a pack is already in changes nothing. Raises
+    ``PackDoorError(404)`` for an unknown name. BLOCKING when it turns a pack
+    on (a connect with a timeout): call it off the event loop."""
+    from . import tools as _tools
+
+    persist = persist or persist_for(platform)
+    servers = _servers(platform)
+    idx = next(
+        (i for i, s in enumerate(servers) if isinstance(s, dict) and s.get("name") == name),
+        None,
+    )
+    if idx is None:
+        raise PackDoorError(404, "no such server")
+    row = dict(servers[idx])
+    was_on = _tools.pack_enabled(row)
+    want = bool(enabled)
+    if was_on == want:
+        out: dict[str, Any] = {"name": name, "enabled": want, "changed": False}
+        if not want:
+            out["tools_unloaded"] = 0
+        return out
+    if want:
+        row.pop("enabled", None)
+    else:
+        row["enabled"] = False
+    servers[idx] = row
+    platform.config.mcp_servers = servers
+    persist(["mcp_servers"])
+    if not want:
+        unloaded = _tools.switch_off_pack(platform.registry, name)
+        log.info("MCP pack %r switched off (%d tools unloaded)", name, unloaded)
+        return {"name": name, "enabled": False, "changed": True, "tools_unloaded": unloaded}
+    result = _tools.reload_pack(platform, name, home=platform.config.home)
+    log.info("MCP pack %r switched on (%d tools loaded)", name, int(result.get("tools_loaded") or 0))
+    return {"name": name, "enabled": True, "changed": True, **result}
 
 
 # --------------------------------------------------------------------------- #
@@ -507,6 +595,7 @@ def forget_legacy_refs(platform: Any, name: str, cfg: dict[str, Any] | None) -> 
 
 
 __all__ = [
+    "PACK_SAVED_OFF_NOTE",
     "PackDoorError",
     "add_pack",
     "forget_legacy_refs",
@@ -514,5 +603,6 @@ __all__ = [
     "load_config",
     "persist_for",
     "remove_pack",
+    "set_pack_enabled",
     "vault_refs",
 ]

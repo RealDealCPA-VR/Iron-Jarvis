@@ -116,11 +116,18 @@ export function recipeMethodWord(method: string): string {
   return method;
 }
 
+/** v1.356.0 (G74): what a working recipe's row says. The method ("over
+ *  HTTP", "over stdio") is how it is wired, not what the user gets, so it
+ *  rides the row's title (`recipeNote(...).title`). */
+export const RECIPE_READY_HEADLINE = "Jarvis tools ready";
+
 /** The one sentence the CLI I am about to launch has coming to it. */
 export function recipeNote(cli: LaunchCli): {
   headline: string;
   ready: boolean;
   limitations: string[];
+  /** v1.356.0 (G74): how a ready recipe is wired, for the row's title. */
+  title?: string;
 } {
   const recipe = cli.recipe;
   // No recipe at all: an older daemon, or a catalog entry nobody wrote one for.
@@ -146,9 +153,10 @@ export function recipeNote(cli: LaunchCli): {
     return { headline: "Launches as-is — no Jarvis capabilities", ready: false, limitations };
   }
   return {
-    headline: `Jarvis capabilities ${recipeMethodWord(method)}`,
+    headline: RECIPE_READY_HEADLINE,
     ready: true,
     limitations,
+    title: `Jarvis capabilities ${recipeMethodWord(method)}`,
   };
 }
 
@@ -168,7 +176,9 @@ export function LaunchRecipeNote({ cli }: { cli: LaunchCli }) {
       : "text-zinc-500";
   return (
     <span data-testid={`launch-recipe-${cli.id}`} className="block">
-      <span className={`block text-[10px] leading-relaxed ${tone}`}>{note.headline}</span>
+      <span className={`block text-[10px] leading-relaxed ${tone}`} title={note.title}>
+        {note.headline}
+      </span>
       {note.limitations.map((line) => (
         <span key={line} className="block text-[10px] leading-relaxed text-tone-warn">
           {line}

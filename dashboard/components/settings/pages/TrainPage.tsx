@@ -360,7 +360,7 @@ export default function TrainPage() {
           title="Connect your notes and wiki"
           icon={<Library size={15} />}
           done={(st?.memory_bases ?? 0) > 1}
-          blurb="An Obsidian vault, a Notion database, a shared drive, or an MCP brain. Once connected, Iron Jarvis retrieves from it on every relevant question — no tool to arm, no folder to name."
+          blurb="An Obsidian vault, a Notion database, a shared drive, or a memory app. Once connected, Iron Jarvis retrieves from it on every relevant question — no tool to arm, no folder to name."
         >
           <div className="space-y-2">
             {/* v1.316.0: count what the USER added. The built-in base is
@@ -370,7 +370,7 @@ export default function TrainPage() {
             <Doorway
               href="/memory?scope=longterm"
               label={`Your notes and wikis — ${Math.max(0, (st?.memory_bases ?? 1) - 1)} connected (the built-in base is always on)`}
-              note="Obsidian, Notion, Dropbox, Google Drive, OneDrive, SSH, an MCP brain"
+              note="Obsidian, Notion, Dropbox, Google Drive, OneDrive, SSH, a memory app"
             />
             <Doorway
               href="/documents"

@@ -214,7 +214,9 @@ describe("adding is a decision, not a click", () => {
     expect(within(d).getByText(/reads files/)).toBeTruthy();
     expect(within(d).getByText(/writes files/)).toBeTruthy();
     expect(within(d).getByText(/runs through/)).toBeTruthy();
-    expect(within(d).getByText(/Every agent in this fleet/)).toBeTruthy();
+    // v1.356.0 (G74, changed on purpose): plain words, no "fleet".
+    expect(within(d).getByText(/Every agent can use it/)).toBeTruthy();
+    expect(d.textContent).not.toMatch(/fleet|arms it/);
   });
 
   it("collects the folder BEFORE enabling, and will not enable without it", () => {

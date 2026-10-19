@@ -41,10 +41,14 @@ import { Badge, ErrorNote, LoaderInline, SuccessNote, WarnNote } from "@/compone
 import { addedButNotStarted, packDidNotStart } from "@/lib/packStartWords";
 import { appName, listWords } from "@/lib/importDiscovery";
 import {
+  ADDED_OFF_FAR,
+  ADDED_OFF_TAIL,
+  ADDED_OFF_WORDS,
   DOOR_LABELS,
   PASTE_APP,
   TOOLS_ROWS_HREF,
   USE_IN_CHAT,
+  addedSwitchedOff,
   askHint,
   askedNames,
   existsWords,
@@ -154,7 +158,9 @@ function PreviewList({
       {rows.map((row) => {
         const st = rowStatus(row);
         const isHttp = row.transport === "http" || row.transport === "sse";
-        const launcher = isHttp ? row.transport.toUpperCase() : (row.command ?? "").trim() || "stdio";
+        // v1.356.0 (G74): a row with no command reads "a program on this PC"
+        // (it read "stdio").
+        const launcher = isHttp ? row.transport.toUpperCase() : (row.command ?? "").trim() || "a program on this PC";
         const secretKeys = row.secret_keys ?? [];
         // v1.355.0: the secret keys plus every placeholder the config left.
         const asked = askedNames(row);
@@ -274,12 +280,23 @@ function PreviewList({
  *  page (`rowsHere`) a button that scrolls to the row below, opens its last
  *  output and puts the focus on its Retry; elsewhere (the Directory) a link
  *  to the Tools page's packs. */
-function RowJump({ name, label, rowsHere }: { name: string; label: string; rowsHere: boolean }) {
+function RowJump({
+  name,
+  label,
+  rowsHere,
+  farLabel = "Open its row in Tools to retry.",
+}: {
+  name: string;
+  label: string;
+  rowsHere: boolean;
+  /** v1.356.0 (G78): the words of the link from a page without the rows. */
+  farLabel?: string;
+}) {
   const [missed, setMissed] = useState(false);
   if (!rowsHere) {
     return (
       <Link href={TOOLS_ROWS_HREF} data-testid={`import-open-row-${name}`} className={INLINE_ACTION}>
-        Open its row in Tools to retry.
+        {farLabel}
       </Link>
     );
   }
@@ -341,23 +358,33 @@ function ApplyOutcome({ result, rowsHere }: { result: ApplyResult; rowsHere: boo
   return (
     <div className="mt-3 space-y-1" data-testid="import-outcome">
       {result.added.map((a) => {
-        const notStarted = packDidNotStart(a);
+        // v1.356.0 (G78): added switched off (it was off in its app) — saved,
+        // not started on purpose: never the warn triangle.
+        const off = addedSwitchedOff(a);
+        const notStarted = !off && packDidNotStart(a);
         const { head, tail } = splitRowTail(addedButNotStarted(a.note));
         const names = toolNamesLine(toolNames?.[a.name]);
         return (
           <div
             key={`added:${a.name}`}
             data-testid={`import-result-${a.name}`}
-            data-outcome={notStarted ? "not-started" : "ok"}
+            data-outcome={off ? "off" : notStarted ? "not-started" : "ok"}
             className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-zinc-300"
           >
             {notStarted ? (
               <TriangleAlert size={12} className="text-tone-warn" aria-hidden data-testid={`import-warn-${a.name}`} />
             ) : (
-              <Check size={12} className="text-tone-success" aria-hidden />
+              <Check size={12} className={off ? "text-zinc-500" : "text-tone-success"} aria-hidden />
             )}
             <span className="font-mono font-semibold text-zinc-100">{a.name}</span>
-            {notStarted ? (
+            {off ? (
+              <>
+                <span className="text-zinc-400" data-testid={`import-off-added-${a.name}`}>
+                  {ADDED_OFF_WORDS}
+                </span>{" "}
+                <RowJump name={a.name} label={ADDED_OFF_TAIL} rowsHere={rowsHere} farLabel={ADDED_OFF_FAR} />
+              </>
+            ) : notStarted ? (
               <>
                 <span className="text-tone-warn">{head}</span>{" "}
                 {tail && <RowJump name={a.name} label={tail} rowsHere={rowsHere} />}

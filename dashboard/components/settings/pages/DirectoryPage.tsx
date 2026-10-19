@@ -18,7 +18,7 @@ import {
   KeyRound,
   X,
 } from "lucide-react";
-import { get, post, del, ApiError } from "@/lib/api";
+import { get, post, del, patch, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import {
   Badge,
@@ -38,8 +38,19 @@ import { DOOR_LABELS } from "@/lib/addPackWords";
 import type { ImportSource } from "@/lib/mcpImport";
 import { discover, discoveryLine } from "@/lib/importDiscovery";
 import { EditPack, type EditSaved } from "@/components/tools/EditPack";
+import { PackSwitch } from "@/components/tools/PackSwitch";
 import { packStartReason } from "@/lib/packStartWords";
 import { packPowersLine } from "@/lib/packPowers";
+import {
+  PACK_OFF_LINE,
+  PACK_OFF_WORD,
+  isPackOff,
+  packSwitchLabel,
+  packSwitchTitle,
+  savedWhileOff,
+  switchedNote,
+  type SwitchAnswer,
+} from "@/lib/extensionWords";
 
 /* -------------------------------------------------------------------------- */
 /*  Types (local — lib/types.ts is intentionally untouched)                    */
@@ -107,6 +118,10 @@ interface Connector {
   held_back?: number | null;
   /** v1.355.0 (G69): the app holds a key or token the card can change. */
   keyed?: boolean | null;
+  /** v1.356.0 (G78): false = the user switched this app's pack off (kept
+   *  with its key, never loaded). The daemon's connectors rows carry it
+   *  (the pack's `mcp_servers` entry `enabled`); absent = on. */
+  enabled?: boolean | null;
 }
 
 interface ConnectorsResponse {
@@ -427,6 +442,13 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
   }
   function onKeyChanged(res: EditSaved) {
     setEditRow(null);
+    // v1.356.0 (G78): a key changed on an app that is switched off is saved
+    // and stays off — the daemon loads nothing behind the switch.
+    if (isPackOff(res as { enabled?: boolean | null; state?: string | null })) {
+      setSuccess(savedWhileOff(c.name));
+      onChanged();
+      return;
+    }
     const loaded = typeof res.tools_loaded === "number" ? res.tools_loaded : 0;
     if (res.reloaded) {
       setSuccess(`Key changed. ${loaded} tool${loaded === 1 ? "" : "s"} ready to use.`);
@@ -437,6 +459,30 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
       setNote(`Key saved, but ${c.name} didn't start${reason ? `: ${reason}` : ""}. Press Retry.`);
     }
     onChanged();
+  }
+
+  /** v1.356.0 (G78): On / Off without losing it — the Tools row's switch
+   *  (PATCH /mcp/servers/{name} {enabled}; the card id IS the pack's
+   *  mcp_servers name, as Retry and Change key use it). Off takes its tools
+   *  out of every chat and agent and keeps its key; on loads it again with
+   *  nothing typed. */
+  const [switchBusy, setSwitchBusy] = useState(false);
+  async function setOn(next: boolean) {
+    if (switchBusy) return;
+    setSwitchBusy(true);
+    clearNotes();
+    setTestResult(null);
+    try {
+      const res = await patch<SwitchAnswer>(`/mcp/servers/${encodeURIComponent(c.id)}`, { enabled: next });
+      const said = switchedNote(c.name, next, res);
+      if (said.warn) setNote(said.text);
+      else setSuccess(said.text);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setSwitchBusy(false);
+    }
   }
 
   async function disconnect() {
@@ -466,8 +512,12 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
   // real and survives restarts), so the green badge, ring and glyph read the
   // backend's `status` instead: "connected" is green; a saved connection in
   // any other state (failed, no_tools) "Needs attention", in the warn tone.
-  const healthy = c.connected && c.status === "connected";
-  const attention = c.connected && !healthy;
+  // v1.356.0 (G78): a saved app the user switched off is neither working nor
+  // broken: "Off", no Retry, its switch says how to turn it back on. Read off
+  // the row's `enabled` (absent = on), whatever its status says.
+  const off = c.connect_via === "mcp" && c.connected && isPackOff({ enabled: c.enabled });
+  const healthy = !off && c.connected && c.status === "connected";
+  const attention = !off && c.connected && !healthy;
   // v1.353.0 (G45): the needs said before Connect.
   const setupNeeds = (c.needs ?? "").trim();
   const runtimeMissing = c.runtime_ready === false && Boolean((c.runtime ?? "").trim());
@@ -486,6 +536,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
     <div
       data-testid={`connector-card-${c.id}`}
       data-health={healthy ? "connected" : attention ? "attention" : "off"}
+      data-switched-off={off ? "1" : undefined}
       className={`card-surface relative flex flex-col gap-3.5 p-5 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover hover:ring-1 hover:ring-accent/20 ${
         healthy
           ? "ring-1 ring-emerald-500/25 shadow-[0_0_24px_-10px_rgba(52,211,153,0.35)]"
@@ -519,6 +570,17 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               tone="amber"
               keepCase
               data-testid={`connector-attention-${c.id}`}
+            />
+          </span>
+        ) : off ? (
+          <span className="shrink-0">
+            <Badge
+              value={PACK_OFF_WORD}
+              tone="slate"
+              variant="calm"
+              keepCase
+              title={PACK_OFF_LINE}
+              data-testid={`connector-off-${c.id}`}
             />
           </span>
         ) : null}
@@ -598,7 +660,12 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               "0 tools loaded" was a count where the user needed a cause: the
               daemon knows whether the pack failed or loaded nothing, says
               why, and names the fix. Retry reloads the pack in place. */}
-          {c.connect_via === "mcp" && (c.status === "no_tools" || c.status === "failed") ? (
+          {off ? (
+            /* v1.356.0 (G78): what off means, and that nothing is lost. */
+            <p data-testid={`connector-off-line-${c.id}`} className="text-[12px] text-zinc-400">
+              {PACK_OFF_LINE}
+            </p>
+          ) : c.connect_via === "mcp" && (c.status === "no_tools" || c.status === "failed") ? (
             <div
               data-testid={`connector-status-${c.id}`}
               className="flex flex-wrap items-center gap-2 text-[12px] text-amber-200"
@@ -660,7 +727,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               Turn it on in a chat with + › Connections
             </p>
           )}
-          {c.connect_via === "mcp" && (c.tool_names?.length ?? 0) > 0 && (
+          {c.connect_via === "mcp" && !off && (c.tool_names?.length ?? 0) > 0 && (
             <div className="flex flex-wrap gap-1">
               {c.tool_names!.map((n) => (
                 <span
@@ -723,6 +790,17 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
       {/* Action row */}
       {c.connected ? (
         <div className="flex items-center gap-2">
+          {/* v1.356.0 (G78): On / Off for an app that runs as a pack. */}
+          {c.connect_via === "mcp" && (
+            <PackSwitch
+              on={!off}
+              label={packSwitchLabel(c.name)}
+              title={packSwitchTitle(!off)}
+              busy={switchBusy}
+              testId={`connector-switch-${c.id}`}
+              onChange={(next) => void setOn(next)}
+            />
+          )}
           <button
             type="button"
             onClick={runTest}
@@ -756,10 +834,17 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               )}
             </button>
           )}
+          {/* v1.356.0 (G74): one word for taking an app away, the same as
+              the Tools page: Remove (it said Disconnect here, Delete there).
+              To pause it instead, the switch keeps its key. */}
           <ConfirmButton
             onConfirm={disconnect}
-            label="Disconnect"
-            title={`Disconnect ${c.name}`}
+            label="Remove"
+            title={
+              c.connect_via === "mcp"
+                ? `Remove ${c.name} and its saved key (to pause it instead, switch it off)`
+                : `Remove ${c.name}`
+            }
             className="py-1.5"
           />
         </div>

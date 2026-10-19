@@ -271,13 +271,17 @@ def test_a_server_switched_off_in_claude_desktop_is_listed_disabled_and_added_on
         "off-two": True,
         "said-false": False,
     }
-    # The press is the choice: a disabled server ticked anyway is added like
-    # any other, and "disabled" is not a key of the stored pack.
+    # The press is the choice: a disabled server ticked anyway is added.
+    # v1.356.0 (G78, changed ON PURPOSE): it is added SWITCHED OFF, as it was
+    # in its app — the stored pack carries `enabled = false` (never the
+    # source's "disabled" key), nothing is loaded, and the Tools row's switch
+    # turns it on with the values the import stored.
     res = client.post("/mcp/import/apply", json={"source": "claude-desktop", "names": ["off-one"]})
     assert res.status_code == 200, res.text
     assert [a["name"] for a in res.json()["added"]] == ["off-one"]
+    assert res.json()["added"][0]["state"] == "off"
     entry = next(s for s in platform.config.mcp_servers if s["name"] == "off-one")
-    assert "disabled" not in entry and "enabled" not in entry
+    assert "disabled" not in entry and entry["enabled"] is False
 
 
 def test_claude_desktops_own_switches_file_turns_a_server_off(client, homes):

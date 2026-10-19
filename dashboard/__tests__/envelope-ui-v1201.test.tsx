@@ -354,7 +354,10 @@ describe("Measured endpoints — their own section BELOW the connect cards", () 
     expect(lt).toContain("honest context 49,152 of 262,144 advertised (19%)");
     expect(lt).toContain("big gap");
     expect(lt).toContain("3.6 chars/token");
-    expect(lt).toContain("JSON adherence 0.96");
+    // v1.356.0 (G74, changed on purpose): the format score in words; the
+    // number rides the line's title.
+    expect(lt).toContain("follows formats reliably");
+    expect(lt).not.toContain("JSON adherence");
     expect(lt).toContain("coherent to ~9 turns");
     expect(lt).toContain("vision no");
 
@@ -508,7 +511,7 @@ describe("Measured endpoints — a floored rung is a refusal, not a score", () =
   it("floored native: verdict leads with guided JSON; expand says refused + the note, never 0.00", async () => {
     const card = await renderOllamaCard(FLOORED_NATIVE);
     expect(within(card).getByTestId(`${OLLAMA_CARD}-verdict`).textContent).toBe(
-      "Fully usable. Tool calls run as guided JSON.",
+      "Fully usable. Tool calls run in a guided format.",
     );
     fireEvent.click(within(card).getByTestId(`${OLLAMA_CARD}-expand`));
     const detail = within(card).getByTestId(`${OLLAMA_CARD}-detail`);
@@ -558,7 +561,7 @@ describe("Measured endpoints — the verdict, all three ways", () => {
       envelope({ profile: profile({ tool_protocols: { native: 0.8, strict_json: 0.93 } }) }),
     );
     expect(within(card).getByTestId(`${OLLAMA_CARD}-verdict`).textContent).toBe(
-      "Fully usable. Tool calls run as guided JSON.",
+      "Fully usable. Tool calls run in a guided format.",
     );
     fireEvent.click(within(card).getByTestId(`${OLLAMA_CARD}-expand`));
     const detail = within(card).getByTestId(`${OLLAMA_CARD}-detail`);

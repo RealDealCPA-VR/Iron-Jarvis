@@ -139,6 +139,21 @@ export const USE_IN_CHAT = "Use it in a chat: + › Connections";
  *  area turns into a button that goes to the row. */
 export const ROW_TAIL = "Open its row below to retry.";
 
+/** v1.356.0 (G78): a server its app had switched off, ticked anyway, is
+ *  added SWITCHED OFF (the apply answer's `state: "off"`): saved with its
+ *  values, loaded when the user turns it on. Not a failure. */
+export function addedSwitchedOff(added: { state?: string | null } | null | undefined): boolean {
+  return added?.state === "off";
+}
+
+/** What the outcome says for such a row, and the press that goes to it. */
+export const ADDED_OFF_WORDS = "Added switched off, as it was in its app.";
+export const ADDED_OFF_TAIL = "Turn it on in its row below.";
+export const ADDED_OFF_FAR = "Turn it on in Tools.";
+
+/** The row's on/off switch (components/tools/PackSwitch on the Tools row). */
+const SWITCH_TESTID = "mcp-switch-";
+
 /** Split "Added, but it didn't start: x. Open its row below to retry." into
  *  the sentence and the tail, so the tail can be a button. A sentence without
  *  the tail comes back whole with an empty tail. */
@@ -189,7 +204,12 @@ function attr(value: string): string {
 export function packRowParts(
   name: string,
   doc: Document | null = typeof document === "undefined" ? null : document,
-): { anchor: HTMLElement; retry: HTMLElement | null; output: HTMLDetailsElement | null } | null {
+): {
+  anchor: HTMLElement;
+  retry: HTMLElement | null;
+  output: HTMLDetailsElement | null;
+  toggle?: HTMLElement | null;
+} | null {
   if (!doc || !name) return null;
   const n = attr(name);
   const row = doc.querySelector<HTMLElement>(`[data-pack-row="${n}"]`);
@@ -197,8 +217,11 @@ export function packRowParts(
   const retry = scope.querySelector<HTMLElement>(`[data-testid="mcp-retry-${n}"]`);
   const output = scope.querySelector<HTMLDetailsElement>(`details[data-testid="mcp-stderr-${n}"]`);
   const badge = scope.querySelector<HTMLElement>(`[data-testid="mcp-state-${n}"]`);
+  // v1.356.0 (G78): a switched-off row has no Retry; its next step is its
+  // on/off switch.
+  const toggle = scope.querySelector<HTMLElement>(`[data-testid="${SWITCH_TESTID}${n}"]`);
   const anchor = row ?? retry ?? badge;
-  return anchor ? { anchor, retry, output } : null;
+  return anchor ? { anchor, retry, output, toggle } : null;
 }
 
 function prefersReducedMotion(): boolean {
@@ -229,7 +252,7 @@ export function showPackRow(name: string, doc?: Document | null): boolean {
     }
   }
   if (output) output.open = true;
-  const target = retry ?? anchor;
+  const target = retry ?? parts.toggle ?? anchor;
   // A row or a badge is not focusable by itself; -1 lets the focus land
   // there without adding a stop to the page's tab order.
   if (!target.matches("a[href],button,input,select,textarea,summary,[tabindex]")) {

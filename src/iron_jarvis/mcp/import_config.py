@@ -188,9 +188,11 @@ class PackSpec:
     #: (``"disabled": true`` / ``"enabled": false`` on the entry, a Claude
     #: Code project's ``disabledMcpServers``, Gemini CLI's ``mcp.excluded``,
     #: a Claude Code plugin turned off in ``enabledPlugins``). The preview
-    #: row says so and the import door leaves the row unticked. NOT stored:
-    #: a server the user ticks anyway is added like any other — the press is
-    #: the choice.
+    #: row says so and the import door leaves the row unticked. The key is
+    #: never stored as "disabled": v1.356.0 (G78) — a server the user ticks
+    #: anyway is added SWITCHED OFF (``enabled = false`` on the stored row,
+    #: ``routes/agents._apply_specs`` → ``mcp/pack_door.add_pack(enabled=
+    #: False)``), saved with its values and loaded when the user turns it on.
     disabled: bool = False
     #: v1.355.0 integrate: where the imported config held a PLACEHOLDER
     #: instead of a value (VS Code's ``${input:token}``, a plugin's

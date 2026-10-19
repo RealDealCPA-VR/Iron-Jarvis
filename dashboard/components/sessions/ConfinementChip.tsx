@@ -15,9 +15,10 @@ export default function ConfinementChip({ className = "" }: { className?: string
     <span
       data-testid="confinement-chip"
       className={`inline-flex items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/[0.1] px-2 py-0.5 text-[10px] font-medium text-amber-300 ${className}`}
-      title="At least one shell command in this session ran on the native runtime because Docker was unavailable — the workspace, host and network limits were advisory, not enforced."
+      title="At least one command in this session ran without the safety box because Docker wasn't running, so the folder, host and network limits were advice, not enforced."
     >
-      <ShieldOff size={10} /> Shell ran unconfined (Docker unavailable)
+      {/* v1.356.0 (G74): it said "Shell ran unconfined (Docker unavailable)". */}
+      <ShieldOff size={10} aria-hidden /> Ran without the safety box (Docker wasn&apos;t running)
     </span>
   );
 }

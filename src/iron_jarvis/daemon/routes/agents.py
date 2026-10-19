@@ -314,7 +314,7 @@ def _generate_avatar_bytes(key: str, prompt: str, *, timeout_seconds: int = 180)
         time.sleep(5.0)
 
 
-def add_mcp_pack(d, body: McpServerBody) -> dict[str, Any]:
+def add_mcp_pack(d, body: McpServerBody, *, enabled: bool = True) -> dict[str, Any]:
     """Register an external MCP server (persisted; loaded live best-effort,
     guaranteed on the next restart).
 
@@ -327,13 +327,56 @@ def add_mcp_pack(d, body: McpServerBody) -> dict[str, Any]:
     add_pack` so the Directory's Connect and the chat's ``app_connect`` go
     through it too (a service must not import a route module); this wrapper
     keeps the route's name, signature and answer byte for byte.
+
+    v1.356.0 (G78): ``enabled=False`` (keyword only; the import door, for a
+    server its app had switched off) saves the pack switched off — see
+    :func:`iron_jarvis.mcp.pack_door.add_pack`. Every other caller is
+    unchanged.
     """
     from ...mcp.pack_door import PackDoorError, add_pack
 
     try:
-        return add_pack(d.platform, body, persist=d._persist_config)
+        if enabled:
+            return add_pack(d.platform, body, persist=d._persist_config)
+        return add_pack(d.platform, body, persist=d._persist_config, enabled=False)
     except PackDoorError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
+def switch_mcp_pack(d, name: str, enabled: bool) -> dict[str, Any]:
+    """Switch a configured pack ON or OFF without losing it (v1.356.0, G78):
+    :func:`iron_jarvis.mcp.pack_door.set_pack_enabled` (the one door — a pack
+    is added, changed or removed only through ``mcp/pack_door``), answered as
+    the ``GET /mcp/servers`` row plus ``changed`` and, for a pack turned ON,
+    ``reloaded`` / ``note`` in the edit route's words (the reload is the
+    Retry's). Raises ``HTTPException(404)`` for an unknown name. BLOCKING
+    when it turns a pack on — the routes calling it are sync ``def``s
+    (FastAPI's threadpool)."""
+    from ...mcp.pack_door import PackDoorError, set_pack_enabled
+
+    try:
+        out = set_pack_enabled(d.platform, name, bool(enabled), persist=d._persist_config)
+    except PackDoorError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    row = _pack_row(d, name) or {"name": name}
+    answer: dict[str, Any] = {**mcp_server_row(d, row), "changed": bool(out.get("changed"))}
+    if not enabled:
+        answer["reloaded"] = False
+        answer["tools_unloaded"] = int(out.get("tools_unloaded") or 0)
+        answer["note"] = None
+        return answer
+    loaded = int(out.get("tools_loaded") or 0)
+    if not out.get("changed"):
+        answer["reloaded"] = loaded > 0 or bool(answer.get("tools_loaded"))
+        answer["note"] = None
+        return answer
+    answer["reloaded"] = loaded > 0
+    if loaded > 0:
+        answer["note"] = None
+    else:
+        reason = str(out.get("reason") or out.get("last_error") or "it did not start")
+        answer["note"] = f"switched on, but it did not start: {reason}; see its row for the fix"
+    return answer
 
 
 def remove_mcp_pack(d, name: str) -> dict[str, Any]:
@@ -802,14 +845,20 @@ def _apply_specs(
             except HTTPException as exc:
                 skipped.append({"name": name, "why": f"could not replace: {exc.detail}"})
                 continue
+        # v1.356.0 (G78): a server its app had switched OFF (the preview
+        # row's `disabled`) that the user ticked anyway is added switched
+        # off, as it was there — saved with its keys, loaded only when the
+        # user turns it on.
+        switched_off = bool(getattr(spec, "disabled", False))
         try:
-            result = add_mcp_pack(d, body)
+            result = add_mcp_pack(d, body, enabled=False) if switched_off else add_mcp_pack(d, body)
         except HTTPException as exc:
             why = str(exc.detail)
             if old_row is not None:
                 why = _put_back_pack(d, old_row, old_values, why)
             skipped.append({"name": name, "why": why})
             continue
+        from ...mcp.tools import STATE_OFF as _STATE_OFF
         from ...mcp.tools import load_status as _mcp_load_status
 
         status = _mcp_load_status(name) or {}
@@ -819,7 +868,11 @@ def _apply_specs(
                 "name": name,
                 "tools_loaded": tools_loaded,
                 "note": result.get("note"),
-                "state": status.get("state") or ("ok" if tools_loaded else "failed"),
+                "state": (
+                    _STATE_OFF
+                    if result.get("enabled") is False
+                    else status.get("state") or ("ok" if tools_loaded else "failed")
+                ),
             }
         )
     return {"added": added, "skipped": skipped}
@@ -904,9 +957,14 @@ def mcp_server_row(d, s: dict[str, Any]) -> dict[str, Any]:
     J: lifted out of the route so the PATCH answer is the same row). Key and
     header NAMES only, never a value; annotated with the live tool count and
     the load record."""
+    from ...mcp.tools import STATE_OFF as _STATE_OFF
     from ...mcp.tools import load_status as _mcp_load_status
+    from ...mcp.tools import pack_enabled as _pack_enabled
 
     name = s.get("name") or ""
+    # v1.356.0 (G78): every row says whether the pack is switched on; a
+    # switched-off row's state is "off" (it has no load record by design).
+    _enabled = _pack_enabled(s)
     loaded = d.platform.registry.mcp_names(name) if name else []
     # v1.299.0: the per-tool view, read off the LIVE Tool objects so the
     # row and the resolver cannot disagree about what is held back.
@@ -1004,8 +1062,11 @@ def mcp_server_row(d, s: dict[str, Any]) -> dict[str, Any]:
         # has not answered yet (packs load after boot now) — a row
         # must not read as "0 tools, broken" in that window.
         # v1.342.0: "ok" / "failed" / "failing" (loaded, but its
-        # calls fail) — the row says it in words.
-        "state": status.get("state") if status else None,
+        # calls fail) — the row says it in words. v1.356.0 (G78): "off"
+        # for a pack the user switched off.
+        "state": _STATE_OFF if not _enabled else (status.get("state") if status else None),
+        # v1.356.0 (G78): always a bool (absent on the stored row = on).
+        "enabled": _enabled,
         # v1.342.0: call-time failures since the last success or
         # Retry, and the child's last output (masked, bounded) —
         # the one clue a crashed pack leaves behind.
@@ -1035,6 +1096,19 @@ _PACK_SHAPE_KEYS: frozenset[str] = frozenset(
         "url_secret",
     }
 )
+
+
+class McpServerSwitchPatchBody(McpServerPatchBody):
+    """``PATCH /mcp/servers/{name}``'s body (v1.356.0, G78): the v1.343.0
+    partial edit (:class:`McpServerPatchBody`, unchanged) plus ``enabled`` —
+    ``false`` switches the pack OFF without losing it (row, vault secrets and
+    manifest kept; tools, client and load record gone), ``true`` switches it
+    back on through the Retry's reload (no token typed again). Omitted or
+    ``null`` = no switch, so every older body behaves exactly as before.
+    (Declared here, beside the route that reads it, rather than in
+    ``daemon/schemas.py``.)"""
+
+    enabled: bool | None = None
 
 
 def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
@@ -1300,8 +1374,24 @@ def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
 
     # -- unload, then load again through the one loader -------------------- #
     from ...mcp.tools import mcp_tools as _mcp_tools
+    from ...mcp.tools import pack_enabled as _pack_enabled
+    from ...mcp.tools import switch_off_pack as _switch_off_pack
     from ...mcp.tools import unload_pack_tools as _unload_pack_tools
 
+    if not _pack_enabled(new):
+        # v1.356.0 (G78): an edit to a switched-off pack is SAVED (its
+        # `enabled = false` rode along with the row's other non-shape keys)
+        # and stays off: nothing is loaded behind the switch's back. The
+        # answer says so; switching it on loads the edited row.
+        _switch_off_pack(d.platform.registry, name)
+        off_notes = ["saved; it's switched off, so it starts when you turn it on"]
+        if body.auto_approve is not None and bool(body.auto_approve) != bool(old.get("auto_approve")):
+            off_notes.append("restart Iron Jarvis for autonomous agents to pick up the auto-approve change")
+        return {
+            **mcp_server_row(d, new),
+            "reloaded": False,
+            "note": "; ".join(off_notes),
+        }
     _unload_pack_tools(d.platform.registry, name)
     loaded = 0
     errors: dict[str, dict[str, Any]] = {}
@@ -3829,9 +3919,11 @@ def register(app: FastAPI, d) -> None:
         return add_mcp_pack(d, body)
 
     @app.patch("/mcp/servers/{name}")
-    def patch_mcp_server(name: str, body: McpServerPatchBody) -> dict[str, Any]:
+    def patch_mcp_server(name: str, body: McpServerSwitchPatchBody) -> dict[str, Any]:
         """Edit a connected pack (v1.343.0, lane J: PARTIAL — see
-        :func:`update_mcp_pack`), or just flip its auto-approve (v1.103.0).
+        :func:`update_mcp_pack`), or just flip its auto-approve (v1.103.0),
+        or switch it on/off (v1.356.0, G78: ``enabled`` — see
+        :func:`switch_mcp_pack`).
 
         The auto-approve flip could only ever be set at CONNECT time —
         changing your mind meant deleting the pack and re-adding it, and the
@@ -3845,7 +3937,27 @@ def register(app: FastAPI, d) -> None:
         is live. Turning it OFF is honest immediately in the sense that it stops
         being re-applied on the next boot.
         """
-        if not body.only_auto_approve():
+        switch = body.enabled
+        edit_fields = set(body.model_fields_set) - {"enabled"}
+        if switch is not None:
+            if body.name is not None and body.name.strip() != name:
+                raise HTTPException(
+                    status_code=422,
+                    detail="the name cannot change; remove the pack and add it again under the new name",
+                )
+            if edit_fields <= {"name"}:
+                # A bare switch: the Tools row's and the Directory card's.
+                return switch_mcp_pack(d, name, switch)
+            if not edit_fields <= {"auto_approve"}:
+                # An edit AND a switch: OFF lands first (the edit is then
+                # saved and not loaded); ON lands last (it loads the EDITED
+                # row once, through the Retry's reload).
+                if not switch:
+                    switch_mcp_pack(d, name, False)
+                    return update_mcp_pack(d, name, body)
+                update_mcp_pack(d, name, body)
+                return switch_mcp_pack(d, name, True)
+        if edit_fields and not edit_fields <= {"auto_approve"}:
             return update_mcp_pack(d, name, body)
         servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
         target = next((s for s in servers if s.get("name") == name), None)
@@ -3860,13 +3972,21 @@ def register(app: FastAPI, d) -> None:
             target.pop("auto_approve", None)  # absent == off, matching POST
         d.platform.config.mcp_servers = servers
         d._persist_config(["mcp_servers"])
-        return {
+        answer: dict[str, Any] = {
             "name": name,
             "auto_approve": bool(body.auto_approve),
             "note": (
                 "saved — restart Iron Jarvis for autonomous agents to pick this up"
             ),
         }
+        if switch is not None:
+            # v1.356.0 (G78): `{auto_approve, enabled}` — the flip above, then
+            # the switch; a bare `{auto_approve}` never reaches here.
+            sw = switch_mcp_pack(d, name, switch)
+            answer.update(
+                {"enabled": sw.get("enabled"), "changed": sw.get("changed"), "reloaded": sw.get("reloaded")}
+            )
+        return answer
 
     @app.delete("/mcp/servers/{name}")
     def delete_mcp_server(name: str) -> dict[str, Any]:

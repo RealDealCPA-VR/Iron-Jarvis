@@ -159,7 +159,8 @@ export function needsFor(command: string | null | undefined): string {
   if (c === "npx" || c === "node" || c === "npm") return "Node";
   if (c === "uvx" || c === "uv" || c === "python" || c === "pipx" || c === "python3") return "Python (uv)";
   if (c === "docker") return "Docker";
-  return c ? c : "a runtime";
+  // v1.356.0 (G74): "Needs a helper program", never "Needs a runtime".
+  return c ? c : "a helper program";
 }
 
 /** The StatusChip for a preview row: already added wins; an HTTP pack needs

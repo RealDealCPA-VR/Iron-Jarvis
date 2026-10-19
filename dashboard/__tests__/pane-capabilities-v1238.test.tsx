@@ -497,8 +497,13 @@ describe("recipeNote — what the Launch menu knows before the launch", () => {
     expect(note.limitations).toEqual([]);
   });
 
+  // v1.356.0 (G74, changed on purpose): the row says "Jarvis tools ready";
+  // the method rides its title.
   it("a verified method names the method", () => {
     expect(recipeNote(cli({ recipe: { ok: true, method: "mcp_http" } })).headline).toBe(
+      "Jarvis tools ready",
+    );
+    expect(recipeNote(cli({ recipe: { ok: true, method: "mcp_http" } })).title).toBe(
       "Jarvis capabilities over HTTP",
     );
     expect(recipeNote(cli({ recipe: { ok: true, method: "mcp_stdio" } })).ready).toBe(true);
@@ -550,7 +555,8 @@ describe("LaunchRecipeNote — the rendered row", () => {
 
   it("says what a working recipe configured", () => {
     render(<LaunchRecipeNote cli={cli({ recipe: { ok: true, method: "mcp_http" } })} />);
-    expect(screen.getByText("Jarvis capabilities over HTTP")).toBeInTheDocument();
+    expect(screen.getByText("Jarvis tools ready")).toBeInTheDocument();
+    expect(screen.getByText("Jarvis tools ready").getAttribute("title")).toBe("Jarvis capabilities over HTTP");
   });
 });
 

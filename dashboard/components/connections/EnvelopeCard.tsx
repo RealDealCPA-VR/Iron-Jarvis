@@ -238,6 +238,21 @@ function fmtInt(n: number): string {
   return n.toLocaleString("en-US");
 }
 
+/** v1.356.0 (G74): the probe's format score in words — it read "JSON
+ *  adherence 0.93", the probe's own name and number. The number stays on
+ *  the line's title (`adherenceTitle`). The bands follow the ladder: 0.9 is
+ *  the guided-format bar above. */
+export function formatAdherenceWords(score: number): string {
+  const n = Number.isFinite(score) ? score : 0;
+  if (n >= 0.9) return "follows formats reliably";
+  if (n >= 0.6) return "usually follows formats";
+  return "often breaks formats";
+}
+
+export function adherenceTitle(score: number): string {
+  return `Format score ${Number.isFinite(score) ? score.toFixed(2) : "unknown"} (how often its answers kept to the requested format)`;
+}
+
 /** One rung row: score vs its bar, word-first verdict, tiny bar visual. */
 function LadderRow({
   label,
@@ -458,7 +473,7 @@ function MeasuredProfileCard({
     : selectedRung === "native"
       ? "Fully usable, with native tool calls."
       : selectedRung === "strict_json"
-        ? "Fully usable. Tool calls run as guided JSON."
+        ? "Fully usable. Tool calls run in a guided format."
         : "Limited. It runs step by step and checks each step.";
   const verdictTone = !measured
     ? profile.source === "probe_failed"
@@ -480,8 +495,10 @@ function MeasuredProfileCard({
 
   const meta: string[] = [];
   if (measured) {
+    // v1.356.0 (G74): said in words ("JSON adherence 0.93" was the probe's
+    // own name and number); the number stays on the line's title.
     if (profile.json_adherence != null && fieldMeasured("json_adherence"))
-      meta.push(`JSON adherence ${profile.json_adherence.toFixed(2)}`);
+      meta.push(formatAdherenceWords(profile.json_adherence));
     if (profile.coherence_horizon != null && fieldMeasured("coherence_horizon"))
       meta.push(`coherent to ~${profile.coherence_horizon} turns`);
     if (profile.vision != null && fieldMeasured("vision"))
@@ -590,7 +607,16 @@ function MeasuredProfileCard({
                 </p>
               )}
               {meta.length > 0 && (
-                <p className="pt-0.5 text-[10px] text-zinc-500">{meta.join(" · ")}</p>
+                <p
+                  className="pt-0.5 text-[10px] text-zinc-500"
+                  title={
+                    profile.json_adherence != null && fieldMeasured("json_adherence")
+                      ? adherenceTitle(profile.json_adherence)
+                      : undefined
+                  }
+                >
+                  {meta.join(" · ")}
+                </p>
               )}
             </>
           ) : profile.source === "probe_failed" ? (

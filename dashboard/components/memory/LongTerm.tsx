@@ -143,11 +143,11 @@ export function parseMcpPaste(raw: string): ParsedMcp {
         entry = JSON.parse(frag.json) as Record<string, unknown>;
         name = frag.name;
       } catch {
-        return { error: "Couldn't parse that config — paste the full { … } block for one server." };
+        return { error: "Couldn't read that setup block — paste the full { … } block for one memory app." };
       }
     }
   }
-  if (!entry) return { error: "No MCP server found in the paste." };
+  if (!entry) return { error: "No memory app found in the paste." };
   const out: ParsedMcp = { name };
   const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
   const headers: Record<string, string> = {
@@ -186,7 +186,7 @@ export function parseMcpPaste(raw: string): ParsedMcp {
   }
   if (Object.keys(headers).length) out.headers = headers;
   if (!out.url && !out.command)
-    return { error: "That config has neither a URL nor a command." };
+    return { error: "That setup block has neither a web address nor a command." };
   return out;
 }
 
@@ -400,7 +400,7 @@ export function LongTerm() {
     }
     if (srcKind === "mcp" && !mcpParsed.url && !mcpParsed.command) {
       setSrcError(
-        mcpParsed.error ?? "Paste an MCP config (or a server URL) first.",
+        mcpParsed.error ?? "Paste the memory app's setup block (or its web address) first.",
       );
       return;
     }
@@ -971,8 +971,9 @@ export function LongTerm() {
 
                   {srcKind === "mcp" && (
                     <div>
+                      {/* v1.356.0 (G74): it said "MCP config". */}
                       <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                        MCP config
+                        Its setup block or address
                       </label>
                       <textarea
                         value={mcpPaste}
@@ -984,7 +985,7 @@ export function LongTerm() {
                         rows={6}
                         spellCheck={false}
                         placeholder={
-                          'Paste the server\'s config block (Claude Desktop style), e.g.\n"my-brain": {\n  "command": "npx",\n  "args": ["-y", "mcp-remote", "http://host:8098/mcp", "--header", "Authorization: Bearer …"]\n}\n— or just the server URL.'
+                          'Paste the memory app\'s setup block (as Claude Desktop shows it), e.g.\n"my-brain": {\n  "command": "npx",\n  "args": ["-y", "mcp-remote", "http://host:8098/mcp", "--header", "Authorization: Bearer …"]\n}\n— or just its web address.'
                         }
                         className="field resize-y font-mono text-[11px]"
                       />
@@ -996,18 +997,18 @@ export function LongTerm() {
                         ) : (
                           <p className="mt-1.5 text-[11px] leading-relaxed text-emerald-300/80">
                             {mcpParsed.url
-                              ? `→ direct HTTP connection to ${mcpParsed.url}`
-                              : `→ command: ${mcpParsed.command} ${(mcpParsed.args ?? []).slice(0, 3).join(" ")}…`}
+                              ? `→ connects to ${mcpParsed.url}`
+                              : `→ runs: ${mcpParsed.command} ${(mcpParsed.args ?? []).slice(0, 3).join(" ")}…`}
                             {mcpParsed.token &&
-                              " · Bearer token detected — it will be stored in the encrypted vault"}
+                              " · a token was found; it is kept encrypted on this PC"}
                           </p>
                         ))}
                       <p className="mt-1 text-[10px] leading-relaxed text-zinc-600">
-                        mcp-remote wrappers are flattened to their direct HTTP
-                        connection — no npx needed. The server&apos;s
-                        search/append tools are discovered automatically, and
-                        it answers memory recalls alongside your other
-                        bases.
+                        A setup block that only forwards to a web address is
+                        connected to that address directly, so nothing needs
+                        installing. Its search and save tools are found
+                        automatically, and it answers memory recalls
+                        alongside your other bases.
                       </p>
                     </div>
                   )}

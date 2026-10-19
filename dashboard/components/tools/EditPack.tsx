@@ -22,6 +22,7 @@ import { useState } from "react";
 import { Check, X } from "lucide-react";
 import { ApiError, patch } from "@/lib/api";
 import { ErrorNote, LoaderInline } from "@/components/ui";
+import { KEYS_KEPT_HINT } from "@/lib/extensionWords";
 import {
   editPatch,
   seedFromRow,
@@ -192,17 +193,20 @@ export function EditPack({
       </div>
 
       <div className="mt-2 grid gap-2 sm:grid-cols-[auto_1fr]">
+        {/* v1.356.0 (G74): how it connects, in words; the protocol names
+            ride the title for anyone matching them to a server's docs. */}
         <label className="sm:col-span-2">
-          <Label>Server type</Label>
+          <Label>How it connects</Label>
           <select
             data-testid={`edit-transport-${name}`}
             value={isHttp ? st.transport : "stdio"}
             onChange={(e) => set({ transport: e.target.value })}
+            title="A program on this PC (stdio), a web address (Streamable HTTP) or an older web address (SSE)"
             className="field sm:w-56"
           >
-            <option value="stdio">A program this PC runs</option>
-            <option value="http">Streamable HTTP</option>
-            <option value="sse">SSE</option>
+            <option value="stdio">A program on this PC</option>
+            <option value="http">A web address</option>
+            <option value="sse">A web address (older servers)</option>
           </select>
         </label>
       </div>
@@ -252,7 +256,8 @@ export function EditPack({
 
       {!isHttp && (
         <div className="mt-2">
-          <Label>Environment variables</Label>
+          {/* v1.356.0 (G74): it said "Environment variables". */}
+          <Label>Settings for this extension</Label>
           <div className="space-y-1">
             {plainKeys.map((k) => (
               <label key={k} className="flex items-center gap-2">
@@ -292,7 +297,8 @@ export function EditPack({
                     setNothing(false);
                     setNewEnv((rows) => rows.map((x) => (x.id === r.id ? { ...x, key: e.target.value } : x)));
                   }}
-                  placeholder="KEY"
+                  placeholder="Name"
+                  aria-label="Setting name"
                   className="field w-44 px-2 py-1 font-mono text-[12px]"
                 />
                 <input
@@ -305,12 +311,13 @@ export function EditPack({
                     setNewEnv((rows) => rows.map((x) => (x.id === r.id ? { ...x, value: e.target.value } : x)));
                   }}
                   placeholder="value"
+                  aria-label="Setting value"
                   className="field flex-1 px-2 py-1 font-mono text-[12px]"
                 />
                 <button
                   type="button"
                   onClick={() => setNewEnv((rows) => rows.filter((x) => x.id !== r.id))}
-                  aria-label="Remove variable"
+                  aria-label="Remove setting"
                   className="text-zinc-500 hover:text-zinc-300"
                 >
                   <X size={14} />
@@ -324,10 +331,13 @@ export function EditPack({
             onClick={() => setNewEnv((rows) => [...rows, { id: ids.n++, key: "", value: "" }])}
             className="mt-1 text-[12px] font-medium text-zinc-400 hover:text-zinc-200"
           >
-            + Add a variable
+            + Add a setting
           </button>
-          <span className="mt-1 block text-[11px] leading-relaxed text-zinc-500">
-            A key that looks like a token, key, secret or password goes to the encrypted vault.
+          <span
+            className="mt-1 block text-[11px] leading-relaxed text-zinc-500"
+            title="A setting whose name looks like a token, key, secret or password goes to the encrypted vault"
+          >
+            {KEYS_KEPT_HINT}
           </span>
         </div>
       )}
@@ -400,8 +410,9 @@ export function EditPack({
           >
             + Add a header
           </button>
-          <div className="mt-2">
-            <Label>Bearer token</Label>
+          <div className="mt-2" title="Sent as Authorization: Bearer">
+            {/* v1.356.0 (G74): it said "Bearer token". */}
+            <Label>Access token</Label>
             {seed.tokenSet ? (
               <SetChip
                 label="Authorization"
@@ -419,7 +430,7 @@ export function EditPack({
                 autoComplete="off"
                 value={st.token ?? ""}
                 onChange={(e) => set({ token: e.target.value, clearToken: false })}
-                placeholder="None set. Type one to send Authorization: Bearer ..."
+                placeholder="None set. Paste one if the server needs it."
                 className="field w-72 px-2 py-1 font-mono text-[12px]"
               />
             )}

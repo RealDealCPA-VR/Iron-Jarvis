@@ -46,8 +46,11 @@ export interface EnablePlan {
   /** Runtime the pack needs, if any. */
   needs?: string;
   official?: boolean;
-  /** Values to collect before enabling — a path placeholder, an API key. */
-  fields?: { key: string; label: string; hint?: string; kind: "path" | "text" }[];
+  /** Values to collect before enabling — a path placeholder, an API key.
+   *  v1.356.0 (G74): `label` is said in words ("Folder", "GitHub personal
+   *  access token"); `title` keeps the raw placeholder or key for anyone
+   *  matching it to the docs. */
+  fields?: { key: string; label: string; title?: string; hint?: string; kind: "path" | "text" }[];
   /** Extensions can be granted "run without asking" at the moment of enabling;
    *  built-in suite tools have no such flag (they are argv commands the daemon
    *  runs under the normal tool permission). */
@@ -130,7 +133,7 @@ export function EnableDialog({
             </h3>
             {fields.map((f) => (
               <label key={f.key} className="block">
-                <span className="mb-1 flex items-center gap-1.5 text-[12px] text-zinc-300">
+                <span className="mb-1 flex items-center gap-1.5 text-[12px] text-zinc-300" title={f.title}>
                   {f.kind === "path" && (
                     <FolderOpen size={12} className="text-accent-soft/80" aria-hidden />
                   )}
@@ -180,9 +183,10 @@ export function EnableDialog({
         {/* WHO GETS IT. */}
         <section className="flex items-start gap-2.5 text-[12px] leading-relaxed text-zinc-400">
           <Users size={14} className="mt-0.5 shrink-0 text-zinc-500" aria-hidden />
+          {/* v1.356.0 (G74): plain words ("this fleet", "arms it per turn"). */}
           <span>
-            Every agent in this fleet can use it — built-in agents, the ones you
-            created, and remote agents. Chat arms it per turn, as it always has.
+            Every agent can use it — built-in agents, the ones you created, and
+            agents on your other computers. In a chat, turn it on with + › Connections.
           </span>
         </section>
 

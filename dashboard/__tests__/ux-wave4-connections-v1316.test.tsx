@@ -588,12 +588,13 @@ describe("Directory — one name, one primary, a summary line (marketplace-hiera
     );
   });
 
-  it("Disconnect is still two presses", async () => {
+  // v1.356.0 (G74, changed on purpose): the card's removal says Remove.
+  it("Remove is still two presses", async () => {
     seedDirectory();
     render(<MarketplacePage />);
     const card = dirCard("Notion");
     await act(async () => {
-      fireEvent.click(within(card).getByRole("button", { name: /Disconnect/ }));
+      fireEvent.click(within(card).getByRole("button", { name: /Remove/ }));
     });
     expect(hooks.dels).toEqual([]);
   });

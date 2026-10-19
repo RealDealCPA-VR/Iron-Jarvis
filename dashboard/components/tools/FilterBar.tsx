@@ -170,10 +170,11 @@ export function FilterBar({
         <Chip
           on={value.readyOnly}
           onClick={() => set({ readyOnly: !value.readyOnly })}
-          title="Hide extensions that need a runtime you may not have"
+          title="Hide extensions that need a helper program (like Node.js) you may not have installed"
           testId="filter-ready"
         >
-          No runtime needed
+          {/* v1.356.0 (G74): it said "No runtime needed". */}
+          Works without installing anything
         </Chip>
         {CAP_FILTERS.map((c) => (
           <Chip
