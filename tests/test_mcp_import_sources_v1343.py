@@ -38,6 +38,8 @@ from iron_jarvis.mcp import tools as mcp_tools_mod
 # --------------------------------------------------------------------------- #
 # The REAL files, read at import time, before any fixture moves HOME.
 # --------------------------------------------------------------------------- #
+from tests.fixtures.real_config_view import real_view  # noqa: E402
+
 _REAL_HOME = Path(os.path.expanduser("~"))
 _REAL_CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or "") if os.environ.get("CLAUDE_CONFIG_DIR") else None
 _REAL_CODEX_HOME = Path(os.environ.get("CODEX_HOME") or _REAL_HOME / ".codex")
@@ -61,25 +63,9 @@ def _bytes(p: Path) -> bytes | None:
 
 
 def _view(p: Path) -> bytes | str | None:
-    """What this guard compares. v1.344.0: Claude Code REWRITES ~/.claude.json
-    (history, caches, project state) while a suite runs under a session, so
-    for that one file only the parts a pack import could ever touch are
-    compared — the top-level and per-project ``mcpServers`` — not the bytes."""
-    raw = _bytes(p)
-    if raw is None or p.name != ".claude.json":
-        return raw
-    try:
-        doc = json.loads(raw.decode("utf-8", errors="replace"))
-    except ValueError:
-        return raw
-    if not isinstance(doc, dict):
-        return raw
-    projects = doc.get("projects") if isinstance(doc.get("projects"), dict) else {}
-    view = {
-        "mcpServers": doc.get("mcpServers"),
-        "projects": {k: (v.get("mcpServers") if isinstance(v, dict) else None) for k, v in projects.items()},
-    }
-    return json.dumps(view, sort_keys=True)
+    """What this guard compares: one shared view (tests/fixtures/real_config_view)
+    so every real-files guard treats the app-rewritten files alike."""
+    return real_view(p)
 
 
 _REAL_BEFORE: dict[Path, bytes | str | None] = {p: _view(p) for p in _REAL_FILES}

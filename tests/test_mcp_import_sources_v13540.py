@@ -40,6 +40,8 @@ from iron_jarvis.mcp.import_config import PackSpec, parse_any
 # --------------------------------------------------------------------------- #
 # The REAL files the new sources name, read before any fixture moves HOME.
 # --------------------------------------------------------------------------- #
+from tests.fixtures.real_config_view import real_view  # noqa: E402
+
 _REAL_HOME = Path(os.path.expanduser("~"))
 _REAL_CLAUDE_DIR = Path(os.environ["CLAUDE_CONFIG_DIR"]) if os.environ.get("CLAUDE_CONFIG_DIR") else _REAL_HOME / ".claude"
 _REAL_APPDATA = Path(os.environ["APPDATA"]) if os.environ.get("APPDATA") else None
@@ -61,13 +63,13 @@ def _bytes(p: Path) -> bytes | None:
         return None
 
 
-_REAL_BEFORE = {p: _bytes(p) for p in _REAL_FILES}
+_REAL_BEFORE = {p: real_view(p) for p in _REAL_FILES}
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _real_files_untouched():
     yield
-    changed = [str(p) for p in _REAL_FILES if _bytes(p) != _REAL_BEFORE[p]]
+    changed = [str(p) for p in _REAL_FILES if real_view(p) != _REAL_BEFORE[p]]
     assert not changed, f"a test touched the user's real config files: {changed}"
 
 
