@@ -315,6 +315,51 @@ describe("G62: agent replies get a receipt line and a pending state", () => {
     expect(panelWaiting([local])).toEqual([false]);
   });
 
+  it("review: a line saved before v1.355.0 with the old message-back-off words never waits", () => {
+    // threads.py v1.285.0 to v1.354.0 said this for a remote with
+    // message-back OFF; a chat saved then must not show "waiting 52 h"
+    // forever after the update.
+    const old = {
+      role: "assistant",
+      panelWho: "remote:hermes",
+      panelKind: "progress",
+      content: "hermes has the task and will report back on its own side when it has something.",
+      at: plus(2000),
+    };
+    expect(isNoReplyBack(old)).toBe(true);
+    expect(panelWaiting([{ role: "user", content: "@hermes x", at: T0 }, old])).toEqual([false, false]);
+    // Message-back ON keeps waiting.
+    const on = { ...old, content: "hermes has the task and will report back here when it has something." };
+    expect(isNoReplyBack(on)).toBe(false);
+    expect(panelWaiting([{ role: "user", content: "@hermes x", at: T0 }, on])).toEqual([false, true]);
+  });
+
+  it("review: a remote's late answer is timed from ITS question, not a later message", () => {
+    const q = { role: "user", content: "@hermes research the lease", at: T0 };
+    const pending = {
+      role: "assistant",
+      panelWho: "remote:hermes",
+      panelKind: "progress",
+      content: "hermes has the task and will report back here when it has something.",
+      at: plus(2000),
+    };
+    // The user carries on with Jarvis while hermes works.
+    const q2 = { role: "user", content: "what is the weather", at: plus(300_000) };
+    const jarvis = { role: "assistant", content: "Sunny." };
+    // A progress update from hermes does not move the start either.
+    const update = { ...pending, content: "halfway there", at: plus(320_000) };
+    const answer = { role: "assistant", panelWho: "remote:hermes", panelKind: "done", content: "Here it is", at: plus(372_000) };
+    const asked = panelAskedAt([q, pending, q2, jarvis, update, answer]);
+    expect(asked[5]).toBe(T0);
+    // The answer closes it: hermes's NEXT answer counts from the newest question.
+    const q3 = { role: "user", content: "@hermes and the deposit?", at: plus(400_000) };
+    const answer2 = { ...answer, content: "Two months", at: plus(410_000) };
+    expect(panelAskedAt([q, pending, q2, jarvis, answer, q3, answer2])[6]).toBe(plus(400_000));
+    // A line that said its answer will not come back opens nothing.
+    const off = { ...pending, content: `hermes took the task. ${NO_REPLY_BACK_MARK}; turn on Let it message back on its card to get it in this chat.` };
+    expect(panelAskedAt([q, off, q2, answer])[3]).toBe(plus(300_000));
+  });
+
   it("the page's mark is the daemon's own sentence (pinned EQUAL)", () => {
     const py = readFileSync(
       join(process.cwd(), "..", "src", "iron_jarvis", "agents", "threads.py"),

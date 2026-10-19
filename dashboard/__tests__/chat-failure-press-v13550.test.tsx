@@ -469,6 +469,51 @@ describe("G62: a remote's reply has a receipt line and a pending state", () => {
     expect(screen.getByTestId("panel-receipt").textContent).toBe("from hermes · 6 min 12 s");
   });
 
+  it("review: an answer that lands after the user asked something else is timed from its own question", async () => {
+    const t0 = Date.now() - 60 * 60_000;
+    const at = (ms: number) => new Date(t0 + ms).toISOString();
+    openThread([
+      { role: "user", content: "@hermes research the lease", at: at(0) },
+      {
+        role: "assistant",
+        content: "hermes has the task and will report back here when it has something.",
+        panelWho: "remote:hermes",
+        panelKind: "progress",
+        at: at(2_000),
+      },
+      { role: "user", content: "what is the weather", at: at(300_000) },
+      { role: "assistant", content: "Sunny all day." },
+      {
+        role: "assistant",
+        content: "The lease ends in May.",
+        panelWho: "remote:hermes",
+        panelKind: "done",
+        panelAt: at(372_000),
+      },
+    ]);
+    render(<ChatPage />);
+    await screen.findByText("The lease ends in May.");
+    expect(screen.getByTestId("panel-receipt").textContent).toBe("from hermes · 6 min 12 s");
+  });
+
+  it("review: a chat saved before the update, message-back off in the old words, never waits", async () => {
+    const asked = new Date(Date.now() - 52 * 60 * 60_000).toISOString();
+    openThread([
+      { role: "user", content: "@hermes research the lease", at: asked },
+      {
+        role: "assistant",
+        content: "hermes has the task and will report back on its own side when it has something.",
+        panelWho: "remote:hermes",
+        panelKind: "progress",
+        at: asked,
+      },
+    ]);
+    render(<ChatPage />);
+    const line = await screen.findByTestId("panel-progress");
+    expect(line.textContent).toContain("on its own side");
+    expect(screen.queryByTestId("panel-waiting")).toBeNull();
+  });
+
   it("an older daemon's round, composed by the page, waits on the remote the same way", async () => {
     H.api.getResponses["/agents/mentionable"] = {
       agents: [

@@ -47,9 +47,21 @@ export function lineAt(m: PanelLineFacts): string | undefined {
   return m.at || m.panelAt || undefined;
 }
 
+/** The words the daemon used for the same case before v1.355.0
+ *  (`agents/threads.py`, v1.285.0 to v1.354.0: "<name> has the task and will
+ *  report back on its own side when it has something."). A chat saved then
+ *  still holds that line; its answer never comes back either, so it must not
+ *  wait forever after an update. */
+export const OLD_NO_REPLY_BACK_MARK = "will report back on its own side";
+
 /** A remote said its answer will not come back to this chat. */
 export function isNoReplyBack(m: PanelLineFacts): boolean {
-  return m.panelNoReply === true || (m.content ?? "").includes(NO_REPLY_BACK_MARK);
+  const text = m.content ?? "";
+  return (
+    m.panelNoReply === true ||
+    text.includes(NO_REPLY_BACK_MARK) ||
+    text.includes(OLD_NO_REPLY_BACK_MARK)
+  );
 }
 
 function isRemote(who: string | undefined): boolean {
@@ -64,13 +76,37 @@ function isStillWorking(m: PanelLineFacts): boolean {
 /**
  * Per message: the question's time for an agent's line (the nearest earlier
  * question the user typed, never a steer note), else undefined.
+ *
+ * An answer that follows the same agent's "still working" line counts from
+ * the question THAT line answered: a remote's answer can land many minutes
+ * later, after the user has asked something else, and the receipt must not
+ * time it from the later message. The earliest unanswered "still working"
+ * line wins (a remote's own progress updates do not move it), and the
+ * answer closes it. A line that said its answer will not come back opens
+ * nothing.
  */
 export function panelAskedAt(msgs: readonly PanelLineFacts[]): (string | undefined)[] {
   const out: (string | undefined)[] = [];
   let asked: string | undefined;
+  const waitingFrom = new Map<string, string | undefined>();
   for (const m of msgs) {
     if (m.role === "user" && !m.steer) asked = m.at || undefined;
-    out.push(m.role === "assistant" && m.panelWho ? asked : undefined);
+    const who = m.role === "assistant" ? m.panelWho : undefined;
+    if (!who) {
+      out.push(undefined);
+      continue;
+    }
+    if (isStillWorking(m)) {
+      if (!m.panelError && !isNoReplyBack(m) && !waitingFrom.has(who)) waitingFrom.set(who, asked);
+      out.push(asked);
+      continue;
+    }
+    if (waitingFrom.has(who)) {
+      out.push(waitingFrom.get(who));
+      waitingFrom.delete(who);
+    } else {
+      out.push(asked);
+    }
   }
   return out;
 }
