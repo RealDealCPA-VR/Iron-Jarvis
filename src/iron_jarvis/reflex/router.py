@@ -148,18 +148,30 @@ class ReflexRouter:
     async def execute(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:
         """Launch the rule's bound action; return a small result dict. Never
         raises — a bad rule reports an error and the others still fire."""
-        try:
-            if rule.action == "workflow":
-                result = self._run_workflow(rule, context)
-            elif rule.action == "remote_agent":
-                result = self._run_remote(rule, context)
-            elif rule.action == "session":
-                result = await self._run_session(rule, context)
-            else:
-                result = {"ok": False, "error": f"unknown action '{rule.action}'"}
-        except Exception as exc:  # noqa: BLE001 — one bad rule never breaks the rest
-            log.exception("reflex rule %r failed", rule.name)
-            result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        # EMERGENCY STOP (v1.351.0 re-review, G13): asked FIRST, for every
+        # action. Only the ``session`` action ends in ``create_session``; a
+        # ``workflow`` action's non-agent steps and a ``remote_agent`` hand-off
+        # create no session, so the switch's one refusal never saw them and a
+        # webhook / email / phone keyword still started them while the setting
+        # said "rules … do not start". The row (and a webhook's ack) carries
+        # the switch's own sentence — never ``EmergencyStopOn: …``.
+        stop = getattr(self.orch, "emergency_stop_reason", None)
+        why = stop(f"reflex:{rule.name}") if callable(stop) else ""
+        if why:
+            result: dict[str, Any] = {"ok": False, "error": why}
+        else:
+            try:
+                if rule.action == "workflow":
+                    result = self._run_workflow(rule, context)
+                elif rule.action == "remote_agent":
+                    result = self._run_remote(rule, context)
+                elif rule.action == "session":
+                    result = await self._run_session(rule, context)
+                else:
+                    result = {"ok": False, "error": f"unknown action '{rule.action}'"}
+            except Exception as exc:  # noqa: BLE001 — one bad rule never breaks the rest
+                log.exception("reflex rule %r failed", rule.name)
+                result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
         # v1.231.0 (audit AE6): the row carries the outcome either way — a
         # failed start is written as ``last_error`` where the user looks,

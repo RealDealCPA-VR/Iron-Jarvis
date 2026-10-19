@@ -1864,10 +1864,13 @@ words everywhere. The chat looks the same.
 - **The bell remembers while the window was closed.** Close the app to the
   tray, and when you open it again the bell lists what finished meanwhile
   under "While you were away", once.
-- **A chat waiting for your OK is announced.** If you leave a chat whose
-  question card is still waiting, the bell shows "A chat is waiting for your
-  OK"; with the window closed to the tray, a desktop notice says the same.
-  Clicking either opens that chat, where the card is.
+- **A chat waiting for your OK is announced.** When a chat's question card
+  is still waiting and no window is showing that chat any more (you opened
+  another chat or a new one, or closed the app to the tray), the bell shows
+  "A chat is waiting for your OK"; with the window closed to the tray, a
+  desktop notice says the same. Clicking either opens that chat, where the
+  card is. (Moving to another page in the same window, such as Build, keeps
+  the chat following its reply, so the card simply waits there for you.)
 - **Emergency stop really stops.** With it on, nothing that starts on its own
   can start: schedules, goals, rules, phone jobs, queued jobs and automatic
   work. Turning it on (from the Autonomy page, Settings, Ctrl K or chat) also

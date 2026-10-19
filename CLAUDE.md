@@ -3587,7 +3587,11 @@ does not need a bump, stop and bump it.
   assignment dispatcher HOLDS (never claims → never strikes), the goal
   engine refuses honestly (200 `{ok:false, refused:true}`), the phone's
   one-shot and chat hand-off and a desktop reply into a phone thread say
-  the sentence BEFORE any "On it" ack; any other route door gets the app's
+  the sentence BEFORE any "On it" ack, and `ReflexRouter.execute` asks
+  before EVERY action (re-review: a rule's `workflow` and `remote_agent`
+  actions create no session, so they ran under the stop, and a `session`
+  rule's row read "EmergencyStopOn: …" —
+  `tests/test_emergency_stop_rules_v13510.py`); any other route door gets the app's
   409 `{detail, code: "emergency_stop"}` handler, never a 500. A person's
   Continue is NOT refused (`continue_session` builds its row itself —
   pinned). Known: a manual workflow Run's agent steps are refused (origin
