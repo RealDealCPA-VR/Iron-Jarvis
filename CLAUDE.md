@@ -3592,6 +3592,10 @@ does not need a bump, stop and bump it.
   through `chat_turn.arming_kw`, passed only when set); research ABOUT an app
   reaches the web, and `app_names.apps_section` says so.
   `ToolRegistry.pick_for_message` picks an app's `_MAX_CONNECTOR_TOOLS` (24)
+  (its per-tool word cache `_RANK_CACHE` is read from worker threads: every
+  cache step holds `_RANK_CACHE_LOCK`, the word work never does; the race is
+  FORCED in `tests/test_rank_cache_threads_v13580.py` — a hammer test could
+  not show it)
   by the message's words (name ×3 + description), read-only first on a tie,
   unseen tools last; an app that fits is unchanged; used by
   `_resolve_connectors` (the toggle, both lanes) and `named_app_ask_tools`

@@ -90,6 +90,11 @@ _RANK_DESC_CHARS = 400
 #: Cached word sets per (tool name, description) — bounded.
 _RANK_CACHE: "OrderedDict[tuple[str, str], tuple[frozenset[str], frozenset[str]]]" = OrderedDict()
 _RANK_CACHE_MAX = 4096
+#: Chat turns rank tools from worker threads at once; an OrderedDict's
+#: get -> move_to_end -> popitem is not atomic, so a concurrent eviction could
+#: raise KeyError between the read and the move (the turn then fell back to
+#: name order). The lock covers only the cache steps, never the word work.
+_RANK_CACHE_LOCK = threading.Lock()
 
 
 def _rank_stem(word: str) -> str:
@@ -121,14 +126,16 @@ def _tool_rank_words(name: str, tool: Any) -> tuple[frozenset[str], frozenset[st
     remote = str(getattr(tool, "remote_name", "") or name.rsplit("__", 1)[-1])
     desc = str(getattr(tool, "description", "") or "")[:_RANK_DESC_CHARS]
     key = (name, desc)
-    hit = _RANK_CACHE.get(key)
-    if hit is not None:
-        _RANK_CACHE.move_to_end(key)
-        return hit
+    with _RANK_CACHE_LOCK:
+        hit = _RANK_CACHE.get(key)
+        if hit is not None:
+            _RANK_CACHE.move_to_end(key)
+            return hit
     got = (rank_words(remote), rank_words(desc))
-    _RANK_CACHE[key] = got
-    while len(_RANK_CACHE) > _RANK_CACHE_MAX:
-        _RANK_CACHE.popitem(last=False)
+    with _RANK_CACHE_LOCK:
+        _RANK_CACHE[key] = got
+        while len(_RANK_CACHE) > _RANK_CACHE_MAX:
+            _RANK_CACHE.popitem(last=False)
     return got
 
 
