@@ -137,7 +137,6 @@ def client(tmp_path, monkeypatch, spawned):
     # or a pack has, it got from the card.
     monkeypatch.delenv("ENABLED_TOOLS", raising=False)
     monkeypatch.delenv(catalog.MS365_TENANT_ENV, raising=False)
-    monkeypatch.setattr(ai_clis.shutil, "which", lambda exe: f"/usr/bin/{exe}")
     _RecordingBackend.instances = []
     monkeypatch.setattr("iron_jarvis.terminals.session.default_backend", _RecordingBackend)
 
@@ -152,6 +151,13 @@ def client(tmp_path, monkeypatch, spawned):
             yield c
         finally:
             mcp_tools_mod.unload_pack_tools(c.app.state.d.platform.registry, CARD_ID)
+
+
+def _program_on_path(monkeypatch) -> None:
+    """The typed line is the plain command when the program is on the
+    daemon's PATH (patched only AFTER the app started, so boot's own CLI
+    detection never sees a made-up PATH)."""
+    monkeypatch.setattr(ai_clis.shutil, "which", lambda exe: f"/usr/bin/{exe}")
 
 
 def _platform(c: TestClient):
@@ -311,7 +317,7 @@ def test_a_typed_answer_is_refused_and_so_is_none(client, spawned):
     [("consumers", "Personal account"), ("common", "Work or school account")],
 )
 def test_sign_in_opens_a_pane_running_the_packs_own_program_with_its_settings(
-    client, answer, account
+    client, monkeypatch, answer, account
 ):
     """The acceptance's middle: one press, a NEW Build pane, the sign-in typed
     AND started, the pane showing whatever the program prints (the web address
@@ -319,6 +325,7 @@ def test_sign_in_opens_a_pane_running_the_packs_own_program_with_its_settings(
     with the SAME settings, so it asks for the tools (and so the scopes) and
     the Microsoft authority the pack will use. MUTATION: drop the env hand-off
     in launch_pane -> the shell has no ENABLED_TOOLS (red)."""
+    _program_on_path(monkeypatch)
     assert _connect(client, answer).status_code == 200
     row = _row(client)
     assert row["status"] == "connected" and row["tools_loaded"] == 24
@@ -363,11 +370,12 @@ def test_a_sign_in_whose_card_cannot_be_read_starts_nothing(client, monkeypatch)
     assert _RecordingBackend.instances == [], "no shell was started"
 
 
-def test_every_other_launch_starts_exactly_as_before(client):
+def test_every_other_launch_starts_exactly_as_before(client, monkeypatch):
     """No extra settings for a job that has none: the starter download and a
     Launch-menu CLI start on the daemon's environment alone."""
     assert ai_clis.launch_env(ai_clis.launch_entry("ollama-starter")) is None
     assert ai_clis.launch_env(ai_clis.launch_entry("claude")) is None
+    _program_on_path(monkeypatch)
     r = client.post("/terminals/launch", json={"cli": "ollama-starter"})
     assert r.status_code == 200, r.text
     shell = _backend_of(r.json()["id"])
