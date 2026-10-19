@@ -81,9 +81,12 @@ const NONE: ReadonlySet<string> = new Set();
 
 /**
  * The sessions/agents that started and have not completed yet, in the
- * window's order — the orb's THINKING rule, exported so the Running now list
- * re-reads when this set changes (v1.352.0). `settled` holds START frame ids a
- * reconnect check found already ended (see the reconnect effect below).
+ * window's order — the orb's THINKING rule, as a pure helper (v1.352.0). The
+ * Running now list does NOT key on it: its own subscription never sees the
+ * start of a run already going when it opens, so it re-reads on any new
+ * start/end frame instead (RunningNow.RUN_EDGE_TYPES). `settled` holds START
+ * frame ids a reconnect check found already ended (see the reconnect effect
+ * below).
  */
 export function inFlightIds(events: readonly IJEvent[], settled: ReadonlySet<string> = NONE): string[] {
   const done = new Set<string>();

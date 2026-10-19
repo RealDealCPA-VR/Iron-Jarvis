@@ -339,6 +339,27 @@ describe("the sidebar footer", () => {
     expect(count(RUNNING_SESSIONS_PATH)).toBe(2);
   });
 
+  it("a run that ENDS while it is open drops at once, even one that started before it opened", async () => {
+    // Review v1.352.0: the re-read was keyed on an in-flight set built from
+    // the list's OWN subscription, which never saw the start of a run already
+    // going when it opened — so that run's end changed nothing and the
+    // finished run stayed listed until the next poll (10 s).
+    seedRunning();
+    wrap(<AppSidebar />);
+    act(() => socket().open());
+    fireEvent.click(orb());
+    const pop = await screen.findByRole("dialog", { name: "Running now" }, W);
+    await within(pop).findByText("Schedule · nightly-brief · 3 min", {}, W);
+    expect(count(RUNNING_SESSIONS_PATH)).toBe(1);
+    H.replies[RUNNING_SESSIONS_PATH] = { sessions: [MISSION, { ...SCHEDULE, status: "completed" }] };
+    act(() => socket().frame("e-end", "session.completed", {}, "s-sched"));
+    await waitFor(() => expect(within(pop).queryByText("Schedule · nightly-brief · 3 min")).toBeNull(), W);
+    expect(count(RUNNING_SESSIONS_PATH)).toBe(2);
+    expect(within(pop).getAllByTestId("running-row").map((r) => r.getAttribute("href"))).toContain(
+      missionPath("s-miss", "p1"),
+    );
+  });
+
   it("nothing running says so; a failed read never says nothing is running", async () => {
     H.replies[RUNNING_SESSIONS_PATH] = { sessions: [DONE] };
     H.replies["/chat/threads"] = { threads: [] };

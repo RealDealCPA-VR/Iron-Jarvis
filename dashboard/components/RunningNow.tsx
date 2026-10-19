@@ -13,8 +13,8 @@
  *
  * Reads only while it is on screen: mounted = open. The run list is re-read
  * every RUNNING_POLL_MS (visible windows only) and at once whenever a run
- * starts or ends (the orb's own event types and in-flight rule,
- * `MoodOrb.inFlightIds`); the chat list comes from the one sidebar store
+ * starts or ends (any new frame of the orb's run start/end types,
+ * RUN_EDGE_TYPES); the chat list comes from the one sidebar store
  * (`lib/chatList`), which already re-reads on a chat update and while a chat
  * is running. Elapsed times re-word every RUNNING_TICK_MS.
  *
@@ -27,7 +27,6 @@ import { usePolledApi } from "@/lib/useApi";
 import { useChatList } from "@/lib/chatList";
 import { useEvents } from "@/lib/useEvents";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
-import { inFlightIds, MOOD_EVENT_TYPES } from "@/components/MoodOrb";
 import {
   MAX_RUNNING_ROWS,
   RUNNING_POLL_MS,
@@ -37,7 +36,17 @@ import {
   type RunningSessionRow,
 } from "@/lib/runningNow";
 
-const EVENT_OPTS = { types: MOOD_EVENT_TYPES };
+/** The frames that start or end a run (the run half of the orb's
+ *  MOOD_EVENT_TYPES). Any NEW one re-reads the list. */
+export const RUN_EDGE_TYPES: readonly string[] = [
+  "session.created",
+  "session.completed",
+  "agent.started",
+  "agent.completed",
+  "sessions.interrupted",
+];
+
+const EVENT_OPTS = { types: RUN_EDGE_TYPES };
 
 export function RunningNow({
   onNavigate,
@@ -54,17 +63,24 @@ export function RunningNow({
   const [now, setNow] = useState(() => Date.now());
   useVisibleInterval(() => setNow(Date.now()), RUNNING_TICK_MS);
 
-  // A run that starts or ends while the list is open shows at once.
+  // A run that starts OR ends while the list is open shows at once. Keyed on
+  // the newest start/end frame, not on an in-flight set: this subscription
+  // only sees frames from its own mount, so a run that started BEFORE the
+  // list opened is never "in flight" here, and its end would change nothing
+  // (review v1.352.0: a finished run stayed listed until the next poll).
   const { events } = useEvents(100, EVENT_OPTS);
-  const flightKey = useMemo(() => inFlightIds(events).join("|"), [events]);
+  const edgeKey = useMemo(() => {
+    const e = events[0];
+    return e ? `${e.id}|${e.type}|${e.ts}` : "";
+  }, [events]);
   const reload = sessions.reload;
-  const seenRef = useRef(flightKey);
+  const seenRef = useRef(edgeKey);
   useEffect(() => {
-    if (flightKey === seenRef.current) return;
-    seenRef.current = flightKey;
+    if (edgeKey === seenRef.current) return;
+    seenRef.current = edgeKey;
     setNow(Date.now());
     reload();
-  }, [flightKey, reload]);
+  }, [edgeKey, reload]);
 
   const items = useMemo(
     () => runningItems(sessions.data?.sessions ?? null, chats.threads, now),
