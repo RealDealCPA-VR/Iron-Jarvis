@@ -3583,7 +3583,15 @@ does not need a bump, stop and bump it.
   lanes get the "Apps named in this message" section (byte-identical prompt
   when none is named); the STREAM lane ask-arms a named connected app's tools
   (never granted, not in low trust / local only; POST never ask-arms); the
-  web rule skips a bare search verb aimed at an app. IMPORT (4C) is ONE door:
+  web rule skips a bare search verb aimed at an app. RE-REVIEW: a matched word
+  is a HINT — "the email" is a message the user has in hand ("rewrite the
+  email below" put "Gmail: not connected" in the prompt and a real model
+  appended it to the rewrite), "my email below/:/draft" likewise, and
+  lower-case "my drive" is the disk (only Google's "My Drive" names the app);
+  the section raises a missing app only "If answering needs <app>"
+  (`tests/test_rereview_wave4_v13540.py`). The phone's "I hit a problem: …"
+  and the Build pane's failure line say the same `title. fix` (ChatTurnFailed
+  `words` / `failureLine.turnErrorText`). IMPORT (4C) is ONE door:
   `SourcesDoor` on the Tools page's add area AND the Directory's found-line
   (one GET /mcp/import/sources), named `addPackWords.DOOR_LABELS`; `PackSpec.
   disabled` / `exists_as` / `blurb` are preview facts (never stored); every

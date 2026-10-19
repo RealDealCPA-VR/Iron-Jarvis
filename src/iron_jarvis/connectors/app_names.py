@@ -49,7 +49,10 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "github": (r"git\s*hub",),
     "postgres": (r"postgres(?:ql)?",),
     "google_maps": (r"google\s*maps",),
-    "google_drive": (r"google\s*drive", r"g-?drive", r"my\s+drive"),
+    # v1.354.0 re-review: "my drive" in lower case is this PC's disk ("how
+    # much space is left on my drive", "clean up my drive"); only Google's own
+    # capitalised name for the Drive root, "My Drive", names the app.
+    "google_drive": (r"google\s*drive", r"g-?drive", r"(?-i:My\s+Drive)"),
     "onedrive": (r"one\s*drive",),
     "dropbox": (r"drop\s*box",),
     "brave_search": (r"brave\s*search",),
@@ -64,9 +67,15 @@ _NOT_MAIL_ITSELF = (
     r"(?!\s+(?:address(?:es)?|goals?|schedules?|workflows?|rules?|watchers?|webhooks?"
     r"|sentinels?|reflex(?:es)?|zero|templates?|signatures?)\b)"
 )
+#: v1.354.0 re-review: "the email" is a MESSAGE the user has in hand ("rewrite
+#: the email below", "summarize the email", "make the email shorter") — the
+#: everyday request of a new user, which must not be told Gmail is not
+#: connected. Only "my email(s)" names the mailbox, and not when it points at
+#: text in the message ("my email below:", "my email draft").
+_NOT_A_PASTED_ONE = r"(?!\s*(?::|(?:below|above|here|drafts?)\b))"
 _GMAIL_WORDS = re.compile(
     r"\bg-?mail\b"
-    r"|\b(?:my|the)\s+e-?mails?\b" + _NOT_MAIL_ITSELF
+    r"|\bmy\s+e-?mails?\b" + _NOT_MAIL_ITSELF + _NOT_A_PASTED_ONE
     + r"|\b(?:my|the)\s+(?:e-?mail\s+)?(?:inbox|mailbox)\b" + _NOT_MAIL_ITSELF,
     re.IGNORECASE,
 )
@@ -357,16 +366,21 @@ def apps_section(rows: list[dict[str, Any]]) -> str:
                     line = line.rstrip(".") + f"; {r['note']}."
             elif state == "not_working":
                 why = f" ({r['note']})" if r.get("note") else ""
+                # v1.354.0 re-review: said only when answering NEEDS the app
+                # — a matched word is a hint, not the request ("rewrite my
+                # email below" needs no Gmail), so the model must not open
+                # every such reply with "it is not connected".
                 line = (
-                    f"- {name}: set up, but not working right now{why}. Say so, and"
-                    f" point to {APPS_PLACE} to fix it."
+                    f"- {name}: set up, but not working right now{why}. If answering"
+                    f" needs {name}, say so and point to {APPS_PLACE} to fix it."
                 )
             elif state == "not_connected":
                 line = (
-                    f"- {name}: not connected.{_needs_words(r.get('needs', ''))} Tell"
-                    " the user plainly and offer to connect it (the app_connect tool"
-                    f" does that when it is offered; otherwise {APPS_PLACE}). Never"
-                    " search the web in its place."
+                    f"- {name}: not connected.{_needs_words(r.get('needs', ''))} If"
+                    f" answering needs {name}, tell the user plainly and offer to"
+                    " connect it (the app_connect tool does that when it is offered;"
+                    f" otherwise {APPS_PLACE}). Never search the web in its place."
+                    " If it does not, say nothing about it."
                 )
             elif state == "signed_in":
                 line = f"- {name}: signed in."

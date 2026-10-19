@@ -53,6 +53,7 @@ import { useModels } from "@/lib/useModels";
 import { answeredModelName } from "@/lib/answeredModel";
 import { useChatStream, StreamError } from "@/lib/useChatStream";
 import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
+import { turnErrorText } from "@/lib/failureLine";
 import { TurnClock } from "@/components/chat/TurnClock";
 import { ErrorNote, OfflineHint } from "@/components/ui";
 // v1.329.0: the ONE markdown renderer (CLAUDE.md, v1.230.0) — remote images
@@ -951,7 +952,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         : history;
       setMessages(full);
       queueSave(full);
-      setError(e instanceof Error ? e.message : String(e));
+      // v1.354.0 re-review (G28): the chat page's one sentence for a failed
+      // answer (`title. fix`, lib/failureLine), never the server's raw text;
+      // a failure that carries no title keeps its message, as before.
+      setError(turnErrorText(e));
       // v1.353.0 (G51): Retry re-sends THIS turn — the same question and the
       // same files (a followed turn's files are read off its question) — and
       // the question goes back in an empty box for an edit (the chat page's

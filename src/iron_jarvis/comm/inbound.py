@@ -106,6 +106,27 @@ JARVIS_MENTIONS = frozenset({"jarvis", "ironjarvis", "iron jarvis", "iron-jarvis
 _REMOTE_CHAT_ROWS = 60
 
 
+def _failure_words_for_phone(exc: HTTPException) -> str:
+    """What the phone hears after "I hit a problem: " (v1.354.0 re-review,
+    G28). A failed ANSWER carries the chat's plain words
+    (``chat_turn.ChatTurnFailed.words``, from ``failure_words``): the phone
+    gets the same sentence the chat line and a failed run's summary say —
+    ``title. fix``, the join ``failure_words.plain_reason`` makes — never the
+    server's raw text ("openrouter API error 401: …"), which the phone has no
+    hover to fold away. Any other refusal (an unknown skill's 404, …) keeps
+    its own ``detail``, exactly as before. Never raises."""
+    try:
+        words = getattr(exc, "words", None)
+        if isinstance(words, dict):
+            title = " ".join(str(words.get("title") or "").split())
+            fix = " ".join(str(words.get("fix") or "").split())
+            if title:
+                return f"{title}. {fix}" if fix else f"{title}."
+    except Exception:  # noqa: BLE001 — wording only
+        pass
+    return str(exc.detail)
+
+
 def _words_beyond_mentions(text: str) -> bool:
     """True when the message says something besides "@name" tokens — the
     part Iron Jarvis should answer after a hand-back. Never raises."""
@@ -1144,7 +1165,7 @@ class InboundPoller:
                 self.platform, self.personas, body, **self._chat_turn_kwargs(name)
             )
         except HTTPException as exc:
-            reply = f"I hit a problem: {exc.detail}"
+            reply = f"I hit a problem: {_failure_words_for_phone(exc)}"
             if tid:
                 tid = self._safe_append(
                     tid, "assistant", reply,
