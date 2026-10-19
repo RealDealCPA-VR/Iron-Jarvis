@@ -390,7 +390,7 @@ export function DocPreview({
       // be simply wrong there. Only a 400 "cannot read" earns that wording.
       const errorHint =
         status === 403
-          ? `The daemon's file policy refused to read ${failedName} — a protected path, or one outside the configured allowlist.`
+          ? `Iron Jarvis isn't allowed to open ${failedName} (a protected folder, or one outside the folders it may read).`
           : status === 400
             ? `The comparison needs both files on disk — ${failedName} may have been moved, renamed, or deleted.`
             : `Couldn't read ${failedName} — use Refresh to try again.`;

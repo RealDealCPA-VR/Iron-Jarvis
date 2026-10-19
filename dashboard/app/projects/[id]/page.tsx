@@ -49,6 +49,7 @@ import { ProjectTasks } from "@/components/project/ProjectTasks";
 import { ProjectApprovals } from "@/components/project/ProjectSurfaces";
 import { KnowledgePanel } from "@/components/project/KnowledgePanel";
 import { FilePickerModal } from "@/components/FilePickerModal";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { ConfirmButton } from "@/components/ui";
 import type { ModelOption, Project, SessionView } from "@/lib/types";
 import {
@@ -109,7 +110,7 @@ function mediaSrc(url: string): string {
 /** The project's CREATIONS — every generation tagged to this project (studio,
  *  pixio, task outputs) via the artifact spine. Ties Creative into the workspace. */
 function ProjectMedia({ projectId }: { projectId: string }) {
-  const { data, loading, error } = useApi<{ items: ProjectMediaItem[] }>(
+  const { data, loading, error, reload } = useApi<{ items: ProjectMediaItem[] }>(
     `/creative/items?project_id=${encodeURIComponent(projectId)}&limit=200`,
   );
   const items = data?.items ?? [];
@@ -118,7 +119,8 @@ function ProjectMedia({ projectId }: { projectId: string }) {
       {loading && !data ? (
         <SkeletonRows rows={3} />
       ) : error && error.status === 0 ? (
-        <p className="py-2 text-sm text-zinc-500">Media unavailable — the daemon looks offline.</p>
+        // v1.354.0 (G59): the user's words, never "the daemon".
+        <LoadFailedLine thing="Media" error={error} />
       ) : !data ? (
         // The same unknown-guard the Board and Activity carry, and for the same
         // reason: `items` is `data?.items ?? []`, so a 500/404 fell straight
@@ -128,9 +130,7 @@ function ProjectMedia({ projectId }: { projectId: string }) {
         // The error is named only when there IS one; otherwise this is still
         // honestly loading-shaped.
         error ? (
-          <p className="py-2 text-sm text-zinc-500">
-            Media unavailable — the daemon returned an error (HTTP {error.status}).
-          </p>
+          <LoadFailedLine thing="Media" error={error} onRetry={reload} />
         ) : (
           <SkeletonRows rows={3} />
         )
@@ -228,7 +228,7 @@ function ProjectBoard({ projectId }: { projectId: string }) {
   if (offline && list.length === 0)
     return (
       <Card title="Board" icon={<SquareKanban size={15} />}>
-        <p className="py-2 text-sm text-zinc-500">Board unavailable — the daemon looks offline.</p>
+        <LoadFailedLine thing="The board" error={error} />
       </Card>
     );
   // "No sessions in this project yet" is a CLAIM about the project, and it may
@@ -247,9 +247,7 @@ function ProjectBoard({ projectId }: { projectId: string }) {
         {loading || !error ? (
           <SkeletonRows rows={3} />
         ) : (
-          <p className="py-2 text-sm text-zinc-500">
-            Board unavailable — the daemon returned an error (HTTP {error.status}).
-          </p>
+          <LoadFailedLine thing="The board" error={error} onRetry={refreshAll} />
         )}
       </Card>
     );
@@ -278,7 +276,7 @@ function ProjectBoard({ projectId }: { projectId: string }) {
 function ActivityList({ projectId }: { projectId: string }) {
   // Same scoped + visibility-paused poll as the Board so the two never diverge.
   const visible = useDocumentVisible();
-  const { data, error, loading } = usePolledApi<{ sessions: SessionView[] }>(
+  const { data, error, loading, reload } = usePolledApi<{ sessions: SessionView[] }>(
     visible ? `/sessions?project_id=${encodeURIComponent(projectId)}` : null,
     4000,
   );
@@ -297,15 +295,8 @@ function ActivityList({ projectId }: { projectId: string }) {
       {!data ? (
         loading || !error ? (
           <SkeletonRows rows={3} />
-        ) : error.status === 0 ? (
-          <p className="py-2 text-sm text-zinc-500">
-            Recent activity unavailable — the daemon looks offline.
-          </p>
         ) : (
-          <p className="py-2 text-sm text-zinc-500">
-            Recent activity unavailable — the daemon returned an error (HTTP{" "}
-            {error.status}).
-          </p>
+          <LoadFailedLine thing="Recent activity" error={error} onRetry={reload} />
         )
       ) : sessions.length === 0 ? (
         <Empty icon={<History size={22} />}>

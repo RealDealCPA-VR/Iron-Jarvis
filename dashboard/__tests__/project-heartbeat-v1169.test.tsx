@@ -285,28 +285,34 @@ describe("ProjectSchedules", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("says so when the daemon is unreachable — never fakes 'no schedules'", async () => {
+  // v1.354.0 (G59, updated on purpose): the line is in the user's words —
+  // "Schedules couldn't load. …" — never "the daemon", and the HTTP code
+  // rides the line's title only. (`lineText` reads the whole line: "Try
+  // again" is a press inside it when the list can be re-read.)
+  const lineText = (text: string) => (_: string, el: Element | null) =>
+    el?.tagName === "P" && el.textContent === text;
+
+  it("says so when Iron Jarvis is unreachable — never fakes 'no schedules'", async () => {
     // /schedules is unmocked → the fetch rejects with status 0. Schedules are
     // UNKNOWN here, not absent; vanishing would be indistinguishable from a
-    // project with nothing scheduled (same hint idiom as SurfaceMedia).
+    // project with nothing scheduled (same line as SurfaceMedia).
     render(<ProjectSchedules projectId="proj_1" />);
-    expect(
-      await screen.findByText("Schedules unavailable. The daemon looks offline."),
-    ).toBeInTheDocument();
+    const line = await screen.findByText(
+      lineText("Schedules couldn't load. Iron Jarvis isn't responding."),
+    );
+    expect(line.textContent).not.toMatch(/daemon/i);
+    expect(line.getAttribute("title")).toBeNull();
   });
 
   it("a non-0 error (e.g. HTTP 500) shows an error hint, not an empty surface", async () => {
     api.responses["/schedules"] = new api.FakeApiError("boom", 500);
     render(<ProjectSchedules projectId="proj_1" />);
-    expect(
-      await screen.findByText(
-        "Schedules unavailable. The daemon returned an error (HTTP 500).",
-      ),
-    ).toBeInTheDocument();
+    const line = await screen.findByText(lineText("Schedules couldn't load. Try again."));
+    // The code is kept for whoever troubleshoots — in the title, not the text.
+    expect(line.getAttribute("title")).toBe("HTTP 500: boom");
+    expect(line.textContent).not.toMatch(/HTTP|daemon/i);
     // And it is honest about WHICH failure: not the offline wording.
-    expect(
-      screen.queryByText("Schedules unavailable. The daemon looks offline."),
-    ).toBeNull();
+    expect(screen.queryByText(/isn't responding/)).toBeNull();
   });
 });
 

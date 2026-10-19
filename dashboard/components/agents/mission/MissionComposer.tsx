@@ -59,7 +59,8 @@ export function preflightProblem(
   if (stale) {
     return {
       provider,
-      text: `Iron Jarvis could not check your default model, ${provider}. The last check couldn't reach the daemon, and it looked unavailable before that. If a task fails, check it on Connections.`,
+      // v1.354.0 (G59): the app's name, never "the daemon".
+      text: `Iron Jarvis isn't responding, so it could not check your default model, ${provider}. The model looked unavailable at the last check. If a task fails, check it on Connections.`,
     };
   }
   if (row.available === false) {
@@ -133,11 +134,11 @@ export function MissionComposer({
         ...(projectId ? { project_id: projectId } : {}),
       });
       if (row && typeof row.id === "string" && row.id) onStarted(row.id, projectId);
-      else setError("The daemon did not say which mission it started.");
+      else setError("The mission may have started, but Iron Jarvis did not say which one. Check your missions before starting it again.");
     } catch (e) {
       setError(
         e instanceof ApiError && (e.status === 404 || e.status === 405)
-          ? "This daemon is older than the mission screen. Restart Iron Jarvis to update it."
+          ? "Restart Iron Jarvis to finish updating."
           : e instanceof Error
             ? e.message
             : "Could not start the mission.",

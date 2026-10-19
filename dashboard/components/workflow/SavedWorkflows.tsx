@@ -22,6 +22,7 @@ import { FolderOpen, Trash2, Workflow, X } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { del, get, ApiError } from "@/lib/api";
 import { Empty, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { CalmSection, WF_DANGER_SM, WF_GHOST_DANGER_SM, WF_GHOST_SM } from "./calm";
 
 /** One row of GET /workflows (project_id is omitted by the list route). */
@@ -181,8 +182,6 @@ export function SavedWorkflows() {
     [reload],
   );
 
-  const offline = error && error.status === 0;
-
   // v1.329.0 (calm chat wave 9, K3): a plain section like the chat's lists:
   // a quiet label, rows over hairlines, ghost Load / Delete that fill on
   // hover, and the delete confirm as tone lines under its row.
@@ -194,11 +193,13 @@ export function SavedWorkflows() {
         <SkeletonRows rows={3} />
       ) : !data ? (
         // No response in hand means UNKNOWN — never "you have none".
-        <p className="px-1 py-2 text-[13px] text-zinc-500">
-          {offline
-            ? "Saved workflows unavailable. The daemon looks offline."
-            : `Saved workflows unavailable. The daemon returned an error (HTTP ${error?.status ?? "?"}).`}
-        </p>
+        // v1.354.0 (G59): in the user's words; the HTTP code is the title.
+        <LoadFailedLine
+          className="px-1 py-2 text-[13px] text-zinc-500"
+          thing="Saved workflows"
+          error={error}
+          onRetry={reload}
+        />
       ) : rows.length === 0 ? (
         <Empty icon={<Workflow size={22} />}>
           {/* Worded apart from the Templates card's "No saved workflows yet"

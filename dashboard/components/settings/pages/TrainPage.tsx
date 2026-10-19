@@ -24,7 +24,6 @@ import {
   MessagesSquare,
   FolderSearch,
   Plus,
-  Trash2,
   Sparkles,
   Check,
   ArrowRight,
@@ -33,7 +32,7 @@ import { useApi } from "@/lib/useApi";
 import { post, put, del, ApiError } from "@/lib/api";
 import { PageShell, Reveal } from "@/components/motion";
 import { PageHeader } from "@/components/PageHeader";
-import { Card, ErrorNote, SuccessNote, Empty, SectionLabel } from "@/components/ui";
+import { Card, ConfirmButton, ErrorNote, SuccessNote, Empty, SectionLabel } from "@/components/ui";
 
 interface TrainingStatus {
   about: boolean;
@@ -284,6 +283,8 @@ export default function TrainPage() {
                 {rows.map((s) => (
                   <div
                     key={s.id}
+                    role="group"
+                    aria-label={s.label}
                     className="flex items-start justify-between gap-3 rounded-lg border border-white/[0.06] px-3 py-2"
                   >
                     <div className="min-w-0">
@@ -297,14 +298,17 @@ export default function TrainPage() {
                         {s.excerpt}
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => void removeSample(s.id)}
-                      title="Remove this sample"
-                      className="shrink-0 rounded-md p-1 text-zinc-500 transition-colors hover:text-rose-400"
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    {/* v1.354.0 (G68): two presses, like every other delete
+                        in the app; the first arms "Remove sample?" and it
+                        disarms by itself after 3 s. */}
+                    <ConfirmButton
+                      variant="calm"
+                      onConfirm={() => removeSample(s.id)}
+                      label="Remove"
+                      confirmLabel="Remove sample?"
+                      title={`Remove the sample “${s.label}”`}
+                      className="shrink-0"
+                    />
                   </div>
                 ))}
               </div>

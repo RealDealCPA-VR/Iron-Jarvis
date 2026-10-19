@@ -20,6 +20,7 @@ import { useEvents } from "@/lib/useEvents";
 import { useReviews } from "@/lib/useReviews";
 import type { SessionView } from "@/lib/types";
 import { Empty, SkeletonRows } from "@/components/ui";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { ProjectTasks } from "@/components/project/ProjectTasks";
@@ -255,11 +256,16 @@ function SurfaceBoard({ projectId }: { projectId: string }) {
   const sessions = data?.sessions;
   const reviewsState = useReviews(sessions);
   const mine = (sessions ?? []).filter((s) => s.project_id === projectId);
+  // v1.354.0 (G59): the user's words ("The board couldn't load. …"), never
+  // "the daemon"; the HTTP code rides the line's title only.
   if (error && error.status === 0 && mine.length === 0)
     return (
-      <p data-testid="project-board-state" className={`${SURFACE_COLUMN} py-2 text-sm text-zinc-500`}>
-        Board unavailable. The daemon looks offline.
-      </p>
+      <LoadFailedLine
+        testId="project-board-state"
+        className={`${SURFACE_COLUMN} py-2 text-sm text-zinc-500`}
+        thing="The board"
+        error={error}
+      />
     );
   // "No sessions" is a CLAIM and may only be made once a response has landed.
   // `data` is null until the first /sessions round-trip resolves, so the old
@@ -278,9 +284,14 @@ function SurfaceBoard({ projectId }: { projectId: string }) {
         {loading || !error ? (
           <SkeletonRows rows={3} />
         ) : (
-          <p className="py-2 text-sm text-zinc-500">
-            Board unavailable. The daemon returned an error (HTTP {error.status}).
-          </p>
+          <LoadFailedLine
+            thing="The board"
+            error={error}
+            onRetry={() => {
+              reload();
+              reviewsState.reload();
+            }}
+          />
         )}
       </div>
     );
@@ -306,7 +317,7 @@ function SurfaceBoard({ projectId }: { projectId: string }) {
 }
 
 function SurfaceMedia({ projectId }: { projectId: string }) {
-  const { data, loading, error } = useApi<{ items: MediaItem[] }>(
+  const { data, loading, error, reload } = useApi<{ items: MediaItem[] }>(
     `/creative/items?project_id=${encodeURIComponent(projectId)}&limit=200`,
   );
   const items = data?.items ?? [];
@@ -320,18 +331,14 @@ function SurfaceMedia({ projectId }: { projectId: string }) {
       {loading && !data ? (
         <SkeletonRows rows={3} />
       ) : error && error.status === 0 ? (
-        <p className="py-2 text-sm text-zinc-500">
-          Media unavailable. The daemon looks offline.
-        </p>
+        <LoadFailedLine thing="Media" error={error} />
       ) : !data ? (
         // Same unknown-guard as the Board, and for the same reason: `items`
         // is `data?.items ?? []`, so a 500/404 used to fall straight through
         // to "No media in this project yet" — a claim about the project made
         // from a failed request. No response in hand means UNKNOWN.
         error ? (
-          <p className="py-2 text-sm text-zinc-500">
-            Media unavailable. The daemon returned an error (HTTP {error.status}).
-          </p>
+          <LoadFailedLine thing="Media" error={error} onRetry={reload} />
         ) : (
           <SkeletonRows rows={3} />
         )

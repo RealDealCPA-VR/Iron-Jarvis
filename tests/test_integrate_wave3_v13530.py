@@ -124,13 +124,38 @@ def test_the_browser_door_and_the_directorys_browser_card_open_one_address():
     assert [c.id for c in LINK_CARDS] == ["browser_addon"]
 
 
+def _settings_row_label(section: str) -> str:
+    """The name a Settings row shows (v1.354.0, G67): a row that holds a
+    relocated page is named like that page — the nav catalogue's label for the
+    old address that redirects to it (lib/settingsRows.settingsRowLabel)."""
+    relocated = _src("lib", "relocated.ts")
+    routes = {
+        sec: route
+        for route, sec in re.findall(
+            r'"(/[a-z-]+)":\s*\{\s*base:\s*"/settings",\s*extra:\s*\{\s*section:\s*"([a-z-]+)"\s*\}', relocated
+        )
+    }
+    route = routes[section]
+    catalogue = _src("lib", "nav.ts") + _src("lib", "surfaces.ts")
+    m = re.search(r'href:\s*"' + re.escape(route) + r'",\s*(?://[^\n]*\n\s*)*label:\s*"([^"]+)"', catalogue)
+    assert m, f"no nav label for {route}"
+    return m.group(1)
+
+
 def test_the_pixio_refusal_names_a_place_that_exists():
     from iron_jarvis.media.registry import ACCOUNTS_AND_KEYS
 
-    assert ACCOUNTS_AND_KEYS == "Settings › Connections › Accounts & keys"
+    # v1.354.0 (G67, updated on purpose): the Settings row is named like the
+    # page it opens ("Connections", the page's heading and its Everything
+    # entry) — it no longer carries a third name of its own, so the place the
+    # refusal names must END in the name the row actually shows.
     home = _src("components", "settings", "SettingsHome.tsx")
     at = home.index('id: "connections-accounts"')
-    assert 'label: "Accounts & keys"' in home[at : at + 200]
+    assert "label:" not in home[at : home.index("Comp:", at)]
+    assert "label: settingsRowLabel(sub.id, sub.label ?? sub.id)" in home
+    row = _settings_row_label("connections-accounts")
+    assert row == "Connections"
+    assert ACCOUNTS_AND_KEYS == f"Settings › Connections › {row}"
     # …and Pixio is on that page (its "Creative media" group).
     assert re.search(r"pixio:\s*\"creative\"", _src("components", "settings", "pages", "ConnectionsPage.tsx"))
 

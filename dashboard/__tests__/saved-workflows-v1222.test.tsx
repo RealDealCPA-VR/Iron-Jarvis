@@ -196,7 +196,10 @@ describe("SavedWorkflows", () => {
   it("offline is UNKNOWN, not 'no saved workflows'", async () => {
     api.responses["/workflows"] = new api.FakeApiError("offline", 0);
     render(<SavedWorkflows />);
-    expect(await screen.findByText(/daemon looks offline/)).toBeInTheDocument();
+    // v1.354.0 (G59, updated on purpose): the user's words, not "the daemon".
+    expect(
+      await screen.findByText("Saved workflows couldn't load. Iron Jarvis isn't responding."),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/Nothing saved yet/)).not.toBeInTheDocument();
   });
 });

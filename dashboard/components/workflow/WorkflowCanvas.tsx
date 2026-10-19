@@ -38,7 +38,6 @@ import {
   MinusCircle,
   Loader2,
   Ban,
-  Trash2,
   ChevronRight,
   FolderOpen,
   ChevronDown,
@@ -60,6 +59,7 @@ import {
 } from "@/lib/types";
 import {
   Badge,
+  ConfirmButton,
   OfflineHint,
   ErrorNote,
   SuccessNote,
@@ -1290,13 +1290,11 @@ function Canvas() {
 
   /* ---- Delete a saved workflow from the Load list ------------------------ */
 
+  // v1.354.0 (G68): the two presses are the row's ConfirmButton (the app's
+  // one destructive confirm, the same two presses as the page's Saved list);
+  // this runs only after the second press — never a native window.confirm.
   const deleteDef = useCallback(
     async (defName: string) => {
-      if (
-        typeof window !== "undefined" &&
-        !window.confirm(`Delete workflow “${defName}”? This can't be undone.`)
-      )
-        return;
       // If the canvas is editing the row being deleted, its loaded-def
       // tracking is now stale: a later Save must be a fresh create (never a
       // rename PATCH against a deleted row) and a Run must not carry the
@@ -1448,6 +1446,8 @@ function Canvas() {
                     return (
                       <div
                         key={d.id ?? d.name}
+                        role="group"
+                        aria-label={d.name}
                         className="group flex items-center gap-1 rounded-lg pr-1 transition-colors hover:bg-white/[0.05]"
                       >
                         <button
@@ -1466,18 +1466,20 @@ function Canvas() {
                             </span>
                           </span>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteDef(d.name)}
-                          aria-label={`Delete ${d.name}`}
-                          title={`Delete “${d.name}”`}
-                          // Always visible (v1.222.0): at opacity 0 until hover
-                          // nobody found it — the user reported having no way
-                          // to delete a workflow while this button existed.
-                          className="shrink-0 rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-tone-danger/10 hover:text-tone-danger"
-                        >
-                          <Trash2 size={13} />
-                        </button>
+                        {/* Always visible (v1.222.0): at opacity 0 until hover
+                            nobody found it — the user reported having no way
+                            to delete a workflow while this button existed.
+                            v1.354.0 (G68): two presses, like every other
+                            delete — the first arms "Delete workflow?", the
+                            second deletes; it disarms by itself after 3 s. */}
+                        <ConfirmButton
+                          variant="calm"
+                          onConfirm={() => deleteDef(d.name)}
+                          label="Delete"
+                          confirmLabel="Delete workflow?"
+                          title={`Delete “${d.name}”. This can’t be undone.`}
+                          className="shrink-0"
+                        />
                       </div>
                     );
                   })}
@@ -1635,7 +1637,7 @@ function Canvas() {
       {(activeRun || result || error || success) && (
         <div className="space-y-2 px-1 pt-3">
           {result?.offline && (
-            <OfflineHint detail="couldn't reach the daemon for this workflow." />
+            <OfflineHint detail="your workflow is still here in the editor. Try again when it's back." />
           )}
           {success && !error && <SuccessNote>{success}</SuccessNote>}
           {activeRun && (

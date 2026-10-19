@@ -79,6 +79,7 @@ vi.mock("framer-motion", async () => {
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 import { AppsLine } from "@/components/chat/HomeReadiness";
 import { RELOCATED } from "@/lib/relocated";
+import { settingsRowLabel } from "@/lib/settingsRows";
 import type { Onboarding, OnboardingStep } from "@/lib/types";
 
 const ROOT = join(__dirname, "..");
@@ -160,7 +161,11 @@ describe("(a) one place for the apps a new user connects — the Directory", () 
     expect(sectionOf("/marketplace")).toBe("connections-apps");
     const entry = settingsEntry("connections-apps");
     expect(entry.page).toBe("DirectoryPage");
-    expect(entry.label).toBe("Apps & tools");
+    // v1.354.0 (G67, updated on purpose): the row has no name of its own any
+    // more; it is named like the page it opens — "Directory", the word
+    // Everything, the checklist's press and the page's heading all use.
+    expect(entry.label).toBe("");
+    expect(settingsRowLabel("connections-apps")).toBe("Directory");
     // The page that section renders calls itself the Directory — the word
     // the checklist row's press uses.
     expect(read("components", "settings", "pages", "DirectoryPage.tsx")).toMatch(/title="Directory"/);

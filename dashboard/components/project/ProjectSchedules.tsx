@@ -14,6 +14,7 @@ import { useApi } from "@/lib/useApi";
 import { cronLabel } from "@/lib/schedules";
 import type { Schedule } from "@/lib/types";
 import { Card, Dot } from "@/components/ui";
+import { LoadFailedLine } from "@/components/LoadFailedLine";
 import {
   failureReason,
   scheduleDetail,
@@ -92,21 +93,16 @@ export function ProjectSchedules({
    *  hairline, for the chat's box-free Tasks view. */
   bare?: boolean;
 }) {
-  const { data, error } = useApi<{ schedules: Schedule[] }>("/schedules");
+  const { data, error, reload } = useApi<{ schedules: Schedule[] }>("/schedules");
   const mine = projectSchedules(data?.schedules ?? [], projectId);
   // Honesty over tidiness: when the list could not load, this project's
   // schedules are UNKNOWN, not absent — vanishing here would be
   // indistinguishable from "nothing runs in this project", the exact collapse
-  // v1.165.0 exists to prevent. Same hint idiom as SurfaceMedia/SurfaceBoard
-  // (status 0 = daemon unreachable; anything else = the daemon errored).
+  // v1.165.0 exists to prevent. Same line as SurfaceMedia/SurfaceBoard
+  // (v1.354.0, G59: "Schedules couldn't load. Try again." in the user's
+  // words; the HTTP code rides the title only).
   if (error) {
-    const line = (
-      <p className="py-2 text-sm text-zinc-500">
-        {error.status === 0
-          ? "Schedules unavailable. The daemon looks offline."
-          : `Schedules unavailable. The daemon returned an error (HTTP ${error.status}).`}
-      </p>
-    );
+    const line = <LoadFailedLine thing="Schedules" error={error} onRetry={reload} />;
     return bare ? (
       <BareSection title="Schedules">{line}</BareSection>
     ) : (

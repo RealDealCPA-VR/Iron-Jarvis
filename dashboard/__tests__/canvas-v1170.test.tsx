@@ -40,6 +40,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { Connection, Edge, Node } from "@xyflow/react";
@@ -833,6 +834,9 @@ describe("Canvas pin lifecycle (Save as new / delete)", () => {
   });
 
   it("deleting the LOADED def clears name+pin: the next run is unpinned and a later save is a fresh create, never a rename PATCH", async () => {
+    // v1.354.0 (G68, updated on purpose): the delete is the app's two-press
+    // ConfirmButton now, never a native window.confirm — the spy proves the
+    // native prompt is not asked.
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     try {
       getMock.mockImplementation(async () => ({
@@ -855,10 +859,16 @@ describe("Canvas pin lifecycle (Save as new / delete)", () => {
       expect((await clickRun()).project_id).toBe("proj-1");
       // Delete the loaded row from the Load ▾ dropdown.
       fireEvent.click(screen.getByRole("button", { name: "Load" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Delete parent" }));
+      const row = await screen.findByRole("group", { name: "parent" });
+      fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
+      // The first press only arms it: nothing is deleted yet.
+      expect(within(row).getByRole("button", { name: "Delete workflow?" })).toBeInTheDocument();
+      expect(delMock).not.toHaveBeenCalled();
+      fireEvent.click(within(row).getByRole("button", { name: "Delete workflow?" }));
       await waitFor(() =>
         expect(delMock).toHaveBeenCalledWith("/workflows/parent"),
       );
+      expect(confirmSpy).not.toHaveBeenCalled();
       await screen.findByText(/Deleted/);
       // The row is gone: a run must NOT carry the deleted def's pin…
       expect("project_id" in (await clickRun())).toBe(false);

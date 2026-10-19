@@ -161,7 +161,7 @@ describe("SurfaceBoard never asserts an empty project on a guess", () => {
     ).toBeNull();
     // …and it does not invent the offline story either.
     expect(
-      screen.queryByText(/the daemon looks offline/),
+      screen.queryByText(/couldn't load/),
     ).toBeNull();
   });
 
@@ -189,8 +189,8 @@ describe("SurfaceBoard never asserts an empty project on a guess", () => {
     render(<ProjectSurface projectId="proj_1" hasRoot view="board" />);
 
     expect(
-      // v1.329.0 (calm chat W4 F6): the same sentence without its em-dash aside.
-      await screen.findByText("Board unavailable. The daemon looks offline."),
+      // v1.354.0 (G59, updated on purpose): the user's words, not "the daemon".
+      await screen.findByText("The board couldn't load. Iron Jarvis isn't responding."),
     ).toBeInTheDocument();
     expect(screen.queryByText(/No sessions in this project yet/)).toBeNull();
   });
@@ -211,9 +211,9 @@ describe("SurfaceBoard never asserts an empty project on a guess", () => {
         <ProjectSurface projectId="proj_1" hasRoot view="board" />,
       );
 
-      expect(screen.queryByText(/returned an error/)).toBeNull();
+      expect(screen.queryByText(/couldn't load/)).toBeNull();
       expect(screen.queryByText(/No sessions in this project yet/)).toBeNull();
-      expect(screen.queryByText(/looks offline/)).toBeNull();
+      expect(screen.queryByText(/isn't responding/)).toBeNull();
       // …and it is honestly UNKNOWN, i.e. still loading-shaped.
       expect(container.querySelectorAll(".skeleton").length).toBeGreaterThan(0);
     } finally {
@@ -229,11 +229,12 @@ describe("SurfaceMedia never asserts an empty project on a failed request", () =
     api.responses[MEDIA] = new api.FakeApiError("boom", 500);
     render(<ProjectSurface projectId="proj_1" hasRoot view="media" />);
 
-    expect(
-      await screen.findByText(
-        /Media unavailable\. The daemon returned an error \(HTTP 500\)/,
-      ),
-    ).toBeInTheDocument();
+    // v1.354.0 (G59, updated on purpose): "Media couldn't load. Try again."
+    // (Try again is a press inside the line); the code is the line's title.
+    const line = await screen.findByText(
+      (_, el) => el?.tagName === "P" && el.textContent === "Media couldn't load. Try again.",
+    );
+    expect(line.getAttribute("title")).toBe("HTTP 500: boom");
     expect(screen.queryByText(/No media in this project yet/)).toBeNull();
   });
 
@@ -273,7 +274,8 @@ describe("the Projects page's own Board + Activity guards", () => {
   it("ActivityList destructures error/loading and guards its empty state", () => {
     const src = body("ActivityList");
     // It never even looked at `error` — so it asserted "no sessions" offline.
-    expect(src).toMatch(/const \{ data, error, loading \}/);
+    // (v1.354.0: `reload` too — the failed line's "Try again" re-reads.)
+    expect(src).toMatch(/const \{ data, error, loading, reload \}/);
     expect(src.indexOf("{!data ?")).toBeGreaterThan(-1);
     expect(src.indexOf("{!data ?")).toBeLessThan(
       src.indexOf("sessions.length === 0 ?"),
@@ -285,13 +287,14 @@ describe("the Projects page's own Board + Activity guards", () => {
     // `items` is `data?.items ?? []`, so after the loading branch and the
     // status-0 (offline) branch a 500/404 fell straight through to "No media in
     // this project yet" — the same false-empty assertion, on the media surface.
-    expect(src).toMatch(/const \{ data, loading, error \}/);
+    expect(src).toMatch(/const \{ data, loading, error, reload \}/);
     expect(src.indexOf(") : !data ? (")).toBeGreaterThan(-1);
     expect(src.indexOf(") : !data ? (")).toBeLessThan(
       src.indexOf("items.length === 0 ?"),
     );
-    // …and it names an HTTP error only when there IS one.
-    expect(src).toMatch(/returned an error \(HTTP \{error\.status\}\)/);
+    // …and it names a failure only when there IS one (v1.354.0, G59: in the
+    // user's words, "Media couldn't load. Try again.", the code in a title).
+    expect(src).toMatch(/error \? \(\s*<LoadFailedLine thing="Media" error=\{error\} onRetry=\{reload\} \/>/);
   });
 
   it("neither copy claims an error while `error` is null", () => {

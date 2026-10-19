@@ -2248,7 +2248,7 @@ export default function ToolsPage() {
                               state === "failing"
                                 ? "Loaded, but its calls fail. It is restarted on the next call."
                                 : state === "starting"
-                                  ? "The daemon is still starting this pack."
+                                  ? "Starting this extension…"
                                   : undefined
                             }
                           />

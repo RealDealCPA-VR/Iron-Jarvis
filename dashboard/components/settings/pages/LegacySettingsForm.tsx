@@ -28,6 +28,7 @@ import { PageShell, Reveal } from "@/components/motion";
 import { MaintenanceTools } from "@/components/settings/MaintenanceTools";
 import { DaemonTokenCard } from "@/components/settings/DaemonTokenCard";
 import { useDaemon } from "@/lib/daemon";
+import { RESTART_WORDS } from "@/lib/restartWords";
 import { PageGrid } from "@/components/PageGrid";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { ThemeMaker } from "@/components/ThemeMaker";
@@ -263,7 +264,7 @@ const FIELDS: FieldDef[] = [
     type: "text",
     section: "local",
     placeholder: "whisper-1 / Systran/faster-whisper-large-v3",
-    hint: "Exact transcription model your server serves. Leave blank to auto-discover (the daemon queries the endpoint's model list and tries the common whisper names).",
+    hint: "Exact transcription model your server serves. Leave blank to auto-discover (Iron Jarvis asks the endpoint for its model list and tries the common whisper names).",
   },
 
   // --- Automation & autonomy ----------------------------------------------
@@ -522,7 +523,7 @@ function FieldRow({
           {def.label}
           {def.restart && (
             <span
-              title="Takes full effect after a daemon restart"
+              title={RESTART_WORDS.tagTitle}
               className="rounded border border-amber-500/25 bg-amber-500/[0.08] px-1 py-px text-[9px] font-medium uppercase tracking-wide text-amber-300/90"
             >
               restart
@@ -1106,7 +1107,7 @@ export default function SettingsPage() {
           : "";
         setMaintOk(`Backup written to ${r.result}${copy}`);
         setBackupsVersion((v) => v + 1);
-      } else setMaintErr("The daemon reported the backup did not complete.");
+      } else setMaintErr("Iron Jarvis says the backup did not finish.");
     } catch (err) {
       setMaintErr(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -1152,7 +1153,7 @@ export default function SettingsPage() {
           title="Settings"
           subtitle={
             full
-              ? "Tune how Iron Jarvis behaves. Changes are written to config.toml so they survive a restart; a few settings (marked “restart”) only take full effect once the daemon restarts."
+              ? "Tune how Iron Jarvis behaves. Changes are written to config.toml so they survive a restart; a few settings (marked “restart”) only take full effect once Iron Jarvis restarts."
               : "Choose which AI answers and how the app looks. Everything else is under “Show all settings”."
           }
         />
@@ -1273,10 +1274,7 @@ export default function SettingsPage() {
 
 
                   {restartTouched && dirty && (
-                    <p className="text-[11px] text-amber-300/80">
-                      One or more changed settings need a daemon restart to fully apply — use
-                      “Restart daemon” under Maintenance after saving.
-                    </p>
+                    <p className="text-[11px] text-amber-300/80">{RESTART_WORDS.needed}</p>
                   )}
 
                   {/* v1.316.0: the Save row is ALWAYS here (disabled while clean),
@@ -1387,18 +1385,15 @@ export default function SettingsPage() {
                 />
 
                 <div className="border-t hairline pt-4">
-                  <SectionLabel>Restart daemon</SectionLabel>
-                  <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
-                    Applies “restart” settings and clears a stuck state. It briefly interrupts
-                    Iron Jarvis; the desktop app brings it right back.
-                  </p>
+                  <SectionLabel>{RESTART_WORDS.label}</SectionLabel>
+                  <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">{RESTART_WORDS.blurb}</p>
                   <div className="mt-2.5">
                     <ConfirmButton
                       onConfirm={restartDaemon}
-                      label="Restart daemon"
+                      label={RESTART_WORDS.label}
                       confirmLabel={restarting ? "Restarting…" : "Confirm restart"}
                       className="w-full justify-center border-amber-500/30 py-1.5 text-amber-200 hover:border-amber-500/50 hover:text-amber-100"
-                      title="Gracefully stops the daemon; the desktop app restarts it within ~2s."
+                      title={RESTART_WORDS.title}
                     />
                   </div>
                   {restarting && (

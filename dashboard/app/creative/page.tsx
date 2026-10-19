@@ -49,6 +49,7 @@ import { API_BASE, ApiError, del, get, ijToken, post } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
+import { couldntWhileNoAnswer } from "@/lib/loadFailed";
 import { timeAgo } from "@/lib/format";
 import type { AiCli, Drive, FsEntry, FsListing, Skill } from "@/lib/types";
 import {
@@ -487,7 +488,7 @@ function TileShare({
     } catch (e) {
       const ae = e instanceof ApiError ? e : new ApiError(String(e), 0);
       setErr({
-        detail: ae.status === 0 ? "Daemon offline — could not publish." : ae.message,
+        detail: ae.status === 0 ? couldntWhileNoAnswer("publish") : ae.message,
         notConnected: ae.status === 424,
       });
     } finally {
@@ -751,7 +752,7 @@ async function requestTranscode(t: PlayableTarget): Promise<{ src: string; filen
  *  failure) details come straight from the daemon. */
 function transcodeError(e: unknown): string {
   const ae = e instanceof ApiError ? e : new ApiError(String(e), 0);
-  return ae.status === 0 ? "Daemon offline — could not convert." : ae.message;
+  return ae.status === 0 ? couldntWhileNoAnswer("convert it") : ae.message;
 }
 
 /**
@@ -1169,7 +1170,7 @@ function MediaLightbox({
       onDeleted?.(); // closes the lightbox + reloads — no state reset needed here
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
-      setDelErr(err.status === 0 ? "Daemon offline — could not delete." : err.message);
+      setDelErr(err.status === 0 ? couldntWhileNoAnswer("delete it") : err.message);
       setDelBusy(false);
     }
   };
@@ -2397,7 +2398,7 @@ function StudioView({
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
       const engine = clis.find((c) => c.id === opts.cliId);
       setStartErr({
-        detail: err.status === 0 ? "Daemon offline — could not start the session." : err.message,
+        detail: err.status === 0 ? couldntWhileNoAnswer("start the session") : err.message,
         installUrl: err.status === 424 ? (engine?.url ?? null) : null,
       });
     } finally {
@@ -2507,7 +2508,7 @@ function StudioView({
         err.status === 404 || err.status === 409
           ? `The terminal is gone or has exited — ${err.message}`
           : err.status === 0
-            ? "Daemon offline — message not sent."
+            ? couldntWhileNoAnswer("send your message")
             : err.message,
       );
       return false;
@@ -2801,7 +2802,7 @@ function StudioView({
           <Reveal>
             <ErrorNote>
               {gone
-                ? "This terminal no longer exists on the daemon."
+                ? "This terminal is gone. Iron Jarvis may have restarted."
                 : !alive
                   ? describeTerminalExit(exitCode)
                   : "The engine exited in this terminal — its shell is still open on Build."}{" "}
@@ -3192,7 +3193,7 @@ function StudioView({
         <Reveal>
           <div className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-2.5">
             <p className="min-w-0 flex-1 text-xs text-amber-200">
-              Your previous studio session ended (the daemon may have restarted). The terminal
+              Your previous studio session ended (Iron Jarvis may have restarted). The terminal
               and its output are gone; your media is still in the destination folder.
             </p>
             <button
@@ -3770,7 +3771,7 @@ export default function CreativePage() {
         } catch (err) {
           const ae = err instanceof ApiError ? err : new ApiError(String(err), 0);
           if (ae.status === 0) {
-            errs.push("Daemon offline — could not upload.");
+            errs.push(couldntWhileNoAnswer("upload"));
             break; // no point retrying the rest of the batch
           }
           errs.push(`"${file.name}": ${ae.message}`);

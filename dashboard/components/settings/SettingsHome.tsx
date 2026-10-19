@@ -40,6 +40,7 @@ import { ThemeMaker } from "@/components/ThemeMaker";
 import { SettingRow, type SchemaSetting } from "@/components/settings/SettingRow";
 import { LedgerPanel } from "@/components/settings/LedgerPanel";
 import { AccessSummary } from "@/components/settings/AccessSummary";
+import { settingsRowLabel } from "@/lib/settingsRows";
 
 const LegacySettingsForm = dynamic(() => import("@/components/settings/pages/LegacySettingsForm"), { ssr: false });
 
@@ -57,10 +58,16 @@ interface Sub {
   label: string;
   blurb: string;
   Comp: ComponentType;
+  /** v1.354.0 (G67): the row's earlier name, still found by Settings search. */
+  formerly?: string;
 }
 
+/** A row as declared below: a row that holds a relocated page has NO label
+ *  of its own — it is named like that page (`settingsRowLabel`). */
+type SubDef = Omit<Sub, "label"> & { label?: string };
+
 /** The pages and panels each group holds, beside its settings rows. */
-const SUBSECTIONS: Record<string, Sub[]> = {
+const SUB_DEFS: Record<string, SubDef[]> = {
   models: [
     {
       id: "models-local",
@@ -72,32 +79,30 @@ const SUBSECTIONS: Record<string, Sub[]> = {
   connections: [
     {
       id: "connections-accounts",
-      label: "Accounts & keys",
+      formerly: "Accounts & keys",
       blurb: "Model providers, sign-ins, API keys, endpoints and Iron-Proxy accounts.",
       Comp: page(() => import("@/components/settings/pages/ConnectionsPage")),
     },
     {
       id: "connections-apps",
-      label: "Apps & tools",
-      blurb: "The Directory: connect Notion, GitHub, Slack and other apps.",
+      formerly: "Apps & tools",
+      blurb: "Connect Notion, GitHub, Slack and other apps.",
       Comp: page(() => import("@/components/settings/pages/DirectoryPage")),
     },
     {
       id: "connections-notifications",
-      label: "Notifications",
       blurb: "Where Iron Jarvis messages you: Telegram, Slack, Discord and email.",
       Comp: page(() => import("@/components/settings/pages/NotificationsPage")),
     },
     {
       id: "connections-browser",
-      label: "Browser",
       // v1.353.0 (G71): what exists — no desktop control is offered.
       blurb: "Your browser add-on and the agent browser.",
       Comp: page(() => import("@/components/settings/pages/BrowserPage")),
     },
     {
       id: "connections-secrets",
-      label: "Keys & secrets",
+      formerly: "Keys & secrets",
       blurb: "The encrypted vault: values are write-only, never shown back.",
       Comp: page(() => import("@/components/settings/pages/SecretsPage")),
     },
@@ -105,13 +110,13 @@ const SUBSECTIONS: Record<string, Sub[]> = {
   memory: [
     {
       id: "memory-profile",
-      label: "Your profile",
+      formerly: "Your profile",
       blurb: "Who you are and how you want answers written.",
       Comp: page(() => import("@/components/settings/pages/YouPage")),
     },
     {
       id: "memory-train",
-      label: "Train on your files",
+      formerly: "Train on your files",
       blurb: "Your writing, notes, wiki and past conversations, in one place.",
       Comp: page(() => import("@/components/settings/pages/TrainPage")),
     },
@@ -119,7 +124,7 @@ const SUBSECTIONS: Record<string, Sub[]> = {
   permissions: [
     {
       id: "permissions-tools",
-      label: "Tools & permissions",
+      formerly: "Tools & permissions",
       blurb: "What each tool may do without asking, extensions and your own tools.",
       Comp: page(() => import("@/components/settings/pages/ToolsPage")),
     },
@@ -133,24 +138,34 @@ const SUBSECTIONS: Record<string, Sub[]> = {
   system: [
     {
       id: "system-updates",
-      label: "Updates",
       blurb: "What version you are on, what is new, and the restart-to-install switch.",
       Comp: page(() => import("@/components/settings/pages/UpdatesPage")),
     },
     {
       id: "system-maintenance",
       label: "Maintenance",
-      blurb: "Back up now, restore, and restart the daemon.",
+      blurb: "Back up now, restore, and restart Iron Jarvis.",
       Comp: named(() => import("@/components/settings/MaintenanceCard"), "MaintenanceCard"),
     },
     {
       id: "system-token",
       label: "Access token",
-      blurb: "The key a browser outside the app uses to reach the daemon.",
+      blurb: "The key a browser outside the app uses to reach Iron Jarvis.",
       Comp: named(() => import("@/components/settings/DaemonTokenCard"), "DaemonTokenCard"),
     },
   ],
 };
+
+/** v1.354.0 (G67): every row named. A row whose page had its own address
+ *  takes that page's name — the Everything entry, this row and the page's
+ *  heading say ONE word (Directory, not "Apps & tools"); the other rows keep
+ *  their own words. */
+const SUBSECTIONS: Record<string, Sub[]> = Object.fromEntries(
+  Object.entries(SUB_DEFS).map(([group, subs]) => [
+    group,
+    subs.map((sub) => ({ ...sub, label: settingsRowLabel(sub.id, sub.label ?? sub.id) })),
+  ]),
+);
 
 function readSection(): { section: string; focus: string } {
   try {
@@ -301,7 +316,7 @@ export function SettingsHome() {
   const subsShown = q
     ? Object.values(SUBSECTIONS)
         .flat()
-        .filter((s) => [s.label, s.blurb].join(" ").toLowerCase().includes(q.toLowerCase()))
+        .filter((s) => [s.label, s.blurb, s.formerly ?? ""].join(" ").toLowerCase().includes(q.toLowerCase()))
     : SUBSECTIONS[active] ?? [];
   const sections = Array.from(new Set(shown.map((d) => (q ? groups?.find((g) => g.id === d.group)?.label ?? d.group : d.section))));
   const group = groups?.find((g) => g.id === active);
