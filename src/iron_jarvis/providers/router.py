@@ -693,6 +693,15 @@ class RouteResult:
         self.reasoning = reasoning
 
 
+def _named_failure(provider: str, exc: BaseException) -> str:
+    """``<provider>: <error>`` for the rate-limited sentence, without saying
+    the provider twice (v1.358.0, integrate): an adapter's own error already
+    starts "claude-cli: …", and the raw ``detail`` read "claude-cli:
+    claude-cli: CLI timed out"."""
+    text = str(exc)
+    return text if text.startswith(f"{provider}:") else f"{provider}: {text}"
+
+
 class ModelRouter:
     def __init__(
         self,
@@ -2069,7 +2078,7 @@ class ModelRouter:
                 if transient:
                     raise RuntimeError(
                         "every connected model is rate-limited or unavailable "
-                        f"right now. Wait a minute and try again ({adapter.provider}: {exc})"
+                        f"right now. Wait a minute and try again ({_named_failure(adapter.provider, exc)})"
                     ) from exc
                 raise
             fallback = self.manager.get("mock")
@@ -2539,7 +2548,7 @@ class ModelRouter:
             if transient:
                 raise RuntimeError(
                     "every connected model is rate-limited or unavailable "
-                    f"right now. Wait a minute and try again ({adapter.provider}: {primary_exc})"
+                    f"right now. Wait a minute and try again ({_named_failure(adapter.provider, primary_exc)})"
                 ) from primary_exc
             raise primary_exc
         fallback = self.manager.get("mock")

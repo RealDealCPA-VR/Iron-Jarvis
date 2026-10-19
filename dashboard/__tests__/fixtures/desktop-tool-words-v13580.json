@@ -1,5 +1,5 @@
 {
-  "about": "v1.358.0 lane 8E: one table of tool ids and the words the approval card (dashboard/lib/toolWords.ts toolWords) and the desktop's closed-window ask toast (desktop/main.js askToolWords/plainAskSummary) say for each. tests/test_desktop_words_v13580.py runs the desktop half under node; dashboard/__tests__/desktop-tool-words-v13580.test.ts runs the card half. 'card' null = the card has no words of its own and shows the id; 'ahead' rows are the desktop's words for tools the card does not describe yet (it must say the same words once it does).",
+  "about": "v1.358.0 lane 8E: one table of tool ids and the words the approval card (dashboard/lib/toolWords.ts toolWords) and the desktop's closed-window ask toast (desktop/main.js askToolWords/plainAskSummary) say for each. tests/test_desktop_words_v13580.py runs the desktop half under node; dashboard/__tests__/desktop-tool-words-v13580.test.ts runs the card half. 'card' null = the card has no words of its own and shows the id; (v1.358.0 integrate: the card gained write_document, excel_edit and generate_media, so no row is desktop-only any more.)",
   "rows": [
     {
       "tool": "write_file",
@@ -315,15 +315,21 @@
     },
     {
       "tool": "write_document",
-      "kind": "ahead",
-      "card": null,
+      "kind": "table",
+      "card": "create a document",
       "desktop": "create a document"
     },
     {
       "tool": "excel_edit",
-      "kind": "ahead",
-      "card": null,
+      "kind": "table",
+      "card": "edit a workbook",
       "desktop": "edit a workbook"
+    },
+    {
+      "tool": "generate_media",
+      "kind": "table",
+      "card": "make an image, video or sound",
+      "desktop": "make an image, video or sound"
     }
   ]
 }

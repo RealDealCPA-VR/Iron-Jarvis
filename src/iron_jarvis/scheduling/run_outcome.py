@@ -122,8 +122,12 @@ def failed_reason(summary: object, status: object, *, asked: bool = False) -> st
     words ``failure_detail`` puts after "The run failed: "). A run whose ask
     expired first says so (v1.358.0, lane 8A): the row reads "Failed", as
     the run's own badge does, and the person still learns it asked them."""
-    reason = plain_text(summary) or f"the run ended {status}"
-    return f"{ASK_EXPIRED_REASON} {reason}" if asked else reason
+    text = plain_text(summary)
+    if asked:
+        # v1.358.0 (integrate): an asked run with no summary ends on the ask
+        # sentence — "...in time. the run ended failed" read as a typo.
+        return f"{ASK_EXPIRED_REASON} {text}" if text else ASK_EXPIRED_REASON
+    return text or f"the run ended {status}"
 
 
 def workflow_waiting_detail(ref: object) -> str:
@@ -133,10 +137,33 @@ def workflow_waiting_detail(ref: object) -> str:
     return f"Your workflow “{name}” is waiting for your answer on the Workflows page."
 
 
+def workflow_answered(run_status: object, ref: object) -> tuple[str, str] | None:
+    """A PARKED scheduled workflow the user answered has finished (v1.358.0,
+    integrate): the ``(last_status, detail)`` its row now says, or None for
+    a run status that settles nothing. The row stops saying "Needs you" the
+    moment the run's own page stops saying it."""
+    name = " ".join(str(ref or "").split()) or "inline"
+    status = str(run_status or "").strip().lower()
+    if status == "completed":
+        return STATUS_OK, f"Your workflow “{name}” finished after your answer."
+    if status == "failed":
+        return STATUS_ERROR, failure_detail(
+            f"your workflow “{name}” failed after your answer — its run history on the "
+            "Workflows page says where."
+        )
+    if status == "cancelled":
+        return STATUS_CANCELLED, f"Your workflow “{name}” was stopped after your answer."
+    return None
+
+
 def goal_skipped_detail(reason: object) -> str:
     """The row detail for a goal iteration the engine REFUSED (``skipped``,
     v1.358.0 lane 8A): nothing ran, and why, in the engine's own words."""
     why = " ".join(str(reason or "").split()) or "it was refused"
+    if why.lower().startswith("unknown goal"):
+        # v1.358.0 (integrate): the engine's "unknown goal 'goal_7f…'" put an
+        # internal id on the row; the person learns what it means instead.
+        why = "the goal it runs no longer exists (it was deleted)."
     return f"The goal did not run this time: {why}"
 
 

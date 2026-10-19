@@ -2269,6 +2269,10 @@ export function RemoteAgentsSection({
   // that computer could reach this one yet (the same sentence as everywhere).
   const [reachNote, setReachNote] = useState<string | null>(null);
   const doorUrl = isTaskDoorUrl(baseUrl);
+  // v1.358.0 (integrate, G61): another computer running Iron Jarvis has ONE
+  // kind (its task door), so the form picks it — a new user is never asked
+  // to choose "http-task" (the daemon refuses a chat kind for a door anyway).
+  const sendKind: RemoteKind = doorUrl ? "http-task" : kind;
 
   async function connect(e: React.FormEvent) {
     e.preventDefault();
@@ -2284,8 +2288,8 @@ export function RemoteAgentsSection({
       }>("/agents/remote", {
         name: name.trim(),
         base_url: baseUrl.trim(),
-        kind,
-        model: OPENAI_KINDS.includes(kind) ? model.trim() : "",
+        kind: sendKind,
+        model: OPENAI_KINDS.includes(sendKind) ? model.trim() : "",
         token: secret.trim(), // stored encrypted in the vault, never returned
         enabled: true,
       });
@@ -2355,10 +2359,12 @@ export function RemoteAgentsSection({
             className={QUIET_FIELD}
           />
           <select
-            value={kind}
+            value={sendKind}
             onChange={(e) => setKind(e.target.value as RemoteKind)}
             aria-label="Remote kind"
-            className={`${QUIET_FIELD} cursor-pointer`}
+            disabled={doorUrl}
+            title={doorUrl ? "Picked for you: another computer running Iron Jarvis takes tasks" : undefined}
+            className={`${QUIET_FIELD} cursor-pointer disabled:cursor-default disabled:opacity-70`}
           >
             <option value="http-task">http-task (task API)</option>
             <option value="openai-chat">openai-chat (chat/completions)</option>
@@ -2375,9 +2381,9 @@ export function RemoteAgentsSection({
         />
         {doorUrl && (
           <p data-testid="connect-remote-jarvis-hint" className="px-1 text-[11px] leading-relaxed text-zinc-500">
-            This is another computer running Iron Jarvis. Use http-task and the token from
-            its Another computer running Jarvis card; its answers will come back to the chat
-            that asked.
+            This is another computer running Iron Jarvis, so the task API is picked for you.
+            Paste the token from its Another computer running Jarvis card as the secret; its
+            answers will come back to the chat that asked.
           </p>
         )}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -2390,7 +2396,7 @@ export function RemoteAgentsSection({
             autoComplete="off"
             className={`${QUIET_FIELD} font-mono`}
           />
-          {OPENAI_KINDS.includes(kind) ? (
+          {OPENAI_KINDS.includes(sendKind) ? (
             <input
               value={model}
               onChange={(e) => setModel(e.target.value)}

@@ -236,6 +236,13 @@ ASK_WORDS: dict[str, str] = {
     "web_search": "search the web",
     # v1.357.0 (G84): a saved web service (integrations/tools.RestCallTool).
     "rest_call": "call one of your saved web services",
+    # v1.358.0 (integrate, G41): the chat's refusal footnote read "Jarvis
+    # couldn't use app connect" / "use generate media". The card's words
+    # (lib/toolWords WORDS, pinned equal by test_receipt_seams_v13520).
+    "app_connect": "connect an app",
+    "write_document": "create a document",
+    "excel_edit": "edit a workbook",
+    "generate_media": "make an image, video or sound",
 }
 
 

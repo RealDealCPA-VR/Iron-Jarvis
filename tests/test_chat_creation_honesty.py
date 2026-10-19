@@ -70,7 +70,11 @@ def test_no_file_written_gets_an_honest_note(tmp_path):
     # Nothing armed: the model replies with prose only.
     out = _chat(client, "create an excel of my top clients")
     assert "no file was actually created" in out["reply"]
-    assert "write_document" in out["reply"]  # the note teaches the fix
+    # v1.358.0 (integrate, on purpose): the note teaches the fix in the
+    # app's words and place (it read "Arm write_document via the “+” menu",
+    # a raw id and a button that does not hold the switch).
+    assert "Turn on Auto tools in the chat's Tools menu" in out["reply"]
+    assert "write_document" not in out["reply"] and "“+”" not in out["reply"]
     # Armed-but-unused (the local-model failure mode): distinct wording.
     out = _chat(
         client, "create an excel of my top clients",

@@ -88,6 +88,12 @@ const KIND_OF: Record<string, WorkKind> = {
   [REST_CALL_TOOL]: "service",
 };
 
+/** The built-ins KIND_OF words (v1.358.0, integrate): read by
+ *  one-receipt-v13580 so a new entry here that agents/mission._STEP_KIND
+ *  (the Python twin) does not word fails, instead of falling back to "used
+ *  <name>" in the run log. */
+export const KIND_OF_TOOLS: readonly string[] = Object.keys(KIND_OF);
+
 /** The kind of a tool id. Exact match only: never trimmed, never a prefix.
  *  v1.352.0 (G22): a built-in browser tool (by its exact name) is "browser",
  *  a connected app's `mcp__<pack>__<tool>` is "app"; anything else is a

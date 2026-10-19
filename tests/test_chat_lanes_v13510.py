@@ -767,8 +767,9 @@ def test_a_creation_claim_reads_exactly_as_before():
     assert note == (
         "\n\n_Note: nothing was written to disk this turn. The reply mentions "
         "`report.docx`, but no document-writing tool ran — so that file does not "
-        "exist. Ask again and arm a document tool (the “+” menu, or keep "
-        "Auto-tools on)._"
+        # v1.358.0 (integrate, on purpose): the Tools menu, never a "+" menu.
+        "exist. Ask again with Auto tools on, or a document tool turned on, in "
+        "the chat's Tools menu._"
     )
 
 

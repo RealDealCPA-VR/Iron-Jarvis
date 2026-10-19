@@ -1751,6 +1751,49 @@ def build_platform(
             db.add(rec)
             db.commit()
 
+    # A PARKED scheduled workflow settles its row when the person answers it
+    # and the run finishes (v1.358.0, integrate): the fire remembers ``run id
+    # -> schedule`` (scheduling/parked_runs), the ``workflow.completed``
+    # handler below restamps the row ONLY while it still holds the parked
+    # ``needs_you`` verdict. The schedule link is kept.
+    from .scheduling.parked_runs import ParkedRuns
+
+    _parked_runs = ParkedRuns(getattr(config, "home", None))
+
+    def _restamp_parked(name: str, status: str, detail: str) -> bool:
+        from sqlmodel import select
+
+        from .scheduling.models import ScheduledTaskRecord
+
+        with session_scope(engine) as db:
+            rec = db.exec(
+                select(ScheduledTaskRecord).where(ScheduledTaskRecord.name == name)
+            ).first()
+            if rec is None or rec.last_status != _run_outcome.STATUS_NEEDS_YOU:
+                return False  # deleted, or a later fire has its own say
+            rec.last_status = status
+            rec.last_detail = " ".join((detail or "").split())[:300]
+            db.add(rec)
+            db.commit()
+            return True
+
+    def _settle_parked_workflow(ev) -> None:
+        # A sync handler: the bus runs it on a worker thread (file + row I/O).
+        from .core.events import EventType as _ET
+
+        if getattr(ev, "type", "") != _ET.WORKFLOW_COMPLETED:
+            return
+        data = getattr(ev, "payload", None) or {}
+        hit = _parked_runs.settle(str(data.get("run_id") or ""))
+        if hit is None:
+            return
+        name, ref = hit
+        words = _run_outcome.workflow_answered(data.get("status"), ref or data.get("workflow"))
+        if words is not None:
+            _restamp_parked(name, *words)
+
+    event_bus.add_handler(_settle_parked_workflow)
+
     def _deliver_outcome(task, payload: dict, status: str, detail: str) -> None:
         # A schedule is explicit intent, so the default audience is EVERY
         # destination ("This PC" included) — the pre-v1.119 default (default
@@ -2110,6 +2153,10 @@ def build_platform(
             # parked is not "done", and a failed run is not a success — the
             # old blind "ran" stamped ok the instant either happened.
             status = getattr(result, "status", None)
+            if status != "waiting":
+                # v1.358.0 (integrate): this fire did not park — an older
+                # parked run of this schedule no longer speaks for its row.
+                await asyncio.to_thread(_parked_runs.clear, task.name)
             if status == "failed":
                 raise RuntimeError(f"workflow “{ref}” run failed — see its run history")
             if status == "waiting":
@@ -2117,6 +2164,13 @@ def build_platform(
                 # the row reads "Needs you" and the notice "needs you", never
                 # "ok"/"Done" over work that waits for the person.
                 fired["outcome"] = _run_outcome.STATUS_NEEDS_YOU
+                # (integrate) remembered, so the answer settles the row.
+                await asyncio.to_thread(
+                    _parked_runs.park,
+                    task.name,
+                    str(getattr(result, "id", "") or ""),
+                    str(ref),
+                )
                 return _run_outcome.workflow_waiting_detail(ref)
             return f"workflow “{ref}” ran"
         if task.kind == "event":

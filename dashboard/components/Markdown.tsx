@@ -56,27 +56,13 @@ export function nodeText(node: ReactNode): string {
 }
 
 /**
- * Markdown → one line of plain text, for a row that truncates. Strips the
- * markers a model writes (emphasis, headings, list bullets, links, inline
- * code, fences) and collapses whitespace; the words stay. Snake_case
- * identifiers keep their underscores (only word-bounded `_x_` is emphasis).
+ * Markdown → one line of plain text, for a row that truncates. v1.358.0: the
+ * rule lives in the dependency-free `lib/plainText` (the bell, on every page,
+ * flattens a run's summary with it and must not pull this renderer in); this
+ * file re-exports it so every `import { plainText } from "@/components/
+ * Markdown"` keeps working and there is ONE copy of the rule.
  */
-export function plainText(md: string): string {
-  return (md || "")
-    .replace(/```[^\n]*\n?/g, "") // fence markers (the code inside stays)
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1") // images → alt
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // links → text
-    .replace(/^\s{0,3}#{1,6}\s+/gm, "") // headings
-    .replace(/^\s{0,3}>\s?/gm, "") // blockquotes
-    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, "") // list bullets
-    .replace(/(\*\*|__)(?=\S)([\s\S]+?)(?<=\S)\1/g, "$2") // bold
-    .replace(/\*(?=\S)([^*]+?)(?<=\S)\*/g, "$1") // *italic*
-    .replace(/(?<![\w])_(?=\S)([^_]+?)(?<=\S)_(?![\w])/g, "$1") // _italic_
-    .replace(/~~(.+?)~~/g, "$1") // strikethrough
-    .replace(/`([^`]+)`/g, "$1") // inline code
-    .replace(/\s+/g, " ")
-    .trim();
-}
+export { plainText } from "@/lib/plainText";
 
 /** Small clipboard button: copies `text`, flashes a check for a moment. */
 export function CopyIconButton({

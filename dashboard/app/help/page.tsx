@@ -877,8 +877,12 @@ export default function HelpPage() {
               background service listens on <Code>127.0.0.1:8787</Code> and this dashboard on{" "}
               <Code>127.0.0.1:8788</Code>, and the dashboard calls that service at{" "}
               <Code>http://127.0.0.1:8787</Code> — which, on a
-              phone, is the phone itself. So the installed app cannot be opened from a phone, over
-              Wi-Fi or a VPN, until all of this is in place (nothing here is applied for you):
+              phone, is the phone itself. (Turning on &ldquo;Let other computers on my network
+              reach this Iron Jarvis&rdquo; in Settings › Connections opens only the background
+              service on your network, for another computer running Iron Jarvis, and every request
+              still needs its token; it never opens this dashboard.) So the
+              installed app cannot be opened from a phone, over Wi-Fi or a VPN, until all of this
+              is in place (nothing here is applied for you):
             </p>
             <ol className="mt-3 space-y-2 text-[13px] leading-relaxed text-zinc-400">
               <li>

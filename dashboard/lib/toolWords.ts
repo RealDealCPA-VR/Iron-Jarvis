@@ -65,6 +65,15 @@ const WORDS: Record<string, string> = {
   // steps. No custom tool may take this name (tools/dynamic.py
   // RESERVED_TOOL_NAMES), so these words stay true.
   approve_plan: "follow this plan",
+  // v1.358.0 (integrate, re-audit L7 + G41): the document writers and the
+  // media maker read "run write_document" / "run generate_media" here while
+  // the desktop toast already said these words. ONE table: desktop/main.js
+  // TOOL_WORDS and fixtures/desktop-tool-words-v13580.json say the same, and
+  // agents/mission.ASK_WORDS (the activity log + chat refusal footnote)
+  // repeats them (tests/test_receipt_seams_v13520 pins it equal).
+  write_document: "create a document",
+  excel_edit: "edit a workbook",
+  generate_media: "make an image, video or sound",
 };
 
 // The 14 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

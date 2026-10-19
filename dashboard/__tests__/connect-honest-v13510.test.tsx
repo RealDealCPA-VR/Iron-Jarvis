@@ -215,7 +215,7 @@ describe("Directory: green only when the pack works", () => {
     api.connectors = [slack({ connected: true, status: "connected", tools_loaded: 8 })];
     render(<DirectoryPage />);
     const hint = await screen.findByTestId("connector-chat-hint-slack");
-    expect(hint.textContent).toBe("Turn it on in a chat with + › Connections");
+    expect(hint.textContent).toBe("Turn it on in a chat with Tools › Connections");
     expect(hint.className).toContain("text-zinc-500");
     const c = card("slack");
     expect(c.getAttribute("data-health")).toBe("connected");

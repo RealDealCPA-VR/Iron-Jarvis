@@ -73,6 +73,7 @@ import type { LocalServerPreset } from "@/lib/localServerPresets";
 import { STARTER_MODEL_LABEL, useStarterModel } from "@/lib/starterModel";
 import { useDaemon } from "@/lib/daemon";
 import {
+  LOCAL_SERVER_PROVIDERS,
   OLLAMA_LOCAL_URL,
   SUBSCRIPTION_CLIS,
   answerCandidates,
@@ -152,6 +153,10 @@ const ONE_PRESS = new Set([
   "google",
   "xai",
   "openrouter",
+  // v1.358.0 (lane 8D): LM Studio / llama.cpp found on this PC (the /health
+  // custom row's detected_servers) — the use-model door saves the
+  // model-server slot and chooses them; lib/onboarding names them.
+  ...LOCAL_SERVER_PROVIDERS,
 ]);
 
 /** The press names, in checklist.py's _PROVIDER_LABELS words (the Overview's

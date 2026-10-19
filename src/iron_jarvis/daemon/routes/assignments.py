@@ -92,7 +92,7 @@ def _store(d):
     if store is None:
         raise HTTPException(
             status_code=503,
-            detail="assignments are not available on this daemon — restart it",
+            detail="Queued tasks are not available right now. Restart Iron Jarvis to bring them back.",
         )
     return store
 

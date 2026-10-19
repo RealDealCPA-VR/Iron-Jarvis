@@ -2754,10 +2754,9 @@ let askWaitingCount = 0;
 //: v1.358.0 (lane 8E): ONE TABLE. These are the approval card's OWN words,
 //: entry for entry (dashboard/lib/toolWords.ts WORDS) — this process cannot
 //: import the dashboard's TypeScript, so tests/test_desktop_words_v13580.py
-//: reads both files and fails on any key or phrase that differs. Two entries
-//: are ahead of the card (write_document, excel_edit: the card still reads
-//: "run write_document" there); the pin allows exactly those two until the
-//: card's table has them, and then requires the same words. The toast used
+//: reads both files and fails on any key or phrase that differs. (The
+//: integrator gave the card write_document, excel_edit and generate_media in
+//: v1.358.0, so no entry is desktop-only any more.) The toast used
 //: to keep its own six-entry table, so `edit_file` read "use edit file"
 //: beside the card's "change a file".
 const TOOL_WORDS = {
@@ -2793,6 +2792,7 @@ const TOOL_WORDS = {
   approve_plan: "follow this plan",
   write_document: "create a document",
   excel_edit: "edit a workbook",
+  generate_media: "make an image, video or sound",
 };
 
 //: The batch forms ("rename or move 4 files") for the asks that come in

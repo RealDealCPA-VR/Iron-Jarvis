@@ -343,10 +343,15 @@ def serve(
     # Pre-flight: if something is already listening on host:port, don't run the
     # whole lifespan startup (auto-backup, rehydration) only to die on bind with a
     # raw WinError 10048. Tell the user plainly and exit cleanly.
-    if _port_in_use(host, port):
-        if _is_ironjarvis_daemon(host, port):
+    # v1.358.0 (G61): with "Let other computers on my network reach this Iron
+    # Jarvis" on, the desktop starts serve with --host 0.0.0.0; a wildcard is
+    # not an address to dial (connect_ex(("0.0.0.0", p)) misses a listener on
+    # Windows), so the preflight probes loopback for it.
+    probe = "127.0.0.1" if host in ("0.0.0.0", "", "::") else host
+    if _port_in_use(probe, port):
+        if _is_ironjarvis_daemon(probe, port):
             console.print(
-                f"[yellow]Iron Jarvis is already running[/yellow] on http://{host}:{port} "
+                f"[yellow]Iron Jarvis is already running[/yellow] on http://{probe}:{port} "
                 "— not starting a second instance."
             )
             # v1.226.0 (contract C2): 75, not 0. Exit 0 read as "my child died

@@ -41,7 +41,7 @@ export const PACK_OFF_LINE =
   "Switched off. Chats and agents can't use its tools until you turn it on; its settings and keys are kept.";
 
 /** v1.357.0 integrate (wave-6 follow-up): a chat whose saved connections
- *  hold an app the user has since switched off keeps it in + › Connections
+ *  hold an app the user has since switched off keeps it in Tools › Connections
  *  as an Off row (never silently dropped), and this is what that row says:
  *  the one off line, then where to turn it on and that this chat picks it up
  *  again then. The daemon arms nothing for it meanwhile

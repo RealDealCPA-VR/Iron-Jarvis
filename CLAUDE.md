@@ -3547,6 +3547,129 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **Every surface gives ONE verdict per run; chat picks the right tools; the
+  Directory and chat agree; another computer comes in by a setting**
+  (v1.358.0, product-readiness Wave 8 "close the re-audit": its 14 regressions
+  and G01/G15/G19/G30/G39/G41/G61/G76; lanes 8A-8E + integrate). OUTCOMES (8A):
+  `lib/statusWords` OUTCOME reads `needs_you` "Needs you" and
+  `completed_with_failures` "Part failed" (amber) — ONE table for
+  SessionStatusBadge, Sessions, Kanban, the run page, RunResultCard, the
+  mission rail (`lib/mission.missionRowWords`) and Schedules
+  (`scheduleRunWords`; the row inks the word itself with
+  `statusWords.toneTextClass`, `!text-tone-warn` / `!text-tone-danger`).
+  `run_outcome.delivery_head(needs_you)` is "needs you",
+  `lib/scheduleOutcome.runNowNote` the same. `lib/plainText` (no imports:
+  `plainText` + `summaryLine`) is THE flattening rule — `components/Markdown`
+  re-exports it (integrate), the bell's `clip`, `scheduleDetail` and the phone
+  (`run_outcome.plain_text`) use it; `lib/browserRunWords` words
+  `computeruse.run_finished` bell rows (an ask is not a failure); the bell's
+  colours are tone tokens; `_NO_REASON` never says "daemon log". PARKED
+  WORKFLOWS (integrate): `scheduling/parked_runs.ParkedRuns`
+  (`<home>/schedule_parked_runs.json`, schedule → {run_id, ref}; a newer park
+  replaces, a fire that does not park clears; file I/O off the loop) and
+  platform's `_settle_parked_workflow` (a `workflow.completed` handler, bus
+  worker thread) restamp the row with `run_outcome.workflow_answered` ONLY
+  while it still reads `needs_you` — never via `WorkflowRunRecord.started_by`
+  (Emergency stop's field). ONE RECEIPT (8C): `lib/runReceipt.pairRunReceipts`
+  / `stampCarriesReceipt` pair a `runResult` reply with its settled hand-off
+  row; that reply renders `RunResultCard withRow` (files, honest note, errors
+  fold, Try again / Revert / Stop — no headline, RunMeta, chips or
+  PanelReplyLine, no box) and the row's `AgentRunReceipt activity` carries
+  `components/chat/RunActivity` ("Step by step"); the full card headlines in
+  the table's words and links "Open run". `mission.tool_line`'s fallback,
+  `tool_own_name`, `app_name_words` and `app_tool_name_words` are the Python
+  twins of `lib/runWords` toolStepLine / toolOwnName and `lib/toolWords`
+  appNameWords / appToolNameWords, held equal by
+  `fixtures/tool-lines-v13580.json` (`IJ_REGEN_TOOL_LINES=1`); a new built-in
+  in `lib/runWords` AGENT_TOOLS or `lib/workTarget` KIND_OF (exported as
+  `KIND_OF_TOOLS`, integrate) is worded in `mission._RUN_TOOL_WORDS` /
+  `_STEP_KIND` or one-receipt-v13580 fails. `rest_call` is the "service" work
+  kind ("Called crm"); WorkLine `cutOff`; ConfirmButton `idleClassName`;
+  PaneChat folds `turnErrorTechnical` under DETAILS_WORDS. CHAT TOOLS (8B,
+  both lanes lock-step): `autoselect._searches_in_the_app` hands a search to
+  an app only for the user's own data (a possessive always; an unpossessive
+  search only when the app is connected — `apps_on` from `_Grounding.apps_on`
+  through `chat_turn.arming_kw`, passed only when set); research ABOUT an app
+  reaches the web, and `app_names.apps_section` says so.
+  `ToolRegistry.pick_for_message` picks an app's `_MAX_CONNECTOR_TOOLS` (24)
+  by the message's words (name ×3 + description), read-only first on a tie,
+  unseen tools last; an app that fits is unchanged; used by
+  `_resolve_connectors` (the toggle, both lanes) and `named_app_ask_tools`
+  (stream only), whose room is PER APP counting what is already armed
+  (integrate: an app toggled AND named read 44 GitHub tools in the stream lane
+  and 24 in the POST lane). A ranking pin needs a message that wants a WRITE
+  tool — the read-only tie alone can satisfy it. FAILURE WORDS: the Claude
+  transport's `_typed(kind)` + `TIMEOUT_PREFIX` / `INCOMPLETE_PREFIX`;
+  `subprocess_cli` / `opencode_cli` stamp `kind="timeout"` + `failed_provider`
+  (integrate; the cause chain says it too, but a wrapper may drop it);
+  `failure_words.generic_title` / `is_generic_title` / `undoubled`;
+  `router._named_failure` names the provider once; `PLAIN_NAMES` == the
+  dashboard's FRIENDLY table. A refused built-in reads `builtin_tool_words` +
+  `builtin_tool_place` ("Web & research" / "Auto tools" in the chat's Tools
+  menu / no place). `mission.ASK_WORDS` == `lib/toolWords` WORDS ==
+  desktop/main.js TOOL_WORDS (`fixtures/desktop-tool-words-v13580.json`;
+  integrate added write_document, excel_edit, generate_media, app_connect).
+  THE CHAT'S APP SWITCHES ARE "Tools › Connections" (the wrench chip's menu),
+  never "+ › Connections" (integrate renamed every sentence and the Handbook;
+  wave8-seams scans app/, components/, lib/). `records.AppConnectTool` says a
+  pack that loaded no tools "did not start" and why. Pixio:
+  `media/pixio_http.KEY_PLACE` == `failure_words.ACCOUNTS_PLACE`;
+  `MISSING_KEY_ERROR` / `REJECTED_KEY_ERROR` serve the media provider, the
+  pixio_* tools' 401 and the portrait door — never the vault name or
+  PIXIO_API_KEY. DIRECTORY (8D): catalog `built_in` / `built_in_note` +
+  `BUILT_IN_TOOLS` (== DirectoryPage BUILT_IN; separate versions folded);
+  `lib/directoryHealth` cardHealth / healthCounts ("N connected" = working);
+  `connectors/signin_seen` (cached, never blocks, one bounded check per app —
+  integrate: `asyncio.wait_for` inside the call, so a hung verify-login is
+  cancelled); `service._signin_state` → status "signin" +
+  `signin_needed_line`, AND `app_names.app_states` → state "signin"
+  (integrate), so chat never calls a not-signed-in app connected and
+  `connected_ids` leaves it out; `_connect_api_key` runs the registry's Test
+  on save (verdict per key fingerprint, process memory);
+  `lib/secretLabels.secretWords`; `providers/local_servers_seen` (LM Studio /
+  llama.cpp, cached 20 s, probe bound read at run time; tests/conftest forces
+  it off for the session); /health's custom row carries `detected_servers`
+  (cached read only) and ConnectDoors ONE_PRESS includes
+  `LOCAL_SERVER_PROVIDERS` (never one without the other); `rescan_providers`
+  re-probes it (integrate). DESKTOP + LAN (8E): main.js speaks "Iron Jarvis";
+  `lan_access` (schema ask-floor, restart, off; Config) is read by main.js
+  `readDaemonNetwork` at EVERY spawn → `--host 0.0.0.0` +
+  IRONJARVIS_HOST_ALLOWLIST (this PC's private addresses + the user's own) +
+  `IRONJARVIS_LAN_ACCESS=1`, which makes `auth._exempt_for` want the install
+  token from a non-loopback PEER for /health, /openapi.json, /docs and /redoc;
+  `cli.serve` probes loopback for a wildcard host (integrate: a running copy
+  was missed and exit 75 lost); the key is equal in five places (schema,
+  Config, main.js LAN_ACCESS_KEY, routes/agents.LAN_ACCESS_KEY,
+  lib/anotherJarvis LAN_SETTING_KEY) and the marker in `auth.LAN_ACCESS_ENV`
+  and main.js; the reachability sentence names the setting, never a command
+  line; the Connect a remote agent form picks http-task for a door address
+  (integrate). `tests/test_vocabulary_beyond_dashboard_v13580.py` scans
+  main.js, the schema, run_outcome, notifier, task_door and (integrate)
+  parked_runs, the coach/grants/skills_curator/profile_share routes and
+  pixio_http with the dashboard's retired list. THE RULE A FUTURE CHANGE MUST
+  KEEP: a run's verdict is a statusWords word on every surface (a new surface
+  reads the table, never its own words); a schedule row that waits on the
+  person is settled by the run that answers it; a new built-in tool gets its
+  words in toolWords WORDS + mission.ASK_WORDS + main.js TOOL_WORDS + the
+  fixture, and its work kind in KIND_OF + mission._STEP_KIND; no lane arms
+  more than 24 of one app's tools; a surface that reads an app's state reads
+  the Directory's (sign-in included); a new way in for another computer goes
+  through `lan_access` and its token rules; a new user-facing Python sentence
+  lives in a scanned file or earns an ALLOW entry. Pins:
+  `tests/test_{outcomes_say_the_truth,chat_picks_tools,one_receipt,connections_honest,local_servers_doors,desktop_words,lan_access,vocabulary_beyond_dashboard,integrate_wave8}_v13580.py`,
+  `dashboard/__tests__/{outcomes-say-the-truth,bell-outcomes,one-receipt,one-receipt-chat,sessions-armed-delete,pane-chat-details,connections-honest,connect-doors-local-servers,desktop-tool-words,another-jarvis-lan,wave8-seams}-v13580.test.tsx`,
+  fixtures `outcomes-v13580.json` (`IJ_REGEN_OUTCOMES_V13580=1`),
+  `tool-lines-v13580.json` (`IJ_REGEN_TOOL_LINES=1`),
+  `desktop-tool-words-v13580.json` and `wave8-seams-v13580.json`
+  (`IJ_REGEN_WAVE8_SEAMS=1`) (every lane, review and integrator change
+  mutation-checked red). Known: a parked run cancelled while waiting publishes
+  no completion, so its row keeps "Needs you" until the next fire; the
+  key-refused verdict is process memory; agent runs pass no `apps_on`;
+  apps-by-name arming is stream-only; the bell's ask row still links the run
+  by its short id; mission's refusal line still names a built-in by its spaced
+  id ("tried write file"); not tried on two physical PCs, the Windows Firewall
+  prompt unverified.
+
 - **Another Jarvis is a teammate through ONE door; every pack lives in ONE
   catalog file; a saved web service is callable, carded and kept away; the
   vocabulary is a SCAN** (v1.357.0, product-readiness Wave 7, G61/G76/G82/
@@ -3572,7 +3695,9 @@ does not need a bump, stop and bump it.
   (`is_task_door_url`); registering a door turns message-back on; a chat
   dialect for a door is refused before the credential is touched; one
   `routes/agents.reachability()` sentence serves both doors and nothing ever
-  opens a bind or edits `IRONJARVIS_HOST_ALLOWLIST`. (re-review) The sender
+  opens a bind or edits `IRONJARVIS_HOST_ALLOWLIST` — except, since v1.358.0,
+  the user's own `lan_access` setting, applied by the desktop at spawn (see
+  the v1.358.0 bullet). (re-review) The sender
   DIALS `task_door.door_address(base_url)` — `is_task_door_url` accepts a
   trailing "/", the auth exemption is exact, and the typed form looped on
   "token does not match"; a finished run the DEMO model answered comes home
@@ -4089,8 +4214,12 @@ does not need a bump, stop and bump it.
   needs_you | partial | error | cancelled | skipped | missed | ""`;
   `fire_status(Session.outcome)` maps the ledger verdict (`needs_you` →
   needs_you, `completed_with_failures` → partial), a FAILED run whose ask
-  expired is `needs_you` (the person is the headline — `derive_outcome`'s
-  rule), a failed row reads "The run failed: <plain reason>" (class name in
+  expired is `error` since v1.358.0 (it read `needs_you`; the row now says
+  "Failed" like the run's own badge, its reason opens with
+  `run_outcome.ASK_EXPIRED_REASON`, and the bell and phone say "could not
+  finish"), a scheduled workflow PARKED on the user is `needs_you` and a
+  goal iteration the engine refused is `skipped` (v1.358.0; both read "ok"
+  before), a failed row reads "The run failed: <plain reason>" (class name in
   the log only), the detail is `plain_sentence`. `FAILED_STATUSES` (error +
   legacy "failed") / `NEEDS_A_LOOK_STATUSES` / `SHORT_STATUSES` are what the
   Status map's Schedules star and `/ui/status-line` `short_schedules` count

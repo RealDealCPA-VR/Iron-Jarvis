@@ -353,9 +353,16 @@ class SubprocessCliAdapter(LLMAdapter):
             except subprocess.TimeoutExpired as exc:
                 # A wedged CLI is a TRANSIENT failure (typed) — the router should
                 # fail over to another provider, not surface it as a hard error.
-                raise ProviderError(
+                timed_out = ProviderError(
                     f"{self.provider}: CLI timed out after {_TIMEOUT_S}s", transient=True
-                ) from exc
+                )
+                # v1.358.0 (integrate): typed like the Claude transport's own
+                # timeout (``kind``/``failed_provider``, failure_words reads
+                # them), so chat says "Codex didn't answer in time", never an
+                # anonymous "couldn't finish this answer".
+                timed_out.kind = "timeout"  # type: ignore[attr-defined]
+                timed_out.failed_provider = self.provider  # type: ignore[attr-defined]
+                raise timed_out from exc
             if code != 0:
                 # v1.234.0: the CLI's own words, mapped to the remedy when it
                 # is a sign-in refusal — and the shared probe hears about it.

@@ -372,7 +372,10 @@ describe("whose cost it is: subscription, metered, free", () => {
 
   it("free / local (cost_usd 0, not a subscription turn): no dollar figure at all", () => {
     render(<TurnReceipt route={{ provider: "lmstudio" }} usage={{ input_tokens: 900, cost_usd: 0 }} />);
-    expect(screen.getByText("lmstudio")).toBeInTheDocument();
+    // v1.358.0 (lane 8D, on purpose): lib/onboarding's FRIENDLY table names
+    // LM Studio in words (it read the raw id "lmstudio").
+    expect(screen.getByText("LM Studio")).toBeInTheDocument();
+    expect(screen.queryByText("lmstudio")).toBeNull();
     expect(screen.queryByTestId("turn-usage")).toBeNull();
     expect(document.body.textContent).not.toContain("$0.00");
     cleanup();

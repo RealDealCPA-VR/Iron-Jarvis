@@ -45,7 +45,7 @@ export function interruptedLabel(session: OutcomeSource): string | null {
   return session.interrupted_at ? INTERRUPTED_WORD : null;
 }
 
-/** "Done · needs you" / "Done · part failed", or null when the plain status
+/** "Needs you" / "Part failed" (v1.358.0 table words), or null when the plain status
  *  badge tells the truth (a completed run that completed, or a failed or
  *  stopped run — its own word already says it).
  *

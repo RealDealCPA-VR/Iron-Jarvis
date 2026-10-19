@@ -215,6 +215,62 @@ Fixing those five, and the desktop shell's "daemon" words, would be the most val
 
 ---
 
+## 0b. After wave 8 (v1.358.0)
+
+Wave 8 ("close the re-audit") worked through section 0's lists in five lanes (8A-8E), a reviewer per lane, and an integrator. The scores in section 0 are the re-audit's and are not re-marked here. Each fix below is pinned by a test that was mutation-checked red without it. The running app was not re-checked live.
+
+**All 14 regressions in 0.5 are fixed:**
+- **Schedules row** — it leads with the outcome: Needs you, Part failed, Failed or Skipped, with the word itself coloured. A run that failed after its ask expired reads Failed. A parked workflow reads Needs you, and once answered it reads Done ("…finished after your answer", integrate). A refused goal reads Skipped.
+- **Web research naming an app** — it reaches the web again. A search in the user's own data still goes to the app.
+- **GitHub pull-request tools** — chat arms the 24 tools that fit the message. The integrator also capped an app that is both turned on and named at 24 in the stream lane (it read 44).
+- **Anonymous failures** — the line names the provider ("Claude Code didn't answer in time"; Codex and OpenCode timeouts are typed too), and "claude-cli:" is never doubled.
+- **Two receipts for one helper run** — there is now one.
+- **"Used history search"** — the "What it did" lines use plain tool words.
+- **"✓ Answered" over a cut-off reply** — it reads "Cut off after N s".
+- **Directory built-ins** — they no longer sit under a Connect button.
+- **"N connected"** — counts only working apps.
+- **Raw summaries in the bell** — flattened to plain words.
+- **rest_call** — reads "Called <service>".
+- **The armed delete press** — red again.
+- **README** — names the "Demo replies" strip.
+- **Palette drift** — the bell and ConnectDoors use tone tokens.
+
+**Gaps 0.4 listed as partly met:**
+- **Met:** G01, G15, G30, G39, G76. G39's name-matching stays stream-lane only, by design.
+- **Met in code:** G61. It has a setting that is off by default (Settings › Connections › "Let other computers on my network reach this Iron Jarvis"). The desktop applies it at each start, and it keeps the token rule. The register form now picks the task API itself. It is still untried on two physical PCs.
+- **Met, apart from noted remainders:**
+  - G19: the run log is in tool words. The mission's refusal line still names a built-in tool by its spaced id ("tried write file").
+  - G41: built-in refusals say where to turn the tool on, and Pixio key errors name Settings › Connections. The Drive "Connect" button still appears only when the model calls app_connect.
+- **Not built (owner's decision):** G83, G85, G86.
+
+**Leaks from 0.6 that are closed:**
+- the desktop's "daemon" wording;
+- "the daemon log";
+- write_file and app_connect refusals that showed raw ids;
+- "Builder used history search";
+- "Ran rest_call";
+- the approval card's "run write_document" (write_document, excel_edit and generate_media now have words);
+- the desktop ask toast's raw ids;
+- the Pixio secret and PIXIO_API_KEY wording (media, the pixio_* tools and the portrait door);
+- "MCP pack <name>" on Secrets;
+- seven Settings labels, among them "Read a project's AGENTS.md and CLAUDE.md in chat" and "Autonomy (the pulse)" (the nav's "Sentinels", "Reflexes" and "Artifacts" are unchanged);
+- the serve --host / allowlist sentence;
+- the "… not available on this daemon" 503s (six routes; routes/assignments.py's other refusals still say "assignment");
+- "+ › Connections" and the chat notes' "arm a document tool (the “+” menu…)", which pointed at the wrong button. The switches live in the chat's Tools menu.
+
+**Also new:** the chat's apps section tells the model when Microsoft 365 still needs a sign-in, LM Studio and llama.cpp get a one-press offer, and Re-detect looks for them.
+
+**Still open:**
+- the model menu's "subscription/fleet" words and "Claude Code CLI" on Connections;
+- "Session cancelled by the user.";
+- the demo reply's opening line;
+- the bell's short run id;
+- the advanced paths listed in 0.6.
+- A parked workflow that is cancelled while it waits keeps "Needs you" until its next run.
+- Microsoft 365, GitHub's server, the other-computer setup and LM Studio have never been tried live.
+
+---
+
 ## 1. Overall product-readiness score: **55 / 100**
 
 The goal: a completely new user can install Jarvis, understand it, connect their existing tools and AI, get useful work done, and understand exactly what happened, without learning how it is built.

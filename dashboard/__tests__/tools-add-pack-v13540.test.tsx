@@ -226,7 +226,7 @@ describe("G49: Bring your tools from Claude, Codex, Cursor…", () => {
     await waitFor(() =>
       expect(tools.textContent).toBe("3 tools ready: search repositories, get issue and list pull requests"),
     );
-    expect(within(group).getByTestId("import-use-in-chat").textContent).toBe("Use it in a chat: + › Connections");
+    expect(within(group).getByTestId("import-use-in-chat").textContent).toBe("Use it in a chat: Tools › Connections");
     // Read once for the names (the page re-reads its own list too).
     expect(api.gets.filter((g) => g === "/mcp/servers").length).toBeGreaterThan(serversBefore);
   });
@@ -354,7 +354,7 @@ describe("G49: the HTTP door", () => {
     expect((posted("/mcp/servers")[0].body as Record<string, unknown>).transport).toBe("sse");
     // The success note says where to switch it on.
     expect((await within(door).findByTestId("add-pack-http-ok")).textContent).toContain(
-      "Use it in a chat: + › Connections",
+      "Use it in a chat: Tools › Connections",
     );
 
     fireEvent.change(within(door).getByTestId("add-pack-url"), { target: { value: "https://api.example.com/mcp" } });

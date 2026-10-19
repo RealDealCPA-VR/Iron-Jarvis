@@ -65,7 +65,11 @@ def test_pixio_publish_honest_on_error():
         pixio_publish("k", url="https://example.com/a.png", http=fake_http)
         raise AssertionError("should have raised")
     except RuntimeError as exc:
-        assert "401" in str(exc)
+        # v1.358.0 (integrate, G41, on purpose): the refusal says what to do
+        # in plain words (it read "Pixio rejected the API key (401) — update
+        # the 'pixio' secret or PIXIO_API_KEY").
+        assert "Pixio didn't accept your key" in str(exc)
+        assert "Settings" in str(exc) and "PIXIO_API_KEY" not in str(exc)
 
 
 # --- the pixio_upload TOOL ----------------------------------------------------

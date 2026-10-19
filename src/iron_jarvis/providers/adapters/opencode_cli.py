@@ -179,9 +179,14 @@ class OpencodeCliAdapter(LLMAdapter):
                 # Stop / a closed tab kills the CLI tree, not just the await.
                 code, out, err = await run_cli(argv, prompt, timeout=_TIMEOUT_S)
         except subprocess.TimeoutExpired as exc:
-            raise ProviderError(
+            timed_out = ProviderError(
                 f"opencode-cli: CLI timed out after {_TIMEOUT_S:.0f}s", transient=True
-            ) from exc
+            )
+            # v1.358.0 (integrate): typed like the Claude transport's timeout,
+            # so chat says "OpenCode didn't answer in time".
+            timed_out.kind = "timeout"  # type: ignore[attr-defined]
+            timed_out.failed_provider = "opencode-cli"  # type: ignore[attr-defined]
+            raise timed_out from exc
         if code != 0:
             detail = (err or out).strip()[:400]
             raise RuntimeError(f"opencode-cli: CLI exited {code}: {detail}")

@@ -127,7 +127,13 @@ def _call_check(platform, server: str, timeout_s: float) -> Verdict | None:
 
     def _run() -> None:
         try:
-            box["result"] = asyncio.run(client.call_tool(remote, {}))
+            # v1.358.0 (integrate, lane 8D review): bounded INSIDE the call
+            # too — a check that hangs is cancelled (the client's own cancel
+            # path), so it never holds the app's transport while the user's
+            # calls queue behind it; the outer wait only stops waiting.
+            box["result"] = asyncio.run(
+                asyncio.wait_for(client.call_tool(remote, {}), timeout_s)
+            )
         except BaseException as exc:  # noqa: BLE001 — recorded, never raised
             box["error"] = exc
         finally:

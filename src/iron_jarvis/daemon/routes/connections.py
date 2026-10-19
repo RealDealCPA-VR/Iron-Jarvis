@@ -995,6 +995,17 @@ def rescan_providers(d) -> dict[str, Any]:
         ollama_seen.record(any(dm.provider == "ollama" and dm.available for dm in detected))
     except Exception:  # noqa: BLE001 — a cache write never breaks the rescan
         pass
+    # v1.358.0 (integrate, lane 8D review): Re-detect looks again for LM
+    # Studio / llama.cpp on this PC too (blocking ≤ the probe bound, the two
+    # asked side by side — this is a sync route on the threadpool), so a
+    # server started a moment ago is offered at once, not after the cache's
+    # 20 s.
+    try:
+        from ...providers import local_servers_seen
+
+        local_servers_seen.probe_now()
+    except Exception:  # noqa: BLE001 — a probe never breaks the rescan
+        pass
     rows = [dm.as_dict() for dm in detected]
     # v1.234.0: the subscription CLIs are re-PROBED for sign-in here
     # (blocking is fine — this is a sync route on the threadpool), so

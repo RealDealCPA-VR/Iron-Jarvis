@@ -200,7 +200,10 @@ async def test_pixio_without_a_key_refuses_before_any_http():
     with pytest.raises(MediaError) as exc:
         await p.quote("pixio/flux", {}, "image")
     assert exc.value.code == "not_configured"
-    assert "pixio" in exc.value.words and "PIXIO_API_KEY" in exc.value.words
+    # v1.358.0 (integrate, G41, on purpose): where a person adds the key —
+    # never the vault name or the environment variable.
+    assert "Pixio" in exc.value.words and "Settings › Connections" in exc.value.words
+    assert "PIXIO_API_KEY" not in exc.value.words and "secret" not in exc.value.words
     assert PixioProvider(key_resolver=lambda: _KEY, http=_never).available() is True
 
 

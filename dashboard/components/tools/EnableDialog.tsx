@@ -186,7 +186,7 @@ export function EnableDialog({
           {/* v1.356.0 (G74): plain words ("this fleet", "arms it per turn"). */}
           <span>
             Every agent can use it — built-in agents, the ones you created, and
-            agents on your other computers. In a chat, turn it on with + › Connections.
+            agents on your other computers. In a chat, turn it on with Tools › Connections.
           </span>
         </section>
 

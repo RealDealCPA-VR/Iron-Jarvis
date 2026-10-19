@@ -38,14 +38,11 @@ FIXTURE = ROOT / "dashboard" / "__tests__" / "fixtures" / "desktop-tool-words-v1
 
 DAEMON = re.compile(r"\bdaemons?\b", re.I)
 
-#: Desktop entries AHEAD of the card: the card's table (lib/toolWords.ts)
-#: has no words for the document writers yet, so the card reads "run
-#: write_document" (re-audit L7). These two may exist on the desktop only —
-#: and the moment the card gains them, they must say the same words.
-DESKTOP_AHEAD = {
-    "write_document": "the card has no words for it yet (re-audit L7); notes ask the integrator to add it",
-    "excel_edit": "the card has no words for it yet (re-audit L7); notes ask the integrator to add it",
-}
+#: Desktop entries AHEAD of the card (words the card's table, lib/
+#: toolWords.ts, does not have yet), each with a why. v1.358.0 (integrate, on
+#: purpose): EMPTY — the card gained write_document, excel_edit and
+#: generate_media, so both sides now hold the same table entry for entry.
+DESKTOP_AHEAD: dict[str, str] = {}
 
 
 # --------------------------------------------------------------------------- #

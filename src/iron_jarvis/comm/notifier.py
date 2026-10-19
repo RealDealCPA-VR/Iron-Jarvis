@@ -163,8 +163,10 @@ def _clip(text: str, limit: int = _SUMMARY_MAX) -> str:
 def _plain_summary(summary: Any) -> str:
     """A run's model-written summary as plain words on one line (v1.358.0,
     lane 8A): "# Final Report ## What happened …" reaches no phone line —
-    the Schedules row's and the bell's rule (``run_outcome.plain_text``, the
-    dashboard's ``lib/plainText.summaryLine`` twin). Never raises."""
+    ``run_outcome.plain_text``, the rule the Schedules row's detail is
+    written with. Not an exact twin of the bell's ``lib/plainText.
+    summaryLine``: Python drops heading words when other text exists, the
+    bell keeps them — both are plain words, never markdown. Never raises."""
     if not isinstance(summary, str):
         return ""
     try:

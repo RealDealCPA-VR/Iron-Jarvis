@@ -35,7 +35,7 @@ def _curator(d):
     if cur is None:
         raise HTTPException(
             status_code=503,
-            detail="the skill curator is not available on this daemon — restart it",
+            detail="The skill tidy-up is not available right now. Restart Iron Jarvis to bring it back.",
         )
     return cur
 

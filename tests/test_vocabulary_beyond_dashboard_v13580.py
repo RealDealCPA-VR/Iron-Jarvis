@@ -45,6 +45,16 @@ PY_FILES = (
     SRC / "scheduling" / "run_outcome.py",
     SRC / "comm" / "notifier.py",
     SRC / "agents" / "task_door.py",
+    # v1.358.0 (integrate): the reworded 503s ("… is not available right
+    # now. Restart Iron Jarvis …", never "this daemon"), the Pixio key
+    # sentences and the parked-workflow store. routes/assignments.py is NOT
+    # here yet: its refusals still say "assignment"/"job" (a later wave).
+    SRC / "scheduling" / "parked_runs.py",
+    SRC / "daemon" / "routes" / "coach.py",
+    SRC / "daemon" / "routes" / "grants.py",
+    SRC / "daemon" / "routes" / "skills_curator.py",
+    SRC / "daemon" / "routes" / "profile_share.py",
+    SRC / "media" / "pixio_http.py",
 )
 
 #: Calls whose arguments are never shown to a person.

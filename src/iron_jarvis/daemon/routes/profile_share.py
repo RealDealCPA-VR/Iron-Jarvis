@@ -42,7 +42,7 @@ def register(app: FastAPI, d) -> None:
     def _svc() -> _share.ProfileShare:
         svc = getattr(d.platform, "profile_share", None)
         if svc is None:
-            raise HTTPException(status_code=503, detail="Sharing your profile is not available in this daemon.")
+            raise HTTPException(status_code=503, detail="Sharing your profile is not available right now. Restart Iron Jarvis to bring it back.")
         return svc
 
     def _spec(cli: str) -> _share.CliSpec:

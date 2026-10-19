@@ -257,7 +257,8 @@ def app_states(
 ) -> list[dict[str, Any]]:
     """One row per named app (and named CLI): ``{id, name, state, tools,
     needs, note}`` where ``state`` is ``connected`` / ``not_working`` /
-    ``off`` (v1.356.0: saved, but the user switched it off) /
+    ``off`` (v1.356.0: saved, but the user switched it off) / ``signin``
+    (v1.358.0: saved and loaded, its sign-in on this PC unfinished) /
     ``not_connected`` (CLIs: ``signed_in`` / ``signed_out`` /
     ``not_installed`` / ``unknown``). BLOCKING (the connections table, the
     memory bases): call it OFF the loop. Never raises; a row it cannot read
@@ -298,6 +299,16 @@ def app_states(
                     row["state"] = "connected" if n else "not_working"
                     if not n:
                         row["note"] = _load_reason(platform, cid)
+                    else:
+                        # v1.358.0 (integrate, lane 8D review): an app that
+                        # signs in on this PC reads as its Directory card
+                        # does — "Sign in to Microsoft to finish" — until its
+                        # own check says signed in; never "connected" here
+                        # while the card says otherwise.
+                        unfinished = _signin_unfinished(platform, conn, cid)
+                        if unfinished:
+                            row["state"] = "signin"
+                            row["note"] = unfinished
                 else:
                     row["needs"] = conn.needs
             else:
@@ -345,6 +356,32 @@ def _switched_off(platform: Any, cid: str) -> bool:
         return cfg is not None and not pack_on(cfg)
     except Exception:  # noqa: BLE001
         return False
+
+
+def _signin_unfinished(platform: Any, conn: Any, cid: str) -> str:
+    """The card's own line ("Sign in to Microsoft to finish.") while an app
+    that signs in on this PC has not; "" once signed in, or for any other
+    app (v1.358.0, integrate). The Directory's reading
+    (``connectors.service._signin_state``): ``signin_seen.seen`` is cached
+    and never blocks; an unsure answer is "not signed in yet"."""
+    if not getattr(conn, "signin_args", None):
+        return ""
+    try:
+        from . import signin_seen
+        from .service import _configured_name, _server_cfg, signin_identity, signin_needed_line
+    except Exception:  # noqa: BLE001
+        return ""
+    try:
+        server = _configured_name(platform, cid) or cid
+        verdict = signin_seen.seen(platform, server, signin_identity(_server_cfg(platform, server)))
+    except Exception:  # noqa: BLE001 — unsure is "not signed in yet"
+        verdict = None
+    if verdict is not None and getattr(verdict, "signed_in", False):
+        return ""
+    try:
+        return signin_needed_line(conn)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _load_reason(platform: Any, cid: str) -> str:
@@ -435,6 +472,15 @@ def apps_section(rows: list[dict[str, Any]]) -> str:
                 line = (
                     f"- {name}: set up, but not working right now{why}. If answering"
                     f" needs {name}, say so and point to {APPS_PLACE} to fix it."
+                )
+            elif state == "signin":
+                # v1.358.0 (integrate): saved and loaded, sign-in unfinished —
+                # the Directory card's own words and press.
+                why = str(r.get("note") or "").strip()
+                line = (
+                    f"- {name}: saved, but not signed in yet" + (f" ({why.rstrip('.')})" if why else "")
+                    + f". If answering needs {name}, say so and point to its Sign in"
+                    f" button on its card in {APPS_PLACE}."
                 )
             elif state == "off":
                 line = (

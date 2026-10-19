@@ -789,7 +789,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               {c.connect_via === "mcp"
                 ? `${c.tools_loaded} tool${c.tools_loaded === 1 ? "" : "s"} loaded`
                 : c.connect_via === "memory"
-                  ? "Grounds chat & agents — toggle it on in the chat + menu"
+                  ? "Grounds chat & agents — turn it on in a chat's Tools menu"
                   : c.account
                     ? `Signed in as ${c.account}`
                     : "Ready to use"}
@@ -799,7 +799,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               (it was only a tooltip on the page's Back to chat door). */}
           {c.connect_via === "mcp" && healthy && (
             <p data-testid={`connector-chat-hint-${c.id}`} className="text-[11px] text-zinc-500">
-              Turn it on in a chat with + › Connections
+              Turn it on in a chat with Tools › Connections
             </p>
           )}
           {/* v1.356.0 (G60): an app that signs in on this PC (Microsoft 365):
@@ -1411,7 +1411,7 @@ export default function MarketplacePage() {
             <Link
               href="/chat"
               className="btn-ghost px-3 py-1.5 text-[13px]"
-              title="Back to the conversation — new connections appear in the + menu"
+              title="Back to the conversation — new connections appear in its Tools menu"
             >
               <ArrowLeft size={14} /> Back to chat
             </Link>

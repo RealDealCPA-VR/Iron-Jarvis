@@ -138,7 +138,9 @@ export function toolNamesLine(names: readonly string[] | null | undefined, shown
 }
 
 /** Where a pack's tools are switched on for a conversation. */
-export const USE_IN_CHAT = "Use it in a chat: + › Connections";
+// v1.358.0 (integrate): the chat's Connections switches sit in the Tools
+// menu (the wrench chip), never a "+" menu.
+export const USE_IN_CHAT = "Use it in a chat: Tools › Connections";
 
 /** The tail of the not-started sentence (lib/packStartWords) that the add
  *  area turns into a button that goes to the row. */

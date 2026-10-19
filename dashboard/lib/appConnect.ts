@@ -4,7 +4,7 @@
  *
  * Before: the secure card said "<label> saved securely" and stopped. Nothing
  * said whether the app started, the next message still had no GitHub tools
- * (the chat's "+ › Connections" switch for it was off), and the question the
+ * (the chat's "Tools › Connections" switch for it was off), and the question the
  * user had asked was left behind.
  *
  * Now the daemon's answer to the card's save (POST /config/secret) carries,

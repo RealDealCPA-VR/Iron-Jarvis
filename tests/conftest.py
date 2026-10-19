@@ -108,6 +108,28 @@ def _isolate_local_ollama_probe():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _isolate_local_model_servers_probe():
+    """No test asks a REAL LM Studio (localhost:1234) or llama.cpp
+    (localhost:8080) on this machine (v1.358.0, lane 8D).
+
+    ``providers/local_servers_seen`` is read by ``GET /health``, ``GET
+    /onboarding``, ``/connections/local-servers`` and the use-model door; its
+    answer is process-wide. On a dev box with LM Studio running, a bare test
+    would see that machine's models and exact ``usable == []`` pins would go
+    red by test order. The probe now reads "not answering" for the whole
+    session, which is exactly what CI sees. Tests that exercise the probe set
+    ``local_servers_seen.PROBE_FORCED_OFF`` back to False via monkeypatch."""
+    from iron_jarvis.providers import local_servers_seen
+
+    original = local_servers_seen.PROBE_FORCED_OFF
+    local_servers_seen.PROBE_FORCED_OFF = True
+    try:
+        yield
+    finally:
+        local_servers_seen.PROBE_FORCED_OFF = original
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_subscription_cli_detection():
     """Keep Claude/OpenAI subscription INHERITANCE out of bare tests.
 

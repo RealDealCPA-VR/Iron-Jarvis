@@ -425,7 +425,10 @@ def test_generate_without_image_model_is_an_honest_409(tmp_path, monkeypatch):
         assert r.status_code == 409
         detail = r.json()["detail"]
         # Names exactly what is missing and how to fix it — no placeholder.
-        assert "pixio" in detail and "PIXIO_API_KEY" in detail
+        # v1.358.0 (integrate, G41, on purpose): where to add the key, never
+        # the vault name or the environment variable.
+        assert "Pixio" in detail and "Settings › Connections" in detail
+        assert "PIXIO_API_KEY" not in detail and "secret" not in detail
         assert client.get("/agents/builder/avatar").status_code == 404
         # And nothing landed on disk.
         avatars = _avatars_dir(tmp_path)

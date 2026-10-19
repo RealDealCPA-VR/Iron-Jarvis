@@ -103,8 +103,9 @@ export function addThisComputerSteps(caller: string): string {
   const who = caller.trim() || "the other computer";
   return (
     `On ${who}: Agents, Your team, New & manage, Connect a remote agent. Give this computer a name ` +
-    "(for example desk), choose http-task (task API), paste this address as the Base " +
-    "URL and the token as the secret. Then “@desk” in its chat hands this " +
+    // v1.358.0 (integrate, G61): the form picks the kind for a door address.
+    "(for example desk), paste this address as the Base URL (the task API, http-task, is " +
+    "picked for you) and the token as the secret. Then “@desk” in its chat hands this " +
     "computer the task, and the answer comes back to that chat."
   );
 }

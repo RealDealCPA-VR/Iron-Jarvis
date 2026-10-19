@@ -585,7 +585,10 @@ async def test_goal_schedule_survives_a_deleted_goal_as_an_honest_skip(platform)
     # it read "ok" and a green "Done". Still not an error (not a malfunction).
     assert row.last_status == "skipped"
     assert "did not run" in row.last_detail
-    assert "unknown goal" in row.last_detail
+    # v1.358.0 (integrate, on purpose): the row says what the engine's
+    # "unknown goal '<id>'" means, never the internal id.
+    assert "no longer exists" in row.last_detail
+    assert "goal_deleted" not in row.last_detail
 
     # The loop is genuinely alive: the same row fires again without drama.
     await platform.scheduler.run_now("goal-orphan")

@@ -56,7 +56,7 @@ import { AgentRunReceipt } from "@/components/chat/AgentRunReceipt";
 import { AgentRunSettled } from "@/components/chat/AgentRunRow";
 import { LiveToolRows, WorkLine, workSummary } from "@/components/chat/WorkLine";
 import { AGENT_TOOL_NAMES, toolDidWords, toolFailedWords, toolStepLine } from "@/lib/runWords";
-import { stepTarget, toolKind } from "@/lib/workTarget";
+import { KIND_OF_TOOLS, stepTarget, toolKind } from "@/lib/workTarget";
 import { stepCounts, stepPhrase, stepPhraseText } from "@/lib/stepWords";
 import { REST_CALL_TOOL, appNameWords, serviceNameWords, toolWords } from "@/lib/toolWords";
 import { pairRunReceipts, stampCarriesReceipt } from "@/lib/runReceipt";
@@ -307,6 +307,11 @@ describe("(2) the run's log says tools in words: TypeScript == Python, one fixtu
   it("every agent-side built-in the card words is covered by the fixture (or worded by Python's own table)", () => {
     const covered = new Set([...Object.keys(FIX.lines), ...FIX.python_own_words]);
     for (const name of AGENT_TOOL_NAMES) expect(covered.has(name), name).toBe(true);
+    // v1.358.0 (integrate): the work line's kinds too — a KIND_OF built-in
+    // that mission._STEP_KIND does not word would read "used <name>" in
+    // Python while the card says "read 1 file".
+    expect(KIND_OF_TOOLS.length).toBeGreaterThan(20); // anti-vacuity
+    for (const name of KIND_OF_TOOLS) expect(covered.has(name), name).toBe(true);
   });
 
   it("the audit's own examples: 'searched your chats', an app as '<app>: <action>'", () => {

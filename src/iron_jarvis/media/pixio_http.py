@@ -34,9 +34,15 @@ HttpUpload = Callable[[str, "dict[str, str]", bytes, str, str], Any]
 KeyResolver = Callable[[], "str | None"]
 
 BASE_URL = "https://beta.pixio.myapps.ai"
+#: v1.358.0 (integrate, G41): where a person fixes it — the media
+#: refusals' place (``failure_words.ACCOUNTS_PLACE``, pinned equal) — never a
+#: vault name or an environment variable a new user cannot act on.
+KEY_PLACE = "Settings › Connections"
 MISSING_KEY_ERROR = (
-    "Pixio API key not configured — add a secret named 'pixio' (Secrets page) "
-    "or set PIXIO_API_KEY"
+    f"Pixio isn't connected yet. Add your Pixio key in {KEY_PLACE}, then try again."
+)
+REJECTED_KEY_ERROR = (
+    f"Pixio didn't accept your key. Update your Pixio key in {KEY_PLACE}, then try again."
 )
 
 #: A plausible file extension: dot + up to 8 alphanumerics (``.png``, ``.mp4``).
@@ -99,7 +105,7 @@ def http_error(status: int, payload: Any) -> str | None:
     text = detail(payload)
     suffix = f": {text}" if text else ""
     if status == 401:
-        return "Pixio rejected the API key (401) — update the 'pixio' secret or PIXIO_API_KEY"
+        return REJECTED_KEY_ERROR
     if status == 402:
         return f"Pixio: insufficient credits (402) — top up the account before generating{suffix}"
     if status == 404:

@@ -196,8 +196,10 @@ _AVATAR_MAX_DIM = 512
 _PREVIEW_CHARS = 140
 
 _NO_IMAGE_MODEL = (
-    "no image model is connected — add a 'pixio' secret (Secrets page) or set "
-    "PIXIO_API_KEY to enable portrait generation"
+    # v1.358.0 (integrate, G41): where a person adds the key, never a vault
+    # name or an environment variable.
+    "no image model is connected — add your Pixio key in Settings › Connections "
+    "to make a portrait"
 )
 
 _AVATAR_PROMPT = (

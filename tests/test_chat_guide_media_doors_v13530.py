@@ -585,7 +585,8 @@ def test_a_refusal_the_registry_made_leaves_no_button_stream_lane(app):
     assert "app_connect" not in model.tools[0], "anti-vacuity: app_connect was not armed"
     done = _done(frames)
     # v1.358.0 (G41, on purpose): the built-in reads in tool words, not its id.
-    assert "Jarvis couldn't use app connect (not turned on for this chat)" in done["reply"], done["reply"]
+    # v1.358.0 (integrate, on purpose): app_connect has the card's words now.
+    assert "Jarvis couldn't connect an app (not turned on for this chat)" in done["reply"], done["reply"]
     assert done["doors"] == []
 
 
@@ -598,7 +599,8 @@ def test_a_refusal_the_registry_made_leaves_no_button_post_lane(app):
     res = asyncio.run(run_chat_turn(platform, {}, body))
     assert "app_connect" not in platform.router.tools[0], "anti-vacuity: app_connect was not armed"
     # v1.358.0 (G41, on purpose): the built-in reads in tool words, not its id.
-    assert "Jarvis couldn't use app connect (not turned on for this chat)" in res["reply"], res["reply"]
+    # v1.358.0 (integrate, on purpose): app_connect has the card's words now.
+    assert "Jarvis couldn't connect an app (not turned on for this chat)" in res["reply"], res["reply"]
     assert res["doors"] == []
 
 
@@ -646,7 +648,7 @@ def test_an_app_tools_refusal_reads_in_the_users_words():
     out = refusal_footnotes([("mcp__github__create_issue", "not armed")])
     assert out == (
         "\n\n_Note: GitHub › create issue could not run (not turned on for this chat)"
-        " — turn GitHub on in + › Connections._"
+        " — turn GitHub on in the chat's Tools menu › Connections._"
     )
     assert "mcp__" not in out
     denied = refusal_footnotes([("mcp__github__create_issue", "permission denied")])
@@ -696,7 +698,8 @@ def test_an_unarmed_app_tool_in_a_real_turn_is_footnoted_in_app_words(app):
     reply = _done(frames)["reply"]
     assert github.calls == [], "anti-vacuity: the unarmed tool never ran"
     assert "GitHub › create issue could not run (not turned on for this chat)" in reply, reply
-    assert "turn GitHub on in + › Connections" in reply
+    # v1.358.0 (integrate, on purpose): the switch is in the Tools menu.
+    assert "turn GitHub on in the chat's Tools menu › Connections" in reply
     assert "mcp__github__create_issue could not run" not in reply
 
 

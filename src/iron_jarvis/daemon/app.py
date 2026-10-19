@@ -2160,6 +2160,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 row["address_saved"] = bool(
                     (getattr(platform.config, "ollama_base_url", None) or "").strip()
                 )
+            # v1.358.0 (lane 8D): the custom row names LM Studio / llama.cpp
+            # answering on THIS PC while the model-server slot is free -- what
+            # ONE press (POST /onboarding/use-model {provider: key}) connects
+            # and chooses, so the chat's connect doors, the first-run wizard
+            # and the suggestion chip offer them where they offer a detected
+            # Ollama. The cached probe only (providers/local_servers_seen:
+            # never blocks, a stale answer refreshes behind this read).
+            if row.get("provider") == "custom":
+                try:
+                    from ..providers import local_servers_seen
+
+                    row["detected_servers"] = local_servers_seen.health_field(platform.config)
+                except Exception:  # noqa: BLE001 — health must never fail
+                    row["detected_servers"] = []
         return rows
 
     # --- Chat (direct conversation — frontier-chat parity) -----------------

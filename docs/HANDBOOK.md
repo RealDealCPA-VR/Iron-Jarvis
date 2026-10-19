@@ -452,9 +452,10 @@ Failed and its card says **Stopped** (grey, not red).
   on the session's outcome (*needs you*) — the bell does not keep a record
   of asks that already expired.
 - **The verdict is separate from the status** (v1.227.0): a finished run also
-  carries an **outcome** — *Done*, *Done · part failed* (a call that changes
-  files or state failed), or *Done · needs you* (an ask was never answered;
-  the words since v1.352.0). The session header, the sessions list, the Session board card and
+  carries an **outcome** — *Done*, *Part failed* (a call that changes
+  files or state failed), or *Needs you* (an ask was never answered; the
+  words since v1.358.0 — they read "Done · part failed" / "Done · needs you"
+  from v1.352.0). The session header, the sessions list, the Session board card and
   a project's recent runs show it as an amber chip instead of a green badge,
   and the result card headlines "Finished — N calls were never approved".
   The Worklist panel offers **Re-run the N failed items**, which re-opens
@@ -1333,15 +1334,16 @@ conversation is one you are having from
 your phone — on your phone, named ("hermes: Done — 3 files."). **Rotate
 token** mints a new one and the old stops working; **Turn off message-back**
 forgets it, and disabling the agent silences it in both directions. One
-honest limit: out of the box the daemon listens on this machine only
+honest limit: out of the box Iron Jarvis listens on this machine only
 (127.0.0.1) and answers only requests addressed to it, so a remote agent
 running on THIS machine can message back as is, while one on another
 machine cannot until you choose to open a door — the token box says so and
-names the two settings: start the daemon listening on your LAN address
-(`ironjarvis serve --host <your LAN IP>`) with
-`IRONJARVIS_HOST_ALLOWLIST=<your LAN IP>` set, or put a tunnel or reverse
-proxy in front of 127.0.0.1:8787 and paste its address as the inbound URL.
-Nothing opens on its own. Files a remote sends land under the app's remote inbox folder,
+names the two ways: turn on **Let other computers on my network reach this
+Iron Jarvis** in Settings › Connections and restart Iron Jarvis (since
+v1.358.0; Windows may ask once to allow it on your network, and every
+request still needs its token), or put a tunnel or reverse proxy in front of
+127.0.0.1:8787 and paste its address as the inbound URL. Nothing opens on
+its own. Files a remote sends land under the app's remote inbox folder,
 never in a project it was not given, with the same name, size and host checks
 its earlier file hand-backs had. From your phone (Telegram, Slack, or any
 chat-enabled channel), "@hermes what is the ledger total?" goes to hermes as a
@@ -1689,7 +1691,8 @@ now it stops while you are not looking and catches up the moment you come back.
    while the tool was running — its effect may have landed", so the ledger
    never claims nothing ran (a call to a tool that does not exist is recorded
    too). A tool call inside an agent run also has a deadline (Settings →
-   Automation, "Tool call deadline", default 600 s): a wedged tool is stopped,
+   Automation, "Time limit for one step (seconds)" — "Tool call deadline"
+   before v1.358.0 — default 600 s): a wedged tool is stopped,
    recorded as "did not finish within N s — it was stopped", and the run
    continues; a shell command that overruns its timeout is killed together
    with everything it started; and a model that streams more than 200,000
@@ -1892,6 +1895,87 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Every screen tells one story, chat picks the right tools, another computer by a switch (v1.358.0)
+
+What a run did now reads the same on every screen, chat reaches the web and
+the right app tools again, and another computer can reach this one through a
+setting you turn on. The look of the app is the same.
+
+- **The outcome comes first, in the same words everywhere.**
+  - A Schedules row starts with how the last run went, and the word itself
+    is coloured when it matters: **Needs you**, **Part failed**, **Failed**,
+    **Skipped**. The note it sends, **Run now**, the bell, the Sessions list,
+    the board and the run's own page use the same words.
+  - A scheduled workflow waiting for your answer reads **Needs you**. Once
+    you answer and it finishes, its row says so ("Your workflow “Weekly
+    report” finished after your answer.") and the home line stops counting
+    it.
+  - A goal that did not run reads **Skipped** and says why. A run that failed
+    after nobody answered its question reads **Failed**, like its own page,
+    and starts with "it asked for your OK and nobody answered in time".
+  - An objective that finished with part of it failed is never announced as
+    done, and the objectives list says **Part failed** or **Needs you**.
+  - The bell shows a report's first words plainly (never "# Final Report"),
+    and a browser task that stopped to ask reads "Your browser task is
+    waiting for your OK", not as a failure. A failure that gave no reason
+    says "Iron Jarvis kept the details in its log; Status shows how the app
+    is doing."
+- **One receipt for a helper's run in chat.** The row above the reply says
+  how it ended, what it did, the model, the folder and, folded, **Step by
+  step**. The reply under it shows only what the row does not: the files, any
+  warning, what went wrong, and **Try again** / **Revert** / **Stop**. A reply
+  that was cut off says "Cut off after 2.1 s", never a check mark. A call to
+  one of your web services reads "Called crm". The second press of
+  **Delete them all?** on Sessions is red again, and a failure in a Build
+  terminal's chat folds its details under **Details**.
+- **Chat picks the right tools.**
+  - Research about an app ("look up the Stripe API docs for refunds",
+    "search for Notion templates") searches the web again. A search in your
+    own data ("search my Google Drive for the lease") goes to the app, or
+    offers to connect it.
+  - An app with more than 24 tools gets the 24 that fit your message, so
+    "list my open pull requests" reaches GitHub's pull-request list. An app
+    you turned on in the chat and also named in the message still gets 24.
+  - The switches for your apps in a chat are in the **Tools** menu (the
+    wrench) › **Connections**. Every sentence now says so; it used to say
+    "+ › Connections", which is a different button.
+  - A tool that was not turned on reads in words, with where to turn it on:
+    "Jarvis couldn't save a file (not turned on for this chat) — turn on
+    Auto tools in the chat's Tools menu, then ask for it in your message."
+- **A failure names who failed.** "Claude Code didn't answer in time",
+  "The connection to Claude Code dropped mid-answer", "Codex didn't answer in
+  time", or "<the AI> couldn't finish this answer", with **Retry**. A
+  newly connected app that did not start says so and why. A Pixio key that
+  is missing or refused says "Update your Pixio key in Settings ›
+  Connections, then try again."
+- **The Directory and Connections agree.** Built-in tools are not offered
+  again with a Connect button; their separate versions sit under **Separate
+  versions of built-in tools**. "N connected" counts only apps that work,
+  with switched-off ones and ones that need attention said apart. Microsoft
+  365 reads **Sign in to Microsoft to finish** until you sign in, on its card
+  and in chat. An app key (Pixio) is tested when you save it. Settings ›
+  Secrets names a key "GitHub: GitHub personal access token". LM Studio and
+  llama.cpp running on this PC are offered with one press wherever Ollama is
+  (the chat's start, the first-run steps, the suggestion chip, the Overview,
+  Accounts), and **Re-detect** looks for them again at once.
+- **The desktop speaks plainly.** The tray, Windows notifications and the
+  startup message say **Iron Jarvis**. A question waiting while the window
+  is closed uses the approval card's words and names the task ("save a file
+  for “Draft the Q3 letter”").
+- **Another computer can reach this one, on purpose.** Settings ›
+  Connections › **Let other computers on my network reach this Iron Jarvis**
+  is off until you turn it on (from chat it always asks), and works after a
+  restart (Settings › System › Maintenance › **Restart Iron Jarvis**).
+  Windows may ask once to allow it on your network. Every request still
+  needs this computer's token. The **Another computer running Jarvis** tile
+  links to it with **Open the setting**, and **Connect a remote agent** picks
+  the task API for you when the address is another Iron Jarvis.
+- **Plainer Settings names.** "How the assistant talks by default", "Use
+  several accounts", "Time limit for one step (seconds)", "Work on my goals by
+  itself", "Most model use in a day (tokens)", "Most actions it may take in a
+  day" and "Follow a project folder's own instructions in chat". Searching
+  the old names still finds them.
+
 ## Another computer as a teammate, your web services from chat, and one set of words (v1.357.0)
 
 You can now hand a task to Iron Jarvis on another computer, let chat use a
@@ -1956,7 +2040,7 @@ screen. The look of the app is the same.
   **Emergency stop** names what it stops: schedules, goals, rules, phone
   tasks, queued tasks and tasks from another computer.
 - **An app you switched off stays in its chats, marked Off.** A chat that had
-  an app turned on still lists it under + › Connections after you switch the
+  an app turned on still lists it under Tools › Connections after you switch the
   app off: **Off**, with a line saying where to turn it on. It does nothing in
   that chat meanwhile and is back as soon as you switch the app on. **Remove
   from this chat** takes it out.
@@ -2149,7 +2233,7 @@ The look of the app is the same.
   switched off in its app is listed unticked as "turned off in Claude
   Desktop"; one you already have reads "already connected". After **Add
   selected**, it names the tools that are ready and says "Use it in a chat:
-  + › Connections"; one that didn't start offers **Open its row** to retry
+  Tools › Connections"; one that didn't start offers **Open its row** to retry
   it. The paste box is now **Paste from a website or README (advanced)**.
   The Directory's "Found 3 tools in …" line opens this same door, and every
   **Add a tool** link lands right on it.
@@ -2299,8 +2383,9 @@ it, where it ran, and what it wants from you. The chat looks the same.
   never "local", the same as its replies' receipt. If you picked a remote
   agent for a hand-off that has to run here, the line says so: "Running on
   this PC. Reach hermes with @hermes."
-- **The same status words everywhere:** Working, Queued, Done, Done · needs
-  you, Done · part failed, Failed, and a grey Stopped. The Session board's
+- **The same status words everywhere:** Working, Queued, Done, Needs you,
+  Part failed, Failed, and a grey Stopped (since v1.358.0; "Done · needs
+  you" / "Done · part failed" before). The Session board's
   columns are Working, Waiting for you, Done and Failed; a stopped card says
   Stopped, and an empty column says so in a sentence. A project's Schedules
   list uses the Schedules page's words.
@@ -2351,12 +2436,13 @@ words everywhere. The chat looks the same.
   you", one where a step failed reads "finished · part failed", and a failed
   run says why in a plain sentence ("The run failed: the model endpoint is
   not answering"), never a code name. The note it sends says the same thing
-  ("finished, but it needs you"), and **Run now** answers in the same words.
+  ("needs you" since v1.358.0), and **Run now** answers in the same words.
   "open session" still takes you to the run. Since v1.352.0 both lists use
-  the app's one set of status words: **Done**, **Done · needs you**, **Done
-  · part failed**, **Failed: <why>**, a grey **Stopped** and **Not run yet**
-  (they read "✓ ok", "finished · needs you" and "finished · part failed"
-  before).
+  the app's one set of status words — since v1.358.0 **Done**, **Needs
+  you**, **Part failed**, **Failed: <why>**, a grey **Stopped** and **Not
+  run yet** (they read "✓ ok", "finished · needs you" and "finished · part
+  failed" before v1.352.0, and "Done · needs you" / "Done · part failed"
+  until v1.358.0).
 - **You see it without going to look.** The Schedules light on the Status
   map turns amber when a schedule failed or fell short last time, and the
   line above the chat box offers "1 scheduled job needs a look · Open".
@@ -2396,7 +2482,7 @@ words everywhere. The chat looks the same.
   in green only when it is really working; one that isn't reads "Needs
   attention" with the reason and Retry. Adding or editing a tool pack that
   didn't start says so in amber, with the reason, instead of a green note.
-  A working app's card says where to turn it on: "+ › Connections" in a chat.
+  A working app's card says where to turn it on: "Tools › Connections" in a chat.
 - **A mission that partly failed says so:** "Finished, but part of it
   failed", in amber, and the bell uses the same words.
 - **Open on a chat's work folder opens the folder** in File Explorer.

@@ -2385,7 +2385,11 @@ def app_tool_words(tool: str) -> "tuple[str, str] | None":
             return None
         if any(ord(c) < 0x20 or ord(c) == 0x7F for c in remote):
             return None
-        app = pack
+        # v1.358.0 (integrate): an uncatalogued pack's name reads with spaces
+        # ("google_drive" -> "google drive"), lib/toolWords.appNameWords' rule,
+        # so the footnote and the work line / approval card say one name.
+        own = " ".join(pack.replace("_", " ").split()) or pack
+        app = own
         try:
             from ..connectors.catalog import get_connector
 
@@ -2393,7 +2397,7 @@ def app_tool_words(tool: str) -> "tuple[str, str] | None":
             if conn is not None and str(getattr(conn, "name", "") or "").strip():
                 app = str(conn.name).strip()
         except Exception:  # noqa: BLE001 — the pack's own name is a fine label
-            app = pack
+            app = own
         spaced = _re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", remote)
         words = [
             w.lower() if _re.fullmatch(r"[A-Z][a-z]+", w) else w
@@ -2461,7 +2465,8 @@ def refusal_footnotes(refused: "list[tuple[str, str]]") -> str:
     v1.353.0 (G41): a connected app's tool is named in the user's words —
     ``GitHub › create issue``, never ``mcp__github__create_issue`` — and a
     "not armed" refusal of one says where to turn it on (the chat's
-    ``+ › Connections`` switch for that app).
+    Tools menu › Connections switch for that app; v1.358.0 named the menu
+    right, it read "+ › Connections").
 
     v1.358.0 (G41, the built-in half): a BUILT-IN tool is named by what it
     does ("_Note: Jarvis couldn't save a file (not turned on for this
@@ -2485,7 +2490,7 @@ def refusal_footnotes(refused: "list[tuple[str, str]]") -> str:
             out += f"\n\n_Note: Jarvis couldn't {does} ({words}){fix}._"
             continue
         app, tool_words = parts
-        fix = f" — turn {app} on in + › Connections" if label == "not armed" else ""
+        fix = f" — turn {app} on in the chat's Tools menu › Connections" if label == "not armed" else ""
         out += f"\n\n_Note: {app} › {tool_words} could not run ({words}){fix}._"
     return out
 
@@ -3242,7 +3247,16 @@ def named_app_ask_tools(
                 room = _MAX_CONNECTOR_TOOLS - len(add)
                 if room <= 0:
                     break
-                fresh = [n for n in live.get(cid) or [] if n not in have and n not in add]
+                # v1.358.0 (integrate): the cap is PER APP, counting what is
+                # already armed — an app the "+" toggle already armed (its 24
+                # most relevant tools) gains no second 24 here because the
+                # message also names it (it read 44 GitHub tools in this lane
+                # and 24 in the POST lane for the same message).
+                tools_of_app = list(live.get(cid) or [])
+                room = min(room, _MAX_CONNECTOR_TOOLS - sum(1 for n in tools_of_app if n in have))
+                if room <= 0:
+                    continue
+                fresh = [n for n in tools_of_app if n not in have and n not in add]
                 if registry is not None:
                     add += _pick_connector_tools(registry, fresh, text, room)
                 else:
@@ -5038,8 +5052,10 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=()) -
             f" succeeded this turn — so {which} did not change."
         )
     return (
-        f"\n\n_Note: nothing was written to disk this turn.{said} Ask again and"
-        f" arm a document tool (the “+” menu, or keep Auto-tools on)._"
+        # v1.358.0 (integrate): the place is the chat's Tools menu (the wrench
+        # chip); it said "the “+” menu", a different button.
+        f"\n\n_Note: nothing was written to disk this turn.{said} Ask again with"
+        f" Auto tools on, or a document tool turned on, in the chat's Tools menu._"
     )
 
 
@@ -5128,14 +5144,14 @@ def _creation_honesty_note(body, armed: list[str], tools_used: list[str]) -> str
     if set(armed) & _FILE_WRITING_TOOLS:
         return (
             "\n\n_Note: no file was actually written this turn — the model "
-            "answered without using its document tools. Ask again (e.g. "
-            "“use write_document”), or switch to a model that is stronger "
+            "answered without using its document tools. Ask again (for example "
+            "“save it as a document”), or switch to a model that is stronger "
             "at tool use._"
         )
     return (
-        "\n\n_Note: no file was actually created this turn — no document-"
-        "writing tool was armed. Arm write_document via the “+” menu (or "
-        "keep Auto-tools on) and ask again._"
+        "\n\n_Note: no file was actually created this turn — no tool that "
+        "writes documents was turned on. Turn on Auto tools in the chat's Tools "
+        "menu and ask again._"
     )
 
 

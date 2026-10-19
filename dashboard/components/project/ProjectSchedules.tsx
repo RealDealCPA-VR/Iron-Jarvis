@@ -148,7 +148,7 @@ export function ProjectSchedules({
                   amber here too, and a detail is plain words.
                   v1.352.0 (G17): those words are the ONE status table's
                   (lib/statusWords via scheduleStatusWords) — "Done", "Failed",
-                  "Done · needs you", "Stopped" in slate, "Not run yet" — so a
+                  "Needs you" (v1.358.0), "Stopped" in slate, "Not run yet" — so a
                   last run reads the same here and on the Schedules page. */}
               {s.last_status === "ok" ? (
                 <span className={`text-[11px] ${STATUS_INK[scheduleStatusWords("ok").tone]}`}>

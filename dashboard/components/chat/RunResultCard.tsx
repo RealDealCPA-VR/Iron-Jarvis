@@ -128,7 +128,7 @@ export function runEnd(result: Pick<RunResult, "status" | "summary">): RunEnd {
  *  v1.358.0 (lane 8C): the words are the shared status table's
  *  (lib/statusWords), the same every badge, the settled row and the Sessions
  *  list say: "Done" (was "Task complete"), "Failed" (was "Task failed"),
- *  "Stopped", "Done · needs you", "Done · part failed". An ask that expired
+ *  "Stopped", "Needs you", "Part failed" (lane 8A's table words). An ask that expired
  *  unanswered IS "needs you" (the note below says how many calls). Two say
  *  more than any table word: "Stopped at its step limit" and "Finished — but
  *  nothing ran" (a run that only TALKED about the work earns no "Done"). */

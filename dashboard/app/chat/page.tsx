@@ -7199,7 +7199,7 @@ export default function ChatPage() {
   }
 
   /** v1.351.0 (G15): an app connected FROM this chat is ON in this chat —
-   *  the same "+" › Connections switch, only ever turned on (never off),
+   *  the same Tools › Connections switch, only ever turned on (never off),
    *  saved with the thread setup like a toggle. Called when an app's card is
    *  saved and when a turn's `app_connect` succeeded (an app that was
    *  already connected: the tool says "It is on for this chat now"). */

@@ -56,6 +56,7 @@ from .base import (
     Quote,
 )
 from .pixio_http import (
+    MISSING_KEY_ERROR,
     HttpUpload,
     KeyResolver,
     api_call,
@@ -282,8 +283,9 @@ class PixioProvider(MediaProvider):
         if not key:
             raise MediaError(
                 "not_configured",
-                "Pixio is not connected — add a secret named 'pixio' (Settings → "
-                "Connections) or set PIXIO_API_KEY",
+                # v1.358.0 (integrate, G41): the place, never a vault name or
+                # an environment variable — the pixio_* tools' own sentence.
+                MISSING_KEY_ERROR,
             )
         return key
 

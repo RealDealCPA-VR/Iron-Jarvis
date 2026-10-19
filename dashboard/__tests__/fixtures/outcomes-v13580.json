@@ -11,8 +11,8 @@
       "case": "goal-skipped",
       "name": "goal-gone",
       "last_status": "skipped",
-      "last_detail": "The goal did not run this time: unknown goal 'goal_gone'",
-      "notice": "Schedule “goal-gone”: skipped — The goal did not run this time: unknown goal 'goal_gone'"
+      "last_detail": "The goal did not run this time: the goal it runs no longer exists (it was deleted).",
+      "notice": "Schedule “goal-gone”: skipped — The goal did not run this time: the goal it runs no longer exists (it was deleted)."
     },
     {
       "case": "failed-asked",

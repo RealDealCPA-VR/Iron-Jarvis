@@ -109,7 +109,10 @@ async def test_missing_key_is_a_clear_error_and_no_http(tmp_path):
     tool = PixioModelsTool(key_resolver=lambda: None, http=_never_called)
     res = await tool.execute({}, _ctx(tmp_path))
     assert res.ok is False
-    assert "PIXIO_API_KEY" in res.error and "pixio" in res.error
+    # v1.358.0 (integrate, G41, on purpose): where a person adds the key,
+    # never the vault name or the environment variable.
+    assert "Pixio" in res.error and "Settings › Connections" in res.error
+    assert "PIXIO_API_KEY" not in res.error and "secret" not in res.error
 
 
 # --- error mapping ----------------------------------------------------------------
