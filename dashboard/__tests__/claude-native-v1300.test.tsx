@@ -499,10 +499,13 @@ describe("the composer's model menu shows the picker's label, the 1M chip and th
     const fable = rowFor(menu, "Fable 5.1");
     expect(within(fable).getByTestId("model-credits")).toHaveTextContent("uses credits");
     expect(within(fable).queryByTestId("model-1m")).toBeNull();
-    // A null window and no credits flag: no chips at all; a row with no
-    // label keeps its raw id (today's look).
+    // A null window and no credits flag: no chips at all. v1.359.0 (lane 9B,
+    // changed on purpose): a row with no label reads in words, never its raw
+    // id ("subscription" is Claude Code's own default: "Your Claude plan"),
+    // and the raw id is the hover.
     expect(within(rowFor(menu, "Haiku 4.5")).queryByTestId("model-1m")).toBeNull();
-    expect(within(menu).getByText("subscription")).toBeInTheDocument();
+    expect(within(menu).getByText("Your Claude plan")).toHaveAttribute("title", "subscription");
+    expect(within(menu).queryByText("subscription")).toBeNull();
     expect(within(menu).getAllByTestId("model-credits")).toHaveLength(1);
     expect(within(menu).getAllByTestId("model-1m")).toHaveLength(1);
   });

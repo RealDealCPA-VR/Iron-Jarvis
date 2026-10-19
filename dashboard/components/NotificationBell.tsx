@@ -32,7 +32,7 @@ import { useEvents } from "@/lib/useEvents";
 import { usePolledApi } from "@/lib/useApi";
 import { useDesktopNotifications } from "@/lib/useDesktopNotifications";
 import type { ComputerUseStatus, IJEvent, WorkflowRun } from "@/lib/types";
-import { shortId, clockTime, formatTokens } from "@/lib/format";
+import { clockTime, formatTokens } from "@/lib/format";
 import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
 import { agentsPath, missionPath } from "@/lib/mission";
 import { MISSION_ORIGIN, sessionHref } from "@/lib/missionLinks";
@@ -889,8 +889,14 @@ function WaitingRunRow({
             </button>
           </div>
           {error && <p className="mt-1 text-[11px] text-tone-danger">{error}</p>}
-          <span className="mt-1 block font-mono text-[10px] text-zinc-600">
-            {shortId(ask.runId)} · {clockTime(ask.startedAt)}
+          {/* v1.359.0 (lane 9B): the run is named by its workflow above;
+              its id is the hover, never the visible words. */}
+          <span
+            data-testid="bell-waiting-run-when"
+            title={runLinkTitle(ask.workflow, ask.runId)}
+            className="mt-1 block font-mono text-[10px] text-zinc-600"
+          >
+            {clockTime(ask.startedAt)}
           </span>
         </div>
       </div>
@@ -1156,6 +1162,14 @@ function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
  *  what happened for a few seconds (`AgentAnsweredRow`) before it leaves. */
 type AgentAnswer = "once" | "conversation" | "deny" | "always";
 
+/** v1.359.0 (lane 9B): the hover on a link to a run: the task it is named
+ *  by (cut on the row) and the run's id, the record. The id is never the
+ *  link's visible words. */
+export function runLinkTitle(task: string, runId: string): string {
+  const what = task.trim();
+  return what ? `${what} · run ${runId}` : `Run ${runId}`;
+}
+
 /** Where a run's ask opens: its mission screen, else its session page. */
 function agentAskHref(ask: PendingAgentApproval): string | null {
   if (ask.missionId) return missionPath(ask.missionId, ask.projectId ?? "");
@@ -1232,7 +1246,22 @@ function AgentApprovalRow({
               title={ask.task}
               className="mt-0.5 truncate text-[11px] text-zinc-500"
             >
-              for: {ask.task}
+              for:{" "}
+              {ask.sessionId ? (
+                // v1.359.0 (lane 9B): the run is named by its task and this
+                // is its link; the run's id lives only in the title (it was
+                // the link's visible text, "session_job42…").
+                <Link
+                  data-testid="bell-approval-run"
+                  href={`/sessions/${encodeURIComponent(ask.sessionId)}`}
+                  title={runLinkTitle(ask.task, ask.sessionId)}
+                  className="text-accent-soft transition-colors hover:text-accent"
+                >
+                  {ask.task}
+                </Link>
+              ) : (
+                ask.task
+              )}
             </p>
           ) : null}
           {undo ? (
@@ -1303,18 +1332,27 @@ function AgentApprovalRow({
               Open the objective →
             </Link>
           ) : null}
-          <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-zinc-600">
-            {ask.sessionId ? (
+          <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-zinc-600 empty:hidden">
+            {ask.sessionId && !ask.task ? (
+              // No task to name it by: the link says what it opens, in the
+              // words the answered row uses; the id stays in the title.
               <Link
+                data-testid="bell-approval-run"
                 href={`/sessions/${encodeURIComponent(ask.sessionId)}`}
-                className="text-accent-soft transition-colors hover:text-accent"
+                title={runLinkTitle("", ask.sessionId)}
+                className="font-sans text-accent-soft transition-colors hover:text-accent"
               >
-                {shortId(ask.sessionId)}
+                Open run
               </Link>
-            ) : (
+            ) : ask.sessionId ? null : (
               "—"
             )}
-            {ask.requestedAt ? <>· {clockTime(ask.requestedAt)}</> : null}
+            {ask.requestedAt ? (
+              <>
+                {ask.sessionId && ask.task ? null : "· "}
+                {clockTime(ask.requestedAt)}
+              </>
+            ) : null}
           </span>
         </div>
       </div>
@@ -2098,8 +2136,14 @@ export function NotificationBell() {
                             <span className="block truncate text-[11px] text-zinc-500">
                               {summary}
                             </span>
-                            <span className="mt-0.5 block font-mono text-[10px] text-zinc-600">
-                              {e.session_id ? shortId(e.session_id) : "—"} · {clockTime(e.ts)}
+                            {/* v1.359.0 (lane 9B): the run's id is the
+                                hover, never the visible words. */}
+                            <span
+                              data-testid="bell-review-when"
+                              title={e.session_id ? runLinkTitle("", e.session_id) : undefined}
+                              className="mt-0.5 block font-mono text-[10px] text-zinc-600"
+                            >
+                              {clockTime(e.ts)}
                             </span>
                           </span>
                           <ArrowRight size={13} className="shrink-0 text-zinc-600" />

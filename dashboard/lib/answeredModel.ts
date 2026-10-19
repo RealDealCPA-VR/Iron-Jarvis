@@ -10,9 +10,14 @@
  * receipt keeps it in the line's title and in the expanded detail.
  *
  * No model on the route: undefined, and the receipt names the provider.
+ *
+ * v1.359.0 (lane 9B): a route whose model is the provider's own default
+ * ("subscription" under Claude Code and Codex) is answered by THAT
+ * provider: "answered by Claude Code", never "answered by subscription".
  */
 
 import { friendlyModelName } from "@/lib/friendlyModelName";
+import { isProviderDefaultModel, providerDisplay } from "@/lib/onboarding";
 
 export interface AnsweredRoute {
   provider: string;
@@ -33,5 +38,10 @@ export function answeredModelName(
   if (!route || !model) return undefined;
   const row = models.find((x) => x.provider === route.provider && x.model === model);
   const label = typeof row?.label === "string" ? row.label.trim() : "";
-  return label || friendlyModelName(model);
+  if (label) return label;
+  if (isProviderDefaultModel(model)) {
+    const who = providerDisplay(route.provider);
+    if (who && who !== route.provider) return who;
+  }
+  return friendlyModelName(model);
 }

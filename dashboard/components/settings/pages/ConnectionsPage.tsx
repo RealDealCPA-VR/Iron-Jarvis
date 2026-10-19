@@ -1670,7 +1670,10 @@ interface CliProviderInfo {
 const CLI_PROVIDERS: CliProviderInfo[] = [
   {
     provider: "claude-cli",
-    name: "Claude Code CLI",
+    // v1.359.0 (lane 9B): the product's own name, from the one provider
+    // table (lib/onboarding), as every other surface says it. The row's id
+    // and testids stay.
+    name: providerDisplay("claude-cli"),
     description: "Your Claude Max plan",
     hint: "sign in to Claude Code on this PC and it shows up here by itself",
     icon: Sparkles,
@@ -1678,7 +1681,7 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
   },
   {
     provider: "codex-cli",
-    name: "Codex CLI",
+    name: providerDisplay("codex-cli"),
     description: "Your ChatGPT plan",
     hint: "sign in to Codex on this PC and it shows up here by itself",
     icon: Bot,
@@ -1686,7 +1689,7 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
   },
   {
     provider: "grok-cli",
-    name: "Grok CLI",
+    name: providerDisplay("grok-cli"),
     description: "Your Grok subscription",
     hint: "sign in to Grok on this PC and it shows up here by itself",
     icon: Zap,
@@ -1694,7 +1697,7 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
   },
   {
     provider: "opencode-cli",
-    name: "OpenCode CLI",
+    name: providerDisplay("opencode-cli"),
     description: "Your local models only",
     hint: "point an OpenCode provider at a server on your own network",
     icon: Terminal,
@@ -2167,7 +2170,7 @@ export default function ConnectionsPage() {
         ok: true,
         text: parts.length
           ? `Rescan complete: ${parts.join("; ")}.`
-          : "Rescan complete. No local CLI providers detected. Install (and log into) the Claude, Codex, or Grok CLI and it will appear here.",
+          : "Rescan complete. Nothing found on this PC yet. Install Claude Code, Codex or the Grok CLI and sign in, and it appears here.",
       });
       reload(); // connections list
       refreshHealth(); // /health providers → the "Detected" pills below

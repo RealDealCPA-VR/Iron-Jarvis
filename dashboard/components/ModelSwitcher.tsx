@@ -7,7 +7,7 @@ import { useApi } from "@/lib/useApi";
 import { useDaemon } from "@/lib/daemon";
 import { put, post, ApiError } from "@/lib/api";
 import type { Health, ModelOption } from "@/lib/types";
-import { ModelRowChips, modelText } from "@/components/ModelRowBits";
+import { ModelRowChips, modelText, modelTitle } from "@/components/ModelRowBits";
 import { noModelChosen } from "@/lib/onboarding";
 // v1.357.0 (G76): the ONE demo name and sentence.
 import { DEMO_REPLIES, DEMO_STATE } from "@/lib/demoWords";
@@ -499,7 +499,7 @@ export function ModelSwitcher() {
         <span className="min-w-0">
           <span className="flex min-w-0 items-center gap-1.5">
             <span
-              title={m.label ? m.model : undefined}
+              title={modelTitle(m)}
               className={`block truncate font-mono text-[11px] ${
                 ok ? "text-zinc-200" : "text-zinc-500 line-through"
               }`}
@@ -607,7 +607,8 @@ export function ModelSwitcher() {
           </span>
         ) : (
           <span className="hidden max-w-[150px] truncate font-mono text-[11px] lg:inline">
-            {activeEntry?.label ? modelText(activeEntry) : activeModel}
+            {/* v1.359.0 (lane 9B): the row's own words, never "subscription". */}
+            {activeEntry ? modelText(activeEntry) : activeModel}
           </span>
         )}
         {selectedOffline && (

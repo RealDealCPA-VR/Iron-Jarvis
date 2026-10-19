@@ -211,7 +211,9 @@ describe("G33 — a signed-out Claude Code is one press from signing in", () => 
   it("CONTROL: a signed-in CLI is green with no press and no hint", async () => {
     health([{ ...CLAUDE_SIGNED_OUT, available: true, signed_in: true }]);
     render(<ConnectionsPage />);
-    await screen.findByText("Claude Code CLI");
+    // v1.359.0 (lane 9B, changed on purpose): the row is named by the
+    // product, "Claude Code", as every other surface says it.
+    await screen.findByText("Claude Code", { selector: "div" });
     expect(screen.queryByTestId("cli-sign-in-claude-cli")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Sign in/ })).toBeNull();
   });

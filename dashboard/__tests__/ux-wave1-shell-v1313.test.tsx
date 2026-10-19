@@ -495,16 +495,19 @@ describe("the model chip never names a model while replies are a scripted demo",
     await renderWithDaemon(<ModelSwitcher />);
     fireEvent.click(await trigger());
     const list = await screen.findByTestId("ij-model-list");
-    for (const id of ["claude-opus-4-8", "claude-sonnet-4-6", "gpt-5.5"]) {
+    // v1.359.0 (lane 9B, changed on purpose): an unlabelled Claude id reads
+    // in words ("Opus 4.8"), the raw id is the row's hover.
+    for (const id of ["Opus 4.8", "Sonnet 4.6", "gpt-5.5"]) {
       expect(list.textContent).toContain(id);
     }
     // The real Anthropic row stays selectable in its group…
-    expect(within(list).getByTestId("ij-model-group-anthropic").textContent).toContain("claude-opus-4-8");
+    expect(within(list).getByTestId("ij-model-group-anthropic").textContent).toContain("Opus 4.8");
     // …and nothing else claims it (RED today: a pinned "active" row reads
     // claude-opus-4-8 under the mock provider, so the id appears twice).
-    expect(within(list).getAllByText("claude-opus-4-8")).toHaveLength(1);
+    expect(within(list).getAllByText("Opus 4.8")).toHaveLength(1);
+    expect(within(list).getByText("Opus 4.8")).toHaveAttribute("title", "claude-opus-4-8");
     const pinned = within(list).queryByTestId("ij-active-model-row");
-    if (pinned) expect(pinned.textContent).not.toContain("claude-opus-4-8");
+    if (pinned) expect(pinned.textContent).not.toContain("Opus 4.8");
   });
 
   it("a pick flips the chip at once (optimistic), with no wait for /health", async () => {
@@ -514,14 +517,15 @@ describe("the model chip never names a model while replies are a scripted demo",
     expect(btn.textContent).toContain("Demo replies"); // RED today
     fireEvent.click(btn);
     const list = await screen.findByTestId("ij-model-list");
-    fireEvent.click(within(list).getByText("claude-sonnet-4-6").closest("button")!);
+    // v1.359.0 (lane 9B, changed on purpose): the row reads "Sonnet 4.6".
+    fireEvent.click(within(list).getByText("Sonnet 4.6").closest("button")!);
     await waitFor(() =>
       expect(putMock).toHaveBeenCalledWith("/settings", {
         values: { default_provider: "anthropic", default_model: "claude-sonnet-4-6" },
       }),
     );
     // /health still answers "mock" — the chip follows the pick anyway.
-    await waitFor(() => expect(btn.textContent).toContain("claude-sonnet-4-6"));
+    await waitFor(() => expect(btn.textContent).toContain("Sonnet 4.6"));
     expect(btn.textContent).not.toContain("Demo replies");
     expect(btn.querySelector('[data-testid="ij-model-demo-dot"]')).toBeNull();
   });
@@ -530,7 +534,8 @@ describe("the model chip never names a model while replies are a scripted demo",
     mockDaemon(health("anthropic"));
     await renderWithDaemon(<ModelSwitcher />);
     const btn = await trigger();
-    await waitFor(() => expect(btn.textContent).toContain("claude-opus-4-8"));
+    // v1.359.0 (lane 9B, changed on purpose): the chip says the row's words.
+    await waitFor(() => expect(btn.textContent).toContain("Opus 4.8"));
     expect(btn.textContent).not.toContain("Demo replies");
     expect(btn.querySelector('[data-testid="ij-model-demo-dot"]')).toBeNull();
   });

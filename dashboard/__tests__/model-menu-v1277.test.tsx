@@ -173,8 +173,10 @@ describe("type to find a model (v1.277.0)", () => {
     expect(within(menu).getByText("default model")).not.toBeNull();
     fireEvent.change(box, { target: { value: "sonnet" } });
     const rows = await screen.findAllByTestId("model-match");
+    // v1.359.0 (lane 9B, changed on purpose): an unlabelled Claude id reads
+    // in words, the way the composer's chip says it; the id still matches.
     expect(rows.map((r) => r.textContent)).toEqual([
-      "claude-sonnet-5Anthropic",
+      "Sonnet 5Anthropic",
       "anthropic/claude-sonnet-5OpenRouter",
     ]);
     // The provider tree is gone while a filter is typed (one list, not two):
@@ -230,7 +232,8 @@ describe("the last picks first (v1.277.0)", () => {
     const names = within(recent)
       .getAllByRole("button")
       .map((b) => b.textContent);
-    expect(names).toEqual(["gpt-5OpenAI", "claude-sonnet-5Anthropic"]);
+    // v1.359.0 (lane 9B, changed on purpose): the row's words, not its id.
+    expect(names).toEqual(["gpt-5OpenAI", "Sonnet 5Anthropic"]);
     // The tree still follows.
     expect(within(screen.getByTestId("model-menu")).getByText("default model")).not.toBeNull();
     fireEvent.click(within(recent).getAllByRole("button")[1]);

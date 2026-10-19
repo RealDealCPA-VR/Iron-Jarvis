@@ -31,6 +31,7 @@
 import { post } from "@/lib/api";
 import type { Health, ProviderHealth } from "@/lib/types";
 import { DEMO_MODEL_LABEL } from "@/lib/demoWords";
+import { friendlyModelName } from "@/lib/friendlyModelName";
 
 /* ------------------------------------------------------------ W2-1 / W2-6 --- */
 
@@ -283,6 +284,44 @@ export function modelGroupName(m: { provider: string; model?: string; name?: str
   return providerHeading(m.provider) || m.provider;
 }
 
+/** v1.359.0 (lane 9B): the model ids that mean "this provider's own
+ *  default": no model is passed and the CLI or the server picks. The
+ *  daemon's twins are `subprocess_cli._PLACEHOLDER_MODELS` and
+ *  `claude_models.DEFAULT_IDS`. The live menu listed the raw word
+ *  "subscription" under Claude Code and Codex. */
+export const PROVIDER_DEFAULT_MODEL_IDS: readonly string[] = ["", "subscription", "default", "auto"];
+
+export function isProviderDefaultModel(model: string | null | undefined): boolean {
+  return PROVIDER_DEFAULT_MODEL_IDS.includes((model ?? "").trim().toLowerCase());
+}
+
+/** The alias docs/LOCAL-MODELS.md tells a model-server owner to keep in
+ *  front of their servers ("fleet"; OpenCode writes it "<its server>/fleet").
+ *  It means "whatever my own servers run", so a row says that. */
+function isServerAlias(model: string): boolean {
+  const m = model.trim().toLowerCase();
+  return m === "fleet" || m.endsWith("/fleet");
+}
+
+/** What a model-menu ROW calls its model (v1.359.0, lane 9B), from the
+ *  words this file already has: the picker's own label ("Opus 5.5"); a
+ *  provider-default row by the plan or server it runs on ("Your Claude
+ *  plan", "Your ChatGPT plan", "Your model server"); the "fleet" alias by
+ *  "Your model server"; else the name the id spells (friendlyModelName:
+ *  "Opus 4.8"; an id it cannot read stays as it is, nothing invented). The
+ *  raw id belongs in the row's title (`ModelRowBits.modelTitle`). */
+export function modelRowName(m: { provider: string; model: string; label?: string | null }): string {
+  const label = typeof m.label === "string" ? m.label.trim() : "";
+  if (label) return label;
+  const model = (m.model ?? "").trim();
+  if (isProviderDefaultModel(model)) {
+    const cli = SUBSCRIPTION_CLIS.find((c) => c.provider === m.provider);
+    return cli?.planName || providerHeading(m.provider) || m.model;
+  }
+  if (isServerAlias(model)) return providerHeading("custom");
+  return friendlyModelName(model);
+}
+
 export interface AnswerCandidate {
   /** What the press posts to W2-1 (a CLI name stays the CLI name; the daemon
    *  promotes it to the inherited API name so the quality dial applies). */
@@ -427,6 +466,9 @@ export interface SubscriptionCli {
   /** How a non-technical user should read it — never "app/CLI". */
   longName: string;
   plan: string;
+  /** v1.359.0 (lane 9B): what the model menu calls this CLI's default row
+   *  (the raw "subscription"). */
+  planName: string;
   installUrl: string;
   installLabel: string;
   /** Used only when the daemon's row carries no `sign_in_fix` text. */
@@ -446,6 +488,7 @@ export const SUBSCRIPTION_CLIS: SubscriptionCli[] = [
     name: "Claude Code",
     longName: "Claude Code (the command-line tool)",
     plan: "Claude Pro or Max",
+    planName: "Your Claude plan",
     installUrl: "https://docs.anthropic.com/en/docs/claude-code/setup",
     installLabel: "How to get Claude Code",
     fallbackFix: "Claude Code isn't signed in yet. Run `claude`, then type `/login`.",
@@ -457,6 +500,7 @@ export const SUBSCRIPTION_CLIS: SubscriptionCli[] = [
     name: "Codex",
     longName: "Codex (OpenAI's command-line tool)",
     plan: "ChatGPT Plus or Pro",
+    planName: "Your ChatGPT plan",
     installUrl: "https://github.com/openai/codex",
     installLabel: "How to get Codex",
     fallbackFix: "Codex isn't signed in yet. Run `codex login`.",

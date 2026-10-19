@@ -371,7 +371,7 @@ import {
 } from "@/lib/localOnly";
 import { CALM_GHOST_BTN, RetryTurnButton } from "@/components/chat/RetryTurnButton";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
-import { ModelRowChips, modelText } from "@/components/ModelRowBits";
+import { ModelRowChips, modelText, modelTitle } from "@/components/ModelRowBits";
 import { friendlyModelName } from "@/lib/friendlyModelName";
 import {
   reasoningChipLabel,
@@ -4675,13 +4675,16 @@ export default function ChatPage() {
       const row = models.find(
         (m) => m.provider === defaultProviderId && m.model === defaultModelName,
       );
-      return row?.label ? modelText(row) : friendlyModelName(defaultModelName);
+      // v1.359.0 (lane 9B): the menu row's own words (modelText), so the
+      // chip never says "subscription" for the row that read "Your Claude
+      // plan"; a default the catalog does not list is named the same way.
+      return modelText(row ?? { provider: defaultProviderId, model: defaultModelName });
     }
     const { provider, model } = splitChoice(choice);
     const row = models.find((m) => m.provider === provider && m.model === model);
     // v1.329.0: no label → the name people say ("Opus 4.8"), derived only
     // from what the id spells; an id it cannot read stays as it is.
-    return row?.label ? modelText(row) : friendlyModelName(modelLabel);
+    return row ? modelText(row) : friendlyModelName(modelLabel);
   }, [choice, models, modelLabel, defaultModelName, defaultProviderId]);
   /** The record behind the trigger's words: provider · model id. */
   const modelTriggerRaw = useMemo(() => {
@@ -13905,7 +13908,7 @@ export default function ChatPage() {
                                           choice === v ? "text-accent-soft" : "text-zinc-300"
                                         }`}
                                       >
-                                        <span className="min-w-0 truncate" title={m.label ? m.model : undefined}>
+                                        <span className="min-w-0 truncate" title={modelTitle(m)}>
                                           {modelText(m)}
                                         </span>
                                         <ModelRowChips m={m} />
@@ -13935,7 +13938,7 @@ export default function ChatPage() {
                                           choice === v ? "text-accent-soft" : "text-zinc-300"
                                         }`}
                                       >
-                                        <span className="min-w-0 truncate" title={row.label ? model : undefined}>
+                                        <span className="min-w-0 truncate" title={modelTitle(row)}>
                                           {modelText(row)}
                                         </span>
                                         <ModelRowChips m={row} />
@@ -14028,7 +14031,7 @@ export default function ChatPage() {
                                             >
                                               <span
                                                 className="min-w-0 truncate"
-                                                title={m.label ? m.model : undefined}
+                                                title={modelTitle(m)}
                                               >
                                                 {modelText(m)}
                                               </span>

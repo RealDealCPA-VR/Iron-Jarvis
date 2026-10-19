@@ -335,12 +335,15 @@ describe("ModelSwitcher availability", () => {
     const label = within(offlineRow).getByText("fleet-llama-70b");
     expect(label.className).toContain("line-through");
 
-    // The online provider's row is unmarked.
-    const onlineRow = screen.getByText("claude-sonnet-4-6").closest("button")!;
+    // The online provider's row is unmarked. v1.359.0 (lane 9B, changed on
+    // purpose): an unlabelled Claude id reads in words ("Sonnet 4.6"), the
+    // raw id is the row's hover.
+    const onlineRow = screen.getByText("Sonnet 4.6").closest("button")!;
     expect(onlineRow.textContent).not.toContain("(offline)");
-    expect(within(onlineRow).getByText("claude-sonnet-4-6").className).not.toContain(
+    expect(within(onlineRow).getByText("Sonnet 4.6").className).not.toContain(
       "line-through",
     );
+    expect(within(onlineRow).getByText("Sonnet 4.6")).toHaveAttribute("title", "claude-sonnet-4-6");
 
     // Selecting the offline provider still goes through to PUT /settings.
     fireEvent.click(offlineRow);
