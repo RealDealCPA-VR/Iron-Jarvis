@@ -149,16 +149,22 @@ describe("a teammate card says the demo in the chat's words", () => {
     return screen.findByTestId(`mission-card-model-${m.agent}`);
   }
 
-  it("a DONE demo teammate: 'Demo answer. No AI model ran (mock · mock-1).' in the warn tone", async () => {
+  // v1.357.0 review (G76): the line says the demo's one name and nothing else;
+  // the raw "mock · mock-1" it used to carry in parentheses is the title now
+  // (the rule a real model's line follows), so no retired word is on screen.
+  it("a DONE demo teammate: 'Demo answer. No AI model ran.' in the warn tone, the raw stamp in the title", async () => {
     const line = await modelLine(member());
-    expect(line.textContent).toBe("Demo answer. No AI model ran (mock · mock-1).");
+    expect(line.textContent).toBe("Demo answer. No AI model ran.");
+    expect(line.getAttribute("title")).toBe("mock · mock-1");
     expect(line.className).toContain("text-tone-warn");
     expect(line.textContent).not.toContain("—");
+    expect(line.textContent).not.toMatch(/\bmock\b/i);
   });
 
-  it("a mock teammate that has not answered says so in plain sentences", async () => {
+  it("a demo teammate that has not answered says so in plain sentences", async () => {
     const line = await modelLine(member({ status: "working", model: "" }));
-    expect(line.textContent).toBe("On the demo model. No AI model ran (mock).");
+    expect(line.textContent).toBe("On the demo model. No AI model ran.");
+    expect(line.getAttribute("title")).toBe("mock");
   });
 
   it("control: a real model keeps the receipt's tense and the quiet colour", async () => {
@@ -209,12 +215,15 @@ describe("the mission receipt says the demo in the chat's words", () => {
     expect(mockLine(false)).toBe("On the demo model. No AI model ran.");
   });
 
-  it("a card's parenthetical never breaks inside 'mock-1'", async () => {
+  // v1.357.0 review (G76): the card's "(mock · mock-1)" parenthetical (and the
+  // nowrap span this used to pin) left the line; the card and the mission
+  // receipt now say the same words, and the raw stamp lives in the title.
+  it("a card's demo line is the receipt's line exactly", async () => {
     render(<AgentCards members={[member()]} />);
     fireEvent.click(screen.getByRole("button", { expanded: false }));
     const line = await screen.findByTestId("mission-card-model-researcher");
-    const paren = [...line.querySelectorAll("span")].find((s) => s.textContent === "(mock · mock-1)");
-    expect(paren?.className).toContain("whitespace-nowrap");
+    expect(line.textContent).toBe(mockLine(true));
+    expect(line.querySelector("span")).toBeNull();
   });
 });
 

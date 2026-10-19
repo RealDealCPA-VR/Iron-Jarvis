@@ -111,21 +111,18 @@ export function ProgressBar({
  *  lib/demoWords), in the chat receipt's words: "Demo answer. No AI model
  *  ran." (TurnReceipt) for an answer, the same second sentence for a run that
  *  has not answered. Plain sentences, no dash aside. The mission receipt
- *  (MissionOutput) and every teammate card read it from here; a card names
- *  what it ran on in parentheses before the last stop (MockRanOn). */
+ *  (MissionOutput) and every teammate card read it from here. */
 export function mockLine(answered: boolean): string {
   return answered ? DEMO_ANSWER : DEMO_RUNNING;
 }
 
-/** The card's demo line with what it ran on: "Demo answer. No AI model ran
- *  (mock · mock-1)." The parentheses never break inside (a narrow card used
- *  to wrap "mock-" from "1"). */
-function MockRanOn({ answered, ranOn }: { answered: boolean; ranOn: string }) {
-  return (
-    <>
-      {mockLine(answered).replace(/\.$/, "")} <span className="whitespace-nowrap">({ranOn})</span>.
-    </>
-  );
+/** The card's demo line. v1.357.0 review (G76): the line says the demo's ONE
+ *  name and nothing else; what it ran on ("mock · mock-1", the provider id
+ *  the canon retired) stays in the line's title, the rule a real model's
+ *  line already follows (v1.352.0 G23). It used to ride in parentheses on
+ *  the line itself: "Demo answer. No AI model ran (mock · mock-1)." */
+function MockRanOn({ answered }: { answered: boolean }) {
+  return <>{mockLine(answered)}</>;
 }
 
 /** A teammate that is still running (or parked on an ask) can be stopped. */
@@ -260,9 +257,9 @@ function AgentCard({
                   its model, it was never "answered by" it.
                   v1.329.0: the demo line says it in the chat receipt's own
                   words ("Demo answer. No AI model ran.") and its warn
-                  tone, with what it ran on in parentheses. */}
+                  tone; what it ran on is the title (v1.357.0 review). */}
               {m.provider === "mock" ? (
-                <MockRanOn answered={m.status === "done"} ranOn={ranOn} />
+                <MockRanOn answered={m.status === "done"} />
               ) : (
                 // v1.352.0 (G23): "Answered by fleet on DGX Spark".
                 // v1.352.0 integrate: "Working with glm-4.6 on DGX Spark"
