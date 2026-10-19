@@ -130,12 +130,20 @@ def test_naming_the_browser_reads_the_cached_status_only(tmp_path, monkeypatch):
     backend = app.state.d.platform.browser.backend
     calls: list[str] = []
 
-    async def no_probe(*_a, **_kw):  # pragma: no cover - must never run
-        calls.append("probe")
+    def spy_on(method: str):
+        # A plain function, so the CALL is recorded even if the result would
+        # never be awaited (calling a coroutine function is already the probe).
+        def no_probe(*_a, **_kw):  # pragma: no cover - must never run
+            calls.append(method)
+            raise AssertionError(f"the Browser star called backend.{method}")
 
-    # Anything that would talk to the add-on is a coroutine on the backend;
-    # the star must not reach for one.
-    monkeypatch.setattr(backend, "request", no_probe, raising=False)
+        return no_probe
+
+    # The transport's two doors to the add-on are `command` and `directive`
+    # (browser/extension_backend.py); the star must not reach for either.
+    # raising=True: a rename of either method fails here, not silently.
+    for method in ("command", "directive"):
+        monkeypatch.setattr(backend, method, spy_on(method), raising=True)
     node = _map(app)["browser"]
     assert node["detail"] == "Your own Microsoft Edge, connected."
     assert started == [] and calls == []

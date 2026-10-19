@@ -253,6 +253,41 @@ describe("a long chat offers to summarize its start, in plain words", () => {
   });
 });
 
+/* The composer's fill gauge (ContextMeter) shows from half full; its hover is
+ * the only words it has. With no offer on screen (level "ok") the gauge is the
+ * one element carrying them. */
+describe("the fill gauge's hover says how full the chat is in plain words", () => {
+  const gaugeTitle = async (fragment: RegExp) =>
+    waitFor(() => {
+      const el = Array.from(document.querySelectorAll<HTMLElement>("[title]")).find((n) =>
+        fragment.test(n.getAttribute("title") ?? ""),
+      );
+      expect(el).toBeTruthy();
+      return (el as HTMLElement).getAttribute("title") ?? "";
+    });
+
+  it("a filling chat: 'This chat fills about N% …', never 'context window' or 'token'", async () => {
+    H.stream.context = { ...LONG, percent: 60, level: "ok" };
+    render(<ChatPage />);
+    await sendHello();
+    const title = await gaugeTitle(/of what this model can read at once/);
+    expect(title).toBe("This chat fills about 60% of what this model can read at once.");
+    expect(screen.queryByTestId("compaction-offer")).toBeNull();
+    expect(document.body.innerHTML).not.toMatch(/context window|-token window/);
+  });
+
+  it("a trimmed chat says what was summarized, in the same words", async () => {
+    H.stream.context = { ...LONG, percent: 60, level: "ok", dropped: 2 };
+    render(<ChatPage />);
+    await sendHello();
+    const title = await gaugeTitle(/earlier messages? (was|were) summarized/);
+    expect(title).toBe(
+      "2 earlier messages were summarized so this chat fits what this model can read at once. A model that reads longer chats would keep them.",
+    );
+    expect(document.body.innerHTML).not.toMatch(/context window|-token window/);
+  });
+});
+
 describe("the compaction card says who started the summary in plain words", () => {
   it("auto: 'summarized automatically because the chat got long'; manual: 'summarized at your request'", () => {
     const { unmount } = render(
