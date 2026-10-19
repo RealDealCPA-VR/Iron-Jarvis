@@ -97,6 +97,11 @@ def _waiting_on(d, session_id: str) -> dict[str, Any] | None:
     # and a project task's card say what the chat card says. Left out for a
     # read-only tool and an unknown name. In-memory registry read.
     out.update(_undo_verdict(d, out["tool"]))
+    # v1.356.0 (G79): what a PRICED ask would spend, in the service's words
+    # (the sentence the ask's own event carries) — never the arguments.
+    _cost = first.get("cost_note")
+    if isinstance(_cost, str) and _cost.strip():
+        out["cost_note"] = _cost
     return out
 
 

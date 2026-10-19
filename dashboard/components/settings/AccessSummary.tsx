@@ -12,8 +12,10 @@
  * opens the place that setting really lives.
  *
  *   Reading files    GET /settings/access (core/fs_policy: the protected
- *                    folders, and IRONJARVIS_FS_ALLOWLIST when an install
- *                    sets one); READS_LINE is lib/permissionLevels' sentence
+ *                    folders, the "Folders Jarvis may read" setting (v1.356.0,
+ *                    G81 — `chosen`, with a press to the row that changes
+ *                    it), and an install's own limit when it sets one);
+ *                    READS_LINE is lib/permissionLevels' sentence
  *   Saving files     the file tools' confinement (the chat's or project's
  *                    folder); the chat folder from the same route
  *   Connected apps   GET /connectors (green only when it works: the
@@ -38,11 +40,17 @@ import {
 } from "@/lib/permissionLevels";
 import type { SchemaSetting } from "@/components/settings/SettingRow";
 
-/** GET /settings/access (daemon/routes/access_summary.py). */
+/** GET /settings/access (daemon/routes/access_summary.py). `chosen` (v1.356.0,
+ *  G81) = the folders the user listed in "Folders Jarvis may read", as typed;
+ *  `install` = the installation's own limit is on. An older daemon sends
+ *  neither. */
 export interface AccessFacts {
-  reads?: { limited?: boolean; folders?: string[] };
+  reads?: { limited?: boolean; folders?: string[]; chosen?: string[]; install?: boolean };
   writes?: { chat_files_dir?: string };
 }
+
+/** The settings row that changes what Jarvis may read (SettingRow's id). */
+export const READ_FOLDERS_ROW = "setting-readable_folders";
 
 /** The fields of a GET /connectors row this block reads. */
 interface ConnectorRow {
@@ -66,6 +74,12 @@ export function readsSentence(facts: AccessFacts | null): string {
     return `${READS_LINE}, at every approval level, unless this install limits it to chosen folders. ${NEVER_READ_LINE}`;
   }
   if (reads.limited) {
+    // v1.356.0 (G81): the user's own folders, named as they typed them.
+    const chosen = (reads.chosen ?? []).filter((f) => typeof f === "string" && f.trim());
+    if (chosen.length > 0) {
+      const where = reads.install ? " (where this install allows)" : "";
+      return `Reads files only in the folders you chose${where}, without asking: ${chosen.join(", ")}, and in its own working folders. ${NEVER_READ_LINE}`;
+    }
     const folders = (reads.folders ?? []).filter((f) => typeof f === "string" && f.trim());
     if (folders.length === 0) {
       return "This install limits reading to a list of folders, and none of them could be found, so it reads no files.";
@@ -179,6 +193,14 @@ export function AccessSummary({
       <dl className="divide-y divide-white/[0.04]">
         <Row label="Reading files" testId="access-reads">
           {facts === undefined ? "Checking…" : readsSentence(facts)}
+          {/* v1.356.0 (G81): the row that changes it, right below. */}
+          {facts && def("readable_folders") && (
+            <Go onPress={onGo ? () => onGo("permissions", READ_FOLDERS_ROW) : undefined}>
+              {(facts.reads?.chosen ?? []).some((f) => typeof f === "string" && f.trim())
+                ? "Change folders"
+                : "Choose folders"}
+            </Go>
+          )}
         </Row>
         <Row label="Saving files" testId="access-writes">
           {facts === undefined ? "Checking…" : writesSentence(facts)}

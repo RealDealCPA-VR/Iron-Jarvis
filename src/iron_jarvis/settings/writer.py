@@ -105,8 +105,14 @@ class ConfigWriter:
         return getattr(cfg, d.field_name, None)
 
     # ------------------------------------------------------------- validate
-    def _validate(self, values: dict[str, Any]) -> dict[str, Any]:
-        """Every value checked before anything changes; returns the cleaned set."""
+    def _validate(self, values: dict[str, Any], *, restoring: bool = False) -> dict[str, Any]:
+        """Every value checked before anything changes; returns the cleaned set.
+
+        ``restoring`` (an Undo) relaxes ONE check: a folder in "Folders Jarvis
+        may read" that has gone missing since it was saved does not refuse the
+        restore — putting a reading limit back is the safe direction, and
+        refusing it would leave reads unlimited. Protected folders and the
+        installation's own limit are still refused."""
         from ..core.config import Config  # noqa: F401 — the trial copy's type
 
         cfg = self.platform.config
@@ -162,6 +168,17 @@ class ConfigWriter:
             problem = mirror_dir_problem(cfg.home, clean["backup_mirror_dir"])
             if problem:
                 raise SettingError(f"backup copy folder: {problem}")
+        if clean.get("readable_folders"):
+            # v1.356.0 (G81): every folder through the file policy's own door
+            # (fs_policy.read_root_problem = root_problem for READING), at
+            # write time only — never at load. Blocking (it stats each
+            # folder): the writer always runs off the event loop.
+            from ..core.fs_policy import read_root_problem
+
+            for folder in clean["readable_folders"]:
+                problem = read_root_problem(folder, must_exist=not restoring)
+                if problem:
+                    raise SettingError(f"{_label('readable_folders')}: {problem}.")
         for cli_key, cli in (("profile_share_claude_code", "claude-code"), ("profile_share_codex", "codex")):
             if clean.get(cli_key) is True:
                 share = getattr(self.platform, "profile_share", None)
@@ -190,10 +207,12 @@ class ConfigWriter:
         device_id: str = "",
         journal: bool = True,
         session_id: str = "settings",
+        restoring: bool = False,
     ) -> ChangeSet:
-        """Validate, apply, run side effects once, journal. Blocking."""
+        """Validate, apply, run side effects once, journal. Blocking.
+        ``restoring`` is :meth:`restore`'s (see :meth:`_validate`)."""
         with self._lock:
-            clean = self._validate(values)
+            clean = self._validate(values, restoring=restoring)
             prior = {k: self.current(k, device_id=device_id) for k in clean}
             out = ChangeSet()
             plain: dict[str, Any] = {}
@@ -256,11 +275,11 @@ class ConfigWriter:
         ok: dict[str, Any] = {}
         for k, v in prior.items():
             try:
-                ok.update(self._validate({k: v}))
+                ok.update(self._validate({k: v}, restoring=True))
             except SettingError:
                 continue
         if restore_fn is None:
-            return self.apply(ok, actor="undo", device_id=device_id, journal=False)
+            return self.apply(ok, actor="undo", device_id=device_id, journal=False, restoring=True)
 
         def _plain(k: str) -> bool:
             d = schema.get(k)
@@ -274,7 +293,7 @@ class ConfigWriter:
                 if plain
                 else []
             )
-            out = self.apply(rest, actor="undo", device_id=device_id, journal=False)
+            out = self.apply(rest, actor="undo", device_id=device_id, journal=False, restoring=True)
             self._side_effects(restored)
             out.updated = restored + out.updated
             return out

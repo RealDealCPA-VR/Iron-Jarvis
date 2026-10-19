@@ -761,6 +761,11 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
             rev = None
         if rev is not None:
             out["reversible"] = rev
+        # v1.356.0 (G79): a priced ask's cost sentence — the words the
+        # mission's own card shows before Allow (never the arguments).
+        cost = first.get("cost_note")
+        if isinstance(cost, str) and cost.strip():
+            out["cost_note"] = cost
         return out
 
     with session_scope(engine) as db:

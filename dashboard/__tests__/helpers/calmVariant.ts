@@ -8,6 +8,11 @@
  * through the TypeScript parser, so a comment or a string that mentions a
  * Badge never counts, and a JSX spread (which could hide the variant) is
  * reported as such.
+ *
+ * v1.356.0 (G80, updated on purpose): calm is the DEFAULT look of Badge and
+ * ConfirmButton now, so a use is calm unless it says `variant="bordered"`
+ * (the old pill, kept only where it is deliberate) or picks its variant with
+ * an expression the reader cannot prove. A bare `<Badge value=… />` is calm.
  */
 
 import ts from "typescript";
@@ -35,6 +40,14 @@ export function calmUses(rel: string, src = readSrc(rel)): CalmUse[] {
     const v = attr?.initializer;
     return v && ts.isStringLiteral(v) ? v.text : "";
   };
+  // Absent = the default (calm since v1.356.0); a string literal is calm
+  // unless it is "bordered"; an expression cannot be proven calm.
+  const calmVariant = (props: ts.NodeArray<ts.JsxAttributeLike>) => {
+    const attr = props.find((p): p is ts.JsxAttribute => ts.isJsxAttribute(p) && p.name.getText(file) === "variant");
+    if (!attr) return true;
+    const v = attr.initializer;
+    return !!v && ts.isStringLiteral(v) && v.text !== "bordered";
+  };
   const visit = (n: ts.Node) => {
     if (ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) {
       const tag = n.tagName.getText(file).replace(/^ui\./, "");
@@ -44,7 +57,7 @@ export function calmUses(rel: string, src = readSrc(rel)): CalmUse[] {
           rel,
           line: file.getLineAndCharacterOfPosition(n.getStart(file)).line + 1,
           tag: tag as CalmUse["tag"],
-          calm: literal(props, "variant") === "calm",
+          calm: calmVariant(props),
           spread: props.some((p) => ts.isJsxSpreadAttribute(p)),
           label: literal(props, "label") || literal(props, "value"),
         });
@@ -56,8 +69,8 @@ export function calmUses(rel: string, src = readSrc(rel)): CalmUse[] {
   return out;
 }
 
-/** A use the page keeps in the default (bordered) look on purpose: the file,
- *  the element, its literal label, and WHY. */
+/** A use the page keeps in the bordered look on purpose (`variant="bordered"`
+ *  since v1.356.0): the file, the element, its literal label, and WHY. */
 export type KeptDefault = { rel: string; tag: CalmUse["tag"]; label: string; why: string };
 
 /** The uses that are not calm (or hide their variant behind a spread), as
@@ -66,5 +79,5 @@ export function uncalm(rel: string, src?: string, kept: KeptDefault[] = []): str
   return calmUses(rel, src)
     .filter((u) => !u.calm || u.spread)
     .filter((u) => u.spread || !kept.some((k) => k.rel === rel && k.tag === u.tag && k.label === u.label))
-    .map((u) => `${rel}:${u.line} <${u.tag}> ${u.spread ? "has a spread" : 'is not variant="calm"'}`);
+    .map((u) => `${rel}:${u.line} <${u.tag}> ${u.spread ? "has a spread" : "is not the calm look"}`);
 }

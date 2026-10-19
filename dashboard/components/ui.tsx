@@ -204,10 +204,13 @@ const CALM_DOT: Record<Tone, string> = {
   slate: "bg-zinc-500",
 };
 
-/** `default` is the bordered status pill most pages use; `calm` (v1.330.0) is
- *  the quiet chip of the calm pages (Settings > Connections): no border, no
- *  fill, neutral words, and only the small dot carries the tone token. */
-export type BadgeVariant = "default" | "calm";
+/** `calm` (v1.330.0) is the quiet chip of the calm pages: no border, no fill,
+ *  neutral words, and only the small dot carries the tone token. Since
+ *  v1.356.0 (G80) it is THE DEFAULT — `default` and `calm` draw the same
+ *  chip, so a status badge looks the same on Sessions, Tools and Schedules.
+ *  `bordered` is the older tinted pill, byte-identical to the pre-v1.356.0
+ *  default, for a place that keeps it on purpose (none today). */
+export type BadgeVariant = "default" | "calm" | "bordered";
 
 /** The calm Badge's shell, exported so a test can hold it to the same rules
  *  as the endpoint rows' quiet chip. */
@@ -225,6 +228,7 @@ export function Badge({
   title,
   className = "",
   "data-testid": testId,
+  "data-status": dataStatus,
 }: {
   value: string;
   tone?: Tone;
@@ -236,14 +240,18 @@ export function Badge({
   title?: string;
   className?: string;
   "data-testid"?: string;
+  /** v1.356.0 (G80): the raw status a row's chip stands for (the Schedules
+   *  row kept it on its old span), passed through untouched. */
+  "data-status"?: string;
 }) {
   const t = tone ?? statusTone(value);
-  if (variant === "calm") {
+  if (variant !== "bordered") {
     return (
       <span
         data-badge-variant="calm"
         data-tone={t}
         data-testid={testId}
+        data-status={dataStatus}
         title={title}
         className={`${CALM_BADGE} ${keepCase ? "" : "capitalize"} ${className}`.replace(/\s+/g, " ").trim()}
       >
@@ -255,6 +263,7 @@ export function Badge({
   return (
     <span
       data-testid={testId}
+      data-status={dataStatus}
       title={title}
       className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${keepCase ? "" : "capitalize"} ${TONE_BADGE[t]}${className ? ` ${className}` : ""}`}
     >
@@ -603,11 +612,13 @@ export function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
-/** `default` is the hairline-bordered button most pages use; `calm`
- *  (v1.330.0) is a quiet ghost for the calm pages: no border, it fills on
- *  hover, and the armed step reads in tone-danger. Same button, same two
- *  presses, same 3 s timeout. */
-export type ConfirmVariant = "default" | "calm";
+/** `calm` (v1.330.0) is a quiet ghost: no border, it fills on hover, and the
+ *  armed step reads in tone-danger. Since v1.356.0 (G80) it is THE DEFAULT
+ *  (`default` and `calm` draw the same button). `bordered` is the older
+ *  hairline-bordered button, byte-identical to the pre-v1.356.0 default, kept
+ *  for a deliberately boxed dialog (Build's "Close this terminal?" card).
+ *  Every variant: same button, same two presses, same 3 s timeout. */
+export type ConfirmVariant = "default" | "calm" | "bordered";
 
 /** The calm ConfirmButton's look, one string per state (exported for the
  *  source guard and the tests). 28 px tall at least, so a finger can hit it. */
@@ -657,7 +668,7 @@ export function ConfirmButton({
       setArmed(false);
     }
   };
-  if (variant === "calm") {
+  if (variant !== "bordered") {
     return (
       <button
         type="button"

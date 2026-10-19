@@ -128,7 +128,10 @@ async def test_extract_pdf_denies_before_sniffing_the_file(tmp_path, monkeypatch
     res = await _tool("extract_pdf").execute({"path": str(denied)}, _ctx(wsdir))
 
     assert res.ok is False
-    assert "IRONJARVIS_FS_ALLOWLIST" in res.error
+    # v1.356.0 (G81, updated on purpose): the POLICY reason is a sentence that
+    # never names the environment variable.
+    assert "isn't one Jarvis may read" in res.error
+    assert "IRONJARVIS_FS_ALLOWLIST" not in res.error
     assert "not a PDF file" not in res.error
 
 

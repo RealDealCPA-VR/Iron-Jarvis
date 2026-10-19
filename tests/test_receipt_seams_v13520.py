@@ -317,5 +317,7 @@ def test_settings_access_is_served_by_the_real_app_factory(tmp_path):
     assert r.status_code == 200, r.text
     body = r.json()
     assert set(body) == {"reads", "writes"}
-    assert set(body["reads"]) == {"limited", "folders"}
+    # v1.356.0 (G81, updated on purpose): + the user's own folders (`chosen`)
+    # and whether the installation's own limit is on (`install`).
+    assert set(body["reads"]) == {"limited", "folders", "chosen", "install"}
     assert "chat_files_dir" in body["writes"]

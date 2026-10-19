@@ -494,7 +494,9 @@ describe("C. status primitives read through the tone tokens", () => {
       ["tool", "violet", undefined],
     ];
     for (const [value, tone, explicit] of cases) {
-      render(<ui.Badge value={value} tone={explicit} />);
+      // v1.356.0 (G80, updated on purpose): the tinted pill is
+      // `variant="bordered"` now; the DEFAULT is the calm chip (below).
+      render(<ui.Badge value={value} tone={explicit} variant="bordered" />);
       const pill = screen.getByText(value);
       expect(pill.className, `${value} pill`).toContain(`text-tone-${tone}`);
       expect(pill.className, `${value} pill`).toContain(`bg-tone-${tone}`);
@@ -503,15 +505,29 @@ describe("C. status primitives read through the tone tokens", () => {
       const dot = pill.querySelector("span");
       expect(dot?.className ?? "", `${value} dot`).toContain(`bg-tone-${tone}`);
       cleanup();
+      // The default (calm) chip: the same tone token on its dot, words neutral.
+      render(<ui.Badge value={value} tone={explicit} />);
+      const chip = screen.getByText(value);
+      expect(chip.className, `${value} chip`).not.toMatch(NO_RAW_HUE);
+      expect(chip.className, `${value} chip`).toContain("text-zinc-400");
+      expect(chip.querySelector("span")?.className ?? "", `${value} chip dot`).toContain(`bg-tone-${tone}`);
+      cleanup();
     }
   });
 
   it("anti-vacuity: running stays accent, idle stays neutral, and the value is still shown", () => {
-    render(<ui.Badge value="running" />);
+    render(<ui.Badge value="running" variant="bordered" />);
     expect(screen.getByText("running").className).toContain("text-accent-soft");
     cleanup();
-    render(<ui.Badge value="idle" />);
+    render(<ui.Badge value="idle" variant="bordered" />);
     expect(screen.getByText("idle").className).toContain("text-zinc-300");
+    cleanup();
+    // v1.356.0 (G80): the default chip keeps the same tones on its dot.
+    render(<ui.Badge value="running" />);
+    expect(screen.getByText("running").querySelector("span")?.className ?? "").toContain("bg-accent");
+    cleanup();
+    render(<ui.Badge value="idle" />);
+    expect(screen.getByText("idle").querySelector("span")?.className ?? "").toContain("bg-zinc-500");
   });
 
   it("StatusIcon, StatusDot and Dot use the tokens for success/failure", () => {

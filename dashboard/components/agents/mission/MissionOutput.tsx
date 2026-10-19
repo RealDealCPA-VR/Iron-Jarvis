@@ -94,13 +94,26 @@ export function deliverableFor(view: MissionView | null, live: MissionLive): Del
   return { text: "", source: "none", who: "" };
 }
 
+/** The ask a run is parked on, as the mission view carries it. `cost_note`
+ *  (v1.356.0, G79) is what a PRICED call would spend, in the service's own
+ *  words ("Generate 1 image on Pixio for 12 credits (your price)") — the
+ *  sentence the chat card's cost line shows; absent for an unpriced ask. */
+type MissionAsk = WaitingOn & { cost_note?: string };
+
+/** The cost sentence to show on the card, or "" — only a non-empty string
+ *  counts (an older daemon sends no key; anything else is not words). */
+export function askCostLine(waiting: MissionAsk): string {
+  const note = waiting.cost_note;
+  return typeof note === "string" ? note.trim() : "";
+}
+
 function ApprovalCard({
   waiting,
   who,
   session,
   onAnswered,
 }: {
-  waiting: WaitingOn;
+  waiting: MissionAsk;
   who: string;
   /** The session parked on the ask (the coordinator's or the teammate's):
    *  whose plan a plan ask reads. */
@@ -121,6 +134,7 @@ function ApprovalCard({
   // 404 (no copy) leaves the words and the two answers.
   const planAsk = waiting.tool === PLAN_TOOL;
   const undo = undoLine(waiting.reversible);
+  const cost = planAsk ? "" : askCostLine(waiting);
   const [plan, setPlan] = useState<PlanView | null>(null);
   useEffect(() => {
     if (!planAsk || !session) return;
@@ -163,6 +177,13 @@ function ApprovalCard({
               exact id it will run stays in the title. */}
           <strong>{who}</strong> wants to <strong title={`The exact tool: ${waiting.tool}`}>{askPhrase(waiting.tool)}</strong>.
           Nothing runs until you answer.
+        </div>
+      )}
+      {/* v1.356.0 (G79): what a priced call would spend, before Allow — the
+          chat card's cost line, in this card's quiet style. */}
+      {cost && (
+        <div data-testid="mission-approval-cost" className="mt-0.5 text-[12px] text-zinc-400">
+          {cost}
         </div>
       )}
       {/* v1.352.0 (G25): can it be undone, when the daemon said so. */}

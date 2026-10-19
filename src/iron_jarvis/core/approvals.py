@@ -93,6 +93,33 @@ APPROVAL_TIMEOUT_S = 180.0
 #: updated entries past this are forgotten.
 WAITED_SESSIONS_MAX = 1024
 
+#: The longest cost sentence a pending ask keeps (v1.356.0, G79). The words
+#: are the service's quote ("Generate 1 image on Pixio for 12 credits (your
+#: price)"), never the call's arguments; the cap only bounds what a listing
+#: carries.
+COST_NOTE_MAX = 300
+
+
+def _cost_sentence(cost_note: Any) -> str:
+    """The quote's sentence as a listing may carry it: a string, masked
+    (``detections.redact.mask`` — belt and braces: the words are built from
+    a price, never from arguments), cut to :data:`COST_NOTE_MAX`. ``""``
+    for anything else."""
+    if not isinstance(cost_note, str):
+        return ""
+    text = " ".join(cost_note.split())
+    if not text:
+        return ""
+    try:
+        from ..detections.redact import mask
+
+        text = mask(text)
+    except Exception:  # noqa: BLE001 — wording only, never a new failure
+        pass
+    if len(text) > COST_NOTE_MAX:
+        text = text[: COST_NOTE_MAX - 1].rstrip() + "…"
+    return text
+
 
 class ChatApprovals:
     """Pending mid-turn approval requests, keyed by id."""
@@ -127,13 +154,21 @@ class ChatApprovals:
         *,
         count: int = 1,
         examples: "list[Any] | None" = None,
+        cost_note: str | None = None,
     ) -> tuple[str, "asyncio.Future[str]"]:
         """File one request; returns ``(id, future)``. The future resolves to a
         DECISIONS value. ``tool``/``args`` are kept only as display/matching
         metadata (the asker passes already-redacted args); the SSE frame /
         event still carries them to the client that answers. ``session_id``
         (v1.227.0) names the run that is waiting, so ``pending_for`` and
-        ``resolve_where`` can scope to it; a chat-lane ask passes none."""
+        ``resolve_where`` can scope to it; a chat-lane ask passes none.
+
+        ``cost_note`` (v1.356.0, G79) is what a PRICED call would spend, in
+        the service's own words — the sentence the ask's own frame/event
+        carries (``SpendCheck.words``). Recorded only when there is one, so
+        an ask with no price keeps its exact shape, and handed on by
+        ``pending_for`` so a surface that reads a run's waiting ask (the
+        session row, the mission screen) can say the cost before Allow."""
         approval_id = f"apr_{secrets.token_hex(8)}"
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
@@ -151,14 +186,20 @@ class ChatApprovals:
         if int(count or 1) > 1:
             self._meta[approval_id]["count"] = int(count)
             self._meta[approval_id]["examples"] = list(examples or [])[:3]
+        # G79 (v1.356.0): the price sentence, only for a priced ask.
+        _cost = _cost_sentence(cost_note)
+        if _cost:
+            self._meta[approval_id]["cost_note"] = _cost
         return approval_id, fut
 
     def pending_for(self, session_id: str | None) -> list[dict[str, Any]]:
         """The asks a session is currently waiting on, oldest first (v1.227.0).
 
-        Each entry: ``{approval_id, tool, args, requested_at}``. Only asks
-        filed WITH that session id match — a chat-lane ask (no session) is
-        never attributed to a run, and an empty/None id answers ``[]``."""
+        Each entry: ``{approval_id, tool, args, requested_at}``, plus
+        ``count``/``examples`` on a batched ask and ``cost_note`` (a
+        sentence) on a priced one. Only asks filed WITH that session id
+        match — a chat-lane ask (no session) is never attributed to a run,
+        and an empty/None id answers ``[]``."""
         sid = str(session_id or "")
         if not sid:
             return []
@@ -174,6 +215,8 @@ class ChatApprovals:
                     if "count" in m
                     else {}
                 ),
+                # v1.356.0 (G79): present only on a priced ask.
+                **({"cost_note": m["cost_note"]} if m.get("cost_note") else {}),
             }
             for m in self._meta.values()
             if m.get("session_id") == sid

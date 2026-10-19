@@ -522,12 +522,15 @@ describe("Build: Badge and ConfirmButton are calm, except the one kept on purpos
     expect(card).toMatch(/rounded-2xl border border-white\/10 bg-ink-850/);
   });
 
-  it("the kept list does not excuse a second default use (anti-vacuity)", () => {
+  // v1.356.0 (G80, updated on purpose): calm is the default, so a bare use is
+  // calm and the kept one says variant="bordered".
+  it("the kept list does not excuse a second bordered use (anti-vacuity)", () => {
     const probe = [
-      'const a = <ConfirmButton onConfirm={go} label="Close terminal" />;',
-      'const b = <ConfirmButton onConfirm={go} label="Remove pane" />;',
-      'const c = <Badge value="idle" />;',
+      'const a = <ConfirmButton variant="bordered" onConfirm={go} label="Close terminal" />;',
+      'const b = <ConfirmButton variant="bordered" onConfirm={go} label="Remove pane" />;',
+      'const c = <Badge variant="bordered" value="idle" />;',
       'const d = <ConfirmButton {...p} label="Close terminal" />;',
+      'const e = <Badge value="idle" />;',
     ].join("\n");
     expect(uncalm(PAGE, probe, BUILD_KEPT).map((x) => x.split(" ")[0].split(":")[1])).toEqual(["2", "3", "4"]);
   });

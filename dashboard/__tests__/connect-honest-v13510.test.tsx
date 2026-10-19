@@ -177,7 +177,10 @@ describe("Directory: green only when the pack works", () => {
     render(<DirectoryPage />);
     const badge = await screen.findByTestId("connector-attention-slack");
     expect(badge.textContent).toBe("Needs attention");
-    expect(badge.className).toContain("text-tone-warn");
+    // v1.356.0 (G80, updated on purpose): the calm Badge is the default — the
+    // amber lives on its dot (and the card's ring below), the words neutral.
+    expect(badge.getAttribute("data-tone")).toBe("amber");
+    expect(badge.querySelector("span")?.className ?? "").toContain("bg-tone-warn");
     const c = card("slack");
     expect(c.getAttribute("data-health")).toBe("attention");
     expect(c.className).toContain("ring-tone-warn/30");

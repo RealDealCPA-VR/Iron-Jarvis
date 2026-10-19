@@ -258,19 +258,24 @@ describe("the inbox row and a project's Completed list draw calm chips", () => {
 /* ===================================================== the calm-variant reader */
 
 describe("the calm-variant reader (helpers/calmVariant.ts)", () => {
-  it("finds every Badge and ConfirmButton, and reports the default ones and a spread", () => {
+  // v1.356.0 (G80, updated on purpose): calm is the DEFAULT look, so a bare
+  // use (and variant="default") is calm; the reader reports variant="bordered",
+  // an expression it cannot prove, and a spread.
+  it("finds every Badge and ConfirmButton, and reports the bordered ones, an expression and a spread", () => {
     const probe = [
-      'const a = <Badge value="Ready" tone="green" />;',
-      "const b = <ConfirmButton onConfirm={() => void go()} label=\"Delete\" />;",
-      'const c = <ConfirmButton variant="default" onConfirm={go} />;',
+      'const a = <Badge value="Ready" tone="green" variant="bordered" />;',
+      "const b = <ConfirmButton onConfirm={() => void go()} label=\"Delete\" variant={look} />;",
+      'const c = <ConfirmButton variant="bordered" onConfirm={go} />;',
       'const d = <Badge {...rest} variant="calm" value="x" />;',
       'const e = <ConfirmButton variant="calm" onConfirm={go} label="Delete" />;',
       'const f = <Badge variant="calm" value="Ready" />;',
       "// <Badge value=\"in a comment\" />",
       'const g = "<Badge value=\\"in a string\\" />";',
       "const h = <BadgeCheck size={13} />;",
+      'const i = <Badge value="Ready" />;',
+      'const j = <ConfirmButton variant="default" onConfirm={go} label="Delete" />;',
     ].join("\n");
-    expect(calmUses("probe.tsx", probe)).toHaveLength(6);
+    expect(calmUses("probe.tsx", probe)).toHaveLength(8);
     expect(uncalm("probe.tsx", probe).map((s) => s.split(" ")[0])).toEqual([
       "probe.tsx:1",
       "probe.tsx:2",
@@ -282,9 +287,9 @@ describe("the calm-variant reader (helpers/calmVariant.ts)", () => {
   it("a kept use is excused only by its file, element and label", () => {
     const kept: KeptDefault[] = [{ rel: "probe.tsx", tag: "ConfirmButton", label: "Close", why: "a boxed dialog" }];
     const probe = [
-      '<ConfirmButton onConfirm={go} label="Close" />;',
-      '<ConfirmButton onConfirm={go} label="Delete" />;',
-      '<Badge value="Close" />;',
+      '<ConfirmButton variant="bordered" onConfirm={go} label="Close" />;',
+      '<ConfirmButton variant="bordered" onConfirm={go} label="Delete" />;',
+      '<Badge variant="bordered" value="Close" />;',
     ].join("\n");
     expect(uncalm("probe.tsx", probe, kept).map((s) => s.split(" ")[0])).toEqual(["probe.tsx:2", "probe.tsx:3"]);
     expect(uncalm("other.tsx", probe, kept)).toHaveLength(3);

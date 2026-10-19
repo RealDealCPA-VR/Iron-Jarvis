@@ -251,10 +251,21 @@ describe("the one table: every state a person can meet, in words and a tone", ()
 /* ================================================== Sessions: the badge */
 
 describe("Sessions: a stopped run reads 'Stopped' in slate", () => {
+  // v1.356.0 (G80, updated on purpose): calm is the default chip; the old
+  // bordered pill is variant="bordered" and still says Stopped in slate.
   it("the bordered pill says Stopped in the slate tone, never the danger red", () => {
-    render(<SessionStatusBadge session={{ status: "cancelled" }} />);
+    render(<SessionStatusBadge session={{ status: "cancelled" }} variant="bordered" />);
     const chip = screen.getByText("Stopped");
     expect(chip.className).toMatch(/text-zinc-300/);
+    expect(chip.className).not.toMatch(/tone-danger/);
+    expect(dotOf(chip)).toMatch(/bg-zinc-500/);
+  });
+
+  it("the default chip (the Sessions list) says Stopped with a slate dot, never the danger red", () => {
+    render(<SessionStatusBadge session={{ status: "cancelled" }} />);
+    const chip = screen.getByText("Stopped");
+    expect(chip.getAttribute("data-badge-variant")).toBe("calm");
+    expect(chip.getAttribute("data-tone")).toBe("slate");
     expect(chip.className).not.toMatch(/tone-danger/);
     expect(dotOf(chip)).toMatch(/bg-zinc-500/);
   });
@@ -273,8 +284,12 @@ describe("Sessions: a stopped run reads 'Stopped' in slate", () => {
   });
 
   it("a caller's own tone still wins (the session header's violet Queued)", () => {
+    // v1.356.0 (G80, updated on purpose): on the default (calm) chip the
+    // tone lives on the dot.
     render(<SessionStatusBadge session={{ status: "queued" }} tone="violet" />);
-    expect(screen.getByText("Queued").className).toMatch(/tone-violet/);
+    const chip = screen.getByText("Queued");
+    expect(chip.getAttribute("data-tone")).toBe("violet");
+    expect(dotOf(chip)).toMatch(/tone-violet/);
   });
 
   it("the outcome chip and the plain badge speak the table's words", () => {
@@ -306,7 +321,9 @@ describe("Sessions page: the badges and the filter speak words", () => {
     mount([sv("s-stop", "cancelled"), sv("s-run", "active")]);
     const row = screen.getByRole("link", { name: "task s-stop" }).closest("tr") as HTMLElement;
     const chip = within(row).getByText("Stopped");
-    expect(chip.className).toMatch(/text-zinc-300/);
+    // v1.356.0 (G80, updated on purpose): the calm chip, slate on its dot.
+    expect(chip.getAttribute("data-badge-variant")).toBe("calm");
+    expect(chip.getAttribute("data-tone")).toBe("slate");
     expect(within(row).queryByText(/cancelled/i)).toBeNull();
     const live = screen.getByRole("link", { name: "task s-run" }).closest("tr") as HTMLElement;
     expect(within(live).getByText("Working")).toBeInTheDocument();

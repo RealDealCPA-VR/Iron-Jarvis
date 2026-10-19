@@ -290,7 +290,8 @@ SETTINGS: tuple[SettingDef, ...] = (
       "The model to use per kind (image, video, audio, music). Empty = the service's cheapest model of that kind.",
       tier="ask", section="Media", advanced=True),
     S("mcp_auto_approve", "Run app tools without asking", "permissions", "bool",
-      "Let every app (MCP) tool run without an approval card. Not recommended.",
+      "Let every tool from your connected apps and extensions run without asking you first. "
+      "Not recommended.",
       tier="ask-floor", restart=True, put=False, aliases=("mcp auto approve",)),
     # -------------------------------------------------------------- automation
     S("max_agent_steps", "Max steps per run", "automation", "number",
@@ -397,6 +398,19 @@ SETTINGS: tuple[SettingDef, ...] = (
       "A message from your phone, Slack or email starts a run. Low trust may read and answer but not change memory, settings, agents or skills.",
       options=(("low", "Low trust (default)"), ("full", "Full trust")),
       tier="ask", floor_when=("full",), aliases=("phone trust", "inbound trust")),
+    # v1.356.0 (G81): what chat and agents may read is a setting, not an
+    # environment variable. Read LIVE by core/fs_policy; every folder is
+    # checked when it is saved (settings/writer -> fs_policy.read_root_problem).
+    # Changing it from chat asks every time — a model must never widen (or
+    # quietly move) what it may read.
+    S("readable_folders", "Folders Jarvis may read", "permissions", "list",
+      "Chat and agents read files only inside these folders, plus Jarvis's own working folders. "
+      "One folder per line. Leave it empty to let them read any file on this PC, except the "
+      "folders that hold Jarvis's keys and records.",
+      tier="ask-floor",
+      aliases=("readable folders", "read folders", "allowed folders", "limit reading",
+               "folders jarvis can read", "which folders"),
+      placeholder="One folder per line, for example C:\\Users\\you\\Documents\\Clients"),
     S("permissions.{tool}", "Approval for one tool", "permissions", "enum",
       "Whether a tool may run without asking (allow), asks first (ask), or never runs (deny). Tools that touch your PC can never be set to allow.",
       options=(("allow", "Run without asking"), ("ask", "Ask first"), ("deny", "Never run")),

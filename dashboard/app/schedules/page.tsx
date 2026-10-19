@@ -33,7 +33,6 @@ import {
   WarnNote,
   LoaderInline,
   ConfirmButton,
-  type Tone,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -58,18 +57,6 @@ import { UnattendedAskNote } from "@/components/UnattendedAskNote";
 /** Fallback only — the real list comes live from GET /agents (builtin +
  * dynamic), the same source NewSessionForm's picker uses. */
 const FALLBACK_AGENTS = ["builder", "supervisor", "planner", "researcher", "reviewer"];
-
-/** The last-run word's ink, by the table's tone (v1.352.0, G17): theme
- *  tokens only — the row's old literal emerald/rose/amber inks are the same
- *  hues on the dark Marks and re-ink properly on the light ones. */
-const ROW_INK: Record<Tone, string> = {
-  green: "text-tone-success",
-  red: "text-tone-danger",
-  amber: "text-tone-warn",
-  cyan: "text-accent-soft",
-  violet: "text-tone-violet",
-  slate: "text-zinc-500",
-};
 
 /** What a fire DOES (v1.119.0) — task leads because "have an agent do X every
  * morning" is the schedule people actually mean; workflow/event serve
@@ -1024,14 +1011,17 @@ export default function SchedulesPage() {
                                 green "Done" and never "Not run yet"; the detail
                                 is plain words, never the report's markdown.
                                 v1.352.0 (G17): the words are the ONE status
-                                table's (lib/statusWords.scheduleRunWords). */}
-                            <span
-                              className={`text-[12px] ${ROW_INK[scheduleRunWords(s.last_status).tone]}`}
+                                table's (lib/statusWords.scheduleRunWords).
+                                v1.356.0 (G80): drawn as the calm Badge every
+                                other status list uses (Sessions, Tools) —
+                                the words neutral, the tone on its dot. */}
+                            <Badge
+                              value={scheduleRunWords(s.last_status).word}
+                              tone={scheduleRunWords(s.last_status).tone}
+                              keepCase
                               data-testid={`schedule-status-${s.name}`}
                               data-status={s.last_status || "none"}
-                            >
-                              {scheduleRunWords(s.last_status).word}
-                            </span>
+                            />
                             {s.last_detail ? (
                               <div
                                 className="max-w-[220px] truncate text-[11px] text-zinc-500"

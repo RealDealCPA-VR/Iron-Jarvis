@@ -1465,7 +1465,12 @@ export default function TerminalsPage() {
                                   Ends the live shell session in {t.cwd}.
                                 </p>
                                 <div className="mt-4 flex items-center justify-center gap-2">
+                                  {/* v1.356.0 (G80): the bordered look, on
+                                      purpose — this confirm card is a
+                                      deliberately boxed dialog beside a
+                                      bordered Cancel (calm is the default). */}
                                   <ConfirmButton
+                                    variant="bordered"
                                     onConfirm={() => {
                                       closeTerminal(t.id);
                                       setPendingClose(null);

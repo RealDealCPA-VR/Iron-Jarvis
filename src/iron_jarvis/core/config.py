@@ -429,6 +429,16 @@ class Config(BaseModel):
     #: agents, skills or schedules; ``core/trust.py``) or "full".
     comm_trust: str = "low"
     search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
+    #: THE FOLDERS JARVIS MAY READ (v1.356.0, G81) — Settings › Permissions.
+    #: Empty (the default) = no limit: chat and agents read any file except
+    #: the protected folders, exactly as before this setting existed. A list
+    #: confines every read (``core/fs_policy``, read LIVE off this object) to
+    #: these folders plus Jarvis's own working folders; with
+    #: ``IRONJARVIS_FS_ALLOWLIST`` also set, a read must satisfy both. Each
+    #: folder is checked when it is SAVED (``fs_policy.read_root_problem``,
+    #: through the one settings writer), never at load: an unplugged drive
+    #: must not stop the app starting — it just reads nothing there.
+    readable_folders: list[str] = Field(default_factory=list)
     # Where a chat with NO project keeps the files it was handed and the files
     # it makes (v1.244.0): one dated folder per conversation, so the work lands
     # somewhere the user will look. "" = <Documents>\Iron Jarvis. Read through
@@ -723,6 +733,30 @@ class Config(BaseModel):
             raise ValueError("comm_trust must be low | full")
         return v
 
+    @field_validator("readable_folders")
+    @classmethod
+    def _clean_readable_folders(cls, v: list[str]) -> list[str]:
+        # v1.356.0 (G81): one folder per entry, blanks dropped, a repeat kept
+        # once (case-blind on Windows), at most fs_policy's cap. Whether each
+        # folder EXISTS is the writer's check at save time, never here — a
+        # load must not depend on a drive being plugged in.
+        from .fs_policy import MAX_READABLE_FOLDERS
+
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in v:
+            s = str(raw).strip()
+            if not s:
+                continue
+            k = os.path.normcase(os.path.normpath(s))
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(s)
+        if len(out) > MAX_READABLE_FOLDERS:
+            raise ValueError(f"at most {MAX_READABLE_FOLDERS} folders")
+        return out
+
     @field_validator("browser_access")
     @classmethod
     def _valid_browser_access(cls, v: str) -> str:
@@ -913,7 +947,25 @@ def resolve_home(project_root: str | Path) -> Path:
 
 
 def load_config(project_root: str | Path) -> Config:
-    """Load merged config for a project root."""
+    """Load merged config for a project root.
+
+    v1.356.0 (G81): the config returned is the one the file policy reads the
+    "Folders Jarvis may read" setting from (``fs_policy.use_config``) — this
+    is the one place every platform's config is made (``build_platform`` for
+    the daemon and every CLI door), and the settings writer changes this same
+    object in place, so a saved change limits the very next read."""
+    cfg = _load_config(project_root)
+    try:
+        from .fs_policy import use_config
+
+        use_config(cfg)
+    except Exception:  # noqa: BLE001 — the policy binding must never stop a boot
+        _log.warning("could not bind the readable-folders setting", exc_info=True)
+    return cfg
+
+
+def _load_config(project_root: str | Path) -> Config:
+    """The merge behind :func:`load_config` (unchanged since before v1.356.0)."""
     root = Path(project_root).resolve()
     home = resolve_home(root)
 

@@ -10,9 +10,10 @@
  *    the 3 s disarm is the same timer as before.
  *  - Badge calm: the quiet chip the endpoint rows use, with no border and no
  *    fill: neutral words, and only the small dot carries the tone token.
- * The default variants are unchanged (other pages use them), and that is
- * pinned here too. The source guard that keeps a bordered one off the
- * Connections page lives in connections-fleet-calm-v1329.test.tsx.
+ * v1.356.0 (G80): calm became THE DEFAULT for both; the old bordered looks are
+ * `variant="bordered"` (byte-identical), pinned here too. The source guard that
+ * keeps a bordered one off the Connections page lives in
+ * connections-fleet-calm-v1329.test.tsx.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -148,9 +149,12 @@ describe("ConfirmButton variant=\"calm\": a quiet ghost with the same two presse
   });
 });
 
-describe("ConfirmButton default variant is unchanged", () => {
-  it("still the hairline-bordered button, with no calm data attributes", () => {
-    render(<ConfirmButton onConfirm={() => {}} label="Delete" />);
+// v1.356.0 (G80, updated on purpose): calm is THE DEFAULT now. The old
+// hairline-bordered button is `variant="bordered"`, byte-identical to what
+// the default drew before (kept for Build's boxed close dialog).
+describe("ConfirmButton: calm by default, the old bordered look on request", () => {
+  it("variant=\"bordered\" is still the hairline-bordered button, with no calm data attributes", () => {
+    render(<ConfirmButton variant="bordered" onConfirm={() => {}} label="Delete" />);
     const btn = screen.getByRole("button", { name: "Delete" });
     expect(btn.className).toBe(
       "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 border-white/10 text-zinc-400 hover:border-tone-danger/30 hover:text-tone-danger ",
@@ -160,6 +164,23 @@ describe("ConfirmButton default variant is unchanged", () => {
     fireEvent.click(btn);
     const armed = screen.getByRole("button", { name: "Confirm?" });
     expect(tokens(armed)).toContain("border-tone-danger/50");
+  });
+
+  it("no variant (and variant=\"default\") draws the calm ghost, exactly variant=\"calm\"'s classes", () => {
+    render(<ConfirmButton variant="calm" onConfirm={() => {}} label="Calm" />);
+    const calm = screen.getByRole("button", { name: "Calm" }).className;
+    cleanup();
+    for (const el of [
+      <ConfirmButton key="none" onConfirm={() => {}} label="Calm" />,
+      <ConfirmButton key="default" variant="default" onConfirm={() => {}} label="Calm" />,
+    ]) {
+      render(el);
+      const btn = screen.getByRole("button", { name: "Calm" });
+      expect(btn.className).toBe(calm);
+      expect(btn.getAttribute("data-confirm-variant")).toBe("calm");
+      expect(tokens(btn).filter((c) => BORDER.test(c))).toEqual([]);
+      cleanup();
+    }
   });
 });
 
@@ -208,13 +229,26 @@ describe("Badge variant=\"calm\": no border, no fill, only the dot carries the t
     expect(CALM_BADGE).not.toMatch(/(?:^|\s)bg-/);
   });
 
-  it("the default Badge is unchanged: still the bordered, tinted pill", () => {
-    render(<Badge value="completed" />);
+  // v1.356.0 (G80, updated on purpose): the default Badge IS the calm chip;
+  // the bordered, tinted pill is `variant="bordered"`, unchanged.
+  it("variant=\"bordered\" is the old bordered, tinted pill", () => {
+    render(<Badge variant="bordered" value="completed" />);
     const chip = screen.getByText("completed");
     expect(chip.hasAttribute("data-badge-variant")).toBe(false);
     const cls = tokens(chip);
     expect(cls).toContain("border");
     expect(cls).toContain("bg-tone-success/10");
+  });
+
+  it("no variant (and variant=\"default\") draws the calm chip, exactly variant=\"calm\"'s", () => {
+    render(<Badge variant="calm" value="completed" />);
+    const calm = screen.getByText("completed").outerHTML;
+    cleanup();
+    render(<Badge value="completed" />);
+    expect(screen.getByText("completed").outerHTML).toBe(calm);
+    cleanup();
+    render(<Badge variant="default" value="completed" />);
+    expect(screen.getByText("completed").outerHTML).toBe(calm);
   });
 });
 

@@ -178,12 +178,28 @@ describe("lib/scheduleOutcome — one table of words", () => {
 // a mission and the board say for the same run, in theme tone tokens (the
 // row's literal emerald/rose inks are gone). It read "✓ ok", "finished ·
 // needs you", "✗ failed" and "not run yet".
+// v1.356.0 (G80, updated on purpose): the word is drawn as the calm Badge the
+// Sessions and Tools lists use — the words neutral, the tone on the chip's
+// dot (`data-tone` + the dot's tone token), never a coloured word.
+const DOT_OF_TONE: Record<string, string> = {
+  green: "bg-tone-success",
+  amber: "bg-tone-warn",
+  red: "bg-tone-danger",
+  slate: "bg-zinc-500",
+};
+function expectCalmWord(word: HTMLElement, tone: "green" | "amber" | "red" | "slate") {
+  expect(word.getAttribute("data-badge-variant")).toBe("calm");
+  expect(word.getAttribute("data-tone")).toBe(tone);
+  expect((word.querySelector("span")?.className ?? "")).toContain(DOT_OF_TONE[tone]);
+  // Words neutral: no tone ink on the words themselves.
+  expect(word.className).not.toMatch(/text-tone-/);
+}
 describe("the Schedules page row", () => {
   it("a run that needs the user is amber 'Done · needs you' with its session link — never a green Done", async () => {
     mountPage([row({ last_status: "needs_you", last_detail: NEEDS_YOU_DETAIL, last_session_id: "session_abc" })]);
     const word = await screen.findByTestId("schedule-status-nightly");
     expect(word.textContent).toBe("Done · needs you");
-    expect(word.className).toMatch(/text-tone-warn/);
+    expectCalmWord(word, "amber");
     expect(screen.queryByText("Done")).toBeNull();
     expect(screen.queryByText("Not run yet")).toBeNull();
     const cell = word.parentElement as HTMLElement;
@@ -197,14 +213,14 @@ describe("the Schedules page row", () => {
     mountPage([row({ last_status: "partial", last_detail: "Some of its steps failed." })]);
     const word = await screen.findByTestId("schedule-status-nightly");
     expect(word.textContent).toBe("Done · part failed");
-    expect(word.className).toMatch(/text-tone-warn/);
+    expectCalmWord(word, "amber");
   });
 
   it("a failed run keeps its red word and reads 'The run failed: <reason>'", async () => {
     mountPage([row({ last_status: "error", last_detail: "The run failed: the endpoint is down" })]);
     const word = await screen.findByTestId("schedule-status-nightly");
     expect(word.textContent).toBe("Failed");
-    expect(word.className).toMatch(/text-tone-danger/);
+    expectCalmWord(word, "red");
     expect(screen.getByTestId("schedule-detail-nightly").textContent).toBe(
       "The run failed: the endpoint is down",
     );
@@ -226,14 +242,14 @@ describe("the Schedules page row", () => {
       row({ name: "e", last_status: "cancelled" }),
     ]);
     expect((await screen.findByTestId("schedule-status-a")).textContent).toBe("Done");
-    expect(screen.getByTestId("schedule-status-a").className).toMatch(/text-tone-success/);
+    expectCalmWord(screen.getByTestId("schedule-status-a"), "green");
     expect(screen.getByTestId("schedule-status-b").textContent).toBe("Skipped");
-    expect(screen.getByTestId("schedule-status-b").className).toMatch(/text-tone-warn/);
+    expectCalmWord(screen.getByTestId("schedule-status-b"), "amber");
     expect(screen.getByTestId("schedule-status-c").textContent).toBe("Missed");
     expect(screen.getByTestId("schedule-status-d").textContent).toBe("Not run yet");
     // A run stopped mid-way is not a failure and not a warning: slate.
     expect(screen.getByTestId("schedule-status-e").textContent).toBe("Stopped");
-    expect(screen.getByTestId("schedule-status-e").className).toMatch(/text-zinc-500/);
+    expectCalmWord(screen.getByTestId("schedule-status-e"), "slate");
     // Theme tokens only: no literal hue is left on the row.
     for (const n of ["a", "b", "c", "d", "e"]) {
       expect(screen.getByTestId(`schedule-status-${n}`).className).not.toMatch(/emerald|rose|amber/);
@@ -312,13 +328,21 @@ describe("a project's Schedules list", () => {
   // "stopped" here and a slate "Stopped" there. Both real components, the
   // same row, every verdict the scheduler writes plus a never-fired one.
   const INK = /text-tone-success|text-tone-danger|text-tone-warn|text-zinc-500/;
+  const INK_OF_TONE: Record<string, string> = {
+    green: "text-tone-success",
+    red: "text-tone-danger",
+    amber: "text-tone-warn",
+    slate: "text-zinc-500",
+  };
   it.each(["ok", "needs_you", "partial", "error", "failed", "cancelled", "skipped", "missed", ""])(
     "last_status %j reads the same word in the same ink on the Schedules page and the project list",
     async (status) => {
       mountPage([row({ last_status: status })]);
       const pageWord = await screen.findByTestId("schedule-status-nightly");
       const word = pageWord.textContent ?? "";
-      const pageInk = pageWord.className.match(INK)?.[0];
+      // v1.356.0 (G80, updated on purpose): the page's word is the calm
+      // Badge, its tone on the dot; the project list's ink is that tone.
+      const pageInk = INK_OF_TONE[pageWord.getAttribute("data-tone") ?? ""];
       expect(word).not.toBe("");
       expect(pageInk).toBeTruthy();
       cleanup();

@@ -47,7 +47,9 @@ def no_allowlist(monkeypatch):
 def test_a_desktop_install_reads_anywhere_and_the_gate_agrees(tmp_path, no_allowlist):
     client, d = _client(tmp_path)
     body = client.get("/settings/access").json()
-    assert body["reads"] == {"limited": False, "folders": []}
+    # v1.356.0 (G81, updated on purpose): + `chosen` (the "Folders Jarvis may
+    # read" setting, empty = no limit) and `install` (the variable's limit).
+    assert body["reads"] == {"limited": False, "folders": [], "chosen": [], "install": False}
     # The gate the file tools call reads a file far outside every workspace.
     outside = tmp_path / "elsewhere" / "taxes.pdf"
     ok, why = fs_policy.fs_read_ok(outside)
@@ -96,7 +98,10 @@ def test_the_route_never_fails_a_settings_page(no_allowlist):
             raise OSError("no Documents folder")
 
     facts = access_summary.access_facts(Broken())
-    assert facts == {"reads": {"limited": False, "folders": []}, "writes": {"chat_files_dir": ""}}
+    assert facts == {
+        "reads": {"limited": False, "folders": [], "chosen": [], "install": False},
+        "writes": {"chat_files_dir": ""},
+    }
     # No config at all (a bare platform) is not a crash either.
     assert access_summary.access_facts(None)["writes"]["chat_files_dir"] == ""
 

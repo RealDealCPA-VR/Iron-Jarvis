@@ -161,7 +161,7 @@ const FAILED = sv("s-failed", { status: "failed", outcome: null });
 
 /* ================================================== SessionStatusBadge */
 
-describe("SessionStatusBadge: a variant prop, the default unchanged", () => {
+describe("SessionStatusBadge: a variant prop, the default calm (v1.356.0)", () => {
   // v1.352.0 (G17, updated on purpose): the badge speaks the ONE status
   // table's words — "Done · needs you", "Done" (it read "Completed · needs
   // you" and the raw "completed").
@@ -171,8 +171,14 @@ describe("SessionStatusBadge: a variant prop, the default unchanged", () => {
     ["plain status", OK, "Done"],
   ];
 
-  it.each(cases)("%s: with no variant it is still the bordered pill", (_name, s, words) => {
-    const { container } = render(<SessionStatusBadge session={s} />);
+  // v1.356.0 (G80, updated on purpose): calm is THE DEFAULT, so the Sessions
+  // list and a session's header draw the same quiet chip as the board; the
+  // old pill is variant="bordered", unchanged.
+  it.each(cases)("%s: with no variant it is the calm chip; variant=\"bordered\" is the old pill", (_name, s, words) => {
+    render(<SessionStatusBadge session={s} />);
+    expectCalmChip(screen.getByText(words), s === OK ? "bg-tone-success" : "bg-tone-warn", words);
+    cleanup();
+    const { container } = render(<SessionStatusBadge session={s} variant="bordered" />);
     const chip = screen.getByText(words);
     expect(chip.getAttribute("data-badge-variant")).toBeNull();
     expect(tokens(chip)).toContain("border");
@@ -322,7 +328,8 @@ describe("source guard: the board and the project Tasks stay calm", () => {
     expect(uses).toEqual(["calm", "calm"]);
   });
 
-  it("the Sessions pages pass no variant, so they keep the bordered pill (the default is unchanged)", () => {
+  // v1.356.0 (G80, updated on purpose): no variant now means the calm chip.
+  it("the Sessions pages pass no variant, so they draw the default (calm since v1.356.0) chip", () => {
     for (const rel of ["app/sessions/page.tsx", "app/sessions/[id]/page.tsx"]) {
       const uses = statusBadgeVariants(rel);
       expect(uses.length, rel).toBeGreaterThan(0);

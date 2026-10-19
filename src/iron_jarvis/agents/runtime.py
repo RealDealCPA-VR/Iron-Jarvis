@@ -2538,6 +2538,16 @@ class AgentRuntime:
         # person; an unattended door keeps SESSION_APPROVAL_TIMEOUT_S.
         timeout = _ask_timeout_for(getattr(session, "origin", None) or "")
         examples: list = []
+        # G79 (v1.356.0): a PRICED ask's sentence rides the registry entry
+        # too, so the session row's `waiting_on` and the mission screen's own
+        # card say the cost before Allow — the same words the event carries.
+        # Passed only when there is a price (a registry double takes no kwarg
+        # it was never given; an unpriced ask files exactly as before).
+        _cost_kw = (
+            {"cost_note": spend.words}
+            if spend is not None and getattr(spend, "words", "")
+            else {}
+        )
         if count > 1:
             for c in calls[:_BATCH_EXAMPLES]:
                 ct = self.p.registry.get(c.name)
@@ -2545,10 +2555,13 @@ class AgentRuntime:
                     ct.redact_args(c.arguments) if ct is not None else c.arguments
                 )
             approval_id, fut = approvals.request(
-                tc.name, safe, session_id=session.id, count=count, examples=examples
+                tc.name, safe, session_id=session.id, count=count, examples=examples,
+                **_cost_kw,
             )
         else:
-            approval_id, fut = approvals.request(tc.name, safe, session_id=session.id)
+            approval_id, fut = approvals.request(
+                tc.name, safe, session_id=session.id, **_cost_kw
+            )
         _grant_scopes = self.grant_scopes(session)
         requested = {
             "approval_id": approval_id,
