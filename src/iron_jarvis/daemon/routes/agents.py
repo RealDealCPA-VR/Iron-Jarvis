@@ -471,6 +471,10 @@ class ConnectionIndex(dict):
       Google Drive / OneDrive / Dropbox sign-in gives MEMORY SEARCH, not
       that server's tools, so it is never "already connected" for an
       imported server of the same name; the row says the sign-in instead.
+    * ``keyed`` (v1.356.0 integrate) -- folded name -> the card name of a
+      KEY connection (Pixio's). A saved key powers a built-in tool, never an
+      imported server of the same name, so it is not "already connected"
+      either (the OAuth rule, for keys); the row says the key instead.
     """
 
     def __init__(self) -> None:
@@ -478,6 +482,7 @@ class ConnectionIndex(dict):
         self.packs: dict[str, list[dict[str, Any]]] = {}
         self.others: dict[str, str] = {}
         self.signed_in: dict[str, str] = {}
+        self.keyed: dict[str, str] = {}
 
 
 def connection_index(d) -> ConnectionIndex:
@@ -512,15 +517,20 @@ def connection_index(d) -> ConnectionIndex:
             for key in (row.get("id"), row.get("catalog_id")):
                 if _fold_name(key):
                     index.signed_in.setdefault(_fold_name(key), str(row.get("name") or key))
-        elif via in ("mcp", "api_key") and row.get("connected") is True:
+        elif via == "api_key" and row.get("connected") is True:
+            # v1.356.0 integrate (wave-5 follow-up): a saved KEY is not the
+            # server either — Pixio's key powers the built-in media tool; an
+            # imported "pixio" server is a different server with its own tools.
             for key in (row.get("id"), row.get("catalog_id")):
                 if _fold_name(key):
-                    index.setdefault(_fold_name(key), "app")
+                    index.keyed.setdefault(_fold_name(key), str(row.get("name") or key))
+        elif via == "mcp" and row.get("connected") is True:
+            for key in (row.get("id"), row.get("catalog_id")):
+                if _fold_name(key):
                     # A Directory MCP card IS a pack (its row in
                     # config.mcp_servers): it never speaks for a DIFFERENT
-                    # server of a similar name. A key connection (Pixio) does.
-                    if via == "api_key":
-                        index.others.setdefault(_fold_name(key), "app")
+                    # server of a similar name.
+                    index.setdefault(_fold_name(key), "app")
     return index
 
 
@@ -721,6 +731,11 @@ def preview_rows(
         )
         if signed_in and not exists_as:
             row["signed_in_app"] = signed_in
+        # v1.356.0 integrate: a KEY of the same name (Pixio's) - said, never
+        # "already connected" (the key powers a built-in tool, not this server).
+        keyed = getattr(known, "keyed", {}).get(_fold_name(spec.name), "") if spec.name else ""
+        if keyed and not exists_as:
+            row["key_app"] = keyed
         rows.append(row)
     return rows
 
@@ -834,14 +849,26 @@ def _apply_specs(
             skipped.append({"name": name, "why": _plain_validation_words(exc)})
             continue
         old_row = _pack_row(d, name)
+        old_name = name
+        if old_row is None:
+            # v1.356.0 integrate (wave-5 follow-up): the SAME server already
+            # added under another spelling (the preview's "already added as
+            # X") is never silently added a second time under the new one —
+            # it is skipped with that name, or (replace) X is replaced.
+            other = _same_server_other_name(d, spec)
+            if other:
+                if not replace:
+                    skipped.append({"name": name, "why": f"already added as {other}"})
+                    continue
+                old_row, old_name = _pack_row(d, other), other
         old_values: dict[str, str] = {}
         if old_row is not None:
             if not replace:
                 skipped.append({"name": name, "why": "already added"})
                 continue
-            old_values = _pack_vault_values(d, name, old_row)
+            old_values = _pack_vault_values(d, old_name, old_row)
             try:
-                remove_mcp_pack(d, name)
+                remove_mcp_pack(d, old_name)
             except HTTPException as exc:
                 skipped.append({"name": name, "why": f"could not replace: {exc.detail}"})
                 continue
@@ -876,6 +903,24 @@ def _apply_specs(
             }
         )
     return {"added": added, "skipped": skipped}
+
+
+def _same_server_other_name(d, spec: Any) -> str:
+    """The stored pack name that runs the SAME server as *spec* under a
+    differently spelled name (folded equal, ``_same_server``), or ``""`` —
+    the apply-side twin of the preview's ``exists_name`` (v1.356.0
+    integrate)."""
+    name = str(getattr(spec, "name", "") or "")
+    fold = _fold_name(name)
+    if not fold:
+        return ""
+    for s in getattr(d.platform.config, "mcp_servers", None) or []:
+        if not isinstance(s, dict):
+            continue
+        other = str(s.get("name") or "")
+        if other and other != name and _fold_name(other) == fold and _same_server(s, spec):
+            return other
+    return ""
 
 
 def _pack_row(d, name: str) -> dict[str, Any] | None:

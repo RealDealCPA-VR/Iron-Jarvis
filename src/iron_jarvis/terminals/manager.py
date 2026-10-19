@@ -116,8 +116,10 @@ def _with_pane_env(
     recipe's freshly minted `IRONJARVIS_MCP_TOKEN` — which arrives in
     `pane_env` — still reaches the child, while an inherited one never does.
     It applies to a caller-supplied `env` too: the credential is the same
-    credential whichever dict it travelled in, and no caller in this repository
-    passes one deliberately.
+    credential whichever dict it travelled in. Since v1.356.0 (G60) one caller
+    passes one deliberately: `routes/terminals.launch_pane` hands an app
+    sign-in pane the daemon's environment plus the card's settings (Microsoft
+    365's tool filter and account kind) — the strip still applies to it.
 
     `accounts` (v1.302.0, a `pane_accounts.PaneAccounts`) is applied to that
     same base BEFORE the pane's identity: the account's home variable set,

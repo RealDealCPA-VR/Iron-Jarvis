@@ -449,6 +449,10 @@ export function SettingsHome() {
                             ? String(form.default_provider ?? "") || undefined
                             : undefined
                         }
+                        // v1.356.0 (G77): "after a restart" is a press that opens
+                        // Settings › System › Maintenance in place (never a
+                        // /settings?section= link — the v1.353.0 rule).
+                        onOpenMaintenance={() => goTo("system", "system-maintenance")}
                         onChange={(v) => setForm((f) => ({ ...f, [d.key]: v }))}
                       />
                     ))}

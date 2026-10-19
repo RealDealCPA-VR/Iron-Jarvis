@@ -160,11 +160,15 @@ export function EndpointModelPicker({
   onChange,
   protocol = "openai",
   onProtocol,
+  label = "Model",
 }: {
   baseUrl: string;
   apiKey: string;
   value: string;
   onChange: (model: string) => void;
+  /** v1.356.0 (G75): the field's visible label (the first-run door says
+   *  "Model name"); every other picker keeps "Model". */
+  label?: string;
   /** The way to ask first (the form's current choice). */
   protocol?: EndpointProtocol;
   /** Told which way the server answered when a list came back. */
@@ -319,7 +323,7 @@ export function EndpointModelPicker({
     <div className="space-y-1">
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5">
         <label htmlFor={inputId} className="text-[11px] font-medium text-zinc-400">
-          Model
+          {label}
         </label>
         <button
           type="button"

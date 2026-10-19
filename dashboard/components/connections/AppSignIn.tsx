@@ -76,7 +76,7 @@ export function ChoiceField({
     <fieldset data-testid={`choice-${name}`} className="space-y-1">
       <legend className="text-[11px] font-medium text-zinc-400">
         {label}
-        {!optional && <span className="ml-0.5 text-rose-300">*</span>}
+        {!optional && <span className="ml-0.5 text-tone-danger">*</span>}
         {optional && <span className="ml-1 text-zinc-600">(optional)</span>}
       </legend>
       {options.map((o, i) => (

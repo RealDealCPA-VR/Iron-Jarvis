@@ -1,0 +1,76 @@
+{
+  "directory_card": {
+    "account": "",
+    "action": "",
+    "asks_first": true,
+    "blurb": "Read channels and post messages.",
+    "can_change": 0,
+    "category": "Communication",
+    "connect_via": "mcp",
+    "connected": true,
+    "detail": "It's switched off, so its tools are not loaded.",
+    "docs_url": "https://github.com/zencoderai/slack-mcp-server",
+    "enabled": false,
+    "fields": [
+      {
+        "help": "A xoxb-\u2026 bot token from your Slack app.",
+        "kind": "secret",
+        "label": "Slack bot token",
+        "name": "SLACK_BOT_TOKEN",
+        "optional": false
+      },
+      {
+        "help": "Your workspace/team id (T\u2026).",
+        "kind": "env",
+        "label": "Slack team id",
+        "name": "SLACK_TEAM_ID",
+        "optional": false
+      }
+    ],
+    "fix": "",
+    "glyph": "\ud83d\udcac",
+    "held_back": 0,
+    "href": "",
+    "id": "slack",
+    "keyed": true,
+    "name": "Slack",
+    "needs": "",
+    "package_note": "",
+    "provider": "",
+    "reason": "",
+    "scopes": [
+      "Read channels & messages",
+      "Post messages"
+    ],
+    "status": "off",
+    "stderr_tail": "",
+    "tool_names": [],
+    "tools_loaded": 0,
+    "unlocks": "Search your Slack workspace, read channel history, and post or reply to messages on your behalf."
+  },
+  "tools_row": {
+    "auth": {
+      "format": "Bearer {value}",
+      "header": "Authorization",
+      "value_set": true
+    },
+    "auth_set": true,
+    "enabled": false,
+    "env_keys": [],
+    "failures": 0,
+    "fix": null,
+    "header_names": [],
+    "last_attempt_at": null,
+    "last_error": null,
+    "name": "slack",
+    "quarantined": [],
+    "reason": null,
+    "secret_keys": [],
+    "state": "off",
+    "stderr_tail": "",
+    "tool_names": [],
+    "tools": [],
+    "tools_loaded": 0,
+    "transport": "http"
+  }
+}

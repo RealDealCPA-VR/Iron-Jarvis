@@ -638,11 +638,13 @@ describe("StatusChip — a runtime this PC has is not a warning (tools-false-run
     expect(container.querySelector('svg[class*="triangle"], svg[class*="alert"]')).toBeNull();
   });
 
-  it("control: 'blocked' still carries the amber alert — so the check above is not vacuous", () => {
-    const { container } = render(<StatusChip status="blocked" needs="Node" />);
-    expect(screen.getByTestId("status-blocked").textContent).toContain("Needs Node");
-    expect(container.querySelector('[class*="amber"]')).not.toBeNull();
-    expect(container.querySelector('svg[class*="triangle"], svg[class*="alert"]')).not.toBeNull();
+  it("control: 'blocked' still carries the amber tone — so the check above is not vacuous", () => {
+    // v1.356.0 integrate (G80, moved on purpose): the chip is the calm Badge -
+    // the tone rides the dot (data-tone), the word says "Needs"; no triangle.
+    render(<StatusChip status="blocked" needs="Node" />);
+    const chip = screen.getByTestId("status-blocked");
+    expect(chip.textContent).toContain("Needs Node");
+    expect(chip.getAttribute("data-tone")).toBe("amber");
   });
 });
 

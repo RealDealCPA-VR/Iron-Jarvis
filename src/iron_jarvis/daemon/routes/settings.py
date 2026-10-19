@@ -283,7 +283,9 @@ def diagnostics_snapshot(d_or_platform) -> dict[str, Any]:
     # name with its reason — the Overview hero reads this so "All systems
     # nominal" cannot sit over a pack whose tools every agent is missing.
     try:
+        from ...mcp.tools import STATE_OFF as _STATE_OFF
         from ...mcp.tools import load_status as _mcp_load_status
+        from ...mcp.tools import pack_enabled as _pack_enabled
 
         out["mcp_servers"] = [
             {
@@ -291,8 +293,12 @@ def diagnostics_snapshot(d_or_platform) -> dict[str, Any]:
                 # v1.311.0: "starting" while the daemon's background load
                 # has not heard from the pack yet (boot no longer waits on
                 # handshakes), then "ok" / "failed" / "failing" (v1.342.0;
-                # "ok" was "ready"); None = never tried.
-                "state": (_mcp_load_status(str(s.get("name") or "")) or {}).get("state"),
+                # "ok" was "ready"); None = never tried. v1.356.0 integrate
+                # (G78): "off" for a pack the user switched off (it has no
+                # load record by design — "never tried" would misread it).
+                "state": _STATE_OFF
+                if not _pack_enabled(s)
+                else (_mcp_load_status(str(s.get("name") or "")) or {}).get("state"),
                 "tools_loaded": len(platform.registry.mcp_names(str(s.get("name") or ""))),
                 "last_error": (_mcp_load_status(str(s.get("name") or "")) or {}).get("last_error"),
                 # v1.256.0 (R-02): the plain-words cause and the next action,

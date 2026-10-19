@@ -278,7 +278,8 @@ describe("G72: the key door's Custom endpoint", () => {
     ]);
 
     fireEvent.click(within(panel).getByText("gemma-3-4b"));
-    expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("gemma-3-4b");
+    // v1.356.0 integrate (G75): the first-run door's field reads "Model name" (moved on purpose).
+    expect((screen.getByLabelText("Model name") as HTMLInputElement).value).toBe("gemma-3-4b");
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     await waitFor(() =>
       expect(hooks.puts).toEqual([

@@ -86,6 +86,14 @@ PRICES: dict[tuple[str, str], dict[str, float]] = {
     ("google", "gemini-1.5-pro"): {"input": 1.25, "output": 5.0},
     ("google", "gemini-2.0-flash"): {"input": 0.10, "output": 0.40},
     ("google", "gemini-2.5-pro"): {"input": 1.25, "output": 10.0},
+    # v1.356.0 integrate: read 2026-10-19 on Google's own page,
+    # https://ai.google.dev/gemini-api/docs/pricing ("Last updated 2026-10-16
+    # UTC"), Standard paid tier, per 1M tokens. gemini-3.8-flash is $0.75 in /
+    # $3.75 out (thinking included) / $0.075 cached "through December 31,
+    # 2026" and doubles "starting January 1, 2027" ($1.50 / $7.50 / $0.15) —
+    # UPDATE THIS ROW THEN. gemini-3.5-flash-lite: $0.30 / $2.50 / $0.03.
+    ("google", "gemini-3.8-flash"): {"input": 0.75, "output": 3.75, "cache_read": 0.075},
+    ("google", "gemini-3.5-flash-lite"): {"input": 0.30, "output": 2.50, "cache_read": 0.03},
     ("google", "gemini"): {"input": 1.25, "output": 5.0},  # generic gemini-* fallback
     # --- Local / offline providers cost nothing --------------------------
     ("mock", ""): {"input": 0.0, "output": 0.0},

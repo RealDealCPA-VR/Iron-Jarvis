@@ -56,7 +56,9 @@ RECENT_ERRORS_SHOWN = 10
 #: One line per relayed text; a longer one is cut with a marker.
 LINE_MAX = 300
 #: The pack states a row may carry, in the order the summary names them.
-PACK_STATES = ("ok", "starting", "failed", "failing")
+#: v1.356.0 integrate (G78): "off" = switched off by the user (kept with its
+#: key, no tools loaded on purpose) - never counted as "not started".
+PACK_STATES = ("ok", "starting", "failed", "failing", "off")
 #: Where the user fixes a pack / a provider by hand (the words the recovery
 #: block and these tools agree on).
 TOOLS_PAGE = "Settings > Tools"
@@ -192,6 +194,8 @@ def pack_words(p: dict[str, Any]) -> str:
         return s + "."
     if state == "starting":
         return f"{name}: still starting."
+    if state == "off":
+        return f"{name}: switched off by the user; turn it on in {TOOLS_PAGE}."
     if state == "failing":
         s = f"{name}: loaded ({n} tools) but its calls fail ({p.get('failures') or 0} so far)"
     elif state == "failed":
@@ -461,7 +465,7 @@ class AppHealthTool(Tool):
         for state in PACK_STATES:
             n = sum(1 for p in packs if p["state"] == state)
             if n:
-                counts.append(f"{n} {state}")
+                counts.append(f"{n} switched off" if state == "off" else f"{n} {state}")
         unknown = sum(1 for p in packs if p["state"] not in PACK_STATES)
         if unknown:
             counts.append(f"{unknown} not started")

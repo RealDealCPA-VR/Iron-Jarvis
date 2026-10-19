@@ -104,7 +104,10 @@ export function MaintenanceCard() {
           <SectionLabel>{RESTART_WORDS.label}</SectionLabel>
           <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">{RESTART_WORDS.blurb}</p>
           <div className="mt-2.5">
+            {/* v1.356.0 integrate (G80): the restart keeps its deliberate amber
+                outline - the calm default has no border for it to colour. */}
             <ConfirmButton
+              variant="bordered"
               onConfirm={() => void restartDaemon()}
               label={RESTART_WORDS.label}
               confirmLabel={restarting ? "Restarting…" : "Confirm restart"}

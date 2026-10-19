@@ -57,6 +57,18 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "dropbox": (r"drop\s*box",),
     "brave_search": (r"brave\s*search",),
     "filesystem": (r"file\s+system",),
+    # v1.356.0 integrate (G60, lane 6D's note): "what's on my calendar
+    # tomorrow?" and "check my Outlook inbox" name Microsoft 365 (Outlook, the
+    # calendar, OneDrive). "Outlook" only capitalised ("an outlook on the
+    # market" is a view), and "my calendar" never as "my calendar year".
+    "microsoft_365": (
+        r"microsoft\s*365",
+        r"office\s*365",
+        r"m365",
+        r"(?-i:Outlook)",
+        r"outlook\.com",
+        r"my\s+(?:outlook\s+)?calendar(?!\s+years?\b)",
+    ),
 }
 
 #: The everyday words for mail that mean Gmail (the one mail app in the
@@ -228,6 +240,7 @@ def app_states(
 ) -> list[dict[str, Any]]:
     """One row per named app (and named CLI): ``{id, name, state, tools,
     needs, note}`` where ``state`` is ``connected`` / ``not_working`` /
+    ``off`` (v1.356.0: saved, but the user switched it off) /
     ``not_connected`` (CLIs: ``signed_in`` / ``signed_out`` /
     ``not_installed`` / ``unknown``). BLOCKING (the connections table, the
     memory bases): call it OFF the loop. Never raises; a row it cannot read
@@ -258,7 +271,11 @@ def app_states(
                 "needs": "", "note": "",
             }
             if conn.connect_via == "mcp":
-                if cid in live:
+                if cid in live and _switched_off(platform, cid):
+                    # v1.356.0 integrate (G78): saved with its key, its tools
+                    # not loaded on purpose — never "set up, but not working".
+                    row["state"] = "off"
+                elif cid in live:
                     n = len(live[cid])
                     row["tools"] = n
                     row["state"] = "connected" if n else "not_working"
@@ -298,6 +315,19 @@ def app_states(
         except Exception:  # noqa: BLE001
             continue
     return rows
+
+
+def _switched_off(platform: Any, cid: str) -> bool:
+    """True when the app's saved pack row is switched OFF (v1.356.0, G78) —
+    the loader's own reading (``connectors.service.pack_on``). Any fault reads
+    as on (the older answer)."""
+    try:
+        from .service import _configured_name, _server_cfg, pack_on
+
+        cfg = _server_cfg(platform, _configured_name(platform, cid) or cid)
+        return cfg is not None and not pack_on(cfg)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _load_reason(platform: Any, cid: str) -> str:
@@ -373,6 +403,13 @@ def apps_section(rows: list[dict[str, Any]]) -> str:
                 line = (
                     f"- {name}: set up, but not working right now{why}. If answering"
                     f" needs {name}, say so and point to {APPS_PLACE} to fix it."
+                )
+            elif state == "off":
+                line = (
+                    f"- {name}: switched off by the user (kept with its key; its"
+                    f" tools are not loaded). If answering needs {name}, say so and"
+                    " point to Settings › Tools or its card in"
+                    f" {APPS_PLACE} to turn it on. Never ask for its key again."
                 )
             elif state == "not_connected":
                 line = (

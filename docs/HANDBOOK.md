@@ -1892,6 +1892,75 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Switch an app off without losing it, Microsoft 365, and the last plain words (v1.356.0)
+
+You can now pause an app instead of removing it, connect Microsoft 365, and
+read every control in plain words. The look of the app is the same.
+
+- **Switch an app off, and back on.** Every extension on Settings › Tools and
+  every connected card in the Directory has an On/Off switch. Off pauses its
+  tools for chats and agents at once; its settings and keys are kept, so
+  switching it back on needs nothing typed again. An app that is off reads
+  **Off** everywhere: on its row, on its card, in Everything › Status ("2 of 2
+  tool packs running (1 switched off)"), in the health check, and to Jarvis
+  itself, which says it is switched off rather than broken. Asking the chat to
+  "connect my Slack" while Slack is off tells you where to switch it on and
+  never asks for the key again. A tool brought in from another app where it
+  was switched off arrives switched off here too.
+- **Microsoft 365 (Outlook, Calendar, OneDrive).** Press **Connect** on its
+  Directory card and answer one question: **Work or school account** or
+  **Personal account** (Outlook.com, Hotmail, Live). Then press **Sign in to
+  Microsoft**: a Build pane opens with a web address and a code. Open the
+  address, type the code and sign in. Turn it on in a chat with + ›
+  Connections and ask, for example, what's on your calendar tomorrow. It reads
+  and changes calendar events, reads, drafts and sends email, reads contacts
+  and reads OneDrive files, and asks before each use unless you allow it. It
+  needs Node.js. Saying "connect my Outlook" in chat sets it up the same way.
+- **Adding and editing tools without technical words.** The Tools page says
+  how each tool connects in words ("A web address", "(older servers)"), keeps
+  its command or address folded under **Show command** / **Show address**,
+  names its settings as settings, and says **Remove**. A tool that is failing
+  adds "Chats and agents can't use its tools until it works."
+- **Chat controls in plain words.** A long chat offers "This chat is getting
+  long. Summarize the start to keep it fast? The full transcript is kept." with
+  a **Summarize** button. The tools menu lists each tool by what it does
+  ("Read files", "gmail: search messages") with **Turn off**. A model that
+  reads very long documents shows **long docs**; the thinking control's
+  default reads **Model decides**; the first-run model server door asks for
+  "Your model server's address" and "Model name".
+- **Labels say what they lead to.** Hovering **low trust** says what that run
+  can't do (change settings, schedules, rules, connections, memory, agents or
+  skills, type into your terminals, spend credits); the session page says the
+  same. A setting marked **after a restart** is a press that opens Settings ›
+  System › Maintenance, where **Restart Iron Jarvis** is. The Sessions page
+  button reads **Clear finished, failed and stopped** and asks before it
+  deletes. Everything › Status names your models as the model menu does and
+  names the browser you paired.
+- **Choose the folders Jarvis may read.** Settings › Permissions & ledger has
+  **Folders Jarvis may read**, one folder per line (a comma in a folder name
+  is fine). Leave it empty to let Jarvis read anywhere except the folders
+  that hold its own keys and records. With folders listed, chat and agents
+  read only inside them and Jarvis's own working folders; a read elsewhere is
+  refused with "That folder isn't one Jarvis may read. Change the folders in
+  Settings › Permissions." A project or work folder outside them says the
+  same place. **What Jarvis can reach** updates as soon as you save.
+- **A paid request shows its price on the mission screen too.** When a
+  teammate asks to make a paid picture, the approval says what it costs
+  ("Generate 1 image on Pixio for 12 credits (your price)") before **Allow**.
+- **One quiet status chip.** Status chips on Sessions, Tools (including the
+  catalog cards) and Schedules are the same calm word with a small coloured
+  dot. Only the **Close this terminal?** dialog and the **Restart Iron
+  Jarvis** button keep their outline on purpose.
+- **Bringing tools from your other apps, honestly.** A tool already added
+  under a slightly different name is skipped with "already added as
+  brave_search" unless you choose **Replace**. A saved Pixio key is said on
+  its own line ("Your Pixio key is saved here for its built-in tools"), never
+  as "already connected" for a different tool of the same name.
+- **An agent's waiting time starts at your question.** Pressing Continue does
+  not restart the clock on an @-mentioned agent's reply.
+- **Gemini 3.8 Flash and Gemini 3.5 Flash-Lite are priced at Google's
+  published rates** in usage and allowance estimates.
+
 ## Every reply says what happened, and every app has one way in (v1.355.0)
 
 Replies now say what was left out, what you approved and how long they took;

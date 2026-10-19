@@ -12,10 +12,9 @@
  * tests/test_microsoft_365_v13560.py). Only lib/api is a fake (the house
  * pattern). Every waitFor waits for the thing it asserts.
  *
- * THE DIRECTORY MOUNT (last block) needs the lane's patch to DirectoryPage.tsx
- * (lane 6A's file; the integrator applies it). Until then those pins are
- * `it.fails` — they pass only while the card lacks the pieces. INTEGRATOR:
- * after applying the 6D mount patch, change each `it.fails` below to `it`.
+ * THE DIRECTORY MOUNT (last block): the v1.356.0 integrator applied the
+ * lane's patch to DirectoryPage.tsx (ChoiceField for a field with `options`,
+ * AppSignIn on a saved card with `signin`), so those pins are plain `it` now.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -235,7 +234,7 @@ describe("AppSignIn's look", () => {
 
 // --------------------------------------------------------------------------- //
 // The Directory mount (lane 6A's DirectoryPage + the 6D patch)
-// INTEGRATOR: after applying the 6D mount patch, change `it.fails` -> `it`.
+// (v1.356.0 integrate: the mount patch is applied; these are plain pins.)
 // --------------------------------------------------------------------------- //
 describe("the Directory card", () => {
   async function renderDirectory(row: Row) {
@@ -262,7 +261,7 @@ describe("the Directory card", () => {
     return screen.findByTestId("connector-card-microsoft_365", {}, { timeout: 10_000 });
   }
 
-  it.fails("asks the plain choice in the Connect form, and Connect waits for an answer", async () => {
+  it("asks the plain choice in the Connect form, and Connect waits for an answer", async () => {
     const card = await renderDirectory(ROWS.before);
     fireEvent.click(within(card).getByRole("button", { name: /Connect/ }));
     const group = await within(card).findByRole("group", { name: /Which Microsoft account\?/ });
@@ -278,7 +277,7 @@ describe("the Directory card", () => {
     );
   });
 
-  it.fails("offers Sign in to Microsoft on the saved card, opening the sign-in pane", async () => {
+  it("offers Sign in to Microsoft on the saved card, opening the sign-in pane", async () => {
     const card = await renderDirectory(ROWS.after);
     const press = await within(card).findByTestId("connector-signin-press-microsoft_365");
     expect(press.textContent).toContain("Sign in to Microsoft");

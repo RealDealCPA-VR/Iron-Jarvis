@@ -102,12 +102,14 @@ export function writesSentence(facts: AccessFacts | null): string {
 }
 
 /** The connected apps, by name (the Memory sources are not apps). A saved
- *  connection that does not work is named as such. */
+ *  connection that does not work is named as such; one the user switched off
+ *  (v1.356.0, G78) says "off", never "not working". */
 export function connectedApps(rows: ConnectorRow[] | null | undefined): string[] {
   return (rows ?? [])
     .filter((r) => r && r.connected === true && r.category !== "Memory")
     .map((r) => {
       const name = (r.name || r.id || "").trim();
+      if (r.status === "off") return `${name} (off)`;
       return r.status === "connected" ? name : `${name} (not working)`;
     })
     .filter(Boolean);

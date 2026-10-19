@@ -81,10 +81,10 @@ export function waitingLabel(session: OutcomeSource): string | null {
  *  that case only, and still wins over the table's).
  *
  *  `variant` (v1.330.0, calm wave 12) picks the Badge's look for all three
- *  cases: "default" is the bordered pill the Sessions pages draw (and what a
- *  caller that says nothing gets); "calm" is the quiet chip of the calm
- *  surfaces (a project's Tasks list), where only the dot carries the tone.
- *  The words and the tone are the same either way. */
+ *  cases. Since v1.356.0 (G80) "default" and "calm" draw the SAME quiet chip
+ *  (only the dot carries the tone) — what the Sessions pages and a project's
+ *  Tasks list draw, and what a caller that says nothing gets; "bordered" is
+ *  the older tinted pill. The words and the tone are the same either way. */
 export function SessionStatusBadge({
   session,
   tone,

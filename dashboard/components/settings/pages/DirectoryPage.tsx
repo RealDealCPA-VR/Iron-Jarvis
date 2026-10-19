@@ -41,6 +41,7 @@ import { EditPack, type EditSaved } from "@/components/tools/EditPack";
 import { PackSwitch } from "@/components/tools/PackSwitch";
 import { packStartReason } from "@/lib/packStartWords";
 import { packPowersLine } from "@/lib/packPowers";
+import { AppSignIn, ChoiceField, type AppSigninRow, type FieldOption } from "@/components/connections/AppSignIn";
 import {
   PACK_OFF_LINE,
   PACK_OFF_WORD,
@@ -68,6 +69,9 @@ interface ConnectorField {
   help: string;
   kind: FieldKind;
   optional: boolean;
+  /** v1.356.0 (G60): a field answered from a list (the daemon sends
+   *  `options` only for one) - drawn as a plain choice. */
+  options?: FieldOption[];
 }
 
 /** One entry of GET /connectors — catalog data merged with live status. */
@@ -118,6 +122,9 @@ interface Connector {
   held_back?: number | null;
   /** v1.355.0 (G69): the app holds a key or token the card can change. */
   keyed?: boolean | null;
+  /** v1.356.0 (G60): an app that signs in on this PC - what its Sign in
+   *  press opens (null until it is saved). Absent on every other card. */
+  signin?: AppSigninRow | null;
   /** v1.356.0 (G78): false = the user switched this app's pack off (kept
    *  with its key, never loaded). The daemon's connectors rows carry it
    *  (the pack's `mcp_servers` entry `enabled`); absent = on. */
@@ -727,6 +734,10 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               Turn it on in a chat with + › Connections
             </p>
           )}
+          {/* v1.356.0 (G60): an app that signs in on this PC (Microsoft 365):
+              its Sign in opens a Build pane running the app's own sign-in,
+              which shows a web address and a code. */}
+          {c.connect_via === "mcp" && c.signin && <AppSignIn id={c.id} signin={c.signin} />}
           {c.connect_via === "mcp" && !off && (c.tool_names?.length ?? 0) > 0 && (
             <div className="flex flex-wrap gap-1">
               {c.tool_names!.map((n) => (
@@ -903,7 +914,21 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
                   </span>
                 </label>
               ) : (
-                c.fields.map((f, i) => (
+                c.fields.map((f, i) => f.options?.length ? (
+                  /* v1.356.0 (G60): a field answered from a list (Microsoft
+                     365's account kind): components/connections/AppSignIn. */
+                  <ChoiceField
+                    key={f.name}
+                    name={f.name}
+                    label={f.label}
+                    help={f.help}
+                    options={f.options}
+                    optional={f.optional}
+                    value={values[f.name] ?? ""}
+                    autoFocus={i === 0}
+                    onChange={(v) => setValues((cur) => ({ ...cur, [f.name]: v }))}
+                  />
+                ) : (
                   <label key={f.name} className="block space-y-1">
                     <span className="text-[11px] font-medium text-zinc-400">
                       {f.label}

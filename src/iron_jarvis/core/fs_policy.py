@@ -431,6 +431,14 @@ def root_problem(
             if not inside:
                 return f"this installation does not allow reading that folder: {root}"
         return None
+    if not is_protected_path(str(p)) and _read_refusal(p) == READ_REFUSAL:
+        # v1.356.0 integrate (G81): the USER's "Folders Jarvis may read"
+        # refused it — say where that is changed (a project root, a chat's
+        # work folder or a schedule's folder outside the listed ones).
+        return (
+            f"that folder isn't one Jarvis may read or work in: {root} "
+            "— change the folders in Settings › Permissions, or pick one of them"
+        )
     if not fs_path_allowed(str(p)) or is_protected_path(str(p)):
         return (
             f"folder is protected or outside the app's allowed file roots: {root} "

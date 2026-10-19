@@ -12,13 +12,14 @@
  * review's §2 complaint ("two nearly duplicate products") was exactly that
  * happening at the section level.
  *
- * STATUS IS NEVER COLOUR-ONLY (review, accessibility): every state carries an
- * icon and a word, so "Added" and "Add" are distinguishable without seeing
- * green vs teal.
+ * STATUS IS NEVER COLOUR-ONLY (review, accessibility): every state carries its
+ * own word, so "Enabled" and "Not added" are distinguishable without seeing
+ * green vs grey (since v1.356.0 the calm Badge: a word and a toned dot).
  */
 
 import type { ReactNode } from "react";
-import { AlertTriangle, Check, Download, Eye, Globe, HardDrive, Pencil } from "lucide-react";
+import { Eye, Globe, HardDrive, Pencil } from "lucide-react";
+import { Badge } from "@/components/ui";
 import { CAPABILITY_CHIP, CAPABILITY_LABEL, type Capability } from "./meta";
 
 /* ------------------------------------------------------------------ status */
@@ -33,10 +34,13 @@ import { CAPABILITY_CHIP, CAPABILITY_LABEL, type Capability } from "./meta";
  */
 export type ToolStatus = "added" | "available" | "blocked" | "ready";
 
-/** The status chips' shared shape — one literal, so the four states cannot
- *  drift apart in size (v1.316.0 lifted it when "ready" made a fourth). */
-const STATUS_CHIP = "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10.5px] font-medium";
-
+/**
+ * v1.356.0 integrate (G80): the catalog cards' status is the calm Badge — the
+ * same chip the connected-pack rows (`mcp-state-<name>`), Sessions and
+ * Schedules draw: no border, neutral words, the tone on the small dot. Still
+ * never colour-only: every state is a different WORD ("Enabled", "Uses X",
+ * "Needs X", "Not added"), and the requirement stays in the title.
+ */
 export function StatusChip({
   status,
   needs,
@@ -48,45 +52,33 @@ export function StatusChip({
   className?: string;
 }) {
   if (status === "added") {
-    return (
-      <span
-        data-testid="status-added"
-        className={`${STATUS_CHIP} border-emerald-500/30 bg-emerald-500/[0.1] text-emerald-300 ${className}`}
-      >
-        <Check size={11} aria-hidden /> Enabled
-      </span>
-    );
+    return <Badge value="Enabled" tone="green" keepCase data-testid="status-added" className={className} />;
   }
   if (status === "ready") {
     return (
-      <span
+      <Badge
+        value={`Uses ${needs}`}
+        tone="slate"
+        keepCase
         data-testid="status-ready"
         title={`Needs ${needs} — found on this PC, so it can be added now`}
-        className={`${STATUS_CHIP} border-white/10 text-zinc-400 ${className}`}
-      >
-        <Check size={11} aria-hidden /> Uses {needs}
-      </span>
+        className={className}
+      />
     );
   }
   if (status === "blocked") {
     return (
-      <span
+      <Badge
+        value={`Needs ${needs}`}
+        tone="amber"
+        keepCase
         data-testid="status-blocked"
         title={`This extension runs through ${needs}`}
-        className={`${STATUS_CHIP} border-amber-400/25 bg-amber-400/[0.08] text-amber-200/90 ${className}`}
-      >
-        <AlertTriangle size={11} aria-hidden /> Needs {needs}
-      </span>
+        className={className}
+      />
     );
   }
-  return (
-    <span
-      data-testid="status-available"
-      className={`${STATUS_CHIP} border-white/10 text-zinc-500 ${className}`}
-    >
-      <Download size={11} aria-hidden /> Not added
-    </span>
-  );
+  return <Badge value="Not added" tone="slate" keepCase data-testid="status-available" className={className} />;
 }
 
 /* -------------------------------------------------------------------- risk */

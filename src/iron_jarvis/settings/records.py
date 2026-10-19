@@ -1559,6 +1559,18 @@ class AppConnectTool(_RecordTool):
         conn = get_connector(self._target(args))
         if conn is None or conn.connect_via in ("oauth", "api_key"):
             return SpendCheck(ask=False, cost_note="changes nothing by itself")
+        # v1.356.0 integrate (G78): a saved app the user switched off — the
+        # call only says so (``execute``), so it is no card either.
+        platform = getattr(self, "platform", None)
+        if platform is not None:
+            from ..connectors.service import pack_on
+
+            try:
+                saved = await asyncio.to_thread(snap_app, platform, conn.id)
+            except Exception:  # noqa: BLE001 — a verdict read never breaks the turn
+                saved = None
+            if saved is not None and not pack_on(saved):
+                return SpendCheck(ask=False, cost_note="changes nothing by itself")
         return None
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -1637,6 +1649,28 @@ class AppConnectTool(_RecordTool):
                 data={"secret_requests": [req]},
             )
         values = args.get("values") if isinstance(args.get("values"), dict) else {}
+        # v1.356.0 integrate (G78): an app the user SWITCHED OFF is still
+        # saved, with its key — "connect my Slack" must not walk into the
+        # connect flow and ask for the token again on the secure card. Say it
+        # is off and where it is turned back on (the switch keeps the key).
+        _saved = await asyncio.to_thread(snap_app, self.platform, conn.id)
+        if _saved is not None:
+            from ..connectors.app_names import APPS_PLACE
+            from ..connectors.service import pack_on
+
+            if not pack_on(_saved):
+                # Not ok: nothing was connected, so the page must not turn the
+                # app on for this chat (lib/appConnect.appConnectIds reads ok).
+                return ToolResult(
+                    ok=False,
+                    error=(
+                        f"{conn.name} is already added but switched off by the user, so its "
+                        "tools are not loaded. It keeps its key: the user turns it back on with "
+                        f"its switch in Settings › Tools or on its card in {APPS_PLACE}. "
+                        "Never ask for its token again."
+                    ),
+                    data={"app": conn.id, "switched_off": True},
+                )
         # v1.351.0 (G15): an app that is ALREADY connected and working is not
         # connected again — no card asking for a token it has, no record
         # change, no "waiting for its token". The page turns the app on for
@@ -1665,7 +1699,11 @@ class AppConnectTool(_RecordTool):
                     data={"app": conn.id, "already_connected": True, "tools_loaded": live},
                 )
         cfg_args = list(conn.args)
-        env: dict[str, str] = {}
+        # v1.356.0 integrate (G60, lane 6D's review): the settings the pack
+        # ALWAYS starts with (Microsoft 365's tool filter) — the Directory's
+        # Connect writes them (service.pack_body), so must this door, or the
+        # pack loads every tool its server has and its card offers no Sign in.
+        env: dict[str, str] = dict(getattr(conn, "env", None) or {})
         env_secrets: dict[str, str] = {}
         requests: list[dict[str, Any]] = []
         for f in conn.fields:
@@ -1688,6 +1726,18 @@ class AppConnectTool(_RecordTool):
                 if not f.optional:
                     return ToolResult(ok=False, error=f"{conn.name} needs `{f.name}` ({f.label}) in values.")
                 continue
+            if getattr(f, "options", None):
+                # v1.356.0 integrate (G60): a choice is answered from its list,
+                # never typed free — the Directory's door refuses the same
+                # (service.choice_refusal). "work" is not a Microsoft authority.
+                from ..connectors.catalog import option_for
+
+                if option_for(f, val) is None:
+                    allowed = ", ".join(f"`{o.value}` ({o.label})" for o in f.options)
+                    return ToolResult(
+                        ok=False,
+                        error=f"{conn.name} needs `{f.name}` to be one of {allowed}.",
+                    )
             if f.kind == "arg":
                 cfg_args = [a.replace(f"<{f.name}>", val) for a in cfg_args]
             else:

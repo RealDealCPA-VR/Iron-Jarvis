@@ -72,6 +72,7 @@ import { agentDisplayName, bareMemberName } from "@/lib/agentWorlds";
 import { isMissionRow } from "@/lib/missionLinks";
 import { tookMs } from "@/lib/ranOnWords";
 import { phaseLabel } from "@/lib/stepWords";
+import { LOW_TRUST_CANNOT } from "@/lib/trustWords";
 import {
   findContinuation,
   liveEventWords,
@@ -492,7 +493,9 @@ export default function SessionDetailPage({
                 <span>
                   This run is in low trust
                   {session.trust_reason?.trim() ? ` — ${session.trust_reason.trim()}` : ""}.
-                  It cannot change memory, settings, agents or skills.
+                  {/* v1.356.0 integrate (G77): the chip's own words (lib/trustWords). */}
+                  {" "}
+                  {LOW_TRUST_CANNOT}
                 </span>
               </div>
             </Reveal>

@@ -671,9 +671,13 @@ def _setup(d, db, since, failing_packs: list[dict[str, str]]) -> list[dict[str, 
         )
 
     def tools() -> dict[str, Any]:
-        from ...mcp.tools import load_status
+        from ...mcp.tools import load_status, pack_enabled
 
         packs = [s for s in (getattr(d.platform.config, "mcp_servers", None) or []) if isinstance(s, dict)]
+        # v1.356.0 integrate (G78): a pack the user switched off is not "not
+        # running" - it is counted apart, so "N of M running" stays honest.
+        off = sum(1 for s in packs if not pack_enabled(s))
+        on = len(packs) - off
         ready = 0
         for s in packs:
             st = load_status(str(s.get("name") or "")) or {}
@@ -695,7 +699,8 @@ def _setup(d, db, since, failing_packs: list[dict[str, str]]) -> list[dict[str, 
         names = ", ".join(p["name"] for p in failing_packs)
         return _node(
             "tools", "Tools", "/tools", setup=len(packs) + custom, used=used, live=0, unit="pack",
-            detail=f"{ready} of {len(packs)} tool pack{'s' if len(packs) != 1 else ''} running"
+            detail=f"{ready} of {on} tool pack{'s' if on != 1 else ''} running"
+            + (f" ({off} switched off)" if off else "")
             + (f", plus {custom} custom tool{'s' if custom != 1 else ''}." if custom else "."),
             attention=f"Didn't start: {names}" if failing_packs else None,
         )

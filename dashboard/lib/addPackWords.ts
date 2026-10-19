@@ -104,9 +104,14 @@ export function askHint(row: ImportRow, name: string): string {
  *  sign-in gives memory search; the server gives its own tools). One quiet
  *  line under the row; "" when there is none. */
 export function signedInWords(row: ImportRow): string {
+  if (row.exists) return "";
   const app = typeof row.signed_in_app === "string" ? row.signed_in_app.trim() : "";
-  if (!app || row.exists) return "";
-  return `You're signed in to ${app} here for memory search; this adds the server's own tools.`;
+  if (app) return `You're signed in to ${app} here for memory search; this adds the server's own tools.`;
+  // v1.356.0 integrate: a saved KEY of the same name (Pixio's) is not this
+  // server either — it powers a built-in tool.
+  const keyed = typeof row.key_app === "string" ? row.key_app.trim() : "";
+  if (keyed) return `Your ${keyed} key is saved here for its built-in tools; this adds the server's own tools.`;
+  return "";
 }
 
 /** A row ticked when the door opens: new here and switched on in its app. */

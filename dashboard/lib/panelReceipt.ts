@@ -33,6 +33,9 @@ export interface PanelLineFacts {
   content?: string;
   at?: string;
   steer?: boolean;
+  /** v1.356.0 integrate: the hidden "Continue" turn (v1.323.0) — sent for
+   *  the user, never typed by them, so it is not a question. */
+  continuation?: boolean;
   panelWho?: string;
   panelKind?: string;
   panelAt?: string;
@@ -75,7 +78,9 @@ function isStillWorking(m: PanelLineFacts): boolean {
 
 /**
  * Per message: the question's time for an agent's line (the nearest earlier
- * question the user typed, never a steer note), else undefined.
+ * question the user typed, never a steer note and never the hidden Continue
+ * prompt — v1.356.0 integrate: the waiting clock starts at the real
+ * question), else undefined.
  *
  * An answer that follows the same agent's "still working" line counts from
  * the question THAT line answered: a remote's answer can land many minutes
@@ -90,7 +95,7 @@ export function panelAskedAt(msgs: readonly PanelLineFacts[]): (string | undefin
   let asked: string | undefined;
   const waitingFrom = new Map<string, string | undefined>();
   for (const m of msgs) {
-    if (m.role === "user" && !m.steer) asked = m.at || undefined;
+    if (m.role === "user" && !m.steer && !m.continuation) asked = m.at || undefined;
     const who = m.role === "assistant" ? m.panelWho : undefined;
     if (!who) {
       out.push(undefined);

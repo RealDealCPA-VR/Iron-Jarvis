@@ -1388,7 +1388,10 @@ export default function SettingsPage() {
                   <SectionLabel>{RESTART_WORDS.label}</SectionLabel>
                   <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">{RESTART_WORDS.blurb}</p>
                   <div className="mt-2.5">
+                    {/* v1.356.0 integrate (G80): the restart keeps its deliberate
+                        amber outline (the calm default has no border). */}
                     <ConfirmButton
+                      variant="bordered"
                       onConfirm={restartDaemon}
                       label={RESTART_WORDS.label}
                       confirmLabel={restarting ? "Restarting…" : "Confirm restart"}

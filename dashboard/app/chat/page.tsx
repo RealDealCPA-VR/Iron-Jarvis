@@ -1367,6 +1367,9 @@ interface ConnectorEntry {
   /** "mcp" | "oauth" | "api_key" | "memory" — memory = an LTM source/brain. */
   connect_via?: string;
   tools_loaded?: number;
+  /** v1.356.0 (G78): saved, but the user switched it off — neither offered as
+   *  connected nor as one to connect (it is turned on in Settings › Tools). */
+  off?: boolean;
 }
 
 /** POST /documents/upload response (same contract NewSessionForm uses). */
@@ -6916,6 +6919,8 @@ export default function ChatPage() {
         status?: string;
         connect_via?: string;
         tools_loaded?: number;
+        /** v1.356.0 (G78): a saved pack the user switched off (absent = on). */
+        enabled?: boolean;
       }[];
     }>("/connectors")
       .then((d) =>
@@ -6924,9 +6929,12 @@ export default function ChatPage() {
             id: c.id,
             name: c.name,
             glyph: c.glyph,
-            connected: Boolean(c.connected) || c.status === "connected",
+            // v1.356.0 integrate (G78): a switched-off app is not offered as
+            // connected — turning it on for a chat would arm nothing.
+            connected: (Boolean(c.connected) || c.status === "connected") && c.enabled !== false,
             connect_via: c.connect_via,
             tools_loaded: c.tools_loaded,
+            off: c.enabled === false,
           })),
         ),
       )
@@ -6940,7 +6948,7 @@ export default function ChatPage() {
     [connCatalog],
   );
   const marketplaceTeasers = useMemo(
-    () => (connCatalog ?? []).filter((c) => !c.connected).slice(0, 3),
+    () => (connCatalog ?? []).filter((c) => !c.connected && !c.off).slice(0, 3),
     [connCatalog],
   );
 

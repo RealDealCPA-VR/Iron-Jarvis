@@ -609,9 +609,10 @@ def _install_audit_hook(
             if write_roots and not any(_within(canonical, r) for r in write_roots):
                 refuse(_WRITE_BLOCKED.format(target=target, roots=shown))
         elif read_roots and not any(_within(canonical, r) for r in read_roots):
+            # v1.356.0 integrate (G81): plain words, never the variable's name.
             refuse(
-                f"iron-jarvis repl: BLOCKED — reading {target} is outside "
-                f"IRONJARVIS_FS_ALLOWLIST ({' ; '.join(read_roots)})."
+                f"iron-jarvis repl: BLOCKED — reading {target}: that folder isn't one "
+                f"Jarvis may read ({' ; '.join(read_roots)})."
             )
 
     def hook(event: str, args: tuple[Any, ...]) -> None:

@@ -486,12 +486,19 @@ def test_a_server_connected_another_way_reads_as_already_here(client, homes, mon
     res = client.post("/mcp/import/preview", json={"text": paste})
     assert res.status_code == 200, res.text
     rows = {r["name"]: (r["exists"], r["exists_as"]) for r in res.json()["servers"]}
+    # v1.356.0 integrate (moved on purpose): a saved KEY (Pixio's) powers a
+    # built-in tool, not an imported server of the same name - it is never
+    # "already connected" (the v1.355.0 OAuth rule, for keys); the row says
+    # the key instead (`key_app`).
     assert rows == {
         "basic_memory": (True, "memory"),
-        "pixio": (True, "app"),
+        "pixio": (False, ""),
         "brave-search": (True, "pack"),
         "fresh": (False, ""),
     }
+    by_name = {r["name"]: r for r in res.json()["servers"]}
+    assert by_name["pixio"]["key_app"] == "Pixio"
+    assert "key_app" not in by_name["fresh"]
 
 
 def test_the_sources_route_reads_what_is_connected_once_not_once_per_file(client, homes, monkeypatch):

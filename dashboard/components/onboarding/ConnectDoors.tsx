@@ -86,7 +86,7 @@ import {
 import type { ConnectionTestResult } from "@/lib/types";
 import { AnswerPressNote, useAnswerPress } from "./AnswerPress";
 import { MODEL_SERVERS_TITLE } from "@/lib/modelServers";
-import { MODEL_SERVER_ADDRESS } from "@/lib/chatControlWords";
+import { MODEL_NAME_LABEL, MODEL_SERVER_ADDRESS } from "@/lib/chatControlWords";
 
 type Door = "subscription" | "local" | "key";
 
@@ -749,6 +749,7 @@ export function ConnectDoors({
                 apiKey={keyValue}
                 value={customModel}
                 onChange={setCustomModel}
+                label={MODEL_NAME_LABEL}
               />
             </div>
           )}

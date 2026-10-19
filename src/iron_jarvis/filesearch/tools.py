@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..core.fs_policy import fs_path_allowed, is_protected_path
+from ..core.fs_policy import fs_path_allowed, fs_read_ok, is_protected_path
 from ..tools.base import Tool, ToolContext, ToolResult
 from .service import BadSearchPattern, FileSearchService, SearchNotes
 
@@ -50,11 +50,12 @@ class FileSearchTool(Tool):
         # endpoints: never a protected secrets/key dir, and inside the allowlist
         # when one is configured. Otherwise an agent could search arbitrary roots.
         if root is not None:
-            if is_protected_path(root) or not fs_path_allowed(root):
-                return ToolResult(
-                    ok=False,
-                    error="root is protected or outside IRONJARVIS_FS_ALLOWLIST",
-                )
+            # v1.356.0 integrate (G81): the read gate's own sentence (it names
+            # Settings › Permissions when the user's folders refused, and never
+            # the environment variable).
+            ok, why = fs_read_ok(root)
+            if not ok:
+                return ToolResult(ok=False, error=why)
         roots = [Path(root)] if root else None
         # What the search could not cover. Reported below rather than dropped —
         # a skipped file is a hole in the answer, and this codebase's rule is that

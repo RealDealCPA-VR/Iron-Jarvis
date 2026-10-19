@@ -52,9 +52,22 @@ export function toText(def: SchemaSetting, v: unknown): string {
   return String(v);
 }
 
+/** v1.356.0 integrate (G81): lists of FOLDERS split on new lines only — a
+ *  client folder named like `C:\Clients\Smith, John` is one folder, and a
+ *  comma split it in two (the save was then refused). Every other list still
+ *  takes commas too. */
+export const FOLDER_LIST_KEYS: ReadonlySet<string> = new Set([
+  "readable_folders",
+  "search_roots",
+  "extra_skill_paths",
+]);
+
 /** The value to send for what the user typed; `undefined` = not valid yet. */
 export function fromText(def: SchemaSetting, text: string): unknown {
-  if (def.type === "list") return text.split(/\r?\n|,/).map((s) => s.trim()).filter(Boolean);
+  if (def.type === "list") {
+    const sep = FOLDER_LIST_KEYS.has(def.key) ? /\r?\n/ : /\r?\n|,/;
+    return text.split(sep).map((s) => s.trim()).filter(Boolean);
+  }
   if (def.type === "dict") {
     if (!text.trim()) return {};
     try {

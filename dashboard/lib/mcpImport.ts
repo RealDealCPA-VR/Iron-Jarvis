@@ -51,6 +51,9 @@ export interface PreviewRow {
    *  Drive sign-in gives memory search, not this server's tools). Absent
    *  otherwise. */
   signed_in_app?: string | null;
+  /** v1.356.0 integrate: a KEY of this name is saved here (Pixio's media
+   *  key) — it powers a built-in tool, not this server. Absent otherwise. */
+  key_app?: string | null;
 }
 
 /** POST /mcp/import/preview's answer. */

@@ -259,7 +259,10 @@ describe("the bordered look stays only where it is deliberate", () => {
     expect(ui.match(/if \(variant !== "bordered"\) \{/g) ?? []).toHaveLength(2);
   });
 
-  it("the ONE bordered use in the app is Build's 'Close this terminal?' confirm", () => {
+  // v1.356.0 integrate (moved on purpose): the "Restart Iron Jarvis" confirm
+  // (Maintenance card + the legacy settings form) keeps its deliberate amber
+  // outline too - its className colours a border the calm look does not draw.
+  it("the bordered uses are Build's 'Close this terminal?' confirm and the Restart confirm", () => {
     const root = path.join(__dirname, "..");
     const hits: string[] = [];
     const walk = (dir: string) => {
@@ -274,9 +277,19 @@ describe("the bordered look stays only where it is deliberate", () => {
     };
     walk(path.join(root, "app"));
     walk(path.join(root, "components"));
-    expect(hits).toEqual(["app/terminals/page.tsx"]);
+    expect(hits.sort()).toEqual([
+      "app/terminals/page.tsx",
+      "components/settings/MaintenanceCard.tsx",
+      "components/settings/pages/LegacySettingsForm.tsx",
+    ]);
     const page = src("app/terminals/page.tsx");
     const at = page.indexOf('variant="bordered"');
     expect(page.slice(at, at + 400)).toContain('label="Close terminal"');
+    for (const rel of ["components/settings/MaintenanceCard.tsx", "components/settings/pages/LegacySettingsForm.tsx"]) {
+      const f = src(rel);
+      expect(f.match(/variant="bordered"/g) ?? []).toHaveLength(1);
+      const i = f.indexOf('variant="bordered"');
+      expect(f.slice(i, i + 300)).toContain("label={RESTART_WORDS.label}");
+    }
   });
 });

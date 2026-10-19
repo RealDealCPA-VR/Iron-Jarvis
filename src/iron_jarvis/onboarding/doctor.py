@@ -1040,13 +1040,22 @@ def check_mcp(platform) -> dict:
     """Each configured MCP server's last load result, plus the ``npx`` launcher
     when any server needs it. RECOMMENDED: a pack that did not start costs the
     agents its tools, not the install."""
-    from ..mcp.tools import STATE_STARTING, load_status
+    from ..mcp.tools import STATE_STARTING, load_status, pack_enabled
 
     servers = [
         s for s in (getattr(platform.config, "mcp_servers", None) or []) if isinstance(s, dict)
     ]
     if not servers:
         return _result("mcp", True, "no MCP servers configured.", level=RECOMMENDED)
+    # v1.356.0 integrate (G78): a pack the user switched off is not checked
+    # and not counted as started - it is named apart.
+    off = sum(1 for s in servers if not pack_enabled(s))
+    servers = [s for s in servers if pack_enabled(s)]
+    off_words = f" ({off} switched off)" if off else ""
+    if not servers:
+        return _result(
+            "mcp", True, f"all {off} MCP server{'s' if off != 1 else ''} switched off.", level=RECOMMENDED
+        )
     problems: list[str] = []
     needs_npx = [str(s.get("name") or "mcp") for s in servers if str(s.get("command") or "").lower() in ("npx", "npx.cmd")]
     if needs_npx and _find_npx() is None:
@@ -1082,7 +1091,7 @@ def check_mcp(platform) -> dict:
         (
             f"still starting: {', '.join(starting)}."
             if starting
-            else f"all {len(servers)} MCP server{'s' if len(servers) != 1 else ''} started."
+            else f"all {len(servers)} MCP server{'s' if len(servers) != 1 else ''} started{off_words}."
         )
         if ok
         else "; ".join(problems),

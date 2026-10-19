@@ -3547,6 +3547,79 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A switched-off pack reads OFF on every surface; an app that signs in on
+  this PC is ONE row from every door; the calm chip is the default**
+  (v1.356.0, product-readiness Wave 6, G60/G74/G75/G77-G81; lanes 6A-6D +
+  integrate). OFF (6A, G78): an `mcp_servers` row with `enabled = false`
+  (`mcp.tools.pack_enabled`; absent = on) is never loaded and has NO load
+  record; `PATCH /mcp/servers/{name} {enabled}` goes through
+  `mcp/pack_door.set_pack_enabled` (off unloads + closes, keeps the row,
+  every vault secret and the manifest; on reloads with the stored token);
+  `GET /mcp/servers` rows say `state: "off"` (`STATE_OFF`); an import row
+  its app had switched off is added off. Every reader of a pack's state must
+  say off, never failed/not working/not started (integrate):
+  `connectors.service` card `status: "off"` + `enabled` (`pack_on`),
+  `app_names.app_states` `off` + its own `apps_section` line,
+  `tools/selfcare` `PACK_STATES` "off" ("switched off by the user"),
+  `diagnostics_snapshot` `state: "off"`, the Status map's tools star "N of M
+  … (K switched off)", the doctor's `check_mcp`, the chat page's + ›
+  Connections (`enabled !== false`, never a "connect" teaser either),
+  `AccessSummary.connectedApps` "(off)", and `records.AppConnectTool` (no
+  card, `ok=False`, never re-asks the token). MICROSOFT 365 (6D, G60):
+  `connectors/catalog` card `microsoft_365` (`MS365_TOOLS` = exactly 24 =
+  `_MAX_CONNECTOR_TOOLS`, the filter in `env` ENABLED_TOOLS because npx is a
+  .cmd under cmd.exe; ONE choice field `MS365_MCP_TENANT_ID` "common" work /
+  "consumers" personal, refused off the list); `service.signin_row` offers
+  Sign in only while the saved row equals `catalog.signin_env` exactly;
+  `POST /terminals/launch {cli: microsoft-365-signin-<key>}` types the pack's
+  own command + args + `--login` with the same env (`SETUP_LAUNCHES` ==
+  `catalog.signin_launches()`, pinned); DirectoryPage mounts `ChoiceField` /
+  `AppSignIn` (`components/connections/AppSignIn`). (integrate) The chat's
+  `app_connect` starts `env` from the card's `env` and refuses a choice off
+  the list, so a chat-connected Microsoft 365 is the Directory's row byte for
+  byte; `app_names.ALIASES["microsoft_365"]` (capitalised "Outlook", "my
+  calendar" never "calendar year"). WORDS (6A G74, 6B G75/G77):
+  `lib/extensionWords` (webAddressWords/transportTitle/addressLine — a
+  protocol name only in a tooltip), `lib/chatControlWords`, `lib/trustWords`
+  (`LOW_TRUST_CANNOT`, pinned against `core/trust.LOW_TRUST_DENY`; the
+  session banner uses it too), the restart tag a button through
+  SettingsHome's `goTo("system", "system-maintenance")` (never
+  `/settings?section=`), `EndpointModelPicker label`, Status map
+  `provider_heading`/`answers_from` + the paired browser's name from the
+  cached status. MISSION COST (6C G79): `approvals.request(cost_note=)` →
+  `pending_for` → `_waiting_on` / `mission._waiting` → `WaitingOn.cost_note`
+  → MissionOutput's one line before Allow. READ FOLDERS (6C G81):
+  `Config.readable_folders` (schema row, saved only through the writer,
+  validated by `fs_policy.read_root_problem`), `fs_policy.use_config` bound
+  by `load_config` (weakly), a read must pass BOTH the installation's
+  `IRONJARVIS_FS_ALLOWLIST` and the setting, Jarvis's own home + chat files
+  folder always readable; `READ_REFUSAL` is the one sentence (file_search,
+  the REPL hook and `root_problem`'s work-folder branch say it too —
+  integrate); `SettingRow.FOLDER_LIST_KEYS` split on new lines only. CALM
+  (6C G80): `Badge`/`ConfirmButton` default = calm (`variant="bordered"` is
+  the old look: Build's "Close this terminal?" and the "Restart Iron Jarvis"
+  confirm only — pinned), `tools/chips.StatusChip` is the calm Badge.
+  (integrate, wave-5 follow-ups) an import row of the SAME server under
+  another spelling is skipped "already added as X" unless `replace`
+  (`_same_server_other_name`); a saved KEY (Pixio) is `ConnectionIndex.keyed`
+  → row `key_app`, never "already connected"; `panelAskedAt` skips the hidden
+  `continuation` turn; `eval/pricing` rows for gemini-3.8-flash (DOUBLES on
+  2027-01-01 — update it then) and gemini-3.5-flash-lite, cited to Google's
+  page. THE RULE A FUTURE CHANGE MUST KEEP: a new surface that shows a pack's
+  or app's state reads `pack_enabled`/`enabled` and says off as off; a door
+  that saves a catalog app's pack writes the card's `env` and refuses a choice
+  off its list (one row from every door); a new status chip uses the default
+  Badge. Pins: `tests/test_{pack_switch,microsoft_365,mission_cost_note,
+  readable_folders,status_map_words,trust_words,integrate_wave6,
+  integrate_wave6_ms365,integrate_wave6_pricing,read_refusal_words}_v13560.py`,
+  `dashboard/__tests__/{extension-switch,microsoft-365,chat-words,labels,
+  mission-cost-note,readable-folders,calm-status-badges,wave6-seams,
+  chat-connectors-off}-v13560.test.tsx` and `fixtures/wave6-seams-v13560.json`
+  (the REAL daemon's off rows; regenerate with `IJ_REGEN_WAVE6_SEAMS=1`)
+  (every lane and integrator change mutation-checked red). Known: nothing was
+  ever signed in to Microsoft for real (the stand-in lists the real server's
+  tool names); a sign-in pane restored after a restart is a plain shell; a
+  REPL already running keeps the folders it started with.
 - **A failure carries its press on BOTH lanes; a pack has ONE add/remove
   door; an imported placeholder is ASKED, never stored** (v1.355.0,
   product-readiness Wave 5, G29/G32/G44/G46/G55/G62-G65/G69/G70/G72/G73;

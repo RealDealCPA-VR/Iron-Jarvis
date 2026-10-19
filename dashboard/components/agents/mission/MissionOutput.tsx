@@ -95,10 +95,11 @@ export function deliverableFor(view: MissionView | null, live: MissionLive): Del
 }
 
 /** The ask a run is parked on, as the mission view carries it. `cost_note`
- *  (v1.356.0, G79) is what a PRICED call would spend, in the service's own
- *  words ("Generate 1 image on Pixio for 12 credits (your price)") — the
- *  sentence the chat card's cost line shows; absent for an unpriced ask. */
-type MissionAsk = WaitingOn & { cost_note?: string };
+ *  (v1.356.0, G79, on `WaitingOn` itself) is what a PRICED call would spend,
+ *  in the service's own words ("Generate 1 image on Pixio for 12 credits
+ *  (your price)") — the sentence the chat card's cost line shows; absent for
+ *  an unpriced ask. */
+type MissionAsk = WaitingOn;
 
 /** The cost sentence to show on the card, or "" — only a non-empty string
  *  counts (an older daemon sends no key; anything else is not words). */

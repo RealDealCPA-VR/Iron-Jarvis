@@ -34,6 +34,9 @@ export interface WaitingOn {
   /** v1.352.0 (G25): can the action be undone (the daemon's verdict)?
    *  Absent when there is nothing to say (read-only, the plan ask). */
   reversible?: boolean;
+  /** v1.356.0 (G79): a priced ask's cost sentence (SpendCheck.words), from
+   *  pending_for; absent for an unpriced ask. */
+  cost_note?: string;
 }
 
 export interface MissionMember {

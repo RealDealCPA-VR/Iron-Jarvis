@@ -469,7 +469,8 @@ def test_an_older_github_pack_says_so_and_how_to_switch(client):
     ]
     row = next(r for r in client.get("/connectors").json()["connectors"] if r["id"] == "github")
     assert row["package_note"] == (
-        f"{conn_catalog.OLDER_PACKAGE_NOTE} Disconnect and connect again to use GitHub's own server."
+        # v1.356.0 integrate (G74): moved on purpose - the card's button reads "Remove".
+        f"{conn_catalog.OLDER_PACKAGE_NOTE} Remove it and connect again to use GitHub's own server."
     )
     p.config.mcp_servers = [{"name": "github", "transport": "http", "url": conn_catalog.GITHUB_MCP_URL}]
     row = next(r for r in client.get("/connectors").json()["connectors"] if r["id"] == "github")

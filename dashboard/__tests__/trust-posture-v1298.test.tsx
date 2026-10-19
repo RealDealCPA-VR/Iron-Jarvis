@@ -259,8 +259,10 @@ describe("sessions/[id] — the low-trust banner", () => {
     renderPage({ trust: "low", trust_reason: REASON });
     await act(async () => {});
     const banner = screen.getByTestId("trust-banner");
+    // v1.356.0 integrate (G77): the banner says the chip's own can't-do
+    // sentence (lib/trustWords.LOW_TRUST_CANNOT) - moved on purpose.
     expect(banner).toHaveTextContent(
-      `This run is in low trust — ${REASON}. It cannot change memory, settings, agents or skills.`,
+      `This run is in low trust — ${REASON}. This run can't change settings, schedules, rules, connections, memory, agents or skills, can't type into your terminals and can't spend credits. It can still read, search and answer.`,
     );
     expect(screen.getAllByTestId("trust-banner")).toHaveLength(1);
     // The header chip rides along too.

@@ -220,16 +220,12 @@ def pack_on(cfg: "dict | None") -> bool:
     read counts as on, as every row saved before the switch existed is."""
     if not isinstance(cfg, dict):
         return True
-    from ..mcp import tools as _tools
+    from ..mcp.tools import pack_enabled
 
-    reader = getattr(_tools, "pack_enabled", None)
-    if reader is not None:
-        try:
-            return bool(reader(cfg))
-        except Exception:  # noqa: BLE001 — a status read never raises
-            return True
-    # Only until G78's reader is in the same build: an explicit false is off.
-    return cfg.get("enabled", True) is not False
+    try:
+        return bool(pack_enabled(cfg))
+    except Exception:  # noqa: BLE001 — a status read never raises
+        return True
 
 
 def _off_status() -> dict[str, Any]:
@@ -400,8 +396,9 @@ def _status_for(
             # moved to its maker's own server (GitHub's) still runs the older
             # package and is never moved for the user; its card says so, and
             # says how to switch.
+            # v1.356.0 integrate (G74): the card's button reads "Remove".
             row["package_note"] = (
-                f"{OLDER_PACKAGE_NOTE} Disconnect and connect again to use "
+                f"{OLDER_PACKAGE_NOTE} Remove it and connect again to use "
                 f"{connector.name}'s own server."
             )
         if server and server != connector.id:

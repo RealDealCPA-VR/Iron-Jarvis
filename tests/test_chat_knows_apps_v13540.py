@@ -119,6 +119,11 @@ def _section(system: str) -> str:
         ("connect my Box account", ["box"]),
         ("set up sequential thinking", ["sequential_thinking"]),
         ("charge the customer in Stripe", ["stripe"]),
+        # v1.356.0 integrate (G60): Outlook IS a catalog app now (Microsoft
+        # 365) - moved here from the names-nothing list on purpose; still
+        # never Gmail.
+        ("check my Outlook inbox", ["microsoft_365"]),
+        ("what is on my calendar tomorrow?", ["microsoft_365"]),
     ],
 )
 def test_the_matcher_finds_the_app_by_the_words_people_use(text, want):
@@ -128,7 +133,8 @@ def test_the_matcher_finds_the_app_by_the_words_people_use(text, want):
 @pytest.mark.parametrize(
     "text",
     [
-        "check my Outlook inbox",  # another mail service, not Gmail
+        "an outlook on the market",  # v1.356.0: a view, not the app
+        "my calendar year 2025 deduction",  # v1.356.0: not the calendar app
         "what is my email address",
         "pause my inbox goal",  # a record of the user's, not the mailbox
         "I have a notion that this is wrong",
