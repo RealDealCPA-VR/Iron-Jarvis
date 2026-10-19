@@ -6,8 +6,9 @@
  *    "finished · needs you", partial "finished · part failed", an unknown
  *    value reads as itself (it used to fall through to "not run yet");
  *    v1.352.0 (G17, updated on purpose): those words are now the app's one
- *    status table's (lib/statusWords) — "Needs you", "Done · part
- *    failed", "Failed", "Stopped" (slate), "Not run yet";
+ *    status table's (lib/statusWords) — "Needs you", "Part failed"
+ *    (v1.358.0: the outcome leads), "Failed", "Stopped" (slate), "Not run
+ *    yet";
  *  - the Schedules page row: amber words for a run that finished short, the
  *    open-session link, the detail as plain words (an older row's flattened
  *    "# Final Report ## …" too); Run now answers in AMBER for those, never
@@ -175,8 +176,8 @@ describe("lib/scheduleOutcome — one table of words", () => {
 /* -------------------------------------------------------- the Schedules page */
 
 // v1.352.0 (G17, updated on purpose): the Schedules row speaks the ONE status
-// table's words (lib/statusWords.scheduleRunWords) — "Done", "Done · needs
-// you", "Part failed", "Failed", "Not run yet" — the words a session,
+// table's words (lib/statusWords.scheduleRunWords) — "Done", "Needs you",
+// "Part failed", "Failed", "Not run yet" — the words a session,
 // a mission and the board say for the same run, in theme tone tokens (the
 // row's literal emerald/rose inks are gone). It read "✓ ok", "finished ·
 // needs you", "✗ failed" and "not run yet".
