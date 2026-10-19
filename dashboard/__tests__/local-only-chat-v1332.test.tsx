@@ -262,10 +262,12 @@ describe("the Local only chip", () => {
     expect(screen.getByTestId("composer-toolbar").contains(c)).toBe(true);
     // Right after the permission chip: the next element in the toolbar.
     expect(screen.getByTestId("permission-chip-wrap").nextElementSibling).toBe(c);
-    // A phone shows the house alone when off.
+    // v1.356.0 (G75): a phone shows its word when off too (it showed the
+    // house alone) — updated on purpose; the desktop words are unchanged.
     const words = Array.from(c.querySelectorAll("span"));
-    expect(words.map((w) => w.textContent)).toEqual(["Local only"]);
-    expect(classes(words[0])).toContain("hidden");
+    expect(words.map((w) => w.textContent)).toEqual(["Local", "Local only"]);
+    expect(classes(words[0])).toContain("sm:hidden");
+    expect(classes(words[1])).toContain("hidden");
   });
 
   it("a press turns it on: pressed, the success tone, the on words, remembered, saved with the chat", async () => {

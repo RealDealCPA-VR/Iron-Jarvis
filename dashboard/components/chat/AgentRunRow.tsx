@@ -33,6 +33,9 @@
  * done"): the checklist says them. The settled row opens to the plan as it
  * ended (saved on the stamp by finalize). The body still takes `children`
  * after the checklist.
+ *
+ * v1.356.0 (G75): the row wears the Bot icon (a helper agent did this), the
+ * same as the hand-off line, never the Zap that means Reflexes elsewhere.
  */
 
 import {
@@ -44,7 +47,7 @@ import {
   type ReactNode,
 } from "react";
 import Link from "next/link";
-import { Check, ChevronDown, Loader2, Zap } from "lucide-react";
+import { Bot, Check, ChevronDown, Loader2 } from "lucide-react";
 import type { ToolCard } from "@/lib/useChatStream";
 import { LiveToolRows, WorkRow } from "@/components/chat/WorkLine";
 import { formatElapsed, useNow } from "@/components/chat/TurnClock";
@@ -305,7 +308,7 @@ export function AgentRunLive({
           onClick={() => setOpen((v) => !v)}
           className={TOGGLE}
         >
-          <Zap size={14} aria-hidden="true" className="shrink-0 text-accent-soft" />
+          <Bot size={14} aria-hidden="true" className="shrink-0 text-accent-soft" />
           <span data-testid="agent-run-words" className="min-w-0 truncate">
             <span className="ij-shimmer text-zinc-300">{name} is working</span>
             {current ? ` · ${current}` : ""}
@@ -387,7 +390,7 @@ export function AgentRunSettled({ name, run, why, children }: AgentRunSettledPro
             onClick={() => setOpen((v) => !v)}
             className={TOGGLE}
           >
-            <Zap size={14} aria-hidden="true" className="shrink-0 text-accent-soft" />
+            <Bot size={14} aria-hidden="true" className="shrink-0 text-accent-soft" />
             <span data-testid="agent-run-words" className="min-w-0 truncate">
               {words}
             </span>
@@ -395,7 +398,7 @@ export function AgentRunSettled({ name, run, why, children }: AgentRunSettledPro
           </button>
         ) : (
           <div className="flex min-w-0 flex-1 items-center gap-2 text-[13px] leading-5 text-zinc-500">
-            <Zap size={14} aria-hidden="true" className="shrink-0 text-accent-soft" />
+            <Bot size={14} aria-hidden="true" className="shrink-0 text-accent-soft" />
             <span data-testid="agent-run-words" className="min-w-0 truncate">
               {words}
             </span>

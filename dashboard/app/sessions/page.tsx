@@ -269,7 +269,8 @@ function SessionsList() {
         statuses: ["completed", "failed", "cancelled"],
       });
       const n = res?.cleared ?? 0;
-      setNotice(`Cleared ${n} finished session${n === 1 ? "" : "s"}.`);
+      // v1.356.0 (G77): the notice names all three kinds it removed.
+      setNotice(`Cleared ${n} finished, failed or stopped session${n === 1 ? "" : "s"}.`);
       reload();
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : String(err));
@@ -300,11 +301,13 @@ function SessionsList() {
           title="Sessions"
           subtitle="Run agents and inspect past sessions."
           actions={
+            // v1.356.0 (G77): the button says everything it removes —
+            // "Clear finished" also deleted failed and stopped sessions.
             <ConfirmButton
-              label="Clear finished"
-              confirmLabel="Clear all finished?"
+              label="Clear finished, failed and stopped"
+              confirmLabel="Delete them all?"
               onConfirm={clearFinished}
-              title="Delete all completed, failed and cancelled sessions"
+              title="Deletes every session that finished, failed or was stopped. Running and waiting ones stay."
               className="!text-zinc-400 hover:!text-accent-soft"
             />
           }

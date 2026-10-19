@@ -86,6 +86,7 @@ import {
 import type { ConnectionTestResult } from "@/lib/types";
 import { AnswerPressNote, useAnswerPress } from "./AnswerPress";
 import { MODEL_SERVERS_TITLE } from "@/lib/modelServers";
+import { MODEL_SERVER_ADDRESS } from "@/lib/chatControlWords";
 
 type Door = "subscription" | "local" | "key";
 
@@ -731,11 +732,14 @@ export function ConnectDoors({
             <div ref={customRef} className="mt-2.5 space-y-2">
               {/* v1.355.0 (G72): the two local servers, one press each. */}
               <LocalServerChips onPick={pickLocalServer} />
+              {/* v1.356.0 (G75): the field says what goes in it, never
+                  "Base URL". */}
               <input
                 value={customBaseUrl}
                 onChange={(e) => setCustomBaseUrl(e.target.value)}
-                placeholder="Base URL (e.g. http://localhost:1234/v1)"
-                aria-label="Base URL"
+                placeholder={`${MODEL_SERVER_ADDRESS} (e.g. http://localhost:1234/v1)`}
+                aria-label={MODEL_SERVER_ADDRESS}
+                title="Where your model server answers, like http://localhost:1234/v1"
                 className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none"
               />
               {/* v1.355.0 (G72): the Connections form's own Model field: type

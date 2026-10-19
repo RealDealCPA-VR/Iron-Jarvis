@@ -40,6 +40,84 @@ USED_DAYS = 7
 #: Heartbeat buckets (hours, the last one being the current hour).
 HEARTBEAT_HOURS = 24
 
+#: v1.356.0 (G77): the user's own server as the model menu names it — the
+#: twin of the dashboard's ``lib/onboarding`` HEADING table
+#: (``providerHeading``); every other provider reads through
+#: ``providers.failure_words.plain_name``, the twin of ``providerDisplay``.
+_MODEL_HEADINGS: dict[str, str] = {"custom": "Your model server"}
+
+#: A browser name longer than this is cut (the add-on's text is its own).
+_BROWSER_NAME_MAX = 40
+
+
+def provider_heading(provider: str, manager: Any = None) -> str:
+    """A provider as a list entry reads it ("Claude Code", "Your model
+    server", a fleet node's own label) — never a raw id the tables know.
+    An id no table knows reads as itself. Never raises."""
+    p = " ".join(str(provider or "").split())
+    if not p:
+        return ""
+    if p in _MODEL_HEADINGS:
+        return _MODEL_HEADINGS[p]
+    try:
+        from ...providers.failure_words import heading, plain_name
+
+        name = plain_name(p, manager) or p
+    except Exception:  # noqa: BLE001 — wording only
+        return p
+    # An id no table knows (and a fleet node with no label) stays exactly
+    # as it is — not ours to re-case; a known phrase starts the entry.
+    return p if name == p else heading(name)
+
+
+def answers_from(provider: str, manager: Any = None) -> str:
+    """The Models star's second sentence: where answers come from, in the
+    same words as the list ("Answers come from your model server.")."""
+    p = " ".join(str(provider or "").split())
+    if p == "auto":
+        return "Auto picks a model for each message."
+    if p in _MODEL_HEADINGS:
+        # Mid-sentence, our own phrase loses its capital ("your model server").
+        head = _MODEL_HEADINGS[p]
+        name = head[:1].lower() + head[1:]
+    else:
+        # plain_name is already the mid-sentence form; a brand keeps its own
+        # casing ("Claude Code", "xAI").
+        try:
+            from ...providers.failure_words import plain_name
+
+            name = plain_name(p, manager) or p
+        except Exception:  # noqa: BLE001 — wording only
+            name = p
+    return f"Answers come from {name}."
+
+
+def paired_browser_name(d) -> str:
+    """The name of the browser the add-on said it runs in ("Microsoft Edge"),
+    from the transport's own status view (in memory: no socket round trip, no
+    probe), or "" when it has not said (nothing connected, or an older
+    add-on). Never raises."""
+    try:
+        runtime = getattr(d.platform, "browser", None)
+        backend = getattr(runtime, "backend", None)
+        if backend is None:
+            return ""
+        view = backend.status() or {}
+        name = " ".join(str(view.get("browser_name") or "").split())
+        return name[:_BROWSER_NAME_MAX]
+    except Exception:  # noqa: BLE001 — wording only
+        return ""
+
+
+def browser_detail(connected: bool, paired: bool, name: str) -> str:
+    """The Browser star's line, naming the paired browser when it is known."""
+    if connected:
+        return f"Your own {name}, connected." if name else "Your own browser, connected."
+    if paired:
+        return "Paired — your browser is not connected right now."
+    return "Not paired with a browser yet."
+
+
 #: The constellations, in the Directory's words.
 AREAS: list[tuple[str, str]] = [
     ("work", "Work"),
@@ -580,13 +658,16 @@ def _setup(d, db, since, failing_packs: list[dict[str, str]]) -> list[dict[str, 
             select(func.count()).select_from(AgentRun).where(AgentRun.created_at >= since).where(AgentRun.provider != "mock"),
         )
         live = _active_session_count(db)  # a run in flight is a model in use
-        names = ", ".join(str(r.get("provider")) for r in ready[:4]) or "none yet"
+        # v1.356.0 (G77): providers in the model menu's words ("Claude
+        # Code", "Your model server"), never a raw id like "custom".
+        manager = getattr(d.platform, "providers", None)
+        names = ", ".join(provider_heading(str(r.get("provider") or ""), manager) for r in ready[:4]) or "none yet"
         demo = default in ("", "mock")
         return _node(
             "models", "Models", "/connections", setup=len(ready), used=calls, live=1 if live > 0 and not demo else 0,
             unit="model",
             detail=(f"Ready: {names}. " + ("No model chosen for answers yet — replies are a demo." if demo else
-                    f"Answers come from {default}.")),
+                    answers_from(default, manager))),
         )
 
     def tools() -> dict[str, Any]:
@@ -631,11 +712,13 @@ def _setup(d, db, since, failing_packs: list[dict[str, str]]) -> list[dict[str, 
             .where(ToolInvocation.tool.like("browser\\_%", escape="\\")),  # type: ignore[attr-defined]
         )
         connected = bool(b.get("connected"))
+        # v1.356.0 (G77): the PAIRED browser by its own name ("Microsoft
+        # Edge"), read off the transport's cached status — never a probe and
+        # never "Chrome" on a guess.
         return _node(
             "browser", "Browser", "/computeruse", setup=1 if (b.get("paired") or connected) else 0, used=used,
             live=1 if connected else 0,
-            detail="Your own Chrome, connected." if connected else
-            ("Paired — Chrome is not connected right now." if b.get("paired") else "Not paired with Chrome yet."),
+            detail=browser_detail(connected, bool(b.get("paired")), paired_browser_name(d)),
         )
 
     def channels() -> dict[str, Any]:

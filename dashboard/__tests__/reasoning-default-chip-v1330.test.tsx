@@ -189,7 +189,8 @@ describe("the words, one table (lib/reasoningChip)", () => {
     ["", "low", "Low", "Default (Low)"],
     ["", "high", "High", "Default (High)"],
     ["", "off", "Thinking off", "Default (Thinking off)"],
-    ["", "auto", "Auto", "Default (Auto)"],
+    // v1.356.0 (G75): "auto" reads "Model decides" (updated on purpose).
+    ["", "auto", "Model decides", "Default (Model decides)"],
     ["", "", "Reasoning", "Default"],
     ["high", "medium", "High", "Default (Medium)"],
     ["low", "off", "Low", "Default (Thinking off)"],
@@ -265,10 +266,12 @@ describe("the chip on the page says the level the model will use", () => {
     expect(Array.from(select.options).slice(1).map((o) => o.value)).toEqual(LEVELS);
   });
 
-  it("a model that decides for itself reads 'Auto'", async () => {
+  // v1.356.0 (G75): "Model decides", not a third control called "Auto"
+  // (updated on purpose).
+  it("a model that decides for itself reads 'Model decides'", async () => {
     render(<ChatPage />);
-    const select = await chipFor("gpt-5.9-auto", "Auto");
-    expect(select.options[0].textContent).toBe("Default (Auto)");
+    const select = await chipFor("gpt-5.9-auto", "Model decides");
+    expect(select.options[0].textContent).toBe("Default (Model decides)");
   });
 
   it.each(["gpt-5-codex", "o3", "gpt-7"])(

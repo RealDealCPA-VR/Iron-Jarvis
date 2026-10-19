@@ -479,7 +479,15 @@ describe("source guard: no literal hue, half pixel or colour value on the calm s
 
   it("the page's notices say their words without em-dash asides", () => {
     const page = readSrc("app/chat/page.tsx");
-    expect(page).toContain("keeps the thread going, and\n        the full transcript is kept either way.");
+    // v1.356.0 (G75): the compaction offer's words moved to
+    // lib/chatControlWords (plain words, still no em-dash aside) — updated on
+    // purpose; the page renders that one sentence.
+    expect(page).toContain("{COMPACTION_OFFER_WORDS}");
+    const words = readSrc("lib/chatControlWords.ts");
+    expect(words).toContain(
+      '"This chat is getting long. Summarize the start to keep it fast? The full transcript is kept."',
+    );
+    expect(words.slice(words.indexOf("COMPACTION_OFFER_WORDS"), words.indexOf("COMPACTION_OFFER_BUTTON"))).not.toContain("—");
     expect(page).toContain('"The reply ran out of room and stopped."');
     expect(page).toContain('"The reply was cut off."');
     expect(page).not.toMatch(/"stopped — the reply ran out of room"|"interrupted — the reply was cut off"/);

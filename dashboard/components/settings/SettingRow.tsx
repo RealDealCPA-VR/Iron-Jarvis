@@ -11,6 +11,15 @@ import { useState } from "react";
 import { ShieldAlert } from "lucide-react";
 import { providerDisplay, providerHeading } from "@/lib/onboarding";
 import { DefaultModelPicker } from "./DefaultModelPicker";
+import { RESTART_WORDS } from "@/lib/restartWords";
+
+/** v1.356.0 (G77): where a "restart" setting is applied, said on its tag.
+ *  "after a restart" never said HOW; the tag now names the place, and with
+ *  `onOpenMaintenance` it opens it. Settings › System › Maintenance holds
+ *  "Restart Iron Jarvis" (lib/restartWords). */
+export const MAINTENANCE_PLACE = "Settings › System › Maintenance";
+export const RESTART_TAG_TITLE = `${RESTART_WORDS.tagTitle}. Use “${RESTART_WORDS.label}” in ${MAINTENANCE_PLACE}.`;
+export const RESTART_TAG_LINK_TITLE = `${RESTART_WORDS.tagTitle}. Press to open ${MAINTENANCE_PLACE}, where “${RESTART_WORDS.label}” is.`;
 
 export interface SchemaSetting {
   key: string;
@@ -71,6 +80,7 @@ export function SettingRow({
   onChange,
   providerOptions,
   modelProvider,
+  onOpenMaintenance,
 }: {
   def: SchemaSetting;
   value: unknown;
@@ -82,6 +92,10 @@ export function SettingRow({
   /** v1.353.0 (G57): default_model is picked from THIS provider's models (the
    *  form's current default provider). Absent: the saved default's. */
   modelProvider?: string;
+  /** v1.356.0 (G77): open Settings › System › Maintenance in place (the page's
+   *  own `goTo`; never a `/settings?section=` link). Absent: the tag says
+   *  where in words. */
+  onOpenMaintenance?: () => void;
 }) {
   const id = `setting-${def.key}`;
   const [draft, setDraft] = useState<string | null>(null);
@@ -206,7 +220,26 @@ export function SettingRow({
               <ShieldAlert size={10} aria-hidden /> protected
             </span>
           )}
-          {def.restart && <span className="text-[11px] font-normal text-tone-warn">after a restart</span>}
+          {def.restart &&
+            (onOpenMaintenance ? (
+              <button
+                type="button"
+                data-testid={`${id}-restart`}
+                onClick={onOpenMaintenance}
+                title={RESTART_TAG_LINK_TITLE}
+                className="rounded text-[11px] font-normal text-tone-warn underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+              >
+                after a restart
+              </button>
+            ) : (
+              <span
+                data-testid={`${id}-restart`}
+                title={RESTART_TAG_TITLE}
+                className="text-[11px] font-normal text-tone-warn"
+              >
+                after a restart
+              </span>
+            ))}
           {def.store === "device" && <span className="text-[11px] font-normal text-zinc-500">this device</span>}
         </div>
         {def.help && <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">{def.help}</p>}

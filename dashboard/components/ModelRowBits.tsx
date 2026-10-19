@@ -12,8 +12,10 @@
  */
 
 import type { ModelOption } from "@/lib/types";
+import { LONG_DOCS_CHIP, LONG_DOCS_TITLE } from "@/lib/chatControlWords";
 
-/** A window this size or larger gets the "1M" chip. */
+/** A window this size or larger gets the "long docs" chip (v1.356.0, G75:
+ *  it read "1M", a number only an engineer could read). */
 export const ONE_MILLION = 1_000_000;
 
 type RowFacts = Pick<ModelOption, "model" | "label" | "context_window" | "usage_credits">;
@@ -25,7 +27,7 @@ export function modelText(m: Pick<ModelOption, "model" | "label">): string {
   return label || m.model;
 }
 
-/** The chips after a row's name: "1M" for a million-token window, and a
+/** The chips after a row's name: "long docs" for a million-token window, and a
  *  muted "uses credits" note when the model draws from usage credits on
  *  this plan. Renders nothing when neither applies. */
 export function ModelRowChips({ m }: { m: RowFacts }) {
@@ -40,10 +42,10 @@ export function ModelRowChips({ m }: { m: RowFacts }) {
       {big && (
         <span
           data-testid="model-1m"
-          title="1M-token context window"
-          className="shrink-0 rounded border border-white/10 px-1 font-sans text-[9.5px] leading-tight text-zinc-400"
+          title={LONG_DOCS_TITLE}
+          className="shrink-0 rounded border border-white/10 px-1 font-sans text-[10px] leading-tight text-zinc-400"
         >
-          1M
+          {LONG_DOCS_CHIP}
         </span>
       )}
       {credits && (

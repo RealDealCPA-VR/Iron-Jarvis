@@ -487,7 +487,8 @@ describe("the composer's model menu shows the picker's label, the 1M chip and th
     const menu = screen.getByTestId("model-menu");
     fireEvent.click(rowFor(menu, "Claude"));
     const opus = rowFor(menu, "Opus 5.5");
-    expect(within(opus).getByTestId("model-1m")).toHaveTextContent("1M");
+    // v1.356.0 (G75): the chip says "long docs", never "1M" (updated on purpose).
+    expect(within(opus).getByTestId("model-1m")).toHaveTextContent("long docs");
     expect(within(opus).queryByTestId("model-credits")).toBeNull();
     // The raw id is the hover, not the text.
     expect(within(opus).getByText("Opus 5.5")).toHaveAttribute("title", "claude-opus-5-5");

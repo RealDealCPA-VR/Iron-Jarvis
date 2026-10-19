@@ -387,11 +387,13 @@ describe("the tools chip", () => {
     expect(classes(chip)).toContain("text-accent-soft");
     fireEvent.click(chip);
     const menu = await screen.findByTestId("composer-tools-menu");
-    expect(within(menu).getByText("read_file")).toBeTruthy();
-    fireEvent.click(within(menu).getByRole("button", { name: "Disarm read_file" }));
+    // v1.356.0 (G75): the row says what the tool does ("Read files", the id
+    // in its title) and its button is "Turn off" — updated on purpose.
+    expect(within(menu).getByText("Read files")).toBeTruthy();
+    fireEvent.click(within(menu).getByRole("button", { name: "Turn off Read files (read_file)" }));
     await waitFor(() => expect(chip.textContent).not.toContain("+ 1"));
     expect(chip.textContent).toContain("Auto tools");
-    expect(within(menu).queryByText("read_file")).toBeNull();
+    expect(within(menu).queryByText("Read files")).toBeNull();
   });
 });
 

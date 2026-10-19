@@ -34,6 +34,7 @@ import { useEffect } from "react";
 import { EyeOff, Layers, X } from "lucide-react";
 import { Modal } from "@/components/Modal";
 import { providerDisplay } from "@/lib/onboarding";
+import { compactionTriggerWords } from "@/lib/chatControlWords";
 
 /** GET /chat/threads/{id}/compaction — the wire shape (routes/chat.py). */
 export interface CompactionInfo {
@@ -139,11 +140,9 @@ export function CompactionCard({
   const note = strippedNote(stripped, claims);
   const truncNote = truncatedNote(stripped, claims.length);
   const meta = [
-    info.trigger === "manual"
-      ? "compacted at your request"
-      : info.trigger === "auto"
-        ? "compacted automatically at the context ceiling"
-        : null,
+    // v1.356.0 (G75): who started it, in plain words ("summarized
+    // automatically because the chat got long"), never "the context ceiling".
+    compactionTriggerWords(info.trigger),
     // v1.353.0 (G57): who wrote it by name ("Claude Code"), not its raw id.
     info.provider
       ? `written by ${providerDisplay(info.provider)}${info.model ? ` · ${info.model}` : ""}`
@@ -158,7 +157,7 @@ export function CompactionCard({
     // not to the viewport. `Modal` renders into document.body and owns the
     // backdrop, Escape and the scroll lock.
     <Modal
-      label="Compaction summary"
+      label="Summary of the start of this chat"
       onClose={onClose}
       className="w-full max-w-2xl bg-zinc-900"
       testId="compaction-modal"

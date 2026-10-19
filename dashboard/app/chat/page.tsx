@@ -102,7 +102,6 @@ import {
   VolumeX,
   Wrench,
   X,
-  Zap,
 } from "lucide-react";
 import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import {
@@ -380,6 +379,16 @@ import {
   reasoningDefaultOption,
   reasoningTitle,
 } from "@/lib/reasoningChip";
+// v1.356.0 (G75): the chat's controls in plain words, one place.
+import {
+  COMPACTION_NOT_NOW_TITLE,
+  COMPACTION_OFFER_BUTTON,
+  COMPACTION_OFFER_WORDS,
+  armedToolWords,
+  turnOffToolLabel,
+  webSwitchTitle,
+  workingFolderTitle,
+} from "@/lib/chatControlWords";
 import { answeredModelName as answeredModelNameFor } from "@/lib/answeredModel";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 // v1.349.0 (lane B2): the helper-agent row (live + settled) and its facts.
@@ -1053,16 +1062,15 @@ function ContextMeter({ usage }: { usage: ContextUsage | null }) {
     : pct >= 75
       ? "text-tone-warn"
       : "text-zinc-500";
-  const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
   return (
     <span
       className={`hidden items-center gap-1 text-[11px] sm:inline-flex ${tone}`}
+      // v1.356.0 (G75): the hover says how full the chat is in words a new
+      // user knows, never "context window" or "token".
       title={
         trimmed
-          ? `${usage.dropped} earlier message(s) were summarized to fit this model's ${k(
-              usage.window,
-            )}-token window. A larger-context model would keep them.`
-          : `About ${k(usage.used)} of this model's ${k(usage.window)}-token context window is in use.`
+          ? `${usage.dropped} earlier message${usage.dropped === 1 ? " was" : "s were"} summarized so this chat fits what this model can read at once. A model that reads longer chats would keep them.`
+          : `This chat fills about ${pct}% of what this model can read at once.`
       }
     >
       <span className="relative inline-block h-1 w-8 overflow-hidden rounded-full bg-white/10">
@@ -1102,19 +1110,17 @@ function CompactionOffer({
   // the true fill level, but there is no offer to make.
   if (!usage || usage.level !== "suggest" || usage.disabled) return null;
   const pct = usage.percent ?? 0;
-  const auto = usage.auto_at ?? 92;
   return (
     // v1.329.0 (calm chat wave 5, G4): a calm notice in the warning TONE (a
     // hairline edge, a faint tint, ghost buttons), so Daylight re-inks it.
+    // v1.356.0 (G75): the offer in plain words (no "context window", no
+    // "Compact now"); the fill level stays on the hover for the curious.
     <div
       data-testid="compaction-offer"
+      title={`This chat fills about ${pct}% of what this model can read at once.`}
       className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-tone-warn/25 bg-tone-warn/[0.05] px-3 py-2 text-[12px] text-tone-warn"
     >
-      <span>
-        This conversation is using about <strong>{pct}%</strong> of this model&apos;s
-        context window. Summarizing the earlier part keeps the thread going, and
-        the full transcript is kept either way.
-      </span>
+      <span data-testid="compaction-offer-words">{COMPACTION_OFFER_WORDS}</span>
       <span className="ml-auto flex items-center gap-1">
         <button
           type="button"
@@ -1122,14 +1128,14 @@ function CompactionOffer({
           disabled={busy}
           className="rounded-lg px-2 py-1 font-medium text-tone-warn transition-colors hover:bg-tone-warn/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {busy ? "Summarizing…" : "Compact now"}
+          {busy ? "Summarizing…" : COMPACTION_OFFER_BUTTON}
         </button>
         <button
           type="button"
           onClick={onDismiss}
           disabled={busy}
           className="rounded-lg px-2 py-1 text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
-          title={`If you do nothing, this happens automatically around ${auto}%.`}
+          title={COMPACTION_NOT_NOW_TITLE}
         >
           Not now
         </button>
@@ -3172,7 +3178,8 @@ const MessageRow = memo(function MessageRow({
       <div className="group/msg">
         <HandOffLine session={m.awaitingSession}>
           <div className="flex items-start gap-2 text-[13px] text-zinc-400">
-            <Zap size={13} className="mt-[3px] shrink-0 text-accent-soft" />
+            {/* v1.356.0 (G75): a helper agent wears the Bot, never Reflexes' Zap. */}
+            <Bot size={13} aria-hidden="true" className="mt-[3px] shrink-0 text-accent-soft" />
             <span>{said}</span>
           </div>
         </HandOffLine>
@@ -12818,7 +12825,7 @@ export default function ChatPage() {
                         skill chip is NOT mode-gated (v1.104.0): a picker whose
                         selection leaves no trace on screen is indistinguishable
                         from one that failed. Tools armed by hand are counted on the
-                        toolbar's tools chip and listed (with Disarm) in its menu. */}
+                        toolbar's tools chip and listed (with Turn off) in its menu. */}
                     {(attachments.length > 0 ||
                       appResources.length > 0 ||
                       chatRefs.length > 0 ||
@@ -12837,7 +12844,7 @@ export default function ChatPage() {
                         {projectSubfolder !== null && atFilesRoot && (
                           <span
                             data-testid="working-folder-chip"
-                            title={`Files this chat's tools make land in ${projectSubfolder}`}
+                            title={workingFolderTitle(projectSubfolder)}
                             className="max-w-full inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-zinc-300"
                           >
                             <FolderOpen size={11} className="shrink-0 text-accent-soft" />
@@ -13173,11 +13180,8 @@ export default function ChatPage() {
                                   setPickingFolder(Boolean(workspaceDir));
                                   showProjectPanel("user", plusBtnRef.current);
                                 }}
-                                title={
-                                  workspaceDir
-                                    ? `Files this chat's tools make land in ${workspaceDir}`
-                                    : "Pick a folder for the files this chat's tools make"
-                                }
+                                // v1.356.0 (G75): what the folder is FOR, in plain words.
+                                title={workingFolderTitle(workspaceDir)}
                                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
                               >
                                 <FolderOpen size={14} className="shrink-0 text-zinc-400" />
@@ -13385,13 +13389,15 @@ export default function ChatPage() {
                           className={composerChipClass(localOnly, "success")}
                         >
                           <House size={14} className="shrink-0" aria-hidden="true" />
-                          {localOnly && <span className="sm:hidden">Local</span>}
+                          {/* v1.356.0 (G75): a phone shows its word on and off; a
+                              house alone said nothing until it was pressed. */}
+                          <span className="sm:hidden">Local</span>
                           <span className="hidden sm:inline">Local only</span>
                         </button>
                         {/* THE TOOLS CHIP (v1.326.0): Auto tools, and the tools armed by hand
                             for this chat, counted so a pick leaves a trace. Its menu holds the
                             web and Auto tools switches with their plain lines, the armed tools
-                            (each with Disarm) and the chat's connections. */}
+                            (each with Turn off) and the chat's connections. */}
                         <div ref={toolMenuRef} className="sm:relative">
                           <button
                             type="button"
@@ -13423,13 +13429,8 @@ export default function ChatPage() {
                                 disabled={!webArmed && !webRoom}
                                 role="switch"
                                 aria-checked={webArmed}
-                                title={
-                                  webArmed
-                                    ? "Web research armed. Click to disarm."
-                                    : webRoom
-                                      ? "Arm web research for this chat"
-                                      : `All ${MAX_TOOLS} tool slots armed. Disarm one first.`
-                                }
+                                // v1.356.0 (G75): Turn on / Turn off, never arm / disarm.
+                                title={webSwitchTitle(webArmed, webRoom, MAX_TOOLS)}
                                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-40"
                               >
                                 <Globe size={14} className="shrink-0 text-zinc-400" />
@@ -13460,7 +13461,7 @@ export default function ChatPage() {
                                 onClick={toggleAutoTools}
                                 role="switch"
                                 aria-checked={autoTools}
-                                title="Each request arms the safe tools it needs (files, documents, web, images)"
+                                title="Each request turns on the safe tools it needs (files, documents, web, images)"
                                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
                               >
                                 <Sparkles size={14} className="shrink-0 text-zinc-400" />
@@ -13487,24 +13488,35 @@ export default function ChatPage() {
                                   <p className="px-2.5 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-zinc-500">
                                     Turned on for this chat
                                   </p>
-                                  {armedTools.map((name) => (
-                                    <div
-                                      key={name}
-                                      className="flex items-center gap-2 rounded-lg px-2.5 py-1 text-[12px] text-zinc-300"
-                                    >
-                                      <Wrench size={12} className="shrink-0 text-accent-soft" />
-                                      <span className="min-w-0 flex-1 truncate font-mono">{name}</span>
-                                      <button
-                                        type="button"
-                                        onClick={() => disarmTool(name)}
-                                        aria-label={`Disarm ${name}`}
-                                        title="Disarm tool"
-                                        className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-tone-danger"
+                                  {/* v1.356.0 (G75): each tool by what it does ("Read
+                                      files", "gmail: search messages"); the exact id is
+                                      the row's title, and an id the app cannot describe
+                                      shows as itself. */}
+                                  {armedTools.map((name) => {
+                                    const words = armedToolWords(name);
+                                    return (
+                                      <div
+                                        key={name}
+                                        data-testid="armed-tool-row"
+                                        title={name}
+                                        className="flex items-center gap-2 rounded-lg px-2.5 py-1 text-[12px] text-zinc-300"
                                       >
-                                        <X size={12} />
-                                      </button>
-                                    </div>
-                                  ))}
+                                        <Wrench size={12} className="shrink-0 text-accent-soft" />
+                                        <span className={`min-w-0 flex-1 truncate ${words ? "" : "font-mono"}`}>
+                                          {words ?? name}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => disarmTool(name)}
+                                          aria-label={turnOffToolLabel(name)}
+                                          title="Turn off for this chat"
+                                          className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-tone-danger"
+                                        >
+                                          <X size={12} />
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               )}
                               <div className="my-1 border-t hairline" />

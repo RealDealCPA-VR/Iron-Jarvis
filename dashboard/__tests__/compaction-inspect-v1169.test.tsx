@@ -132,7 +132,7 @@ describe("CompactionCard", () => {
     expect(screen.getByText('"never said this"')).toBeInTheDocument();
     // Attribution footer: who wrote it and why it ran.
     expect(
-      screen.getByText(/compacted at your request/),
+      screen.getByText(/summarized at your request/),
     ).toBeInTheDocument();
     expect(screen.getByText(/written by acme · acme-1/)).toBeInTheDocument();
   });
@@ -209,7 +209,8 @@ describe("CompactionCard", () => {
       <CompactionCard info={{ ...STANDING, trigger: "auto" }} onClose={() => {}} />,
     );
     expect(
-      screen.getByText(/compacted automatically at the context ceiling/),
+      // v1.356.0 (G75): plain words, updated on purpose.
+      screen.getByText(/summarized automatically because the chat got long/),
     ).toBeInTheDocument();
   });
 

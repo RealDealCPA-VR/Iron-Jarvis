@@ -11,7 +11,7 @@
  *  - picked "high"            chip "High"
  *  - nothing, default medium  chip "Medium",       menu "Default (Medium)"
  *  - nothing, default off     chip "Thinking off", menu "Default (Thinking off)"
- *  - nothing, default auto    chip "Auto",         menu "Default (Auto)"
+ *  - nothing, default auto    chip "Model decides", menu "Default (Model decides)"
  *  - nothing, unknown         chip "Reasoning",    menu "Default"
  *
  * v1.330.0 (W11): the "send nothing" row LEADS with "Default". It used to say
@@ -20,10 +20,18 @@
  * the model keeps following its vendor's default (and a chat saved with it
  * follows a different model's default after a switch), while "Medium" pins
  * medium. Both rows stay, so a saved explicit pick still matches an option.
+ *
+ * v1.356.0 (G75): the "auto" default reads "Model decides". "Auto" was the
+ * name of three different controls on one toolbar (this chip, Auto tools and
+ * the Auto model), and only this one meant "the model picks how hard to
+ * think".
  */
 
 const LEVELS = ["low", "medium", "high"];
 const KNOWN_DEFAULTS = [...LEVELS, "off", "auto"];
+
+/** v1.356.0 (G75): the words for a model that picks its own level. */
+export const MODEL_DECIDES = "Model decides";
 
 /** The first sentence of every tooltip: what the knob measures. */
 export const REASONING_TITLE_LEAD =
@@ -41,11 +49,11 @@ function cap(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
-/** The default in plain words ("Medium", "Thinking off", "Auto"), "" when unknown. */
+/** The default in plain words ("Medium", "Thinking off", "Model decides"), "" when unknown. */
 export function defaultWords(def: string): string {
   if (LEVELS.includes(def)) return cap(def);
   if (def === "off") return "Thinking off";
-  if (def === "auto") return "Auto";
+  if (def === "auto") return MODEL_DECIDES;
   return "";
 }
 

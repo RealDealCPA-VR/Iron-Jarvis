@@ -149,6 +149,7 @@ vi.mock("framer-motion", async () => {
 });
 
 import TrustChip from "@/components/TrustChip";
+import { LOW_TRUST_CANNOT } from "@/lib/trustWords";
 import { CardInner } from "@/components/kanban/SessionCard";
 import SessionDetailPage from "@/app/sessions/[id]/page";
 import { TurnReceipt, blockedRows } from "@/components/chat/TurnReceipt";
@@ -193,12 +194,14 @@ describe("TrustChip", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  // v1.356.0 (G77): the title leads with the daemon's reason and then says
+  // what the run cannot do (lib/trustWords) — updated on purpose.
   it("says low trust with the daemon's reason as its title", () => {
     render(<TrustChip trust="low" reason={REASON} />);
     const chip = screen.getByTestId("trust-chip");
     expect(chip).toHaveTextContent("low trust");
     expect(chip).not.toHaveTextContent("since");
-    expect(chip).toHaveAttribute("title", REASON);
+    expect(chip).toHaveAttribute("title", `${REASON}. ${LOW_TRUST_CANNOT}`);
     expect(chip).not.toHaveAttribute("data-tainted");
   });
 
@@ -223,7 +226,7 @@ describe("SessionCard wears the chip beside the origin", () => {
     );
     expect(screen.getByTestId("origin-chip")).toBeInTheDocument();
     const chip = screen.getByTestId("trust-chip");
-    expect(chip).toHaveAttribute("title", REASON);
+    expect(chip.getAttribute("title")).toBe(`${REASON}. ${LOW_TRUST_CANNOT}`);
   });
 
   it("a full-trust row and an untagged row do not", () => {

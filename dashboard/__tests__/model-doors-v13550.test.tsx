@@ -260,6 +260,8 @@ describe("G73: the free-and-private door downloads a starter model with one pres
 /*  G72 — LM Studio and llama.cpp are one press                                */
 /* ========================================================================== */
 
+// v1.356.0 (G75): the address field is labelled "Your model server's address"
+// (was "Base URL"); these reads were updated on purpose.
 describe("G72: the key door's Custom endpoint", () => {
   it("'LM Studio on this PC' fills the address and lists the server's models to pick", async () => {
     render(<ConnectDoors />);
@@ -268,7 +270,7 @@ describe("G72: the key door's Custom endpoint", () => {
     expect(probes()).toHaveLength(0); // nothing is asked before the press
 
     fireEvent.click(screen.getByRole("button", { name: "LM Studio on this PC" }));
-    expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe("http://localhost:1234/v1");
+    expect((screen.getByLabelText("Your model server's address") as HTMLInputElement).value).toBe("http://localhost:1234/v1");
     const panel = await screen.findByTestId("endpoint-model-picker");
     expect(optionTexts(panel)).toEqual(MODELS);
     expect(probes()).toEqual([
@@ -317,7 +319,7 @@ describe("G72: the key door's Custom endpoint", () => {
 
     hooks.probe = { models: ["llama-server-model"], error: null, reason: null };
     fireEvent.click(screen.getByRole("button", { name: "llama.cpp" }));
-    expect((screen.getByLabelText("Base URL") as HTMLInputElement).value).toBe("http://localhost:8080/v1");
+    expect((screen.getByLabelText("Your model server's address") as HTMLInputElement).value).toBe("http://localhost:8080/v1");
     // Wait for the list the SECOND server answered, not for the request.
     const panel = await screen.findByTestId("endpoint-model-picker");
     await waitFor(() => expect(optionTexts(panel)).toEqual(["llama-server-model"]));

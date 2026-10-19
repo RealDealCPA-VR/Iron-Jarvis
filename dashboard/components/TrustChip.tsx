@@ -13,11 +13,16 @@
  * FULL trust (and an absent field — every row from before the column
  * existed) renders NOTHING: a "full trust" badge on every card would be
  * noise, and the quiet case is the honest default.
+ *
+ * v1.356.0 (G77): the hover also says what the run CANNOT do (settings,
+ * schedules, rules, connections, memory, …) — lib/trustWords, pinned
+ * against the daemon's own deny set (core/trust.LOW_TRUST_DENY).
  */
 
 import { ShieldAlert, ShieldOff } from "lucide-react";
 import type { SessionTrust } from "@/lib/types";
 import { clockTime } from "@/lib/format";
+import { LOW_TRUST_CANNOT, lowTrustTitle } from "@/lib/trustWords";
 
 export interface TrustChipProps {
   trust?: SessionTrust | string | null;
@@ -33,13 +38,10 @@ export default function TrustChip({
   className = "",
 }: TrustChipProps) {
   if (trust !== "low") return null;
-  const why = (reason ?? "").trim();
   const since = taintedAt ? clockTime(taintedAt) : "";
   // ShieldOff = trust was LOST mid-run (tainted); ShieldAlert = it started low.
   const Icon = taintedAt ? ShieldOff : ShieldAlert;
-  const title = [why || "This run is in low trust", since ? `since ${since}` : ""]
-    .filter(Boolean)
-    .join(" — ");
+  const title = lowTrustTitle(reason, since);
   return (
     <span
       title={title}
@@ -50,6 +52,8 @@ export default function TrustChip({
       <Icon size={10} aria-hidden="true" className="shrink-0" />
       low trust
       {since && <span className="text-amber-300/80">· since {since}</span>}
+      {/* The hover is mouse-only; a screen reader hears the same words. */}
+      <span className="sr-only">. {LOW_TRUST_CANNOT}</span>
     </span>
   );
 }
