@@ -188,7 +188,7 @@ def launch_pane(
     snapshot), so "continue on the next account" carries exactly that
     conversation and Resume reopens it by id. ``claude_session_id`` records
     the id a ``command`` already names (``claude --resume <id>``)."""
-    from ...terminals.ai_clis import launch_entry, launch_line
+    from ...terminals.ai_clis import launch_entry, launch_env, launch_line
     from ...terminals.pane_accounts import CLI_PROVIDER, PaneAccountRefused
 
     cli_id = (body.cli or "").strip().lower()
@@ -200,6 +200,17 @@ def launch_pane(
         raise HTTPException(
             status_code=400, detail=f'"{body.cli}" is not a CLI on the Launch menu.'
         )
+    # v1.356.0 (G60): an app sign-in's pane starts with its card's settings
+    # (the pack's own, plus the account kind chosen) on top of the daemon's
+    # environment, so the login asks for what the pack will use. None for
+    # every other entry: those panes start exactly as before.
+    try:
+        job_env = launch_env(cat)
+    except LookupError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{cat['label']} could not read its app's settings, so nothing was started.",
+        ) from None
     provider = CLI_PROVIDER.get(cli_id)
     account = (body.account or "").strip()
     if account and provider is None:
@@ -239,10 +250,15 @@ def launch_pane(
                 cols=body.cols,
                 rows=body.rows,
                 name=name,
-                # A set-up job's pane is labelled as the CLI it runs.
-                agent_cli=cat.get("agent_cli") or cli_id,
+                # A set-up job's pane is labelled as the CLI it runs; an app
+                # sign-in ("agent_cli": "") runs no AI CLI and reads as a shell.
+                agent_cli=cat.get("agent_cli", cli_id) or None,
                 accounts=accounts,
                 claude_session_id=claude_session_id,
+                # Only when the job has settings: every other pane's create
+                # call is exactly what it was (the backends then copy the
+                # daemon's environment themselves).
+                **({"env": {**os.environ, **job_env}} if job_env else {}),
             )
         except RuntimeError as exc:  # the session cap
             raise HTTPException(status_code=429, detail=str(exc)) from None

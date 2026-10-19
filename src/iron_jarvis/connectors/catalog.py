@@ -27,6 +27,22 @@ FIELD_KINDS = ("secret", "env", "arg")
 
 
 @dataclass(frozen=True)
+class Option:
+    """One answer to a field that is a plain CHOICE (v1.356.0, G60).
+
+    ``value`` is exactly what the pack reads (the field's env var is set to
+    it, so every door that already writes a field's value — the Directory's
+    Connect, the chat's ``app_connect`` — writes the right thing); ``label``
+    and ``help`` are the words the card shows; ``key`` is a short stable name
+    for the doors that need one (the app's sign-in job id)."""
+
+    value: str
+    label: str
+    help: str = ""
+    key: str = ""
+
+
+@dataclass(frozen=True)
 class Field:
     """One value the user supplies to connect an MCP connector."""
 
@@ -35,6 +51,10 @@ class Field:
     help: str = ""
     kind: str = "secret"
     optional: bool = False
+    # v1.356.0 (G60): a field the user ANSWERS rather than types — the card
+    # shows these as a plain choice, and a value outside them is refused
+    # (connectors.service.pack_body). Empty for every typed field.
+    options: list[Option] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -85,6 +105,21 @@ class Connector:
     # (a Claude Desktop config still naming @modelcontextprotocol/server-github)
     # is described by this card's blurb (routes/agents.catalog_blurbs).
     replaces: list[str] = field(default_factory=list)
+    # -- v1.356.0 (G60): settings the pack ALWAYS starts with (not asked) --
+    # Plain env values every connect writes beside the fields' answers
+    # (connectors.service.pack_body). In the ENVIRONMENT rather than in
+    # ``args`` when a value carries characters a Windows launcher shim would
+    # read as its own (``|`` ``^``): npx is a .cmd, run through cmd.exe.
+    env: dict[str, str] = field(default_factory=dict)
+    # -- v1.356.0 (G60): an app that SIGNS IN on this PC --
+    # The pack's own program run once more with these extra arguments is its
+    # sign-in (a device-code login that prints a web address and a code). It
+    # runs in a Build pane (terminals/ai_clis.SETUP_LAUNCHES), with exactly
+    # the pack's command, arguments and settings plus these — the sign-in
+    # asks for what the pack will use (signin_argv / signin_env).
+    signin_args: list[str] = field(default_factory=list)
+    # Whose account the sign-in is for, in the press's words ("Microsoft").
+    signin_name: str = ""
 
 
 def is_remote(connector: "Connector") -> bool:
@@ -118,6 +153,63 @@ _GH = "https://github.com/settings/tokens"
 GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
 #: The reference package the GitHub card ran before (G43's "older package").
 GITHUB_OLD_PACKAGE = "@modelcontextprotocol/server-github"
+
+#: v1.356.0 (G60): Microsoft 365 through Softeria's maintained server
+#: (npm @softeria/ms-365-mcp-server, MIT, github.com/Softeria/ms-365-mcp-
+#: server; 0.170.2 read 2026-10-19). Its README: `--login` runs the DEVICE
+#: CODE sign-in in a terminal (a web address and a code are printed), tokens
+#: are kept in an encrypted file under %APPDATA%\ms-365-mcp-server with the
+#: key in the OS credential store, and the RUNNING server re-reads that cache
+#: before every use (its disk-coherency cache plugin, dist/auth.js) — so a
+#: sign-in finished in a Build pane is seen by the connected pack without a
+#: restart.
+MS365_PACKAGE = "@softeria/ms-365-mcp-server"
+#: The tools the card turns on (the server's ENABLED_TOOLS regex). Chat arms a
+#: connected app's tools as ONE group of at most 24 (daemon/chat_turn
+#: ``_MAX_CONNECTOR_TOOLS``, taken in name order), and the server's presets
+#: are far wider (`outlook` + `onedrive` = 108 tools, the calendar's day view
+#: past the 24th name) — so this is the everyday set: these 18 plus the six
+#: sign-in tools the server always adds (login, logout, verify-login,
+#: list-accounts, select-account, remove-account) = 24, measured by starting
+#: the real 0.170.2 server and listing its tools. Requests Calendars.ReadWrite,
+#: Contacts.Read, Files.Read, Mail.ReadWrite and Mail.Send (its own
+#: `--list-permissions` with this filter).
+MS365_TOOLS: tuple[str, ...] = (
+    # Calendar
+    "get-calendar-view",
+    "list-calendar-events",
+    "get-calendar-event",
+    "create-calendar-event",
+    "update-calendar-event",
+    # Outlook mail
+    "list-mail-messages",
+    "get-mail-message",
+    "read-mail-text",
+    "list-mail-folders",
+    "create-draft-email",
+    "send-mail",
+    # Contacts
+    "list-outlook-contacts",
+    # OneDrive
+    "search-onedrive-files",
+    "list-drives",
+    "get-drive-root-item",
+    "list-folder-files",
+    "get-drive-item",
+    "download-bytes",
+)
+#: The filter as the server reads it (`ENABLED_TOOLS`, matched per tool name).
+MS365_ENABLED_TOOLS = "^(" + "|".join(MS365_TOOLS) + ")$"
+#: Which Microsoft sign-in authority the server uses (`MS365_MCP_TENANT_ID`,
+#: environment only — the server has no flag for it). The README: personal
+#: accounts must use "consumers" ("as of June 2026, refresh tokens issued via
+#: the default 'common' authority are rejected at the first refresh, so
+#: sessions die roughly an hour after login"); a work or school account keeps
+#: the server's own default, "common". Work features beyond these tools
+#: (Teams, SharePoint) would need --org-mode; this card turns none of them on.
+MS365_TENANT_ENV = "MS365_MCP_TENANT_ID"
+MS365_WORK = "common"
+MS365_PERSONAL = "consumers"
 
 CATALOG: list[Connector] = [
     # ---------------- Developer ----------------
@@ -248,6 +340,58 @@ CATALOG: list[Connector] = [
         needs="Needs a one-time Google developer setup",
     ),
     # ---------------- Productivity ----------------
+    Connector(
+        # v1.356.0 (G60): Outlook mail, the calendar and OneDrive. Signs in
+        # with the account's own Microsoft sign-in (a web address and a code,
+        # shown in a Build pane by the card's Sign in) — no developer setup.
+        # ONE plain choice says which kind of account, because the two sign
+        # in through different Microsoft authorities (MS365_TENANT_ENV): a
+        # wrong guess either refuses the sign-in or (a personal account on
+        # "common") ends it an hour later.
+        id="microsoft_365",
+        name="Microsoft 365 (Outlook, Calendar, OneDrive)",
+        category="Productivity",
+        glyph="📅",
+        blurb="Your Outlook email, calendar and OneDrive files.",
+        unlocks="Ask what's on your calendar, find and read email, draft or send "
+        "a message, add or move a meeting, and find files in OneDrive — from "
+        "chat and agents.",
+        connect_via="mcp",
+        scopes=[
+            "Read & change calendar events",
+            "Read, draft & send email",
+            "Read contacts",
+            "Read OneDrive files",
+        ],
+        docs_url="https://github.com/Softeria/ms-365-mcp-server",
+        command="npx",
+        args=["-y", MS365_PACKAGE],
+        env={"ENABLED_TOOLS": MS365_ENABLED_TOOLS},
+        fields=[
+            Field(
+                MS365_TENANT_ENV,
+                "Which Microsoft account?",
+                help="Pick the kind you sign in to Outlook with.",
+                kind="env",
+                options=[
+                    Option(
+                        MS365_WORK,
+                        "Work or school account",
+                        help="One your workplace or school gave you.",
+                        key="work",
+                    ),
+                    Option(
+                        MS365_PERSONAL,
+                        "Personal account",
+                        help="Outlook.com, Hotmail or Live.",
+                        key="personal",
+                    ),
+                ],
+            ),
+        ],
+        signin_args=["--login"],
+        signin_name="Microsoft",
+    ),
     Connector(
         id="notion",
         name="Notion",
@@ -501,7 +645,88 @@ def get_connector(connector_id: str) -> Connector | None:
 
 
 def field_dict(f: Field) -> dict:
-    return {"name": f.name, "label": f.label, "help": f.help, "kind": f.kind, "optional": f.optional}
+    out = {"name": f.name, "label": f.label, "help": f.help, "kind": f.kind, "optional": f.optional}
+    if f.options:
+        # v1.356.0 (G60): a field the card shows as a plain choice. Only a
+        # choice field carries the key, so every other field's dict is what
+        # it always was.
+        out["options"] = [
+            {"value": o.value, "label": o.label, "help": o.help} for o in f.options
+        ]
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# v1.356.0 (G60): a plain choice, and an app that signs in on this PC.
+# --------------------------------------------------------------------------- #
+def choice_field(c: Connector) -> Field | None:
+    """The card's one CHOICE field (the answer its sign-in must carry), or
+    None. A card has at most one; the first wins."""
+    return next((f for f in c.fields if f.options), None)
+
+
+def option_for(f: Field, value: str) -> Option | None:
+    """The option of choice field ``f`` whose value is ``value`` (exactly),
+    else None."""
+    return next((o for o in f.options if o.value == value), None)
+
+
+def signin_launch_id(connector_id: str, key: str = "") -> str:
+    """The Build set-up job id of an app's sign-in (``terminals/ai_clis.
+    SETUP_LAUNCHES``): ``microsoft-365-signin-work`` — one job per choice,
+    because each answer signs in a different way."""
+    base = f"{connector_id.replace('_', '-')}-signin"
+    return f"{base}-{key}" if key else base
+
+
+def signin_argv(c: Connector) -> list[str]:
+    """The sign-in's command line: the pack's own command and arguments, then
+    ``signin_args``. Never anything the pack does not run."""
+    return [c.command, *c.args, *c.signin_args]
+
+
+def signin_env(c: Connector, key: str = "") -> dict[str, str]:
+    """The settings the sign-in runs with: the pack's fixed ``env`` and the
+    chosen option's value under the choice field's name — exactly the env a
+    connect with that answer saves (``service.pack_body``), so the sign-in
+    asks Microsoft for what the pack will use. An unknown ``key`` adds no
+    answer (the caller refuses it first)."""
+    env = dict(c.env)
+    f = choice_field(c)
+    if f is not None and key:
+        opt = next((o for o in f.options if o.key == key), None)
+        if opt is not None:
+            env[f.name] = opt.value
+    return env
+
+
+def signin_launches() -> list[dict[str, str]]:
+    """Every app sign-in as a ``SETUP_LAUNCHES``-shaped row: ``id``, ``label``,
+    ``command`` (the line typed), ``provider``, ``url``, ``app`` (the catalog
+    id) and ``choice`` (the option key, "" for a card with no choice). The
+    terminals catalog keeps its own copy of these rows; a test holds the two
+    equal."""
+    rows: list[dict[str, str]] = []
+    for c in CATALOG:
+        if not c.signin_args:
+            continue
+        f = choice_field(c)
+        answers = [(o.key, o.label) for o in f.options] if f is not None else [("", "")]
+        for key, words in answers:
+            label = f"{c.signin_name or c.name} sign-in"
+            rows.append(
+                {
+                    "id": signin_launch_id(c.id, key),
+                    # The pane's name: "Microsoft sign-in · Personal account".
+                    "label": f"{label} · {words}" if words else label,
+                    "command": " ".join(signin_argv(c)),
+                    "provider": c.signin_name or c.name,
+                    "url": c.docs_url,
+                    "app": c.id,
+                    "choice": key,
+                }
+            )
+    return rows
 
 
 def connector_dict(c: Connector) -> dict:

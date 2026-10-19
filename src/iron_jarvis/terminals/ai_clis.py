@@ -55,6 +55,17 @@ STARTER_MODEL = "llama3.2"
 #: :func:`launch_line` gives it the program's full path when the daemon's own
 #: PATH predates the program's install (Ollama installed while Iron Jarvis was
 #: already running — the first-run door's own step 1).
+#:
+#: v1.356.0 (G60): an app that SIGNS IN on this PC is a set-up job too — the
+#: Directory card's Sign in opens a pane running the pack's own program with
+#: its sign-in argument (a device-code login: the pane shows a web address
+#: and a code). One job per answer to the card's choice, because each signs
+#: in a different way. ``app`` / ``choice`` name the catalog card and the
+#: answer; :func:`launch_env` reads the settings the pane starts with from
+#: that card, so the sign-in asks for exactly what the pack will use. These
+#: rows are ``connectors.catalog.signin_launches()`` written out (this module
+#: stays free of the connectors package at import); a test holds them equal.
+#: ``agent_cli`` "" = not an AI CLI: the pane reads as a plain shell.
 SETUP_LAUNCHES: list[dict[str, str]] = [
     {
         "id": "ollama-starter",
@@ -64,7 +75,47 @@ SETUP_LAUNCHES: list[dict[str, str]] = [
         "provider": "Ollama",
         "url": "https://ollama.com",
     },
+    {
+        "id": "microsoft-365-signin-work",
+        "label": "Microsoft sign-in · Work or school account",
+        "command": "npx -y @softeria/ms-365-mcp-server --login",
+        "agent_cli": "",
+        "provider": "Microsoft",
+        "url": "https://github.com/Softeria/ms-365-mcp-server",
+        "app": "microsoft_365",
+        "choice": "work",
+    },
+    {
+        "id": "microsoft-365-signin-personal",
+        "label": "Microsoft sign-in · Personal account",
+        "command": "npx -y @softeria/ms-365-mcp-server --login",
+        "agent_cli": "",
+        "provider": "Microsoft",
+        "url": "https://github.com/Softeria/ms-365-mcp-server",
+        "app": "microsoft_365",
+        "choice": "personal",
+    },
 ]
+
+
+def launch_env(entry: dict[str, str]) -> dict[str, str] | None:
+    """The settings a set-up job's pane starts with on top of the daemon's own
+    environment (v1.356.0, G60): an app sign-in's are its catalog card's
+    (``connectors.catalog.signin_env`` — the pack's fixed settings plus the
+    chosen answer); every other entry has none (None, byte-identical to
+    before). Read lazily: this module is imported by light paths that must not
+    pull in the connectors package. Raises ``LookupError`` when an app
+    sign-in's card cannot be read — a sign-in with the WRONG settings would
+    ask Microsoft for the wrong account kind, so the route refuses instead."""
+    app = (entry.get("app") or "").strip()
+    if not app:
+        return None
+    from ..connectors.catalog import get_connector, signin_env
+
+    card = get_connector(app)
+    if card is None or not card.signin_args:
+        raise LookupError(f"no app named {app!r} signs in here")
+    return signin_env(card, entry.get("choice", ""))
 
 
 def launch_entry(cli_id: str) -> dict[str, str] | None:

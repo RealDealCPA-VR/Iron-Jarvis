@@ -48,6 +48,21 @@ export async function launchSignIn(c: Pick<SubscriptionCli, "cli">): Promise<str
   return res && typeof res.id === "string" ? res.id : null;
 }
 
+/**
+ * v1.356.0 (G60): open a Build pane running an APP's sign-in — a set-up job
+ * the daemon names on the app's Directory row (`signin.cli`, e.g.
+ * "microsoft-365-signin-work"; terminals/ai_clis.SETUP_LAUNCHES). The same
+ * door as `launchSignIn`, by NAME only (the route accepts only catalog ids,
+ * so nothing here can type a command), and with no `account`: an app's
+ * sign-in is not an AI CLI and never runs on an Iron-Proxy account. Resolves
+ * the new pane's id (null when the daemon did not say); rejects with the
+ * daemon's own sentence.
+ */
+export async function launchAppSignIn(cli: string): Promise<string | null> {
+  const res = await post<{ id?: string }>("/terminals/launch", { cli });
+  return res && typeof res.id === "string" ? res.id : null;
+}
+
 /** Where "Open the Build pane" goes: the pane itself when its id is known. */
 export function paneHref(paneId: string | null | undefined): string {
   return paneId ? `/terminals?focus=${encodeURIComponent(paneId)}` : "/terminals";

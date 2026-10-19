@@ -1,0 +1,66 @@
+{
+  "before": {
+    "id": "microsoft_365",
+    "name": "Microsoft 365 (Outlook, Calendar, OneDrive)",
+    "connect_via": "mcp",
+    "fields": [
+      {
+        "name": "MS365_MCP_TENANT_ID",
+        "label": "Which Microsoft account?",
+        "help": "Pick the kind you sign in to Outlook with.",
+        "kind": "env",
+        "optional": false,
+        "options": [
+          {
+            "value": "common",
+            "label": "Work or school account",
+            "help": "One your workplace or school gave you."
+          },
+          {
+            "value": "consumers",
+            "label": "Personal account",
+            "help": "Outlook.com, Hotmail or Live."
+          }
+        ]
+      }
+    ],
+    "status": "disconnected",
+    "connected": false,
+    "enabled": true,
+    "signin": null
+  },
+  "after": {
+    "id": "microsoft_365",
+    "name": "Microsoft 365 (Outlook, Calendar, OneDrive)",
+    "connect_via": "mcp",
+    "fields": [
+      {
+        "name": "MS365_MCP_TENANT_ID",
+        "label": "Which Microsoft account?",
+        "help": "Pick the kind you sign in to Outlook with.",
+        "kind": "env",
+        "optional": false,
+        "options": [
+          {
+            "value": "common",
+            "label": "Work or school account",
+            "help": "One your workplace or school gave you."
+          },
+          {
+            "value": "consumers",
+            "label": "Personal account",
+            "help": "Outlook.com, Hotmail or Live."
+          }
+        ]
+      }
+    ],
+    "status": "connected",
+    "connected": true,
+    "enabled": true,
+    "signin": {
+      "cli": "microsoft-365-signin-work",
+      "label": "Sign in to Microsoft",
+      "account": "Work or school account"
+    }
+  }
+}

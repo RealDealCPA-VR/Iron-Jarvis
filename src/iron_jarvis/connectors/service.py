@@ -20,7 +20,18 @@ from typing import Any
 
 from ..core.config import persist_config_values
 from ..mcp.tools import mcp_tools, unload_pack_tools
-from .catalog import CATALOG, LINK_CARDS, OLDER_PACKAGE_NOTE, connector_dict, get_connector, is_remote
+from .catalog import (
+    CATALOG,
+    LINK_CARDS,
+    OLDER_PACKAGE_NOTE,
+    choice_field,
+    connector_dict,
+    get_connector,
+    is_remote,
+    option_for,
+    signin_env,
+    signin_launch_id,
+)
 
 
 def _mcp_servers(platform) -> list[dict]:
@@ -196,6 +207,83 @@ def _mcp_status(configured: bool, tools_loaded: int, name: str = "") -> dict[str
     return {"connected": True, "status": "connected", "detail": ""}
 
 
+#: v1.356.0 (G78/G60): what a saved pack the user SWITCHED OFF says on its
+#: card — the words mcp/tools gives a switched-off pack (``PACK_OFF_REASON``),
+#: never "isn't answering, press Retry" (nothing is wrong with it).
+PACK_OFF_DETAIL = "It's switched off, so its tools are not loaded."
+
+
+def pack_on(cfg: "dict | None") -> bool:
+    """Whether a saved pack row is switched ON (v1.356.0): the loader's own
+    reading (``mcp.tools.pack_enabled`` — absent ``enabled`` = on), so the
+    Directory card and the loader can never disagree. A row that cannot be
+    read counts as on, as every row saved before the switch existed is."""
+    if not isinstance(cfg, dict):
+        return True
+    from ..mcp import tools as _tools
+
+    reader = getattr(_tools, "pack_enabled", None)
+    if reader is not None:
+        try:
+            return bool(reader(cfg))
+        except Exception:  # noqa: BLE001 — a status read never raises
+            return True
+    # Only until G78's reader is in the same build: an explicit false is off.
+    return cfg.get("enabled", True) is not False
+
+
+def _off_status() -> dict[str, Any]:
+    """The status of a saved pack the user switched off (v1.356.0): still a
+    saved connection (``connected`` stays true, as for every saved pack),
+    state ``off``, the plain words — no load record, no Retry."""
+    from ..mcp import tools as _tools
+
+    return {
+        "connected": True,
+        "status": "off",
+        "detail": str(getattr(_tools, "PACK_OFF_REASON", "") or PACK_OFF_DETAIL),
+        "reason": "",
+        "fix": "",
+        "stderr_tail": "",
+    }
+
+
+def signin_row(connector, cfg: "dict | None") -> "dict[str, str] | None":
+    """What the card's Sign in press needs (v1.356.0, G60): ``{cli, label,
+    account}`` — the Build set-up job to open (``POST /terminals/launch
+    {cli}``), the press's words, and which kind of account it signs in.
+
+    Offered only for an app that signs in on this PC, once it is SAVED, and
+    only while the saved pack still runs exactly what that sign-in runs: the
+    same command and arguments, the same settings (the account kind chosen +
+    the card's fixed ones, nothing more, nothing vaulted). A pack changed by
+    hand (Tools › Edit) gets no press rather than one that would ask
+    Microsoft for a different sign-in than the pack uses. None otherwise."""
+    if not getattr(connector, "signin_args", None) or not isinstance(cfg, dict):
+        return None
+    if str(cfg.get("command") or "") != connector.command:
+        return None
+    if [str(a) for a in (cfg.get("args") or [])] != list(connector.args):
+        return None
+    if cfg.get("env_secrets") or cfg.get("arg_secrets"):
+        return None
+    env = {str(k): str(v) for k, v in dict(cfg.get("env") or {}).items()}
+    key, account = "", ""
+    f = choice_field(connector)
+    if f is not None:
+        opt = option_for(f, env.get(f.name, ""))
+        if opt is None:
+            return None
+        key, account = opt.key, opt.label
+    if env != signin_env(connector, key):
+        return None
+    return {
+        "cli": signin_launch_id(connector.id, key),
+        "label": f"Sign in to {connector.signin_name or connector.name}",
+        "account": account,
+    }
+
+
 def auto_approve_on(platform) -> bool:
     """Do pack tools run WITHOUT asking? The rule the boot resolver applies
     (platform.py: the global "Run app tools without asking" OR any pack's own
@@ -266,6 +354,10 @@ def _status_for(
     if connector.connect_via == "mcp":
         server = _configured_name(platform, connector.id)
         configured = server is not None
+        cfg = _server_cfg(platform, server) if server else None
+        # v1.356.0: a saved pack the user switched off says so (G78's switch
+        # on the card reads `enabled`); one never saved reads as on.
+        on = pack_on(cfg) if cfg is not None else True
         loaded = platform.registry.mcp_names(server) if server else []
         row: dict[str, Any] = {
             # CONNECTED MEANS REACHABLE (v1.172.0). This used to be "a config
@@ -274,7 +366,11 @@ def _status_for(
             # confident green while the model could not call a single tool.
             # The one surface that could have revealed a dark wiki was the
             # surface insisting it was fine. Tools loaded IS the connection.
-            **_mcp_status(configured, len(loaded), server or connector.id),
+            **(
+                _mcp_status(configured, len(loaded), server or connector.id)
+                if on
+                else _off_status()
+            ),
             "tools_loaded": len(loaded),
             "tool_names": [n.split("__", 2)[-1] for n in loaded],
             "account": "",
@@ -282,7 +378,13 @@ def _status_for(
             # the helper program the pack starts with ("Needs Node.js"). A
             # remote server (v1.355.0, G44: GitHub's) launches nothing here.
             **_runtime_fields(connector.command, runtime_cache if runtime_cache is not None else {}),
+            "enabled": on,
         }
+        if getattr(connector, "signin_args", None):
+            # v1.356.0 (G60): an app that signs in on this PC — what its Sign
+            # in press opens (None until it is saved, or when the saved pack
+            # no longer runs what the sign-in runs).
+            row["signin"] = signin_row(connector, cfg)
         if server:
             # v1.355.0 (G70): what the connected pack can actually do.
             row.update(
@@ -293,7 +395,7 @@ def _status_for(
                     asks_first=(not auto_approve_on(platform)) if asks_first is None else asks_first,
                 )
             )
-        if server and _runs_replaced_package(_server_cfg(platform, server), connector):
+        if server and _runs_replaced_package(cfg, connector):
             # v1.355.0 integrate (lane 5B note 4): a pack saved before the card
             # moved to its maker's own server (GitHub's) still runs the older
             # package and is never moved for the user; its card says so, and
@@ -429,6 +531,7 @@ def _user_mcp_connectors(
         if not name or name in catalog_ids:
             continue
         loaded = platform.registry.mcp_names(name)
+        on = pack_on(cfg)
         out.append({
             **_entry_base(
                 name, name, USER_CATEGORY, "🧩",
@@ -437,14 +540,17 @@ def _user_mcp_connectors(
                 "mcp",
             ),
             # Was hardcoded connected:true — a user-added server that loaded no
-            # tools claimed a working connection (v1.172.0).
-            **_mcp_status(True, len(loaded), name),
+            # tools claimed a working connection (v1.172.0). v1.356.0: one the
+            # user switched off says so instead of "isn't answering".
+            **(_mcp_status(True, len(loaded), name) if on else _off_status()),
             "tools_loaded": len(loaded),
             "tool_names": [n.split("__", 2)[-1] for n in loaded],
             "account": "",
             # v1.355.0 (G70): an imported pack has no hand-written scopes; its
             # card says what its tools can do and whether they ask first.
             **pack_powers(platform, name, loaded, asks_first=asks_first),
+            # v1.356.0: the pack's switch (G78), as the loader reads it.
+            "enabled": on,
         })
     return out
 
@@ -598,6 +704,13 @@ REMOTE_AUTH_HEADER = "Authorization"
 REMOTE_AUTH_FORMAT = "Bearer {value}"
 
 
+def choice_refusal(f) -> str:
+    """The sentence a choice field answered with something not on its list
+    gets (v1.356.0, G60): its own question, then its answers by name."""
+    answers = " or ".join(f'"{o.label}"' for o in f.options)
+    return f"{f.label} Pick {answers}."
+
+
 def pack_body(connector, values: dict[str, Any]):
     """The ``McpServerBody`` the one add door takes for a Directory card and
     the values the user typed (v1.355.0, G44). Secret fields ride as VALUES —
@@ -628,11 +741,18 @@ def pack_body(connector, values: dict[str, Any]):
             name=connector.id, transport=connector.transport, url=url, headers=headers, auth=auth
         )
     args = list(connector.args)
-    env: dict[str, str] = {}
+    # v1.356.0 (G60): the settings the pack always starts with (Microsoft
+    # 365's tool filter), then the fields' answers on top.
+    env: dict[str, str] = dict(getattr(connector, "env", None) or {})
     for f in connector.fields:
         val = str(values.get(f.name, "")).strip()
         if not val:
             continue
+        if f.options and option_for(f, val) is None:
+            # v1.356.0 (G60): a choice is answered from its list, never typed
+            # free (the value is what the pack reads — a guessed one would
+            # sign in the wrong way).
+            raise ValueError(choice_refusal(f))
         if f.kind == "arg":
             args = [a.replace(f"<{f.name}>", val) for a in args]
         else:  # env, or a secret the door vaults (injected as an env var at launch)
