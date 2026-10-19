@@ -173,6 +173,23 @@ def is_task_door_url(url: object) -> bool:
     return (parsed.path or "").rstrip("/") == _door_path()
 
 
+def door_address(url: object) -> str:
+    """The address to DIAL for ``url``: a task door's address with the
+    trailing slashes of its path removed, anything else unchanged.
+
+    v1.357.0 re-review: :func:`is_task_door_url` accepts ``…/task/`` (the
+    form says "another Iron Jarvis" for it and message-back is turned on), but
+    the install-bearer exemption is an EXACT match on ``TASK_DOOR_PATH``. Sent
+    as typed, every task and every Test came back 401 from the install guard,
+    and the sender was told "its token does not match — copy the token again",
+    a loop no new token could end. The sender dials the exact leaf instead."""
+    text = str(url or "").strip()
+    if not is_task_door_url(text):
+        return str(url or "")
+    parsed = urlparse(text)
+    return parsed._replace(path=(parsed.path or "").rstrip("/")).geturl()
+
+
 def valid_reply_to(url: object) -> bool:
     """Is ``url`` a place this computer may send an answer to — another Iron
     Jarvis's inbound door over http(s)? Anything else is refused at the door."""

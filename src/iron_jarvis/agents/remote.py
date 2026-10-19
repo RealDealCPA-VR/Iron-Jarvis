@@ -502,7 +502,12 @@ class RemoteAgentRegistry:
                 "input": [*rows, {"role": "user", "content": task}] if rows else task,
             }
         else:  # http-task (default / unknown kind falls here)
-            url = record.base_url or ""
+            # v1.357.0 re-review: another Iron Jarvis's door is dialled at its
+            # exact leaf (a trailing "/" met the install guard, never the
+            # door); every other remote's address is used as typed.
+            from .task_door import door_address
+
+            url = door_address(record.base_url or "")
             payload = {"task": task}
             if conversation_id:
                 payload["conversation_id"] = conversation_id
@@ -658,6 +663,8 @@ class RemoteAgentRegistry:
         computer (token checked, nothing started). Bounded; never raises."""
         import httpx
 
+        from .task_door import door_address
+
         token = ""
         if record.secret_name:
             try:
@@ -669,7 +676,7 @@ class RemoteAgentRegistry:
         try:
             async with asyncio.timeout(timeout):
                 async with httpx.AsyncClient(timeout=timeout) as client:
-                    resp = await client.get(record.base_url, headers=headers)
+                    resp = await client.get(door_address(record.base_url), headers=headers)
         except Exception:  # noqa: BLE001 — timeout / connection / DNS
             return {
                 "ok": False,
