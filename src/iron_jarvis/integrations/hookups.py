@@ -26,9 +26,16 @@ _MIN_NAME = 3
 #: The longest message text the matcher reads (the app matcher's bound).
 _MAX_TEXT = 4000
 #: The built-in EXAMPLE hookup (``builtin.REST_SPEC``, "Generic REST API"):
-#: always registered, saved by nobody unless they configure it. It can still
-#: be named and called, but a list of "your hookups" does not offer it.
+#: always registered, saved by nobody unless they configure it. The tool can
+#: still find it by name (:func:`find_hookup`), but a list of "your hookups"
+#: does not offer it and a message never ARMS the tool by naming it — its id
+#: words are "REST API", which any developer's question says ("how do I build
+#: a REST API in Flask?" ask-armed ``rest_call`` on an install with no hookup
+#: saved; v1.357.0 review).
 EXAMPLE_IDS: frozenset[str] = frozenset({"rest_api"})
+#: "<display name> (<id>)" — the exact form :func:`hookup_names` lists in the
+#: tool's spec, so a model that copies it finds the hookup.
+_LISTED_RX = re.compile(r"^(?P<shown>.*\S)\s*\((?P<sid>[a-z0-9_]+)\)$")
 
 
 def rest_hookups(registry: Any) -> list[Any]:
@@ -45,11 +52,19 @@ def _slug(text: str) -> str:
 
 
 def find_hookup(registry: Any, name: str) -> Any:
-    """The hookup *name* means — its id, its display name (any case), or the
-    id its name would get — else None."""
+    """The hookup *name* means — its id, its display name (any case), the id
+    its name would get, or the ``"<display name> (<id>)"`` line the tool's
+    spec lists (v1.357.0 review: that exact line was refused AFTER the user
+    had approved the card) — else None."""
     want = str(name or "").strip()
     if not want:
         return None
+    listed = _LISTED_RX.match(want)
+    if listed is not None:
+        sid_wanted = listed.group("sid")
+        for spec in rest_hookups(registry):
+            if str(getattr(spec, "id", "")) == sid_wanted:
+                return spec
     slug = _slug(want)
     for spec in rest_hookups(registry):
         sid = str(getattr(spec, "id", ""))
@@ -83,7 +98,8 @@ def _name_rx(words: str) -> "re.Pattern[str] | None":
 
 def hookups_named(registry: Any, text: str) -> list[str]:
     """The ids of the hookups *text* names, by display name or id (word-bounded,
-    any case, spaces/underscores/hyphens alike), in id order. ``[]`` for none."""
+    any case, spaces/underscores/hyphens alike), in id order. ``[]`` for none.
+    The built-in example (:data:`EXAMPLE_IDS`) is never named this way."""
     t = str(text or "")[:_MAX_TEXT]
     if not t.strip():
         return []
@@ -91,6 +107,8 @@ def hookups_named(registry: Any, text: str) -> list[str]:
     try:
         for spec in rest_hookups(registry):
             sid = str(getattr(spec, "id", ""))
+            if sid in EXAMPLE_IDS:
+                continue  # never armed by name
             shown = str(getattr(spec, "display_name", "") or "")
             for words in (shown, sid):
                 rx = _name_rx(words)
