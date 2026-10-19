@@ -177,6 +177,13 @@ PROBE_TABLE: list[tuple[str, bool, bool]] = [
     ("search for the dropbox desktop app download", True, True),
     ("look up google maps api pricing", True, True),
     ("search for brave search api pricing", True, True),
+    # review: a how-to question stays research even when it names "in my <app>"
+    # (the about-the-app guard), and an app that is not the verb's object or
+    # place stays research when connected (the into-the-app guard)
+    ("look up how to share a folder in my google drive", True, True),
+    ("look up how to archive a channel in slack", True, True),
+    ("look up reviews of notion", True, True),
+    ("search for alternatives to slack", True, True),
     # a real web word: web, as before
     ("what's the latest news about github copilot", True, True),
     ("find a good postgres tutorial online", True, True),
@@ -191,7 +198,9 @@ PROBE_TABLE: list[tuple[str, bool, bool]] = [
     ("search github for issues about login", True, False),
     ("look up the refund in stripe", True, False),
 ]
-ALL_ON = ("github", "notion", "stripe", "google_drive", "gmail", "dropbox", "google_maps", "brave_search")
+ALL_ON = (
+    "github", "notion", "stripe", "google_drive", "gmail", "dropbox", "google_maps", "brave_search", "slack",
+)
 
 
 @pytest.mark.parametrize("text, web_off, web_on", PROBE_TABLE)
@@ -352,6 +361,47 @@ def test_the_toggle_arms_the_pull_request_list_tool_in_both_lanes(tmp_path, monk
     _send(client, lane, "list my open pull requests", connectors=["github"])
     github = [t for t in seen["tools"][0] if t.startswith("mcp__github__")]
     assert PR_LIST in github, github
+    assert len(github) == chat_turn._MAX_CONNECTOR_TOOLS
+
+
+PR_CREATE = "mcp__github__create_pull_request"
+
+
+def test_reads_first_alone_would_leave_out_the_write_tool_asked_for(tmp_path):
+    """Anti-vacuity for the next two pins (review): with no words to go on
+    the 24 picked are exactly the read-only tools, so ``list_pull_requests``
+    is in them by the tie alone — only a WRITE tool the message asks for
+    proves the message itself reached the ranking."""
+    platform = create_app(str(tmp_path)).state.platform
+    names = _connect_github(platform)
+    got = platform.registry.pick_for_message(names, "", chat_turn._MAX_CONNECTOR_TOOLS)
+    assert PR_CREATE not in got and PR_LIST in got
+
+
+@pytest.mark.parametrize("lane", ["post", "stream"])
+def test_the_toggle_ranks_by_the_users_own_message(tmp_path, monkeypatch, lane):
+    """Review: the "+" toggle hands the turn's LAST user message to the
+    ranking — a write tool asked for by name is armed, in both lanes."""
+    client = TestClient(create_app(str(tmp_path)))
+    platform = client.app.state.platform
+    _connect_github(platform)
+    seen = _scripted(platform, monkeypatch)
+    _send(client, lane, "create a pull request for my branch", connectors=["github"])
+    github = [t for t in seen["tools"][0] if t.startswith("mcp__github__")]
+    assert PR_CREATE in github, github
+    assert len(github) == chat_turn._MAX_CONNECTOR_TOOLS
+
+
+def test_the_named_app_path_ranks_by_the_users_own_message(tmp_path, monkeypatch):
+    """Review: the stream lane's named-app path hands the message to the
+    ranking too (still ask-armed: each call shows its card)."""
+    client = TestClient(create_app(str(tmp_path)))
+    platform = client.app.state.platform
+    _connect_github(platform)
+    seen = _scripted(platform, monkeypatch)
+    _send(client, "stream", "create a pull request on GitHub for my branch")
+    github = [t for t in seen["tools"][0] if t.startswith("mcp__github__")]
+    assert PR_CREATE in github, github
     assert len(github) == chat_turn._MAX_CONNECTOR_TOOLS
 
 
