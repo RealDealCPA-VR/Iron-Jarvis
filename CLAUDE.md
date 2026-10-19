@@ -3614,7 +3614,20 @@ does not need a bump, stop and bump it.
   wave4-seams,wave4-words,wave4-import-door}-v13540.test.tsx` and
   `fixtures/wave4-seams-v13540.json` (the REAL daemon's words, regenerate
   with `IJ_REGEN_WAVE4_SEAMS=1`) (every lane and integrator change
-  mutation-checked red).
+  mutation-checked red). SHIP-STEP FIX (the re-review's open G50 line):
+  Claude Desktop NEVER writes "disabled" on a server's entry — its own
+  switches are DISABLED TOOL keys in `%APPDATA%/Claude/mcp-user-tool-
+  toggles.json` (`{"v":3,"owners":{acct:["local:<server>:<tool>",...]}}`;
+  read on the user's PC). The claude-desktop source reads it
+  (`import_sources.read_claude_desktop` / `claude_desktop_switched_off`,
+  every account joined, only `local:` keys, read-only + size-capped): a
+  server with ANY tool switched off there arrives `disabled` (unticked,
+  "turned off in Claude Desktop") — the file names tools, not servers, so
+  "some off" and "all off" look alike and the user's tick decides. Pin:
+  `test_claude_desktops_own_switches_file_turns_a_server_off`. Re-review also
+  fixed: "the email" / "my email below" / lower-case "my drive" no longer
+  name Gmail or Google Drive (`connectors/app_names.py`); the Build pane chat
+  and the phone say the chat's ONE failure sentence.
 - **ONE place for each kind of thing, and a refusal leaves the door the other
   surfaces already use** (v1.353.0, product-readiness Wave 3, G33-G38,
   G40-G43, G45, G51-G54, G56-G58, G66, G71; lanes 3A-3E + integrate).

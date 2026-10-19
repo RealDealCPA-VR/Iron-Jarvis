@@ -280,6 +280,54 @@ def test_a_server_switched_off_in_claude_desktop_is_listed_disabled_and_added_on
     assert "disabled" not in entry and "enabled" not in entry
 
 
+def test_claude_desktops_own_switches_file_turns_a_server_off(client, homes):
+    """RE-REVIEW (v1.354.0, G50): Claude Desktop never writes "disabled" on
+    the entry. Its switches live in mcp-user-tool-toggles.json beside the
+    config as DISABLED TOOL keys ({"v":3,"owners":{acct:["local:<server>:<tool>"]}};
+    read on the user's own PC). A server with tools switched off there is
+    listed disabled (the door leaves it unticked, "turned off in Claude
+    Desktop"); a server the file does not name, an entry for an app that
+    is not "local", and a broken file change nothing."""
+    cfg = homes["appdata"] / "Claude" / "claude_desktop_config.json"
+    _write(
+        cfg,
+        json.dumps(
+            {
+                "mcpServers": {
+                    "hermes-brain": {"command": NO_SUCH, "args": ["a"]},
+                    "quickbooks-desktop": {"command": NO_SUCH, "args": ["b"]},
+                    "n8n mcp": {"command": NO_SUCH, "args": ["c"]},
+                    "remote-only": {"command": NO_SUCH, "args": ["d"]},
+                }
+            }
+        ),
+    )
+    toggles = homes["appdata"] / "Claude" / "mcp-user-tool-toggles.json"
+    _write(
+        toggles,
+        json.dumps(
+            {
+                "v": 3,
+                "owners": {
+                    "acct-1": ["local:quickbooks-desktop:list_invoices", "local:quickbooks-desktop:add_bill"],
+                    "acct-2": ["local:n8n mcp:run_workflow", "remote:remote-only:fetch", "garbage"],
+                },
+            }
+        ),
+    )
+    servers = _servers(_sources(client)["claude-desktop"])
+    assert {n: s["disabled"] for n, s in servers.items()} == {
+        "hermes-brain": False,
+        "quickbooks-desktop": True,
+        "n8n-mcp": True,  # the import name is the safe form of "n8n mcp"
+        "remote-only": False,  # only a "local:" key is Claude Desktop's own switch
+    }, servers
+    # A broken switches file changes nothing.
+    toggles.write_text("{not json", encoding="utf-8")
+    servers = _servers(_sources(client)["claude-desktop"])
+    assert not any(s["disabled"] for s in servers.values()), servers
+
+
 def test_codex_enabled_false_and_a_claude_code_project_disable_list_read_as_off(client, homes):
     user = homes["user"]
     _write(

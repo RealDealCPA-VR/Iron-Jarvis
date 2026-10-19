@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from .import_config import FILE_CAP_BYTES, PackSpec, parse_file, unique_names
+from .import_config import FILE_CAP_BYTES, PackSpec, parse_file, safe_name, unique_names
 
 #: Marks of Iron Jarvis's own server, repeated here only for the doc reader;
 #: the parser (``import_config._OWN_SERVER_MARKS``) is what drops them.
@@ -306,6 +306,55 @@ def _plugin_specs(root: Path) -> list[PackSpec]:
     return [_with_plugin_root(s, root) for s in specs]
 
 
+#: v1.354.0 (G50, re-review): Claude Desktop never writes ``"disabled"`` on a
+#: server's entry. Its own on/off switches ("Search and tools") are saved as
+#: DISABLED TOOL keys in this file beside its config, shaped
+#: ``{"v": 3, "owners": {<account>: ["local:<server>:<tool>", ...]}}``
+#: (Claude Desktop 2.42304's persistDisabledToolKeys; read on the user's own
+#: PC: quickbooks-desktop had all 150 of its tools listed).
+CLAUDE_DESKTOP_TOGGLES = "mcp-user-tool-toggles.json"
+
+
+def claude_desktop_switched_off(config_path: Path) -> set[str]:
+    """Server names Claude Desktop has tools switched OFF for, read-only from
+    the toggles file next to its config (every account's list joined). The
+    file names tools, not servers, so "some tools off" and "all tools off"
+    look alike here: both are reported, and the import door leaves such a
+    server UNTICKED with "turned off in Claude Desktop" — the user ticks it
+    if they want it anyway. A missing, oversized or unreadable file is
+    ``set()``. Never raises."""
+    try:
+        obj = _read_json_object(config_path.parent / CLAUDE_DESKTOP_TOGGLES)
+    except Exception:  # noqa: BLE001
+        return set()
+    owners = obj.get("owners") if isinstance(obj, dict) else None
+    if not isinstance(owners, dict):
+        return set()
+    off: set[str] = set()
+    for keys in owners.values():
+        if not isinstance(keys, list):
+            continue
+        for key in keys:
+            parts = str(key or "").split(":", 2)
+            if len(parts) == 3 and parts[0] == "local" and parts[1]:
+                off.add(parts[1])
+    return off
+
+
+def read_claude_desktop(path: Path) -> tuple[list[PackSpec], bool, str]:
+    """Claude Desktop's config (the ordinary parse) with its own switches
+    applied: a server it has tools switched off for arrives ``disabled``."""
+    specs, readable, note = parse_file(path, source="claude-desktop")
+    if specs:
+        off = claude_desktop_switched_off(path)
+        if off:
+            off_safe = {safe_name(n) for n in off}
+            for spec in specs:
+                if spec.name in off or safe_name(spec.name) in off_safe:
+                    spec.disabled = True
+    return specs, readable, note
+
+
 def read_claude_plugins(path: Path) -> tuple[list[PackSpec], bool, str]:
     """The servers of every Claude Code plugin the user INSTALLED (never the
     whole marketplace catalogue the plugins folder also holds), each with
@@ -365,6 +414,7 @@ KNOWN_SOURCES: tuple[SourceDef, ...] = (
         "claude-desktop",
         "Claude Desktop",
         lambda _p_: _p(app_data_dir(), "Claude", "claude_desktop_config.json"),
+        read=read_claude_desktop,
     ),
     SourceDef("codex", "codex", "Codex", lambda _p_: _p(codex_home(), "config.toml")),
     SourceDef("cursor", "cursor", "Cursor", lambda _p_: _p(_home(), ".cursor", "mcp.json")),
