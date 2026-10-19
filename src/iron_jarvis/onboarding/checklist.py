@@ -96,7 +96,8 @@ def default_is_mock(platform) -> bool:
 _PROVIDER_LABELS: dict[str, str] = {
     "claude-cli": "Claude (your Claude Code sign-in)",
     "codex-cli": "ChatGPT (your Codex sign-in)",
-    "ollama": "Ollama (free, runs on this PC)",
+    # v1.353.0 (G34): the press reads "Use Ollama (on this PC) for answers".
+    "ollama": "Ollama (on this PC)",
     "custom": "Your own model server",
     "mock": "the offline demo",
     "auto": "Auto (picks a model for each task)",
@@ -123,6 +124,25 @@ def provider_label(platform, name: str) -> str:
     except Exception:  # noqa: BLE001 — a label is cosmetic
         pass
     return name or "a model"
+
+
+def apps_connected(platform) -> bool:
+    """True once ANY app is connected in the Directory (Settings ›
+    Connections › Apps & tools) -- a catalog connector, an app the user added,
+    or a memory source (v1.353.0, G36). Read off the Directory's own list
+    (``connectors.service.list_connectors``), so the step and the cards can
+    never disagree. Cheap: config, the tool registry and two small tables; a
+    CLI sign-in verdict is read from the cache (no ``claude auth status`` is
+    started from here). Never raises -- unsure is "not yet"."""
+    try:
+        from ..connectors.service import list_connectors
+        from ..providers.cli_auth import cached_verdicts
+
+        with cached_verdicts():
+            rows = list_connectors(platform)
+        return any(bool(r.get("connected")) for r in rows)
+    except Exception:  # noqa: BLE001 — a status read never breaks onboarding
+        return False
 
 
 def _one_press_choices(platform) -> bool:
@@ -207,9 +227,10 @@ def getting_started(platform) -> list[dict]:
     """The first-steps-to-value, each with a live ``done`` flag.
 
     Returns a list of ``{key, title, detail, done, action, optional}`` dicts in
-    order: four core steps followed by the OPTIONAL ``set_up_voice`` step. The
-    optional step never gates ``first_run`` and is never surfaced as ``next_step``
-    (see :func:`readiness`), so voice can be skipped without blocking onboarding.
+    order: four core steps followed by the OPTIONAL ``set_up_voice`` and
+    ``connect_apps`` steps. An optional step never gates ``first_run`` and is
+    never surfaced as ``next_step`` (see :func:`readiness`), so voice and apps
+    can be skipped without blocking onboarding.
     """
     from ..core.models import ChatThreadRecord, Session
 
@@ -400,4 +421,26 @@ def getting_started(platform) -> list[dict]:
         "optional": True,
     }
 
-    return [step_connect, step_session, step_doc, step_learn, step_voice]
+    # 6. Connect the apps you use (OPTIONAL) -----------------------------
+    # v1.353.0 (G36): first run never mentioned connecting what the user
+    # already has (GitHub, Notion, Slack...). Modelled on set_up_voice: an
+    # opt-in that never becomes next_step and never keeps first_run true.
+    # ``href`` is where it is done (the Directory); ``action`` stays the
+    # sentence every other step carries.
+    apps_done = apps_connected(platform)
+    step_apps = {
+        "key": "connect_apps",
+        "title": "Connect the apps you use (optional)",
+        "detail": (
+            "An app is connected. Connect more any time in the Directory."
+            if apps_done
+            else "Optional: connect GitHub, Notion, Slack and the other apps you "
+            "already use, so Jarvis can work with them. You can skip this."
+        ),
+        "done": apps_done,
+        "action": "Open the Directory (or skip — apps are optional)",
+        "href": "/marketplace",
+        "optional": True,
+    }
+
+    return [step_connect, step_session, step_doc, step_learn, step_voice, step_apps]

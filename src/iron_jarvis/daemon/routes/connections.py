@@ -461,12 +461,24 @@ def build_selectable_models(d, *, providers: Any = None) -> list[dict[str, Any]]
         from ...providers.cli_detect import detect_cli_providers
 
         for dm in detect_cli_providers(configured={"ollama": cfg.ollama_base_url}):
+            avail = bool(dm.available)
+            if avail and dm.provider == "ollama":
+                # v1.353.0 (G34): ONE truth with the router. A running Ollama
+                # whose address is not saved is refused by name on every turn
+                # (ProviderManager.available('ollama') is False until
+                # ollama_base_url is set), so listing its models as pickable
+                # offered a press that could only fail. They stay listed,
+                # greyed, until the one press (or Connections) saves it.
+                try:
+                    avail = bool(providers.available("ollama"))
+                except Exception:  # noqa: BLE001 — unsure = not pickable
+                    avail = False
             models.append(
                 {
                     "provider": dm.provider,
                     "model": dm.model,
                     "name": dm.name,
-                    "available": bool(dm.available),
+                    "available": avail,
                     "source": "cli",
                 }
             )
@@ -975,6 +987,14 @@ def rescan_providers(d) -> dict[str, Any]:
     detected = detect_cli_providers(
         configured={"ollama": getattr(d.platform.config, "ollama_base_url", None)}
     )
+    # v1.353.0 (G34): this scan IS the Ollama probe /health's `detected`
+    # reads, so Re-detect turns the one press on (or off) at once.
+    try:
+        from ...providers import ollama_seen
+
+        ollama_seen.record(any(dm.provider == "ollama" and dm.available for dm in detected))
+    except Exception:  # noqa: BLE001 — a cache write never breaks the rescan
+        pass
     rows = [dm.as_dict() for dm in detected]
     # v1.234.0: the subscription CLIs are re-PROBED for sign-in here
     # (blocking is fine — this is a sync route on the threadpool), so

@@ -134,8 +134,11 @@ export function decodeOnboardingModel(raw: unknown): OnboardingModel | null {
 
 /** A /health provider row as the subscription door reads it. `sign_in_fix`
  *  is W2-3's additive field (cli_auth.SIGN_IN_FIX) — typed here, not in the
- *  shared lib/types.ts, which this track does not own. */
-export type HealthRow = ProviderHealth & { sign_in_fix?: string };
+ *  shared lib/types.ts, which this track does not own. `detected` (v1.353.0,
+ *  G34, the ollama row only): Ollama answers on this PC with a model to use,
+ *  from the daemon's cached probe — true even before its address is saved,
+ *  which is exactly when the one press can save it. */
+export type HealthRow = ProviderHealth & { sign_in_fix?: string; detected?: boolean };
 
 /**
  * v1.313.0 (contract U1-1): THE one truth for "replies are a scripted demo".
@@ -177,6 +180,8 @@ const FRIENDLY: Record<string, string> = {
   "claude-cli": "Claude Code",
   "codex-cli": "Codex",
   "grok-cli": "Grok CLI",
+  // v1.353.0 (G57): the model menu named it by its raw id.
+  "opencode-cli": "OpenCode",
   anthropic: "Anthropic",
   openai: "OpenAI",
   google: "Google Gemini",
@@ -202,6 +207,35 @@ export function providerDisplay(provider: string | null | undefined): string {
   if (p === "mock") return "Demo model (scripted)";
   if (p === "auto") return "Auto";
   return friendlyProvider(p);
+}
+
+/** v1.353.0 (G57): a provider as a HEADING or a list entry reads it — the
+ *  model menu's rows, a settings option — never a raw id. Sentence case, and
+ *  the user's own server is "Your model server" (mid-sentence surfaces keep
+ *  `providerDisplay`'s "your own endpoint"). "" for an id no table knows, so
+ *  the caller can fall back to a name of its own (an endpoint's label). */
+const HEADING: Record<string, string> = { custom: "Your model server" };
+
+export function providerHeading(provider: string | null | undefined): string {
+  const p = (provider || "").trim();
+  if (!p) return "";
+  if (HEADING[p]) return HEADING[p];
+  const shown = providerDisplay(p);
+  if (shown === p) return ""; // unknown: not ours to name
+  return shown[0].toUpperCase() + shown.slice(1);
+}
+
+/** The name a model-menu row's provider group reads (v1.353.0, G57): the
+ *  row's own `name` (an endpoint's label the user gave it) unless that is
+ *  only the model id again — a detected Ollama row names its MODEL there —
+ *  else the provider's plain name ("Claude Code", "Your model server"); the
+ *  raw id only when nothing at all is known. The catalogue's rows carry no
+ *  `name` for the built-in providers, which is how the menu came to list
+ *  "claude-cli", "codex-cli", "custom" and "opencode-cli". */
+export function modelGroupName(m: { provider: string; model?: string; name?: string }): string {
+  const name = (m.name || "").trim();
+  if (name && name !== m.model) return name;
+  return providerHeading(m.provider) || m.provider;
 }
 
 export interface AnswerCandidate {
@@ -245,6 +279,11 @@ function rank(row: HealthRow): number {
  */
 export function answerCandidates(health: Health | null | undefined): AnswerCandidate[] {
   const rows = availableRows(health);
+  // v1.353.0 (G34): Ollama answering on this PC is ready for the ONE press
+  // even before its address is saved — the press saves it (POST
+  // /onboarding/use-model, the user's click). Still never chosen on its own.
+  const detected = ollamaDetected(health);
+  if (detected && !rows.some((r) => r.provider === "ollama")) rows.push(detected);
   const names = new Set(rows.map((r) => r.provider));
   const out: AnswerCandidate[] = [];
   const seen = new Set<string>();
@@ -256,6 +295,14 @@ export function answerCandidates(health: Health | null | undefined): AnswerCandi
     out.push({ provider: name, label: friendlyProvider(name), where: WHERE[name] ?? "" });
   }
   return out;
+}
+
+/** v1.353.0 (G34): the /health ollama row when the daemon's cached probe
+ *  found Ollama running on this PC with a model (`detected`) but it is not
+ *  connected yet — undefined otherwise (an older daemon sends no flag). */
+export function ollamaDetected(health: Health | null | undefined): HealthRow | undefined {
+  const row = healthRow(health, "ollama");
+  return row && !row.available && row.detected === true ? row : undefined;
 }
 
 /**
@@ -305,6 +352,11 @@ export function firstTaskProvider(
   }
   return [...rows].sort((a, b) => rank(a) - rank(b))[0].provider;
 }
+
+/** The address that connects the Ollama on THIS PC (its installer's default
+ *  port). The connect doors' Ollama press, the Accounts row's "Use Ollama on
+ *  this PC" and the daemon's one press (routes/settings.py) all save this. */
+export const OLLAMA_LOCAL_URL = "http://localhost:11434";
 
 /* ------------------------------------------------- the subscription door --- */
 

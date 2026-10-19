@@ -224,6 +224,13 @@ import {
   useOpenTerminal,
 } from "@/components/chat/ProjectPanelParts";
 import { ModelSuggestChip } from "@/components/chat/ModelSuggestChip";
+import {
+  AppsLine,
+  ChosenLine,
+  MachineLine,
+  decodeHomeReadiness,
+  type HomeReadiness,
+} from "@/components/chat/HomeReadiness";
 import { PermissionChip } from "@/components/chat/PermissionChip";
 import { asPermissionMode, type PermissionMode } from "@/lib/permissionLevels";
 import {
@@ -239,7 +246,7 @@ import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
 import { stepLabel } from "@/components/chat/stepLabel";
 import { useProviderHealth } from "@/lib/useProviderHealth";
 import { useDaemon } from "@/lib/daemon";
-import { needsConnect, providerDisplay } from "@/lib/onboarding";
+import { modelGroupName, needsConnect, providerDisplay } from "@/lib/onboarding";
 import type { WorkflowDraft, WorkflowRun } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView, TurnUsage } from "@/lib/types";
 import { turnUsageFrom } from "@/lib/types";
@@ -3569,6 +3576,13 @@ export default function ChatPage() {
   // model answers (or the default is still the offline demo) — read off the
   // same /health, never a second poll.
   const showConnectDoors = needsConnect(useDaemon().health);
+  // v1.353.0 (G35): the words of the "Use … for answers" press the user made
+  // in the doors, kept for the rest of the visit — the doors unmount as soon
+  // as /health follows the new default, and the home keeps saying it.
+  const [chosenLabel, setChosenLabel] = useState("");
+  // v1.353.0 (G36): "a real model answers" needs a KNOWN /health —
+  // needsConnect is false while it loads, which is not the same thing.
+  const healthKnown = useDaemon().health != null;
   // Redesign S9: "Make this my default" re-reads /health so every reader follows.
   const daemonRefresh = useDaemon().refresh;
   const [personas, setPersonas] = useState<PersonaOption[]>(DEFAULT_PERSONAS);
@@ -4401,7 +4415,10 @@ export default function ChatPage() {
       if (!prev) {
         seen.set(m.provider, {
           id: m.provider,
-          label: m.name || m.provider,
+          // v1.353.0 (G57): a plain name ("Claude Code", "Your model
+          // server"), an endpoint by the label the user gave it — never a
+          // raw provider id like "claude-cli" or "opencode-cli".
+          label: modelGroupName(m),
           kind,
           available: m.available !== false,
           size,
@@ -11113,6 +11130,23 @@ export default function ChatPage() {
   // layout, so the typed text and the focus survive the move.
   const emptyHero = messages.length === 0 && !busy;
 
+  // v1.353.0 (G36): the empty chat's machine check and connect-your-apps
+  // line, from ONE read of GET /onboarding the first time the empty chat
+  // shows this visit. Never polled, never part of the status-line poll; a
+  // failed read (an older daemon) shows nothing rather than a guess.
+  const [homeReadiness, setHomeReadiness] = useState<HomeReadiness | null>(null);
+  const homeReadinessAskedRef = useRef(false);
+  useEffect(() => {
+    if (!emptyHero || homeReadinessAskedRef.current) return;
+    homeReadinessAskedRef.current = true;
+    get<unknown>("/onboarding")
+      .then((raw) => setHomeReadiness(decodeHomeReadiness(raw)))
+      .catch(() => {
+        // Nothing to say, so the lines stay away; a later new chat asks again.
+        homeReadinessAskedRef.current = false;
+      });
+  }, [emptyHero]);
+
   // The project chip and its menu. ONE definition, drawn in one of two places:
   // in the card's toolbar once the conversation has a message, and just above
   // the card on a new chat (where it names the project, so a phone shows the
@@ -13441,7 +13475,7 @@ export default function ChatPage() {
                                         data-testid="model-match"
                                         onClick={() => pickModel(v)}
                                         disabled={m.available === false}
-                                        title={m.available === false ? `${m.name || m.provider} isn't connected` : undefined}
+                                        title={m.available === false ? `${modelGroupName(m)} isn't connected` : undefined}
                                         className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
                                           choice === v ? "text-accent-soft" : "text-zinc-300"
                                         }`}
@@ -13451,7 +13485,7 @@ export default function ChatPage() {
                                         </span>
                                         <ModelRowChips m={m} />
                                         <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
-                                          {m.name || m.provider}
+                                          {modelGroupName(m)}
                                         </span>
                                       </button>
                                     );
@@ -13481,7 +13515,7 @@ export default function ChatPage() {
                                         </span>
                                         <ModelRowChips m={row} />
                                         <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
-                                          {row.name || row.provider}
+                                          {modelGroupName(row)}
                                         </span>
                                       </button>
                                     );
@@ -13750,10 +13784,21 @@ export default function ChatPage() {
                           <p className="mb-2 text-center text-[13px] text-zinc-400">
                             Connect a model for real answers
                           </p>
-                          <ConnectDoors layout="row" />
+                          <ConnectDoors layout="row" onChosen={setChosenLabel} />
                         </div>
                       )}
+                      {/* v1.353.0 (G35): the press's own words, kept on the
+                          home after the doors are gone. One quiet line. */}
+                      <ChosenLine label={chosenLabel} />
                       <NewChatSuggestions examples={examples} onPick={prefill} />
+                      {/* v1.353.0 (G36): quiet lines, no cards — the machine
+                          check while setting up (or a required helper is
+                          missing), and once a real model answers, the
+                          optional way to connect the apps the user has. */}
+                      <MachineLine h={homeReadiness} />
+                      {healthKnown && !showConnectDoors && homeReadiness?.appsOpen && homeReadiness.settingUp && (
+                        <AppsLine names={marketplaceTeasers.map((c) => c.name)} />
+                      )}
                     </div>
                   )}
                 </div>

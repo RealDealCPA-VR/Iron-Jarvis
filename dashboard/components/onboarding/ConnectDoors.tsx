@@ -33,6 +33,12 @@
  *    is ready (a real choice stays the user's), and it says what happened:
  *    the new default, the daemon's "you already chose X", or its 409 sentence.
  *  - The Ollama door ends in the same press once Ollama answers.
+ *  - v1.353.0 (wave 3, G33/G35): the signed-out line no longer prints the
+ *    CLI's terminal sentence above its own Sign in button — it says to press
+ *    Sign in and what happens in the window that opens (lib/cliSignIn, the
+ *    same press Settings › Connections › Accounts offers). A promotion calls
+ *    `onChosen(label)` with the PRESSED words, so the chat home can keep
+ *    saying "Done — <label> answers you now." after the doors are gone.
  *  - v1.313.0 (opencode-press-no-privacy-line-raw-id): a press is offered
  *    ONLY for what that press can choose. POST /onboarding/use-model takes
  *    claude-cli, codex-cli, ollama, custom and the API providers; anything
@@ -51,8 +57,10 @@ import { useState } from "react";
 import Link from "next/link";
 import { CheckCircle2, KeyRound, Loader2, RefreshCw, TerminalSquare } from "lucide-react";
 import { post, put } from "@/lib/api";
+import { codeParts, paneHref, signedOutLine, useCliSignIn } from "@/lib/cliSignIn";
 import { useDaemon } from "@/lib/daemon";
 import {
+  OLLAMA_LOCAL_URL,
   SUBSCRIPTION_CLIS,
   answerCandidates,
   cliDoorState,
@@ -117,7 +125,8 @@ const ONE_PRESS = new Set([
 const PRESS_LABELS: Record<string, string> = {
   "claude-cli": "Claude (your Claude Code sign-in)",
   "codex-cli": "ChatGPT (your Codex sign-in)",
-  ollama: "Ollama (free, runs on this PC)",
+  // v1.353.0 (G34): one name with checklist.py's _PROVIDER_LABELS.
+  ollama: "Ollama (on this PC)",
   custom: "Your own model server",
 };
 
@@ -148,13 +157,13 @@ function andList(names: string[]): string {
 
 /** A sentence with `backticked` words to type, drawn as code. */
 function withCode(text: string) {
-  return text.split(/`([^`]+)`/).map((part, i) =>
-    i % 2 === 1 ? (
+  return codeParts(text).map((part, i) =>
+    part.code ? (
       <code key={i} className="font-mono text-zinc-300">
-        {part}
+        {part.text}
       </code>
     ) : (
-      part
+      part.text
     ),
   );
 }
@@ -162,6 +171,7 @@ function withCode(text: string) {
 export function ConnectDoors({
   onChanged,
   onEnabled,
+  onChosen,
   onOpenPane,
   className = "",
   layout = "stack",
@@ -172,6 +182,10 @@ export function ConnectDoors({
   /** The provider the user just enabled through a door — the wizard sends it
    *  explicitly on the first task. */
   onEnabled?: (provider: string) => void;
+  /** v1.353.0 (G35): a "Use … for answers" press really made a model the
+   *  default — `label` is the press's own words ("Claude (your Claude Code
+   *  sign-in)"). The chat home keeps saying it once the doors are gone. */
+  onChosen?: (label: string) => void;
   /** The user is leaving for the Build pane a Sign in opened (the wizard
    *  steps aside so the pane is visible). */
   onOpenPane?: () => void;
@@ -209,9 +223,6 @@ export function ConnectDoors({
 
   // --- subscription door ---------------------------------------------------
   const [rescanBusy, setRescanBusy] = useState(false);
-  const [signIn, setSignIn] = useState<
-    Record<string, { busy?: boolean; paneId?: string | null; error?: string }>
-  >({});
 
   async function rescan() {
     setRescanBusy(true);
@@ -228,19 +239,13 @@ export function ConnectDoors({
   /* Sign in = a NEW Build pane with the CLI started in it, on THIS PC's own
      login ("default" — never an Iron-Proxy account the user did not pick).
      The click is the consent (the ResumeStrip rule). The CLI still asks the
-     user to type /login; the door says so instead of pretending. */
-  async function startSignIn(c: SubscriptionCli) {
-    setSignIn((s) => ({ ...s, [c.cli]: { busy: true } }));
-    try {
-      const res = await post<{ id?: string }>("/terminals/launch", { cli: c.cli, account: "default" });
-      const paneId = res && typeof res.id === "string" ? res.id : null;
-      setSignIn((s) => ({ ...s, [c.cli]: { paneId } }));
-      onEnabled?.(c.provider);
-      after();
-    } catch (e) {
-      setSignIn((s) => ({ ...s, [c.cli]: { error: errText(e) } }));
-    }
-  }
+     user to type /login; the door says so instead of pretending.
+     v1.353.0 (G33): the press lives in lib/cliSignIn, shared with Settings ›
+     Connections › Accounts. */
+  const { signIn, start: startSignIn } = useCliSignIn((c: SubscriptionCli) => {
+    onEnabled?.(c.provider);
+    after();
+  });
 
   /* Ollama door (v1.197.0). Rescan does NOT detect Ollama: the provider only
      reports available once `ollama_base_url` is CONFIGURED. Saving the default
@@ -255,7 +260,7 @@ export function ConnectDoors({
     setOllamaBusy(true);
     setOllamaError(null);
     try {
-      await put("/settings", { values: { ollama_base_url: "http://localhost:11434" } });
+      await put("/settings", { values: { ollama_base_url: OLLAMA_LOCAL_URL } });
       setOllamaSaved(true);
       onEnabled?.("ollama");
       after(); // immediate re-check — don't wait for the 5s health poll
@@ -329,8 +334,10 @@ export function ConnectDoors({
           <div className="flex items-center gap-2 text-sm font-medium text-emerald-200">
             <CheckCircle2 size={16} className="text-emerald-400" />
             {/* v1.313.0: the presses below name each one in full; the heading
-                no longer repeats every long name before them. */}
-            Ready on this PC — choose what answers you
+                no longer repeats every long name before them. v1.353.0 (G35):
+                not "on this PC" — a pasted cloud key is ready too, and it
+                does not run here. */}
+            Ready — choose what answers you
           </div>
           <p className="mt-1 text-xs leading-relaxed text-emerald-300/80">
             Replies still come from the offline demo until you choose what answers you —
@@ -344,7 +351,12 @@ export function ConnectDoors({
               <button
                 key={c.provider}
                 type="button"
-                onClick={() => void press(c, onEnabled)}
+                onClick={() =>
+                  void press(c, (provider, label) => {
+                    onEnabled?.(provider);
+                    onChosen?.(label);
+                  })
+                }
                 disabled={pressBusy !== null}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-accent/35 bg-accent/[0.08] px-3 py-1.5 text-left text-xs font-semibold text-accent-soft transition-colors hover:border-accent/50 hover:bg-accent/[0.14] disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -439,7 +451,7 @@ export function ConnectDoors({
           <ul className="mt-3 space-y-2.5">
             {states
               .filter((s) => s.state !== "unknown")
-              .map(({ c, row, state }) => {
+              .map(({ c, state }) => {
                 const si = signIn[c.cli] ?? {};
                 return (
                   <li key={c.provider} className="text-xs leading-relaxed text-zinc-400">
@@ -474,8 +486,12 @@ export function ConnectDoors({
                       <>
                         <span className="text-zinc-300">{c.longName}</span> is on this PC but
                         not signed in.
-                        <span className="mt-1 block text-zinc-500">
-                          {row?.sign_in_fix || c.fallbackFix}
+                        {/* v1.353.0 (G33): never the terminal sentence
+                            (row.sign_in_fix stays for the refusals) — the
+                            press is right below, and the window it opens is
+                            where the sign-in finishes. */}
+                        <span data-testid={`signed-out-line-${c.cli}`} className="mt-1 block text-zinc-500">
+                          {withCode(signedOutLine(c))}
                         </span>
                         {si.paneId !== undefined ? (
                           <span
@@ -485,7 +501,7 @@ export function ConnectDoors({
                             A Build pane opened with {c.name} running. {withCode(c.paneHint)} This
                             turns green by itself once you&apos;re signed in.{" "}
                             <Link
-                              href={si.paneId ? `/terminals?focus=${encodeURIComponent(si.paneId)}` : "/terminals"}
+                              href={paneHref(si.paneId)}
                               onClick={() => onOpenPane?.()}
                               className="font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent"
                             >
@@ -675,6 +691,9 @@ export function ConnectDoors({
             <p role="status" className={`mt-2 text-xs ${keyResult.ok ? "text-emerald-300" : "text-rose-300"}`}>
               {keyResult.ok ? "Connected — " : "Not connected — "}
               {keyResult.detail}
+              {/* v1.353.0 (G35): connected is not chosen — while replies are
+                  the demo, say the next step instead of stopping at "Connected". */}
+              {keyResult.ok && demo ? " Choose it above to use it for answers." : ""}
             </p>
           )}
           {keyError && (

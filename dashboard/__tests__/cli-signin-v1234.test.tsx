@@ -54,8 +54,11 @@ describe("Connections CLI row (v1.234.0)", () => {
     // v1.329.0 (calm K2): the pills' middle dot, not a dash aside.
     expect(page).toMatch(/Installed · not signed in/);
     expect(page).toMatch(/cli-signed-out-\$\{info\.provider\}/);
-    expect(page).toMatch(/"claude-cli": "run `claude` in a terminal, then \/login, then Re-detect"/);
-    expect(page).toMatch(/"codex-cli": "run `codex login` in a terminal, then Re-detect"/);
+    // v1.353.0 (G33): the remedy is a Sign in PRESS (lib/cliSignIn), no
+    // longer a "run `claude` in a terminal" hint — behaviour pinned in
+    // accounts-signin-v13530.test.tsx.
+    expect(page).toMatch(/<CliSignInAction provider=\{info\.provider\} \/>/);
+    expect(page).not.toMatch(/in a terminal/);
   });
 
   it("derives the state from the /health row's installed + signed_in", () => {

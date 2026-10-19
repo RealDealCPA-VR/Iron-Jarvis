@@ -17,6 +17,8 @@ import {
   Globe,
   HardDrive,
   KeyRound,
+  Loader2,
+  LogIn,
   MessagesSquare,
   MoonStar,
   Pencil,
@@ -41,7 +43,8 @@ import {
 import { useApi } from "@/lib/useApi";
 import { useFocusRef } from "@/lib/useFocusRef";
 import { useDaemon } from "@/lib/daemon";
-import { providerDisplay } from "@/lib/onboarding";
+import { OLLAMA_LOCAL_URL, providerDisplay, type HealthRow } from "@/lib/onboarding";
+import { codeParts, paneHref, subscriptionCliFor, useCliSignIn } from "@/lib/cliSignIn";
 import type { Connection, ConnectionTestResult, OAuthStart } from "@/lib/types";
 
 /** A user-added custom endpoint (a routable fleet node) as the card shows it. */
@@ -1536,12 +1539,17 @@ interface CliProviderInfo {
   tint: string;
 }
 
+/* v1.353.0 (G33): no row tells anyone to open a terminal. Claude Code and
+   Codex carry a Sign in press when they are on this PC but signed out
+   (lib/cliSignIn — the same press as the chat's connect door) and their
+   vendor's page when they are not on this PC; their `hint` is said only
+   while neither is known (an older daemon). */
 const CLI_PROVIDERS: CliProviderInfo[] = [
   {
     provider: "claude-cli",
     name: "Claude Code CLI",
     description: "Your Claude Max plan",
-    hint: "install / log in via its CLI; appears automatically",
+    hint: "sign in to Claude Code on this PC and it shows up here by itself",
     icon: Sparkles,
     tint: "text-tone-warn",
   },
@@ -1549,7 +1557,7 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
     provider: "codex-cli",
     name: "Codex CLI",
     description: "Your ChatGPT plan",
-    hint: "install / log in via its CLI; appears automatically",
+    hint: "sign in to Codex on this PC and it shows up here by itself",
     icon: Bot,
     tint: "text-tone-success",
   },
@@ -1557,7 +1565,7 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
     provider: "grok-cli",
     name: "Grok CLI",
     description: "Your Grok subscription",
-    hint: "install / log in via its CLI; appears automatically",
+    hint: "sign in to Grok on this PC and it shows up here by itself",
     icon: Zap,
     tint: "text-tone-violet",
   },
@@ -1573,23 +1581,124 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
     provider: "ollama",
     name: "Local Ollama",
     description: "Free models running on this machine",
-    hint: "install Ollama and pull a model; appears automatically",
+    // v1.353.0 (G34): it never "appeared automatically" — the address had to
+    // be saved first. A running Ollama now gets a one-press row (below).
+    hint: "not running on this PC",
     icon: Cpu,
     tint: "text-tone-info",
   },
 ];
 
-/** v1.234.0: the sign-in remedy per subscription CLI, in the user's words.
- *  Mirrors the daemon's `SIGN_IN_FIX` (providers/cli_auth.py). */
-const SIGN_IN_HINT: Record<string, string> = {
-  "claude-cli": "run `claude` in a terminal, then /login, then Re-detect",
-  "codex-cli": "run `codex login` in a terminal, then Re-detect",
-};
+/** Where to get Ollama (the connect doors' own link). */
+const OLLAMA_DOWNLOAD_URL = "https://ollama.com/download";
+
+/** A sentence with `backticked` words to type, drawn as code. */
+function withCode(text: string) {
+  return codeParts(text).map((part, i) =>
+    part.code ? (
+      <code key={i} className="font-mono text-zinc-300">
+        {part.text}
+      </code>
+    ) : (
+      part.text
+    ),
+  );
+}
+
+const ROW_LINK =
+  "font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent";
+
+/** v1.353.0 (G33): what a signed-out Claude Code / Codex row offers — the
+ *  ONE sign-in press (lib/cliSignIn): a Build pane opens with the CLI running
+ *  on this PC's own login, and the row turns green by itself once the user
+ *  finishes there. Never a terminal instruction. */
+function CliSignInAction({ provider }: { provider: string }) {
+  const cli = subscriptionCliFor(provider);
+  const { refresh } = useDaemon();
+  const { signIn, start } = useCliSignIn(() => refresh());
+  if (!cli) return null;
+  const si = signIn[cli.cli] ?? {};
+  return (
+    <div data-testid={`cli-sign-in-${provider}`} className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+      {si.paneId !== undefined ? (
+        <span data-testid={`cli-pane-hint-${provider}`}>
+          A Build pane opened with {cli.name} running. {withCode(cli.paneHint)} This turns green by
+          itself once you&apos;re signed in.{" "}
+          <Link href={paneHref(si.paneId)} className={ROW_LINK}>
+            Open the Build pane
+          </Link>
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => void start(cli)}
+          disabled={si.busy}
+          className={`-ml-2.5 ${CALM_ACTION}`}
+        >
+          {si.busy ? (
+            <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden />
+          ) : (
+            <LogIn size={13} aria-hidden />
+          )}
+          Sign in to {cli.name}
+        </button>
+      )}
+      {si.error && (
+        <span role="alert" className="mt-0.5 block text-tone-danger">
+          {si.error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** v1.353.0 (G34): Ollama answers on this PC but its address is not saved,
+ *  so nothing can use it yet. One press saves this PC's address — the same
+ *  PUT /settings the connect doors' Ollama press makes. It connects; which
+ *  model answers stays the user's choice (nothing switches on its own). */
+function UseOllamaAction() {
+  const { refresh } = useDaemon();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function connect() {
+    setBusy(true);
+    setError(null);
+    try {
+      await put("/settings", { values: { ollama_base_url: OLLAMA_LOCAL_URL } });
+      refresh(); // the row turns green on this answer, not the next poll
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div data-testid="use-ollama-row" className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+      Running on this PC, not connected yet.{" "}
+      <button
+        type="button"
+        onClick={() => void connect()}
+        disabled={busy}
+        className={`-ml-1 ${CALM_ACTION}`}
+      >
+        {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden />}
+        Use Ollama on this PC
+      </button>
+      {error && (
+        <span role="alert" className="mt-0.5 block text-tone-danger">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
 
 function CliProviderRow({
   info,
   available,
   signedOut = false,
+  notInstalled = false,
+  detected = false,
   report = [],
   envelopeModels = [],
 }: {
@@ -1600,6 +1709,11 @@ function CliProviderRow({
    *  logged-out CLI used to read "Detected — ready to use" and refuse the
    *  user's first message. */
   signedOut?: boolean;
+  /** v1.353.0 (G33): the daemon says this subscription CLI is not on this PC
+   *  (`installed: false`) — the row links the vendor's page. */
+  notInstalled?: boolean;
+  /** v1.353.0 (G34, Ollama only): running on this PC, address not saved. */
+  detected?: boolean;
   /** Model report card rows (v1.169.0) — rendered only for LOCAL providers
    *  (ollama, opencode-cli); the cloud CLI rows never get a report line. */
   report?: QualityRow[];
@@ -1609,6 +1723,31 @@ function CliProviderRow({
   envelopeModels?: string[];
 }) {
   const Icon = info.icon;
+  const cli = subscriptionCliFor(info.provider);
+  const isOllama = info.provider === "ollama";
+  // What the line under the description says while this row is not ready:
+  // a Sign in press, the vendor's page, the Ollama press, or where to get
+  // Ollama. Anything else keeps its one-line hint.
+  const action = available ? null : signedOut && cli ? (
+    <CliSignInAction provider={info.provider} />
+  ) : notInstalled && cli ? (
+    <div data-testid={`cli-get-${info.provider}`} className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+      Not on this PC yet.{" "}
+      <a href={cli.installUrl} target="_blank" rel="noreferrer" className={ROW_LINK}>
+        {cli.installLabel}
+      </a>
+    </div>
+  ) : isOllama && detected ? (
+    <UseOllamaAction />
+  ) : isOllama ? (
+    <div data-testid="get-ollama-row" className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+      Not running on this PC.{" "}
+      <a href={OLLAMA_DOWNLOAD_URL} target="_blank" rel="noreferrer" className={ROW_LINK}>
+        Get Ollama
+      </a>{" "}
+      and download a model; this row then offers it in one press.
+    </div>
+  ) : null;
   return (
     <div className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
       <div className="flex min-w-0 items-center gap-3">
@@ -1623,13 +1762,14 @@ function CliProviderRow({
           <div className="text-sm font-medium text-zinc-100">{info.name}</div>
           <div className="truncate text-[11px] text-zinc-500">
             {info.description}
-            {!available && (
+            {!available && !action && (
               <span className="text-zinc-600">
                 {" "}
-                · {signedOut ? (SIGN_IN_HINT[info.provider] ?? info.hint) : info.hint}
+                · {info.hint}
               </span>
             )}
           </div>
+          {action}
           <ModelReportLine rows={report} provider={info.provider} />
           {envelopeModels.map((m) => (
             <div key={m} className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -1787,6 +1927,14 @@ export default function ConnectionsPage() {
     daemonProviders.some(
       (p) => p.provider === provider && Boolean(p.installed) && p.signed_in === false,
     );
+  // v1.353.0 (G33): the daemon KNOWS this subscription CLI is not on this PC
+  // (an explicit `installed: false`; an older daemon's row says nothing).
+  const isNotInstalled = (provider: string) =>
+    daemonProviders.some((p) => p.provider === provider && p.installed === false);
+  // v1.353.0 (G34): Ollama answers on this PC but is not connected yet.
+  const ollamaDetected = (daemonProviders as HealthRow[]).some(
+    (p) => p.provider === "ollama" && !p.available && p.detected === true,
+  );
 
   // Which models a LOCAL provider's row can Measure (v1.201.0): the models
   // the router has judged (quality rows), plus the health default when this
@@ -2126,6 +2274,8 @@ export default function ConnectionsPage() {
                 info={info}
                 available={isDetected(info.provider)}
                 signedOut={isSignedOut(info.provider)}
+                notInstalled={isNotInstalled(info.provider)}
+                detected={info.provider === "ollama" && ollamaDetected}
                 report={qualityRows}
                 envelopeModels={envelopeModelsFor(info.provider)}
               />

@@ -482,8 +482,12 @@ describe("the celebration reads the provider that ACTUALLY answered", () => {
     expect(screen.getByTestId("first-task-use-for-answers").textContent).toMatch(/not real answers/i);
     hooks.refreshHealth.mockClear();
     fireEvent.click(press);
+    // v1.353.0 (G35): the confirmation names what was PRESSED, not the
+    // promoted API row and its raw ids.
     await waitFor(() =>
-      expect(within(dialog()).getByRole("status").textContent).toMatch(/anthropic|claude-opus-4-8/i),
+      expect(within(dialog()).getByRole("status").textContent).toMatch(
+        /Done — Claude.* answers you now\./,
+      ),
     );
     expect(useModelPosts()).toHaveLength(1);
     expect(["claude-cli", "anthropic"]).toContain(
@@ -550,7 +554,13 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
     render(<FirstRunWizard />);
     await waitFor(() => expect(dialog()).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: DOOR_SUB }));
-    expect(dialog().textContent).toContain(SIGN_IN_FIX_CLAUDE);
+    // v1.353.0 (G33): the door says to press Sign in and what the window it
+    // opens asks for — never the CLI's terminal sentence above its own button.
+    expect(dialog().textContent).toMatch(
+      /Not signed in yet — press Sign in below\. A window opens; type \/login there/,
+    );
+    expect(dialog().textContent).not.toContain(SIGN_IN_FIX_CLAUDE);
+    expect(dialog().textContent).not.toMatch(/terminal/i);
     const signIn = within(dialog()).getAllByRole("button", { name: /^Sign in/ });
     expect(signIn).toHaveLength(1); // codex is not installed → no Sign in for it
     fireEvent.click(signIn[0]);
@@ -572,7 +582,11 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
     render(<FirstRunWizard />);
     await waitFor(() => expect(dialog()).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: DOOR_SUB }));
-    expect(dialog().textContent).toContain(SIGN_IN_FIX_CODEX);
+    // v1.353.0 (G33): Codex's own screen, said before the press.
+    expect(dialog().textContent).toMatch(
+      /Not signed in yet — press Sign in below\. A window opens; Codex shows its own sign-in screen/,
+    );
+    expect(dialog().textContent).not.toContain(SIGN_IN_FIX_CODEX);
     const signIn = within(dialog()).getAllByRole("button", { name: /^Sign in/ });
     expect(signIn).toHaveLength(1);
     fireEvent.click(signIn[0]);
@@ -613,8 +627,11 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
     expect(dialog().textContent).not.toMatch(/answers are real/i);
     hooks.refreshHealth.mockClear();
     fireEvent.click(within(dialog()).getByRole("button", { name: /for answers/i }));
+    // v1.353.0 (G35): in the words of the press.
     await waitFor(() =>
-      expect(within(dialog()).getByRole("status").textContent).toMatch(/anthropic|claude-opus-4-8/i),
+      expect(within(dialog()).getByRole("status").textContent).toBe(
+        "Done — Claude (your Claude Code sign-in) answers you now.",
+      ),
     );
     expect(useModelPosts()).toHaveLength(1);
     expect(["claude-cli", "anthropic"]).toContain(

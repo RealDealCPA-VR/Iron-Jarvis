@@ -10,30 +10,40 @@
  */
 
 import { useState } from "react";
-import { chooseForAnswers, friendlyProvider, type AnswerCandidate } from "@/lib/onboarding";
+import { chooseForAnswers, type AnswerCandidate } from "@/lib/onboarding";
 
 export type PressNote = { kind: "ok" | "same" | "error"; text: string } | null;
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** v1.353.0 (G35): the confirmation in the words the user PRESSED. It used to
+ *  name the promoted API row ("answers now come from Anthropic (anthropic ·
+ *  claude-opus-4-8)") for a press labelled "Claude (your Claude Code
+ *  sign-in)" — a different-sounding thing, with two raw ids. Same sentence
+ *  the checklist's step 1 says once a model answers ("<label> answers you
+ *  now"). */
+export function chosenNote(label: string): string {
+  return `Done — ${label} answers you now.`;
+}
+
 export function useAnswerPress(after: () => void) {
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<PressNote>(null);
 
-  async function press(c: AnswerCandidate, onPromoted?: (provider: string) => void) {
+  /** `onPromoted(provider, label)` runs only when the daemon really made the
+   *  pressed one the default — the label is the press's own words, so a
+   *  caller can keep saying it after the doors are gone. */
+  async function press(
+    c: AnswerCandidate,
+    onPromoted?: (provider: string, label: string) => void,
+  ) {
     setBusy(c.provider);
     setNote(null);
     try {
       const answer = await chooseForAnswers(c.provider, after);
       if (answer.promoted) {
-        const { provider, model } = answer.promoted;
-        setNote({
-          kind: "ok",
-          text: `Done — answers now come from ${friendlyProvider(provider)} (${provider}${
-            model ? ` · ${model}` : ""
-          }).`,
-        });
-        onPromoted?.(c.provider);
+        setNote({ kind: "ok", text: chosenNote(c.label) });
+        onPromoted?.(c.provider, c.label);
       } else {
         setNote({ kind: "same", text: answer.reason || "Nothing changed." });
       }

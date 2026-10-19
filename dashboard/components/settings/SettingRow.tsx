@@ -9,6 +9,8 @@
 
 import { useState } from "react";
 import { ShieldAlert } from "lucide-react";
+import { providerDisplay, providerHeading } from "@/lib/onboarding";
+import { DefaultModelPicker } from "./DefaultModelPicker";
 
 export interface SchemaSetting {
   key: string;
@@ -68,6 +70,7 @@ export function SettingRow({
   highlight,
   onChange,
   providerOptions,
+  modelProvider,
 }: {
   def: SchemaSetting;
   value: unknown;
@@ -76,6 +79,9 @@ export function SettingRow({
   onChange: (v: unknown) => void;
   /** default_provider is a choice among the providers this PC has. */
   providerOptions?: string[];
+  /** v1.353.0 (G57): default_model is picked from THIS provider's models (the
+   *  form's current default provider). Absent: the saved default's. */
+  modelProvider?: string;
 }) {
   const id = `setting-${def.key}`;
   const [draft, setDraft] = useState<string | null>(null);
@@ -108,7 +114,9 @@ export function SettingRow({
         ? (def.options ?? []).map((o) => ({ value: String(o.value), label: o.label || String(o.value) }))
         : Array.from(new Set([...(providerOptions ?? []), String(value ?? "")]))
             .filter(Boolean)
-            .map((p) => ({ value: p, label: p === "mock" ? "Demo model (scripted)" : p }));
+            // v1.353.0 (G57): names, not ids ("Claude Code", not "claude-cli");
+            // the value saved stays the id.
+            .map((p) => ({ value: p, label: providerHeading(p) || providerDisplay(p) || p }));
     control = (
       <select
         id={`${id}-control`}
@@ -128,6 +136,18 @@ export function SettingRow({
           </option>
         ))}
       </select>
+    );
+  } else if (def.key === "default_model") {
+    // v1.353.0 (G57): picked from a list (the composer's catalogue), not
+    // typed from memory; "Other…" still takes any id.
+    control = (
+      <DefaultModelPicker
+        id={`${id}-control`}
+        labelledBy={`${id}-label`}
+        provider={modelProvider}
+        value={value === null || value === undefined ? "" : String(value)}
+        onChange={onChange}
+      />
     );
   } else if (def.type === "list" || def.type === "dict") {
     control = (

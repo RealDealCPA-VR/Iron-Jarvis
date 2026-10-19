@@ -58,19 +58,29 @@ an amber strip at the top says so).
 
 **2. Choose which model answers — one press, always yours.** If this PC
 already has a real model — you are signed in to Claude Code or Codex, or
-Ollama is running — the empty chat shows a **Connect a model for real
-answers** card with one button named for it (for example **Use Claude (your
-Claude Code sign-in) for answers**), and once you have started chatting the
-same offer sits beside the composer as a single **Use … for answers · one
-tap**. Under each choice the app says where your questions would go — "stays
-on this PC" or "goes to Anthropic" — before you press anything. Nothing
-switches on its own: whether your questions go to a cloud service or stay on
-this PC is your decision. No model at all? The card's three doors — **I
-already pay for Claude or ChatGPT**, **Free & private on this PC**, **I have
-an API key** — walk you through it.
+Ollama is running with a model downloaded — the empty chat shows a **Connect
+a model for real answers** card with one button named for it (for example
+**Use Claude (your Claude Code sign-in) for answers**, or **Use Ollama (on
+this PC) for answers**, which also connects Ollama — no address to type),
+and once you have started chatting the same offer sits beside the composer
+as a single **Use … for answers · one tap**. Under each choice the app says
+where your questions would go — "stays on this PC" or "goes to Anthropic" —
+before you press anything. After the press the chat keeps saying, in the
+words you pressed, **Done — Claude (your Claude Code sign-in) answers you
+now.** Nothing switches on its own: whether your questions go to a cloud
+service or stay on this PC is your decision. Claude Code or Codex installed
+but signed out? Press **Sign in** — on the card's door or on **Settings →
+Connections → Accounts & keys** — and a sign-in window (a Build pane with
+the tool running) opens inside the app; finish there and the row turns green
+by itself. No model at all? The card's three doors — **I already pay for
+Claude or ChatGPT**, **Free & private on this PC**, **I have an API key** —
+walk you through it. *(v1.353.0)*
 
 **3. Pick a model any time.** The model is chosen in the composer (the small
-model name under the box). Its menu lists every model; type to find one.
+model name under the box). Its menu lists every model by name — Claude Code,
+Codex, OpenCode, Your model server, and your endpoints by the names you gave
+them; type to find one. **Settings → Models → Default model** picks from the
+same list (**Other…** still takes any model id).
 **Make this my default** saves the conversation's pick as the default — with
 an Undo, like every setting. "Switch model" in Ctrl+K opens the same menu from
 any page.
@@ -87,7 +97,12 @@ unfinished, the top of Status holds that checklist, an **Ask Jarvis anything**
 box (it opens a chat with your question written in — nothing runs until you
 press send) and a few starters. Some features need a helper program — reading
 old `.doc` files or scanned pages, and similar; a missing one is folded into a
-single quiet **Optional extras (n)** line there, in plain words. When
+single quiet **Optional extras (n)** line there, in plain words. While you
+are setting up, the empty chat says it too in one quiet line — **This PC: 5
+of 6 helpers ready — …** with **Details** (Everything → Status) — and once a
+real model answers it offers **Connect the apps you use** (GitHub, Notion,
+Slack…), which opens the Directory; that is also an optional checklist step,
+*Connect the apps you use (optional)*. When
 something needs you — work cut off by a restart, a background task failing, a
 job waiting for an answer — one quiet line appears above the chat box, with
 **Open**.
@@ -1752,10 +1767,13 @@ reads; it never writes, runs commands, or starts work on its own.
 
 - **"Claude Code isn't signed in" / "Codex isn't signed in"** (v1.234.0) →
   the subscription CLI is installed but logged out, so Iron Jarvis refuses
-  the turn instead of failing over. Open a terminal, run `claude` and then
-  `/login` (or `codex login`), then **Re-detect** or **Test** on
-  Connections. The Connections row reads **Installed — not signed in**
-  until then, and the composer says so before you type. Installed is not
+  the turn instead of failing over. Press **Sign in to Claude Code** (or
+  **Codex**) on **Settings → Connections → Accounts & keys** (v1.353.0): a
+  Build pane opens with the tool running on this PC's own login — type
+  `/login` there for Claude Code (Codex shows its own sign-in screen) and
+  finish in your browser. The row reads **Installed · not signed in** until
+  then and turns green by itself, and the composer says so before you
+  type. Installed is not
   connected: the app asks the CLI itself (`claude auth status`, `codex
   login status`) and re-checks every couple of minutes.
 - **"Daemon offline"** → the desktop app restarts a crashed daemon by

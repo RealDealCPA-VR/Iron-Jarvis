@@ -2130,6 +2130,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 row["sign_in_fix"] = SIGN_IN_FIX.get(binary, "")
                 row.setdefault("installed", False)
                 row.setdefault("signed_in", None)
+            # v1.353.0 (G34): the ollama row says whether Ollama answers on
+            # THIS PC with a model to use -- even before its address is
+            # saved, which is exactly when the one press can save it. The
+            # cached probe only (providers/ollama_seen: never blocks, nothing
+            # spawned); a stale answer refreshes behind this read.
+            if row.get("provider") == "ollama":
+                try:
+                    from ..providers import ollama_seen
+
+                    row["detected"] = bool(
+                        ollama_seen.seen(getattr(platform.config, "ollama_base_url", None))
+                    )
+                except Exception:  # noqa: BLE001 — health must never fail
+                    row["detected"] = False
         return rows
 
     # --- Chat (direct conversation — frontier-chat parity) -----------------

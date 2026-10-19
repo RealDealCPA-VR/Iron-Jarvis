@@ -59,20 +59,23 @@ def test_getting_started_returns_core_steps_plus_optional_voice(platform):
         assert isinstance(step["done"], bool)
 
     keys = [s["key"] for s in steps]
-    # Four core steps in order, then the OPTIONAL voice step last.
+    # Four core steps in order, then the OPTIONAL voice step and (v1.353.0,
+    # G36) the OPTIONAL connect-your-apps step last.
     assert keys == [
         "connect_ai",
         "first_session",
         "work_with_document",
         "teach_style",
         "set_up_voice",
+        "connect_apps",
     ]
 
-    # The core steps are never optional; only set_up_voice is.
+    # The core steps are never optional; only the voice and apps steps are.
     by_key = {s["key"]: s for s in steps}
     for core in ("connect_ai", "first_session", "work_with_document", "teach_style"):
         assert by_key[core].get("optional", False) is False
     assert by_key["set_up_voice"]["optional"] is True
+    assert by_key["connect_apps"]["optional"] is True
 
 
 async def test_first_session_step_flips_after_running(platform):
@@ -105,7 +108,7 @@ def test_readiness_includes_version_doctor_and_checklist(platform):
     assert report["version"] == __version__
     assert report["first_run"] is True  # fresh platform, no real provider
     assert "ok" in report["doctor"] and isinstance(report["doctor"]["checks"], list)
-    assert isinstance(report["checklist"], list) and len(report["checklist"]) == 5
+    assert isinstance(report["checklist"], list) and len(report["checklist"]) == 6
     # next_step is the first incomplete REQUIRED step on a fresh install — the
     # optional voice step is never advertised as "next".
     assert report["next_step"]["key"] == "connect_ai"

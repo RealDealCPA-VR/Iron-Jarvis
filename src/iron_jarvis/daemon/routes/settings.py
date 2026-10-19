@@ -96,7 +96,14 @@ def _use_model_refusal(d, name: str) -> str | None:
         return SIGN_IN_FIX[binary]
     if name == "ollama":
         if not (getattr(cfg, "ollama_base_url", None) or "").strip():
-            return "Ollama isn't set up yet. Add its address on the Connections page first."
+            # v1.353.0 (G34): reached only when Ollama is NOT answering on
+            # this PC -- a running one is connected by the press itself
+            # (``_adopt_local_ollama``), so "add its address" was the wrong
+            # step to send anyone to.
+            return (
+                "Ollama isn't running on this PC, so nothing changed. Start "
+                "Ollama (and download a model), then press again."
+            )
         return "Ollama isn't answering right now. Make sure it's running, then try again."
     if name == "custom":
         if not (getattr(cfg, "custom_base_url", None) or "").strip():
@@ -109,6 +116,50 @@ def _use_model_refusal(d, name: str) -> str | None:
             "it's running, then try again."
         )
     return f"{label} isn't connected yet. Add its key on the Connections page first."
+
+
+#: v1.353.0 (G34): the address that connects the Ollama on THIS PC -- the
+#: value the connect doors' Ollama press saves (lib/onboarding
+#: OLLAMA_LOCAL_URL), so a press here and a press there save the same thing.
+OLLAMA_LOCAL_URL = "http://localhost:11434"
+
+
+def _adopt_local_ollama(d) -> bool:
+    """The user pressed "Use Ollama for answers": when no Ollama address is
+    saved yet and Ollama answers on this PC with a model, save this PC's
+    address as PART OF THAT PRESS (v1.353.0, G34) -- through the one settings
+    writer, so it is journaled with Undo and the provider is re-pointed live.
+
+    Before this, a running Ollama was listed but refused ("Add its address on
+    the Connections page first") and the one-press offer never named it.
+    Never called on its own: only from the explicit press route. BLOCKING (a
+    fresh probe, at most the probe's 1.5 s timeout): the route is a sync def
+    on the threadpool. Returns True when it saved the address."""
+    from ...providers import ollama_seen
+
+    cfg = d.platform.config
+    if (getattr(cfg, "ollama_base_url", None) or "").strip():
+        return False  # the user's own address stands; never overwritten here
+    if not ollama_seen.probe_now(None):
+        return False
+    import os
+
+    # OLLAMA_HOST names where Ollama listens when it is not the default port;
+    # detection probed THAT address, so it is the one to save.
+    host = (os.environ.get("OLLAMA_HOST") or "").strip()
+    if host:
+        from ...providers.cli_detect import OLLAMA_API
+
+        url = OLLAMA_API
+    else:
+        url = OLLAMA_LOCAL_URL
+    try:
+        config_writer(d).apply({"ollama_base_url": url}, actor="onboarding_press")
+    except Exception:  # noqa: BLE001 — the refusal below then says why
+        log.debug("saving the local Ollama address for the press failed", exc_info=True)
+        return False
+    log.info("Ollama on this PC connected by the user's press: %s", url)
+    return True
 
 
 def _first_local_model(d, name: str) -> str:
@@ -767,6 +818,11 @@ def register(app: FastAPI, d) -> None:
         from ...onboarding.checklist import default_is_mock, provider_label
 
         name = (body.provider or "").strip().lower()
+        if name == "ollama":
+            # v1.353.0 (G34): one press connects a running Ollama AND chooses
+            # it -- the doors offer "Use Ollama (on this PC) for answers" as
+            # soon as /health's cached probe sees it.
+            _adopt_local_ollama(d)
         refusal = _use_model_refusal(d, name)
         if refusal is not None:
             raise HTTPException(status_code=409, detail=refusal)
