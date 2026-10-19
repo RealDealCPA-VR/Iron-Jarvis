@@ -51,13 +51,25 @@
  *    and the Overview call the same choice the same thing.
  *
  * The key door keeps the pre-v1.197.0 mechanics byte-for-byte.
+ *
+ *  - v1.355.0 (wave 5, lane 5D): the key door takes a Google Gemini key (an
+ *    AI Studio key, G46; the old "Gemini connects with account login"
+ *    pointer is gone); its Custom endpoint offers "LM Studio on this PC" and
+ *    "llama.cpp", which fill the address and list the server's models with
+ *    the Connections form's own picker (G72); and the free-and-private door's
+ *    step 2 is a "Download a starter model" press that opens a Build pane
+ *    running the download, with no command to copy (G73, lib/starterModel).
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, KeyRound, Loader2, RefreshCw, TerminalSquare } from "lucide-react";
+import { CheckCircle2, Download, KeyRound, Loader2, RefreshCw, TerminalSquare } from "lucide-react";
 import { post, put } from "@/lib/api";
 import { codeParts, paneHref, signedOutLine, useCliSignIn } from "@/lib/cliSignIn";
+import { EndpointModelPicker } from "@/components/connections/EndpointModelPicker";
+import { LocalServerChips, useFetchModelsSoon } from "@/components/connections/LocalServerChips";
+import type { LocalServerPreset } from "@/lib/localServerPresets";
+import { STARTER_MODEL_LABEL, useStarterModel } from "@/lib/starterModel";
 import { useDaemon } from "@/lib/daemon";
 import {
   OLLAMA_LOCAL_URL,
@@ -93,11 +105,27 @@ const DOORS: { id: Door; label: string; hint: string }[] = [
   },
 ];
 
-type KeyProvider = "anthropic" | "openai" | "custom";
+type KeyProvider = "anthropic" | "openai" | "google" | "custom";
 
-const KEY_PROVIDERS: { id: KeyProvider; label: string; placeholder: string }[] = [
+const KEY_PROVIDERS: {
+  id: KeyProvider;
+  label: string;
+  placeholder: string;
+  /** Where to get one, when a new user may not know (v1.355.0). */
+  keyUrl?: string;
+  keyLabel?: string;
+}[] = [
   { id: "anthropic", label: "Anthropic", placeholder: "sk-ant-…" },
   { id: "openai", label: "OpenAI", placeholder: "sk-…" },
+  // v1.355.0 (G46): the AI Studio key most Gemini users have. It used to be a
+  // pointer to the account login, because the google connection refused a key.
+  {
+    id: "google",
+    label: "Google Gemini",
+    placeholder: "AIza…",
+    keyUrl: "https://aistudio.google.com/apikey",
+    keyLabel: "Google AI Studio",
+  },
   { id: "custom", label: "Custom endpoint", placeholder: "sk-… (optional)" },
 ];
 
@@ -271,6 +299,10 @@ export function ConnectDoors({
     }
   }
 
+  /* v1.355.0 (G73): "Download a starter model" opens a Build pane running the
+     download (lib/starterModel: the Sign in press's door and pane hint). */
+  const starter = useStarterModel();
+
   // --- key door (the pre-v1.197.0 form, unchanged) -------------------------
   const [keyProvider, setKeyProvider] = useState<KeyProvider>("anthropic");
   const [keyValue, setKeyValue] = useState("");
@@ -279,6 +311,17 @@ export function ConnectDoors({
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyResult, setKeyResult] = useState<ConnectionTestResult | null>(null);
   const [keyError, setKeyError] = useState<string | null>(null);
+
+  /* v1.355.0 (G72): "LM Studio on this PC" / "llama.cpp" fill the address and
+     press the model picker's own "Fetch available models" below it. */
+  const customRef = useRef<HTMLDivElement>(null);
+  const fetchModelsSoon = useFetchModelsSoon(customRef);
+  function pickLocalServer(preset: LocalServerPreset) {
+    setCustomBaseUrl(preset.baseUrl);
+    setKeyError(null);
+    setKeyResult(null);
+    fetchModelsSoon();
+  }
 
   async function connectKey() {
     const isCustom = keyProvider === "custom";
@@ -324,6 +367,7 @@ export function ConnectDoors({
      ("checking"). Both turn green by themselves once it does. */
   const anyUnknown = states.some((s) => s.state === "unknown" || s.state === "checking");
   const showPress = demo && candidates.length > 0;
+  const keyPick = KEY_PROVIDERS.find((p) => p.id === keyProvider);
 
   return (
     <div className={className}>
@@ -578,10 +622,42 @@ export function ConnectDoors({
               and install it.
             </li>
             <li>
-              2. Pull a model — copy this into a terminal:
-              <code className="mt-1 block w-fit rounded-lg border border-white/[0.06] bg-black/30 px-2.5 py-1 font-mono text-xs text-zinc-300">
-                ollama pull llama3.2
-              </code>
+              {/* v1.355.0 (G73): no command to copy. One press opens a Build
+                  pane that runs the download, the way Sign in opens one. */}
+              2. Download a starter model ({STARTER_MODEL_LABEL}, about 2 GB):
+              {starter.paneId !== undefined ? (
+                <span data-testid="starter-model-pane" className="mt-1.5 block text-zinc-400">
+                  A Build pane opened and is downloading it. That takes a few minutes; when the
+                  pane says success, come back for step 3.{" "}
+                  <Link
+                    href={paneHref(starter.paneId)}
+                    onClick={() => onOpenPane?.()}
+                    className="font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent"
+                  >
+                    Open the Build pane
+                  </Link>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  data-testid="starter-model-download"
+                  onClick={() => void starter.start()}
+                  disabled={starter.busy}
+                  className="mt-1.5 flex w-fit items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
+                >
+                  {starter.busy ? (
+                    <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Download size={13} aria-hidden="true" />
+                  )}
+                  Download a starter model
+                </button>
+              )}
+              {starter.error && (
+                <span role="alert" className="mt-1 block text-rose-300">
+                  {starter.error}
+                </span>
+              )}
             </li>
             <li>3. Tell Iron Jarvis to use it:</li>
           </ol>
@@ -647,18 +723,23 @@ export function ConnectDoors({
           </div>
 
           {keyProvider === "custom" && (
-            <div className="mt-2.5 space-y-2">
+            <div ref={customRef} className="mt-2.5 space-y-2">
+              {/* v1.355.0 (G72): the two local servers, one press each. */}
+              <LocalServerChips onPick={pickLocalServer} />
               <input
                 value={customBaseUrl}
                 onChange={(e) => setCustomBaseUrl(e.target.value)}
                 placeholder="Base URL (e.g. http://localhost:1234/v1)"
+                aria-label="Base URL"
                 className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none"
               />
-              <input
+              {/* v1.355.0 (G72): the Connections form's own Model field: type
+                  an id, or "Fetch available models" lists the server's. */}
+              <EndpointModelPicker
+                baseUrl={customBaseUrl}
+                apiKey={keyValue}
                 value={customModel}
-                onChange={(e) => setCustomModel(e.target.value)}
-                placeholder="Model id (optional)"
-                className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none"
+                onChange={setCustomModel}
               />
             </div>
           )}
@@ -674,7 +755,7 @@ export function ConnectDoors({
               type="password"
               value={keyValue}
               onChange={(e) => setKeyValue(e.target.value)}
-              placeholder={KEY_PROVIDERS.find((p) => p.id === keyProvider)?.placeholder ?? "key"}
+              placeholder={keyPick?.placeholder ?? "key"}
               className="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none"
             />
             <button
@@ -702,18 +783,23 @@ export function ConnectDoors({
             </p>
           )}
 
-          {/* Gemini is OAuth-only — POSTing a key to the google connection
-              400s — so it is a POINTER, never a form entry here (v1.197.0). */}
-          <p className="mt-2.5 text-[11px] text-zinc-500">
-            Google Gemini connects with account login on the{" "}
-            <Link
-              href="/connections"
-              className="text-zinc-400 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-200"
-            >
-              Connections page
-            </Link>
-            .
-          </p>
+          {/* v1.355.0 (G46): Gemini takes a key here now (the old line
+              pointed to an account login that first needed a Cloud Console
+              app). Where to get one, for the provider that needs saying. */}
+          {keyPick?.keyUrl && (
+            <p data-testid="key-door-get-one" className="mt-2.5 text-[11px] text-zinc-500">
+              No key yet? Get one at{" "}
+              <a
+                href={keyPick.keyUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-zinc-400 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-200"
+              >
+                {keyPick.keyLabel}
+              </a>
+              .
+            </p>
+          )}
         </div>
       )}
     </div>

@@ -146,10 +146,19 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
         # by Anthropic/OpenAI — no other code change needed.
         oauth_help="xAI uses an API key today; account login activates once xAI ships a public OAuth client.",
     ),
+    # v1.355.0 (G46): Gemini TAKES AN API KEY. The card used to offer only the
+    # account login, which first needs an OAuth client the user registers in
+    # Google Cloud Console — while the key most Gemini users have (Google AI
+    # Studio, ``AIza…``) could not be pasted. The key is now the primary way
+    # (``method="api_key"``, so the card's chip says "API key"); the login
+    # stays for whoever set one up (``supports_oauth`` keeps the endpoints).
+    # ``providers/google_key.is_google_api_key`` decides which header the
+    # stored credential rides; the registry still prefers a login token when
+    # one is stored, exactly as before.
     "google": ConnectionSpec(
         provider="google",
         display_name="Google (Gemini)",
-        method="oauth",
+        method="api_key",
         auth_url="https://accounts.google.com/o/oauth2/v2/auth",
         token_url="https://oauth2.googleapis.com/token",
         scopes=[
@@ -160,8 +169,16 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
             "openid",
             "email",
         ],
-        docs_url="https://console.cloud.google.com/apis/credentials",
-        key_help="Create an OAuth 2.0 Client ID in Google Cloud Console.",
+        docs_url="https://aistudio.google.com/apikey",
+        key_help=(
+            "Paste a Gemini API key (it starts AIza…) from Google AI Studio: "
+            "aistudio.google.com/apikey."
+        ),
+        key_secret_name="google_api_key",
+        oauth_help=(
+            "Logging in with your Google account needs an OAuth 2.0 Client ID "
+            "you create in Google Cloud Console first."
+        ),
         # Google-specific authorize params (moved out of the generic OAuth client):
         # offline access_type + forced consent are what make Google return a
         # refresh_token; other providers reject or ignore these.

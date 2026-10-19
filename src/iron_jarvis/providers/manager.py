@@ -33,6 +33,42 @@ AdapterFactory = Callable[..., LLMAdapter]
 #: API providers whose availability is gated on a real credential.
 API_PROVIDERS = ("anthropic", "openai", "google", "xai", "openrouter")
 
+#: The Gemini model a request that names none is served by (v1.355.0, G46).
+#: A current, generally available id (providers/reasoning.py's table, read
+#: 2026-10-10); the old gemini-1.5-flash default had been retired by Google.
+GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
+
+
+class _GeminiAdapter(GoogleAdapter):
+    """Gemini with the header the STORED credential needs (v1.355.0, G46).
+
+    The google slot used to be built with ``oauth=True`` unconditionally — it
+    could only be connected by the account login, whose access token rides
+    ``Authorization: Bearer``. It now also takes an AI Studio API key, which
+    Google accepts only as ``x-goog-api-key`` (and refuses as a Bearer token).
+    So the header is decided per request, from the credential just resolved,
+    by the ONE rule the Connections Test shares
+    (:func:`~iron_jarvis.providers.google_key.is_google_api_key`): a key rides
+    ``x-goog-api-key``; a login token — and anything else — rides Bearer,
+    exactly as every pre-v1.355.0 Google connection did.
+
+    Decided at resolve time rather than at construction because the adapter
+    is cached per (provider, model) while the user can switch between a login
+    and a key with no restart; ``_resolve_key`` runs (off the loop) right
+    before each request builds its headers, in ``complete`` and the stream.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        kwargs.pop("oauth", None)
+        super().__init__(*args, oauth=True, **kwargs)
+
+    def _resolve_key(self) -> str:
+        from .google_key import is_google_api_key
+
+        key = super()._resolve_key()
+        self._oauth = not is_google_api_key(key)
+        return key
+
 #: xAI (Grok) is OpenAI-compatible, so it routes through the OpenAI adapter with
 #: a base_url override (same pattern as a local Ollama server).
 XAI_ENDPOINT = "https://api.x.ai/v1/chat/completions"
@@ -300,12 +336,11 @@ class ProviderManager:
         )
         self.register(
             "google",
-            lambda model=None: GoogleAdapter(
-                model=model or "gemini-1.5-flash",
+            lambda model=None: _GeminiAdapter(
+                # v1.355.0 (G46): gemini-1.5-flash was retired by Google, so a
+                # request with no model named (Auto, a bare "google") 404'd.
+                model=model or GEMINI_DEFAULT_MODEL,
                 credential=lambda: self._cred("google"),
-                # google connects via OAuth (specs.py method="oauth"): the
-                # credential is an access token, sent as Authorization: Bearer.
-                oauth=True,
             ),
         )
         # xAI (Grok) — OpenAI-compatible hosted API; routes through the OpenAI

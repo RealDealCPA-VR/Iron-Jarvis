@@ -12,10 +12,10 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
  *  - the key door keeps the pre-v1.197.0 mechanics byte-for-byte: submitting a
  *    key POSTs /connections/anthropic/key then /connections/anthropic/test —
  *    the doors are presentation, not a new connection path;
- *  - the Ollama door links OUT to ollama.com/download (new tab), and Gemini is
- *    a LINK to /connections, never a key form — the google ConnectionSpec is
- *    OAuth-only and 400s a posted key, so a Gemini key field could only ever
- *    produce an error a new user cannot interpret;
+ *  - the Ollama door links OUT to ollama.com/download (new tab); Gemini was a
+ *    LINK to /connections while the google ConnectionSpec was OAuth-only, and
+ *    since v1.355.0 (G46) takes an AI Studio key in the key form like the
+ *    other providers;
  *  - the Ollama door has a real MECHANISM, not a promise: "Connect to Ollama
  *    on this PC" PUTs the default local URL to /settings (rescan cannot
  *    detect Ollama — availability is gated on ollama_base_url being
@@ -295,8 +295,12 @@ describe("the honest pointers", () => {
     expect(a.getAttribute("href")).toBe("https://ollama.com/download");
     expect(a.getAttribute("target")).toBe("_blank");
     expect(a.getAttribute("rel")).toBe("noreferrer");
-    // The pull snippet and the honest capability line ride along.
-    expect(screen.getByText("ollama pull llama3.2")).toBeTruthy();
+    // v1.355.0 (G73), changed on purpose: there is no pull snippet to copy
+    // any more; step 2 is one "Download a starter model" press (a Build pane
+    // runs the download — model-doors-v13550 pins the press). The honest
+    // capability line still rides along.
+    expect(screen.queryByText("ollama pull llama3.2")).toBeNull();
+    expect(screen.getByRole("button", { name: /Download a starter model/ })).toBeTruthy();
     expect(screen.getByText(/less capable than a frontier one/)).toBeTruthy();
   });
 
@@ -329,16 +333,16 @@ describe("the honest pointers", () => {
     expect(screen.getByRole("button", { name: /Rescan now/ })).toBeTruthy();
   });
 
-  it("Gemini is a LINK to /connections, never a key form", async () => {
-    // The google ConnectionSpec is OAuth-only: POST /connections/google/key
-    // 400s. A Gemini entry in the key form could only ever manufacture an
-    // error, so the wizard points at the Connections page instead.
+  it("Gemini takes a key in the key form (v1.355.0, G46)", async () => {
+    // Changed on purpose. Until v1.355.0 the google ConnectionSpec was
+    // OAuth-only (a posted key 400'd), so this door only pointed at the
+    // Connections page. The spec takes an AI Studio key now, so the key form
+    // offers Google Gemini like the other providers — and the old pointer to
+    // an account login is gone (model-doors-v13550 pins the post + test).
     render(<FirstRunWizard />);
     fireEvent.click(door("I have an API key"));
-    const link = (await screen.findByText("Connections page")) as HTMLAnchorElement;
-    expect(link.getAttribute("href")).toBe("/connections");
-    // ...and no door ever grew a google key option.
-    expect(screen.queryByRole("button", { name: /google|gemini/i })).toBeNull();
+    expect(await screen.findByRole("button", { name: "Google Gemini" })).toBeTruthy();
+    expect(screen.queryByText(/connects with account login/)).toBeNull();
   });
 });
 

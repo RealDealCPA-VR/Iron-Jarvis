@@ -317,6 +317,14 @@ def _ollama_binary() -> str | None:
     return None
 
 
+def ollama_binary() -> str | None:
+    """Where Ollama is installed on this PC, or None — the public name of
+    :func:`_ollama_binary` (v1.355.0, G73: the first-run door's "Download a
+    starter model" types it by full path when the daemon's PATH predates the
+    install; ``terminals.ai_clis.launch_line``)."""
+    return _ollama_binary()
+
+
 def _is_local_ollama(url: str | None) -> bool:
     """True when ``url`` is this machine's Ollama port (loopback, 11434)."""
     if not url:

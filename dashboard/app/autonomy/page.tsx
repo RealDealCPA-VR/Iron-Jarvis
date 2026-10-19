@@ -44,6 +44,8 @@ import type { GrantOffer, StandingGrant } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
 import { Markdown } from "@/components/Markdown";
 import { PageGrid } from "@/components/PageGrid";
+// v1.355.0 (G65): the five-minute sentence every unattended-work form shows.
+import { UnattendedAskNote } from "@/components/UnattendedAskNote";
 import {
   useLiveGoals,
   spentVsBudget,
@@ -1646,6 +1648,9 @@ function NewGoalCard({
             </>
           )}
         </button>
+        {/* v1.355.0 (G65): a goal's runs are unattended — an ask waits 5
+            minutes, then that step is skipped. Said under the form. */}
+        <UnattendedAskNote />
         {ok && <SuccessNote>{ok}</SuccessNote>}
       </form>
     </Card>

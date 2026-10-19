@@ -40,6 +40,8 @@ import {
   EndpointProtocolChoice,
   type EndpointProtocol,
 } from "@/components/connections/EndpointModelPicker";
+import { LocalServerChips, useFetchModelsSoon } from "@/components/connections/LocalServerChips";
+import type { LocalServerPreset } from "@/lib/localServerPresets";
 import { useApi } from "@/lib/useApi";
 import { useFocusRef } from "@/lib/useFocusRef";
 import { useDaemon } from "@/lib/daemon";
@@ -364,6 +366,11 @@ const META: Record<string, ProviderMeta> = {
   google: {
     icon: Globe,
     tint: "text-tone-info",
+    // v1.355.0 (G46): Gemini takes an API key — the one most users have, from
+    // Google AI Studio. The account login (Cloud Console app) stays below it.
+    keyUrl: "https://aistudio.google.com/apikey",
+    keyLabel: "Google AI Studio",
+    placeholder: "AIza…",
     docsUrl: "https://console.cloud.google.com/apis/credentials",
     docsLabel: "Google Cloud Console",
   },
@@ -627,6 +634,12 @@ function ConnectionCard({
   // says none exists yet. Keyed on canOAuth (never on oauth_help — xAI carries
   // help text but is key-only). Absent field (older daemon) = today's card.
   const needsSetup = canOAuth && (conn as ConnRow).oauth_client_configured === false;
+  // v1.355.0 (G46): a card that offers BOTH, whose primary way is the key
+  // (the daemon's `method`: Google Gemini since it takes an AI Studio key),
+  // shows the key first and the account login after it. Every other card
+  // keeps the login first and "Use an API key instead" as the quiet second.
+  const keyFirst = canOAuth && canKey && conn.method === "api_key";
+  const keySecondary = canOAuth && !keyFirst;
 
   // SAVED ENDPOINTS (custom card): every routable custom endpoint —
   // user-added routable fleet node — each one its own provider ("fleet-<id>")
@@ -642,6 +655,20 @@ function ConnectionCard({
   // where endpoints are actually managed, so it was missing where it counts.
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+
+  // v1.355.0 (G72): "LM Studio on this PC" / "llama.cpp" fill the add form
+  // (address, server type, and the name when none is typed) and then press
+  // the form's own "Fetch available models", so the server's loaded models
+  // are listed to pick. Nothing is saved until Save endpoint, as before.
+  const keyFormRef = useRef<HTMLFormElement>(null);
+  const fetchModelsSoon = useFetchModelsSoon(keyFormRef);
+  function pickLocalServer(preset: LocalServerPreset) {
+    setBaseUrl(preset.baseUrl);
+    setProtocol(preset.protocol);
+    setEpName((typed) => (typed.trim() ? typed : preset.name));
+    setError(null);
+    fetchModelsSoon();
+  }
 
   async function reloadEndpoints() {
     try {
@@ -967,6 +994,143 @@ function ConnectionCard({
     return () => window.removeEventListener("message", onMessage);
   }, [conn.method, conn.provider, conn.display_name, onChanged]);
 
+  // v1.355.0 (G46): the account-login block, lifted into a value so a card
+  // whose PRIMARY way is a key (Google Gemini: an AI Studio key) can show it
+  // UNDER the key form instead of above it. Every other card renders it
+  // exactly where it always was.
+  const oauthLogin = canOAuth ? (
+    <div className="space-y-2">
+      {/* v1.316.0 (UX wave 4): when the login needs an app the user
+          registers first, say so BEFORE the press — folded, as steps
+          — instead of after a 400. The button below stays clickable
+          (never gated behind opening the fold), and the old 400 note
+          further down still catches anything this misses. */}
+      {needsSetup && (
+        <details className="group rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2">
+          <summary className="flex cursor-pointer select-none items-center gap-1.5 text-[12px] font-medium text-zinc-300 transition-colors hover:text-zinc-100 [&::-webkit-details-marker]:hidden">
+            <ChevronRight
+              size={13}
+              aria-hidden
+              className="shrink-0 transition-transform duration-200 group-open:rotate-90"
+            />
+            One-time setup (about 5 minutes)
+          </summary>
+          <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-[11px] leading-relaxed text-zinc-400">
+            <li>
+              {conn.oauth_help ||
+                `${conn.display_name} needs an OAuth app that you register yourself.`}
+            </li>
+            <li>
+              Allow this redirect address:{" "}
+              <Code className="break-all">{oauthCallback(conn.provider)}</Code>
+            </li>
+            <li>
+              In{" "}
+              <Link href="/secrets" className="font-medium text-accent-soft underline">
+                Secrets
+              </Link>
+              , save its client id as <Code>{conn.provider}_oauth_client_id</Code>{" "}
+              and, if it has one, its secret as{" "}
+              <Code>{conn.provider}_oauth_client_secret</Code>.
+            </li>
+            <li>Come back and press Set up &amp; log in.</li>
+          </ol>
+          {meta.docsUrl && (
+            <a
+              href={meta.docsUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 flex items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
+            >
+              Manage OAuth app in {meta.docsLabel} <ExternalLink size={11} />
+            </a>
+          )}
+        </details>
+      )}
+      {/* v1.316.0 (accent-overuse-no-primary): outlined, not filled —
+          the page's one filled accent is "Add connection". Full width
+          for a thumb on a phone, its own width from sm. */}
+      <button
+        onClick={connectOAuth}
+        disabled={busy}
+        className={keyFirst ? `${CALM_ACTION} whitespace-nowrap` : "btn-soft w-full py-1.5 text-xs sm:w-auto"}
+      >
+        {busy ? (
+          <LoaderInline label="Starting…" />
+        ) : (
+          <>
+            <ShieldCheck size={14} />{" "}
+            {needsSetup ? "Set up & log in" : "Log in with your account"}
+          </>
+        )}
+      </button>
+      {manualOpen && (
+        <form onSubmit={submitManualCode} className="space-y-2">
+          <input
+            type="text"
+            value={manualCode}
+            onChange={(e) => setManualCode(e.target.value)}
+            placeholder="Paste the authorization code"
+            aria-label="Authorization code"
+            autoComplete="off"
+            autoFocus
+            className="field font-mono text-xs"
+          />
+          <p className="text-[11px] leading-relaxed text-zinc-500">
+            After you approve access, {conn.display_name} shows an authorization
+            code. Copy it and paste it here to finish connecting.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={busy || !manualCode.trim()}
+              className="btn-accent flex-1 py-1.5 text-xs"
+            >
+              {busy ? <LoaderInline label="Connecting…" /> : <><Plug size={14} /> Complete sign-in</>}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setManualOpen(false);
+                setManualCode("");
+                setError(null);
+              }}
+              className={CALM_ACTION}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+      {conn.oauth_help && !needsSetup && (
+        <p className="text-[11px] leading-relaxed text-zinc-500">{conn.oauth_help}</p>
+      )}
+      {meta.docsUrl && !needsSetup && (
+        <a
+          href={meta.docsUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
+        >
+          Manage OAuth app in {meta.docsLabel} <ExternalLink size={11} />
+        </a>
+      )}
+      {needsSecrets && (
+        <div className="rounded-xl border border-tone-warn/25 bg-tone-warn/[0.07] px-3 py-2.5 text-[11px] leading-relaxed text-zinc-300">
+          No OAuth client configured. Set{" "}
+          <code className="rounded bg-ink-900/80 px-1 font-mono text-tone-warn">
+            {conn.provider}_oauth_client_id
+          </code>{" "}
+          in{" "}
+          <Link href="/secrets" className="font-medium text-accent-soft underline">
+            Secrets
+          </Link>{" "}
+          to override the built-in client, then connect.
+        </div>
+      )}
+    </div>
+  ) : null;
+
   return (
     <div
       ref={endpointsFocusRef}
@@ -1106,140 +1270,9 @@ function ConnectionCard({
               (Google/Gemini, Dropbox, Drive, OneDrive). Anthropic/OpenAI are
               API-key-only; their subscription is inherited from the CLI, so
               canOAuth is false and this button never shows for them. */}
-          {canOAuth && (
-            <div className="space-y-2">
-              {/* v1.316.0 (UX wave 4): when the login needs an app the user
-                  registers first, say so BEFORE the press — folded, as steps
-                  — instead of after a 400. The button below stays clickable
-                  (never gated behind opening the fold), and the old 400 note
-                  further down still catches anything this misses. */}
-              {needsSetup && (
-                <details className="group rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2">
-                  <summary className="flex cursor-pointer select-none items-center gap-1.5 text-[12px] font-medium text-zinc-300 transition-colors hover:text-zinc-100 [&::-webkit-details-marker]:hidden">
-                    <ChevronRight
-                      size={13}
-                      aria-hidden
-                      className="shrink-0 transition-transform duration-200 group-open:rotate-90"
-                    />
-                    One-time setup (about 5 minutes)
-                  </summary>
-                  <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-[11px] leading-relaxed text-zinc-400">
-                    <li>
-                      {conn.oauth_help ||
-                        `${conn.display_name} needs an OAuth app that you register yourself.`}
-                    </li>
-                    <li>
-                      Allow this redirect address:{" "}
-                      <Code className="break-all">{oauthCallback(conn.provider)}</Code>
-                    </li>
-                    <li>
-                      In{" "}
-                      <Link href="/secrets" className="font-medium text-accent-soft underline">
-                        Secrets
-                      </Link>
-                      , save its client id as <Code>{conn.provider}_oauth_client_id</Code>{" "}
-                      and, if it has one, its secret as{" "}
-                      <Code>{conn.provider}_oauth_client_secret</Code>.
-                    </li>
-                    <li>Come back and press Set up &amp; log in.</li>
-                  </ol>
-                  {meta.docsUrl && (
-                    <a
-                      href={meta.docsUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-2 flex items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
-                    >
-                      Manage OAuth app in {meta.docsLabel} <ExternalLink size={11} />
-                    </a>
-                  )}
-                </details>
-              )}
-              {/* v1.316.0 (accent-overuse-no-primary): outlined, not filled —
-                  the page's one filled accent is "Add connection". Full width
-                  for a thumb on a phone, its own width from sm. */}
-              <button
-                onClick={connectOAuth}
-                disabled={busy}
-                className="btn-soft w-full py-1.5 text-xs sm:w-auto"
-              >
-                {busy ? (
-                  <LoaderInline label="Starting…" />
-                ) : (
-                  <>
-                    <ShieldCheck size={14} />{" "}
-                    {needsSetup ? "Set up & log in" : "Log in with your account"}
-                  </>
-                )}
-              </button>
-              {manualOpen && (
-                <form onSubmit={submitManualCode} className="space-y-2">
-                  <input
-                    type="text"
-                    value={manualCode}
-                    onChange={(e) => setManualCode(e.target.value)}
-                    placeholder="Paste the authorization code"
-                    aria-label="Authorization code"
-                    autoComplete="off"
-                    autoFocus
-                    className="field font-mono text-xs"
-                  />
-                  <p className="text-[11px] leading-relaxed text-zinc-500">
-                    After you approve access, {conn.display_name} shows an authorization
-                    code. Copy it and paste it here to finish connecting.
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="submit"
-                      disabled={busy || !manualCode.trim()}
-                      className="btn-accent flex-1 py-1.5 text-xs"
-                    >
-                      {busy ? <LoaderInline label="Connecting…" /> : <><Plug size={14} /> Complete sign-in</>}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setManualOpen(false);
-                        setManualCode("");
-                        setError(null);
-                      }}
-                      className={CALM_ACTION}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-              )}
-              {conn.oauth_help && !needsSetup && (
-                <p className="text-[11px] leading-relaxed text-zinc-500">{conn.oauth_help}</p>
-              )}
-              {meta.docsUrl && !needsSetup && (
-                <a
-                  href={meta.docsUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
-                >
-                  Manage OAuth app in {meta.docsLabel} <ExternalLink size={11} />
-                </a>
-              )}
-              {needsSecrets && (
-                <div className="rounded-xl border border-tone-warn/25 bg-tone-warn/[0.07] px-3 py-2.5 text-[11px] leading-relaxed text-zinc-300">
-                  No OAuth client configured. Set{" "}
-                  <code className="rounded bg-ink-900/80 px-1 font-mono text-tone-warn">
-                    {conn.provider}_oauth_client_id
-                  </code>{" "}
-                  in{" "}
-                  <Link href="/secrets" className="font-medium text-accent-soft underline">
-                    Secrets
-                  </Link>{" "}
-                  to override the built-in client, then connect.
-                </div>
-              )}
-            </div>
-          )}
+          {canOAuth && !keyFirst && oauthLogin}
 
-          {canOAuth && canKey && (
+          {canOAuth && canKey && !keyFirst && (
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-600">
               <span className="h-px flex-1 bg-white/[0.08]" />
               or use an API key
@@ -1424,10 +1457,10 @@ function ConnectionCard({
             (!open ? (
               <button
                 onClick={() => setOpen(true)}
-                className={canOAuth ? CALM_ACTION : "btn-soft w-full py-1.5 text-xs sm:w-auto"}
+                className={keySecondary ? CALM_ACTION : "btn-soft w-full py-1.5 text-xs sm:w-auto"}
               >
                 {isCustom ? <Plus size={14} /> : <KeyRound size={14} />}{" "}
-                {canOAuth
+                {keySecondary
                   ? "Use an API key instead"
                   : isCustom
                     ? endpoints.length > 0
@@ -1436,9 +1469,13 @@ function ConnectionCard({
                     : "Connect"}
               </button>
             ) : (
-              <form onSubmit={connectKey} className="space-y-2.5">
+              <form ref={keyFormRef} onSubmit={connectKey} className="space-y-2.5">
                 {isCustom && (
                   <>
+                    {/* v1.355.0 (G72): one press for the two local servers
+                        people run most — fills the fields below and lists
+                        the models the server has loaded. */}
+                    <LocalServerChips onPick={pickLocalServer} />
                     <label className="block space-y-1">
                       <span className="text-[11px] font-medium text-zinc-400">
                         Name <span className="font-normal text-zinc-600">(how it shows in pickers)</span>
@@ -1539,6 +1576,17 @@ function ConnectionCard({
                 </div>
               </form>
             ))}
+
+          {/* v1.355.0 (G46): a key-first card offers the account login
+              after the key, in the same divider words turned around. */}
+          {keyFirst && (
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-600">
+              <span className="h-px flex-1 bg-white/[0.08]" />
+              or log in with your account
+              <span className="h-px flex-1 bg-white/[0.08]" />
+            </div>
+          )}
+          {keyFirst && oauthLogin}
         </div>
       )}
 

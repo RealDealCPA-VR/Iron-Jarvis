@@ -38,6 +38,87 @@ AI_CLIS: list[dict[str, str]] = [
     {"id": "ollama", "label": "Ollama", "command": "ollama run ", "provider": "Ollama", "url": "https://ollama.com"},
 ]
 
+#: The starter model the first-run "free & private" door downloads (v1.355.0,
+#: G73). Small enough for an ordinary PC; the door names it in its words.
+STARTER_MODEL = "llama3.2"
+
+#: One-press SET-UP jobs (v1.355.0, G73): a catalog id that ``POST
+#: /terminals/launch`` may start in a NEW pane, typed + Enter, exactly like a
+#: Launch-menu CLI — but KEPT OUT of the Build Launch list (it is not a tool
+#: you would launch twice) and out of :data:`AI_CLIS`, which the pane-state
+#: classifier, the bell's CLI names and main.js all read as "the CLIs".
+#:
+#: Why a catalog entry and not a command the dashboard sends: the launch route
+#: accepts ONLY catalog ids, so no request can type an arbitrary line into a
+#: shell. ``agent_cli`` is the CLI the job runs (the pane is labelled and
+#: classified as that CLI); ``command`` is the exact line, and
+#: :func:`launch_line` gives it the program's full path when the daemon's own
+#: PATH predates the program's install (Ollama installed while Iron Jarvis was
+#: already running — the first-run door's own step 1).
+SETUP_LAUNCHES: list[dict[str, str]] = [
+    {
+        "id": "ollama-starter",
+        "label": "Ollama starter model",
+        "command": f"ollama pull {STARTER_MODEL}",
+        "agent_cli": "ollama",
+        "provider": "Ollama",
+        "url": "https://ollama.com",
+    },
+]
+
+
+def launch_entry(cli_id: str) -> dict[str, str] | None:
+    """The catalog entry ``POST /terminals/launch`` may start for ``cli_id``:
+    a Launch-menu CLI (:data:`AI_CLIS`) or a set-up job
+    (:data:`SETUP_LAUNCHES`), else None. Case and surrounding space ignored,
+    as the route does."""
+    wanted = (cli_id or "").strip().lower()
+    for entry in (*AI_CLIS, *SETUP_LAUNCHES):
+        if entry["id"] == wanted:
+            return entry
+    return None
+
+
+def _installed_program(exe: str) -> str | None:
+    """Where ``exe`` is installed when the daemon's PATH does not reach it:
+    Ollama's per-user installer folder (the cli_detect rule — one place), else
+    the per-user bin dirs :func:`_find` already knows."""
+    if exe == "ollama":
+        from ..providers.cli_detect import ollama_binary
+
+        return ollama_binary()
+    return _find(exe)
+
+
+def launch_line(entry: dict[str, str], shell: str | None) -> str:
+    """The exact line ``POST /terminals/launch`` types into a new pane for
+    ``entry`` (the route adds Enter, unless the line ends in a space).
+
+    A Launch-menu CLI's line is its catalog ``command``, unchanged — byte for
+    byte what the route typed before v1.355.0. A set-up job's line is its
+    ``command`` too, UNLESS its program is not on the daemon's PATH but is
+    installed where its installer puts it: a shell started by the daemon
+    inherits the daemon's environment, so a program installed after Iron
+    Jarvis started is "not recognized" in the pane even though it is on the
+    PC. Then the program is typed by its full path, quoted for ``shell`` by the
+    sign-in pane's own quoting (``routes.iron_proxy.shell_line``). Never
+    raises: anything unexpected types the catalog command as it is."""
+    command = entry.get("command", "")
+    if entry.get("id") not in {job["id"] for job in SETUP_LAUNCHES}:
+        return command
+    try:
+        argv = command.split()
+        if not argv or shutil.which(argv[0]):
+            return command
+        path = _installed_program(argv[0])
+        if not path:
+            return command
+        from ..daemon.routes.iron_proxy import shell_line
+
+        return shell_line(shell or "", [path, *argv[1:]])
+    except Exception:  # noqa: BLE001 — the plain command is always a fair answer
+        return command
+
 
 #: Per-CLI "run without permission prompts" LAUNCH FLAG for Creative Studio
 #: autopilot. THE CANONICAL HOME (v1.175.0): the Studio's checkbox used to

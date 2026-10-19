@@ -171,8 +171,10 @@ def test_set_api_key_connects_and_stores_in_vault_only(registry, secrets, engine
 
 
 def test_set_api_key_rejects_oauth_provider(registry):
+    # v1.355.0 (G46): Google (Gemini) TAKES a key now, so the oauth-only
+    # provider this pins is a memory drive (Dropbox has no key field at all).
     with pytest.raises(ValueError):
-        registry.set_api_key("google", "sk-x")
+        registry.set_api_key("dropbox", "sk-x")
 
 
 # --- OAuth 2.0 + PKCE happy path -----------------------------------------
@@ -274,4 +276,8 @@ def test_specs_includes_builtins(registry):
     providers = {s.provider for s in registry.specs()}
     assert {"anthropic", "openai", "google", "mock"} <= providers
     assert isinstance(registry.get_spec("google"), ConnectionSpec)
-    assert registry.get_spec("google").method == "oauth"
+    # v1.355.0 (G46): Gemini's primary way is an AI Studio key; the account
+    # login stays offered beside it.
+    google = registry.get_spec("google")
+    assert google.method == "api_key"
+    assert google.supports_api_key and google.supports_oauth

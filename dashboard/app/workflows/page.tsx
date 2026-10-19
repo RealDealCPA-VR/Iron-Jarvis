@@ -34,6 +34,8 @@ import {
 import { COMPOSER_CARD_EDGE } from "@/lib/composerChips";
 import { timeAgo } from "@/lib/format";
 import { plainText } from "@/components/Markdown";
+// v1.355.0 (G65): the five-minute sentence every unattended-work form shows.
+import { UnattendedAskNote } from "@/components/UnattendedAskNote";
 
 export default function WorkflowsPage() {
   // Handoff from a terminal pane's "→ Workflow" button: it stashes the generated
@@ -94,6 +96,11 @@ export default function WorkflowsPage() {
       <QuickStart builder={builder} />
       <Reveal>
         <WorkflowCanvas />
+        {/* v1.355.0 (G65): a workflow's agent steps run unattended (even a
+            Run you press: nobody is asked in a chat), so an ask waits 5
+            minutes, then that step is skipped. Said under the editor where
+            a workflow is made and saved. */}
+        <UnattendedAskNote className="mt-2 px-1" />
       </Reveal>
       {/* v1.222.0: the saved workflows, visible — with Load and Delete on
           every row. Delete used to exist only as a hover icon inside the

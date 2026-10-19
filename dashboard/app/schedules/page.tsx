@@ -52,6 +52,8 @@ import { runNowNote, scheduleDetail } from "@/lib/scheduleOutcome";
 // "Done", "Done · needs you", "Done · part failed", "Failed", "Stopped" —
 // the same words a session, a mission and the board say for the same run.
 import { scheduleRunWords } from "@/lib/statusWords";
+// v1.355.0 (G65): the five-minute sentence every unattended-work form shows.
+import { UnattendedAskNote } from "@/components/UnattendedAskNote";
 
 /** Fallback only — the real list comes live from GET /agents (builtin +
  * dynamic), the same source NewSessionForm's picker uses. */
@@ -914,6 +916,11 @@ export default function SchedulesPage() {
                 >
                   {busy ? <LoaderInline label="Adding…" /> : <><Plus size={14} /> Add schedule</>}
                 </button>
+                {/* v1.355.0 (G65): a schedule runs with nobody watching, so an
+                    ask waits 5 minutes and then that step is skipped — said
+                    BEFORE the user relies on it. Not for an event schedule:
+                    it only emits an event, no step can ask. */}
+                {kind !== "event" && <UnattendedAskNote />}
                 {ok && <SuccessNote>{ok}</SuccessNote>}
                 {/* Run now's amber answer (v1.351.0, G01): a run that finished
                     short of the job, or did not run — ui's WarnNote. */}
