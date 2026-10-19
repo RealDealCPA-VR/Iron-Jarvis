@@ -99,7 +99,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     # v1.353.0 (G34): the press reads "Use Ollama (on this PC) for answers".
     "ollama": "Ollama (on this PC)",
     "custom": "Your own model server",
-    "mock": "the offline demo",
+    "mock": "the demo model",
     "auto": "Auto (picks a model for each task)",
 }
 

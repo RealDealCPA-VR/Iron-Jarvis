@@ -459,7 +459,7 @@ async def test_batch_mock_refusal_survives_role_routing(tmp_path):
     cfg = _cfg(extract="fleet:cheap")
     res = await run_batch(src, tmp_path / "out", router, output="docx", config=cfg)
     assert len(res["failed"]) == 1
-    assert "mock" in res["failed"][0]["error"]
+    assert "demo model" in res["failed"][0]["error"]
 
 
 # ------------------------------------------------------------- (e) view_image --

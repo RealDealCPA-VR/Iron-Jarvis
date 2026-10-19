@@ -313,10 +313,12 @@ describe("the conversation stays with the agent (v1.284.0)", () => {
     await catalogReady();
     await type("@builder draft the brief");
     await screen.findByText("Here is the brief.");
+    // v1.357.0 integrate (G75 words, moved on purpose): the refit receipt's
+    // sentence shape, never "context window".
     expect(await screen.findByTestId("panel-note")).toHaveTextContent(
-      "3 earlier messages did not fit the agent's context window",
+      "Left out 3 older messages to fit the agent's model",
     );
-    await waitFor(() => expect(lastSaved().at(-1)?.panelNote).toMatch(/3 earlier messages/));
+    await waitFor(() => expect(lastSaved().at(-1)?.panelNote).toMatch(/Left out 3 older messages/));
   });
 });
 

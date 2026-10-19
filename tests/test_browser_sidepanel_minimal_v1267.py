@@ -259,7 +259,7 @@ def test_a_failover_or_a_mock_answer_is_said_once_and_an_ordinary_one_is_not(tmp
         app.panel.send(P.PANEL_ACTION_SEND, text="hi")
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the mock turn never finished", nth=2)
         lines = [p["text"] for e, p in app.panel.events() if e == P.PANEL_EVENT_TOOL and p.get("name") == "route"]
-        assert len(lines) == 2 and "mock model" in lines[1]
+        assert len(lines) == 2 and "demo model" in lines[1]
 
         _record_turns(monkeypatch, done={"text": "ok", "route": {"requested": "", "provider": "anthropic", "model": "claude-sonnet-4-6", "reason": "default"}})
         app.panel.send(P.PANEL_ACTION_SEND, text="hi")
@@ -274,7 +274,7 @@ def test_route_notice_words():
     assert PanelTurns._route_notice({"reason": "failover", "provider": "a", "model": "b", "requested": "c"}) == (
         "Answered by a/b — c was unreachable."
     )
-    assert "mock" in PanelTurns._route_notice({"reason": "mock"})
+    assert "demo model" in PanelTurns._route_notice({"reason": "mock"})
 
 
 # --------------------------------------------------------------------------- #

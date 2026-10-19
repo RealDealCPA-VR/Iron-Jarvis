@@ -262,24 +262,6 @@ const ALLOW: ReadonlyArray<{ file: string; text: string; why: string }> = [
     text: "Job card",
     why: "an agent's job description (its role, v1.295.0 'a custom agent is an employee'), not a unit of work",
   },
-  // PENDING (v1.357.0): SetupCard is lane 7A's file this wave. The integrator
-  // rewords these three lines (notes_for_integrator of lane 7C) and deletes
-  // the entries; the stale-entry check below fails until it does.
-  {
-    file: "components/agents/SetupCard.tsx",
-    text: "Follows the chat or job that starts it",
-    why: "PENDING lane 7A file: becomes 'Follows the chat or task that starts it'",
-  },
-  {
-    file: "components/agents/SetupCard.tsx",
-    text: "This daemon doesn’t report which ones",
-    why: "PENDING lane 7A file: becomes 'This version of Iron Jarvis doesn’t report which ones'",
-  },
-  {
-    file: "components/agents/SetupCard.tsx",
-    text: "This daemon doesn’t report the resolved list.",
-    why: "PENDING lane 7A file: becomes 'This version of Iron Jarvis doesn’t report the resolved list.'",
-  },
 ];
 
 const allowed = (h: { file: string; text: string }) => ALLOW.some((a) => a.file === h.file && h.text.includes(a.text));

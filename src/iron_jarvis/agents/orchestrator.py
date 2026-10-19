@@ -414,11 +414,14 @@ def is_unattended_origin(origin: str | None) -> bool:
 #: (one rule, ``emergency_stop_covers``), and ``stop_unattended`` cancels what
 #: such doors already have running when the switch is engaged. Chat, a
 #: mission, a project task and a session a person started are attended and
-#: are never touched.
+#: are never touched. v1.357.0 (G76 + G61): in the canon's unit of work
+#: ("task", VOCABULARY.md) and naming a task another computer running Iron
+#: Jarvis sent (``task_door``'s ``remote:<caller>`` origin), which the sender
+#: reads quoted in the door's 409.
 EMERGENCY_STOP_REFUSAL = (
     "Emergency stop is on, so work that starts on its own (schedules, goals, "
-    "rules, phone jobs, queued jobs) cannot start. Turn it off on the Autonomy "
-    "page to let it run again."
+    "rules, phone tasks, queued tasks, tasks from another computer) cannot "
+    "start. Turn it off on the Autonomy page to let it run again."
 )
 #: The summary a run Emergency stop cut off carries (and the schedule row
 #: shows): the stop was the user's switch, not "cancelled by the user" at a

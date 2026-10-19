@@ -84,6 +84,10 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
     tools: ["pane_send", "pane_spawn"],
   },
   {
+    words: "your web services",
+    tools: ["rest_call"],
+  },
+  {
     words: "spending",
     tools: ["generate_media"],
   },
@@ -92,7 +96,8 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
 /** What a low-trust run cannot do, one sentence (the chip's hover). */
 export const LOW_TRUST_CANNOT =
   "This run can't change settings, schedules, rules, connections, memory, agents or skills, " +
-  "can't type into your terminals and can't spend credits. It can still read, search and answer.";
+  "can't type into your terminals, can't call your web services and can't spend credits. " +
+  "It can still read, search and answer.";
 
 /** The chip's whole hover: the daemon's reason (and since when), then what
  *  the run cannot do. */

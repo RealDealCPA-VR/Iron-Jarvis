@@ -5052,12 +5052,18 @@ def demo_note(tools_used: list[str]) -> str:
     "nothing was written" only when it is TRUE: with a file tool armed the
     demo really writes its RESULT.md (and the demo picture is a real file),
     so then the note says only what the reply is. MIRROR NOTE (lock-step):
-    both chat lanes append this in place of the two file notes."""
+    both chat lanes append this in place of the two file notes.
+
+    v1.357.0 (G76): in the canon's words (VOCABULARY.md; the dashboard's
+    lib/demoWords): the thing is the "demo model" and what it says is "a
+    scripted demo, not real answers" -- the receipt under this reply says
+    "Demo answer. No AI model ran.", so the note no longer gives the same
+    thing a second name ("the offline demo")."""
     wrote = bool(set(tools_used or []) & _FILE_CHANGING_TOOLS)
     return (
-        "\n\n_Note: this is the offline demo — a scripted reply, not a real"
-        " answer" + ("" if wrote else "; nothing was written") + ". Choose a"
-        " model above to get real answers._"
+        "\n\n_Note: this reply came from the demo model: a scripted demo, not"
+        " real answers" + ("" if wrote else "; nothing was written") + ". Choose"
+        " a model above to get real answers._"
     )
 
 

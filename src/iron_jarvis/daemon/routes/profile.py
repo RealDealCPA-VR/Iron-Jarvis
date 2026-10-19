@@ -169,7 +169,7 @@ def register(app: FastAPI, d) -> None:
                 status_code=400,
                 detail=(
                     "reading your writing needs a real model — connect one on "
-                    "Connections (the offline mock would only invent a result)"
+                    "Connections (the demo model would only invent a result)"
                 ),
             )
         card, reason = await _training.derive(complete, samples)

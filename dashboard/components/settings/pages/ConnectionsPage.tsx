@@ -2449,10 +2449,12 @@ export default function ConnectionsPage() {
         </Card>
       </Reveal>
 
-      {/* v1.354.0 (G48): REST hookups are connection CHECKS only: no tool can
-          call one yet, so a card promising to "connect any service" was a
-          dead end for a new user. They sit in a closed fold after every real
-          door (a quiet line, no box); anyone who made one still finds it.
+      {/* v1.354.0 (G48): REST hookups were connection CHECKS only, so a card
+          promising to "connect any service" was a dead end for a new user.
+          They sit in a closed fold after every real door (a quiet line, no
+          box); anyone who made one still finds it. v1.357.0 (G84): chat can
+          call one now (rest_call, named in a message, asked first); the card
+          inside says so.
           Offline, RestHookups renders nothing (the page shows the one
           offline hint), so the fold is not drawn either: no line that opens
           onto an empty space. */}

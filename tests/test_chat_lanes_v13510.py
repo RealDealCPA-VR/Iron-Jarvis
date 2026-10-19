@@ -876,7 +876,7 @@ def test_what_can_you_do_on_the_demo_says_it_is_the_demo_once(tmp_path, lane):
         out = client.post("/chat", json=body).json() if lane == "post" else _stream_done(client, body)
     assert out["route"]["provider"] == "mock" and out["route"]["reason"] == "mock"
     reply = out["reply"]
-    assert reply.count("offline demo") == 1, reply
+    assert reply.count("demo model") == 1, reply
     assert "Choose a model above to get real answers." in reply
     assert "arm a document tool" not in reply and "Arm write_document" not in reply, reply
     assert "nothing was written to disk this turn" not in reply
@@ -888,7 +888,7 @@ def test_a_file_request_on_the_demo_gets_the_demo_note_not_the_tool_advice(tmp_p
         out = client.post("/chat", json={
             "messages": [{"role": "user", "content": "Turn my notes into a clean Word document"}],
         }).json()
-    assert "offline demo" in out["reply"]
+    assert "demo model" in out["reply"]
     assert "Arm write_document" not in out["reply"] and "arm a document tool" not in out["reply"]
 
 

@@ -373,7 +373,9 @@ describe("G48: Accounts & keys hides the dead-end REST hookups and says Add a to
     expect(fold.open).toBe(false);
     expect(fold.querySelector("summary")?.textContent?.trim()).toBe("More ways to connect (advanced)");
     // Everything the hookups render lives inside the closed fold.
-    expect(fold.contains(screen.getByText("Connection checks"))).toBe(true);
+    // v1.357.0 integrate (G84, on purpose): chat can call a saved service
+    // now (rest_call), so the card is "Your web services", not "checks".
+    expect(fold.contains(screen.getByText("Your web services"))).toBe(true);
     expect(fold.contains(screen.getByText("Harbor CRM"))).toBe(true);
     // The real doors come first.
     const where = screen.getByText("Where else things connect");
@@ -416,17 +418,22 @@ describe("G48: Accounts & keys hides the dead-end REST hookups and says Add a to
     expect(screen.queryByText("More ways to connect (advanced)")).toBeNull();
   });
 
-  it("the hookups card says it is a check only and points at the real door", () => {
+  // v1.357.0 integrate (G84, moved on purpose): the note said "Connection
+  // checks only. Jarvis can't call these yet." - false once rest_call
+  // shipped. It now says how chat uses a saved service, and still points at
+  // the real door for any other new ability.
+  it("the web services card says how chat uses one and points at the real door", () => {
     hooks.responses["/integrations"] = { integrations: [] };
     render(<RestHookups />);
     const note = screen.getByTestId("rest-hookups-note");
-    expect(note.textContent?.replace(/\s+/g, " ")).toContain(
-      "Connection checks only. Jarvis can't call these yet.",
-    );
+    const said = note.textContent?.replace(/\s+/g, " ") ?? "";
+    expect(said).toContain("Jarvis can then use it from chat: name it in a message");
+    expect(said).toContain("it asks before it calls the service, and every time before it changes anything there");
+    expect(said).not.toMatch(/can't call these/);
     expect(within(note).getByRole("link", { name: "Add a tool" }).getAttribute("href")).toBe("/tools?focus=add");
-    fireEvent.click(screen.getByRole("button", { name: /Add a check/ }));
-    expect(screen.getByText("New connection check")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Add check/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Add a service/ }));
+    expect(screen.getByText("New web service")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Add service/ })).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/hookup/i);
   });
 });

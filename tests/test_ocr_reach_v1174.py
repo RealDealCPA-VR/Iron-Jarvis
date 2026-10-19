@@ -386,7 +386,7 @@ async def test_the_mock_still_never_fabricates_a_document(tmp_path):
     cfg = _cfg(tmp_path)
     text, note = await ocr_document(pdf, _VisionRouter(provider="mock"), config=cfg)
     assert text == ""
-    assert "mock" in note and "fabricated" in note
+    assert "demo model" in note and "fabricated" in note
     # ...and the refusal is not cached as an answer: a later real model must be
     # asked, not handed a frozen empty transcript.
     assert load_cached(cfg.home, file_digest(pdf), 10) is None
@@ -754,7 +754,7 @@ async def test_batch_scan_failure_names_the_missing_capability(tmp_path):
     assert result["processed"] == 0
     assert len(result["failed"]) == 1
     error = result["failed"][0]["error"]
-    assert "no text layer" in error and "mock" in error
+    assert "no text layer" in error and "demo model" in error
     assert "extracted to no text" not in error
 
 

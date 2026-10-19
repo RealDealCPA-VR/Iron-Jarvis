@@ -65,9 +65,10 @@ REASON_BUILTIN = "the coach only coaches custom agents — a builtin's instructi
 REASON_UNKNOWN = "no such agent"
 REASON_FEW_RUNS = "fewer than {n} runs to learn from"
 REASON_NO_CLUSTERS = "nothing kept going wrong across the recent runs"
+#: v1.357.0 (G76): the demo's one name (dashboard lib/demoWords DEMO_MODEL).
 REASON_NO_MODEL = (
     "no real model is connected — the coach never writes instructions with the "
-    "offline mock"
+    "demo model"
 )
 REASON_PENDING = "already pending — a proposal for the same evidence is waiting for you"
 REASON_DECLINED = "you declined a proposal for the same evidence recently — suppressed for {days} days"

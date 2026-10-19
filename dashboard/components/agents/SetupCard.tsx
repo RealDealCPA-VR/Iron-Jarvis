@@ -632,7 +632,7 @@ const APPROVAL_OPTIONS: {
   {
     value: "",
     label: `As usual (${PERMISSION_LEVELS.approve_for_me.label})`,
-    title: "Follows the chat or job that starts it; on its own it asks when risky.",
+    title: "Follows the chat or task that starts it; on its own it asks when risky.",
   },
   {
     value: "always_ask",
@@ -1313,7 +1313,7 @@ function DynamicRow({
               the lie this feature exists to stop telling. */}
           {origin === "unreported" && (
             <span className="text-[10px] text-zinc-500">
-              Tools · inherits {baseTypePhrase(agent)}. This daemon doesn’t
+              Tools · inherits {baseTypePhrase(agent)}. This version of Iron Jarvis doesn’t
               report which ones
             </span>
           )}
@@ -1458,7 +1458,7 @@ function DynamicRow({
               <p className="text-[10px] leading-relaxed text-zinc-500">
                 {effectiveTools
                   ? `Inherits ${baseTypePhrase(agent)}: ${effectiveTools.length} tools today, and it follows that roster as it changes.`
-                  : `Inherits ${baseTypePhrase(agent)}. This daemon doesn’t report the resolved list.`}
+                  : `Inherits ${baseTypePhrase(agent)}. This version of Iron Jarvis doesn’t report the resolved list.`}
               </p>
             ) : (
               <>

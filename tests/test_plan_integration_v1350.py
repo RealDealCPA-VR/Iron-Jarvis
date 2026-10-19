@@ -210,8 +210,8 @@ def test_the_desktop_toast_and_the_card_say_the_plan_ask_alike(tmp_path):
     ], "now": 0}]}, tmp_path)["out"]
     bodies = [n["body"] for n in out[0]["notify"]]
     assert bodies == [
-        "follow a plan — click to open the job.",
-        "follow 2 plans — click to open the job.",
+        "follow a plan — click to open the run.",
+        "follow 2 plans — click to open the run.",
     ], bodies
 
 

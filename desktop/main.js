@@ -484,7 +484,7 @@ function maybeOfferStartWithWindows() {
     title: "Iron Jarvis",
     message: "Start Iron Jarvis with Windows (in the tray)?",
     detail:
-      "Then schedules, messages and jobs waiting for you keep working after Windows " +
+      "Then schedules, messages and tasks waiting for you keep working after Windows " +
       "restarts — an overnight update no longer leaves Iron Jarvis closed. It starts " +
       "quietly in the tray, and you can turn this off any time from the tray menu.",
   };
@@ -1106,14 +1106,14 @@ function probeDaemonOwnership(timeoutMs) {
 
 function notifyForeignDaemon(found) {
   try {
-    if (tray) tray.setToolTip(`Iron Jarvis — another Iron Jarvis daemon (${found}) holds port ${DAEMON_PORT}`);
+    if (tray) tray.setToolTip(`Iron Jarvis — another copy of Iron Jarvis (${found}) holds port ${DAEMON_PORT}`);
   } catch {
     /* tray may be gone */
   }
   try {
     new Notification({
       title: "Iron Jarvis — problem",
-      body: `Another Iron Jarvis daemon (${found}) is using port ${DAEMON_PORT} and could not be replaced. Close it, then Quit and relaunch.`,
+      body: `Another copy of Iron Jarvis (${found}) is using port ${DAEMON_PORT} and could not be replaced. Close it, then Quit and relaunch.`,
     }).show();
   } catch {
     /* notifications unavailable */
@@ -1975,7 +1975,7 @@ function createMainWindow() {
         title: "Close Iron Jarvis?",
         message: "Keep Iron Jarvis running in the background?",
         detail:
-          "Keeping it running lets schedules, cron jobs, and webhooks stay active " +
+          "Keeping it running lets schedules, rules and webhooks stay active " +
           "while the window is closed. Quitting stops everything until you next open the app.",
         checkboxLabel: "Remember my choice",
         checkboxChecked: false,
@@ -2665,7 +2665,9 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
     const summary = plainAskSummary(ask);
     const sessionId = !isChat && typeof ask.session_id === "string" ? ask.session_id : "";
     const threadId = isChat && typeof ask.thread_id === "string" ? ask.thread_id : "";
-    const where = isChat ? "the chat" : "the job";
+    // v1.357.0 (G76): the canon's words — the click opens the RUN that is
+    // waiting (the bell's "Open run"), never the retired "job".
+    const where = isChat ? "the chat" : "the run";
     // A chat parked on an app's question names no tool: say what to do, not
     // "use a tool".
     const what = isChat && !hasTool ? "" : `${summary} — `;
@@ -2738,7 +2740,7 @@ let paneBlockedSeen = {}; // pane id -> true while it stays blocked
 
 function paneWaitingTitle(cli) {
   const id = typeof cli === "string" ? cli.trim() : "";
-  if (!id) return "A Build pane is waiting for you";
+  if (!id) return "A Build terminal is waiting for you";
   const name = Object.prototype.hasOwnProperty.call(PANE_CLI_NAMES, id) ? PANE_CLI_NAMES[id] : id;
   return `${name} in Build is waiting for you`;
 }
@@ -2756,7 +2758,7 @@ function planPaneNotifications(seen, panes, windowOpen) {
         id: `pane:${id}`,
         paneId: id,
         title: paneWaitingTitle(pane.agent_cli),
-        body: name ? `${name}: click to open the pane.` : "Click to open the pane.",
+        body: name ? `${name}: click to open the terminal.` : "Click to open the terminal.",
       });
     }
     next[id] = true;
@@ -2771,7 +2773,7 @@ function setAskWaitingTooltip(count) {
     if (!tray) return;
     tray.setToolTip(
       count > 0
-        ? `Iron Jarvis — ${count} job${count === 1 ? "" : "s"} waiting for you`
+        ? `Iron Jarvis — ${count} task${count === 1 ? "" : "s"} waiting for you`
         : "Iron Jarvis — running"
     );
   } catch {
@@ -3082,11 +3084,11 @@ function describeBusyWork(activity) {
       if (!seen.includes(label)) seen.push(label);
     }
     parts.push(
-      `${plural(panes, "Build pane", "Build panes")} working${seen.length ? ` (${seen.join(", ")})` : ""}`
+      `${plural(panes, "Build terminal", "Build terminals")} working${seen.length ? ` (${seen.join(", ")})` : ""}`
     );
   }
   const sessions = n("active_sessions");
-  if (sessions) parts.push(`${plural(sessions, "background job", "background jobs")} running`);
+  if (sessions) parts.push(`${plural(sessions, "background task", "background tasks")} running`);
   const runs = n("running_workflow_runs");
   if (runs) parts.push(`${plural(runs, "workflow run", "workflow runs")} running`);
   return parts.join(" · ") || "Work is still in progress";
@@ -3182,7 +3184,7 @@ function requestUpdateInstall() {
             message: `${describeBusyWork(activity)}.`,
             detail:
               "Installing now stops that work: a reply being written stops, programs running in " +
-              "Build panes are closed, and background jobs are interrupted — you can continue " +
+              "Build terminals are closed, and background tasks are interrupted — you can continue " +
               "them after the restart. Later keeps the update ready in the tray. Install when " +
               "idle waits and installs it as soon as nothing is running.",
           });

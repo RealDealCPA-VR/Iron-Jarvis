@@ -236,7 +236,7 @@ async def test_the_mock_never_fabricates_a_scanned_return(tmp_path):
     router = _VisionRouter(provider="mock", text="Wages: $1,000,000")
     got = await extract_for_rag_async(pdf, router=router)
     assert got.text == "" and got.ocr_used is False
-    assert "mock" in got.note and "fabricated" in got.note
+    assert "demo model" in got.note and "fabricated" in got.note
     assert "1,000,000" not in got.note  # the invented number reaches nobody
     assert got.ocr_pages == 1  # an attempt still cost a call
 

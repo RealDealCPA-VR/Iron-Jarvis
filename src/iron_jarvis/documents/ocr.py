@@ -79,7 +79,7 @@ _OCR_PROMPT = (
 )
 
 _MOCK_NOTE = (
-    "scanned document — only the offline mock model is connected, and "
+    "scanned document — only the demo model is connected, and "
     "fabricated OCR is worse than none; connect a vision-capable model and retry"
 )
 _DISABLED_NOTE = (

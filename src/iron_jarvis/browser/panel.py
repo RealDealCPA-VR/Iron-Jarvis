@@ -1078,7 +1078,13 @@ class PanelTurns:
             tail = f" ({why})" if why else ""
             return f"Answered by {answered} — {asked} was unreachable{tail}."
         if reason == "mock":
-            return "Answered by the built-in mock model — no real model is connected in Jarvis."
+            # v1.357.0 (G76): the demo's one name and sentence. Not "no real
+            # model is connected": the default can still be the demo model
+            # while a real one is connected.
+            return (
+                "Answered by the demo model: a scripted demo, not real answers. "
+                "Choose a model in Iron Jarvis to get real answers."
+            )
         return ""
 
     def _over_budget(self) -> str:

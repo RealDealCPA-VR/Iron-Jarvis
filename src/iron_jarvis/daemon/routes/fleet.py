@@ -674,7 +674,7 @@ def register(app: FastAPI, d) -> None:
                     "tool_use": None,
                     "model": model,
                     "error": (
-                        f"{provider} resolved to the offline mock adapter, so "
+                        f"{provider} resolved to the demo model, so "
                         "nothing was actually asked of this node"
                     ),
                     "hint": "turn on Routable for this node so it registers as a provider",
@@ -804,7 +804,7 @@ def register(app: FastAPI, d) -> None:
                 try:
                     adapter = d.platform.providers.get(provider, node.default_model or None)
                     if getattr(adapter, "provider", "") == "mock":
-                        out["error"] = "resolved to the offline mock — nothing was asked of this node"
+                        out["error"] = "resolved to the demo model — nothing was asked of this node"
                         return out
                     # Tool probe (same contract as the single verify).
                     tresp = await asyncio.wait_for(

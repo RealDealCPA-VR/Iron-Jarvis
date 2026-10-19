@@ -40,6 +40,16 @@ export const PACK_OFF_WORD = "Off";
 export const PACK_OFF_LINE =
   "Switched off. Chats and agents can't use its tools until you turn it on; its settings and keys are kept.";
 
+/** v1.357.0 integrate (wave-6 follow-up): a chat whose saved connections
+ *  hold an app the user has since switched off keeps it in + › Connections
+ *  as an Off row (never silently dropped), and this is what that row says:
+ *  the one off line, then where to turn it on and that this chat picks it up
+ *  again then. The daemon arms nothing for it meanwhile
+ *  (`chat_turn._resolve_connectors` skips an id with no loaded tools). */
+export const PACK_OFF_IN_CHAT_LINE =
+  `${PACK_OFF_LINE} Turn it on in Settings › Tools or on its card in the Directory, ` +
+  "and this chat uses it again.";
+
 /** The switch's accessible name: the same words whichever way it points. */
 export function packSwitchLabel(name: string): string {
   return `Use ${name}`;

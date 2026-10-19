@@ -1030,7 +1030,7 @@ def test_busy_daemon_and_later_installs_nothing(tmp_path):
     dlg = next(c for c in out["calls"] if c[0] == "dialog")
     # v1.249.0 (R-02): the sentence is describeBusyWork's, and it now counts
     # chat replies and Build panes too (its own tests live in v1249).
-    assert dlg[1] == "2 background jobs running · 1 workflow run running."
+    assert dlg[1] == "2 background tasks running · 1 workflow run running."
     assert dlg[2] == "Install now|Later|Install when idle"
     assert "applyPendingUpdate" not in names, "'Later' installed anyway"
     assert out["promptInFlight"] is False, "a second click would be locked out forever"

@@ -123,7 +123,7 @@ def test_the_mock_note_is_two_plain_sentences():
         }))],
         {"s1": "Researcher"},
     )
-    assert note == "Researcher ran on the mock model. No real model answered."
+    assert note == "Researcher ran on the demo model. No AI model ran."
     assert not ASIDE.search(note), note
 
 

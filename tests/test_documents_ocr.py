@@ -99,7 +99,7 @@ async def test_ocr_never_fabricates_from_the_mock(tmp_path):
     _scanned_pdf(pdf)
     text, note = await ocr_pdf(pdf, _VisionRouter(provider="mock"))
     assert text == ""
-    assert "mock" in note and "fabricated" in note
+    assert "demo model" in note and "fabricated" in note
 
 
 async def test_ocr_router_failure_is_an_honest_note(tmp_path):

@@ -500,13 +500,13 @@ def test_the_warning_names_the_work_the_old_one_could_not_see(tmp_path):
         tmp_path,
     )
     assert said[0] == "1 chat reply in progress"
-    assert said[1] == "2 Build panes working (Claude, Codex)"
-    assert said[2] == "1 Build pane working (Claude)", "the same CLI was named twice"
+    assert said[1] == "2 Build terminals working (Claude, Codex)"
+    assert said[2] == "1 Build terminal working (Claude)", "the same CLI was named twice"
     assert said[3] == (
-        "1 chat reply in progress · 2 Build panes working (Claude) · "
-        "3 background jobs running · 1 workflow run running"
+        "1 chat reply in progress · 2 Build terminals working (Claude) · "
+        "3 background tasks running · 1 workflow run running"
     )
-    assert said[4] == "1 Build pane working"
+    assert said[4] == "1 Build terminal working"
     # Never an empty sentence, and never a negative or nonsense count.
     assert said[5] == "Work is still in progress"
     assert said[6] == "2 chat replies in progress"
@@ -572,7 +572,7 @@ def test_a_waiting_job_is_announced_once_then_reminded(tmp_path):
     assert len(first) == 1, "the waiting job was never announced"
     assert first[0]["title"] == "Jarvis is waiting for you"
     # v1.316.0: the tool renames OR moves (lib/toolWords.ts says the same).
-    assert first[0]["body"] == "rename or move 4 files — click to open the job."
+    assert first[0]["body"] == "rename or move 4 files — click to open the run."
     assert first[0]["sessionId"] == "sess_7", "the click cannot open the job"
     assert out[1]["notify"] == [], "it re-announced the same ask on the next tick"
     assert len(out[2]["notify"]) == 1, "no reminder after an hour"
@@ -655,10 +655,10 @@ def test_the_asks_are_described_in_plain_words_and_never_quote_arguments(tmp_pat
 @requires_node
 def test_the_tray_tooltip_counts_waiting_jobs_but_yields_to_a_broken_service(tmp_path):
     assert _asks({"steps": [], "tooltip": 2}, tmp_path)["tips"] == [
-        "Iron Jarvis — 2 jobs waiting for you"
+        "Iron Jarvis — 2 tasks waiting for you"
     ]
     assert _asks({"steps": [], "tooltip": 1}, tmp_path)["tips"] == [
-        "Iron Jarvis — 1 job waiting for you"
+        "Iron Jarvis — 1 task waiting for you"
     ]
     assert _asks({"steps": [], "tooltip": 0}, tmp_path)["tips"] == ["Iron Jarvis — running"]
     assert _asks({"steps": [], "tooltip": 3, "degraded": True}, tmp_path)["tips"] == [], (

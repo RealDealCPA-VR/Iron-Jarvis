@@ -436,6 +436,7 @@ import { phaseLabel } from "@/lib/stepWords";
 // v1.354.0 (G30/G31): the app's own words for an outage, and the reconnect
 // edge alone (lib/daemonEpoch, never the whole /health context).
 import { OFFLINE_WORDS } from "@/lib/offlineWords";
+import { PACK_OFF_IN_CHAT_LINE, PACK_OFF_WORD } from "@/lib/extensionWords";
 import { useDaemonEpoch } from "@/lib/daemonEpoch";
 import { ModuleTitle } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -714,8 +715,8 @@ interface ChatMessage {
   panelThreadId?: string;
   /** That agent failed this round; its content is an honest error, not a reply. */
   panelError?: boolean;
-  /** v1.284.0: what the speakers were NOT shown — "3 earlier messages did not
-   *  fit the agent's context window" — on the round's first reply. Never
+  /** v1.284.0: what the speakers were NOT shown — since v1.357.0 "Left out 3
+   *  older messages to fit the agent's model" — on the round's first reply. Never
    *  silent: a forgotten turn the user can see is a limit, an invisible one
    *  reads as a broken feature. */
   panelNote?: string;
@@ -6951,6 +6952,15 @@ export default function ChatPage() {
     () => (connCatalog ?? []).filter((c) => !c.connected && !c.off).slice(0, 3),
     [connCatalog],
   );
+  /** v1.357.0 integrate (wave-6 follow-up): an app THIS chat has on that the
+   *  user has since switched off. It stays in the list as an Off row that
+   *  says why (it arms nothing: the daemon skips an id with no loaded
+   *  tools), never silently dropped; it stays in the chat's saved set, so
+   *  turning the app back on brings it back here too. */
+  const savedOffConnectors = useMemo(
+    () => (connCatalog ?? []).filter((c) => c.off && selectedConnectors.includes(c.id)),
+    [connCatalog, selectedConnectors],
+  );
 
   /** Lazily fetch + cache the skill catalog the first time "/" opens the
    *  picker. v1.250.0 (S-05): a CALLBACK rather than an effect on
@@ -9973,9 +9983,13 @@ export default function ChatPage() {
     // The user's own turn is already in `history`; keep only the agents'.
     const replies = (res.entries ?? []).filter((e) => e.who && e.who !== "user");
     const dropped = res.context?.chat_dropped ?? 0;
+    // v1.357.0 integrate (G75 words): the refit receipt's own sentence shape
+    // (lib/turnRecovery.refitTitle), never the engine-room name for a model's
+    // limit; the daemon's routes/agents.panel_reply_lines says it byte for
+    // byte (pinned).
     const note =
       dropped > 0
-        ? `${dropped} earlier message${dropped === 1 ? "" : "s"} did not fit the agent's context window`
+        ? `Left out ${dropped} older message${dropped === 1 ? "" : "s"} to fit the agent's model`
         : "";
     return [
       ...history,
@@ -13552,9 +13566,11 @@ export default function ChatPage() {
                                         <LoaderInline />
                                       </div>
                                     ) : connectedConnectors.length === 0 ? (
-                                      <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
-                                        Nothing connected yet. Pick one below.
-                                      </p>
+                                      savedOffConnectors.length > 0 ? null : (
+                                        <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
+                                          Nothing connected yet. Pick one below.
+                                        </p>
+                                      )
                                     ) : (
                                       connectedConnectors.map((c) => {
                                         const on = selectedConnectors.includes(c.id);
@@ -13611,6 +13627,45 @@ export default function ChatPage() {
                                           </button>
                                         );
                                       })
+                                    )}
+                                    {connCatalog !== null && savedOffConnectors.length > 0 && (
+                                      <div data-testid="connectors-saved-off">
+                                        {savedOffConnectors.map((c) => (
+                                          <div
+                                            key={c.id}
+                                            role="group"
+                                            data-testid={`connector-off-${c.id}`}
+                                            aria-label={`${c.name}: ${PACK_OFF_WORD}`}
+                                            aria-describedby="connectors-off-why"
+                                            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5"
+                                          >
+                                            <span aria-hidden className="w-4 shrink-0 text-center text-[13px] opacity-60">
+                                              {c.glyph || (c.connect_via === "memory" ? "🧠" : "🔌")}
+                                            </span>
+                                            <span className="min-w-0 truncate text-[12px] text-zinc-500">
+                                              {c.name}
+                                            </span>
+                                            <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-zinc-600">
+                                              {PACK_OFF_WORD}
+                                            </span>
+                                            <button
+                                              type="button"
+                                              onClick={() => toggleConnector(c.id)}
+                                              aria-label={`Remove ${c.name} from this chat`}
+                                              title="Remove from this chat"
+                                              className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-tone-danger"
+                                            >
+                                              <X size={11} />
+                                            </button>
+                                          </div>
+                                        ))}
+                                        <p
+                                          id="connectors-off-why"
+                                          className="px-2.5 pb-1 text-[11px] leading-relaxed text-zinc-500"
+                                        >
+                                          {PACK_OFF_IN_CHAT_LINE}
+                                        </p>
+                                      </div>
                                     )}
                                     {marketplaceTeasers.length > 0 && (
                                       <div className="mt-0.5 border-t hairline pt-1">

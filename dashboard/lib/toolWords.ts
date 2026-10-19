@@ -30,6 +30,10 @@ const WORDS: Record<string, string> = {
   // nothing opens on the user's screen, so "read", not "open".
   web_fetch: "read a web page",
   web_search: "search the web",
+  // v1.357.0 (G84): one call to a web service the user saved in Settings ›
+  // Connections (integrations/tools.RestCallTool); the card's own arguments
+  // name the service, the method and the path.
+  rest_call: "call one of your saved web services",
   // Calm UI redesign S3: the chat's settings tools (settings/tools.py). Only
   // the two ask-tier ones ever reach a card; both change one setting, and
   // the card's own arguments name which one.

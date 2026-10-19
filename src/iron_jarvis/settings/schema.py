@@ -328,8 +328,9 @@ SETTINGS: tuple[SettingDef, ...] = (
     # ``Orchestrator.create_session`` (every unattended door) and engaging it
     # stops what those doors have running — so the words name what it stops.
     S("autonomy_kill_switch", "Emergency stop", "automation", "bool",
-      "Immediately blocks every self-initiated action: schedules, goals, rules, phone jobs, "
-      "queued jobs and Autonomy do not start, and what they have running is stopped. "
+      "Immediately blocks every self-initiated action: schedules, goals, rules, phone tasks, "
+      "queued tasks, tasks from another computer and Autonomy do not start, and what they "
+      "have running is stopped. "
       "Chat and work you start keep going.",
       tier="allow", floor_when=(False,), section="Autonomy", aliases=("kill switch", "stop everything")),
     S("autonomy_tick_seconds", "Think every (seconds)", "automation", "number",

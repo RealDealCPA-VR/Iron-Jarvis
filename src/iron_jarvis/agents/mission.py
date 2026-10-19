@@ -226,6 +226,8 @@ ASK_WORDS: dict[str, str] = {
     "run_code": "run some code",
     "web_fetch": "read a web page",
     "web_search": "search the web",
+    # v1.357.0 (G84): a saved web service (integrations/tools.RestCallTool).
+    "rest_call": "call one of your saved web services",
 }
 
 
@@ -583,8 +585,9 @@ def _route_note(
             used = str(data.get("used") or "")
             if used == "mock":
                 # v1.329.0 (calm chat K4): two plain sentences, the words the
-                # mission screen's own mock line uses.
-                notes.append(f"{who} ran on the mock model. No real model answered.")
+                # mission screen's own line uses. v1.357.0 (G76): the demo's
+                # one name (dashboard lib/demoWords DEMO_RUNNING).
+                notes.append(f"{who} ran on the demo model. No AI model ran.")
             else:
                 # A refusal (``used: "none"``) carries ``label`` since
                 # v1.329.0 (calm chat J1): the name the user gave a fleet

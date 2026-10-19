@@ -241,7 +241,7 @@ def test_the_daemon_panel_line_is_the_pages_roundmessages_shape():
             "content": "A plan.",
             "panelWho": "builtin:builder",
             "panelThreadId": "room-1",
-            "panelNote": "2 earlier messages did not fit the agent's context window",
+            "panelNote": "Left out 2 older messages to fit the agent's model",
         },
         {
             "role": "assistant",
@@ -251,11 +251,14 @@ def test_the_daemon_panel_line_is_the_pages_roundmessages_shape():
             "panelError": True,
         },
     ]
-    # the page's exact words for the note and the empty reply
-    assert "did not fit the agent's context window" in block
+    # the page's exact words for the note and the empty reply (v1.357.0
+    # integrate, moved on purpose: the G75 words, "Left out N older
+    # messages to fit ...", never "context window")
+    assert "older message${dropped === 1 ? \"\" : \"s\"} to fit the agent's model" in block
+    assert "context window" not in block[: block.index("];")]
     assert '"(no reply)"' in block
     one = panel_reply_lines({"entries": [{"who": "x", "content": "y"}], "context": {"chat_dropped": 1}}, "r")
-    assert one[0]["panelNote"] == "1 earlier message did not fit the agent's context window"
+    assert one[0]["panelNote"] == "Left out 1 older message to fit the agent's model"
     # additive, page-renderable keys the page's compose cannot know
     pend = panel_reply_lines({"entries": [{"who": "remote:h", "content": "working", "pending": True,
                                            "documents": ["C:/x/a.md"]}]}, "r")

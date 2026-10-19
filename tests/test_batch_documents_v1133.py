@@ -244,7 +244,7 @@ async def test_mock_provider_never_extracts(tmp_path):
         await extract_one(doc, router)
         raise AssertionError("mock extraction must raise")
     except RuntimeError as exc:
-        assert "mock" in str(exc)
+        assert "demo model" in str(exc)
 
 
 # --------------------------------------------------- synthesis boundaries ----
@@ -316,7 +316,7 @@ async def test_mock_provider_never_synthesizes(tmp_path):
     assert (res["processed"], res["cached"]) == (0, 1)
     assert res["deliverables"] == []
     assert len(res["synthesis_errors"]) == 1
-    assert "mock" in res["synthesis_errors"][0]["error"]
+    assert "demo model" in res["synthesis_errors"][0]["error"]
 
 
 def test_validate_sheets_rejects_silent_data_loss_shapes():

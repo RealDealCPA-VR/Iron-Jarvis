@@ -1085,8 +1085,10 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
  * the browser card is not Tools' Playwright, and `sequential_thinking` is not
  * Tools' `sequentialthinking` (since v1.353.0 the daemon lights the Sequential
  * Thinking card from that pack — `connectors.service.PACK_ALIASES` — and the
- * row then carries the pack's own name as its id). Kept in step with
- * `DIRECTORY_TWINS` in tools/page.tsx.
+ * row then carries the pack's own name as its id). Since v1.357.0 the Tools
+ * page reads each row's `directory_twin` off the one catalog file
+ * (`connectors/catalog.tools_twin`); `tests/test_one_catalog_v13570.py` keeps
+ * this set equal to it.
  */
 const TOOLS_TWINS: ReadonlySet<string> = new Set([
   "github",

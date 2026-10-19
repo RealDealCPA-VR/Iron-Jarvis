@@ -47,8 +47,8 @@ def test_rename_file_reads_rename_or_move_like_the_approval_card(tmp_path):
         ],
         tmp_path,
     )
-    assert one == f"{card} — click to open the job.", one
-    assert many == "rename or move 4 files — click to open the job.", many
+    assert one == f"{card} — click to open the run.", one
+    assert many == "rename or move 4 files — click to open the run.", many
 
 
 @requires_node
@@ -56,7 +56,7 @@ def test_anti_vacuity_the_words_that_already_agree_still_agree(tmp_path):
     """Control: shell already agreed with the card before this wave."""
     card = _tool_words("shell")
     (body,) = _bodies([{"id": "s", "tool": "shell", "count": 1}], tmp_path)
-    assert body == f"{card} — click to open the job.", body
+    assert body == f"{card} — click to open the run.", body
 
 
 @requires_node
@@ -90,5 +90,5 @@ def test_every_phrase_in_the_desktop_table_agrees_with_the_card(tmp_path):
         ],
         tmp_path,
     )
-    assert save == f"{card} — click to open the job.", save
+    assert save == f"{card} — click to open the run.", save
     assert real.startswith("use rename real file — "), real

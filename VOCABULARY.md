@@ -71,10 +71,18 @@ error lines still said "the daemon". So:
 - A task another Jarvis sent reads **From <caller>** wherever its origin is
   shown (origin `remote:<caller>`, `OriginChip.originLabel` and the bell).
 - The **demo model** is the one name for the scripted stand-in, and every
-  surface takes its words from `dashboard/lib/demoWords.ts`.
+  surface takes its words from `dashboard/lib/demoWords.ts`. Iron Jarvis's
+  own sentences say the same: the note under a demo reply in chat (both
+  lanes), a teammate's route note, the browser sidebar's line, the
+  connections registry's name for the row and the refusals that need a real
+  model. `tests/test_one_vocabulary_v13570.py` reads `demoWords.ts` and
+  drives each one.
 - **Iron Jarvis** is the program; a version too old for a feature is "this
   version of Iron Jarvis". A real file name (`daemon.log`) is a file name.
 - **terminal** is one window on the Build page; the page itself is Build.
+  The Windows toast and the update dialog say terminal (and background
+  **task**) like the bell (`desktop/main.js`, pinned beside
+  `lib/paneAsks.ts`).
 
 `dashboard/__tests__/vocabulary.test.ts` now SCANS: every string literal and
 JSX text node in `dashboard/app`, `components` and `lib` is read through the

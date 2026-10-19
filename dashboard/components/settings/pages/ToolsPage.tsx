@@ -185,6 +185,11 @@ interface McpCatalogEntry {
   transport?: string;
   url?: string;
   auth_field?: string;
+  /** v1.357.0 (G82): the Directory card that adds this SAME pack under the
+   *  SAME `mcp_servers` name ("" when none) — read off the one catalog file
+   *  (`connectors/catalog.tools_twin`), so the "Also in the Directory" link
+   *  can never drift from the Directory. Absent on an older daemon: no link. */
+  directory_twin?: string;
 }
 
 /** v1.355.0 (G44): a catalog row that is a server address, not a command. */
@@ -197,17 +202,15 @@ function isRemoteEntry(entry: McpCatalogEntry): boolean {
  * offers under the SAME id. Both surfaces write one `mcp_servers` entry named
  * by that id (Directory: `connectors/service.py` `{"name": connector.id}`), so
  * adding in either place is the same pack — never a second copy. Only exact
- * twins are listed: Directory's browser card is not Tools' Playwright, and its
+ * twins: Directory's browser card is not Tools' Playwright, and its
  * `sequential_thinking` is not Tools' `sequentialthinking` (v1.353.0: the
  * Directory card still LIGHTS from that pack — connectors.service.PACK_ALIASES).
+ * v1.357.0 (G82): no longer a hand-kept list here — each GET /mcp/catalog row
+ * carries `directory_twin` from the one catalog file.
  */
-const DIRECTORY_TWINS: ReadonlySet<string> = new Set([
-  "github",
-  "filesystem",
-  "fetch",
-  "memory",
-  "box",
-]);
+function hasDirectoryTwin(entry: McpCatalogEntry): boolean {
+  return typeof entry.directory_twin === "string" && entry.directory_twin.trim() !== "";
+}
 
 /**
  * Turn a pasted npm package or GitHub repo into a ready MCP launch command
@@ -1338,7 +1341,7 @@ export default function ToolsPage() {
         {/* v1.316.0: the same pack has a guided setup in the Directory —
             one name for that page everywhere ("Directory", never
             Marketplace). Only exact twins (same mcp_servers name). */}
-        {DIRECTORY_TWINS.has(entry.id) && (
+        {hasDirectoryTwin(entry) && (
           <Link
             href="/marketplace"
             className="mt-2 inline-flex w-fit items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"

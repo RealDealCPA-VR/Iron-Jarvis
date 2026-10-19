@@ -230,7 +230,7 @@ async def _one_shot(
     )
     if getattr(route, "provider", "") == "mock":
         raise RuntimeError(
-            "only the offline mock model is connected — a fabricated "
+            "only the demo model is connected — a fabricated "
             "extraction is worse than none; connect a real model and retry"
         )
     return (route.response.text or "").strip()

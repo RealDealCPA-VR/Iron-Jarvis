@@ -666,15 +666,24 @@ function seedTools(servers: unknown[] = []) {
     auto_approve: false,
     auto_approve_effective: false,
   };
+  // v1.357.0 integrate (G82, on purpose): the "Also in the Directory" link
+  // reads each row's `directory_twin` (the one catalog file) instead of a
+  // hand-kept list, so these rows carry it as the real daemon sends it
+  // (Playwright has no Directory twin: "").
   hooks.responses["/mcp/catalog"] = {
     catalog: [
-      pack("filesystem", "Files & folders", "npx", "Node", { runtime_ready: true }),
-      pack("fetch", "Fetch web pages", "uvx", "Python (uv)", { runtime_ready: false }),
-      pack("memory", "Long-term memory", "npx", "Node"), // older daemon: no field
-      pack("github", "GitHub", "npx", "Node", { runtime_ready: true, category: "integration" }),
+      pack("filesystem", "Files & folders", "npx", "Node", { runtime_ready: true, directory_twin: "filesystem" }),
+      pack("fetch", "Fetch web pages", "uvx", "Python (uv)", { runtime_ready: false, directory_twin: "fetch" }),
+      pack("memory", "Long-term memory", "npx", "Node", { directory_twin: "memory" }), // older daemon: no runtime_ready
+      pack("github", "GitHub", "npx", "Node", {
+        runtime_ready: true,
+        category: "integration",
+        directory_twin: "github",
+      }),
       pack("playwright", "Browser control (Playwright)", "npx", "Node", {
         runtime_ready: true,
         category: "integration",
+        directory_twin: "",
       }),
     ],
   };

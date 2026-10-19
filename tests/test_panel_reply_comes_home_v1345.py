@@ -227,7 +227,7 @@ def test_a_failed_seat_and_the_context_drop_keep_the_pages_marks(app):
             "panelWho": "builtin:a",
             "panelThreadId": "athr_7",
             "panelError": True,
-            "panelNote": "1 earlier message did not fit the agent's context window",
+            "panelNote": "Left out 1 older message to fit the agent's model",
         },
         {
             "role": "assistant",
@@ -240,7 +240,8 @@ def test_a_failed_seat_and_the_context_drop_keep_the_pages_marks(app):
     plural = agents_routes.panel_reply_lines(
         {"entries": [{"who": "builtin:a", "content": "x"}], "context": {"chat_dropped": 2}}, "r"
     )
-    assert plural[0]["panelNote"].startswith("2 earlier messages did")
+    # v1.357.0 integrate (G75 words, moved on purpose)
+    assert plural[0]["panelNote"] == "Left out 2 older messages to fit the agent's model"
 
 
 def test_a_session_verdict_is_unchanged_by_a_thread_id(app):

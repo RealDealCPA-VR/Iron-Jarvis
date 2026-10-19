@@ -3547,6 +3547,107 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **Another Jarvis is a teammate through ONE door; every pack lives in ONE
+  catalog file; a saved web service is callable, carded and kept away; the
+  vocabulary is a SCAN** (v1.357.0, product-readiness Wave 7, G61/G76/G82/
+  G84; lanes 7A-7C + integrate). TASK DOOR (7A, G61):
+  `agents/task_door.py` holds the whole contract. `REMOTE_TASK_ORIGIN` /
+  `remote_origin(caller)` is the ONE origin string (`remote:<caller>`,
+  `DEFAULT_CALLER` "another computer"); `auth.TASK_DOOR_PATH`
+  (`/agents/task-door/task`) is token-EXEMPT for exactly that leaf and the
+  handler checks door on (else 403) then the door token, constant-time (else
+  401); `TASK_RATE_MAX` 20/min (429), `TASK_MAX_BODY_BYTES` 2 MB and 12k task
+  chars (413); Emergency stop and local only answer 409 in words. Each task is
+  ONE SUPERVISOR run at LOW trust; `remote:` is in neither `ATTENDED_ORIGINS`
+  nor `ASKING_ORIGINS`, so an ask is refused at once with nobody asked, and
+  `is_unattended_origin` / `emergency_stop_covers` hold. The reply address
+  rides the run (`REPLY_OPTION`), the reply key lives in the vault
+  (`task_door.reply.<sid>`); EVERY terminal path calls
+  `Orchestrator._reply_home` (finished, failed, cancelled incl. the
+  queued-cancel branch, the boot reconcile on a daemon thread) — one bounded,
+  masked attempt, never retried, files within caps, a failure written on the
+  run and the door; `continue_session` / `rerun_session` DROP the reply
+  option (single-use key, the `chat_thread_id` rule). The sender adds
+  `reply_token` / `local_only` only when the remote's address is a door
+  (`is_task_door_url`); registering a door turns message-back on; a chat
+  dialect for a door is refused before the credential is touched; one
+  `routes/agents.reachability()` sentence serves both doors and nothing ever
+  opens a bind or edits `IRONJARVIS_HOST_ALLOWLIST`. Dashboard:
+  `components/agents/AnotherJarvisCard.tsx` (end of RemoteAgentsSection, the
+  **New & manage** tab), `lib/anotherJarvis.ts`; `lib/remoteTask.ts` is the
+  words ("From desk" on OriginChip / the session page, "A task from desk" in
+  the bell and `approvalWords.runSubject`), and (integrate)
+  `comm/notifier._UNATTENDED_SUBJECT["remote"]` says the same on the phone;
+  `EMERGENCY_STOP_REFUSAL` and the kill switch's schema help name "tasks from
+  another computer". ONE CATALOG (7B, G82): `connectors/catalog.py` is the
+  only list of packs — `mcp_catalog_rows()` builds GET /mcp/catalog (app.py
+  just hands it to `d._MCP_CATALOG`), `TOOLS_ONLY` / `TOOLS_ORDER` live
+  there, `service.PACK_ALIASES` is read from it, every row carries
+  `directory_twin` (`tools_twin`) and (integrate) ToolsPage's "Also in the
+  Directory" link reads that field — the hand-kept `DIRECTORY_TWINS` set is
+  gone (DirectoryPage's `TOOLS_TWINS` is still hand-kept, pinned equal). Four
+  Directory names moved to the Tools names (Files & folders, Fetch web pages,
+  Knowledge graph, Step-by-step reasoning); `app_names.ALIASES` keeps the old
+  names. A NEW PACK GOES INTO catalog.py ONLY. REST CALL (7B, G84):
+  `integrations/tools.RestCallTool` (`rest_call`, ASK tier, permission row,
+  `LOW_TRUST_DENY`, `egress.CALLS_YOUR_SERVICES_TOOLS` → reaches outside, so a
+  local-only stream turn cards EVERY call even in yolo, Allow once only);
+  `builtin.RestApiIntegration.call` is off the loop, bounded per phase and in
+  total, never follows redirects, path-only under the service's own address
+  (`build_call_url` refuses full URLs and `..`, plain or encoded), the key
+  from the vault through the Test button's resolver and guard, the answer cut
+  to 6,000 chars, masked, the key replaced in every returned string. A GET is
+  an ordinary card; any other method asks EVERY time via `spend_check`
+  (method + path on the card, never "Always"); the POST lane refuses a
+  write. The STREAM lane ask-arms it when a message names a saved service
+  (`hookups.named_hookup_ask_tools`, ≥ 3 chars, word-bounded; never the
+  built-in `rest_api` example, never low trust / local only); the tool takes
+  the "<name> (<id>)" form its own spec lists. Words (integrate):
+  `lib/trustWords` family "your web services" + `LOW_TRUST_CANNOT`,
+  `lib/toolWords` / `mission.ASK_WORDS` "call one of your saved web
+  services", RestHookups is "Your web services" / "Add a service" and its
+  note says how chat uses one (never "hookup"). Known: a service on this
+  network needs `allow_internal`, which no card exposes yet; bearer keys
+  only; the Test button's DNS-rebinding window. ONE VOCABULARY (7C, G76):
+  `VOCABULARY.md` is the canon (task = the unit of work, a run one attempt;
+  objective; demo model; terminal; Iron Jarvis, never daemon) and
+  `dashboard/__tests__/vocabulary.test.ts` SCANS every string literal and JSX
+  text node in app/, components/, lib/ through
+  `__tests__/helpers/retiredWords.ts` — `ALLOW` is the only exception list,
+  each entry with a why, and a stale entry fails. It cannot see a lone word
+  in a variable or an id arriving through one (TurnReceipt's demo route was
+  fixed by hand), nor desktop/main.js or daemon sentences: those are pinned by
+  `tests/test_one_vocabulary_v13570.py` (reads `lib/demoWords.ts`, drives
+  `demo_note` on both lanes, the mission route note, the sidebar notice, the
+  registry name, the refusals, the toast). (integrate) The desktop's ask
+  toast says "click to open the run", the tray "N tasks waiting for you", the
+  start/close prompts "tasks" / "schedules, rules and webhooks", the
+  port-held notice "another copy of Iron Jarvis"; SetupCard's three PENDING
+  lines reworded. WAVE-6 FOLLOW-UPS (integrate): the @-panel note (daemon
+  `routes/agents.panel_reply_lines` AND the page's `roundMessages` fallback,
+  pinned equal) says "Left out N older messages to fit the agent's model" —
+  the refit receipt's shape, never "context window"; a chat whose saved
+  `connectors` hold an app switched off since keeps it in + › Connections as
+  an Off row (`savedOffConnectors`, `lib/extensionWords.PACK_OFF_IN_CHAT_LINE`,
+  not a switch, "Remove from this chat"), still sent in `connectors` (the
+  daemon arms nothing for it) so switching the app on brings it back. THE
+  RULE A FUTURE CHANGE MUST KEEP: a new way in for another computer goes
+  through the task door (one origin, low trust, one reply attempt from every
+  terminal path); a new pack is a catalog.py row; a tool that calls a user's
+  service declares its egress class and a permission row and is in
+  `LOW_TRUST_DENY`; a new user-facing word passes the scan or earns an ALLOW
+  entry with a why. Pins: `tests/test_{another_jarvis,one_catalog,rest_call,
+  rest_call_review,one_vocabulary,integrate_wave7}_v13570.py`,
+  `dashboard/__tests__/{another-jarvis,one-vocabulary,demo-connections-card,
+  demo-receipt-detail,wave7-seams,chat-connectors-saved-off}-v13570.test.tsx`,
+  `vocabulary.test.ts` and `fixtures/wave7-seams-v13570.json` (the REAL
+  daemon's failed door task; regenerate with `IJ_REGEN_WAVE7_SEAMS=1`)
+  (every lane, review and integrator change mutation-checked red). Known: not
+  tried on two physical PCs (two real app factories, real middleware); the
+  packaged app binds 127.0.0.1, so both PCs need an allowlist plus a tunnel
+  or bind the user sets; the door token and per-run reply keys show by name
+  in the vault listing; not proven against a real CRM.
+
 - **A switched-off pack reads OFF on every surface; an app that signs in on
   this PC is ONE row from every door; the calm chip is the default**
   (v1.356.0, product-readiness Wave 6, G60/G74/G75/G77-G81; lanes 6A-6D +

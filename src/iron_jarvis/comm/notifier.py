@@ -139,6 +139,10 @@ _UNATTENDED_SUBJECT: dict[str, Any] = {
     "reflex": lambda n: f"Your reflex {n}" if n else "A reflex rule",
     "comm": lambda n: f"Your request from {n}" if n else "A request from your phone",
     "autonomy": lambda n: "An autonomy run",
+    # v1.357.0 (G61 + G76): a task another computer running Iron Jarvis sent
+    # (agents/task_door.REMOTE_TASK_ORIGIN, "remote:<caller>") — the bell's
+    # lib/remoteTask.remoteTaskSubject words, and its DEFAULT_CALLER.
+    "remote": lambda n: f"A task from {n}" if n else "A task from another computer",
 }
 
 #: A mission's root run (agents/team.py) — the bell's "Your objective …".

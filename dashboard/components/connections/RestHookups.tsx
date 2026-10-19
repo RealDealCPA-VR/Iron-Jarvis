@@ -270,7 +270,7 @@ function AddIntegrationForm({
     <Card>
       <form onSubmit={submit} className="space-y-4">
         <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
-          <Plug size={15} className="text-accent-soft" /> New connection check
+          <Plug size={15} className="text-accent-soft" /> New web service
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -358,7 +358,7 @@ function AddIntegrationForm({
               <LoaderInline label="Adding…" />
             ) : (
               <>
-                <Save size={14} /> Add check
+                <Save size={14} /> Add service
               </>
             )}
           </button>
@@ -386,12 +386,17 @@ function AddIntegrationForm({
  * component rather than inlined so the Connections page doesn't grow past 1,900
  * lines — the same reason chat/page.tsx is hard to work in.
  *
- * v1.354.0 (G48): a hookup is a CONNECTION CHECK only. No tool can call one
- * (integrations/tools.py has integration_list and integration_test, nothing
- * else), so the old "Connect any service that has an HTTP API" promised what
- * nothing delivered, and Test then said healthy. The copy now says what it
- * is and points at the real door for a new ability (Add a tool); the page
- * keeps it inside its closed "More ways to connect (advanced)" fold.
+ * v1.354.0 (G48): a hookup was a CONNECTION CHECK only. No tool could call
+ * one, so the old "Connect any service that has an HTTP API" promised what
+ * nothing delivered, and Test then said healthy. The page keeps it inside its
+ * closed "More ways to connect (advanced)" fold.
+ *
+ * v1.357.0 (G84): Jarvis CAN call one now: `integrations/tools.RestCallTool`
+ * (`rest_call`, ask tier) makes one call to a path under a saved service's
+ * own address, armed in the streaming chat when a message names the service.
+ * A read is an ordinary approval card; a write (POST/PUT/PATCH/DELETE) asks
+ * every time. So the card is "Your web services" and its note says how to use
+ * one from chat (never the word "hookup": the v13540 pin scans for it).
  */
 export function RestHookups() {
   const { data, error, loading, reload } = useApi<{ integrations: Integration[] }>(
@@ -408,7 +413,7 @@ export function RestHookups() {
 
   return (
     <Card
-      title="Connection checks"
+      title="Your web services"
       icon={<Plug size={15} />}
       right={
         <button
@@ -418,7 +423,7 @@ export function RestHookups() {
           }}
           className={CALM_ACTION}
         >
-          <Plus size={13} /> Add a check
+          <Plus size={13} /> Add a service
         </button>
       }
     >
@@ -426,9 +431,11 @@ export function RestHookups() {
         data-testid="rest-hookups-note"
         className="mb-3 text-xs leading-relaxed text-zinc-500"
       >
-        Connection checks only. Jarvis can&apos;t call these yet. Save a web
-        service&apos;s address, and its key if it needs one, then press Test to see that
-        it answers. To give Jarvis a new ability, use{" "}
+        Save a web service&apos;s address, and its key if it needs one, then press Test
+        to see that it answers. Jarvis can then use it from chat: name it in a message
+        (like &ldquo;get contact 42 from Acme CRM&rdquo;) and it asks before it calls the
+        service, and every time before it changes anything there. For a new ability of
+        another kind, use{" "}
         <Link href="/tools?focus=add" className="font-medium text-accent-soft hover:text-accent">
           Add a tool
         </Link>

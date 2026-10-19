@@ -665,7 +665,7 @@ def test_verify_never_certifies_a_node_from_the_mock_adapter(tmp_path, monkeypat
 
     out = client.post("/fleet/nodes/tower/verify", json={}).json()
     assert out["tool_use"] is None
-    assert "mock" in out["error"]
+    assert "demo model" in out["error"]
     assert mock.calls == []  # it never even asked
     assert d.fleet.get("tower").verified_at == 0.0
 

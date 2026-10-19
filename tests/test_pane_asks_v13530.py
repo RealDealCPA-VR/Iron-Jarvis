@@ -133,7 +133,7 @@ def test_a_pane_that_turns_blocked_with_no_window_is_announced_once(tmp_path):
             "id": "pane:t1",
             "paneId": "t1",
             "title": "Claude Code in Build is waiting for you",
-            "body": "Click to open the pane.",
+            "body": "Click to open the terminal.",
         }
     ]
     assert out[2]["notify"] == [], "the same wait was announced twice"
@@ -190,9 +190,9 @@ def test_words_name_the_cli_and_the_pane_and_never_read_the_screen(tmp_path):
     notes = out[0]["notify"]
     assert [n["paneId"] for n in notes] == ["t1", "t2", "t3"], "a dead or nameless pane was announced"
     assert notes[0]["title"] == "Codex in Build is waiting for you"
-    assert notes[0]["body"] == "tests: click to open the pane."
+    assert notes[0]["body"] == "tests: click to open the terminal."
     assert notes[1]["title"] == "my-cli in Build is waiting for you"
-    assert notes[2]["title"] == "A Build pane is waiting for you"
+    assert notes[2]["title"] == "A Build terminal is waiting for you"
     assert not any("hunter2" in json.dumps(n) for n in notes), "screen text reached a Windows toast"
 
 

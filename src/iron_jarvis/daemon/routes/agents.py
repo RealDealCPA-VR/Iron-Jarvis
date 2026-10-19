@@ -1525,9 +1525,13 @@ def panel_reply_lines(round_out: dict[str, Any], room_id: str) -> list[dict[str,
         if isinstance(e, dict) and e.get("who") and e.get("who") != "user"
     ]
     dropped = int((round_out.get("context") or {}).get("chat_dropped") or 0)
+    # v1.357.0 integrate (G75 words): the chat receipt's refit line says "Left
+    # out 12 older messages to fit this model" (lib/turnRecovery.refitTitle);
+    # the panel note says the same thing the same way, naming whose model —
+    # never "context window". The page's roundMessages fallback is pinned equal.
     note = (
-        f"{dropped} earlier message{'' if dropped == 1 else 's'} did not fit "
-        "the agent's context window"
+        f"Left out {dropped} older message{'' if dropped == 1 else 's'} to fit "
+        "the agent's model"
         if dropped > 0
         else ""
     )

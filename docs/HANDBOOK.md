@@ -1892,6 +1892,73 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Another computer as a teammate, your web services from chat, and one set of words (v1.357.0)
+
+You can now hand a task to Iron Jarvis on another computer, let chat use a
+web service you saved, and read the same words for the same thing on every
+screen. The look of the app is the same.
+
+- **Another computer running Jarvis is a teammate.**
+  - *On the computer that will do the work:* open Agents › Your team ›
+    **New & manage** and find **Another computer running Jarvis**. Type a name
+    for the computer that will send it tasks (for example "laptop") and press
+    **Turn on**. The tile shows a key once (**Copy token**) and the address to
+    use (**Copy address**), and says whether the other computer can reach this
+    one yet. **Rotate token** makes a new key; **Turn off** (press twice)
+    forgets it.
+  - *On the computer that sends tasks:* on its own **New & manage** tab, use
+    **Connect a remote agent**: a name (for example "desk"), **http-task (task
+    API)**, that address and that key. The form says when the address is another
+    Iron Jarvis, and the answers come back to you without a second key.
+    **Test** only checks the key with the other computer; it starts nothing
+    there.
+  - In a chat, "@desk summarise the Q3 notes" goes to that computer. The chat
+    says "desk has the task and will report back", and the answer arrives in
+    that same chat, credited to desk, with any files it made (up to a size
+    limit).
+  - On the computer doing the work, the task runs on its own, at low trust:
+    nobody there is asked anything, so anything that would need an OK is not
+    done, and **Emergency stop** refuses it and stops it. The bell, your phone
+    and the run's page say **A task from laptop** and **From laptop**.
+  - If an answer cannot be delivered it is tried once, never again, and the
+    reason is written on the run and on the tile. A task sent from a
+    local-only chat is refused there when that computer's model is off its
+    own network.
+  - Both computers must be opened to each other on purpose: the installed app
+    answers only on its own PC. The tiles say what to set; nothing is opened
+    for you.
+- **Your web services, from chat.** Settings › Connections › **More ways to
+  connect** › **Your web services** keeps a service's address and its key;
+  press **Test** to see that it answers. Then name it in a chat message ("get
+  contact 42 from Acme CRM") and Jarvis can call it. A read asks first, like
+  any other action; anything that changes something there (adding, changing,
+  deleting) asks every time, even when you let Jarvis run without asking. A
+  low-trust run can't call your web services, and a local-only chat asks
+  before every call. The answer is cut to a readable length and the key never
+  shows. Only key-based sign-in is supported, and a service on your own
+  network (this PC or your office network) is refused for now: the card has
+  no switch for it yet.
+- **One list of tools.** Settings › Tools and the Directory read the same
+  list, so a tool offered in both places has one name and one description:
+  **Files & folders**, **Fetch web pages**, **Knowledge graph** and
+  **Step-by-step reasoning** (chat still knows them by their old names). A
+  tool on the Tools page that the Directory also offers links to it.
+- **One set of words.** The demo is the **demo model** everywhere: under a
+  chat reply ("this reply came from the demo model: a scripted demo, not real
+  answers"), on a teammate's line, in the browser sidebar and in every
+  refusal that needs a real model. The Windows notifications say **Build
+  terminal**, **task** and **run** like the bell ("A Build terminal is waiting
+  for you", "click to open the run", "2 tasks waiting for you").
+  **Emergency stop** names what it stops: schedules, goals, rules, phone
+  tasks, queued tasks and tasks from another computer.
+- **An app you switched off stays in its chats, marked Off.** A chat that had
+  an app turned on still lists it under + › Connections after you switch the
+  app off: **Off**, with a line saying where to turn it on. It does nothing in
+  that chat meanwhile and is back as soon as you switch the app on. **Remove
+  from this chat** takes it out.
+- **An agent's reply says what it could not see**, in the chat's own words:
+  "Left out 3 older messages to fit the agent's model".
+
 ## Switch an app off without losing it, Microsoft 365, and the last plain words (v1.356.0)
 
 You can now pause an app instead of removing it, connect Microsoft 365, and

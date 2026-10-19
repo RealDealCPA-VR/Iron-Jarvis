@@ -227,7 +227,7 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
     ),
     "mock": ConnectionSpec(
         provider="mock",
-        display_name="Mock (offline)",
+        display_name="Demo model (scripted)",  # v1.357.0: lib/demoWords DEMO_MODEL_LABEL
         method="api_key",
         key_help="No key required — always connectable for offline testing.",
         key_secret_name="mock_api_key",
