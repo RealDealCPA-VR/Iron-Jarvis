@@ -26,6 +26,7 @@ from iron_jarvis.core.models import AgentType, Session, SessionStatus
 from iron_jarvis.platform import build_platform
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.providers.adapters.mock import MockLLMAdapter
+from iron_jarvis.tools import registry as _registry
 from iron_jarvis.tools.permissions import SAFE_HEADLESS_TOOLS
 
 DEADLINE_S = 1  # the Setting is whole seconds
@@ -78,6 +79,23 @@ async def _run_supervisor(orch, tool_name):
 
 def _long_child():
     return asyncio.sleep(CHILD_WORK_S)
+
+
+#: The belt test's deadline: long enough that it never fires on its own.
+NEVER_ON_ITS_OWN_S = 600
+
+
+async def _child_trips_the_deadline():
+    """Fire the caller's tool deadline NOW, from inside the child once it is
+    genuinely mid-run, then keep working. Deterministic on any runner: the
+    old 1 s wall-clock deadline also fired before a loaded runner had even
+    CREATED the child (the v1.356.0 Tests gate: a 3.8 s stall, no child
+    session at all). The child task is created inside the tool's ``execute``,
+    so its context carries the registry's deadline scope."""
+    cm = _registry._DEADLINE_SCOPE.get()
+    assert cm is not None, "the tool deadline must be armed for this test"
+    cm.reschedule(asyncio.get_running_loop().time())
+    await asyncio.sleep(NEVER_ON_ITS_OWN_S)
 
 
 def test_delegated_child_outlives_the_tool_deadline_and_completes(tmp_path):
@@ -176,7 +194,8 @@ def test_if_a_deadline_ever_wraps_a_sub_agent_again_it_is_not_blamed_on_the_user
     """The belt: with the exemption lifted (a future regression), the child is
     still stopped — but its record names the time limit, not the user."""
     monkeypatch.setattr(tool_cls, "deadline_exempt", False)
-    p = _platform(tmp_path, _scripted(tool_name, tool_args, _long_child))
+    p = _platform(tmp_path, _scripted(tool_name, tool_args, _child_trips_the_deadline))
+    p.config.tool_call_timeout_s = NEVER_ON_ITS_OWN_S
     seen: list[dict] = []
     p.event_bus.add_handler(lambda e: seen.append(e.to_dict()))
     orch = Orchestrator(p)
