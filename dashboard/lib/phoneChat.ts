@@ -18,7 +18,19 @@
  * a group id is never written into the allowlist. A list the person typed is
  * never replaced. The list still fails closed, and it is VISIBLE: the person
  * sees which id may talk to Iron Jarvis before they save.
+ *
+ * A list the FORM filled follows a corrected chat ID (review, v1.353.0):
+ * picking the wrong private chat and then detecting again used to correct
+ * the chat ID but leave the other person's id as the only allowed sender.
+ * The form notes what it filled under `AUTO_SENDERS_KEY`; while the list
+ * still holds exactly that, it is the form's to move. Moving to a group keeps
+ * the filled id (in a group the sender is still that person). Once the person
+ * edits the list it is theirs. The note is not a field, so the save (which
+ * posts only the destination type's own fields) never sends it.
  */
+
+/** Where the form notes the allowed-senders value it filled in itself. */
+export const AUTO_SENDERS_KEY = "__phone_chat_auto_senders";
 
 /** The id a private Telegram chat carries, which is the sender's user id; null
  *  for a group (negative), a blank or anything that is not a whole number. */
@@ -32,9 +44,14 @@ export function privateChatId(chatId: string | undefined): string | null {
 export function withPhoneChat(values: Record<string, string>): Record<string, string> {
   if ((values.chat_enabled ?? "").trim().toLowerCase() !== "true") return values;
   const next: Record<string, string> = { ...values, inbound_enabled: "true" };
-  if (!(values.allowed_senders ?? "").trim()) {
+  const list = (values.allowed_senders ?? "").trim();
+  const filled = values[AUTO_SENDERS_KEY];
+  if (!list || (filled !== undefined && list === filled)) {
     const id = privateChatId(values.chat_id);
-    if (id) next.allowed_senders = id;
+    if (id) {
+      next.allowed_senders = id;
+      next[AUTO_SENDERS_KEY] = id;
+    }
   }
   return next;
 }

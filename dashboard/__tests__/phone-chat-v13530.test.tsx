@@ -72,7 +72,7 @@ vi.mock("next/navigation", () => ({
 
 import NotificationsPage from "@/components/settings/pages/NotificationsPage";
 import HelpPage from "@/app/help/page";
-import { privateChatId, withPhoneChat } from "@/lib/phoneChat";
+import { AUTO_SENDERS_KEY, privateChatId, withPhoneChat } from "@/lib/phoneChat";
 import { NAV_ENTRIES } from "@/lib/nav";
 import { __resetApiCache } from "@/lib/apiCache";
 
@@ -116,12 +116,27 @@ describe("lib/phoneChat: who may talk once chat is ticked", () => {
   });
 
   it("chat on: listening on, and an EMPTY list gets the private chat id", () => {
+    // The form also notes what it filled (review, v1.353.0) so a corrected
+    // chat ID can move it; the note is not a field and is never posted.
     expect(withPhoneChat({ chat_enabled: "true", chat_id: "4242" })).toEqual({
       chat_enabled: "true",
       chat_id: "4242",
       inbound_enabled: "true",
       allowed_senders: "4242",
+      [AUTO_SENDERS_KEY]: "4242",
     });
+  });
+
+  it("a list the form filled follows the chat ID; a group keeps it; an edited list is the person's", () => {
+    const filled = withPhoneChat({ chat_enabled: "true", chat_id: "7070" });
+    const moved = withPhoneChat({ ...filled, chat_id: "6161" });
+    expect(moved.allowed_senders).toBe("6161");
+    expect(moved[AUTO_SENDERS_KEY]).toBe("6161");
+    // A group names nobody: the user's own id stays the sender.
+    expect(withPhoneChat({ ...moved, chat_id: "-100123" }).allowed_senders).toBe("6161");
+    // Edited by the person: never moved again.
+    const edited = { ...moved, allowed_senders: "6161, 9090" };
+    expect(withPhoneChat({ ...edited, chat_id: "5555" }).allowed_senders).toBe("6161, 9090");
   });
 
   it("never replaces a list the person typed, never fills from a group, does nothing with chat off", () => {
@@ -260,6 +275,69 @@ describe("Notifications: Telegram chat on one screen, no Advanced, no typed id",
     await waitFor(() => expect(chatId().value).toBe("4242"));
     fireEvent.click(chatSwitch());
     expect(senders().value).toBe("111, 222");
+  });
+
+  // Review (v1.353.0): the list the FORM filled must follow a corrected chat
+  // ID. Picking the wrong private chat (a friend who also messaged the bot)
+  // and then detecting again used to correct the chat ID but leave the
+  // friend's id as the only allowed sender: the friend could talk to Iron
+  // Jarvis and the user could not.
+  it("a corrected chat ID moves the id the form filled, after a wrong pick", async () => {
+    api.postResults["/comm/telegram/detect-chat"] = {
+      chats: [
+        { id: 7070, label: "Friend" },
+        { id: 6161, label: "You" },
+      ],
+    };
+    await startTelegram();
+    fireEvent.click(chatSwitch());
+    fireEvent.click(screen.getByRole("button", { name: /Detect my chat ID/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Friend" }));
+    expect(senders().value).toBe("7070");
+    // Detect again; this time only the user's own chat answers.
+    api.postResults["/comm/telegram/detect-chat"] = { chats: [{ id: 6161, label: "You" }] };
+    fireEvent.click(screen.getByRole("button", { name: /Detect my chat ID/ }));
+    await waitFor(() => expect(chatId().value).toBe("6161"));
+    await waitFor(() => expect(senders().value).toBe("6161"));
+    // The save posts only the destination's own fields (the form's note of
+    // what it filled never reaches the daemon).
+    fireEvent.click(screen.getAllByRole("button", { name: /Add destination/ }).at(-1)!);
+    const add = await waitFor(() => {
+      const p = api.posts.find((x) => x.path === "/comm/channels");
+      expect(p).toBeTruthy();
+      return p!;
+    });
+    const cfg = (add.body as { config: Record<string, string> }).config;
+    expect(Object.keys(cfg).sort()).toEqual(TELEGRAM_TYPE.fields.map((f) => f.key).sort());
+    expect(cfg.allowed_senders).toBe("6161");
+  });
+
+  it("a typed chat ID fixed after leaving the box moves the filled id too", async () => {
+    await startTelegram();
+    fireEvent.click(chatSwitch());
+    fireEvent.change(chatId(), { target: { value: "123" } });
+    fireEvent.blur(chatId());
+    expect(senders().value).toBe("123");
+    fireEvent.change(chatId(), { target: { value: "1234" } });
+    fireEvent.blur(chatId());
+    expect(senders().value).toBe("1234");
+    // Moving to a GROUP keeps the user's own id: in a group the sender is
+    // still that person, and a group id names nobody.
+    fireEvent.change(chatId(), { target: { value: "-100777" } });
+    fireEvent.blur(chatId());
+    expect(senders().value).toBe("1234");
+  });
+
+  it("once the person edits the filled list it is theirs and never moves", async () => {
+    await startTelegram();
+    fireEvent.click(chatSwitch());
+    fireEvent.change(chatId(), { target: { value: "8080" } });
+    fireEvent.blur(chatId());
+    expect(senders().value).toBe("8080");
+    fireEvent.change(senders(), { target: { value: "8080, 9090" } });
+    fireEvent.change(chatId(), { target: { value: "7070" } });
+    fireEvent.blur(chatId());
+    expect(senders().value).toBe("8080, 9090");
   });
 
   it("the walkthrough's step 2 no longer sends people to Advanced", async () => {
