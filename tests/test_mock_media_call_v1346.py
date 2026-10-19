@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 
 from iron_jarvis.providers.adapters.base import LLMMessage
-from iron_jarvis.providers.adapters.mock import MockLLMAdapter
+from iron_jarvis.providers.adapters.mock import DEMO_NOTHING_DONE_LINE, DEMO_NOT_SAVED_LINE, MockLLMAdapter
 
 pytestmark = pytest.mark.asyncio
 
@@ -62,6 +62,8 @@ async def test_without_generate_media_the_mock_is_untouched():
     boss = await _ask("do the thing", "delegate")
     assert [c.name for c in boss.tool_calls] == ["delegate"]
     plain = await _ask("do the thing")
-    assert plain.tool_calls == [] and plain.text.startswith("Done.")
+    # v1.359.0 (wave 9): the demo says it is the demo, and claims no file it
+    # did not save — moved on purpose.
+    assert plain.tool_calls == [] and plain.text == DEMO_NOTHING_DONE_LINE
     finished = await _ask("do the thing", "write_file", after_tool=True)
-    assert finished.text == "Done. Wrote RESULT.md summarizing the task."
+    assert finished.text == DEMO_NOT_SAVED_LINE

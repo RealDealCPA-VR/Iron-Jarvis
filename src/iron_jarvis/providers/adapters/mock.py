@@ -25,6 +25,29 @@ from .base import LLMAdapter, LLMMessage, LLMResponse, ToolCall
 #: the daemon).
 NO_MEDIA_MARK = "NO MEDIA SERVICE:"
 
+#: v1.359.0 (wave 9): the demo model's own words, in the canon's
+#: (VOCABULARY.md's demo-model row; dashboard lib/demoWords ``DEMO_MODEL``
+#: and ``DEMO_REPLIES``, pinned equal by tests/test_run_words_and_stop_v13590).
+DEMO_MODEL = "demo model"
+DEMO_REPLIES = "a scripted demo, not real answers"
+#: The first sentence of every reply the demo model writes itself. Before
+#: v1.359.0 it opened "Done. Wrote RESULT.md summarizing the task." — a
+#: fresh install's first answer read like finished work (and, in a chat with
+#: no file tool, claimed a file nobody wrote).
+DEMO_OPENING = f"This is the {DEMO_MODEL}: {DEMO_REPLIES}."
+#: Its one scripted step, when it really ran (a ``write_file`` that saved).
+DEMO_SAVED_LINE = f"{DEMO_OPENING} Its one scripted step saved RESULT.md with your task in it."
+#: …when that step was refused or failed (nothing claims a file).
+DEMO_NOT_SAVED_LINE = (
+    f"{DEMO_OPENING} Its one scripted step tried to save RESULT.md, and that did not happen."
+)
+#: A demo hand-off to a helper agent (which ran the demo model too).
+DEMO_HANDED_OFF_LINE = (
+    f"{DEMO_OPENING} It handed the task to a helper agent, which ran the demo too."
+)
+#: No step at all (a chat with no file tool): it read nothing and did nothing.
+DEMO_NOTHING_DONE_LINE = f"{DEMO_OPENING} No AI model read your message, so nothing was done."
+
 
 class MockLLMAdapter(LLMAdapter):
     provider = "mock"
@@ -120,7 +143,7 @@ class MockLLMAdapter(LLMAdapter):
                 content = (
                     "# Iron Jarvis result\n\n"
                     f"Task: {task}\n\n"
-                    "Completed offline by the MockLLM adapter (no network).\n"
+                    f"Written by the {DEMO_MODEL}: {DEMO_REPLIES}. No AI model ran.\n"
                 )
                 return LLMResponse(
                     tool_calls=[
@@ -159,14 +182,26 @@ class MockLLMAdapter(LLMAdapter):
             # the picture / the "it will appear here" words in the reply.
             return LLMResponse(text="Done.", finish_reason="stop")
         if "delegate" in tool_names:
+            return LLMResponse(text=DEMO_HANDED_OFF_LINE, finish_reason="stop")
+        if has_tool_result and "write_file" in tool_names:
             return LLMResponse(
-                text="Delegated the task to a subagent; all subtasks complete.",
+                text=DEMO_SAVED_LINE if _saved(messages) else DEMO_NOT_SAVED_LINE,
                 finish_reason="stop",
             )
-        return LLMResponse(
-            text="Done. Wrote RESULT.md summarizing the task.",
-            finish_reason="stop",
-        )
+        return LLMResponse(text=DEMO_NOTHING_DONE_LINE, finish_reason="stop")
+
+
+def _saved(messages: list[LLMMessage]) -> bool:
+    """Did the demo's own ``write_file`` step really save? (The tool's
+    success output is "wrote N bytes to RESULT.md"; a refusal or a failure
+    carries its error instead.) Never raises."""
+    try:
+        for m in reversed(messages):
+            if m.role == "tool" and (getattr(m, "name", "") or "") == "write_file":
+                return str(m.content or "").lstrip().lower().startswith("wrote ")
+    except Exception:  # noqa: BLE001
+        return False
+    return False
 
 
 def _media_kind(task: str) -> str:

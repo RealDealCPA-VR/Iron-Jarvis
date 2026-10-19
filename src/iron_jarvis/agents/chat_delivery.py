@@ -66,6 +66,10 @@ CHAT_THREAD_OPTION = "chat_thread_id"
 #: left no summary (v1.352.0, G16: a stop is not a failure, so it no longer
 #: reads like one — the page's ``finalize()`` says the same, pinned).
 STOPPED_SENTENCE = "The agent was stopped before it finished."
+#: The same, for a run stopped while it still waited in the queue (v1.359.0,
+#: wave 9: the orchestrator's summary for that stop; it read "Cancelled while
+#: queued (never started).").
+STOPPED_BEFORE_START_SENTENCE = "The agent was stopped before it started."
 
 #: The page's fallback words when a run that FAILED (or ended any other way
 #: short of ``completed``) left no summary (v1.352.0, G16).

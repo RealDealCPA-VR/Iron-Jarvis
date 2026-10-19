@@ -249,7 +249,9 @@ async def test_cancel_queued_finalizes_honestly_and_never_starts(
 
     got = orchestrator.cancel_session(b.id)
     assert got.status is SessionStatus.CANCELLED
-    assert got.summary == "Cancelled while queued (never started)."
+    # v1.359.0 (wave 9): the shared stopped sentence's words
+    # (orchestrator.STOPPED_BEFORE_START) — moved on purpose.
+    assert got.summary == "The agent was stopped before it started."
     assert got.finished_at is not None
     assert len(orchestrator._queued) == 0  # removed from the queue
 

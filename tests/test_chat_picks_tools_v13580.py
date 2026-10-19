@@ -516,7 +516,10 @@ def test_claude_cli_is_never_doubled_and_a_run_summary_says_the_headline():
     assert w["title"] == "Claude Code didn't answer in time"
     assert "claude-cli: claude-cli:" not in w["technical"]
     reason = plain_reason(outer)
-    assert reason == "Claude Code didn't answer in time. Press Retry, or pick another model for this chat."
+    # v1.359.0 (wave 9): a run's summary is read outside the chat (its
+    # Schedules row, run page, bell, phone): the run's fix, never "…for this
+    # chat" — moved on purpose. The chat keeps its own (``w`` above).
+    assert reason == "Claude Code didn't answer in time. Run it again, or choose another model in Settings."
     # An unclassified wrapped failure keeps its own words, said once.
     odd = _router_wrapped(ProviderError("claude-cli: something new went wrong"))
     assert "claude-cli: claude-cli:" not in plain_reason(odd)
@@ -530,7 +533,7 @@ async def test_a_failed_run_summary_names_claude_code_not_the_doubled_raw_text(t
     with session_scope(p.engine) as db:
         summary = db.get(Session, s.id).summary or ""
     assert summary == (
-        "The run failed: Claude Code didn't answer in time. Press Retry, or pick another model for this chat."
+        "The run failed: Claude Code didn't answer in time. Run it again, or choose another model in Settings."
     )
     assert "claude-cli" not in summary
 

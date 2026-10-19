@@ -99,13 +99,21 @@ _CONTINUATION_ROWS = 10
 _ASK_DENIAL_KINDS = frozenset({"permission denied", "paused"})
 #: The other refusals, in plain words — nobody was asked, so none of them may
 #: read "needed your OK" (a breaker-refused ``read_file`` is an allow-tier
-#: tool). ``{t}`` is the tool's own name (``tool_own_name``: spaces, an
-#: app's tool as "<app>: <its tool in words>").
+#: tool). ``{do}`` is what the call set out to do, in the words the rest of
+#: the log uses (:func:`do_words`: "save a file", "search your chats", "use
+#: Gmail › search messages").
+#:
+#: v1.359.0 (wave 9, G19 remainder): the line named a built-in by its spaced
+#: id ("Builder tried write file, a tool it was not given") beside a log that
+#: says "needed your OK to save a file" two rows up. One grammar for every
+#: tool now, and no dash asides (the calm copy rule).
 _REFUSAL_WORDS: dict[str, str] = {
-    "refused": "was stopped from repeating a {t} call that kept failing",
-    "not armed": "tried {t}, a tool it was not given — nothing ran",
-    "low trust": "was kept from using {t} (low trust)",
+    "refused": "kept failing to {do}, so it was stopped from trying again",
+    "not armed": "tried to {do}, but it was not given that tool, so nothing ran",
+    "low trust": "was kept from trying to {do} (low trust)",
 }
+#: Any other refusal label (a new registry label this table does not know).
+_REFUSAL_DEFAULT = "was not allowed to {do}"
 
 _EVENT_TYPES = (
     EventType.DELEGATION_STARTED,
@@ -248,9 +256,17 @@ ASK_WORDS: dict[str, str] = {
 
 def ask_words(tool: str) -> str:
     """What an ask for ``tool`` wants to do ("save a file"), else "use <its
-    name>". Pure."""
+    name>". Pure.
+
+    v1.359.0 (wave 9): a connected app's tool is named as the chat footnote
+    names it ("use Gmail › search messages"), never "use mcp  gmail  search
+    messages" (its id with the underscores spaced)."""
     name = str(tool or "").strip()
-    return ASK_WORDS.get(name) or f"use {name.replace('_', ' ') or 'a tool'}"
+    if name in ASK_WORDS:
+        return ASK_WORDS[name]
+    if name.startswith("mcp__"):
+        return f"use {tool_own_name(name)}"
+    return f"use {name.replace('_', ' ') or 'a tool'}"
 
 
 #: Tools whose lines are bookkeeping, not work — kept out of the log.
@@ -272,6 +288,12 @@ _QUIET_TOOLS = frozenset(
 # dashboard/__tests__/fixtures/tool-lines-v13580.json (written and checked by
 # tests/test_one_receipt_v13580.py, read back by
 # dashboard/__tests__/one-receipt-v13580.test.tsx).
+#
+# v1.359.0 (wave 9): a CONNECTED APP's tool is the one exception. The log
+# names it as the chat footnote does, by the catalog's display name
+# ("used Gmail › search messages", :func:`app_tool_display`); the dashboard's
+# twin has no catalog and still reads the pack's id ("gmail: search
+# messages"), so app ids sit in the fixture's Python-only ``app_lines``.
 # --------------------------------------------------------------------------- #
 
 #: lib/runWords.ts AGENT_TOOLS: (one call that worked, one call as a noun).
@@ -394,15 +416,47 @@ def app_tool_name_words(name: str) -> str:
     return _cut_words(" ".join(words) or name, _APP_TOOL_MAX)
 
 
+#: v1.359.0 (wave 9): how a connected app's tool is joined to its app, the
+#: chat footnote's own form ("Gmail › search messages",
+#: ``daemon/chat_turn.refusal_footnotes``).
+APP_TOOL_JOIN = " › "
+
+
+def app_tool_display(tool: str) -> str | None:
+    """A connected app's tool as the chat footnote names it — the CATALOG's
+    display name and the tool's words, "Gmail › search messages" — or None
+    for any other id.
+
+    v1.359.0 (wave 9): the run log said "used gmail: search messages" (the
+    pack id) while the chat footnote said "Gmail › search messages" (the
+    catalog). ONE source for both: ``daemon.chat_turn.app_tool_words``, the
+    footnote's own helper (imported at call time, like the orchestrator's
+    other reads of that module), so the two can never drift; if that read
+    fails the pack's own words stand in, in the same form. Pure."""
+    parts = _app_tool_parts(str(tool or "").strip())
+    if parts is None:
+        return None
+    try:
+        from ..daemon.chat_turn import app_tool_words
+
+        named = app_tool_words(str(tool).strip())
+    except Exception:  # noqa: BLE001 — the pack's own words are a fine label
+        named = None
+    if named:
+        return f"{named[0]}{APP_TOOL_JOIN}{named[1]}"
+    return f"{app_name_words(parts[0])}{APP_TOOL_JOIN}{app_tool_name_words(parts[1])}"
+
+
 def tool_own_name(tool: str) -> str:
-    """lib/runWords toolOwnName: a tool said by its own name — a connected
-    app's tool as "<app>: <its tool in words>", anything else with spaces."""
+    """A tool said by its own name — a connected app's tool as the chat
+    footnote names it ("Gmail › search messages", :func:`app_tool_display`),
+    anything else with spaces."""
     tid = str(tool or "").strip()
     if not tid:
         return "a tool"
-    parts = _app_tool_parts(tid)
-    if parts:
-        return f"{app_name_words(parts[0])}: {app_tool_name_words(parts[1])}"
+    shown = app_tool_display(tid)
+    if shown:
+        return shown
     loose = re.match(r"^mcp__(.+?)__(.+)$", tid)
     if loose:
         server = " ".join(loose.group(1).replace("_", " ").split())
@@ -422,9 +476,9 @@ def _step_kind(tool: str) -> str | None:
 def fallback_line(tool: str, ok: bool) -> str:
     """ONE call of a tool ``_TOOL_WORDS`` does not word, in the dashboard's
     words (lib/runWords ``toolStepLine``): "searched your chats", "read 1 web
-    page", "used gmail: search messages", "used rename real file"; a failed
-    one "tried a chat search and it failed" / "tried gmail: … and it
-    failed". Pure."""
+    page", "used rename real file"; a connected app's tool by its catalog
+    name, "used Gmail › search messages" (v1.359.0); a failed one "tried a
+    chat search and it failed" / "tried Gmail › … and it failed". Pure."""
     tid = str(tool or "").strip()
     words = _RUN_TOOL_WORDS.get(tid)
     if words is None:
@@ -438,6 +492,64 @@ def fallback_line(tool: str, ok: bool) -> str:
         return f"tried {article} {noun} and it failed"
     own = tool_own_name(tid)
     return f"used {own}" if ok else f"tried {own} and it failed"
+
+
+#: The first word of a "did" phrase above (``_RUN_TOOL_WORDS[t][0]``,
+#: ``_KIND_WORDS[k][0]``) in the present, so a refusal can say what a call
+#: set out to do in the SAME words the log uses when it ran ("searched your
+#: chats" → "search your chats"). Every first word those tables use is here
+#: (pinned): a new phrase whose verb is missing reads "use <its name>".
+_PRESENT: dict[str, str] = {
+    "added": "add", "asked": "ask", "called": "call", "changed": "change",
+    "checked": "check", "compared": "compare", "finished": "finish",
+    "handed": "hand", "listed": "list", "loaded": "load", "looked": "look",
+    "made": "make", "messaged": "message", "noted": "note", "opened": "open",
+    "picked": "pick", "posted": "post", "queried": "query", "ran": "run",
+    "read": "read", "saved": "save", "searched": "search", "started": "start",
+    "suggested": "suggest", "updated": "update", "used": "use",
+}
+
+
+def _present_phrase(did: str) -> str | None:
+    """"read 1 file" → "read a file", "searched your chats" → "search your
+    chats"; None when the verb is not in :data:`_PRESENT`. Pure."""
+    head, _, rest = str(did or "").partition(" ")
+    verb = _PRESENT.get(head)
+    if verb is None:
+        return None
+    words = f"{verb} {rest}".strip() if rest else verb
+    return re.sub(r"\b1 ", "a ", words)
+
+
+def do_words(tool: str) -> str:
+    """What a call of ``tool`` set out to do, as words that follow "to"
+    (v1.359.0, wave 9, G19 remainder) — the words the rest of the log uses:
+
+    * the approval card's words for a built-in it words ("save a file",
+      "run a command" — :data:`ASK_WORDS`, pinned equal to lib/toolWords);
+    * a connected app's tool by its catalog name ("use Gmail › search
+      messages", :func:`app_tool_display`);
+    * else the log's own line for the tool, in the present ("search your
+      chats", "read a file", "use your browser");
+    * a custom tool by the only name it has ("use rename real file").
+
+    Never a built-in's spaced id. Pure."""
+    name = str(tool or "").strip()
+    if not name:
+        return "use a tool"
+    if name in ASK_WORDS:
+        return ASK_WORDS[name]
+    if name.startswith("mcp__"):
+        return f"use {tool_own_name(name)}"
+    words = _RUN_TOOL_WORDS.get(name)
+    if words is None:
+        kind = _step_kind(name)
+        words = _KIND_WORDS.get(kind) if kind else None
+    if words is not None:
+        present = _present_phrase(words[0])
+        if present:
+            return present
+    return f"use {tool_own_name(name)}"
 
 
 def _service_name(raw: Any) -> str:
@@ -898,9 +1010,10 @@ def tool_activity(
             # …and a refusal NOBODY was asked about is never worded as one
             # (v1.309.0 review, honest copy): the breaker, the roster gate
             # and low trust share the ``ask`` verdict but asked no one.
-            words = _REFUSAL_WORDS.get(kind, "was not allowed to use {t}")
-            # v1.358.0 (G19): a connected app's tool by its app and words.
-            text, tone = words.format(t=tool_own_name(tool)), "warn"
+            words = _REFUSAL_WORDS.get(kind, _REFUSAL_DEFAULT)
+            # v1.359.0 (G19): what the call set out to do, in the log's own
+            # words; a connected app's tool by its catalog name.
+            text, tone = words.format(do=do_words(tool)), "warn"
         else:
             # No ``tool.denied`` event = not a refusal: an ``ask`` call the
             # user APPROVED whose tool then failed reads as the failure it is

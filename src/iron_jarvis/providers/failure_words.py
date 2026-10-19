@@ -42,7 +42,45 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
+
+#: WHERE the words are read (v1.359.0, wave 9). A chat's fix says what to do
+#: in the chat ("Press Retry, or pick another model for this chat."); a RUN —
+#: a schedule's fire, a background job, a helper agent — is read on its
+#: Schedules row, its run page, the bell and the phone, where there is no
+#: Retry button and no "this chat", so its fix says what to do there ("Run it
+#: again, or choose another model in Settings."). ``Orchestrator.run_session``
+#: sets "run" for the length of every run (:func:`run_surface`), so a failure
+#: worded inside one — the run's summary, the background-job banner the
+#: router publishes, an alert — reads the run's words; a chat turn never sets
+#: it and keeps the chat's sentence byte for byte.
+SURFACE_CHAT = "chat"
+SURFACE_RUN = "run"
+_SURFACE: ContextVar[str] = ContextVar("ij_failure_surface", default=SURFACE_CHAT)
+#: Where a run's model is chosen (the default model lives in Settings).
+RUN_MODEL_PLACE = "Settings"
+
+
+@contextmanager
+def run_surface() -> Iterator[None]:
+    """Word every failure inside this block for a RUN (see :data:`_SURFACE`).
+    The context rides every task and worker thread the run makes."""
+    token = _SURFACE.set(SURFACE_RUN)
+    try:
+        yield
+    finally:
+        _SURFACE.reset(token)
+
+
+def current_surface() -> str:
+    """"run" inside :func:`run_surface`, else "chat". Never raises."""
+    try:
+        return SURFACE_RUN if _SURFACE.get() == SURFACE_RUN else SURFACE_CHAT
+    except Exception:  # noqa: BLE001
+        return SURFACE_CHAT
 
 #: Where accounts, sign-ins and API keys live in the app: Settings' own
 #: Connections group, whose first row holds the Accounts page (its Sign in
@@ -330,44 +368,61 @@ def _is_local(provider: str) -> bool:
 
 
 def classify(
-    exc: BaseException | None, *, provider: str = "", manager: Any = None
+    exc: BaseException | None,
+    *,
+    provider: str = "",
+    manager: Any = None,
+    surface: str | None = None,
 ) -> "tuple[str, str] | None":
     """``(title, fix)`` for a failure this module RECOGNISES, else ``None``
     (the caller decides the generic words). Neither ever carries the
-    server's own text — that is ``technical``'s job."""
+    server's own text — that is ``technical``'s job.
+
+    ``surface`` (v1.359.0) says where the words are read: "chat" (the
+    chat's own sentence, byte for byte as before) or "run" (a run read
+    outside the chat: "Run it again, or choose another model in Settings.");
+    None reads :func:`current_surface`. The headline never changes."""
     f = failure_facts(exc)
     who = f.provider or str(provider or "").strip()
     name = plain_name(who, manager) or _SOMEONE
     Name = heading(name)
     kind = f.kind
+    run = (surface or current_surface()) == SURFACE_RUN
+    other = (
+        f"choose another model in {RUN_MODEL_PLACE}" if run else "pick another model for this chat"
+    )
+    again = "run it again" if run else "retry"
 
     if kind == "signed_out":
         cli = f.cli or who
         cname = plain_name(cli, manager) or name
         return (
             f"{heading(cname)} isn't signed in",
-            f"Press Sign in beside {cname} in {ACCOUNTS_PLACE}, then retry.",
+            f"Press Sign in beside {cname} in {ACCOUNTS_PLACE}, then {again}.",
         )
     if kind == "answered_error":
         return (
             f"{Name} answered with an error",
-            "Check it, or pick another model for this chat, and retry. Iron Jarvis"
+            f"Check it, or {other}, and {again}. Iron Jarvis"
             " won't switch to a different AI without asking. You can allow that in"
             " Settings.",
         )
     if kind == "cooldown":
         secs = int(math.ceil(max(0.0, f.retry_in))) if f.retry_in else 0
         when = f"in {secs} s" if secs else "in a moment"
+        lead = "Run it again" if run else "Try again"
         return (
             f"{Name} failed several times in a row",
-            f"Try again {when}, or pick another model for this chat.",
+            f"{lead} {when}, or {other}.",
         )
     transport = kind if kind in ("timeout", "interrupted", "unreachable") else ""
     if not kind and f.status is None:
         transport = f.transport
     if transport == "timeout":
         if _is_local(who):
-            fix = "Give it time to finish loading, or pick another model for this chat, and retry."
+            fix = f"Give it time to finish loading, or {other}, and {again}."
+        elif run:
+            fix = f"Run it again, or {other}."
         else:
             fix = "Press Retry, or pick another model for this chat."
         return (f"{Name} didn't answer in time", fix)
@@ -375,18 +430,20 @@ def classify(
         if f.partial:
             return (
                 f"The connection to {name} dropped mid-answer",
-                "The reply above is incomplete. Press Retry.",
+                "Its answer is incomplete. Run it again."
+                if run
+                else "The reply above is incomplete. Press Retry.",
             )
         return (
             f"The connection to {name} dropped",
-            "Press Retry. If it keeps happening, check your internet connection or"
-            " pick another model for this chat.",
+            ("Run it again." if run else "Press Retry.")
+            + f" If it keeps happening, check your internet connection or {other}.",
         )
     if transport == "unreachable":
         if _is_local(who):
-            fix = "Bring it back up, or pick another model for this chat, and retry."
+            fix = f"Bring it back up, or {other}, and {again}."
         else:
-            fix = "Check your internet connection, or pick another model for this chat, and retry."
+            fix = f"Check your internet connection, or {other}, and {again}."
         return (f"{Name} isn't connected right now", fix)
 
     status = f.status
@@ -394,15 +451,16 @@ def classify(
         if who in SIGN_IN_CLIS:
             return (
                 f"{Name} refused your sign-in",
-                f"Press Sign in beside {name} in {ACCOUNTS_PLACE}, then retry.",
+                f"Press Sign in beside {name} in {ACCOUNTS_PLACE}, then {again}.",
             )
         return (f"{Name} refused your key", f"Update it in {ACCOUNTS_PLACE}.")
     if status == 429 or (status is not None and 500 <= status <= 599):
-        return (f"{Name} is busy", "Try again shortly, or pick another model for this chat.")
+        lead = "Run it again shortly" if run else "Try again shortly"
+        return (f"{Name} is busy", f"{lead}, or {other}.")
     if status is not None:
         return (
             f"{Name} answered with an error",
-            "Retry, or pick another model for this chat.",
+            f"{'Run it again' if run else 'Retry'}, or {other}.",
         )
     return None
 
@@ -410,6 +468,8 @@ def classify(
 #: The generic words when nothing typed says more.
 GENERIC_TITLE = "Iron Jarvis couldn't finish this answer"
 GENERIC_FIX = "Press Retry. If it happens again, pick another model for this chat."
+#: v1.359.0: the generic fix read OUTSIDE the chat (a run, see ``_SURFACE``).
+GENERIC_FIX_RUN = f"Run it again. If it happens again, choose another model in {RUN_MODEL_PLACE}."
 #: v1.358.0 (the re-audit's confirmed regression): the generic headline's
 #: ending — said after the provider's own name when the failure came from a
 #: provider it knows ("Claude Code couldn't finish this answer"), never an
@@ -483,21 +543,25 @@ def friendly_error(
     provider: str = "",
     manager: Any = None,
     technical: str | None = None,
+    surface: str | None = None,
 ) -> dict[str, str]:
     """``{title, fix, technical}`` for *exc* (see the module docstring).
     *provider* is the caller's hint (the provider the turn asked for), used
     only when the failure names none itself. A failure the words cannot
     classify still names the provider it came from (v1.358.0,
     :func:`generic_title`); the technical text stays in ``technical``.
-    Never raises."""
+    *surface* (v1.359.0): where the fix is read — None reads
+    :func:`current_surface` (a chat turn: the chat's words). Never raises."""
+    run = (surface or current_surface()) == SURFACE_RUN
     try:
-        words = classify(exc, provider=provider, manager=manager)
+        words = classify(exc, provider=provider, manager=manager, surface=surface)
     except Exception:  # noqa: BLE001 — words are never a new failure
         words = None
     if words is not None:
         title, fix = words
     else:
-        title, fix = generic_title(_generic_name(exc, provider, manager)), GENERIC_FIX
+        title = generic_title(_generic_name(exc, provider, manager))
+        fix = GENERIC_FIX_RUN if run else GENERIC_FIX
     return {"title": title, "fix": fix, "technical": technical_text(exc, technical)}
 
 
@@ -505,9 +569,14 @@ def plain_reason(exc: BaseException | None, *, manager: Any = None) -> str:
     """One plain sentence for a run summary ("The run failed: <this>"): the
     headline and its fix when the failure is recognised, else the failure's
     own message (masked) — never the exception's CLASS, which goes to the
-    log. Never raises; never empty."""
+    log. Never raises; never empty.
+
+    v1.359.0 (wave 9): a run's summary is read OUTSIDE the chat (its
+    Schedules row, its run page, the bell, the phone), so its fix is always
+    the run's ("Run it again, or choose another model in Settings."), never
+    "Press Retry, or pick another model for this chat."."""
     try:
-        words = classify(exc, manager=manager)
+        words = classify(exc, manager=manager, surface=SURFACE_RUN)
     except Exception:  # noqa: BLE001
         words = None
     if words is not None:

@@ -124,22 +124,6 @@
       "ok": "used mcp bad",
       "failed": "tried mcp bad and it failed"
     },
-    "mcp__github__listOpenIssues": {
-      "ok": "used github: list open issues",
-      "failed": "tried github: list open issues and it failed"
-    },
-    "mcp__gmail__search_messages": {
-      "ok": "used gmail: search messages",
-      "failed": "tried gmail: search messages and it failed"
-    },
-    "mcp__google_drive__search_files": {
-      "ok": "used google drive: search files",
-      "failed": "tried google drive: search files and it failed"
-    },
-    "mcp__tracker__get_PR": {
-      "ok": "used tracker: get PR",
-      "failed": "tried tracker: get PR and it failed"
-    },
     "memory_propose": {
       "ok": "suggested something to remember",
       "failed": "tried a memory suggestion and it failed"
@@ -211,6 +195,24 @@
     "worklist_status": {
       "ok": "checked its list",
       "failed": "tried a worklist check and it failed"
+    }
+  },
+  "app_lines": {
+    "mcp__github__listOpenIssues": {
+      "ok": "used GitHub › list open issues",
+      "failed": "tried GitHub › list open issues and it failed"
+    },
+    "mcp__gmail__search_messages": {
+      "ok": "used Gmail › search messages",
+      "failed": "tried Gmail › search messages and it failed"
+    },
+    "mcp__google_drive__search_files": {
+      "ok": "used Google Drive › search files",
+      "failed": "tried Google Drive › search files and it failed"
+    },
+    "mcp__tracker__get_PR": {
+      "ok": "used tracker › get PR",
+      "failed": "tried tracker › get PR and it failed"
     }
   },
   "python_own_words": [

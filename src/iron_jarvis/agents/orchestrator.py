@@ -54,6 +54,7 @@ from ..git.review import (
     build_review,
     reject as _reject_review,
 )
+from .chat_delivery import STOPPED_BEFORE_START_SENTENCE, STOPPED_SENTENCE
 from .runtime import (
     ATTENDED_ORIGINS,
     AgentRuntime,
@@ -435,6 +436,21 @@ EMERGENCY_STOP_STOPPED = "Emergency stop was turned on, so this run was stopped.
 #: tests/test_integrate_wave4_v13540.py). Rows stored before v1.354.0 keep
 #: the old "interrupted by a daemon restart"; the run page reads both.
 RESTART_SUMMARY = "Stopped when Iron Jarvis restarted."
+#: The summary (and the reply a chat-started run leaves in its chat, and the
+#: answer a task from another computer gets back) when a run was stopped with
+#: no words of its own (v1.359.0, wave 9): the SHARED stopped sentence — the
+#: chat page's own words for a stop with no summary
+#: (``chat_delivery.STOPPED_SENTENCE``), beside the canon's "Stopped" badge
+#: (lib/statusWords). Before: "Session cancelled by the user." — the engine's
+#: "session" and "cancelled". Neutral on purpose: the same summary goes home
+#: to ANOTHER computer for a task it sent, where "by you" would name the
+#: wrong person. Rows stored before v1.359.0 keep their old words
+#: (:data:`LEGACY_STOPPED_SUMMARY`).
+STOPPED_SUMMARY = STOPPED_SENTENCE
+#: The same, for a run stopped while it still waited in the queue.
+STOPPED_BEFORE_START = STOPPED_BEFORE_START_SENTENCE
+#: What a stopped run's summary read before v1.359.0 (rows on disk keep it).
+LEGACY_STOPPED_SUMMARY = "Session cancelled by the user."
 
 
 class EmergencyStopOn(RuntimeError):
@@ -1263,8 +1279,14 @@ class Orchestrator:
         unattended = is_unattended_origin(getattr(session, "origin", None))
         nested = _IN_RUN.get()
         token = _IN_RUN.set(True)
+        from ..providers import failure_words as _failure_words
+
         try:
-            with procs.background_lane(on=unattended):
+            # v1.359.0 (wave 9): a failure worded anywhere inside a run (its
+            # summary, the background-job banner, an alert) says what to do
+            # where a run is read — "Run it again, or choose another model in
+            # Settings." — never the chat's "…pick another model for this chat".
+            with procs.background_lane(on=unattended), _failure_words.run_surface():
                 return await self._run_session_body(
                     session, definition, unattended=unattended, nested=nested
                 )
@@ -1668,8 +1690,82 @@ class Orchestrator:
                 log.exception("Emergency stop could not stop session %s", sid)
                 continue
             stopped.append(sid)
+        # v1.359.0 (wave 9, G13 remainder): a workflow a schedule, a rule, a
+        # goal or the chat tool started that is PARKED on a question has no
+        # live session for the loop above to find, so it kept waiting under
+        # the switch (and its schedule row kept "Needs you").
+        stopped.extend(self._stop_waiting_workflows(reason, limit=limit))
         if stopped:
             log.warning("Emergency stop stopped %d unattended run(s)", len(stopped))
+        return stopped
+
+    def _stop_waiting_workflows(self, reason: str, *, limit: int = 500) -> list[str]:
+        """Stop every unattended workflow run PARKED on a question (status
+        ``waiting``) — Emergency stop's half for work with no live session
+        (v1.359.0, wave 9, G13 remainder). A run a person started
+        (``WorkflowRunRecord.started_by == "person"``, the v1.352.0 mark) is
+        never touched.
+
+        Each run ends exactly as the Workflows page's Cancel ends a waiting
+        one (status ``cancelled``, the question cleared, finished now) — a
+        compare-and-set on ``waiting``, so an answer that claimed the run
+        first (``waiting -> resuming``) wins and the live run is stopped by
+        the session loop instead — with ``reason`` added to the run's notes
+        so its page says why. Then the schedule that parked it is told
+        (``platform.settle_stopped_waiting``, the v1.358.0 path), so its row
+        reads Stopped, not Needs you. BLOCKING (SQLite); returns the run ids
+        it stopped; never raises."""
+        try:
+            from sqlalchemy import update as _sql_update
+
+            from ..workflows.engine import STARTED_BY_PERSON
+            from ..workflows.models import WorkflowRunRecord
+
+            with session_scope(self.p.engine) as db:
+                rows = db.exec(
+                    select(WorkflowRunRecord.id, WorkflowRunRecord.notes_json)
+                    .where(
+                        WorkflowRunRecord.status == "waiting",
+                        WorkflowRunRecord.started_by != STARTED_BY_PERSON,
+                    )
+                    .limit(max(int(limit), 1))
+                ).all()
+                stopped: list[str] = []
+                for run_id, notes_json in rows:
+                    try:
+                        notes = json.loads(notes_json or "[]")
+                    except (TypeError, ValueError):
+                        notes = []
+                    if not isinstance(notes, list):
+                        notes = []
+                    if reason and reason not in notes:
+                        notes.append(reason)
+                    done = db.exec(
+                        _sql_update(WorkflowRunRecord)
+                        .where(
+                            WorkflowRunRecord.id == run_id,
+                            WorkflowRunRecord.status == "waiting",
+                        )
+                        .values(
+                            status="cancelled",
+                            waiting_json="",
+                            finished_at=utcnow(),
+                            notes_json=json.dumps(notes),
+                        )
+                    )
+                    if getattr(done, "rowcount", 0) == 1:
+                        stopped.append(str(run_id))
+                db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("Emergency stop could not stop the waiting workflow runs")
+            return []
+        settle = getattr(self.p, "settle_stopped_waiting", None)
+        for run_id in stopped:
+            if callable(settle):
+                try:
+                    settle(run_id)
+                except Exception:  # noqa: BLE001 — the run already stopped
+                    log.exception("could not settle the schedule row of %s", run_id)
         return stopped
 
     # --- the truth about a finished run (v1.227.0) ------------------------
@@ -2169,7 +2265,7 @@ class Orchestrator:
             # v1.351.0 (G13): a stop Emergency stop made says so.
             or self._stop_reasons.pop(session.id, None)
             or _prose(session.summary)
-            or "Session cancelled by the user.",
+            or STOPPED_SUMMARY,
         )
         session.finished_at = utcnow()
 
@@ -2275,7 +2371,7 @@ class Orchestrator:
                     session.summary,
                     self._stop_reasons.get(session_id)
                     or _prose(session.summary)
-                    or "Session cancelled by the user.",
+                    or STOPPED_SUMMARY,
                 )
                 session.finished_at = utcnow()
                 self._save(session)
@@ -2287,7 +2383,7 @@ class Orchestrator:
                 session.summary,
                 self._stop_reasons.pop(session_id, None)
                 or _prose(session.summary)
-                or "Cancelled while queued (never started).",
+                or STOPPED_BEFORE_START,
             )
             session.finished_at = utcnow()
             self._save(session)
@@ -2312,7 +2408,7 @@ class Orchestrator:
                 session.summary,
                 self._stop_reasons.pop(session_id, None)
                 or _prose(session.summary)
-                or "Session cancelled by the user.",
+                or STOPPED_SUMMARY,
             )
             session.finished_at = utcnow()
             self._save(session)

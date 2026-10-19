@@ -788,8 +788,14 @@ def test_a_refusal_nobody_was_asked_about_never_reads_as_an_ask(tmp_path):
     texts = [t for t, _ in lines]
     asks = [t for t, tone in lines if "needed your OK" in t]
     assert asks == ["Builder needed your OK to use read file"], lines
-    assert "Builder tried write file, a tool it was not given — nothing ran" in texts, texts
-    assert "Builder was stopped from repeating a read file call that kept failing" in texts, texts
+    # v1.359.0 (wave 9, G19 remainder): the refusal says what the call set
+    # out to do in the log's own words, never the built-in's spaced id
+    # ("tried write file") — moved on purpose.
+    assert (
+        "Builder tried to save a file, but it was not given that tool, so nothing ran"
+        in texts
+    ), texts
+    assert "Builder kept failing to read a file, so it was stopped from trying again" in texts, texts
     assert "Builder could not update the workbook book.xlsx" in texts, texts
     assert all(tone != "ask" for t, tone in lines if "needed your OK" not in t), lines
 

@@ -37,6 +37,7 @@ from fastapi.testclient import TestClient
 from iron_jarvis.agents import chat_delivery
 from iron_jarvis.core.db import session_scope
 from iron_jarvis.core.models import AgentType, Session, SessionStatus
+from iron_jarvis.providers.adapters.mock import DEMO_SAVED_LINE
 from iron_jarvis.daemon import chat_append
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.daemon.routes.agents import panel_reply_lines
@@ -143,7 +144,9 @@ def test_a_session_asked_from_a_chat_leaves_one_line_there_and_a_follow_up_never
         assert len(lines) == 1, got["messages"]
         line = lines[0]
         assert line["role"] == "assistant"
-        assert line["content"] == "Done. Wrote RESULT.md summarizing the task."
+        # v1.359.0 (wave 9): the demo model says it is the demo (and what
+        # its one step really did) — moved on purpose.
+        assert line["content"] == DEMO_SAVED_LINE
         assert line["agentType"] == "builder"
         assert line["panelWho"] == "builtin:builder"
         assert line["at"].endswith("+00:00")

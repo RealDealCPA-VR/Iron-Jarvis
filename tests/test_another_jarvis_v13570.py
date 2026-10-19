@@ -1065,7 +1065,10 @@ async def test_a_queued_remote_task_that_is_cancelled_still_tells_the_sender(tmp
     }
     assert set(by_conv) == {"athr_1", "athr_2"}, by_conv
     assert by_conv["athr_2"]["kind"] == "done"
-    assert "never started" in by_conv["athr_2"]["message"]
+    # v1.359.0 (wave 9): the shared stopped sentence for a queued stop
+    # (orchestrator.STOPPED_BEFORE_START), never "Cancelled while queued
+    # (never started)." — moved on purpose.
+    assert "stopped before it started" in by_conv["athr_2"]["message"]
 
 
 def test_the_directions_name_the_tab_the_tile_and_the_form_live_on(tmp_path, monkeypatch):

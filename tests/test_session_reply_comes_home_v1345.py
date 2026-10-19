@@ -403,7 +403,10 @@ async def test_the_cancel_path_appends_the_stopped_sentence(tmp_path):
     msgs = _row(p.engine, tid)["messages"]
     assert len(msgs) == 2
     line = msgs[-1]
-    assert line["content"] == row.summary == "Session cancelled by the user."
+    # v1.359.0 (wave 9): the shared stopped sentence (orchestrator.
+    # STOPPED_SUMMARY == chat_delivery.STOPPED_SENTENCE), never "Session
+    # cancelled by the user." — moved on purpose.
+    assert line["content"] == row.summary == "The agent was stopped before it finished."
     assert line["sessionId"] == s.id and line["panelWho"] == "builtin:builder"
     # a stop a tool time limit caused keeps its own reason (another session)
     tid2 = _thread(p.engine)
@@ -437,7 +440,7 @@ async def test_a_cancel_mid_run_lands_the_stopped_line_once(tmp_path):
     row = _session_row(p.engine, s.id)
     assert row.status is SessionStatus.CANCELLED
     msgs = _row(p.engine, tid)["messages"]
-    assert len(msgs) == 2 and msgs[-1]["content"] == "Session cancelled by the user."
+    assert len(msgs) == 2 and msgs[-1]["content"] == "The agent was stopped before it finished."
 
 
 def test_the_boot_reconcile_tells_the_chat_the_run_was_interrupted(tmp_path):

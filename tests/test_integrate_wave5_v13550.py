@@ -165,12 +165,17 @@ def _banner_seam(tmp_path) -> dict:
     async def _run():
         platform, spy = _platform_with_dead_node(tmp_path)
         try:
-            await platform.router.complete(
-                system="",
-                messages=[LLMMessage(role="user", content="Say hello.")],
-                tools=[],
-                session_id="sess_wave5",
-            )
+            # v1.359.0 (wave 9): a background job's model call happens INSIDE
+            # its run (``Orchestrator.run_session`` words every failure there
+            # for a run: ``failure_words.run_surface``), so the banner and the
+            # job's summary both say the run's fix — moved on purpose.
+            with failure_words.run_surface():
+                await platform.router.complete(
+                    system="",
+                    messages=[LLMMessage(role="user", content="Say hello.")],
+                    tools=[],
+                    session_id="sess_wave5",
+                )
         except ProviderError as exc:
             raised = exc
         else:  # pragma: no cover — the dead node must refuse
@@ -182,7 +187,9 @@ def _banner_seam(tmp_path) -> dict:
     return {
         "event": {"type": "provider.downgraded", "session_id": "sess_wave5", "payload": event},
         "run_summary": "The run failed: " + failure_words.plain_reason(raised, manager=platform.providers),
-        "_raised_words": failure_words.friendly_error(raised, manager=platform.providers),
+        "_raised_words": failure_words.friendly_error(
+            raised, manager=platform.providers, surface=failure_words.SURFACE_RUN
+        ),
     }
 
 

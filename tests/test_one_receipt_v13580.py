@@ -21,6 +21,12 @@ Regenerate after an INTENDED word change:
 ``IJ_REGEN_TOOL_LINES=1 uv run pytest tests/test_one_receipt_v13580.py``
 and commit the fixture with the TypeScript change.
 
+v1.359.0 (wave 9): a CONNECTED APP's tool is named as the chat footnote
+names it, by the catalog's display name ("used Gmail › search messages",
+``mission.app_tool_display`` over ``chat_turn.app_tool_words``). The
+dashboard's twin has no catalog, so those ids moved out of ``lines`` (the
+TS == Python half) into ``app_lines`` (Python only) — on purpose.
+
 The receipt is driven through the REAL app factory over a seeded ledger
 (``GET /sessions/{id}/result`` — the read the chat's settled row and the run
 page show), not through a stub of the words.
@@ -74,13 +80,19 @@ def _fallback_ids() -> list[str]:
     return sorted(i for i in ids if i not in own)
 
 
+def _said(tool: str) -> dict:
+    return {"ok": mission.tool_line(tool, {}, True), "failed": mission.tool_line(tool, {}, False)}
+
+
 def _computed() -> dict:
-    lines = {
-        tool: {"ok": mission.tool_line(tool, {}, True), "failed": mission.tool_line(tool, {}, False)}
-        for tool in _fallback_ids()
-    }
+    ids = _fallback_ids()
+    lines = {tool: _said(tool) for tool in ids if mission._app_tool_parts(tool) is None}
+    app_lines = {tool: _said(tool) for tool in ids if mission._app_tool_parts(tool) is not None}
     return {
         "lines": lines,
+        # v1.359.0: Python only — the catalog's names, which the dashboard's
+        # twin cannot know.
+        "app_lines": app_lines,
         # The built-ins the activity log words in its OWN richer phrases
         # ("read k1.pdf", "checked memory for “q”") — never through the
         # fallback, so the dashboard pin accepts them as covered.
@@ -96,12 +108,13 @@ def test_the_fallback_words_are_the_fixture_the_dashboard_reads():
     assert stored == want, "regenerate with IJ_REGEN_TOOL_LINES=1 after an intended change"
     # Anti-vacuity: the fixture really holds the audit's own examples.
     assert stored["lines"]["history_search"]["ok"] == "searched your chats"
-    assert stored["lines"]["mcp__gmail__search_messages"]["ok"] == "used gmail: search messages"
+    assert stored["app_lines"]["mcp__gmail__search_messages"]["ok"] == "used Gmail › search messages"
     assert len(stored["lines"]) >= 40
 
 
 def test_no_fallback_line_reads_a_tool_id():
-    for tool, said in _computed()["lines"].items():
+    computed = _computed()
+    for tool, said in {**computed["lines"], **computed["app_lines"]}.items():
         if tool == "mcp__bad":
             continue  # not an app id at all: said by its own name, as the TS twin does
         for text in (said["ok"], said["failed"]):
@@ -116,11 +129,14 @@ def test_no_fallback_line_reads_a_tool_id():
 
 
 def test_an_app_tool_reads_app_colon_action_in_words():
-    assert mission.tool_line("mcp__github__listOpenIssues", {}, True) == "used github: list open issues"
+    # v1.359.0 (wave 9): the catalog's display name, in the chat footnote's
+    # form ("GitHub › list open issues") — moved on purpose.
+    assert mission.tool_line("mcp__github__listOpenIssues", {}, True) == "used GitHub › list open issues"
     assert mission.tool_line("mcp__google_drive__search_files", {}, False) == (
-        "tried google drive: search files and it failed"
+        "tried Google Drive › search files and it failed"
     )
-    assert mission.tool_own_name("mcp__tracker__get_PR") == "tracker: get PR"
+    # An app the catalog does not know keeps the pack's own name.
+    assert mission.tool_own_name("mcp__tracker__get_PR") == "tracker › get PR"
     # A built-in ask still uses the approval card's words; a refusal nobody
     # was asked about names an app tool the same way.
     assert mission.ask_words("rest_call") == "call one of your saved web services"
@@ -133,9 +149,10 @@ def test_a_refusal_nobody_was_asked_about_names_an_app_tool_in_words():
     ]
     lines, _last = mission.tool_activity(rows, {"i1": "not armed", "i2": "not armed"}, {"s1": "Builder"})
     assert [l["text"] for l in lines] == [
-        "Builder tried gmail: search messages, a tool it was not given — nothing ran",
-        # A built-in keeps its own name, as the v1.309.0 pin holds.
-        "Builder tried write file, a tool it was not given — nothing ran",
+        "Builder tried to use Gmail › search messages, but it was not given that tool, so nothing ran",
+        # v1.359.0 (G19 remainder): a built-in in the log's own words, never
+        # its spaced id ("tried write file") — moved on purpose.
+        "Builder tried to save a file, but it was not given that tool, so nothing ran",
     ]
 
 
@@ -207,7 +224,7 @@ def test_the_receipts_activity_says_tool_words_never_ids(tmp_path):
     texts = [a["text"] for a in r.json()["activity"]]
     assert texts == [
         "researcher searched your chats",
-        "researcher used gmail: search messages",
+        "researcher used Gmail › search messages",
         "researcher called crm",
         "researcher tried a memory lookup and it failed",
     ], texts

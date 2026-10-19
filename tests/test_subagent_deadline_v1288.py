@@ -20,7 +20,7 @@ from sqlmodel import select
 
 from iron_jarvis.agents.agent_tools import SpawnAgentTool
 from iron_jarvis.agents.delegate_tool import TIME_LIMIT_REASON, DelegateTool
-from iron_jarvis.agents.orchestrator import Orchestrator
+from iron_jarvis.agents.orchestrator import STOPPED_SUMMARY, Orchestrator
 from iron_jarvis.core.db import session_scope
 from iron_jarvis.core.models import AgentType, Session, SessionStatus
 from iron_jarvis.platform import build_platform
@@ -175,7 +175,9 @@ def test_a_real_parent_cancel_still_cancels_the_child_as_the_user(tmp_path):
     sid = asyncio.run(go())
     kids = _children(p, sid)
     assert [k[0] for k in kids] == [SessionStatus.CANCELLED], kids
-    assert "cancelled by the user" in kids[0][1], kids
+    # v1.359.0 (wave 9): a stop reads in the shared stopped sentence
+    # (orchestrator.STOPPED_SUMMARY) — moved on purpose.
+    assert STOPPED_SUMMARY in kids[0][1], kids
     assert TIME_LIMIT_REASON not in kids[0][1], kids
 
 
@@ -204,7 +206,7 @@ def test_if_a_deadline_ever_wraps_a_sub_agent_again_it_is_not_blamed_on_the_user
     kids = _children(p, sid)
     assert [k[0] for k in kids] == [SessionStatus.CANCELLED], kids
     assert kids[0][1].startswith(TIME_LIMIT_REASON), kids
-    assert "cancelled by the user" not in kids[0][1], kids
+    assert STOPPED_SUMMARY not in kids[0][1], kids
     assert "did not finish within" in (orch.get_session(sid).summary or "")
     # The timeline reads the EVENT, not the child row (review): it must not
     # say "cancelled" for a time limit either.

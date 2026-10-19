@@ -45,8 +45,12 @@ from fastapi.testclient import TestClient
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.platform import build_platform
 from iron_jarvis.providers.adapters.base import LLMMessage
+from iron_jarvis.providers.adapters.mock import DEMO_OPENING
 
-MOCK_FABRICATION = "Done. Wrote RESULT.md"
+#: v1.359.0 (wave 9): the demo model opens every reply it writes with
+#: ``DEMO_OPENING``; the detector follows it, or "not in" would pass on
+#: anything (it read "Done. Wrote RESULT.md" before).
+MOCK_FABRICATION = DEMO_OPENING
 
 
 def _only_mock_is_connected(platform, default_provider: str):
