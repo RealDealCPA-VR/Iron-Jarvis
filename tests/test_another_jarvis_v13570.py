@@ -1054,3 +1054,23 @@ async def test_a_queued_remote_task_that_is_cancelled_still_tells_the_sender(tmp
     assert set(by_conv) == {"athr_1", "athr_2"}, by_conv
     assert by_conv["athr_2"]["kind"] == "done"
     assert "never started" in by_conv["athr_2"]["message"]
+
+
+def test_the_directions_name_the_tab_the_tile_and_the_form_live_on(tmp_path, monkeypatch):
+    """Agents › Your team opens on the roster; the tile and the connect form
+    sit on its "New & manage" tab. Every sentence that sends a user there
+    names that tab by the label the page really draws (read from the page's
+    source, so a renamed tab breaks this, not a user's search)."""
+    import re as _re
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1] / "dashboard/components/agents/AgentsModal.tsx"
+    ).read_text(encoding="utf-8").replace("\r\n", "\n")
+    label = _re.search(r'tabBtn\("manage", "([^"]+)"\)', src).group(1)
+    assert td.DOOR_OFF.count(f"Your team, {label}, Another computer running Jarvis") == 1
+    reg = RemoteAgentRegistry(create_app(str(tmp_path)).state.platform.engine)
+    rec = reg.upsert("desk", f"http://192.168.1.60:8787{TASK_DOOR_PATH}", "http-task")
+    _capture_posts(monkeypatch, lambda url, body: (401, {"detail": "nope"}))
+    out = asyncio.run(reg.run(rec, "x", lambda n: None))
+    assert f"Your team, {label}, Another computer running Jarvis" in out["detail"]

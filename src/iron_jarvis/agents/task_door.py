@@ -123,7 +123,7 @@ TASK_INTRO = "A task sent from {caller}, another computer running Iron Jarvis:"
 #: The door refuses while it is off — the sender's room shows this.
 DOOR_OFF = (
     "This computer is not taking tasks from another computer. Turn it on in "
-    "Agents, Your team, Another computer running Jarvis."
+    "Agents, Your team, New & manage, Another computer running Jarvis."
 )
 
 _CALLER_OK = re.compile(r"[^A-Za-z0-9 _.\-]")

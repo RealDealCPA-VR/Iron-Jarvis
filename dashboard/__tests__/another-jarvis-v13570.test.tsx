@@ -329,6 +329,17 @@ describe("the look and the words stay the calm ones", () => {
     expect(prose).not.toMatch(/\b(daemon|job|jobs|mission|pack|mock|pane|connector|assignment)\b/i);
   });
 
+  it("the steps name the tab the connect form lives on, by its real label", () => {
+    // Agents › Your team opens on the roster; the connect form (and this
+    // tile) sit on the "New & manage" tab — the steps must say so.
+    const modal = read("components/agents/AgentsModal.tsx");
+    const label = /tabBtn\("manage", "([^"]+)"\)/.exec(modal)?.[1];
+    expect(label).toBeTruthy();
+    expect(addThisComputerSteps("laptop")).toContain(
+      `Agents, Your team, ${label}, Connect a remote agent`,
+    );
+  });
+
   it("the door path is the daemon's own", () => {
     const auth = readFileSync(path.resolve(root, "../src/iron_jarvis/daemon/auth.py"), "utf8");
     expect(auth).toContain(`TASK_DOOR_PATH = "${TASK_DOOR_PATH}"`);

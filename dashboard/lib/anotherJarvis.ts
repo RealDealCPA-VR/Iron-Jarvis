@@ -85,7 +85,7 @@ export const TOKEN_ONCE = "Copy the token. It is shown once.";
 export function addThisComputerSteps(caller: string): string {
   const who = caller.trim() || "the other computer";
   return (
-    `On ${who}: Agents, Your team, Connect a remote agent. Give this computer a name ` +
+    `On ${who}: Agents, Your team, New & manage, Connect a remote agent. Give this computer a name ` +
     "(for example desk), choose http-task (task API), paste this address as the Base " +
     "URL and the token as the secret. Then “@desk” in its chat hands this " +
     "computer the task, and the answer comes back to that chat."

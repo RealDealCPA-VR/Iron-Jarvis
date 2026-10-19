@@ -196,8 +196,8 @@ def _door_refusal(record: Any, status: int, body: str) -> str:
     if status == 401:
         return (
             f"{name} turned the task away: its token does not match. Copy the token "
-            f"again from that computer (Agents, Your team, Another computer running "
-            f"Jarvis) and paste it into Edit here."
+            f"again from that computer (Agents, Your team, New & manage, Another "
+            f"computer running Jarvis) and paste it into Edit here."
         )
     if status == 429:
         return f"{name} turned the task away: too many tasks this minute. Try again shortly."
