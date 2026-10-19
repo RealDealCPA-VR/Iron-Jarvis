@@ -10,7 +10,7 @@
 // honest empty value, never as a guess. Progress in particular keeps the
 // daemon's `pct: null` — "no count behind this bar" — instead of inventing one.
 
-import { statusWords } from "@/lib/statusWords";
+import { statusWords, type StatusWords } from "@/lib/statusWords";
 
 export type MemberStatus =
   | "queued"
@@ -369,6 +369,21 @@ export function missionFinish(v: MissionView): "done" | "needs_you" | "part_fail
   const failedItems = v.deliverable?.worklist?.failed ?? 0;
   if (typeof failedItems === "number" && failedItems > 0) return "part_failed";
   return "done";
+}
+
+/**
+ * v1.358.0 (lane 8A): a recent objective's word and tone on the objectives
+ * rail (MissionComposer) — the SAME verdict the mission screen's headline and
+ * the bell give, from the ONE status table. A run parked on an ask (the
+ * mission's or a teammate's) reads "Needs you"; a FINISHED objective reads its
+ * outcome — "Needs you" / "Part failed" (amber) — never a plain "Done" over a
+ * mission whose screen says "Finished, but part of it failed". (The rail's row
+ * carries the ledger verdict only; a mission's worklist failures are folded
+ * into that verdict when it finishes — orchestrator `_settle_finished_run`.)
+ */
+export function missionRowWords(r: Pick<MissionRow, "status" | "outcome" | "waiting">): StatusWords {
+  if (r.waiting && (r.status === "active" || r.status === "queued")) return statusWords("waiting_you");
+  return statusWords(r.status, r.outcome);
 }
 
 /** v1.351.0 (G09): the headline's tone. A finish that fell short or needs

@@ -46,7 +46,7 @@
         "status": "failed",
         "outcome": "needs_you"
       },
-      "last_status": "needs_you",
+      "last_status": "error",
       "short": true
     },
     {

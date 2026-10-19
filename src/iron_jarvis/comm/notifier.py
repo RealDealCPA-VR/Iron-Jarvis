@@ -160,24 +160,41 @@ def _clip(text: str, limit: int = _SUMMARY_MAX) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def _plain_summary(summary: Any) -> str:
+    """A run's model-written summary as plain words on one line (v1.358.0,
+    lane 8A): "# Final Report ## What happened …" reaches no phone line —
+    the Schedules row's and the bell's rule (``run_outcome.plain_text``, the
+    dashboard's ``lib/plainText.summaryLine`` twin). Never raises."""
+    if not isinstance(summary, str):
+        return ""
+    try:
+        from ..scheduling.run_outcome import plain_text
+
+        return _text(plain_text(summary))
+    except Exception:  # noqa: BLE001 — wording only, never the alert
+        return _text(summary)
+
+
 def _with_summary(title: str, summary: Any) -> str:
-    said = _clip(_text(summary))
+    said = _clip(_plain_summary(summary))
     return f"{title} — {said}" if said else title
 
 
 def _run_words(payload: dict) -> str:
-    """How a run ended, in the bell's words (``runVerdict`` + its rows): an
-    expired ask is the headline even on a failed run; only a positive
-    ``completed`` outcome is "finished"."""
+    """How a run ended, in the bell's words (``runVerdict`` + its rows): only
+    a positive ``completed`` outcome is "finished". v1.358.0 (lane 8A): a run
+    that ENDED FAILED "could not finish" even when an ask expired on the way
+    — the schedule row says Failed and the run's own badge says Failed;
+    "needs you" is a run that finished with the user as the next step."""
     status = _text(payload.get("status"))
     outcome = _text(payload.get("outcome"))
     ran = status == "completed" and payload.get("ok") is not False
     if status == "cancelled":
         return "was stopped"
-    if outcome == "needs_you":
-        return "needs you"
     if not ran:
         return "could not finish"
+    if outcome == "needs_you":
+        return "needs you"
     if outcome == "completed":
         return "finished"
     if outcome == "completed_with_failures":

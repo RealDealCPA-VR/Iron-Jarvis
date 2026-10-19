@@ -163,11 +163,12 @@ const FAILED = sv("s-failed", { status: "failed", outcome: null });
 
 describe("SessionStatusBadge: a variant prop, the default calm (v1.356.0)", () => {
   // v1.352.0 (G17, updated on purpose): the badge speaks the ONE status
-  // table's words — "Done · needs you", "Done" (it read "Completed · needs
-  // you" and the raw "completed").
+  // table's words — "Needs you", "Done" (it read "Completed · needs
+  // you" and the raw "completed"). v1.358.0 (lane 8A, updated on purpose):
+  // the outcome LEADS — "Needs you" / "Part failed", never "Done · …".
   const cases: [string, SessionView, string][] = [
     ["waiting", WAITING, "Waiting for you · write_document"],
-    ["needs you", NEEDS, "Done · needs you"],
+    ["needs you", NEEDS, "Needs you"],
     ["plain status", OK, "Done"],
   ];
 
@@ -197,7 +198,7 @@ describe("SessionStatusBadge: a variant prop, the default calm (v1.356.0)", () =
       expect(screen.getByTestId("session-waiting-chip").textContent).toBe("Waiting for you · write_document");
       cleanup();
       render(<SessionStatusBadge session={NEEDS} variant={variant} />);
-      expect(screen.getByTestId("session-outcome-chip").textContent).toBe("Done · needs you");
+      expect(screen.getByTestId("session-outcome-chip").textContent).toBe("Needs you");
       cleanup();
     }
   });
@@ -216,7 +217,7 @@ describe("the Kanban board: calm chips on a card, calm Dismiss and Clear", () =>
     );
     const outcomes = screen.getAllByTestId("session-outcome-chip");
     expect(outcomes.map((o) => o.textContent)).toEqual(
-      expect.arrayContaining(["Done · needs you", "Done · part failed"]),
+      expect.arrayContaining(["Needs you", "Part failed"]),
     );
     for (const o of outcomes) expectCalmChip(o.firstElementChild as Element, "bg-tone-warn", o.textContent ?? "");
   });
@@ -268,8 +269,8 @@ describe("ProjectTasks: the Recent runs chips are calm", () => {
     await waitFor(() => expect(screen.getByText("Waiting for you · write_document")).toBeTruthy());
     const dots: Record<string, string> = {
       "Waiting for you · write_document": "bg-tone-warn",
-      "Done · needs you": "bg-tone-warn",
-      "Done · part failed": "bg-tone-warn",
+      "Needs you": "bg-tone-warn",
+      "Part failed": "bg-tone-warn",
       Done: "bg-tone-success",
       Failed: "bg-tone-danger",
     };

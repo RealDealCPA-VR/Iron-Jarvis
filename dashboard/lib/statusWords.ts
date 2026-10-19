@@ -28,7 +28,7 @@
 import type { Tone } from "@/components/ui";
 
 export interface StatusWords {
-  /** What the badge or row says, already cased ("Done", "Done · needs you").
+  /** What the badge or row says, already cased ("Done", "Needs you").
    *  Render it with `keepCase` — CSS `capitalize` would make "Needs You". */
   word: string;
   /** The tone family (components/ui `Tone`), drawn through the theme tokens. */
@@ -87,12 +87,19 @@ const STATUS: Readonly<Record<string, StatusWords>> = {
   success: DONE,
 };
 
-/** A COMPLETED run whose ledger verdict (`Session.outcome`) fell short. */
+/** A COMPLETED run whose ledger verdict (`Session.outcome`) fell short.
+ *
+ *  v1.358.0 (lane 8A): the word LEADS with the outcome — "Needs you" /
+ *  "Part failed" — never "Done · …": a person reads the first word, and
+ *  "Done" over work that still needs them (or that partly failed) was the
+ *  re-audit's regression on the Schedules row. The same object a blocked
+ *  assignment and a waiting teammate say, so the user is next in one word. */
+const PART_FAILED = w("Part failed", "amber");
 const OUTCOME: Readonly<Record<string, StatusWords>> = {
-  // An ask expired unanswered: it finished, and the user is the headline.
-  needs_you: w("Done · needs you", "amber"),
-  // A mutating step failed.
-  completed_with_failures: w("Done · part failed", "amber"),
+  // An ask expired unanswered: the user is the headline.
+  needs_you: NEEDS_YOU,
+  // A mutating step failed (or a mission's worklist kept failed items).
+  completed_with_failures: PART_FAILED,
 };
 
 function norm(v: unknown): string {
@@ -108,9 +115,8 @@ function asItself(raw: string): StatusWords {
 
 /**
  * The word and tone for a work status, given the run's ledger verdict when it
- * has one. Only a COMPLETED run reads its outcome: "Done · needs you" /
- * "Done · part failed" (amber); a failed or stopped run already says what
- * happened.
+ * has one. Only a COMPLETED run reads its outcome: "Needs you" / "Part
+ * failed" (amber); a failed or stopped run already says what happened.
  */
 export function statusWords(status: string | null | undefined, outcome?: string | null): StatusWords {
   const s = norm(status);
@@ -133,11 +139,14 @@ export const NOT_RUN_YET: StatusWords = w("Not run yet", "slate");
 
 /**
  * A schedule's `last_status` (scheduling/run_outcome.py — the verdict the
- * scheduler writes) in the SAME words: ok is "Done", a finish that needs the
- * user or partly failed reads like a completed session's outcome, error is
- * "Failed", a run stopped mid-way is "Stopped". Only three are schedule-only:
- * "Skipped" and "Missed" (amber: it did not run, and the user may want to
- * know why) and "Not run yet" for a schedule that never fired.
+ * scheduler writes) in the SAME words: ok is "Done", a run that needs the
+ * user (an expired ask, or a workflow parked on the user's answer) reads
+ * "Needs you" and one that partly failed "Part failed" — a completed
+ * session's outcome words — error is "Failed" (a FAILED run whose ask
+ * expired too, v1.358.0: the run's own badge says Failed), a run stopped
+ * mid-way is "Stopped". Only three are schedule-only: "Skipped" and
+ * "Missed" (amber: it did not run, and the user may want to know why) and
+ * "Not run yet" for a schedule that never fired.
  */
 const SCHEDULE: Readonly<Record<string, StatusWords>> = {
   ok: DONE,
@@ -157,6 +166,21 @@ export function scheduleRunWords(status: string | null | undefined): StatusWords
   const raw = typeof status === "string" ? status.trim() : "";
   if (!raw) return NOT_RUN_YET;
   return SCHEDULE[raw] ?? asItself(raw);
+}
+
+/**
+ * The WORD's own ink on a calm row (v1.358.0, lane 8A). The calm Badge keeps
+ * its words neutral grey and puts the tone on the dot alone, so a schedule
+ * that needed the user read a grey "Done · needs you" with only an amber dot.
+ * A word in the warn or danger tone ("Needs you", "Part failed", "Skipped",
+ * "Missed" / "Failed") now reads in that tone token itself; every other word
+ * stays the calm grey (""). The `!` wins over the calm shell's grey text —
+ * theme tokens only, so a palette re-inks it.
+ */
+export function toneTextClass(tone: Tone): string {
+  if (tone === "amber") return "!text-tone-warn";
+  if (tone === "red") return "!text-tone-danger";
+  return "";
 }
 
 /** lib/scheduleOutcome's tone names, for a reader that speaks them. */

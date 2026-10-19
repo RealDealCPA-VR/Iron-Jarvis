@@ -6,7 +6,7 @@
  *    "finished · needs you", partial "finished · part failed", an unknown
  *    value reads as itself (it used to fall through to "not run yet");
  *    v1.352.0 (G17, updated on purpose): those words are now the app's one
- *    status table's (lib/statusWords) — "Done · needs you", "Done · part
+ *    status table's (lib/statusWords) — "Needs you", "Done · part
  *    failed", "Failed", "Stopped" (slate), "Not run yet";
  *  - the Schedules page row: amber words for a run that finished short, the
  *    open-session link, the detail as plain words (an older row's flattened
@@ -129,8 +129,9 @@ describe("lib/scheduleOutcome — one table of words", () => {
   it("names every verdict the daemon writes, and an unknown one as itself", () => {
     expect(scheduleStatusWords("ok")).toEqual({ label: "Done", tone: "success" });
     expect(scheduleStatusWords("error")).toEqual({ label: "Failed", tone: "danger" });
-    expect(scheduleStatusWords("needs_you")).toEqual({ label: "Done · needs you", tone: "warn" });
-    expect(scheduleStatusWords("partial")).toEqual({ label: "Done · part failed", tone: "warn" });
+    // v1.358.0 (lane 8A, updated on purpose): the outcome LEADS.
+    expect(scheduleStatusWords("needs_you")).toEqual({ label: "Needs you", tone: "warn" });
+    expect(scheduleStatusWords("partial")).toEqual({ label: "Part failed", tone: "warn" });
     // A stop is not a failure and not a warning: slate (muted).
     expect(scheduleStatusWords("cancelled")).toEqual({ label: "Stopped", tone: "muted" });
     expect(scheduleStatusWords("skipped").tone).toBe("warn");
@@ -155,9 +156,10 @@ describe("lib/scheduleOutcome — one table of words", () => {
   });
 
   it("Run now's note is amber for a short run, red for a failure, green only for ok", () => {
+    // v1.358.0 (lane 8A, updated on purpose): "needs you", the row's word.
     expect(runNowNote("n", "needs_you", NEEDS_YOU_DETAIL)).toEqual({
       tone: "warn",
-      text: `"n" finished, but it needs you — ${NEEDS_YOU_DETAIL}`,
+      text: `"n" needs you — ${NEEDS_YOU_DETAIL}`,
     });
     expect(runNowNote("n", "partial", "").text).toBe('"n" finished, but part of it failed');
     expect(runNowNote("n", "skipped", "Emergency stop is on, so this run was skipped.").tone).toBe("warn");
@@ -174,7 +176,7 @@ describe("lib/scheduleOutcome — one table of words", () => {
 
 // v1.352.0 (G17, updated on purpose): the Schedules row speaks the ONE status
 // table's words (lib/statusWords.scheduleRunWords) — "Done", "Done · needs
-// you", "Done · part failed", "Failed", "Not run yet" — the words a session,
+// you", "Part failed", "Failed", "Not run yet" — the words a session,
 // a mission and the board say for the same run, in theme tone tokens (the
 // row's literal emerald/rose inks are gone). It read "✓ ok", "finished ·
 // needs you", "✗ failed" and "not run yet".
@@ -187,18 +189,28 @@ const DOT_OF_TONE: Record<string, string> = {
   red: "bg-tone-danger",
   slate: "bg-zinc-500",
 };
+// v1.358.0 (lane 8A, updated on purpose): a word that needs the user or
+// reports a failure reads in its OWN tone token too (the re-audit read a grey
+// "Needs you" with only an amber dot); Done and Stopped stay neutral.
+const INK_OF_WORD: Record<string, string | null> = {
+  green: null,
+  amber: "!text-tone-warn",
+  red: "!text-tone-danger",
+  slate: null,
+};
 function expectCalmWord(word: HTMLElement, tone: "green" | "amber" | "red" | "slate") {
   expect(word.getAttribute("data-badge-variant")).toBe("calm");
   expect(word.getAttribute("data-tone")).toBe(tone);
   expect((word.querySelector("span")?.className ?? "")).toContain(DOT_OF_TONE[tone]);
-  // Words neutral: no tone ink on the words themselves.
-  expect(word.className).not.toMatch(/text-tone-/);
+  const ink = INK_OF_WORD[tone];
+  const inks = word.className.split(/\s+/).filter((c) => /text-tone-/.test(c));
+  expect(inks).toEqual(ink ? [ink] : []);
 }
 describe("the Schedules page row", () => {
-  it("a run that needs the user is amber 'Done · needs you' with its session link — never a green Done", async () => {
+  it("a run that needs the user LEADS with an amber 'Needs you' and its session link — never Done", async () => {
     mountPage([row({ last_status: "needs_you", last_detail: NEEDS_YOU_DETAIL, last_session_id: "session_abc" })]);
     const word = await screen.findByTestId("schedule-status-nightly");
-    expect(word.textContent).toBe("Done · needs you");
+    expect(word.textContent).toBe("Needs you");
     expectCalmWord(word, "amber");
     expect(screen.queryByText("Done")).toBeNull();
     expect(screen.queryByText("Not run yet")).toBeNull();
@@ -209,10 +221,10 @@ describe("the Schedules page row", () => {
     expect(screen.getByTestId("schedule-detail-nightly").textContent).toBe(NEEDS_YOU_DETAIL);
   });
 
-  it("a partly failed run reads 'Done · part failed'", async () => {
+  it("a partly failed run reads 'Part failed'", async () => {
     mountPage([row({ last_status: "partial", last_detail: "Some of its steps failed." })]);
     const word = await screen.findByTestId("schedule-status-nightly");
-    expect(word.textContent).toBe("Done · part failed");
+    expect(word.textContent).toBe("Part failed");
     expectCalmWord(word, "amber");
   });
 
@@ -265,7 +277,7 @@ describe("the Schedules page row", () => {
     };
     fireEvent.click(await screen.findByTitle("Run now"));
     const note = await screen.findByTestId("schedule-run-warn");
-    expect(note.textContent).toContain('"nightly" finished, but it needs you');
+    expect(note.textContent).toContain('"nightly" needs you');
     // ui's WarnNote (reused, never a page copy): role=status, the warn tone.
     const box = within(note).getByRole("status");
     expect(box.getAttribute("data-tone")).toBe("warn");
@@ -305,7 +317,7 @@ describe("a project's Schedules list", () => {
     render(<ProjectSchedules projectId="proj_1" />);
     const word = await screen.findByTestId("project-schedule-status-nightly");
     // v1.352.0 (G17, updated on purpose): the Schedules page's words.
-    expect(word.textContent).toBe("Done · needs you");
+    expect(word.textContent).toBe("Needs you");
     expect(word.className).toMatch(/text-tone-warn/);
     expect(word.getAttribute("title")).toBe(NEEDS_YOU_DETAIL);
     expect(screen.queryByText(/not run yet/i)).toBeNull();

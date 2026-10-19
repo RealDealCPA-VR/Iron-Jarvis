@@ -169,7 +169,9 @@ def test_a_run_whose_ask_expired_reads_needs_you_never_ok_or_done(tmp_path):
     assert session.outcome == "needs_you", "the verdict came from the real ledger"
     fresh = _schedule_messages(mock, before, "weekly-review")
     assert fresh, "the result is still delivered"
-    assert all("finished, but it needs you" in m for m in fresh), fresh
+    # v1.358.0 (lane 8A, on purpose): the notice says the row's own "needs
+    # you" — never "finished" (a workflow parked on the user has not).
+    assert all(": needs you" in m for m in fresh), fresh
     assert not any(": done" in m for m in fresh), fresh
 
 
@@ -266,7 +268,8 @@ def test_the_outcome_vocabulary():
     assert ro.fire_status(None) == "ok"
     assert ro.delivery_head("ok") == "done"
     assert ro.delivery_head("error") == "FAILED"
-    assert ro.delivery_head("needs_you") == "finished, but it needs you"
+    # v1.358.0 (lane 8A, on purpose): the row's own word, never "finished".
+    assert ro.delivery_head("needs_you") == "needs you"
     assert ro.delivery_head("partial") == "finished, but part of it failed"
     # A very short opener carries the next sentence; a title-only text is
     # not nothing; a reason is never prefixed twice.
@@ -500,10 +503,13 @@ def test_chat_still_answers_with_emergency_stop_on(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_a_failed_run_whose_ask_expired_reads_needs_you_not_failed(tmp_path, monkeypatch):
-    """``derive_outcome``: when an ask expired the PERSON is the headline, even
-    for a run that ended FAILED (not by raising) — the row and the notice say
-    it needs them, never "The run failed"."""
+def test_a_failed_run_whose_ask_expired_reads_failed_like_its_badge(tmp_path, monkeypatch):
+    """v1.358.0 (lane 8A, CHANGED ON PURPOSE — the re-audit's regression): a
+    run that ended FAILED while an ask expired used to read "Done · needs
+    you" on the row and "finished, but it needs you" in the notice, while the
+    run's own badge said "Failed". Now the row is ``error`` ("Failed"), the
+    notice says FAILED, and the reason says the ask went unanswered first —
+    the person still learns they were asked."""
     app, client = _app(tmp_path)
     platform = app.state.platform
     _plant_on_create(platform, "schedule:", _expired_ask)
@@ -518,11 +524,14 @@ def test_a_failed_run_whose_ask_expired_reads_needs_you_not_failed(tmp_path, mon
 
     body = client.post("/schedules/tidy-scans/run").json()
 
-    assert body["last_status"] == "needs_you", body
-    assert body["last_detail"].startswith(ro.NEEDS_YOU_LEAD), body
-    assert "The run failed" not in body["last_detail"], body
+    assert body["last_status"] == "error", body
+    assert body["last_detail"].startswith("The run failed: " + ro.ASK_EXPIRED_REASON), body
+    assert "Stopped at the folder it was not allowed to open." in body["last_detail"], body
+    session = platform.orchestrator.get_session(body["last_session_id"])
+    assert session.outcome == "needs_you", "the ledger's own verdict is unchanged"
     sent = _schedule_messages(mock, before, "tidy-scans")
-    assert sent and all("finished, but it needs you" in m for m in sent), sent
+    assert sent and all(": FAILED" in m for m in sent), sent
+    assert not any("needs you" in m for m in sent), sent
 
 
 async def test_emergency_stop_never_touches_a_self_development_run_a_person_started(tmp_path):

@@ -226,7 +226,9 @@ def test_one_verdict_from_a_real_fire_reaches_the_row_the_count_and_the_bell(tmp
         ("seam-clean", "ok", False),
         ("seam-needs-you", "needs_you", True),
         ("seam-part-failed", "partial", True),
-        ("seam-failed-asked", "needs_you", True),
+        # v1.358.0 (lane 8A, on purpose): a FAILED run whose ask expired
+        # is a failed row, like the run's own badge.
+        ("seam-failed-asked", "error", True),
         ("seam-failed", "error", True),
     ]
     _hold("run_verdicts", real)

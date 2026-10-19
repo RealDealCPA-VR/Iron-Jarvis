@@ -48,9 +48,10 @@ import { agentLabel } from "@/lib/agentWorlds";
 // Run now note (lib/scheduleOutcome, shared with a project's Schedules list).
 import { runNowNote, scheduleDetail } from "@/lib/scheduleOutcome";
 // v1.352.0 (G17): the row's WORD and tone come from the ONE status table —
-// "Done", "Done · needs you", "Done · part failed", "Failed", "Stopped" —
-// the same words a session, a mission and the board say for the same run.
-import { scheduleRunWords } from "@/lib/statusWords";
+// "Done", "Needs you", "Part failed", "Failed", "Stopped" (v1.358.0: the row
+// LEADS with the outcome) — the same words a session, a mission and the
+// board say for the same run; `toneTextClass` inks a warn/danger word itself.
+import { scheduleRunWords, toneTextClass } from "@/lib/statusWords";
 // v1.355.0 (G65): the five-minute sentence every unattended-work form shows.
 import { UnattendedAskNote } from "@/components/UnattendedAskNote";
 
@@ -1014,11 +1015,19 @@ export default function SchedulesPage() {
                                 table's (lib/statusWords.scheduleRunWords).
                                 v1.356.0 (G80): drawn as the calm Badge every
                                 other status list uses (Sessions, Tools) —
-                                the words neutral, the tone on its dot. */}
+                                the words neutral, the tone on its dot.
+                                v1.358.0 (lane 8A): a word that needs the
+                                user or reports a failure ("Needs you",
+                                "Part failed", "Failed", "Skipped") reads in
+                                its own warn/danger tone token, not only on
+                                the dot — the re-audit read a grey "Done ·
+                                needs you" with an amber dot. "Done" and
+                                "Stopped" stay the calm grey. */}
                             <Badge
                               value={scheduleRunWords(s.last_status).word}
                               tone={scheduleRunWords(s.last_status).tone}
                               keepCase
+                              className={toneTextClass(scheduleRunWords(s.last_status).tone)}
                               data-testid={`schedule-status-${s.name}`}
                               data-status={s.last_status || "none"}
                             />

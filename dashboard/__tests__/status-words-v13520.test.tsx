@@ -187,9 +187,11 @@ describe("the one table: every state a person can meet, in words and a tone", ()
     expect(statusWords("waiting_you")).toEqual({ word: "Needs you", tone: "amber" });
   });
 
+  // v1.358.0 (lane 8A, updated on purpose): a completed run that fell short
+  // LEADS with the outcome — "Needs you" / "Part failed" — never "Done · …".
   it("a completed run reads its ledger verdict; a failed or stopped one does not", () => {
-    expect(statusWords("completed", "needs_you")).toEqual({ word: "Done · needs you", tone: "amber" });
-    expect(statusWords("completed", "completed_with_failures")).toEqual({ word: "Done · part failed", tone: "amber" });
+    expect(statusWords("completed", "needs_you")).toEqual({ word: "Needs you", tone: "amber" });
+    expect(statusWords("completed", "completed_with_failures")).toEqual({ word: "Part failed", tone: "amber" });
     expect(statusWords("completed", "completed")).toEqual({ word: "Done", tone: "green" });
     expect(statusWords("completed", null).word).toBe("Done");
     expect(statusWords("failed", "needs_you").word).toBe("Failed");
@@ -293,8 +295,8 @@ describe("Sessions: a stopped run reads 'Stopped' in slate", () => {
   });
 
   it("the outcome chip and the plain badge speak the table's words", () => {
-    expect(outcomeLabel({ status: "completed", outcome: "needs_you" })).toBe("Done · needs you");
-    expect(outcomeLabel({ status: "completed", outcome: "completed_with_failures" })).toBe("Done · part failed");
+    expect(outcomeLabel({ status: "completed", outcome: "needs_you" })).toBe("Needs you");
+    expect(outcomeLabel({ status: "completed", outcome: "completed_with_failures" })).toBe("Part failed");
     render(<SessionStatusBadge session={{ status: "active" }} />);
     expect(screen.getByText("Working")).toBeInTheDocument();
     expect(screen.queryByText("active")).toBeNull();
@@ -417,7 +419,7 @@ describe("the Session board: lanes in the table's words; a stopped card is slate
     // Anti-vacuity: a finished-short card still wears its amber outcome chip,
     // never a stop chip.
     const doneLane = document.querySelector('[data-lane="completed"]') as HTMLElement;
-    expect(within(doneLane).getByTestId("session-outcome-chip").textContent).toBe("Done · part failed");
+    expect(within(doneLane).getByTestId("session-outcome-chip").textContent).toBe("Part failed");
     expect(within(doneLane).queryByTestId("session-stopped-chip")).toBeNull();
   });
 

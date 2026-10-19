@@ -226,7 +226,10 @@ describe("ACCEPTANCE: status badges look the same on Sessions, Tools and Schedul
     // The same shell on all three pages: CALM_BADGE, nothing else.
     const calm = CALM_BADGE.split(/\s+/).filter(Boolean).sort();
     expect(sessionsLook.shell).toEqual(calm);
-    expect(schedulesLook.shell).toEqual(calm);
+    // v1.358.0 (lane 8A, updated on purpose): a Schedules row whose run
+    // failed (or needs the user) carries its tone on the WORD too — the one
+    // table's tone token (statusWords.toneTextClass), nothing else.
+    expect(schedulesLook.shell).toEqual([...calm, "!text-tone-danger"].sort());
     expect(toolsLook.shell).toEqual(calm);
     // A failure reads red on Sessions and Schedules (the one status table),
     // the Tools pack that did not start amber — each on the dot, same shape.

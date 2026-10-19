@@ -355,7 +355,9 @@ def test_scheduled_gated_workflow_reports_waiting_not_done(client):
         },
     )
     body = client.post("/schedules/fire-gated/run").json()
-    assert body["last_status"] == "ok"
+    # v1.358.0 (lane 8A, on purpose): parked on the user is ``needs_you`` —
+    # the row read "ok" and a green "Done" over work waiting for the person.
+    assert body["last_status"] == "needs_you"
     assert "waiting for your answer" in body["last_detail"]
 
 

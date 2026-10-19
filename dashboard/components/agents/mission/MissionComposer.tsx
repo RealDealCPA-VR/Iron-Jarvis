@@ -28,15 +28,7 @@ import { ApiError, post } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useDaemon } from "@/lib/daemon";
 import type { Health, Project } from "@/lib/types";
-import { clock, decodeMissions, type MissionRow } from "@/lib/mission";
-
-const STATUS_WORD: Record<string, string> = {
-  active: "Working",
-  queued: "Queued",
-  completed: "Done",
-  failed: "Failed",
-  cancelled: "Stopped",
-};
+import { clock, decodeMissions, missionRowWords, type MissionRow } from "@/lib/mission";
 
 /** One sentence when the DEFAULT provider is known not to answer, else "".
  *  Unknown is never a warning: no /health yet, no row for it, or "auto".
@@ -86,9 +78,15 @@ function parked(r: MissionRow): boolean {
   return r.waiting && (r.status === "active" || r.status === "queued");
 }
 
-/** A recent row's status word — "Needs you" beats "Working" for a parked ask. */
-function rowWord(r: MissionRow): string {
-  return parked(r) ? "Needs you" : (STATUS_WORD[r.status] ?? r.status);
+/** A recent row's status word and tone — "Needs you" beats "Working" for a
+ *  parked ask. v1.358.0 (lane 8A): the rail keeps no table of its own: it
+ *  reads the ONE status table through lib/mission.missionRowWords, so a
+ *  finished objective LEADS with its outcome ("Needs you" / "Part failed",
+ *  in the warn tone) and never shows a plain "Done" over a mission whose
+ *  screen and bell say part of it failed. */
+function rowWords(r: MissionRow): { word: string; warn: boolean } {
+  const w = missionRowWords(r);
+  return { word: w.word, warn: w.tone === "amber" };
 }
 
 export function MissionComposer({
@@ -255,11 +253,12 @@ export function MissionComposer({
                   <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-200">{r.objective}</span>
                   <span className="shrink-0 text-[11px] text-zinc-500">{clock(r.created_at)}</span>
                   <span
+                    data-testid={`mission-recent-status-${r.id}`}
                     className={`w-16 shrink-0 text-right text-[11px] ${
-                      parked(r) ? "font-medium text-tone-warn" : "text-zinc-400"
+                      rowWords(r).warn ? "font-medium text-tone-warn" : "text-zinc-400"
                     }`}
                   >
-                    {rowWord(r)}
+                    {rowWords(r).word}
                   </span>
                 </button>
               </li>

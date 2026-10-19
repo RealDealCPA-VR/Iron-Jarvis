@@ -1763,8 +1763,8 @@ def build_platform(
         excerpt = " ".join((detail or "").split())
         if len(excerpt) > 200:
             excerpt = excerpt[:200] + "…"
-        # v1.351.0 (G01): the head says what the ROW says — "finished, but it
-        # needs you" / "finished, but part of it failed", never "done" over a
+        # v1.351.0 (G01): the head says what the ROW says — "needs you"
+        # (v1.358.0) / "finished, but part of it failed", never "done" over a
         # run that fell short ("done" and "FAILED" are unchanged).
         head = _run_outcome.delivery_head(status)
         message = f"Schedule “{task.name}”: {head}" + (f" — {excerpt}" if excerpt else "")
@@ -2075,21 +2075,23 @@ def build_platform(
             # THE REAL OUTCOME (v1.351.0, readiness audit G01): the status says
             # how the RUN ended, ``Session.outcome`` (the ledger's verdict,
             # derived at finalize) says whether the JOB was done. A run that
-            # completed while an ask expired is ``needs_you``, not "✓ ok"; a
-            # FAILED run whose ask expired is ``needs_you`` too (the
-            # ``derive_outcome`` rule: the person is the headline). A run
-            # stopped before it ended (a cancel that won the race with the
+            # completed while an ask expired is ``needs_you``, not "✓ ok". A
+            # run stopped before it ended (a cancel that won the race with the
             # start) is ``cancelled``. ``_fire`` turns this into the row.
             outcome = str(getattr(done, "outcome", None) or "")
             fired["outcome"] = outcome
             if status == "cancelled":
                 fired["outcome"] = _run_outcome.STATUS_CANCELLED
                 return _run_outcome.plain_sentence(summary) or _run_outcome.STOPPED_NO_WORDS
-            if status != "completed" and outcome != "needs_you":
+            if status != "completed":
                 # The reason in plain words; ``_fire`` words the row
                 # ("The run failed: <reason>") — never a Python class name.
+                # v1.358.0 (lane 8A): a FAILED run whose ask expired is a
+                # failed row too — "Failed", like the run's own badge, never
+                # "needs you" over a run that did not finish; its reason
+                # says the ask went unanswered first.
                 raise _ScheduledRunFailed(
-                    _run_outcome.plain_text(summary) or f"the run ended {status}"
+                    _run_outcome.failed_reason(summary, status, asked=outcome == "needs_you")
                 )
             detail = _run_outcome.short_detail(
                 _run_outcome.fire_status(outcome), summary
@@ -2111,7 +2113,11 @@ def build_platform(
             if status == "failed":
                 raise RuntimeError(f"workflow “{ref}” run failed — see its run history")
             if status == "waiting":
-                return f"workflow “{ref}” is waiting for your answer (Workflows page)"
+                # v1.358.0 (lane 8A): PARKED on the user is ``needs_you`` —
+                # the row reads "Needs you" and the notice "needs you", never
+                # "ok"/"Done" over work that waits for the person.
+                fired["outcome"] = _run_outcome.STATUS_NEEDS_YOU
+                return _run_outcome.workflow_waiting_detail(ref)
             return f"workflow “{ref}” ran"
         if task.kind == "event":
             etype = payload.get("type", "schedule.fired")
@@ -2148,7 +2154,10 @@ def build_platform(
                         f"{str(result.get('reason') or result.get('unmet') or '')[:200]}"
                     )
                 reason = str(result.get("reason") or "").strip() or "refused"
-                return f"goal iteration skipped: {reason}"
+                # v1.358.0 (lane 8A): nothing ran, so the row says Skipped
+                # (``skipped``), never "ok"/"Done".
+                fired["outcome"] = _run_outcome.STATUS_SKIPPED
+                return _run_outcome.goal_skipped_detail(reason)
             detail = f"goal iteration {int(result.get('iteration') or 0)} completed"
             if result.get("satisfied"):
                 detail += " — goal satisfied"

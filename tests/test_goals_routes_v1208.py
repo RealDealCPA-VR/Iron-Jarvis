@@ -581,13 +581,15 @@ async def test_goal_schedule_survives_a_deleted_goal_as_an_honest_skip(platform)
     await platform.scheduler.run_now("goal-orphan")  # must not raise
 
     row = _sched_row(platform, "goal-orphan")
-    assert row.last_status == "ok"  # a skip is not a scheduler malfunction
-    assert "skipped" in row.last_detail
+    # v1.358.0 (lane 8A, on purpose): nothing ran, so the row says Skipped —
+    # it read "ok" and a green "Done". Still not an error (not a malfunction).
+    assert row.last_status == "skipped"
+    assert "did not run" in row.last_detail
     assert "unknown goal" in row.last_detail
 
     # The loop is genuinely alive: the same row fires again without drama.
     await platform.scheduler.run_now("goal-orphan")
-    assert _sched_row(platform, "goal-orphan").last_status == "ok"
+    assert _sched_row(platform, "goal-orphan").last_status == "skipped"
 
 
 async def test_goal_schedule_records_a_failed_iteration_without_raising(

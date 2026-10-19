@@ -61,8 +61,18 @@ STOPPED_NO_WORDS = "The run was stopped before it finished."
 NEEDS_YOU_LEAD = "It asked for your OK and nobody answered in time, so some steps did not run."
 PARTIAL_LEAD = "Some of its steps failed."
 
+#: A FAILED run whose ask expired (v1.358.0, lane 8A): the row says
+#: "Failed", like the run's own badge, and the reason says the ask went
+#: unanswered first — the person still learns they were asked.
+ASK_EXPIRED_REASON = "it asked for your OK and nobody answered in time."
+
 _FAILED_LEAD = "The run failed: "
-_NO_REASON = "The run failed, and it gave no reason (the daemon log has the details)."
+#: v1.358.0 (lane 8A): plain words, never "the daemon log" — the app's own
+#: name and where a person can look (Status).
+_NO_REASON = (
+    "The run failed and gave no reason. "
+    "Iron Jarvis kept the details in its log; Status shows how the app is doing."
+)
 
 _DETAIL_LIMIT = 200
 _REASON_LIMIT = 260
@@ -72,7 +82,12 @@ _MIN_SENTENCE = 40
 def fire_status(outcome: object) -> str:
     """``last_status`` for a fire that returned, from the session's ledger
     verdict (``Session.outcome``) — ``ok`` when there is no verdict to read
-    (a workflow, an event, a goal iteration, an older session)."""
+    (an event, a goal iteration that ran, an older session).
+
+    v1.358.0 (lane 8A): the fire paths that have no session say their own
+    verdict through the same door — a workflow PARKED on the user's answer
+    is ``needs_you`` and a goal iteration the engine refused is
+    ``skipped`` (both read "ok" and a "Done" row before)."""
     value = str(outcome or "").strip().lower()
     if value == "needs_you":
         return STATUS_NEEDS_YOU
@@ -80,20 +95,49 @@ def fire_status(outcome: object) -> str:
         return STATUS_PARTIAL
     if value == STATUS_CANCELLED:
         return STATUS_CANCELLED
+    if value == STATUS_SKIPPED:
+        return STATUS_SKIPPED
     return STATUS_OK
 
 
 def delivery_head(status: str) -> str:
     """The notification's head word(s) — the row's verdict, said once.
-    ``done`` and ``FAILED`` are unchanged since v1.119.0 (pinned)."""
+    ``done`` and ``FAILED`` are unchanged since v1.119.0 (pinned).
+
+    v1.358.0 (lane 8A): ``needs_you`` reads "needs you" — the row's own
+    "Needs you" and the bell's — never "finished": a workflow parked on the
+    user's answer has not finished, and a run whose ask expired is not done."""
     return {
         STATUS_OK: "done",
-        STATUS_NEEDS_YOU: "finished, but it needs you",
+        STATUS_NEEDS_YOU: "needs you",
         STATUS_PARTIAL: "finished, but part of it failed",
         STATUS_ERROR: "FAILED",
         STATUS_CANCELLED: "stopped",
         STATUS_SKIPPED: "skipped",
     }.get(str(status or ""), str(status or "") or "done")
+
+
+def failed_reason(summary: object, status: object, *, asked: bool = False) -> str:
+    """The reason a scheduled session that ended FAILED gives its row (the
+    words ``failure_detail`` puts after "The run failed: "). A run whose ask
+    expired first says so (v1.358.0, lane 8A): the row reads "Failed", as
+    the run's own badge does, and the person still learns it asked them."""
+    reason = plain_text(summary) or f"the run ended {status}"
+    return f"{ASK_EXPIRED_REASON} {reason}" if asked else reason
+
+
+def workflow_waiting_detail(ref: object) -> str:
+    """The row detail for a scheduled workflow PARKED on the user's answer
+    (``needs_you``, v1.358.0 lane 8A): where the answer is given."""
+    name = " ".join(str(ref or "").split()) or "inline"
+    return f"Your workflow “{name}” is waiting for your answer on the Workflows page."
+
+
+def goal_skipped_detail(reason: object) -> str:
+    """The row detail for a goal iteration the engine REFUSED (``skipped``,
+    v1.358.0 lane 8A): nothing ran, and why, in the engine's own words."""
+    why = " ".join(str(reason or "").split()) or "it was refused"
+    return f"The goal did not run this time: {why}"
 
 
 # -- markdown → plain words ---------------------------------------------------

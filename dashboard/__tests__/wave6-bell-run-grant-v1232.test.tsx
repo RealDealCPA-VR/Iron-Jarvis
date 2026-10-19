@@ -90,8 +90,9 @@ describe("A9 — the bell offers a grant wider than one call", () => {
     await openBell();
     const wide = screen.getAllByRole("button", { name: /allow for this run/i });
     expect(wide.length).toBe(2);
-    // The batch promise is spelled out where the user hovers.
-    expect(wide[0].getAttribute("title")).toMatch(/every pending ask for it clears at once/i);
+    // The batch promise is spelled out where the user hovers. v1.358.0
+    // (lane 8A, updated on purpose): in the tool's words, never its raw id.
+    expect(wide[0].getAttribute("title")).toMatch(/every waiting ask like this one clears at once/i);
   });
 
   it("'Allow for this run' posts decision 'conversation' to the card's route and the row leaves", async () => {

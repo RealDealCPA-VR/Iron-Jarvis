@@ -244,12 +244,13 @@ describe("KanbanBoard — the waiting card", () => {
         reload={() => {}}
       />,
     );
-    // v1.352.0 (G17, updated on purpose): "Done" lane, "Done · needs you".
+    // v1.352.0 (G17, updated on purpose): "Done" lane, "Needs you".
+    // v1.358.0 (lane 8A, updated on purpose): the outcome leads: "Needs you".
     const done = column("Done");
     expect(done).toHaveTextContent("task s-short");
     const chips = screen.getAllByTestId("session-outcome-chip");
     expect(chips).toHaveLength(1); // s-ok earned plain green — no chip
-    expect(chips[0]).toHaveTextContent("Done · needs you");
+    expect(chips[0]).toHaveTextContent("Needs you");
   });
 });
 
@@ -316,7 +317,7 @@ describe("sessions/[id] — the run is paused for you", () => {
     );
     await act(async () => {});
     expect(screen.getByTestId("session-outcome-chip")).toHaveTextContent(
-      "Done · needs you",
+      "Needs you",
     );
     expect(screen.queryByTestId("session-approval")).not.toBeInTheDocument();
   });

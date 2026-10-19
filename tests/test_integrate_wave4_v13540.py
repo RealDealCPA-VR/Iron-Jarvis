@@ -290,7 +290,10 @@ def test_every_default_alert_reaches_the_phone_in_plain_words(tmp_path, etype):
         ({"status": "completed", "summary": "", "origin": "job:mission", "outcome": "needs_you"}, "Your objective finished, but something needs you"),
         ({"status": "completed", "summary": "", "origin": "job:mission", "outcome": "completed"}, "Your objective is done"),
         ({"status": "completed", "summary": "", "origin": "goal:goal_8f2", "outcome": "completed_with_failures"}, "Your goal's run finished, but part of it failed"),
-        ({"status": "failed", "summary": "", "origin": "comm:telegram", "outcome": "needs_you"}, "Your request from telegram needs you"),
+        # v1.358.0 (lane 8A, on purpose): a run that ENDED FAILED could not
+        # finish even when an ask expired — the bell's and the row's verdict.
+        ({"status": "failed", "summary": "", "origin": "comm:telegram", "outcome": "needs_you"}, "Your request from telegram could not finish"),
+        ({"status": "completed", "summary": "", "origin": "comm:telegram", "outcome": "needs_you"}, "Your request from telegram needs you"),
         ({"status": "cancelled", "summary": "", "origin": "reflex:on-invoice", "outcome": None}, "Your reflex on-invoice was stopped"),
         ({"status": "completed", "summary": "", "origin": "autonomy", "outcome": None}, "An autonomy run finished. Check what it did"),
     ],

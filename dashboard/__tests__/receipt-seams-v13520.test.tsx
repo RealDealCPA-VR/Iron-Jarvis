@@ -165,7 +165,7 @@ describe("(a) the helper agent's card reads the wave-1 receipt the daemon sends"
       </AgentRunSettled>,
     );
     // ONE status table: the ledger's "completed_with_failures" reads "part
-    // failed" here exactly as "Done · part failed" reads on the Sessions page.
+    // failed" here exactly as "Part failed" reads on the Sessions page.
     expect(screen.getByTestId("agent-run-words").textContent).toBe("Your tax-reader agent worked for 3 min · part failed");
     fireEvent.click(screen.getByTestId("agent-run-toggle"));
     const modelRow = screen.getByTestId("agent-run-model");
@@ -196,7 +196,8 @@ describe("(a) ONE status table covers every outcome wave 1 stores", () => {
     const written = [...py.matchAll(/^STATUS_[A-Z_]+ = "([a-z_]+)"/gm)].map((m) => m[1]);
     written.push("missed", "failed"); // scheduling/service.py; the legacy FAILED_STATUSES value
     expect(written).toEqual(expect.arrayContaining(["ok", "error", "needs_you", "partial", "cancelled", "skipped"]));
-    const known = new Set(["Done", "Done · needs you", "Done · part failed", "Failed", "Stopped", "Skipped", "Missed"]);
+    // v1.358.0 (lane 8A, updated on purpose): the outcome leads.
+    const known = new Set(["Done", "Needs you", "Part failed", "Failed", "Stopped", "Skipped", "Missed"]);
     for (const v of written) {
       expect(known.has(scheduleRunWords(v).word), v).toBe(true);
       // lib/scheduleOutcome keeps no second copy of the words.

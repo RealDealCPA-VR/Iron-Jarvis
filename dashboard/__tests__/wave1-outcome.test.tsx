@@ -209,11 +209,12 @@ describe("outcomeLabel / waitingLabel", () => {
   it("names the two short outcomes and stays quiet for an earned green", () => {
     // v1.352.0 (G17, updated on purpose): the one status table's words
     // ("Completed · needs you" / "Completed · with failures" before).
+    // v1.358.0 (lane 8A, updated on purpose): the outcome leads.
     expect(outcomeLabel({ status: "completed", outcome: "needs_you" })).toBe(
-      "Done · needs you",
+      "Needs you",
     );
     expect(outcomeLabel({ status: "completed", outcome: "completed_with_failures" })).toBe(
-      "Done · part failed",
+      "Part failed",
     );
     expect(outcomeLabel({ status: "completed", outcome: "completed" })).toBeNull();
     expect(outcomeLabel({ status: "completed" })).toBeNull(); // an older row
@@ -288,7 +289,7 @@ describe("RunResultCard — the headline tells the truth about a short run", () 
 /* -------------------------------------------------- the list + ProjectTasks */
 
 describe("the sessions list and ProjectTasks wear the outcome chip", () => {
-  it("sessions list: amber 'Done · part failed' instead of green", () => {
+  it("sessions list: amber 'Part failed' instead of green", () => {
     api.responses["/sessions"] = {
       sessions: [
         sv("s-short", "completed", { outcome: "completed_with_failures" }),
@@ -299,10 +300,10 @@ describe("the sessions list and ProjectTasks wear the outcome chip", () => {
     render(<SessionsPage />);
     const chips = screen.getAllByTestId("session-outcome-chip");
     expect(chips).toHaveLength(1);
-    expect(chips[0]).toHaveTextContent("Done · part failed");
+    expect(chips[0]).toHaveTextContent("Part failed");
   });
 
-  it("ProjectTasks recent runs: amber 'Done · needs you'", () => {
+  it("ProjectTasks recent runs: amber 'Needs you'", () => {
     render(
       <ProjectTasks
         projectId="proj_1"
@@ -315,7 +316,7 @@ describe("the sessions list and ProjectTasks wear the outcome chip", () => {
     );
     const chips = screen.getAllByTestId("session-outcome-chip");
     expect(chips).toHaveLength(1);
-    expect(chips[0]).toHaveTextContent("Done · needs you");
+    expect(chips[0]).toHaveTextContent("Needs you");
   });
 });
 

@@ -40,6 +40,11 @@ import { MISSION_ORIGIN, sessionHref } from "@/lib/missionLinks";
 import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
 import { PLAN_TOOL } from "@/lib/toolWords";
+// v1.358.0 (lane 8A): a run's model-written summary flattened to plain words —
+// the SAME helper the Schedules row uses (dependency-free, never the chat's
+// Markdown renderer), and a browser task's ending in words and tone.
+import { summaryLine } from "@/lib/plainText";
+import { browserRunWords, type BrowserRunTone } from "@/lib/browserRunWords";
 // v1.357.0 (G76): a task another Jarvis sent, in the one set of words.
 import { REMOTE_KIND, remoteTaskSubject } from "@/lib/remoteTask";
 // v1.352.0 (G24/G25): the chat card's own answer words, dependency-free.
@@ -49,6 +54,7 @@ import {
   ANSWERED_LINGER_MS,
   DENY,
   answeredLine,
+  askPhrase,
   askSentence,
   runSubject,
   scopeLabel,
@@ -272,9 +278,12 @@ export function unattendedDoor(origin: unknown): { kind: string; name: string } 
   return { kind, name: i >= 0 ? value.slice(i + 1).trim() : "" };
 }
 
-/** A summary cut for a one-line row. */
+/** A run's summary as a one-line row: flattened to plain words first
+ *  (v1.358.0, lane 8A — lib/plainText.summaryLine, the Schedules row's own
+ *  helper), so "# Final Report ## What happened …" never reaches a row,
+ *  then cut. */
 function clip(text: unknown): string {
-  const s = typeof text === "string" ? text.trim() : "";
+  const s = summaryLine(text).trim();
   return s.length > 140 ? `${s.slice(0, 139)}…` : s;
 }
 
@@ -296,21 +305,21 @@ function unattendedCompletion(
   const v = runVerdict(p);
   if (v.cancelled) return null;
   if (v.done && door.kind === "workflow") return null;
-  // An expired ask is the headline even when the run then ended FAILED (the
-  // daemon's `derive_outcome` rule) — the schedule's row reads "finished ·
-  // needs you" for that same run (scheduling/run_outcome.fire_status), so
-  // the bell says "needs you" too, never "could not finish" (v1.351.0
-  // integrate: one verdict, pinned by __tests__/fixtures/wave1-seams-v13510.json).
-  const words =
-    v.outcome === "needs_you"
+  // v1.358.0 (lane 8A): a run that ENDED FAILED reads "could not finish"
+  // even when an ask expired on the way — the schedule's row reads "Failed"
+  // for that same run (scheduling/run_outcome: a failed run is `error`), and
+  // the run's own badge says Failed. "needs you" is a run that finished
+  // while the user is the next step. One verdict, pinned by
+  // __tests__/fixtures/wave1-seams-v13510.json.
+  const words = !v.ran
+    ? "could not finish"
+    : v.outcome === "needs_you"
       ? "needs you"
-      : !v.ran
-        ? "could not finish"
-        : v.done
-          ? "finished"
-          : v.outcome === "completed_with_failures"
-            ? "finished, but part of it failed"
-            : "finished. Check what it did";
+      : v.done
+        ? "finished"
+        : v.outcome === "completed_with_failures"
+          ? "finished, but part of it failed"
+          : "finished. Check what it did";
   return {
     id: e.id,
     ts: e.ts,
@@ -325,6 +334,15 @@ function unattendedCompletion(
     ...(v.done ? { quiet: true } : { attention: true }),
   };
 }
+
+/** v1.358.0 (lane 8A): a browser task's tone, drawn by the row's icon — an
+ *  ask wears the bell's ask mark, never the warning a failure wears. */
+const BROWSER_RUN_ICON: Record<BrowserRunTone, LucideIcon> = {
+  done: MonitorCog,
+  ask: ShieldAlert,
+  warn: AlertTriangle,
+  danger: AlertTriangle,
+};
 
 /** Map one live event to an activity notification (null = not a notified type). */
 export function toActivity(e: IJEvent): ActivityItem | null {
@@ -374,7 +392,6 @@ export function toActivity(e: IJEvent): ActivityItem | null {
               ? "Your objective finished"
               : "Your objective finished. Check what it did";
     const project = typeof p.project_id === "string" ? p.project_id : "";
-    const summary = typeof p.summary === "string" ? p.summary.trim() : "";
     return {
       id: e.id,
       ts: e.ts,
@@ -382,7 +399,9 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: done ? CheckCircle2 : AlertTriangle,
       // The exact words the Handbook promises. Nothing short of done borrows them.
       title,
-      body: summary.length > 140 ? `${summary.slice(0, 139)}…` : summary,
+      // v1.358.0 (lane 8A): the coordinator's report in plain words, never
+      // its raw markdown.
+      body: clip(p.summary),
     };
   }
   if (e.type === "workflow.completed") {
@@ -721,20 +740,19 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     };
   }
   if (e.type === "computeruse.run_finished") {
-    // Payload: {run_id, status, steps}; "completed" is the only good terminal
-    // status (failed/blocked/awaiting_approval all mean the task didn't finish).
-    const status = typeof p.status === "string" && p.status ? p.status : "finished";
-    const ok = status === "completed";
-    const steps =
-      typeof p.steps === "number" ? `${p.steps} step${p.steps === 1 ? "" : "s"}` : "";
-    const runId = typeof p.run_id === "string" ? p.run_id : "";
+    // Payload: {run_id, status, steps}. v1.358.0 (lane 8A): a run that
+    // stopped to ASK is not a failure (its own words, the ask icon), a
+    // failure says what happened in plain words, and the raw status and the
+    // run id never reach the visible text (lib/browserRunWords). The row
+    // opens the Browser page, where the run is.
+    const words = browserRunWords(p.status, p.steps);
     return {
       id: e.id,
       ts: e.ts,
       href: "/computeruse",
-      icon: MonitorCog,
-      title: ok ? "Computer-use run finished" : "Computer-use run failed",
-      body: [status, steps, runId].filter(Boolean).join(" · "),
+      icon: BROWSER_RUN_ICON[words.tone],
+      title: words.title,
+      body: words.body,
     };
   }
   return null;
@@ -827,14 +845,14 @@ function WaitingRunRow({
   return (
     <li data-testid="bell-waiting-run" className="px-4 py-3">
       <div className="flex items-start gap-3">
-        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-tone-warn/25 bg-tone-warn/[0.08] text-tone-warn">
           <Workflow size={15} />
         </span>
         <div className="min-w-0 flex-1">
           <span className="block text-sm font-medium text-zinc-100">
             Workflow &ldquo;{ask.workflow}&rdquo; needs an answer
           </span>
-          <p className="mt-0.5 text-[12px] leading-snug text-amber-200">{ask.question}</p>
+          <p className="mt-0.5 text-[12px] leading-snug text-tone-warn">{ask.question}</p>
           {ask.options.length > 0 && (
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {ask.options.map((o) => (
@@ -843,7 +861,7 @@ function WaitingRunRow({
                   type="button"
                   onClick={() => void submit(o)}
                   disabled={busy}
-                  className="rounded-full border border-amber-500/30 bg-amber-500/[0.08] px-2.5 py-1 text-[11px] text-amber-200 transition-colors hover:bg-amber-500/[0.16] disabled:opacity-50"
+                  className="rounded-full border border-tone-warn/30 bg-tone-warn/[0.08] px-2.5 py-1 text-[11px] text-tone-warn transition-colors hover:bg-tone-warn/[0.16] disabled:opacity-50"
                 >
                   {o}
                 </button>
@@ -870,7 +888,7 @@ function WaitingRunRow({
               {busy ? "Sending…" : "Answer"}
             </button>
           </div>
-          {error && <p className="mt-1 text-[11px] text-rose-300">{error}</p>}
+          {error && <p className="mt-1 text-[11px] text-tone-danger">{error}</p>}
           <span className="mt-1 block font-mono text-[10px] text-zinc-600">
             {shortId(ask.runId)} · {clockTime(ask.startedAt)}
           </span>
@@ -940,14 +958,14 @@ function BusyRunsRow({
   return (
     <li data-testid="bell-busy-runs" className="px-4 py-3">
       <div className="flex items-start gap-3">
-        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-tone-warn/25 bg-tone-warn/[0.08] text-tone-warn">
           <Layers size={15} />
         </span>
         <div className="min-w-0 flex-1">
           <span className="block text-sm font-medium text-zinc-100">
             {ask.running} background runs are going at once
           </span>
-          <p className="mt-0.5 text-[12px] leading-snug text-amber-200">
+          <p className="mt-0.5 text-[12px] leading-snug text-tone-warn">
             Queue the extras so only {ask.cap} run at a time?
           </p>
           <div className="mt-1.5 flex items-center gap-1.5">
@@ -969,7 +987,7 @@ function BusyRunsRow({
               Not now
             </button>
           </div>
-          {error && <p className="mt-1 text-[11px] text-rose-300">{error}</p>}
+          {error && <p className="mt-1 text-[11px] text-tone-danger">{error}</p>}
           <span className="mt-1 block font-mono text-[10px] text-zinc-600">
             {clockTime(ask.ts)}
           </span>
@@ -1052,7 +1070,7 @@ function ChatWaitingRow({ ask, onOpen }: { ask: ChatWaitingAsk; onOpen: () => vo
         onClick={onOpen}
         className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]"
       >
-        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-tone-warn/25 bg-tone-warn/[0.08] text-tone-warn">
           <MessageSquare size={15} />
         </span>
         <span className="min-w-0 flex-1">
@@ -1079,7 +1097,7 @@ function PaneWaitingRow({ pane, onOpen }: { pane: BlockedPane; onOpen: () => voi
         onClick={onOpen}
         className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]"
       >
-        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-tone-warn/25 bg-tone-warn/[0.08] text-tone-warn">
           <SquareTerminal size={15} />
         </span>
         <span className="min-w-0 flex-1">
@@ -1184,14 +1202,14 @@ function AgentApprovalRow({
   return (
     <li data-testid="bell-agent-approval" className="px-4 py-3">
       <div className="flex items-start gap-3">
-        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-tone-warn/25 bg-tone-warn/[0.08] text-tone-warn">
           <ShieldAlert size={15} />
         </span>
         <div className="min-w-0 flex-1">
           <span className="block text-sm font-medium text-zinc-100">
             An agent is asking permission
           </span>
-          <p data-testid="bell-approval-line" className="mt-0.5 text-[12px] leading-snug text-amber-200">
+          <p data-testid="bell-approval-line" className="mt-0.5 text-[12px] leading-snug text-tone-warn">
             {planAsk ? (
               // v1.350.0: the plan approval is not a tool to run.
               <>{runSubject(ask.origin)} wants you to approve its plan</>
@@ -1240,8 +1258,10 @@ function AgentApprovalRow({
                 type="button"
                 onClick={() => void answer("conversation")}
                 disabled={busy !== null}
-                title={`Allow ${ask.tool} for the rest of this run. Every pending ask for it clears at once.`}
-                className="rounded-lg border border-cyan-500/25 bg-cyan-500/[0.06] px-3 py-1.5 text-[12px] text-cyan-200 transition-colors hover:border-cyan-400/40 disabled:opacity-50"
+                // v1.358.0 (lane 8A): the tool in words (lib/toolWords via
+                // askPhrase), never its raw id.
+                title={`Let this run ${askPhrase(ask.tool)} for the rest of the run. Every waiting ask like this one clears at once.`}
+                className="rounded-lg border border-accent/25 bg-accent/[0.06] px-3 py-1.5 text-[12px] text-accent-soft transition-colors hover:border-accent/40 disabled:opacity-50"
               >
                 {busy === "conversation" ? "Allowing…" : scopeLabel("run")}
               </button>
@@ -1254,8 +1274,8 @@ function AgentApprovalRow({
                 data-testid="bell-approval-always"
                 onClick={() => void answer("always")}
                 disabled={busy !== null}
-                title={`Allow ${ask.tool} with exactly these arguments in this run's scope for 30 days. You can take it back on the Autonomy page.`}
-                className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-200 disabled:opacity-50"
+                title={`Always let it ${askPhrase(ask.tool)} with exactly these details, in this run's scope, for 30 days. You can take it back on the Autonomy page.`}
+                className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50"
               >
                 {busy === "always" ? "Allowing…" : ALWAYS_EXACT}
               </button>
@@ -1264,12 +1284,12 @@ function AgentApprovalRow({
               type="button"
               onClick={() => void answer("deny")}
               disabled={busy !== null}
-              className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:border-rose-500/30 hover:text-rose-200 disabled:opacity-50"
+              className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:border-tone-danger/30 hover:text-tone-danger disabled:opacity-50"
             >
               {busy === "deny" ? "Denying…" : DENY}
             </button>
           </div>
-          {error && <p className="mt-1 text-[11px] text-rose-300">{error}</p>}
+          {error && <p className="mt-1 text-[11px] text-tone-danger">{error}</p>}
           {ask.missionId ? (
             // v1.310.0: a mission's ask opens its mission screen — the
             // objective, the team and this same question inline — so the
@@ -1915,7 +1935,7 @@ export function NotificationBell() {
                 <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
                   <Inbox size={22} className="text-zinc-600" />
                   {pollError ? (
-                    <div role="alert" className="text-sm text-rose-200">
+                    <div role="alert" className="text-sm text-tone-danger">
                       Could not load pending work: {pollError.message}
                     </div>
                   ) : (
@@ -1974,7 +1994,7 @@ export function NotificationBell() {
                         onClick={() => setOpen(false)}
                         className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]"
                       >
-                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-tone-warn/25 bg-tone-warn/[0.08] text-tone-warn">
                           <MonitorCog size={15} />
                         </span>
                         {/* v1.353.0 (G54): a queued website action, in
@@ -2015,7 +2035,7 @@ export function NotificationBell() {
                       data-testid="bell-waiting-conflict"
                       className="px-4 py-2.5"
                     >
-                      <p className="text-[11px] leading-snug text-amber-200/90">
+                      <p className="text-[11px] leading-snug text-tone-warn/90">
                         Couldn&apos;t answer &ldquo;{c.workflow}&rdquo;: {c.message}
                       </p>
                     </li>
@@ -2041,7 +2061,7 @@ export function NotificationBell() {
                           }}
                           className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]"
                         >
-                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-tone-warn/25 bg-tone-warn/[0.08] text-tone-warn">
                             <ShieldAlert size={15} />
                           </span>
                           <span className="min-w-0 flex-1">

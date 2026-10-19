@@ -38,7 +38,8 @@ describe("Badge keepCase", () => {
   it("the outcome chip keeps its case", () => {
     render(<SessionStatusBadge session={{ status: "completed", outcome: "needs_you" }} />);
     // v1.352.0 (G17, updated on purpose): the one status table's words.
-    expect(chipClass("Done · needs you")).not.toMatch(/\bcapitalize\b/);
+    // v1.358.0 (lane 8A, updated on purpose): "Needs you" (the outcome leads).
+    expect(chipClass("Needs you")).not.toMatch(/\bcapitalize\b/);
   });
 
   it("the waiting chip keeps its case", () => {

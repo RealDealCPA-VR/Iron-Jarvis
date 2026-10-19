@@ -58,11 +58,15 @@ describe("other bell rows carry no dash aside", () => {
     expect(noWhy.body).toBe("builder");
   });
 
-  it("a computer-use run says finished or failed in its title", () => {
+  it("a browser task says finished or could not finish in its title", () => {
+    // v1.358.0 (lane 8A, updated on purpose): plain words (lib/browserRunWords)
+    // — "Computer-use run finished/failed" with the raw status and run id as
+    // the body before.
     const ok = toActivity(ev("computeruse.run_finished", { run_id: "r1", status: "completed", steps: 3 }))!;
-    expect(ok.title).toBe("Computer-use run finished");
+    expect(ok.title).toBe("Your browser task finished");
     const bad = toActivity(ev("computeruse.run_finished", { run_id: "r2", status: "failed", steps: 1 }))!;
-    expect(bad.title).toBe("Computer-use run failed");
+    expect(bad.title).toBe("Your browser task could not finish");
+    expect(bad.body).not.toMatch(/r2|failed ·/);
   });
 
   it("none of these titles or bodies holds a spaced dash", () => {

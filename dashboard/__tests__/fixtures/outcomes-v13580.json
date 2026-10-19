@@ -1,0 +1,43 @@
+{
+  "schedule_rows": [
+    {
+      "case": "workflow-parked",
+      "name": "fire-gated",
+      "last_status": "needs_you",
+      "last_detail": "Your workflow “gated” is waiting for your answer on the Workflows page.",
+      "notice": "Schedule “fire-gated”: needs you — Your workflow “gated” is waiting for your answer on the Workflows page."
+    },
+    {
+      "case": "goal-skipped",
+      "name": "goal-gone",
+      "last_status": "skipped",
+      "last_detail": "The goal did not run this time: unknown goal 'goal_gone'",
+      "notice": "Schedule “goal-gone”: skipped — The goal did not run this time: unknown goal 'goal_gone'"
+    },
+    {
+      "case": "failed-asked",
+      "name": "tidy-scans",
+      "last_status": "error",
+      "last_detail": "The run failed: it asked for your OK and nobody answered in time. Stopped at the folder it may not open.",
+      "notice": "Schedule “tidy-scans”: FAILED — The run failed: it asked for your OK and nobody answered in time. Stopped at the folder it may not open.",
+      "completion": {
+        "origin": "schedule:tidy-scans",
+        "status": "failed",
+        "outcome": "needs_you",
+        "project_id": null
+      }
+    }
+  ],
+  "mission_part_failed": {
+    "origin": "job:mission",
+    "status": "completed",
+    "outcome": "completed_with_failures",
+    "project_id": null
+  },
+  "browser_statuses": [
+    "completed",
+    "failed",
+    "blocked",
+    "awaiting_approval"
+  ]
+}
