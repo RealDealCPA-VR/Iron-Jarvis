@@ -1069,14 +1069,25 @@ _STRONG_WEB_RX = re.compile(
     re.IGNORECASE,
 )
 
+#: The bare search verbs the web rule counts. One is set aside only when it
+#: is AIMED at a named app (v1.354.0 review): the app's words follow it in
+#: the same clause, within :data:`_VERB_REACH` characters.
+_BARE_WEB_VERB_RX = re.compile(r"\b(?:search|look\s?up|browse)\b", re.IGNORECASE)
+#: What ends a search verb's reach toward an app: a clause break.
+_CLAUSE_BREAK_RX = re.compile(r"[.;:!?,\n]|\b(?:and|then|but|also)\b", re.IGNORECASE)
+_VERB_REACH = 40
+
 
 def _web_signal_is_an_app(msg: str) -> bool:
     """True when the web rule fired ONLY because of a catalog app's name
     (v1.354.0, G39): "search my Google Drive for the lease" is a search IN
     Drive, not a web search — its "search" is aimed at the app and its
-    "Google" is part of the app's name. With the app's words blanked out and
-    the bare search verbs set aside, no web word is left. "search the web
-    and my Notion" keeps "web"; "the latest news on GitHub" keeps "latest".
+    "Google" is part of the app's name. With the app's words blanked out, no
+    strong web word is left, and every bare search verb has a named app
+    right after it in its own clause. "search the web and my Notion" keeps
+    "web"; "the latest news on GitHub" keeps "latest"; "search for flights
+    to Paris and save them to my Notion" keeps its search (the verb's clause
+    names no app — the v1.354.0 review's regression case).
     Never raises (a fault keeps today's behaviour: the rule fires)."""
     try:
         from ..connectors.app_names import app_name_spans
@@ -1088,7 +1099,20 @@ def _web_signal_is_an_app(msg: str) -> bool:
         for start, end in spans:
             for i in range(start, min(end, len(chars))):
                 chars[i] = " "
-        return _STRONG_WEB_RX.search("".join(chars)) is None
+        blanked = "".join(chars)
+        if _STRONG_WEB_RX.search(blanked) is not None:
+            return False
+        # A verb inside an app's own name ("Brave Search") was blanked above.
+        for verb in _BARE_WEB_VERB_RX.finditer(blanked):
+            aimed = any(
+                start >= verb.end()
+                and start - verb.end() <= _VERB_REACH
+                and _CLAUSE_BREAK_RX.search(msg[verb.end():start]) is None
+                for start, _end in spans
+            )
+            if not aimed:
+                return False
+        return True
     except Exception:  # noqa: BLE001
         return False
 

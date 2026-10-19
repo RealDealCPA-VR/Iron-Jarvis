@@ -145,6 +145,26 @@ class _Facts:
         self.transport = ""
 
 
+def _cli_sign_in_refusal(text: str) -> str:
+    """The CLI provider whose OWN sign-in refusal *text* carries ("" when
+    none). Every CLI sign-in failure (``cli_auth.cli_failure_message``, the
+    Claude transport's ``signed_out_message``) puts ``cli_auth.SIGN_IN_FIX``
+    verbatim in its message: matched against that one constant, never
+    guessed from loose words. Never raises."""
+    if not text:
+        return ""
+    try:
+        from .cli_auth import CLI_BINARIES, SIGN_IN_FIX
+
+        for provider, binary in CLI_BINARIES.items():
+            fix = SIGN_IN_FIX.get(binary, "")
+            if fix and fix in text:
+                return provider
+    except Exception:  # noqa: BLE001 — wording only
+        return ""
+    return ""
+
+
 def failure_facts(exc: BaseException | None) -> _Facts:
     """The typed fields of *exc* and what it was raised from (the first value
     found for each field wins, outermost first). Never raises."""
@@ -159,6 +179,16 @@ def failure_facts(exc: BaseException | None) -> _Facts:
                 # the words.
                 k = str(getattr(cur, "kind", "") or "")
                 f.kind = k if k in REFUSAL_KINDS else ""
+            if not f.kind:
+                # The CLI's OWN sign-in refusal (a mid-turn "not logged
+                # in" — the probe had not said so yet) carries no typed
+                # kind, only cli_auth's one remedy sentence (v1.354.0
+                # review): read as signed out, never "press Retry".
+                cli = _cli_sign_in_refusal(str(cur) or "")
+                if cli:
+                    f.kind = "signed_out"
+                    if not f.cli:
+                        f.cli = cli
             if not f.provider:
                 f.provider = str(getattr(cur, "failed_provider", "") or "")
             if not f.cli:

@@ -133,6 +133,7 @@ def test_the_matcher_finds_the_app_by_the_words_people_use(text, want):
         "pause my inbox goal",  # a record of the user's, not the mailbox
         "I have a notion that this is wrong",
         "cut me some slack",
+        "pick up the slack on the report",  # v1.354.0 review: the idiom
         "put it in a box",  # a generic name needs a connect verb
         "add memory about me",
         "the stripe on the flag",
@@ -164,6 +165,7 @@ def test_the_web_rule_does_not_fire_when_its_only_signal_is_an_apps_name():
         "search my Google Drive for the lease",
         "search github for issues about login",
         "look up the invoice in my Dropbox",
+        "search for the lease in my Google Drive",
     ):
         got = select_auto_tools(text)
         assert "web_search" not in got and "web_fetch" not in got, (text, got)
@@ -173,6 +175,15 @@ def test_the_web_rule_does_not_fire_when_its_only_signal_is_an_apps_name():
         "look up the latest news on GitHub Copilot",
         "search google for pizza near me",
         "search for the lease",
+    ):
+        assert "web_search" in select_auto_tools(text), text
+    # v1.354.0 review: a search verb aimed at the WEB keeps the web even when
+    # an app is named elsewhere as the destination (before the review these
+    # armed no web tool at all — a regression on everyday requests).
+    for text in (
+        "search for flights to Paris and save them to my Notion",
+        "look up the best laptops and post them in Slack",
+        "browse for cheap hotels then email the list to my Gmail",
     ):
         assert "web_search" in select_auto_tools(text), text
 

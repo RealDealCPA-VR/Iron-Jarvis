@@ -90,7 +90,7 @@ CONNECT_VERB = (
 #: Brand names that are also everyday words: these readings are not the app.
 _NOT_THE_APP: dict[str, str] = {
     "notion": r"(?<![Aa] )(?<![Tt]he )\bnotion\b(?!\s+(?:that|of)\b)",
-    "slack": r"(?<![Ss]ome )\bslack\b(?!\s+off\b)",
+    "slack": r"(?<![Ss]ome )(?<![Uu]p the )\bslack\b(?!\s+off\b)",
     "stripe": r"(?<![Aa] )\bstripe\b(?!\s+(?:on|of|across|down|along|pattern|through)\b)",
 }
 

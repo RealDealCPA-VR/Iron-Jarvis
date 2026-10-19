@@ -210,6 +210,26 @@ def test_the_post_lane_502_has_the_same_keys(tmp_path, monkeypatch):
     }
 
 
+def test_the_clis_own_sign_in_refusal_mid_turn_reads_as_signed_out(tmp_path, monkeypatch):
+    """v1.354.0 review: when the probe had not said so yet, the Claude CLI
+    refuses MID-TURN and the transport raises a plain RuntimeError carrying
+    cli_auth's remedy sentence (no typed kind, no status). It used to get the
+    generic headline and "Press Retry", which can never help. Built by the
+    REAL transport helper, through the REAL stream lane."""
+    from iron_jarvis.providers.adapters.claude_native.transport import signed_out_message
+
+    exc = RuntimeError(signed_out_message("Not logged in · Please run /login", probe=False))
+    client = TestClient(create_app(str(tmp_path)))
+    _failing_router(client.app.state.platform, monkeypatch, exc)
+    r = client.post("/chat/stream", json={"messages": [{"role": "user", "content": "hi"}]})
+    [err] = [d for ev, d in _parse_sse(r.text) if ev == "error"]
+    assert err["detail"] == str(exc), "detail is unchanged"
+    assert err["title"] == "Claude Code isn't signed in"
+    assert err["fix"] == f"Press Sign in beside Claude Code in {ACCOUNTS_PLACE}, then retry."
+    for raw in ("claude-cli", "/login", "terminal"):
+        assert raw not in err["title"] + err["fix"], raw
+
+
 def test_a_headless_caller_still_catches_an_http_exception_with_the_same_detail(tmp_path, monkeypatch):
     """The phone poller catches HTTPException and reads .detail: unchanged."""
     import asyncio
