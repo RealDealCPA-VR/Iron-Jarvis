@@ -189,6 +189,25 @@ describe("(2) N connected counts what works", () => {
     }
   });
 
+  it("with the filter on and nothing working, never says nothing is connected (review)", async () => {
+    await renderDirectory([working, off]);
+    const filter = screen.getAllByRole("button", { name: /connected/i }).find((b) => b.hasAttribute("aria-pressed"))!;
+    expect(filter.getAttribute("title")).toBe("Show only what is connected and working");
+    fireEvent.click(filter);
+    await waitFor(() => expect(filter.getAttribute("aria-pressed")).toBe("true"));
+    // The one working app is switched off from its own card; the page reads again.
+    api.connectors = [{ ...working, status: "off", enabled: false, tools_loaded: 0 }, off];
+    fireEvent.click(within(screen.getByTestId("connector-card-github")).getByTestId("connector-switch-github"));
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Nothing you connected is working right now — press the connected count again to see every connection.",
+        ),
+      ).toBeTruthy(),
+    );
+    expect(screen.queryByText(/Nothing is connected yet/)).toBeNull();
+  });
+
   it("is one reading for the card and the page (lib/directoryHealth)", () => {
     expect(cardHealth(working)).toBe("working");
     expect(cardHealth(off)).toBe("off");

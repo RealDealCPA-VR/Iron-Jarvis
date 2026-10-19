@@ -416,6 +416,26 @@ def test_a_key_that_could_not_be_checked_says_that_not_refused(client):
     assert _row(client, "pixio")["status"] == "failed"
 
 
+def test_a_service_error_is_not_called_a_refused_key(client):
+    """v1.358.0 review: the service answering 5xx / 404 says nothing about
+    the key (``connections/probe.py`` calls only 401/403 "rejected the
+    credential"), so the save must never say "didn't accept this key ...
+    Remove it". MUTATION: drop the "probe returned http" branch in
+    ``service.key_check_line`` -> the refusal words (red)."""
+    p = _platform(client)
+    p.connections._prober = lambda provider, cred: (
+        False,
+        "pixio probe returned HTTP 502: Bad Gateway",
+    )
+    r = client.post("/connectors/pixio/connect", json={"values": {"key": "pxio_maybe_fine"}})
+    assert r.status_code == 200, r.text
+    words = r.json()["test"]["detail"]
+    assert words == "Pixio couldn't check the key right now. Press Test to try again."
+    assert "didn't accept" not in words and "Remove it" not in words
+    row = _row(client, "pixio")
+    assert row["detail"] == words and row["technical"].startswith("pixio probe returned HTTP 502")
+
+
 def test_removing_a_key_forgets_its_check(client):
     p = _platform(client)
     p.connections._prober = lambda provider, cred: (False, REFUSED)

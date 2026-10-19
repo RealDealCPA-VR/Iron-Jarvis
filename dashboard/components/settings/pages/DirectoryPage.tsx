@@ -1442,7 +1442,7 @@ export default function MarketplacePage() {
               title={
                 connectedOnly
                   ? "Show every connection again"
-                  : "Show only what you have connected"
+                  : "Show only what is connected and working"
               }
               className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-medium transition-colors disabled:cursor-default disabled:opacity-60 ${
                 connectedOnly
@@ -1557,7 +1557,12 @@ export default function MarketplacePage() {
       ) : offline ? null : mainVisible.length === 0 && extrasVisible.length === 0 ? (
         <Reveal>
           <Empty icon={<Search size={24} />}>
-            {connectedOnly && !q && activeCat === "All"
+            {/* v1.358.0 review: the filter keeps WORKING cards only, so with
+                saved apps that are off or need attention "Nothing is
+                connected yet" would be untrue. */}
+            {connectedOnly && !q && activeCat === "All" && counts.off + counts.attention > 0
+              ? "Nothing you connected is working right now — press the connected count again to see every connection."
+              : connectedOnly && !q && activeCat === "All"
               ? "Nothing is connected yet — press the connected count again to see every connection."
               : connectedOnly && (q || activeCat !== "All")
               ? "Nothing you have connected matches your search — press the connected count to show every connection."

@@ -414,6 +414,12 @@ def key_check_line(connector, ok: bool, detail: str) -> str:
     low = (detail or "").lower()
     if "could not reach" in low or "probe failed" in low:
         return f"Couldn't reach {name} to check the key. Press Test to try again."
+    if "probe returned http" in low:
+        # v1.358.0 review: the service answered with an error that is not a
+        # refusal (a 5xx, a 404 — connections/probe.py words only 401/403 as
+        # "rejected the credential"), so the key may be fine; never tell the
+        # user to remove it.
+        return f"{name} couldn't check the key right now. Press Test to try again."
     return f"{name} didn't accept this key. Remove it and connect again with a working key."
 
 
