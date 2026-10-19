@@ -208,6 +208,23 @@ describe("(2) N connected counts what works", () => {
     expect(screen.queryByText(/Nothing is connected yet/)).toBeNull();
   });
 
+  it("with the filter on, a search that finds only an Off app never says nothing connected matches (fix round)", async () => {
+    await renderDirectory([working, off]);
+    const filter = screen.getAllByRole("button", { name: /connected/i }).find((b) => b.hasAttribute("aria-pressed"))!;
+    fireEvent.click(filter);
+    await waitFor(() => expect(filter.getAttribute("aria-pressed")).toBe("true"));
+    // Notion is connected (switched Off) and matches; the working-only filter hides it.
+    fireEvent.change(screen.getByLabelText("Search connections"), { target: { value: "notion" } });
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Nothing connected and working matches your search — press the connected count to show every connection.",
+        ),
+      ).toBeTruthy(),
+    );
+    expect(screen.queryByText(/Nothing you have connected matches/)).toBeNull();
+  });
+
   it("is one reading for the card and the page (lib/directoryHealth)", () => {
     expect(cardHealth(working)).toBe("working");
     expect(cardHealth(off)).toBe("off");

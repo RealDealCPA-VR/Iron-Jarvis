@@ -1565,7 +1565,10 @@ export default function MarketplacePage() {
               : connectedOnly && !q && activeCat === "All"
               ? "Nothing is connected yet — press the connected count again to see every connection."
               : connectedOnly && (q || activeCat !== "All")
-              ? "Nothing you have connected matches your search — press the connected count to show every connection."
+              ? // v1.358.0 fix round: the filter hides an Off / needs-attention
+                // app that DOES match, so "nothing you have connected matches"
+                // would be untrue; name what the filter keeps.
+                "Nothing connected and working matches your search — press the connected count to show every connection."
               : q || activeCat !== "All" || connectedOnly
               ? "No connections match your search. Try a different term or category."
               : "No connections available."}
