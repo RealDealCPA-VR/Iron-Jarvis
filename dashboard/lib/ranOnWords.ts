@@ -85,12 +85,13 @@ export function ranOnWords(
   return { text, title };
 }
 
-/** How long a finished run took, from its own two timestamps ("2 min 5 s"),
- *  through the chat receipt's clock words (`secondsText`, passed in so this
- *  file stays free of the chat component). Null when either end is missing
- *  or unreadable, or the ends are out of order: no guessed duration. Both
- *  stamps come from the daemon in the same form, so their difference is
- *  right whatever zone they are read in. */
+/** How long a finished run took, in milliseconds, from its own two
+ *  timestamps. The caller says it in the chat receipt's clock words
+ *  (AgentCards.memberTook hands this to TurnReceipt's `secondsText`, giving
+ *  "2 min 5 s"), so this file stays free of the chat component. Null when
+ *  either end is missing or unreadable, or the ends are out of order: no
+ *  guessed duration. Both stamps come from the daemon in the same form, so
+ *  their difference is right whatever zone they are read in. */
 export function tookMs(startedAt: string | null | undefined, finishedAt: string | null | undefined): number | null {
   if (!startedAt || !finishedAt) return null;
   const a = Date.parse(startedAt);
