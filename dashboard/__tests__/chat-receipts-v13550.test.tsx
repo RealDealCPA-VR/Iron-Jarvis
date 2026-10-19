@@ -27,7 +27,10 @@ import {
   approvedLine,
   decodeApproved,
   decodeRefit,
+  REFIT_TITLE,
+  REFIT_TOOLS_TITLE,
   refitLine,
+  refitTitle,
 } from "@/lib/turnRecovery";
 import {
   NO_REPLY_BACK_MARK,
@@ -76,6 +79,22 @@ describe("G55: the receipt says what was left out to fit", () => {
     render(<TurnReceipt inline route={ROUTE} refit={{ dropped: 3 }} />);
     fireEvent.click(screen.getByTestId("turn-receipt"));
     expect(screen.getByTestId("turn-refit-detail").textContent).toMatch(/left the oldest messages out/);
+  });
+
+  it("review: a retry that left no message out never says the oldest messages were left out", () => {
+    render(<TurnReceipt inline route={ROUTE} refit={{ dropped: 0 }} />);
+    const part = screen.getByTestId("turn-refit");
+    expect(part.textContent).toBe("Shortened earlier tool results to fit this model");
+    // The hover and the expanded receipt say what happened, not REFIT_TITLE.
+    expect(part.getAttribute("title")).toBe(REFIT_TOOLS_TITLE);
+    fireEvent.click(screen.getByTestId("turn-receipt"));
+    const why = screen.getByTestId("turn-refit-detail").textContent ?? "";
+    expect(why).toContain("No messages were left out");
+    expect(why).not.toMatch(/oldest messages out|did not see them/);
+    // A refit that DID leave messages out keeps the original words.
+    expect(refitTitle({ dropped: 5 })).toBe(REFIT_TITLE);
+    expect(refitTitle({ dropped: 0 })).toBe(REFIT_TOOLS_TITLE);
+    expect(refitTitle(null)).toBeNull();
   });
 
   it("keeps the reply's row on screen (it is never behind a hover)", () => {

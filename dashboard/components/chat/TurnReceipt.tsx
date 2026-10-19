@@ -88,8 +88,8 @@ import {
 import {
   approvedLine,
   decodeApproved,
-  REFIT_TITLE,
   refitLine,
+  refitTitle,
   type ApprovedCall,
   type TurnRefit,
 } from "@/lib/turnRecovery";
@@ -758,6 +758,9 @@ export function TurnReceipt({
   // left out to fit, and the cards the user allowed. Decoded here because a
   // reopened chat hands back whatever the disk held.
   const refitText = refitLine(refit);
+  // Review fix: the "why" follows what happened — a retry that left no
+  // message out must not say the oldest messages were left out.
+  const refitWhy = refitTitle(refit) ?? undefined;
   const approvedRows = decodeApproved(approved);
   if (
     !used.cache &&
@@ -889,7 +892,7 @@ export function TurnReceipt({
     // messages. Said where the user reads the reply; why is on hover and in
     // the expanded receipt (a phone has no hover).
     parts.push(
-      <span key="refit" data-testid="turn-refit" title={REFIT_TITLE} className="text-zinc-500">
+      <span key="refit" data-testid="turn-refit" title={refitWhy} className="text-zinc-500">
         {refitText}
       </span>,
     );
@@ -1135,7 +1138,7 @@ export function TurnReceipt({
             <div className="flex items-start gap-2">
               <Scissors size={12} className="mt-0.5 shrink-0 text-zinc-500" />
               <div data-testid="turn-refit-detail" className="min-w-0 text-[12px] leading-relaxed text-zinc-400">
-                {REFIT_TITLE}
+                {refitWhy}
               </div>
             </div>
           )}

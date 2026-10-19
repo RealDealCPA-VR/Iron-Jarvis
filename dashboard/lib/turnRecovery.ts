@@ -94,6 +94,20 @@ export function refitLine(refit: TurnRefit | null | undefined): string | null {
 export const REFIT_TITLE =
   "The model said this chat was too long for it, so Iron Jarvis left the oldest messages out and asked again. The answer did not see them.";
 
+/** The same "why" for a retry that left NO message out (`dropped: 0`): only
+ *  the results of this reply's own earlier steps were shortened, so the
+ *  REFIT_TITLE words ("left the oldest messages out") would be untrue. */
+export const REFIT_TOOLS_TITLE =
+  "The model said this chat was too long for it, so Iron Jarvis shortened the results of this reply's earlier steps and asked again. No messages were left out.";
+
+/** The "why" for a refit (hover and the expanded receipt), or null when
+ *  there was none — the words for what actually happened. */
+export function refitTitle(refit: TurnRefit | null | undefined): string | null {
+  const r = decodeRefit(refit);
+  if (!r) return null;
+  return r.dropped === 0 ? REFIT_TOOLS_TITLE : REFIT_TITLE;
+}
+
 /** How far an approval reached, in the card's own words (lib/approvalWords:
  *  "Allow once" / "Allow for this chat" / "Allow for this tab" / "Always
  *  allow exactly this"). */
