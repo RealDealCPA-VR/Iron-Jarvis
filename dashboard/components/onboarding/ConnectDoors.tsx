@@ -122,7 +122,8 @@ const KEY_PROVIDERS: {
   {
     id: "google",
     label: "Google Gemini",
-    placeholder: "AIza…",
+    // A new AI Studio key starts "AQ." (since 2026-05-28); an older one "AIza".
+    placeholder: "AQ.… or AIza…",
     keyUrl: "https://aistudio.google.com/apikey",
     keyLabel: "Google AI Studio",
   },

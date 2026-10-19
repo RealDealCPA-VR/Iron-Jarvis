@@ -10,8 +10,15 @@ This module is the ONE place that tells the two Google credentials apart, so
 the adapter's header (``providers/manager.py``) and the Connections Test
 (``connections/probe.py``) can never disagree about which one they hold:
 
-* an AI Studio / Google Cloud **API key** always starts ``AIza`` (Google's
-  documented key format) and is sent as ``x-goog-api-key``;
+* an AI Studio / Google Cloud **API key** is sent as ``x-goog-api-key`` (the
+  header Google's own REST example uses for every key). It comes in TWO
+  shapes: an older "standard" key starts ``AIza``; an "auth key" starts
+  ``AQ.`` -- and since May 28, 2026 every NEW key AI Studio makes is an auth
+  key (ai.google.dev/gemini-api/docs/api-key, read 2026-10-19; Google staff on
+  the developer forum, 2026-07-27: "AI Studio will now only generate
+  Authentication Key (AQ) keys"). A rule that knew only ``AIza`` sent a new
+  user's key as a Bearer token and the Test read it at tokeninfo -- both
+  refuse it -- so a reviewer added ``AQ.`` (v1.355.0 review);
 * an **OAuth access token** from the account login (``ya29.…``) is sent as a
   Bearer token -- and so is anything else, which keeps every pre-v1.355.0
   Google connection (all of them OAuth) byte-identical.
@@ -26,8 +33,10 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-#: Every Google API key starts with this (AI Studio and Cloud Console alike).
-GOOGLE_KEY_PREFIX = "AIza"
+#: How a Google API key starts: an auth key (``AQ.``, every new AI Studio key
+#: since 2026-05-28) or an older standard key (``AIza``). An OAuth access
+#: token (``ya29.``) starts with neither.
+GOOGLE_KEY_PREFIXES: tuple[str, ...] = ("AQ.", "AIza")
 
 #: Where a new user gets a Gemini key -- the card's "Get one at" link.
 AI_STUDIO_KEY_URL = "https://aistudio.google.com/apikey"
@@ -44,7 +53,7 @@ def is_google_api_key(credential: Any) -> bool:
     (sent as a Bearer token, exactly as before v1.355.0). Never raises."""
     if not isinstance(credential, str):
         return False
-    return credential.strip().startswith(GOOGLE_KEY_PREFIX)
+    return credential.strip().startswith(GOOGLE_KEY_PREFIXES)
 
 
 def probe_google_key(

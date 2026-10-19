@@ -149,7 +149,8 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
     # v1.355.0 (G46): Gemini TAKES AN API KEY. The card used to offer only the
     # account login, which first needs an OAuth client the user registers in
     # Google Cloud Console — while the key most Gemini users have (Google AI
-    # Studio, ``AIza…``) could not be pasted. The key is now the primary way
+    # Studio: ``AQ.…`` since 2026-05-28, ``AIza…`` before) could not be
+    # pasted. The key is now the primary way
     # (``method="api_key"``, so the card's chip says "API key"); the login
     # stays for whoever set one up (``supports_oauth`` keeps the endpoints).
     # ``providers/google_key.is_google_api_key`` decides which header the
@@ -171,8 +172,8 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
         ],
         docs_url="https://aistudio.google.com/apikey",
         key_help=(
-            "Paste a Gemini API key (it starts AIza…) from Google AI Studio: "
-            "aistudio.google.com/apikey."
+            "Paste a Gemini API key from Google AI Studio: "
+            "aistudio.google.com/apikey (a new key starts AQ., an older one AIza)."
         ),
         key_secret_name="google_api_key",
         oauth_help=(

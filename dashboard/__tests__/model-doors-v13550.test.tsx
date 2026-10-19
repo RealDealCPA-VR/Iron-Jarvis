@@ -161,6 +161,8 @@ import ConnectionsPage from "@/components/settings/pages/ConnectionsPage";
 const PROBE = "/connections/endpoints/models";
 const MODELS = ["qwen2.5-7b-instruct", "llama-3.2-3b-instruct", "gemma-3-4b"];
 const KEY = "AIzaSyD-dashboard-test-key-0123456789";
+/** What AI Studio makes since 2026-05-28: an auth key, "AQ." (v1.355.0 review). */
+const NEW_KEY = "AQ.Ab8RN6-dashboard-test-key-0123456789";
 
 const DASH = join(__dirname, "..");
 const src = (p: string) => readFileSync(join(DASH, p), "utf-8").replace(/\r\n/g, "\n");
@@ -196,17 +198,17 @@ describe("G46: the first-run key door takes a Google Gemini key", () => {
     expect(document.body.textContent).not.toMatch(/connects with account login/);
 
     fireEvent.click(screen.getByRole("button", { name: "Google Gemini" }));
-    const box = screen.getByPlaceholderText("AIza…");
+    const box = screen.getByPlaceholderText("AQ.… or AIza…");
     const where = screen.getByTestId("key-door-get-one");
     const link = within(where).getByRole("link", { name: "Google AI Studio" });
     expect(link.getAttribute("href")).toBe("https://aistudio.google.com/apikey");
 
-    fireEvent.change(box, { target: { value: KEY } });
+    fireEvent.change(box, { target: { value: NEW_KEY } });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     // Wait for the line the press ends on (the test's answer), not the POST.
     expect(await screen.findByText(/Connected — google reachable/)).toBeTruthy();
     expect(hooks.posts.map((p) => p.path)).toEqual(["/connections/google/key", "/connections/google/test"]);
-    expect(hooks.posts[0].body).toEqual({ key: KEY });
+    expect(hooks.posts[0].body).toEqual({ key: NEW_KEY });
   });
 
   it("only the provider that needs it gets the where-to-get-one line", () => {
@@ -438,7 +440,7 @@ describe("G46: Settings › Connections' Gemini card", () => {
     expect(within(card).getByText("API key")).toBeTruthy(); // the method chip
 
     fireEvent.click(connect);
-    const box = within(card).getByPlaceholderText("AIza…");
+    const box = within(card).getByPlaceholderText("AQ.… or AIza…");
     expect(within(card).getByRole("link", { name: /Google AI Studio/ }).getAttribute("href")).toBe(
       "https://aistudio.google.com/apikey",
     );

@@ -53,6 +53,11 @@ DASH = ROOT / "dashboard"
 
 #: A key in Google's documented shape (AIza + 35). Never a real key.
 KEY = "AIzaSyD-lane5d-test-key-0123456789abc"
+#: What AI Studio makes for a NEW user since 2026-05-28: an "auth key", which
+#: starts "AQ." (ai.google.dev/gemini-api/docs/api-key; Google staff on the
+#: developer forum 2026-07-27: "AI Studio will now only generate Authentication
+#: Key (AQ) keys"). Never a real key. (v1.355.0 review.)
+NEW_KEY = "AQ.Ab8RN6L-lane5d-new-auth-key-0123456789"
 LOGIN_TOKEN = "ya29.lane5d-login-token"
 
 
@@ -196,6 +201,23 @@ def test_a_pasted_key_reaches_gemini_as_x_goog_api_key_and_a_gemini_model_answer
     assert "Authorization" not in sent["headers"]
 
 
+@pytest.mark.parametrize("key", [NEW_KEY, KEY], ids=["auth-key-AQ", "standard-key-AIza"])
+def test_a_new_users_key_reaches_gemini_as_x_goog_api_key(client, key):
+    """THE new user: since 2026-05-28 AI Studio makes only "AQ." auth keys. A
+    rule that knew only "AIza" sent such a key as ``Authorization: Bearer``
+    (Google refuses a key there). MUTATION: drop "AQ." from
+    ``GOOGLE_KEY_PREFIXES`` -> the auth-key case rides Bearer -> red."""
+    assert client.post("/connections/google/key", json={"key": key}).status_code == 200
+    adapter = _platform(client).providers.get("google")
+    http = _FakeGemini()
+    adapter._http = http
+
+    assert _ask(adapter) == "Hello from Gemini"
+    sent = http.calls[-1]["headers"]
+    assert sent["x-goog-api-key"] == key
+    assert "Authorization" not in sent
+
+
 def test_the_header_follows_the_stored_credential_on_the_same_cached_adapter(client):
     """A login token keeps the pre-v1.355.0 Bearer header; replacing the login
     with a pasted key switches the SAME cached adapter to x-goog-api-key with
@@ -253,6 +275,8 @@ def test_a_request_naming_no_model_gets_a_current_gemini():
     [
         (KEY, True),
         ("  " + KEY + "\n", True),  # a paste with stray whitespace
+        (NEW_KEY, True),  # what AI Studio makes for a new user today
+        (" " + NEW_KEY + "\r\n", True),
         (LOGIN_TOKEN, False),
         ("tok", False),  # anything else keeps the old Bearer header
         ("", False),
@@ -338,18 +362,20 @@ def test_a_login_tokens_test_is_unchanged(monkeypatch):
         "Remove this marker when that edit lands."
     ),
 )
-def test_connections_test_turns_green_for_a_pasted_key(client, monkeypatch):
+@pytest.mark.parametrize("key", [NEW_KEY, KEY], ids=["auth-key-AQ", "standard-key-AIza"])
+def test_connections_test_turns_green_for_a_pasted_key(client, monkeypatch, key):
     """The acceptance line: paste the key on the card, press Test, it is green.
     Drives POST /connections/google/test through the real registry and the
-    real live_probe; only the network answer is faked."""
+    real live_probe; only the network answer is faked. Both key shapes (a new
+    user's "AQ." auth key and an older "AIza" key)."""
 
     def fake_get(url, headers=None, params=None, timeout=None):
-        if url == GOOGLE_MODELS_URL and (headers or {}).get("x-goog-api-key") == KEY:
-            return _FakeResponse({"models": [{"name": "models/gemini-2.5-flash"}]}, 200)
+        if url == GOOGLE_MODELS_URL and (headers or {}).get("x-goog-api-key") == key:
+            return _FakeResponse({"models": [{"name": "models/gemini-3.8-flash"}]}, 200)
         return _FakeResponse({"error": "invalid_token"}, 400)
 
     monkeypatch.setattr("httpx.get", fake_get)
-    assert client.post("/connections/google/key", json={"key": KEY}).status_code == 200
+    assert client.post("/connections/google/key", json={"key": key}).status_code == 200
     result = client.post("/connections/google/test").json()
     assert result["ok"] is True, result
 
