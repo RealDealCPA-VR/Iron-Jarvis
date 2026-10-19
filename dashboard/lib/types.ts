@@ -621,6 +621,12 @@ export interface ModelOption {
    *  flat-rate subscription CLI, "api" = a metered hosted API. Same
    *  classification /health serves, from one definition on the daemon. */
   kind?: "local" | "cli" | "api";
+  /** v1.352.0 re-review (G21): whether this row's model really stays on the
+   *  user's own network (the predicate the reply's receipt reads). `kind`
+   *  is the routing class, so an endpoint the user pointed at a cloud
+   *  server is still "local" there; this says it is not. Absent on an older
+   *  daemon (the class decides, as before). */
+  on_this_network?: boolean;
   /** Parameter count in billions, parsed from the model id — orders a local
    *  fleet smallest-first. Absent when the id doesn't state one. */
   size_b?: number | null;

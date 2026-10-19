@@ -215,7 +215,7 @@ _TOOL_WORDS: dict[str, tuple[str, str]] = {
 #: says "Waiting for your OK to save a file.", never "…to use write file".
 #: The Python twin of ``dashboard/lib/toolWords.ts`` for the built-ins an
 #: agent run asks about most; every phrase is pinned EQUAL to that file
-#: (``tests/test_one_vocabulary_v13520.py``). Built-ins only, by exact name;
+#: (``tests/test_receipt_seams_v13520.py``). Built-ins only, by exact name;
 #: any other tool keeps "use <its name>" (never invented words).
 ASK_WORDS: dict[str, str] = {
     "write_file": "save a file",

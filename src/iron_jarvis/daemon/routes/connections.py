@@ -478,7 +478,22 @@ def build_selectable_models(d, *, providers: Any = None) -> list[dict[str, Any]]
     # ("local" | "cli" | "api"), from the one definition in providers.local, and
     # `size_b` is the parameter count parsed out of the id so a local fleet can
     # be ordered smallest-first the way the router now orders it.
+    from ...providers.egress import stays_on_this_network
     from ...providers.local import is_local_provider, model_size_b
+
+    # v1.352.0 re-review (G21): WHERE each row really runs, by the predicate
+    # the reply's receipt reads (`egress.stays_on_this_network`, the local-only
+    # lock's). `kind` keeps the routing CLASS: a fleet node or a custom URL is
+    # "local" there even when the user pointed it at a cloud server (an
+    # Anthropic-compatible API, a hosted Ollama), and the model menu used to
+    # call that row "local · no charge per message" while the reply's receipt
+    # said "cloud". Pure (no DNS, no probe); one answer per provider.
+    _where: dict[str, bool] = {}
+
+    def _on_this_network(prov: str) -> bool:
+        if prov not in _where:
+            _where[prov] = bool(stays_on_this_network(prov, providers, cfg))
+        return _where[prov]
 
     for m in models:
         prov = str(m.get("provider") or "")
@@ -489,6 +504,7 @@ def build_selectable_models(d, *, providers: Any = None) -> list[dict[str, Any]]
             if prov in ("claude-cli", "codex-cli", "grok-cli")
             else "api"
         )
+        m["on_this_network"] = _on_this_network(prov)
         m["size_b"] = model_size_b(str(m.get("model") or ""))
         # v1.230.0 (U5): a keyless API provider served through the logged-in
         # CLI is flat-rate — the picker says "included", not "metered". Same

@@ -46,6 +46,19 @@ function folderName(p: string): string {
   return parts.length ? parts[parts.length - 1] : p;
 }
 
+/** The app's own folder for a run that was given none
+ *  (`<home>/workspaces/session_<id>`, agents/orchestrator.create_session). */
+const RUN_OWN_FOLDER = /[\\/]workspaces[\\/]session_[A-Za-z0-9]+[\\/]?$/;
+
+/** v1.352.0 re-review (G19): how the folder reads in the row. A folder the
+ *  user chose reads by its name ("2026-10-17 S-corp"); the app's own folder
+ *  for a run is named by the run's internal id ("session_8f3a…"), an
+ *  engine-room word, so it reads "its own work folder". The full path stays
+ *  in the title either way. */
+export function runFolderWords(p: string): { name: string; own: boolean } {
+  return RUN_OWN_FOLDER.test(p) ? { name: "its own work folder", own: true } : { name: folderName(p), own: false };
+}
+
 function Dot() {
   return <span aria-hidden="true" className="h-[3px] w-[3px] shrink-0 rounded-full bg-zinc-600" />;
 }
@@ -61,6 +74,7 @@ export function AgentRunReceipt({ run }: { run: AgentRunStamp }) {
   const model = runModelName(run);
   const modelTitle = [providerDisplay(run.provider ?? ""), run.model].filter(Boolean).join(" · ");
   const folder = run.workspacePath ?? "";
+  const folderWords = runFolderWords(folder);
   // v1.352.0 integrate (G21 on the helper agent): where its model ran, in the
   // reply receipt's words and rule ("local" / "cloud"; nothing for the demo
   // model or a stamp that never said).
@@ -125,7 +139,7 @@ export function AgentRunReceipt({ run }: { run: AgentRunStamp }) {
         >
           <FolderOpen size={14} aria-hidden="true" className="shrink-0" />
           <span title={folder} className="min-w-0 truncate text-zinc-400">
-            in {folderName(folder)}
+            in {folderWords.name}
           </span>
           <Dot />
           <button
@@ -133,7 +147,7 @@ export function AgentRunReceipt({ run }: { run: AgentRunStamp }) {
             data-testid="agent-run-open-folder"
             onClick={() => void openFolder()}
             disabled={opening}
-            aria-label={`Open the folder ${folderName(folder)}`}
+            aria-label={folderWords.own ? "Open its own work folder" : `Open the folder ${folderWords.name}`}
             className="shrink-0 text-zinc-500 underline decoration-zinc-600 decoration-dotted underline-offset-[3px] transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:decoration-solid focus-visible:outline-none disabled:opacity-60 motion-reduce:transition-none"
           >
             Open folder

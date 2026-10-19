@@ -270,12 +270,23 @@ describe("the bell's ask says what and why (G24) and whether it can be undone (G
     };
     render(<NotificationBell />);
     const row = await openBellRow();
+    // v1.352.0 re-review (screen readers): the dropdown's live region is in
+    // the page, EMPTY, before the answer, and the same element then says what
+    // happened (a region that mounts with its words is often never read).
+    const live = screen.getByTestId("bell-answered-live");
+    expect(live.getAttribute("role")).toBe("status");
+    expect(live.textContent).toBe("");
     fireEvent.click(within(row).getByRole("button", { name: "Allow once" }));
     const done = await screen.findByTestId("bell-agent-answered");
     expect(H.posts).toEqual([{ path: `/chat/approvals/${NIGHTLY.id}`, body: { decision: "once" } }]);
     expect(done.getAttribute("data-outcome")).toBe("approved");
-    const status = within(done).getByRole("status");
-    expect(folded(status.textContent)).toBe("Approved. The run continues · Open run");
+    expect(folded(within(done).getByTestId("bell-agent-answered-line").textContent)).toBe(
+      "Approved. The run continues · Open run",
+    );
+    expect(screen.getByTestId("bell-answered-live")).toBe(live);
+    expect(live.textContent).toBe("Approved. The run continues.");
+    // ONE announcement: the row itself is not a second live region.
+    expect(within(done).queryByRole("status")).toBeNull();
     expect(within(done).getByTestId("bell-agent-answered-open").getAttribute("href")).toBe("/sessions/session_nb");
     expect(screen.queryByTestId("bell-agent-approval")).toBeNull();
     // Still there after the re-poll the answer triggered…
@@ -297,6 +308,7 @@ describe("the bell's ask says what and why (G24) and whether it can be undone (G
     const done = await screen.findByTestId("bell-agent-answered");
     expect(done.getAttribute("data-outcome")).toBe("denied");
     expect(folded(done.textContent)).toBe("Denied. That action will not run.");
+    expect(screen.getByTestId("bell-answered-live").textContent).toBe("Denied. That action will not run.");
     expect(within(done).queryByTestId("bell-agent-answered-open")).toBeNull();
     expect(H.posts).toEqual([{ path: `/chat/approvals/${NIGHTLY.id}`, body: { decision: "deny" } }]);
   });

@@ -4385,7 +4385,17 @@ export default function ChatPage() {
       // CLI (`inherited_from`) is flat-rate — it ranks and labels as a CLI
       // ("included"), never "metered". The daemon names the CLI; /health and
       // /connections carry the same answer.
-      const kind = m.inherited_from ? "cli" : (m.kind ?? "api");
+      // v1.352.0 re-review (G21): an endpoint the daemon classes "local" (a
+      // fleet node, a custom URL) but says is OFF the user's network (a cloud
+      // API added on Connections) runs in the cloud: its badge says so, as
+      // the reply's receipt does (`on_this_network`, the same predicate),
+      // and it ranks with the cloud rows. Absent (an older daemon): the
+      // class decides, as before.
+      const kind = m.inherited_from
+        ? "cli"
+        : m.kind === "local" && m.on_this_network === false
+          ? "endpoint"
+          : (m.kind ?? "api");
       const size = typeof m.size_b === "number" ? m.size_b : Number.POSITIVE_INFINITY;
       const prev = seen.get(m.provider);
       if (!prev) {
@@ -4403,7 +4413,7 @@ export default function ChatPage() {
         prev.size = Math.min(prev.size, size);
       }
     }
-    const RANK: Record<string, number> = { local: 0, cli: 1, api: 2 };
+    const RANK: Record<string, number> = { local: 0, cli: 1, api: 2, endpoint: 2 };
     return [...seen.values()].sort((a, b) => {
       if (a.available !== b.available) return a.available ? -1 : 1; // offline last
       const ra = RANK[a.kind] ?? 3;
@@ -4433,6 +4443,12 @@ export default function ChatPage() {
       text: "cloud · pay per use",
       cls: "text-zinc-500",
       title: "Runs in the cloud on your API key. Each message is billed to that account.",
+    },
+    // v1.352.0 re-review: an endpoint you added that is not on your network.
+    endpoint: {
+      text: "cloud",
+      cls: "text-zinc-500",
+      title: "Runs on a server outside your network, at an address you added on Connections. That service sets any charge.",
     },
   };
   const modelLabel = useMemo(() => {

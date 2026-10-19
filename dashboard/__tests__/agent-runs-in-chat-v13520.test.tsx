@@ -166,7 +166,7 @@ vi.mock("remark-gfm", () => ({ default: () => {} }));
 import ChatPage from "@/app/chat/page";
 import { RunResultCard, resultHeadline, type RunResult } from "@/components/chat/RunResultCard";
 import { AgentRunSettled, settledRunWords } from "@/components/chat/AgentRunRow";
-import { AgentRunReceipt } from "@/components/chat/AgentRunReceipt";
+import { AgentRunReceipt, runFolderWords } from "@/components/chat/AgentRunReceipt";
 import { TurnReceipt, replyWhere, type TurnRoute } from "@/components/chat/TurnReceipt";
 import {
   handOffSentence,
@@ -879,5 +879,123 @@ describe("G21: every reply says where it ran", () => {
     expect(local.textContent).toBe("local");
     expect(local.getAttribute("title")).toMatch(/your own hardware/);
     expect(document.body.textContent).not.toMatch(/\bincluded\b/);
+  });
+});
+
+/* ======================================== v1.352.0 re-review: the page wiring */
+
+describe("v1.352.0 re-review: what the chat page itself wires", () => {
+  it("the model menu calls an endpoint you added that is OFF your network 'cloud', never 'local'", async () => {
+    // The daemon classes every fleet node "local" for routing; `on_this_network`
+    // (the receipt's own predicate) says where it really runs. A cloud API added
+    // on Connections used to read "local · no charge per message" here while the
+    // reply's receipt said "cloud".
+    H.api.getResponses["/models"] = {
+      models: [
+        { provider: "fleet-spark", model: "glm-4.6", name: "DGX Spark", kind: "local", on_this_network: true, available: true, inherited_from: null },
+        { provider: "fleet-deep", model: "deepseek-chat", name: "DeepSeek API", kind: "local", on_this_network: false, available: true, inherited_from: null },
+        // an older daemon sends no flag: the class decides, as before
+        { provider: "ollama", model: "llama3.2", name: "Ollama", kind: "local", available: true, inherited_from: null },
+        { provider: "openai", model: "gpt-5.5", name: "OpenAI", kind: "api", on_this_network: false, available: true, inherited_from: null },
+      ],
+    };
+    render(<ChatPage />);
+    fireEvent.click(await screen.findByTitle("Switch model"));
+    const badge = async (name: string) =>
+      within((await screen.findByText(name)).closest("button")!).getByTestId("model-kind-badge");
+    expect((await badge("DGX Spark")).textContent).toBe("local");
+    expect((await badge("Ollama")).textContent).toBe("local");
+    const cloudy = await badge("DeepSeek API");
+    expect(cloudy.textContent).toBe("cloud");
+    expect(cloudy.getAttribute("title")).toMatch(/outside your network/);
+    expect(cloudy.getAttribute("title")).not.toMatch(/No charge per message/);
+    expect((await badge("OpenAI")).textContent).toBe("cloud · pay per use");
+    // …and it ranks with the cloud rows, after every model on your own hardware.
+    const rows = screen
+      .getAllByTestId("model-kind-badge")
+      .map((b) => b.closest("button")!.textContent ?? "");
+    const at = (name: string) => rows.findIndex((r) => r.includes(name));
+    expect(at("DeepSeek API")).toBeGreaterThan(at("DGX Spark"));
+    expect(at("DeepSeek API")).toBeGreaterThan(at("Ollama"));
+  });
+
+  it("a hand-off that named nobody settles under the agent the RECEIPT says ran (the page's own call)", async () => {
+    // lib/agentRun.settledRunName is pinned in receipt-seams; this pins that the
+    // PAGE hands it the stamp (re-review: replacing the page's call with the
+    // hand-off line's own name left every other test green).
+    const end = Date.now();
+    const waitingDefault: Msg[] = [
+      { role: "user", content: "read the K-1 and summarise it" },
+      { role: "assistant", content: "", escalated: "needs the agent", awaitingSession: "s1" },
+    ];
+    const daemonLine = {
+      role: "assistant",
+      content: "Summarised.",
+      sessionId: "s1",
+      agentType: "builder",
+      receipt: { ...RESULT, agent_name: "custom:tax-reader", agent_type: "builder" },
+    };
+    let n = 0;
+    H.api.getResponses["/chat/threads/t7"] = () => {
+      n += 1;
+      return n === 1
+        ? { id: "t7", title: "saved", updated_at: "S1", messages: waitingDefault }
+        : { id: "t7", title: "saved", updated_at: "S3", messages: [...waitingDefault, daemonLine] };
+    };
+    window.history.replaceState({}, "", "/chat?thread=t7");
+    H.api.getResponses["/sessions/s1?transcript=0"] = {
+      session: {
+        id: "s1",
+        status: "completed",
+        outcome: "completed_with_failures",
+        summary: "Summarised.",
+        created_at: isoAgo(125_000, end),
+        finished_at: isoAgo(0, end),
+      },
+    };
+    render(<ChatPage />);
+    await waitFor(() =>
+      expect(screen.getByTestId("agent-run-words").textContent).toBe(
+        "Your tax-reader agent worked for 2 min 5 s · 6 steps · part failed",
+      ),
+    );
+  });
+
+  it("a run given no folder works in the app's own folder: the row says so, never the run's internal id", async () => {
+    // agents/orchestrator gives such a run <home>/workspaces/session_<id>; its
+    // name is the run's id, an engine-room word. A folder the user chose keeps
+    // its name (the test above). The path is still the title, and Open folder
+    // still opens exactly that folder.
+    const own = ["C:", "Users", "me", "AppData", "Roaming", "Iron Jarvis", ".ironjarvis", "workspaces", "session_651171438d54"].join(
+      String.fromCharCode(92), // a Windows backslash, the daemon's own separator
+    );
+    const run: AgentRunStamp = { session: "s1", startedAt: 1_000, endedAt: 46_000, steps: 2, workspacePath: own };
+    render(<AgentRunReceipt run={run} />);
+    const line = screen.getByTestId("agent-run-folder");
+    expect(line.textContent).toBe("in its own work folderOpen folder");
+    expect(line.textContent).not.toMatch(/session_/);
+    expect(within(line).getByTitle(own).textContent).toBe("in its own work folder");
+    // A folder the user chose (no run id at its end) keeps its own name.
+    expect(runFolderWords("C:/Users/me/Documents/Iron Jarvis/2026-10-17 S-corp")).toEqual({
+      name: "2026-10-17 S-corp",
+      own: false,
+    });
+    expect(runFolderWords("D:/clients/workspaces/session notes").own).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Open its own work folder" }));
+    await waitFor(() => expect(H.api.posts).toContainEqual({ path: "/documents/open", body: { path: own } }));
+  });
+
+  it("a helper agent's ask found by the listing poll keeps its undo line in the dock (behaviour, not source)", async () => {
+    storeThread(WAITING);
+    H.api.getResponses["/sessions/s1?transcript=0"] = {
+      session: { id: "s1", status: "active", created_at: isoAgo(5_000) },
+    };
+    H.api.getResponses["/chat/approvals/pending"] = {
+      approvals: [{ id: "apr_send", tool: "shell", session_id: "s1", timeout_s: 0, reversible: false }],
+    };
+    render(<ChatPage />);
+    const card = await screen.findByTestId("chat-approval-card");
+    await waitFor(() => expect(within(card).getByTestId("approval-undo").textContent).toBe("This may not be undoable."));
+    expect(within(card).getByTestId("approval-undo").getAttribute("data-reversible")).toBe("false");
   });
 });

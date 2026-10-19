@@ -1237,8 +1237,10 @@ function AgentApprovalRow({
 /** An agent ask answered from this dropdown (v1.352.0, G24): the row stays
  *  for `ANSWERED_LINGER_MS` saying what happened — "Approved. The run
  *  continues · Open run" or "Denied. That action will not run." — so an
- *  answer never just vanishes. A live region announces it; it never counts
- *  on the badge (nothing waits on the user any more). */
+ *  answer never just vanishes. It never counts on the badge (nothing waits
+ *  on the user any more). A screen reader hears it from the dropdown's own
+ *  live region (`bell-answered-live`, v1.352.0 re-review): this row mounts
+ *  with its words already in it, which many screen readers never announce. */
 function AgentAnsweredRow({
   ask,
   outcome,
@@ -1253,7 +1255,10 @@ function AgentAnsweredRow({
         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.03] text-zinc-400">
           {outcome === "denied" ? <ShieldAlert size={15} /> : <ShieldCheck size={15} />}
         </span>
-        <p role="status" className="min-w-0 flex-1 pt-1.5 text-[12px] leading-snug text-zinc-300">
+        <p
+          data-testid="bell-agent-answered-line"
+          className="min-w-0 flex-1 pt-1.5 text-[12px] leading-snug text-zinc-300"
+        >
           {answeredLine(outcome)}
           {outcome === "approved" && !href ? "." : null}
           {outcome === "approved" && href ? (
@@ -1794,6 +1799,19 @@ export function NotificationBell() {
                 </span>
               )}
             </header>
+
+            {/* v1.352.0 re-review (G24, screen readers): what an answer given
+                here did, ANNOUNCED. A live region has to be in the page BEFORE
+                its words change; the answered row mounts with its words already
+                in it, which many screen readers never read. This one is mounted
+                with the dropdown and filled when an answer lands. */}
+            <p role="status" data-testid="bell-answered-live" className="sr-only">
+              {answeredRows.length > 0
+                ? answeredRows[answeredRows.length - 1].outcome === "denied"
+                  ? answeredLine("denied")
+                  : `${answeredLine("approved")}.`
+                : ""}
+            </p>
 
             <div className="max-h-[22rem] overflow-y-auto">
               {count === 0 &&

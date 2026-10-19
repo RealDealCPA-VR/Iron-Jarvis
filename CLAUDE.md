@@ -3572,7 +3572,18 @@ does not need a bump, stop and bump it.
   `FAILED_SENTENCE` are the page's and the daemon's same words. Every reply's
   TurnReceipt says "on <label>" / "· local" / "· cloud" (never "this PC" on a
   guess); the model menu badges read local / cloud · on your plan / cloud ·
-  pay per use. ONE STATUS TABLE (2C): `lib/statusWords` gives every surface
+  pay per use, and (re-review) "cloud" for a local-CLASS endpoint whose
+  `GET /models` row says `on_this_network: false` — every row carries that
+  flag from `egress.stays_on_this_network` (the receipt's predicate; `kind`
+  stays the routing class, `reasoning_default` stays LAST), so a cloud API
+  added as a fleet node no longer reads "local · no charge per message"
+  beside a receipt that says "cloud" (`tests/test_rereview_wave2_v13520.py`).
+  The bell announces an answer through ONE live region mounted with the
+  dropdown (`bell-answered-live`), never from the row that mounts with its
+  words. A run given no folder works in `<home>/workspaces/session_<id>`, and
+  the settled row says "in its own work folder" there, never the run's id
+  (`AgentRunReceipt.runFolderWords`; the path stays the title).
+  ONE STATUS TABLE (2C): `lib/statusWords` gives every surface
   its word AND tone (session badge, Sessions filter, Session board lanes +
   `stoppedChip`, mission cards, inbox, workflow run/step badges, Schedules and
   a project's list via `scheduleStatusLabel` — `lib/scheduleOutcome` keeps no

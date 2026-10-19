@@ -1863,7 +1863,8 @@ it, where it ran, and what it wants from you. The chat looks the same.
   name an agent, the row names the one that ran ("Your tax-reader agent
   worked for 3 min"). Open it for the plain lines: "Searched your chats 83
   times", "One memory lookup failed", "Ran on Opus 5.5 · cloud", and "in
-  <folder> · Open folder". The card under the reply reads "answered by Opus
+  <folder> · Open folder" ("in its own work folder" when the run was given
+  no folder of yours). The card under the reply reads "answered by Opus
   5.5 · cloud · 2 min 5 s · 6 steps · 86 tool calls", says when the model
   had to be swapped, and folds **What it did** step by step ("tax-reader
   read k1-2025.pdf", "needed your OK to run a command"). Tool names are plain
@@ -1872,7 +1873,9 @@ it, where it ran, and what it wants from you. The chat looks the same.
   an endpoint you named, "· local" for your PC or a machine on your network,
   "· cloud" for a model that runs elsewhere. Older replies show nothing new.
   The model menu's badges read **local**, **cloud · on your plan** and
-  **cloud · pay per use**, with the cost on hover. If you picked a remote
+  **cloud · pay per use**, with the cost on hover; an endpoint you added on
+  Connections that is outside your network (a cloud API) reads **cloud**,
+  never "local", the same as its replies' receipt. If you picked a remote
   agent for a hand-off that has to run here, the line says so: "Running on
   this PC. Reach hermes with @hermes."
 - **The same status words everywhere:** Working, Queued, Done, Done · needs
