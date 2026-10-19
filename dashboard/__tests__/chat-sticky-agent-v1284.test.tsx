@@ -362,8 +362,10 @@ describe("work goes to a real session of that agent (v1.284.0)", () => {
     expect(await screen.findAllByText("brief.pdf")).not.toHaveLength(0);
     // ...AND the reply keeps its ledger card (the agent-attributed bubble
     // branch renders before the run-result one — review finding #1), with no
-    // "do this" chip on a reply that already IS the run.
-    expect(await screen.findByTestId("run-result-headline")).toBeTruthy();
+    // "do this" chip on a reply that already IS the run. v1.358.0 (lane 8C,
+    // updated on purpose): under the settled hand-off row that carries the
+    // run's receipt, the card is only the rest (no second headline).
+    expect(await screen.findByTestId("run-result-rest")).toBeTruthy();
     expect(screen.queryByTestId("panel-hand-off")).toBeNull();
   });
 

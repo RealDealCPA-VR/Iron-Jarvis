@@ -303,12 +303,16 @@ function SessionsList() {
           actions={
             // v1.356.0 (G77): the button says everything it removes —
             // "Clear finished" also deleted failed and stopped sessions.
+            // v1.358.0 (lane 8C): the page's neutral look is for the FIRST
+            // press only (`idleClassName`); the armed second press wears the
+            // calm danger cue (tone-danger text on its fill), which the old
+            // `!text-zinc-400` override had painted over.
             <ConfirmButton
               label="Clear finished, failed and stopped"
               confirmLabel="Delete them all?"
               onConfirm={clearFinished}
               title="Deletes every session that finished, failed or was stopped. Running and waiting ones stay."
-              className="!text-zinc-400 hover:!text-accent-soft"
+              idleClassName="hover:!text-accent-soft"
             />
           }
         />

@@ -179,6 +179,7 @@ import {
   type HandOffLike,
 } from "@/lib/agentRun";
 import { runActionLines, stepFailedWords, toolDidWords, toolFailedWords } from "@/lib/runWords";
+import { statusWords } from "@/lib/statusWords";
 
 type Msg = Record<string, unknown>;
 
@@ -322,10 +323,12 @@ describe("G16: a run you stopped reads Stopped, not Task failed", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it("a failed run is still the red 'Task failed'; a run at its step limit says so in the warn tone", () => {
+  it("a failed run is still the red failure (the status table's 'Failed'); a run at its step limit says so in the warn tone", () => {
     const failed = { ...stopped, status: "failed", summary: "Session failed: ProviderError: boom" };
     const { container, unmount } = render(<RunResultCard result={failed} />);
-    expect(screen.getByTestId("run-result-headline").textContent).toBe("Task failed");
+    // v1.358.0 (lane 8C, updated on purpose): the one status table's word
+    // ("Failed"), the same every badge says — was "Task failed".
+    expect(screen.getByTestId("run-result-headline").textContent).toBe(statusWords("failed").word);
     expect(container.firstElementChild!.className).toContain("border-tone-danger/25");
     expect(screen.getByTestId("run-result-icon").className).toContain("text-tone-danger");
     unmount();
@@ -338,14 +341,17 @@ describe("G16: a run you stopped reads Stopped, not Task failed", () => {
     expect(screen.getByTestId("run-result-icon").className).toContain("text-tone-warn");
   });
 
-  it("resultHeadline: cancelled before failed; the old words for every other case", () => {
+  it("resultHeadline: cancelled before failed; the status table's words for every other case", () => {
+    // v1.358.0 (lane 8C, updated on purpose): "Task failed" / "Task complete"
+    // were the card's own words; it now says the one table's (lib/statusWords).
     expect(resultHeadline(stopped)).toBe("Stopped");
     expect(resultHeadline({ ...stopped, unanswered_asks: 3 })).toBe("Stopped");
-    expect(resultHeadline({ ...stopped, status: "failed" })).toBe("Task failed");
+    expect(resultHeadline({ ...stopped, status: "failed" })).toBe(statusWords("failed").word);
     expect(resultHeadline({ ...stopped, status: "failed", summary: "  Stopped: reached max steps" })).toBe(
       "Stopped at its step limit",
     );
-    expect(resultHeadline({ ...RESULT, outcome: null, tools_failed: [] })).toBe("Task complete");
+    expect(resultHeadline({ ...RESULT, outcome: null, tools_failed: [] })).toBe(statusWords("completed").word);
+    expect(resultHeadline({ ...RESULT, outcome: null, tools_failed: [] })).toBe("Done");
   });
 
   it("on the chat page: pressing Stop settles the hand-off as stopped and saves it", async () => {
@@ -401,14 +407,18 @@ describe("G16: a run you stopped reads Stopped, not Task failed", () => {
       },
     };
     render(<ChatPage />);
-    await waitFor(() => expect(screen.getByTestId("run-result-headline").textContent).toBe("Stopped"));
-    expect(screen.queryByText("Task failed")).toBeNull();
-    expect(screen.getByTestId("run-result-icon").getAttribute("data-end")).toBe("stopped");
+    // v1.358.0 (lane 8C, updated on purpose): ONE receipt. The settled row
+    // says the run was stopped; the reply under it carries no second card
+    // (no "Stopped" headline of its own), only the rest, which knows how the
+    // run ended (data-end) — and never a red "Task failed".
     await waitFor(() =>
       expect(screen.getByTestId("agent-run-words").textContent).toBe(
         "The researcher worked for 45 s · 6 steps · stopped",
       ),
     );
+    await waitFor(() => expect(screen.getByTestId("run-result-rest").getAttribute("data-end")).toBe("stopped"));
+    expect(screen.queryByTestId("run-result-headline")).toBeNull();
+    expect(screen.queryByText("Task failed")).toBeNull();
   });
 });
 
@@ -687,10 +697,13 @@ describe("G19: the run's words, from the ledger, never its tool ids", () => {
     const body = await screen.findByTestId("agent-run-receipt");
     expect(within(body).getByText("Searched your chats 83 times")).toBeTruthy();
     expect(within(body).getByText("Ran on Opus 5.5")).toBeTruthy();
-    // The card under the reply (a deferred panel) names the model and the length.
-    await waitFor(() =>
-      expect(screen.getByTestId("run-result-meta").textContent).toMatch(/^answered by Opus 5\.5 · 2 min 5 s/),
-    );
+    // v1.358.0 (lane 8C, updated on purpose): ONE receipt. The row names the
+    // model ("Ran on Opus 5.5", above) and the length; the reply under it (a
+    // deferred panel) draws no second "answered by …" line and no headline.
+    await waitFor(() => expect(screen.getByTestId("run-result-rest")).toBeTruthy());
+    expect(screen.queryByTestId("run-result-meta")).toBeNull();
+    expect(screen.queryByTestId("run-result-headline")).toBeNull();
+    expect(screen.queryByText(/answered by/)).toBeNull();
     // Saved with the thread: the stamp carries the ending and the counts.
     await waitFor(() => expect(putsTo("/chat/threads/t7").length).toBeGreaterThan(0));
     const saved = putsTo("/chat/threads/t7").at(-1)!.body.messages as Msg[];

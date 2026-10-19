@@ -142,6 +142,7 @@ vi.mock("framer-motion", async () => {
 });
 
 import { RunResultCard, resultHeadline, type RunResult } from "@/components/chat/RunResultCard";
+import { statusWords } from "@/lib/statusWords";
 import {
   SessionStatusBadge,
   outcomeLabel,
@@ -242,25 +243,33 @@ describe("outcomeLabel / waitingLabel", () => {
 /* ------------------------------------------------------- RunResultCard (D4) */
 
 describe("RunResultCard — the headline tells the truth about a short run", () => {
-  it("a COMPLETED session whose every mutating call expired does not headline 'Task complete'", async () => {
+  // v1.358.0 (lane 8C, updated on purpose): the card's headline is the ONE
+  // status table's word (lib/statusWords) — the same a badge, the Sessions
+  // list and the settled row say — never its own "Task complete" / "Finished
+  // with failures" / "Finished — N calls were never approved". The count of
+  // calls never approved moved into the note under it.
+  it("a COMPLETED session whose every mutating call expired does not headline the success word", async () => {
     render(<RunResultCard result={result({ outcome: "needs_you", unanswered_asks: 24 })} />);
     await waitFor(() =>
       expect(screen.getByTestId("run-result-headline")).toHaveTextContent(
-        "Finished — 24 calls were never approved",
+        statusWords("completed", "needs_you").word,
       ),
     );
+    expect(screen.getByTestId("run-result-headline").textContent).not.toBe(statusWords("completed").word);
     expect(screen.queryByText("Task complete"), "headline says the job was done").toBeNull();
-    // And says what is left for the user.
-    expect(screen.getByText(/asks expired unanswered/)).toBeInTheDocument();
+    // And says what is left for the user, with the count.
+    expect(screen.getByText(/24 calls waited for your OK/)).toBeInTheDocument();
   });
 
-  it("'Finished with failures' for completed_with_failures", () => {
+  it("the table's part-failed word for completed_with_failures", () => {
     render(<RunResultCard result={result({ outcome: "completed_with_failures" })} />);
-    expect(screen.getByTestId("run-result-headline")).toHaveTextContent("Finished with failures");
+    expect(screen.getByTestId("run-result-headline")).toHaveTextContent(
+      statusWords("completed", "completed_with_failures").word,
+    );
     expect(screen.queryByText("Task complete")).toBeNull();
   });
 
-  it("a plain completed run still reads 'Task complete' — honesty is not blanket amber", () => {
+  it("a plain completed run reads the table's 'Done' — honesty is not blanket amber", () => {
     render(
       <RunResultCard
         result={result({
@@ -271,15 +280,14 @@ describe("RunResultCard — the headline tells the truth about a short run", () 
         })}
       />,
     );
-    expect(screen.getByTestId("run-result-headline")).toHaveTextContent("Task complete");
+    expect(screen.getByTestId("run-result-headline")).toHaveTextContent(statusWords("completed").word);
+    expect(screen.getByTestId("run-result-headline").textContent).toBe("Done");
   });
 
-  it("resultHeadline: singular ask, failed status, and the nothing-ran case keep their words", () => {
-    expect(resultHeadline(result({ unanswered_asks: 1 }))).toBe(
-      "Finished — 1 call was never approved",
-    );
-    expect(resultHeadline(result({ status: "failed", unanswered_asks: 3 }))).toBe("Task failed");
-    expect(resultHeadline(result({ outcome: "needs_you" }))).toBe("Finished — needs you");
+  it("resultHeadline: singular ask, failed status, and the nothing-ran case keep their meaning", () => {
+    expect(resultHeadline(result({ unanswered_asks: 1 }))).toBe(statusWords("completed", "needs_you").word);
+    expect(resultHeadline(result({ status: "failed", unanswered_asks: 3 }))).toBe(statusWords("failed").word);
+    expect(resultHeadline(result({ outcome: "needs_you" }))).toBe(statusWords("completed", "needs_you").word);
     expect(resultHeadline(result({ tools_used: [], tools_failed: [], errors: [] }))).toBe(
       "Finished — but nothing ran",
     );

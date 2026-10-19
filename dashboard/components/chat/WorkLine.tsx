@@ -83,6 +83,7 @@ import {
   SquareTerminal,
   Timer,
   TriangleAlert,
+  Webhook,
   Wrench,
   X,
   type LucideIcon,
@@ -122,6 +123,8 @@ const ICON: Record<WorkKind, LucideIcon> = {
   web: Globe,
   page: Globe,
   command: SquareTerminal,
+  // v1.358.0 (lane 8C): a call to one of the user's saved web services.
+  service: Webhook,
   // v1.352.0 (G22): the browser the user connected, and a connected app.
   browser: AppWindow,
   app: Plug,
@@ -149,6 +152,11 @@ export interface WorkInput {
   timing?: ReceiptTiming | null;
   thinking?: string | null;
   thinkingSeconds?: number | null;
+  /** v1.358.0 (wave 8, lane 8C): the reply was CUT OFF — it ran out of room
+   *  ("truncated") or its stream died ("interrupted"). The line then says so
+   *  under the warn mark, never a check mark over a reply the line below
+   *  calls cut off. Absent: a reply that ended on its own, as before. */
+  cutOff?: "truncated" | "interrupted" | null;
 }
 
 /** The steps to account for: the stored steps (one per call, with timing)
@@ -205,9 +213,19 @@ export function workDuration(timing: ReceiptTiming | null | undefined): string |
  *   "Read 2 files"                         (no timing stored)
  *   "Worked for 6.0 s · thought for 4 s"   (thinking only)
  *   "Answered in 2.1 s"                    (a plain answer, v1.355.0 G63)
+ *   "Cut off after 2.1 s"                  (a plain answer cut off, v1.358.0)
+ *   "Worked for 3.2 s · read 2 files · cut off"   (v1.358.0, lane 8C)
  */
 export function workSummary(input: WorkInput): string | null {
   return summaryOf(workSteps(input), input);
+}
+
+/** v1.358.0 (lane 8C): the line's words for a reply that was cut off. */
+export const CUT_OFF_WORDS = "cut off";
+
+/** v1.358.0 (lane 8C): was the reply cut off (WorkInput.cutOff)? */
+function wasCutOff(input: WorkInput): boolean {
+  return input.cutOff === "truncated" || input.cutOff === "interrupted";
 }
 
 /** v1.355.0 (readiness G63): true when the reply did no work worth folding
@@ -223,7 +241,12 @@ function summaryOf(steps: ReceiptStep[], input: WorkInput): string | null {
   const thought = typeof input.thinking === "string" && input.thinking.trim().length > 0;
   // v1.355.0 (G63): a plain answer says how long it took (it used to show
   // nothing, so a reply with no tools had no duration anywhere).
-  if (plainAnswer(steps, input)) return `Answered in ${workDuration(input.timing)}`;
+  // v1.358.0 (lane 8C): never "Answered in …" over a reply that was cut off:
+  // it says it was cut off, and after how long.
+  if (plainAnswer(steps, input)) {
+    const took = workDuration(input.timing);
+    return wasCutOff(input) ? `Cut off after ${took}` : `Answered in ${took}`;
+  }
   if (!steps.length && !thought) return null;
   const counts = workCounts(steps);
   if (!counts.length) {
@@ -234,7 +257,10 @@ function summaryOf(steps: ReceiptStep[], input: WorkInput): string | null {
         : "thought it through",
     );
   }
-  const list = counts.join(", ");
+  // v1.358.0 (lane 8C): a reply that was cut off says so, last, in the
+  // fold's own words ("Worked for 3.2 s · read 2 files · cut off").
+  if (wasCutOff(input)) counts.push(CUT_OFF_WORDS);
+  const list = counts.join(", ").replace(/, cut off$/, ` · ${CUT_OFF_WORDS}`);
   const dur = workDuration(input.timing);
   if (dur) return `Worked for ${dur} · ${list}`;
   return list.charAt(0).toUpperCase() + list.slice(1);
@@ -896,11 +922,28 @@ export function WorkLine(props: WorkInput) {
     // v1.355.0 (G63): "Answered in 2.1 s". The same quiet line and hairline
     // as the folded one, but not a button: there is nothing under it to
     // open, so no chevron and no expanded state for a screen reader.
+    // v1.358.0 (lane 8C): a plain answer that was CUT OFF reads "Cut off
+    // after 2.1 s" under the warn mark (the theme's token), never a check.
+    const cut = wasCutOff(props);
     return (
-      <div data-testid="work-line" data-kind="answered" className="mb-2">
+      <div
+        data-testid="work-line"
+        data-kind="answered"
+        data-outcome={cut ? "cut-off" : "ok"}
+        className="mb-2"
+      >
         <p className="flex w-full min-w-0 items-center gap-2 border-b border-white/[0.08] pb-2 text-[13px] text-zinc-500">
-          <Check size={14} aria-hidden="true" data-testid="work-line-check" className="shrink-0" />
-          <span data-testid="work-summary" className="min-w-0 truncate">
+          {cut ? (
+            <TriangleAlert
+              size={14}
+              aria-hidden="true"
+              data-testid="work-line-warn"
+              className="shrink-0 text-tone-warn"
+            />
+          ) : (
+            <Check size={14} aria-hidden="true" data-testid="work-line-check" className="shrink-0" />
+          )}
+          <span data-testid="work-summary" className={`min-w-0 truncate ${cut ? "text-tone-warn" : ""}`.trim()}>
             {summary}
           </span>
         </p>
@@ -913,7 +956,12 @@ export function WorkLine(props: WorkInput) {
   // stays the same quiet line; only the theme's warn token marks it.
   const failed = failedSteps(steps);
   const failPiece = failed ? failedWords(failed) : "";
-  const split = failPiece && summary.endsWith(failPiece) ? summary.length - failPiece.length : -1;
+  // v1.358.0 (lane 8C): a cut-off reply's line ends "· cut off" in the same
+  // warn tone, under the same warning mark (never a check).
+  const cut = wasCutOff(props);
+  const cutTail = cut ? ` · ${CUT_OFF_WORDS}` : "";
+  const core = cutTail && summary.endsWith(cutTail) ? summary.slice(0, summary.length - cutTail.length) : summary;
+  const split = failPiece && core.endsWith(failPiece) ? core.length - failPiece.length : -1;
   return (
     <div data-testid="work-line" className="mb-2">
       <button
@@ -921,10 +969,10 @@ export function WorkLine(props: WorkInput) {
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((v) => !v)}
-        data-outcome={failed ? "some-failed" : "ok"}
+        data-outcome={failed ? "some-failed" : cut ? "cut-off" : "ok"}
         className="flex w-full min-w-0 items-center gap-2 border-b border-white/[0.08] pb-2 text-left text-[13px] text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none motion-reduce:transition-none"
       >
-        {failed ? (
+        {failed || cut ? (
           <TriangleAlert
             size={14}
             aria-hidden="true"
@@ -937,14 +985,22 @@ export function WorkLine(props: WorkInput) {
         <span data-testid="work-summary" className="min-w-0 truncate">
           {split >= 0 ? (
             <>
-              {summary.slice(0, split)}
+              {core.slice(0, split)}
               <span data-testid="work-summary-failed" className="text-tone-warn">
                 {failPiece}
               </span>
             </>
           ) : (
-            summary
+            core
           )}
+          {cutTail ? (
+            <>
+              {" · "}
+              <span data-testid="work-summary-cut" className="text-tone-warn">
+                {CUT_OFF_WORDS}
+              </span>
+            </>
+          ) : null}
         </span>
         <ChevronDown
           size={14}

@@ -32,7 +32,7 @@ const WORDS: Record<string, string> = {
   web_search: "search the web",
   // v1.357.0 (G84): one call to a web service the user saved in Settings ›
   // Connections (integrations/tools.RestCallTool); the card's own arguments
-  // name the service, the method and the path.
+  // name the service, the method and the path. (REST_CALL_TOOL below.)
   rest_call: "call one of your saved web services",
   // Calm UI redesign S3: the chat's settings tools (settings/tools.py). Only
   // the two ask-tier ones ever reach a card; both change one setting, and
@@ -108,6 +108,27 @@ export function isBuiltinBrowserTool(tool: string): boolean {
  *  bell share. */
 export const PLAN_TOOL = "approve_plan";
 
+/** v1.358.0 (wave 8, lane 8C): the call to one of the user's saved web
+ *  services (integrations/tools.RestCallTool, v1.357.0 G84). The ONE place
+ *  its name is written on the dashboard: the approval card's words above, the
+ *  work line's `service` kind (lib/workTarget) and its words (lib/stepWords:
+ *  "Called crm", counted "called a web service") all key on it, so it never
+ *  reads "Ran rest_call" / "ran 1 tool" again. */
+export const REST_CALL_TOOL = "rest_call";
+
+/** v1.358.0 (lane 8C): the saved web service a REST call named, as words:
+ *  the tool takes the service's name or the "<name> (<id>)" form its own
+ *  spec lists, and the row says only the name ("crm"). One line, no control
+ *  characters; "" when nothing usable was given. The caller still makes it
+ *  safe to show (lib/workTarget cleanTarget). */
+export function serviceNameWords(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const flat = raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  // "<name> (<id>)": the id is the record, the name is what the user typed.
+  const named = /^(.+?)\s*\([^()]*\)$/.exec(flat);
+  return (named ? named[1] : flat).trim();
+}
+
 /** v1.352.0 (G22): what the browser tool did, said after "Used your
  *  browser" — its own name without the `browser_` prefix ("click", "read
  *  page"). Built-ins only (exact names); null for anything else. */
@@ -168,9 +189,13 @@ export function appToolNameWords(name: string): string {
   return cutWords(words.join(" ") || name, APP_TOOL_MAX);
 }
 
-/** The pack's name for a row, one short line. */
+/** The pack's name for a row, one short line. v1.358.0 (lane 8C): an
+ *  underscore in the pack's id reads as a space ("google_drive" →
+ *  "google drive"), as the run card always said it; agents/mission.py
+ *  `app_name_words` is the Python twin (pinned equal). */
 export function appNameWords(app: string): string {
-  return cutWords(app, APP_NAME_MAX);
+  const words = app.replace(/_/g, " ").replace(/\s+/g, " ").trim();
+  return cutWords(words || app, APP_NAME_MAX);
 }
 
 /** Plain words for a tool id, or null when this map does not know it. */

@@ -19,9 +19,17 @@
  * fetched to draw them. A stamp from before v1.352.0 carries none of these
  * facts and the body renders nothing new. Raw tool ids stay in each row's
  * title (the record), never in its words.
+ *
+ * v1.358.0 (wave 8, lane 8C): THE run's one receipt. The reply under the row
+ * no longer repeats these facts in a boxed card (components/chat/
+ * RunResultCard `withRow`), so the step-by-step log the card used to fold
+ * ("What it did") folds here, under the action lines ("Step by step"), read
+ * off the reply's own saved receipt (`activity`, which the chat page hands
+ * in: lib/runReceipt pairRunReceipts) — the same components/chat/RunActivity
+ * piece, in the same words.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AlertTriangle, Check, Cpu, FolderOpen } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { WorkRow } from "@/components/chat/WorkLine";
@@ -29,6 +37,7 @@ import { runActionLines } from "@/lib/runWords";
 import { friendlyModelName } from "@/lib/friendlyModelName";
 import { providerDisplay } from "@/lib/onboarding";
 import { replyWhere } from "@/components/chat/TurnReceipt";
+import { runActivity, RunActivityFold } from "@/components/chat/RunActivity";
 import type { AgentRunStamp } from "@/lib/agentRun";
 
 /** The model the run was served by, in the words the reply's receipt uses
@@ -63,7 +72,15 @@ function Dot() {
   return <span aria-hidden="true" className="h-[3px] w-[3px] shrink-0 rounded-full bg-zinc-600" />;
 }
 
-export function AgentRunReceipt({ run }: { run: AgentRunStamp }) {
+export function AgentRunReceipt({
+  run,
+  activity,
+}: {
+  run: AgentRunStamp;
+  /** v1.358.0 (lane 8C): the run's step-by-step log, the reply's saved
+   *  receipt `activity` (raw; checked by runActivity). Absent: no fold. */
+  activity?: unknown;
+}) {
   const [openErr, setOpenErr] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
   const tools = run.tools ?? [];
@@ -97,7 +114,10 @@ export function AgentRunReceipt({ run }: { run: AgentRunStamp }) {
     }
   }
 
-  if (!run.routeNote && !lines.length && !model && !folder) return null;
+  // v1.358.0 (lane 8C): what it did, step by step (read once per log).
+  const steps = useMemo(() => runActivity({ activity }), [activity]);
+
+  if (!run.routeNote && !lines.length && !steps.length && !model && !folder) return null;
   return (
     <div data-testid="agent-run-receipt" className="grid gap-1">
       {run.routeNote ? (
@@ -121,6 +141,14 @@ export function AgentRunReceipt({ run }: { run: AgentRunStamp }) {
             />
           ))}
         </div>
+      ) : null}
+      {steps.length ? (
+        <RunActivityFold
+          lines={steps}
+          under="row"
+          toggleTestId="agent-run-steps-toggle"
+          listTestId="agent-run-activity"
+        />
       ) : null}
       {model ? (
         <div data-testid="agent-run-model" title={modelTitle || undefined}>

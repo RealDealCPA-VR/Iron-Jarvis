@@ -19,6 +19,10 @@
  * counted "used your browser". Both are read straight off the tool's own id
  * (lib/toolWords), never invented; the id itself stays in the hover title.
  *
+ * v1.358.0 (wave 8, lane 8C): a call to a saved web service (`rest_call`)
+ * reads "Called crm" and counts "called a web service" (the `service` kind,
+ * lib/workTarget), where it read "Ran rest_call" and "ran 1 tool".
+ *
  * Icons stay in WorkLine (this file is plain data, importable anywhere).
  */
 
@@ -55,6 +59,18 @@ export const STEP_WORDS: Record<WorkKind, KindWords> = {
   web: { done: "Searched the web", doing: "Searching the web", doneOn: "Searched the web for", doingOn: "Searching the web for", count: (n) => `searched the web${times(n)}` },
   page: { done: "Read a web page", doing: "Reading a web page", doneOn: "Read a page on", doingOn: "Reading a page on", count: (n) => `read ${plural(n, "web page")}` },
   command: { done: "Ran", doing: "Running", doneOn: "Ran", doingOn: "Running", count: (n) => `ran ${plural(n, "command")}` },
+  // v1.358.0 (wave 8, lane 8C): a call to one of the user's saved web
+  // services (`rest_call`): "Called crm" with the service's name, "Called a
+  // web service" without one; counted "called a web service", never "ran 1
+  // tool". Several calls may reach different services, so the count does not
+  // name one.
+  service: {
+    done: "Called a web service",
+    doing: "Calling a web service",
+    doneOn: "Called",
+    doingOn: "Calling",
+    count: (n) => (n === 1 ? "called a web service" : `called your web services ${n} times`),
+  },
   // v1.352.0 (G22): the built-in browser tools, as one surface.
   browser: {
     done: "Used your browser",
@@ -81,6 +97,7 @@ export const KIND_ORDER: readonly WorkKind[] = [
   "browser",
   "change",
   "make",
+  "service",
   "command",
   "app",
   "tool",
@@ -197,6 +214,9 @@ export function kindWords(kind: WorkKind, name: string, opts: { subject: boolean
  */
 export function stepHint(kind: WorkKind, name: string): string {
   if (kind === "browser") return browserActionWords(name) ?? name;
+  // v1.358.0 (lane 8C): a web-service call with no service named reads
+  // "Called a web service" alone; its tool id stays in the hover title.
+  if (kind === "service") return "";
   return name;
 }
 
@@ -221,7 +241,7 @@ export function stepPhrase(name: string, target?: string | null): StepPhrase {
     words: kindWords(kind, name, { subject: !!subject, running: false }),
     subject: subject?.text ?? null,
     file: !!subject?.file,
-    hint: subject ? null : stepHint(kind, name),
+    hint: subject ? null : stepHint(kind, name) || null,
   };
 }
 

@@ -20,7 +20,7 @@
  */
 
 import { looksLikeSecret } from "@/lib/configCards";
-import { appToolParts, isBuiltinBrowserTool } from "@/lib/toolWords";
+import { appToolParts, isBuiltinBrowserTool, REST_CALL_TOOL, serviceNameWords } from "@/lib/toolWords";
 
 /**
  * v1.352.0 (G22): two kinds that are not one tool but a whole surface:
@@ -31,6 +31,12 @@ import { appToolParts, isBuiltinBrowserTool } from "@/lib/toolWords";
  *     lib/toolWords keeps for the approval card — never a `browser_`
  *     prefix), "Used your browser".
  * Neither has a target: an app's or a page's arguments are not described.
+ *
+ * v1.358.0 (wave 8, lane 8C): "service", a call to one of the user's saved
+ * web services (`rest_call`, lib/toolWords REST_CALL_TOOL): "Called crm",
+ * counted "called a web service" — it read "Ran rest_call" / "ran 1 tool".
+ * Its target is the service's NAME only (never the path, the method, a body
+ * or the key).
  */
 export type WorkKind =
   | "read"
@@ -41,6 +47,7 @@ export type WorkKind =
   | "web"
   | "page"
   | "command"
+  | "service"
   | "browser"
   | "app"
   | "tool";
@@ -77,6 +84,8 @@ const KIND_OF: Record<string, WorkKind> = {
   shell: "command",
   run_code: "command",
   repl: "command",
+  // v1.358.0 (lane 8C): one call to a saved web service.
+  [REST_CALL_TOOL]: "service",
 };
 
 /** The kind of a tool id. Exact match only: never trimmed, never a prefix.
@@ -248,6 +257,12 @@ export function stepTarget(name: string, args: Record<string, unknown> | null | 
     case "page": {
       const u = str(args, "url");
       return u ? hostOf(u) : null;
+    }
+    case "service": {
+      // v1.358.0 (lane 8C): the saved service's name ("crm"), as the user
+      // named it; the path, method and body are never said.
+      const s = str(args, "service");
+      return s ? cleanTarget(serviceNameWords(s)) : null;
     }
     case "command": {
       if (name === "run_code") {

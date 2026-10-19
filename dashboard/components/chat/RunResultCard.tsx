@@ -13,9 +13,22 @@
  * The failure lane is the other half: a failed run gets Retry / Revert / Cancel
  * rather than a red status and a shrug. Revert is offered ONLY when the ledger
  * says something is genuinely reversible.
+ *
+ * v1.358.0 (wave 8, lane 8C): ONE RECEIPT PER RUN. When the run was handed
+ * over from chat, its settled hand-off row (components/chat/AgentRunRow +
+ * AgentRunReceipt) already says how it ended, what it did, on what model,
+ * where, and links "Open run" — so the reply under that row no longer draws a
+ * second boxed card saying it again in other words ("answered by" beside
+ * "Ran on", "Full transcript" beside "Open run", "Task complete" beside the
+ * row's verdict). With `withRow` this component draws only what the row does
+ * not carry, as quiet grey lines (no box): the files the run made or changed,
+ * the honest note when it fell short, the errors folded, and Try again /
+ * Revert / Stop. A reply with no such row (an older stamp, a run started
+ * elsewhere) keeps the full card. The success word everywhere is the shared
+ * status table's (lib/statusWords): "Done", never "Task complete".
  */
 
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   CheckCircle2,
   CircleStop,
@@ -29,13 +42,13 @@ import {
   Ban,
   ChevronDown,
   ChevronRight,
-  Check,
-  Hand,
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import type { SessionOutcome } from "@/lib/types";
 import { atStepLimit } from "@/lib/agentRun";
 import { runActionLines, stepFailedWords } from "@/lib/runWords";
+import { statusWords } from "@/lib/statusWords";
+import { runActivity, RunActivityFold } from "@/components/chat/RunActivity";
 import { friendlyModelName } from "@/lib/friendlyModelName";
 import { providerDisplay } from "@/lib/onboarding";
 import { replyWhere, secondsText } from "@/components/chat/TurnReceipt";
@@ -110,21 +123,48 @@ export function runEnd(result: Pick<RunResult, "status" | "summary">): RunEnd {
 }
 
 /** The headline, as a pure function so the words are testable. A "completed"
- *  status is NOT "Task complete" when the ledger says the job fell short. */
+ *  status is NOT "Done" when the ledger says the job fell short.
+ *
+ *  v1.358.0 (lane 8C): the words are the shared status table's
+ *  (lib/statusWords), the same every badge, the settled row and the Sessions
+ *  list say: "Done" (was "Task complete"), "Failed" (was "Task failed"),
+ *  "Stopped", "Done · needs you", "Done · part failed". An ask that expired
+ *  unanswered IS "needs you" (the note below says how many calls). Two say
+ *  more than any table word: "Stopped at its step limit" and "Finished — but
+ *  nothing ran" (a run that only TALKED about the work earns no "Done"). */
 export function resultHeadline(result: RunResult): string {
   const end = runEnd(result);
-  if (end === "stopped") return "Stopped";
+  if (end === "stopped") return statusWords("cancelled").word;
   if (end === "step_limit") return "Stopped at its step limit";
-  if (end === "failed") return "Task failed";
+  if (end === "failed") return statusWords("failed").word;
+  if ((result.unanswered_asks ?? 0) > 0) return statusWords("completed", "needs_you").word;
+  if (result.outcome === "needs_you" || result.outcome === "completed_with_failures") {
+    return statusWords("completed", result.outcome).word;
+  }
+  if (!result.tools_used.length) return "Finished — but nothing ran";
+  return statusWords("completed").word;
+}
+
+/** v1.358.0 (lane 8C): the note under a run that finished SHORT of the job,
+ *  in plain words (no "session", no "worklist"): how many calls were never
+ *  approved, or that some changes failed, and what the user can do. */
+export function shortRunNote(result: Pick<RunResult, "unanswered_asks" | "outcome">): string {
   const asks = result.unanswered_asks ?? 0;
   if (asks > 0) {
-    return `Finished — ${asks} call${asks === 1 ? " was" : "s were"} never approved`;
+    return `${asks === 1 ? "One call" : `${asks} calls`} waited for your OK and the ask${
+      asks === 1 ? "" : "s"
+    } ran out unanswered, so ${asks === 1 ? "it was" : "they were"} not run. Open the run to try again, or allow the tool and try again.`;
   }
-  if (result.outcome === "needs_you") return "Finished — needs you";
-  if (result.outcome === "completed_with_failures") return "Finished with failures";
-  if (!result.tools_used.length) return "Finished — but nothing ran";
-  return "Task complete";
+  if (result.outcome === "needs_you") {
+    return "The run waited for your OK and the asks ran out unanswered, so those calls were not run. Open the run to try again, or allow the tool and try again.";
+  }
+  return "Some of the changes this run tried failed. The errors are below, and the run's page lists what is left.";
 }
+
+/** v1.358.0 (lane 8C): the honest note for a run that finished without
+ *  running a single tool (it described the work instead of doing it). */
+export const NOTHING_RAN_NOTE =
+  "No tools ran and no files changed — this run described the work rather than doing it. Ask again more concretely, or check that the tools it needed were available.";
 
 function Row({
   icon,
@@ -229,37 +269,79 @@ function runOnNetwork(result: RunResult): boolean | undefined {
   return typeof result.on_this_network === "boolean" ? result.on_this_network : undefined;
 }
 
-/** The receipt's action log (`activity`, the newest 20 plain lines, oldest
- *  first), checked line by line: a line with words, its tone one of the
- *  three, at most 20. Anything else is left out, never guessed. */
-export function runActivity(result: Pick<RunResult, "activity">): { text: string; tone: "ok" | "warn" | "ask" }[] {
-  const out: { text: string; tone: "ok" | "warn" | "ask" }[] = [];
-  for (const a of Array.isArray(result.activity) ? result.activity : []) {
-    if (out.length >= 20) break;
-    const text = typeof a?.text === "string" ? a.text.replace(/\s+/g, " ").trim() : "";
-    if (!text) continue;
-    const tone = a.tone === "warn" || a.tone === "ask" ? a.tone : "ok";
-    out.push({ text: text.length > 200 ? `${text.slice(0, 199)}…` : text, tone });
-  }
-  return out;
+/** The receipt's action log (`activity`): since v1.358.0 one helper in
+ *  components/chat/RunActivity, shared with the settled row. */
+export { runActivity };
+
+/** v1.358.0 (lane 8C): the files a run made or changed, as ONE quiet line
+ *  under the reply ("Made brief.md, notes.md"), in the work line's verbs and
+ *  its dotted file underline. No label in capitals, no chips, no box. */
+function FileLine({
+  verb,
+  icon: Icon,
+  items,
+  total,
+  testId,
+}: {
+  verb: string;
+  icon: typeof FilePlus2;
+  items: string[];
+  total?: number;
+  testId: string;
+}) {
+  if (!items.length) return null;
+  const hidden = Math.max(0, (total ?? items.length) - items.length);
+  return (
+    <div data-testid={testId} className="flex min-w-0 items-start gap-2 text-[13px] leading-5 text-zinc-500">
+      <Icon size={14} aria-hidden="true" className="mt-[3px] shrink-0" />
+      <span className="min-w-0 break-words">
+        {verb}{" "}
+        {items.map((f, i) => (
+          <span key={f}>
+            {i > 0 ? ", " : ""}
+            <span
+              title={f}
+              className="text-zinc-300 underline decoration-zinc-500 decoration-dotted underline-offset-[3px]"
+            >
+              {f}
+            </span>
+          </span>
+        ))}
+        {hidden > 0 ? ` and ${hidden} more` : ""}
+      </span>
+    </div>
+  );
 }
+
+/** The calm ghost press the reply's own row uses (no border, fills on
+ *  hover; only keyboard focus draws a ring). */
+const REST_BUTTON =
+  "inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] text-zinc-400 transition-colors " +
+  "hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 " +
+  "disabled:opacity-40 motion-reduce:transition-none";
 
 export function RunResultCard({
   result,
   onRetry,
   onReverted,
+  withRow = false,
 }: {
   result: RunResult;
   /** Re-run the same task (POST /sessions/{id}/rerun happens upstream). */
   onRetry?: () => void;
   /** Called after a successful revert so the caller can refresh. */
   onReverted?: (summary: string) => void;
+  /** v1.358.0 (lane 8C): the run's settled hand-off row sits right above this
+   *  reply and already carries its receipt (how it ended, what it did, on
+   *  what model, where, "Open run"). Draw only what that row does not say,
+   *  as quiet lines: no box, no headline, no second "answered by". */
+  withRow?: boolean;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  const [stepsOpen, setStepsOpen] = useState(false);
+  const errorsId = useId();
 
   const end = runEnd(result);
   const failed = end === "failed";
@@ -321,8 +403,137 @@ export function RunResultCard({
     }
   }
 
+  const revertTitle = `Undo the ${result.revertable} reversible action${
+    result.revertable === 1 ? "" : "s"
+  } this task took`;
+
+  if (withRow) {
+    // v1.358.0 (lane 8C): ONE receipt. The row above says how the run ended,
+    // what it did, the model, the folder and "Open run"; this says only the
+    // rest, in the calm chat's quiet lines.
+    const hasActions = !!onRetry || canRevert || result.status === "active";
+    return (
+      <div data-testid="run-result-rest" data-end={end} className="mt-1.5 grid max-w-[640px] gap-1.5">
+        {/* The honesty case: a run that finished without touching a single
+            tool TALKED about the work. Said in words, never boxed. */}
+        {didNothing && !endedEarly && (
+          <p
+            data-testid="run-result-note"
+            className="flex min-w-0 items-start gap-2 text-[13px] leading-5 text-tone-warn"
+          >
+            <AlertTriangle size={14} aria-hidden="true" className="mt-[3px] shrink-0" />
+            <span className="min-w-0">{NOTHING_RAN_NOTE}</span>
+          </p>
+        )}
+        {/* It ENDED, but calls it needed were never answered, or changes
+            failed: what is left for the user, never a green tick. */}
+        {short && (
+          <p
+            data-testid="run-result-note"
+            className="flex min-w-0 items-start gap-2 text-[13px] leading-5 text-tone-warn"
+          >
+            <AlertTriangle size={14} aria-hidden="true" className="mt-[3px] shrink-0" />
+            <span className="min-w-0">{shortRunNote(result)}</span>
+          </p>
+        )}
+        <FileLine
+          verb="Made"
+          icon={FilePlus2}
+          items={result.files_created}
+          total={result.files_created_total}
+          testId="run-result-files-made"
+        />
+        <FileLine
+          verb="Changed"
+          icon={FilePen}
+          items={result.files_changed}
+          total={result.files_changed_total}
+          testId="run-result-files-changed"
+        />
+        {/* What each failed step SAID, one press away (the row above already
+            counts the failures in words). A native disclosure per error. */}
+        {result.errors.length > 0 && (
+          <div>
+            <button
+              type="button"
+              data-testid="run-result-errors-toggle"
+              aria-expanded={open}
+              aria-controls={open ? errorsId : undefined}
+              onClick={() => setOpen((v) => !v)}
+              className="flex items-center gap-1.5 text-[12px] text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none motion-reduce:transition-none"
+            >
+              {open ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
+              {`What went wrong (${result.errors.length})`}
+            </button>
+            {open && (
+              <div id={errorsId} className="mt-1.5 grid gap-1">
+                {result.errors.map((e, i) => (
+                  <details key={i} data-testid="run-result-error">
+                    <summary title={e.tool} className="cursor-pointer text-[12px] leading-5 text-tone-danger">
+                      {stepFailedWords(e.tool)}
+                    </summary>
+                    <div
+                      data-testid="run-result-error-raw"
+                      className="mt-0.5 whitespace-pre-wrap break-words pl-4 text-[12px] leading-5 text-zinc-500"
+                    >
+                      {e.error}
+                    </div>
+                  </details>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {(result.reverted ?? 0) > 0 && (
+          <div className="text-[12px] text-zinc-500">
+            {result.reverted} action{result.reverted === 1 ? "" : "s"} from this task
+            {result.reverted === 1 ? " has" : " have"} already been reverted.
+          </div>
+        )}
+        {note && <div className="text-[12px] text-tone-success">{note}</div>}
+        {err && (
+          <div role="alert" className="text-[12px] text-tone-danger">
+            {err}
+          </div>
+        )}
+        {hasActions && (
+          <div data-testid="run-result-actions" className="-ml-2 flex flex-wrap items-center gap-0.5">
+            {onRetry && (
+              <button type="button" onClick={onRetry} className={`${REST_BUTTON} hover:text-zinc-200`}>
+                <RotateCcw size={12} aria-hidden="true" /> Try again
+              </button>
+            )}
+            {canRevert && (
+              <button
+                type="button"
+                onClick={() => void revert()}
+                disabled={busy !== null}
+                title={revertTitle}
+                className={`${REST_BUTTON} hover:text-tone-warn`}
+              >
+                <Undo2 size={12} aria-hidden="true" />{" "}
+                {busy === "revert" ? "Reverting…" : `Revert (${result.revertable})`}
+              </button>
+            )}
+            {result.status === "active" && (
+              <button
+                type="button"
+                onClick={() => void cancel()}
+                disabled={busy !== null}
+                className={`${REST_BUTTON} hover:text-tone-danger`}
+              >
+                <Ban size={12} aria-hidden="true" /> Stop
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
+      data-testid="run-result-card"
       className={`max-w-[640px] rounded-xl border ${
         failed ? "border-tone-danger/25 bg-tone-danger/[0.04]" : "border-white/[0.08] bg-white/[0.02]"
       }`}
@@ -374,9 +585,7 @@ export function RunResultCard({
             touching a single tool is an agent that TALKED about the work. */}
         {didNothing && !endedEarly && (
           <div className="rounded-lg border border-tone-warn/25 bg-tone-warn/[0.06] px-2.5 py-2 text-[12px] leading-relaxed text-tone-warn">
-            No tools ran and no files changed — this turn described the work
-            rather than doing it. Ask again more concretely, or check that the
-            tools it needed were available.
+            {NOTHING_RAN_NOTE}
           </div>
         )}
         {/* The other honesty case (v1.227.0): the run ENDED, but calls it
@@ -384,9 +593,7 @@ export function RunResultCard({
             left for the user instead of a green tick. */}
         {short && (
           <div className="rounded-lg border border-tone-warn/25 bg-tone-warn/[0.06] px-2.5 py-2 text-[12px] leading-relaxed text-tone-warn">
-            {(result.unanswered_asks ?? 0) > 0 || result.outcome === "needs_you"
-              ? "The run paused for your approval and the asks expired unanswered — those calls were not run. Open the session to re-run the failed items, or grant the tool and try again."
-              : "Some of the changes this run tried failed — check the errors below and the worklist on the session page."}
+            {shortRunNote(result)}
           </div>
         )}
 
@@ -440,43 +647,9 @@ export function RunResultCard({
         {/* v1.352.0 integrate (G18 -> G19): the receipt's own action log —
             "Builder saved brief.md", "needed your OK to run a command" —
             folded behind one quiet toggle, as plain grey rows (no box). An
-            older result with no log shows nothing new. */}
-        {activity.length > 0 && (
-          <div>
-            <button
-              type="button"
-              data-testid="run-result-steps-toggle"
-              aria-expanded={stepsOpen}
-              onClick={() => setStepsOpen((v) => !v)}
-              className="flex items-center gap-1.5 text-[12px] text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none motion-reduce:transition-none"
-            >
-              {stepsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-              {activity.length >= 20 ? "The last 20 things it did" : "What it did"}
-            </button>
-            {stepsOpen && (
-              <ul data-testid="run-result-activity" className="mt-1.5 grid gap-1">
-                {activity.map((a, i) => (
-                  <li
-                    key={i}
-                    data-tone={a.tone}
-                    className={`flex min-w-0 items-start gap-2 text-[12px] leading-5 ${
-                      a.tone === "warn" ? "text-tone-warn" : "text-zinc-400"
-                    }`}
-                  >
-                    {a.tone === "warn" ? (
-                      <AlertTriangle size={13} aria-hidden="true" className="mt-[3px] shrink-0" />
-                    ) : a.tone === "ask" ? (
-                      <Hand size={13} aria-hidden="true" className="mt-[3px] shrink-0 text-zinc-500" />
-                    ) : (
-                      <Check size={13} aria-hidden="true" className="mt-[3px] shrink-0 text-zinc-500" />
-                    )}
-                    <span className="min-w-0 break-words">{a.text}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
+            older result with no log shows nothing new. (v1.358.0: the one
+            fold components/chat/RunActivity, shared with the settled row.) */}
+        <RunActivityFold lines={activity} />
 
         {result.errors.length > 0 && (
           <div>
@@ -545,9 +718,7 @@ export function RunResultCard({
             type="button"
             onClick={() => void revert()}
             disabled={busy !== null}
-            title={`Undo the ${result.revertable} reversible action${
-              result.revertable === 1 ? "" : "s"
-            } this task took`}
+            title={revertTitle}
             className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-[12px] font-medium text-zinc-300 transition-colors hover:border-tone-warn/40 hover:text-tone-warn disabled:opacity-40"
           >
             <Undo2 size={12} /> {busy === "revert" ? "Reverting…" : `Revert (${result.revertable})`}
@@ -563,11 +734,13 @@ export function RunResultCard({
             <Ban size={12} /> Stop
           </button>
         )}
+        {/* v1.358.0 (lane 8C): the settled row's words for the same link. */}
         <a
           href={`/sessions/${result.session_id}`}
+          data-testid="run-result-open"
           className="ml-auto text-[12px] text-zinc-500 transition-colors hover:text-zinc-300"
         >
-          Full transcript →
+          Open run
         </a>
       </div>
     </div>

@@ -382,16 +382,16 @@ export function ConnectDoors({
       {showPress ? (
         /* Ready, but the demo still answers: the explicit press. Never the
            words "answers are real" here — they are not, until the press. */
-        <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] px-4 py-3">
-          <div className="flex items-center gap-2 text-sm font-medium text-emerald-200">
-            <CheckCircle2 size={16} className="text-emerald-400" />
+        <div className="rounded-xl border border-tone-success/25 bg-tone-success/[0.06] px-4 py-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-tone-success">
+            <CheckCircle2 size={16} className="text-tone-success" />
             {/* v1.313.0: the presses below name each one in full; the heading
                 no longer repeats every long name before them. v1.353.0 (G35):
                 not "on this PC" — a pasted cloud key is ready too, and it
                 does not run here. */}
             Ready — choose what answers you
           </div>
-          <p className="mt-1 text-xs leading-relaxed text-emerald-300/80">
+          <p className="mt-1 text-xs leading-relaxed text-tone-success/80">
             Replies still come from the {DEMO_MODEL} until you choose what answers you —
             nothing switches on its own.
           </p>
@@ -420,7 +420,7 @@ export function ConnectDoors({
             ))}
           </div>
           {candidates.some((c) => c.where) && (
-            <p className="mt-2 text-[11px] leading-relaxed text-emerald-300/60">
+            <p className="mt-2 text-[11px] leading-relaxed text-tone-success/60">
               {candidates
                 .filter((c) => c.where)
                 .map((c) => `With ${midSentence(c.label)}, what you type ${c.where}.`)
@@ -508,8 +508,8 @@ export function ConnectDoors({
                 return (
                   <li key={c.provider} className="text-xs leading-relaxed text-zinc-400">
                     {state === "signed-in" && (
-                      <span className="inline-flex items-center gap-1.5 text-emerald-300">
-                        <CheckCircle2 size={13} className="text-emerald-400" />
+                      <span className="inline-flex items-center gap-1.5 text-tone-success">
+                        <CheckCircle2 size={13} className="text-tone-success" />
                         {c.name} is signed in on this PC.
                         {demo ? " Choose it above to use it for answers." : ""}
                       </span>
@@ -576,7 +576,7 @@ export function ConnectDoors({
                           </button>
                         )}
                         {si.error && (
-                          <span className="mt-1 block text-rose-300">{si.error}</span>
+                          <span className="mt-1 block text-tone-danger">{si.error}</span>
                         )}
                       </>
                     )}
@@ -662,7 +662,7 @@ export function ConnectDoors({
                 </button>
               )}
               {starter.error && (
-                <span role="alert" className="mt-1 block text-rose-300">
+                <span role="alert" className="mt-1 block text-tone-danger">
                   {starter.error}
                 </span>
               )}
@@ -679,13 +679,13 @@ export function ConnectDoors({
             Connect to Ollama on this PC
           </button>
           {ollamaError && (
-            <p role="alert" className="mt-2 text-xs text-rose-300">
+            <p role="alert" className="mt-2 text-xs text-tone-danger">
               {ollamaError}
             </p>
           )}
           {ollamaSaved && !ollamaError && ollamaUp && (
-            <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-emerald-300">
-              <CheckCircle2 size={12} className="text-emerald-400" />
+            <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-tone-success">
+              <CheckCircle2 size={12} className="text-tone-success" />
               Ollama is answering on this PC.
               {demo ? " Choose it above to use it for answers." : ""}
             </p>
@@ -781,7 +781,7 @@ export function ConnectDoors({
           </form>
 
           {keyResult && (
-            <p role="status" className={`mt-2 text-xs ${keyResult.ok ? "text-emerald-300" : "text-rose-300"}`}>
+            <p role="status" className={`mt-2 text-xs ${keyResult.ok ? "text-tone-success" : "text-tone-danger"}`}>
               {keyResult.ok ? "Connected — " : "Not connected — "}
               {keyResult.detail}
               {/* v1.353.0 (G35): connected is not chosen — while replies are
@@ -790,7 +790,7 @@ export function ConnectDoors({
             </p>
           )}
           {keyError && (
-            <p role="alert" className="mt-2 text-xs text-rose-300">
+            <p role="alert" className="mt-2 text-xs text-tone-danger">
               {keyError}
             </p>
           )}

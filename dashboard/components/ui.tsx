@@ -633,12 +633,20 @@ export const CALM_CONFIRM = {
  * Two-step destructive button: the first click arms it ("Confirm?"), a second
  * click within 3s runs the action. Prevents accidental irreversible deletes
  * (secrets are write-only and unrecoverable).
+ *
+ * v1.358.0 (wave 8, lane 8C): `idleClassName` styles ONLY the first,
+ * unarmed press. A caller that wants its page action to rest neutral (the
+ * Sessions page's bulk delete) puts its look there; the ARMED press always
+ * wears the danger cue (tone token, calm). A text override in `className`
+ * used to win over the armed state too, so the second press of the Sessions
+ * bulk delete read grey on a faint fill.
  */
 export function ConfirmButton({
   onConfirm,
   label = "Delete",
   confirmLabel = "Confirm?",
   className = "",
+  idleClassName = "",
   title,
   variant = "default",
 }: {
@@ -646,6 +654,8 @@ export function ConfirmButton({
   label?: string;
   confirmLabel?: string;
   className?: string;
+  /** v1.358.0: classes for the unarmed press only (never the armed one). */
+  idleClassName?: string;
   title?: string;
   variant?: ConfirmVariant;
 }) {
@@ -678,7 +688,7 @@ export function ConfirmButton({
         title={title}
         data-confirm-variant="calm"
         data-armed={armed ? "true" : "false"}
-        className={`${CALM_CONFIRM.base} ${armed ? CALM_CONFIRM.armed : CALM_CONFIRM.idle} ${className}`.trim()}
+        className={`${CALM_CONFIRM.base} ${armed ? CALM_CONFIRM.armed : `${CALM_CONFIRM.idle} ${idleClassName}`.trim()} ${className}`.trim()}
       >
         {busy ? <LoaderInline label={confirmLabel} /> : armed ? confirmLabel : label}
       </button>
@@ -693,7 +703,7 @@ export function ConfirmButton({
       className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
         armed
           ? "border-tone-danger/50 bg-tone-danger/[0.12] text-tone-danger"
-          : "border-white/10 text-zinc-400 hover:border-tone-danger/30 hover:text-tone-danger"
+          : `border-white/10 text-zinc-400 hover:border-tone-danger/30 hover:text-tone-danger${idleClassName ? ` ${idleClassName}` : ""}`
       } ${className}`}
     >
       {busy ? <LoaderInline label={confirmLabel} /> : armed ? confirmLabel : label}

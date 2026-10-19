@@ -1,0 +1,249 @@
+{
+  "lines": {
+    "app_search": {
+      "ok": "searched your Iron Jarvis setup",
+      "failed": "tried a setup search and it failed"
+    },
+    "app_status": {
+      "ok": "checked your Iron Jarvis setup",
+      "failed": "tried a setup check and it failed"
+    },
+    "blackboard_read": {
+      "ok": "read the team's notes",
+      "failed": "tried a team notes read and it failed"
+    },
+    "browser_activate_tab": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_click": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_close_tab": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_create_tab": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_get_active_tab": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_get_elements": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_get_status": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_list_tabs": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_navigate": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_press_key": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_read_page": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_screenshot": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_scroll": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "browser_type": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
+    "compare_documents": {
+      "ok": "compared documents",
+      "failed": "tried a document compare and it failed"
+    },
+    "convert_document": {
+      "ok": "made 1 file",
+      "failed": "tried a file save and it failed"
+    },
+    "delegate": {
+      "ok": "handed work to a teammate",
+      "failed": "tried a hand-off and it failed"
+    },
+    "excel_apply_spec": {
+      "ok": "changed 1 file",
+      "failed": "tried a file change and it failed"
+    },
+    "excel_profile": {
+      "ok": "read 1 file",
+      "failed": "tried a file read and it failed"
+    },
+    "excel_query": {
+      "ok": "queried a workbook",
+      "failed": "tried a workbook query and it failed"
+    },
+    "guide_read": {
+      "ok": "read the Iron Jarvis guide",
+      "failed": "tried a guide read and it failed"
+    },
+    "guide_search": {
+      "ok": "searched the Iron Jarvis guide",
+      "failed": "tried a guide search and it failed"
+    },
+    "history_search": {
+      "ok": "searched your chats",
+      "failed": "tried a chat search and it failed"
+    },
+    "image_convert": {
+      "ok": "made 1 file",
+      "failed": "tried a file save and it failed"
+    },
+    "image_info": {
+      "ok": "read 1 file",
+      "failed": "tried a file read and it failed"
+    },
+    "image_resize": {
+      "ok": "made 1 file",
+      "failed": "tried a file save and it failed"
+    },
+    "ltm_append": {
+      "ok": "added to your knowledge base",
+      "failed": "tried a knowledge base note and it failed"
+    },
+    "mcp__bad": {
+      "ok": "used mcp bad",
+      "failed": "tried mcp bad and it failed"
+    },
+    "mcp__github__listOpenIssues": {
+      "ok": "used github: list open issues",
+      "failed": "tried github: list open issues and it failed"
+    },
+    "mcp__gmail__search_messages": {
+      "ok": "used gmail: search messages",
+      "failed": "tried gmail: search messages and it failed"
+    },
+    "mcp__google_drive__search_files": {
+      "ok": "used google drive: search files",
+      "failed": "tried google drive: search files and it failed"
+    },
+    "mcp__tracker__get_PR": {
+      "ok": "used tracker: get PR",
+      "failed": "tried tracker: get PR and it failed"
+    },
+    "memory_propose": {
+      "ok": "suggested something to remember",
+      "failed": "tried a memory suggestion and it failed"
+    },
+    "memory_read": {
+      "ok": "looked up a memory",
+      "failed": "tried a memory lookup and it failed"
+    },
+    "memory_write": {
+      "ok": "saved to its memory",
+      "failed": "tried a memory save and it failed"
+    },
+    "pdf_arrange": {
+      "ok": "changed 1 file",
+      "failed": "tried a file change and it failed"
+    },
+    "pdf_form_fields": {
+      "ok": "read 1 file",
+      "failed": "tried a file read and it failed"
+    },
+    "pdf_form_fill": {
+      "ok": "changed 1 file",
+      "failed": "tried a file change and it failed"
+    },
+    "pdf_split": {
+      "ok": "made 1 file",
+      "failed": "tried a file save and it failed"
+    },
+    "recall_lessons": {
+      "ok": "checked its lessons",
+      "failed": "tried a lesson check and it failed"
+    },
+    "redact_pii": {
+      "ok": "made 1 file",
+      "failed": "tried a file save and it failed"
+    },
+    "rename_real_file": {
+      "ok": "used rename real file",
+      "failed": "tried rename real file and it failed"
+    },
+    "repl": {
+      "ok": "ran 1 command",
+      "failed": "tried a command and it failed"
+    },
+    "run_code": {
+      "ok": "ran 1 command",
+      "failed": "tried a command and it failed"
+    },
+    "skill_load": {
+      "ok": "loaded a skill",
+      "failed": "tried a skill load and it failed"
+    },
+    "skill_search": {
+      "ok": "looked for a skill",
+      "failed": "tried a skill search and it failed"
+    },
+    "some_new_tool": {
+      "ok": "used some new tool",
+      "failed": "tried some new tool and it failed"
+    },
+    "spawn_agent": {
+      "ok": "started a helper agent",
+      "failed": "tried a helper agent start and it failed"
+    },
+    "worklist_next": {
+      "ok": "picked the next item to work on",
+      "failed": "tried a worklist pick and it failed"
+    },
+    "worklist_status": {
+      "ok": "checked its list",
+      "failed": "tried a worklist check and it failed"
+    }
+  },
+  "python_own_words": [
+    "blackboard_post",
+    "browse",
+    "consult",
+    "docx_edit",
+    "edit_file",
+    "excel_edit",
+    "excel_read",
+    "extract_pdf",
+    "file_search",
+    "grep",
+    "list_files",
+    "list_folder",
+    "ltm_search",
+    "memory_search",
+    "message_agent",
+    "notebook",
+    "read_document",
+    "read_file",
+    "recall",
+    "remember_preference",
+    "rename_file",
+    "rest_call",
+    "shell",
+    "view_image",
+    "web_extract",
+    "web_fetch",
+    "web_search",
+    "worklist_add",
+    "worklist_done",
+    "write_document",
+    "write_file"
+  ]
+}

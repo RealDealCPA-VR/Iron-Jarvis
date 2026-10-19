@@ -690,7 +690,7 @@ describe("on the chat page", () => {
     expect(screen.getByRole("button", { name: /Stop/ })).toBeEnabled();
   });
 
-  it("the run finishes: the same row settles, stamped and SAVED on the hand-off message; reply and run card unchanged", async () => {
+  it("the run finishes: the same row settles, stamped and SAVED on the hand-off message; the reply under it keeps no second card", async () => {
     storeThread(WAITING);
     const end = Date.now();
     H.api.getResponses["/sessions/s1?transcript=0"] = {
@@ -710,9 +710,12 @@ describe("on the chat page", () => {
     );
     expect(screen.getByTestId("agent-run-row").getAttribute("data-state")).toBe("settled");
     expect(screen.getByRole("link", { name: "Open run" }).getAttribute("href")).toBe("/sessions/s1");
-    // The ledger card under the reply is exactly what it was (it loads lazily:
-    // a deferred panel, v1.258.0).
-    expect(await screen.findByTestId("run-result-headline")).toBeTruthy();
+    // v1.358.0 (lane 8C, updated on purpose): ONE receipt. The settled row
+    // above carries the run's receipt, so the reply under it no longer draws
+    // a second boxed card with its own headline; it keeps only the rest (it
+    // loads lazily: a deferred panel, v1.258.0).
+    expect(await screen.findByTestId("run-result-rest")).toBeTruthy();
+    expect(screen.queryByTestId("run-result-headline")).toBeNull();
     // Saved with the thread: the stamp on the hand-off, the wait mark gone.
     await waitFor(() => expect(putsTo("/chat/threads/t7").length).toBeGreaterThan(0));
     const saved = putsTo("/chat/threads/t7").at(-1)!.body.messages as Msg[];

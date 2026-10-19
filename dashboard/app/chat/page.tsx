@@ -395,6 +395,9 @@ import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 import { AgentRunLive, AgentRunSettled, HandOffLine } from "@/components/chat/AgentRunRow";
 // v1.352.0 (G19): what a settled run did, inside that row's opened body.
 import { AgentRunReceipt } from "@/components/chat/AgentRunReceipt";
+// v1.358.0 (lane 8C): one receipt per helper-agent run (the settled row
+// carries it; the reply under it draws no second copy).
+import { pairRunReceipts } from "@/lib/runReceipt";
 import {
   agentPhrase,
   handOffFor,
@@ -2918,6 +2921,8 @@ const MessageRow = memo(function MessageRow({
   answeredName,
   panelAsked,
   panelWaits = false,
+  underRow = false,
+  rowActivity,
   h,
 }: {
   m: ChatMessage;
@@ -2948,6 +2953,14 @@ const MessageRow = memo(function MessageRow({
   /** v1.355.0 (G62): a remote's "still working" line nothing has followed
    *  yet — it shows "· waiting 3 min" until the answer arrives. */
   panelWaits?: boolean;
+  /** v1.358.0 (lane 8C): this reply's run has a settled hand-off row above
+   *  it that already carries the receipt (lib/runReceipt pairRunReceipts):
+   *  the run card draws only what the row does not say, and no second
+   *  "from <agent> · <time>" line. */
+  underRow?: boolean;
+  /** v1.358.0 (lane 8C): for a settled hand-off row, the paired reply's
+   *  step-by-step log (its saved receipt `activity`, by reference). */
+  rowActivity?: unknown;
   h: RowHandlers;
 }) {
   // v1.323.0: the hidden "please continue" turn of a Continue press.
@@ -3098,17 +3111,23 @@ const MessageRow = memo(function MessageRow({
             an unnamed escalation. This branch returns before the `runResult`
             one below, so without this line the files would vanish from the
             very replies that make them. */}
+        {/* v1.358.0 (lane 8C): under a settled hand-off row that already
+            carries the run's receipt, the card draws only the rest (files,
+            a note, errors, Try again) as quiet lines: ONE receipt. */}
         {m.runResult && (
           <RunResultCard
             result={m.runResult}
+            withRow={underRow}
             onRetry={() => h.retryTask(m.runResult?.task || "")}
           />
         )}
         {/* v1.355.0 (G62): the agent reply's receipt line, in the voice of
             Jarvis's own "answered by …": who, and how long since the
             question. Not on a failed seat (its line already says so) nor on
-            a "still working" line (that one waits instead). */}
-        {!m.panelError && m.panelKind !== "pending" && m.panelKind !== "progress" && (
+            a "still working" line (that one waits instead). v1.358.0 (lane
+            8C): nor under a settled row, which already says who worked and
+            for how long. */}
+        {!underRow && !m.panelError && m.panelKind !== "pending" && m.panelKind !== "progress" && (
           <PanelReplyLine
             name={agentDisplayName(m.panelWho)}
             replyAt={lineAt(m)}
@@ -3152,6 +3171,7 @@ const MessageRow = memo(function MessageRow({
         )}
         <RunResultCard
           result={m.runResult}
+          withRow={underRow}
           onRetry={() => h.retryTask(m.runResult?.task || "")}
         />
       </div>
@@ -3174,7 +3194,9 @@ const MessageRow = memo(function MessageRow({
       return (
         <div className="group/msg">
           <AgentRunSettled name={settledRunName(m.escalatedTo, run)} run={run} why={said}>
-            <AgentRunReceipt run={run} />
+            {/* v1.358.0 (lane 8C): the run's ONE receipt, with its
+                step-by-step log (the reply's saved `activity`). */}
+            <AgentRunReceipt run={run} activity={rowActivity} />
           </AgentRunSettled>
         </div>
       );
@@ -3220,6 +3242,9 @@ const MessageRow = memo(function MessageRow({
         timing={m.timing}
         thinking={m.thinking}
         thinkingSeconds={m.thinkingSeconds}
+        // v1.358.0 (lane 8C): a reply that was cut off never wears the
+        // check mark of "Answered in …" above "The reply was cut off.".
+        cutOff={m.truncated ? "truncated" : m.interrupted ? "interrupted" : null}
       />
       <Bubble role="assistant">
         {/* v1.325.0: a selection in here offers "Quote". */}
@@ -11017,6 +11042,10 @@ export default function ChatPage() {
     () => ({ asked: panelAskedAt(messages), waiting: panelWaiting(messages) }),
     [messages],
   );
+  // v1.358.0 (lane 8C): each agent reply paired with the settled hand-off
+  // row above it that already carries its run's receipt (lib/runReceipt):
+  // the row keeps the facts, the reply draws no second copy.
+  const runPairs = useMemo(() => pairRunReceipts(messages), [messages]);
   // Calm chat W1-5 (v1.326.0): what the receipt's "answered by …" calls the
   // model. v1.329.0 (G2): the SAME name the composer's model chip uses (the
   // catalog's label, else friendlyModelName: "Opus 4.8", never
@@ -12135,6 +12164,8 @@ export default function ChatPage() {
                           answeredName={answeredModelName(m.route)}
                           panelAsked={m.panelWho ? panelFacts.asked[i] : undefined}
                           panelWaits={m.panelWho ? panelFacts.waiting[i] : false}
+                          underRow={runPairs.underRow[i] === true}
+                          rowActivity={m.escalated ? runPairs.activityFor[i] : undefined}
                           h={rowHandlers}
                         />
                         </div>

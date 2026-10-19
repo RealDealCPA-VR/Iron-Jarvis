@@ -43,6 +43,7 @@ raises past a missing session (``None``); every sub-read degrades to less.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -98,7 +99,8 @@ _CONTINUATION_ROWS = 10
 _ASK_DENIAL_KINDS = frozenset({"permission denied", "paused"})
 #: The other refusals, in plain words — nobody was asked, so none of them may
 #: read "needed your OK" (a breaker-refused ``read_file`` is an allow-tier
-#: tool). ``{t}`` is the tool name with spaces.
+#: tool). ``{t}`` is the tool's own name (``tool_own_name``: spaces, an
+#: app's tool as "<app>: <its tool in words>").
 _REFUSAL_WORDS: dict[str, str] = {
     "refused": "was stopped from repeating a {t} call that kept failing",
     "not armed": "tried {t}, a tool it was not given — nothing ran",
@@ -208,6 +210,12 @@ _TOOL_WORDS: dict[str, tuple[str, str]] = {
     "worklist_done": ("finished an item", "could not record an item"),
     "remember_preference": ("noted a preference", "could not note a preference"),
     "notebook": ("updated its notebook", "could not update its notebook"),
+    # v1.358.0 (wave 8, lane 8C): the chat's page reader (the same words as
+    # the work line's ``page`` kind, dashboard/lib/stepWords "Read a web
+    # page"), and one call to a saved web service, named by the service
+    # (the work line's "Called crm"; never its path, method, body or key).
+    "web_fetch": ("read a web page", "could not read a web page"),
+    "rest_call": ("called {s}", "could not call {s}"),
 }
 
 #: What an ASK wants to do, in the approval card's own words (v1.352.0, one
@@ -245,22 +253,215 @@ _QUIET_TOOLS = frozenset(
 )
 
 
+# --------------------------------------------------------------------------- #
+# v1.358.0 (wave 8, lane 8C, G19): a tool _TOOL_WORDS does not word reads in
+# the DASHBOARD's words, never its id. The run card's "What it did" fold and
+# the mission log used to say "Builder used history search" and, for a
+# connected app, "used mcp  gmail  search messages". These tables are the
+# Python twins of dashboard/lib/runWords.ts (AGENT_TOOLS + KIND_NOUN),
+# lib/workTarget.ts (KIND_OF), lib/stepWords.ts (STEP_WORDS[kind].count(1))
+# and lib/toolWords.ts (appNameWords / appToolNameWords); ``fallback_line`` is
+# ``toolStepLine`` there. ONE fixture holds both to the same words:
+# dashboard/__tests__/fixtures/tool-lines-v13580.json (written and checked by
+# tests/test_one_receipt_v13580.py, read back by
+# dashboard/__tests__/one-receipt-v13580.test.tsx).
+# --------------------------------------------------------------------------- #
+
+#: lib/runWords.ts AGENT_TOOLS: (one call that worked, one call as a noun).
+_RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
+    "history_search": ("searched your chats", "chat search"),
+    "memory_read": ("looked up a memory", "memory lookup"),
+    "memory_search": ("searched its memory", "memory search"),
+    "memory_write": ("saved to its memory", "memory save"),
+    "memory_propose": ("suggested something to remember", "memory suggestion"),
+    "recall": ("searched everything Jarvis knows", "recall"),
+    "recall_lessons": ("checked its lessons", "lesson check"),
+    "ltm_search": ("searched your knowledge base", "knowledge base search"),
+    "ltm_append": ("added to your knowledge base", "knowledge base note"),
+    "file_search": ("searched your drives", "drive search"),
+    "browse": ("opened a web page", "web page visit"),
+    "web_extract": ("read part of a web page", "web page read"),
+    "excel_query": ("queried a workbook", "workbook query"),
+    "compare_documents": ("compared documents", "document compare"),
+    "consult": ("asked a teammate for advice", "request for advice"),
+    "delegate": ("handed work to a teammate", "hand-off"),
+    "spawn_agent": ("started a helper agent", "helper agent start"),
+    "message_agent": ("messaged a teammate", "message to a teammate"),
+    "blackboard_post": ("posted a note for the team", "team note"),
+    "blackboard_read": ("read the team's notes", "team notes read"),
+    "worklist_add": ("listed the items to work through", "worklist update"),
+    "worklist_next": ("picked the next item to work on", "worklist pick"),
+    "worklist_done": ("finished an item on its list", "worklist item"),
+    "worklist_status": ("checked its list", "worklist check"),
+    "skill_search": ("looked for a skill", "skill search"),
+    "skill_load": ("loaded a skill", "skill load"),
+    "remember_preference": ("noted a preference", "preference note"),
+    "notebook": ("updated its notebook", "notebook update"),
+    "guide_search": ("searched the Iron Jarvis guide", "guide search"),
+    "guide_read": ("read the Iron Jarvis guide", "guide read"),
+    "app_search": ("searched your Iron Jarvis setup", "setup search"),
+    "app_status": ("checked your Iron Jarvis setup", "setup check"),
+}
+
+#: browser/tools.py's 14 built-in browser tools, by EXACT name (the
+#: dashboard's lib/toolWords BROWSER_TOOLS) — never a ``browser_`` prefix.
+_BROWSER_TOOLS = frozenset({
+    "browser_get_status", "browser_list_tabs", "browser_get_active_tab",
+    "browser_read_page", "browser_get_elements", "browser_screenshot",
+    "browser_activate_tab", "browser_scroll", "browser_create_tab",
+    "browser_close_tab", "browser_click", "browser_type", "browser_press_key",
+    "browser_navigate",
+})
+
+#: lib/workTarget.ts KIND_OF: the built-ins the work line words by kind.
+_STEP_KIND: dict[str, str] = {
+    **dict.fromkeys(
+        ("read_file", "read_document", "extract_pdf", "view_image", "excel_read",
+         "excel_profile", "image_info", "pdf_form_fields"), "read"),
+    **dict.fromkeys(
+        ("write_file", "write_document", "convert_document", "image_convert",
+         "image_resize", "pdf_split", "redact_pii"), "make"),
+    **dict.fromkeys(
+        ("edit_file", "docx_edit", "excel_edit", "excel_apply_spec", "rename_file",
+         "pdf_arrange", "pdf_form_fill"), "change"),
+    **dict.fromkeys(("list_files", "list_folder"), "folder"),
+    "grep": "search",
+    "web_search": "web",
+    "web_fetch": "page",
+    **dict.fromkeys(("shell", "run_code", "repl"), "command"),
+    "rest_call": "service",
+}
+
+#: lib/stepWords.ts STEP_WORDS[kind].count(1) + lib/runWords.ts KIND_NOUN.
+_KIND_WORDS: dict[str, tuple[str, str]] = {
+    "read": ("read 1 file", "file read"),
+    "make": ("made 1 file", "file save"),
+    "change": ("changed 1 file", "file change"),
+    "folder": ("looked in 1 folder", "folder listing"),
+    "search": ("searched files", "file search"),
+    "web": ("searched the web", "web search"),
+    "page": ("read 1 web page", "web page read"),
+    "command": ("ran 1 command", "command"),
+    "browser": ("used your browser", "browser step"),
+    "service": ("called a web service", "web service call"),
+}
+
+_APP_NAME_MAX = 40
+_APP_TOOL_MAX = 60
+_APP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def _cut_words(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _app_tool_parts(tool: str) -> tuple[str, str] | None:
+    """``mcp__<pack>__<tool>`` split at the FIRST ``__`` after the prefix
+    (lib/toolWords appToolParts), else None."""
+    if not tool.startswith("mcp__"):
+        return None
+    rest = tool[len("mcp__"):]
+    cut = rest.find("__")
+    if cut <= 0:
+        return None
+    app, name = rest[:cut], rest[cut + 2:]
+    if not _APP_ID.match(app) or not name.strip():
+        return None
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in name):
+        return None
+    return app, name
+
+
+def app_name_words(app: str) -> str:
+    """lib/toolWords appNameWords: the pack's id with spaces, one short line."""
+    words = " ".join(app.replace("_", " ").split())
+    return _cut_words(words or app, _APP_NAME_MAX)
+
+
+def app_tool_name_words(name: str) -> str:
+    """lib/toolWords appToolNameWords: "search_messages" → "search messages",
+    "listOpenIssues" → "list open issues", an acronym keeps its case."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name)
+    words = [w for w in re.split(r"[\s_-]+", spaced) if w]
+    words = [w.lower() if re.fullmatch(r"[A-Z][a-z]+", w) else w for w in words]
+    return _cut_words(" ".join(words) or name, _APP_TOOL_MAX)
+
+
+def tool_own_name(tool: str) -> str:
+    """lib/runWords toolOwnName: a tool said by its own name — a connected
+    app's tool as "<app>: <its tool in words>", anything else with spaces."""
+    tid = str(tool or "").strip()
+    if not tid:
+        return "a tool"
+    parts = _app_tool_parts(tid)
+    if parts:
+        return f"{app_name_words(parts[0])}: {app_tool_name_words(parts[1])}"
+    loose = re.match(r"^mcp__(.+?)__(.+)$", tid)
+    if loose:
+        server = " ".join(loose.group(1).replace("_", " ").split())
+        rest = " ".join(loose.group(2).replace("_", " ").split())
+        return f"{server}: {rest}" if server and rest else tid
+    return " ".join(tid.replace("_", " ").split()) or tid
+
+
+def _step_kind(tool: str) -> str | None:
+    if tool in _STEP_KIND:
+        return _STEP_KIND[tool]
+    if tool in _BROWSER_TOOLS:
+        return "browser"
+    return None
+
+
+def fallback_line(tool: str, ok: bool) -> str:
+    """ONE call of a tool ``_TOOL_WORDS`` does not word, in the dashboard's
+    words (lib/runWords ``toolStepLine``): "searched your chats", "read 1 web
+    page", "used gmail: search messages", "used rename real file"; a failed
+    one "tried a chat search and it failed" / "tried gmail: … and it
+    failed". Pure."""
+    tid = str(tool or "").strip()
+    words = _RUN_TOOL_WORDS.get(tid)
+    if words is None:
+        kind = _step_kind(tid)
+        words = _KIND_WORDS.get(kind) if kind else None
+    if words is not None:
+        if ok:
+            return words[0]
+        noun = words[1]
+        article = "an" if noun[:1].lower() in "aeiou" else "a"
+        return f"tried {article} {noun} and it failed"
+    own = tool_own_name(tid)
+    return f"used {own}" if ok else f"tried {own} and it failed"
+
+
+def _service_name(raw: Any) -> str:
+    """The saved service a ``rest_call`` named, by its name only (the tool
+    takes "<name> (<id>)" too — lib/toolWords serviceNameWords)."""
+    flat = " ".join(str(raw or "").split())
+    named = re.match(r"^(.+?)\s*\([^()]*\)$", flat)
+    return _short((named.group(1) if named else flat).strip(), 60)
+
+
 def tool_line(tool: str, args: dict[str, Any], ok: bool) -> str:
     """One plain-words line for a tool call. Never quotes a whole argument
-    blob — a basename, a short query, or nothing."""
+    blob — a basename, a short query, a service's name, or nothing.
+
+    v1.358.0 (G19): a tool the table above does not word reads in the
+    dashboard's own words (:func:`fallback_line`), never its id."""
     words = _TOOL_WORDS.get(tool)
+    if words is None:
+        return fallback_line(tool, ok)
     x = _base(args.get("path") or args.get("file") or args.get("source") or args.get("dst") or "")
     q = _short(args.get("query") or args.get("pattern") or args.get("q") or "", 60)
     a = _short(args.get("agent") or "a teammate", 40)
-    if words is None:
-        label = tool.replace("_", " ")
-        return f"used {label}" if ok else f"tried {label} and it failed"
+    sv = _service_name(args.get("service"))
     text = words[0] if ok else words[1]
     if "{x}" in text and not x:
         text = text.replace(" {x}", " a file").replace("{x}", "a file")
     if "{q}" in text and not q:
         text = text.replace(" for “{q}”", "")
-    return text.format(x=x, q=q, a=a)
+    if "{s}" in text and not sv:
+        text = text.replace("{s}", "a web service")
+    return text.format(x=x, q=q, a=a, s=sv)
 
 
 def session_options(session: Any) -> dict[str, Any]:
@@ -691,7 +892,8 @@ def tool_activity(
             # (v1.309.0 review, honest copy): the breaker, the roster gate
             # and low trust share the ``ask`` verdict but asked no one.
             words = _REFUSAL_WORDS.get(kind, "was not allowed to use {t}")
-            text, tone = words.format(t=tool.replace("_", " ")), "warn"
+            # v1.358.0 (G19): a connected app's tool by its app and words.
+            text, tone = words.format(t=tool_own_name(tool)), "warn"
         else:
             # No ``tool.denied`` event = not a refusal: an ``ask`` call the
             # user APPROVED whose tool then failed reads as the failure it is

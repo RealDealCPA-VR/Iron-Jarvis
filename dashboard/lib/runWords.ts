@@ -30,6 +30,7 @@
 
 import { STEP_WORDS } from "@/lib/stepWords";
 import { toolKind, type WorkKind } from "@/lib/workTarget";
+import { appNameWords, appToolNameWords, appToolParts } from "@/lib/toolWords";
 
 /** An agent-side built-in the shared step table does not know by kind:
  *  `did` is the phrase for one call, `noun` names one call when it failed
@@ -101,7 +102,17 @@ const KIND_NOUN: Partial<Record<WorkKind, { noun: string; nouns?: string }>> = {
   web: { noun: "web search", nouns: "web searches" },
   page: { noun: "web page read" },
   command: { noun: "command" },
+  // v1.358.0 (lane 8C): a browser step and a call to a saved web service
+  // (they read "browser click call" / "rest call call" before).
+  browser: { noun: "browser step" },
+  service: { noun: "web service call" },
 };
+
+/** v1.358.0 (lane 8C): the agent-side built-ins this file words by exact
+ *  name, for the cross-language pin (agents/mission.py `_RUN_TOOL_WORDS` is
+ *  their Python twin; tests/test_one_receipt_v13580.py and
+ *  __tests__/one-receipt-v13580.test.tsx hold both to one fixture). */
+export const AGENT_TOOL_NAMES: readonly string[] = Object.keys(AGENT_TOOLS);
 
 function has<T extends object>(table: T, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(table, key);
@@ -119,10 +130,16 @@ function count(n: unknown): number {
  * A tool id said by its own name: underscores to spaces, a connected app's
  * `mcp__<app>__<tool>` as "<app>: <tool>". Never an invented description.
  * Empty / non-string → "a tool".
+ *
+ * v1.358.0 (lane 8C): an app's tool reads in the SAME words the work line
+ * and the approval card use (lib/toolWords appNameWords / appToolNameWords:
+ * "github: list open issues", never "github: listOpenIssues").
  */
 export function toolOwnName(tool: unknown): string {
   const id = typeof tool === "string" ? tool.trim() : "";
   if (!id) return "a tool";
+  const parts = appToolParts(id);
+  if (parts) return `${appNameWords(parts.app)}: ${appToolNameWords(parts.tool)}`;
   const app = APP_TOOL.exec(id);
   if (app) {
     const server = app[1].replace(/_/g, " ").replace(/\s+/g, " ").trim();
@@ -228,4 +245,41 @@ export function runActionLines(
     if (no) out.push({ tool: u.tool, text: no, failed: true });
   }
   return out;
+}
+
+/* ----------------------------------------- one step of a run (v1.358.0) */
+
+function lowerFirst(s: string): string {
+  return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;
+}
+
+/** "a chat search", "an …": the article a noun takes. */
+function withArticle(noun: string): string {
+  return /^[aeiou]/i.test(noun) ? `an ${noun}` : `a ${noun}`;
+}
+
+/**
+ * v1.358.0 (wave 8, lane 8C, G19): ONE call of `tool`, as the words after
+ * the agent's name in a run's step-by-step log ("Builder searched your
+ * chats", "Builder used gmail: search messages", "Builder tried a memory
+ * lookup and it failed"). The same words the run card's lines use
+ * (toolDidWords / the failed nouns above), so the log never reads a tool id
+ * ("Builder used history search").
+ *
+ * agents/mission.py `tool_line` says a tool its own word table does not
+ * know in exactly these words: the Python twin, held equal to this function
+ * by ONE fixture (dashboard/__tests__/fixtures/tool-lines-v13580.json,
+ * written by tests/test_one_receipt_v13580.py and read back here by
+ * __tests__/one-receipt-v13580.test.tsx).
+ */
+export function toolStepLine(tool: unknown, ok: boolean): string {
+  const id = typeof tool === "string" ? tool.trim() : "";
+  if (ok) return lowerFirst(toolDidWords(id, 1) ?? `Used ${toolOwnName(id)}`);
+  // A tool this file names a call of ("chat search", "file read") fails as
+  // that call; any other tool (a custom one, a connected app's) by its own
+  // name.
+  if (has(AGENT_TOOLS, id) || (sharedKind(id) && KIND_NOUN[sharedKind(id)!])) {
+    return `tried ${withArticle(failedNouns(id).noun)} and it failed`;
+  }
+  return `tried ${toolOwnName(id)} and it failed`;
 }

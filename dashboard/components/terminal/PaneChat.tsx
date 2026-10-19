@@ -36,6 +36,7 @@ import {
 import {
   ArrowUp,
   ChevronDown,
+  ChevronRight,
   CircleAlert,
   FolderKanban,
   Loader2,
@@ -53,7 +54,8 @@ import { useModels } from "@/lib/useModels";
 import { answeredModelName } from "@/lib/answeredModel";
 import { useChatStream, StreamError } from "@/lib/useChatStream";
 import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
-import { turnErrorText } from "@/lib/failureLine";
+import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
+import { DETAILS_WORDS } from "@/lib/failureActions";
 import { TurnClock } from "@/components/chat/TurnClock";
 import { ErrorNote, OfflineHint } from "@/components/ui";
 // v1.329.0: the ONE markdown renderer (CLAUDE.md, v1.230.0) — remote images
@@ -278,6 +280,12 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // v1.358.0 (wave 8, lane 8C): the technical text behind the CURRENT
+  // failure line (lib/failureLine turnErrorTechnical, masked by the daemon),
+  // keyed to that line's words so another error (an upload, a save) never
+  // wears it, and folded under "Details" as on the chat page.
+  const [errorTech, setErrorTech] = useState<{ text: string; technical: string } | null>(null);
+  const [errorDetailsOpen, setErrorDetailsOpen] = useState(false);
   // v1.353.0 (G51): the turn that just FAILED — its exact history and
   // attachments — so Retry re-sends the same message (the chat page's
   // failedTurn rule). Cleared by Retry, a new send, or a pane change.
@@ -955,7 +963,11 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
       // v1.354.0 re-review (G28): the chat page's one sentence for a failed
       // answer (`title. fix`, lib/failureLine), never the server's raw text;
       // a failure that carries no title keeps its message, as before.
-      setError(turnErrorText(e));
+      const line = turnErrorText(e);
+      setError(line);
+      // v1.358.0 (lane 8C): the server's own words, kept for the fold.
+      setErrorTech({ text: line, technical: turnErrorTechnical(e) });
+      setErrorDetailsOpen(false);
       // v1.353.0 (G51): Retry re-sends THIS turn — the same question and the
       // same files (a followed turn's files are read off its question) — and
       // the question goes back in an empty box for an edit (the chat page's
@@ -1255,6 +1267,37 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
           </div>
         ) : null}
         {error ? <ErrorNote>{error}</ErrorNote> : null}
+        {/* v1.358.0 (wave 8, lane 8C): the failure's technical detail,
+            FOLDED under a quiet "Details" toggle (the chat page's fold, the
+            same words), never forced on the reader. Only for THIS line. */}
+        {error && errorTech && errorTech.text === error && errorTech.technical ? (
+          <div data-testid="pane-chat-error-details" className="grid gap-1">
+            <button
+              type="button"
+              data-testid="pane-chat-error-details-toggle"
+              aria-expanded={errorDetailsOpen}
+              aria-controls={errorDetailsOpen ? `pane-chat-error-details-${paneId}` : undefined}
+              onClick={() => setErrorDetailsOpen((v) => !v)}
+              className="inline-flex w-fit items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 motion-reduce:transition-none"
+            >
+              <ChevronRight
+                size={11}
+                aria-hidden="true"
+                className={`transition-transform motion-reduce:transition-none ${errorDetailsOpen ? "rotate-90" : ""}`}
+              />
+              {DETAILS_WORDS}
+            </button>
+            {errorDetailsOpen ? (
+              <pre
+                id={`pane-chat-error-details-${paneId}`}
+                data-testid="pane-chat-error-details-text"
+                className="max-h-40 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-4 text-zinc-500"
+              >
+                {errorTech.technical}
+              </pre>
+            ) : null}
+          </div>
+        ) : null}
         {/* v1.353.0 (G51): a failed turn can be re-sent where it failed —
             the chat page's Retry, at pane scale (a quiet ghost press). */}
         {failedTurn && !busy ? (

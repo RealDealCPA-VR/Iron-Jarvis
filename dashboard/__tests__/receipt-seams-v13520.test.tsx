@@ -129,7 +129,11 @@ describe("(a) the helper agent's card reads the wave-1 receipt the daemon sends"
     const result = c.result as unknown as RunResult;
     render(<RunResultCard result={result} />);
     // How it ended: the ledger's verdict (a completed run whose write failed).
-    expect(screen.getByTestId("run-result-headline").textContent).toBe("Finished with failures");
+    // v1.358.0 (lane 8C, updated on purpose): in the ONE status table's words
+    // (lib/statusWords), never the card's own "Finished with failures".
+    expect(screen.getByTestId("run-result-headline").textContent).toBe(
+      statusWords("completed", "completed_with_failures").word,
+    );
     // Who served it, in the reply receipt's words, and WHERE (G21).
     const meta = screen.getByTestId("run-result-meta");
     expect(folded(meta.textContent)).toMatch(/^answered by \S/);
