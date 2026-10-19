@@ -373,7 +373,10 @@ describe("versions — an edit or a Try again keeps what it replaced (v1.325.0)"
     await send(el, "summarize");
     await answered("local answer");
     fireEvent.click(await screen.findByRole("button", { name: "Try again with another model" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: /claude-opus-5-5/ }));
+    // v1.359.0 (lane 9B review, changed on purpose): an unlabelled Claude id
+    // reads in words in the menu ("Opus 5.5"), never its raw id; the id the
+    // turn runs on is still asserted on the request below.
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Opus 5\.5/ }));
     await answered("cloud answer");
     expect(H.stream.bodies[1].provider).toBe("anthropic");
     expect(H.stream.bodies[1].model).toBe("claude-opus-5-5");
