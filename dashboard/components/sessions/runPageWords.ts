@@ -31,14 +31,45 @@ export const RUN_TITLE_MAX = 80;
 /** What the page calls a run before it has loaded (and one with no task). */
 export const RUN_TITLE_FALLBACK = "Run";
 
+/* v1.354.0 review: the wrapping a run's task carries that the user never
+ * typed. The chat opens an agent run with `${recap}\n\n---\n\n${task}` when the
+ * conversation already had messages (app/chat/page.tsx conversationRecap:
+ * "Conversation so far:\nUser: …\nAssistant: …"), and a "/"-picked skill
+ * leads with its directive line; the daemon's continue door appends its own
+ * model-facing recap ("\n\n[Continuing an earlier session. Original task: …]",
+ * agents/orchestrator.continue_session). Titled on the raw task, a run opened
+ * from an ongoing chat read "Conversation so far:". The recap's own messages
+ * may hold a "---" rule (models write them), so the ask is what follows the
+ * LAST separator. Pinned against the chat page's source in
+ * run-page-words-v13540. */
+export const CHAT_RECAP_HEAD = "Conversation so far:";
+export const CHAT_RECAP_SEP = "\n\n---\n\n";
+const SKILL_LINE_RE = /^Use the "[^"\n]+" skill for this — load it with skill_load first\.\s*/;
+const CONTINUE_RECAP_MARK = "\n\n[Continuing an earlier session.";
+
+/** What the user asked a run, without the wrapping the chat and the continue
+ *  door add around it (above). Unwrapped text is returned as it is. */
+export function askedText(task: string | null | undefined): string {
+  let t = (task ?? "").replace(/\r\n/g, "\n");
+  if (t.startsWith(CHAT_RECAP_HEAD)) {
+    const at = t.lastIndexOf(CHAT_RECAP_SEP);
+    if (at >= 0) t = t.slice(at + CHAT_RECAP_SEP.length);
+  }
+  t = t.replace(SKILL_LINE_RE, "");
+  const cont = t.indexOf(CONTINUE_RECAP_MARK);
+  if (cont > 0) t = t.slice(0, cont);
+  return t;
+}
+
 /**
  * The run's title: the FIRST non-blank line of what it was asked, as plain
  * text (a model or a person may write markdown), clipped. `full` is the whole
  * task as one plain line when the title had to drop anything (more lines, or
- * a clip) — the header shows it on demand — else null.
+ * a clip) — the header shows it on demand — else null. The chat's recap and
+ * the continue door's recap are not part of the ask (askedText).
  */
 export function runTitle(task: string | null | undefined): { title: string; full: string | null } {
-  const raw = (task ?? "").replace(/\r\n/g, "\n");
+  const raw = askedText(task);
   const first = raw.split("\n").find((line) => line.trim()) ?? "";
   const line = plainText(first);
   if (!line) return { title: RUN_TITLE_FALLBACK, full: null };
@@ -109,6 +140,50 @@ export function liveEventWords(e: IJEvent): { label: string; detail: string } {
       return { label: label || e.type, detail: "" };
     }
   }
+}
+
+/* ---- A run a restart cut off (v1.354.0 review) ---------------------------- */
+
+/** The run page's words for a run a restart cut off. */
+export const RESTART_WORDS = "Stopped when Iron Jarvis restarted";
+
+/** The summary the boot reconcile writes on such a run when it had none
+ *  (agents/orchestrator.reconcile_interrupted_sessions) — the engine's word,
+ *  which the receipt must not print under its own plain line. */
+export const RESTART_SUMMARY = "interrupted by a daemon restart";
+
+/** The origin a mission's teammate runs under (agents/team.py). */
+export const MISSION_MEMBER_ORIGIN = "job:mission-member";
+
+/** The summary the receipt shows. The reconcile's stock words are hidden
+ *  while the "Stopped when Iron Jarvis restarted" line stands (it says the
+ *  same, in words), and read as that sentence once the offer is answered;
+ *  every other summary is shown as it is. */
+export function shownSummary(summary: string | null | undefined, interrupted: boolean): string | null {
+  const s = (summary ?? "").trim();
+  if (!s) return null;
+  if (s.toLowerCase() !== RESTART_SUMMARY) return summary ?? null;
+  return interrupted ? null : `${RESTART_WORDS}.`;
+}
+
+/**
+ * Whether the run page offers the restart Continue / Dismiss — exactly the
+ * runs the bell offers (GET /sessions/interrupted, routes/sessions.
+ * interrupted_rows): a failed run the boot reconcile tagged, NEVER a mission
+ * teammate or a delegated child (v1.309.0, contract 7: continuing one started
+ * a lone builder with no coordinator to report to; continuing the mission's
+ * root re-runs the team). The reconcile tags those too, so the tag alone is
+ * not the offer. The bell's 3-day window is its prompt horizon, not a rule
+ * about the run, and is not repeated here.
+ */
+export function offersRestartContinue(
+  session: { status?: string | null; interrupted_at?: string | null; origin?: string | null },
+  runs: readonly { parent_id?: string | null }[] | null | undefined,
+): boolean {
+  if ((session.status ?? "").trim().toLowerCase() !== "failed") return false;
+  if (!session.interrupted_at) return false;
+  if (session.origin === MISSION_MEMBER_ORIGIN) return false;
+  return !(runs ?? []).some((r) => !!r.parent_id);
 }
 
 /** A row of GET /sessions, as far as finding a continuation needs it. */

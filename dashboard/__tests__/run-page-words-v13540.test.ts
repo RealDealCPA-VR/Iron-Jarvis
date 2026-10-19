@@ -17,12 +17,18 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  askedText,
+  CHAT_RECAP_SEP,
   findContinuation,
   liveEventWords,
+  MISSION_MEMBER_ORIGIN,
+  offersRestartContinue,
+  RESTART_SUMMARY,
   runModelWords,
   runTitle,
   RUN_TITLE_FALLBACK,
   RUN_TITLE_MAX,
+  shownSummary,
 } from "@/components/sessions/runPageWords";
 import { PHASE_LABEL, phaseLabel } from "@/lib/stepWords";
 import { EVENT_WORDS, humanSummary } from "@/lib/eventWords";
@@ -180,5 +186,61 @@ describe("the Interrupted label", () => {
     expect(interruptedLabel({ status: "failed", interrupted_at: null })).toBeNull();
     expect(interruptedLabel({ status: "failed" })).toBeNull();
     expect(interruptedLabel({ status: "completed", interrupted_at: "2026-10-18T09:00:00" })).toBeNull();
+  });
+});
+
+/* ---- v1.354.0 review ------------------------------------------------------ */
+describe("askedText — what the user asked, without the wrapping", () => {
+  it("drops the chat's recap; a '---' inside the recap is not the cut", () => {
+    const task =
+      "Conversation so far:\nUser: hi\nAssistant: a\n\n---\n\nb\n" + CHAT_RECAP_SEP + "Rename the scans\nAttached file: C:/x.pdf";
+    expect(askedText(task)).toBe("Rename the scans\nAttached file: C:/x.pdf");
+    expect(runTitle(task).title).toBe("Rename the scans");
+  });
+  it("drops a picked skill's directive line", () => {
+    expect(runTitle('Use the "tax-prep" skill for this — load it with skill_load first.\n\nFile the 1040').title).toBe(
+      "File the 1040",
+    );
+  });
+  it("drops the continue door's model-facing recap from the whole-task hint", () => {
+    const t = runTitle("make it shorter\n\n[Continuing an earlier session. Original task: 'x'. Prior result: y]");
+    expect(t).toEqual({ title: "make it shorter", full: null });
+  });
+  it("an unwrapped task is untouched (a task that merely mentions the words stays)", () => {
+    expect(askedText("Summarise\n\n---\n\nthe notes")).toBe("Summarise\n\n---\n\nthe notes");
+    expect(runTitle("Explain 'Conversation so far:' in the docs").title).toBe("Explain 'Conversation so far:' in the docs");
+  });
+  it("the wrapping it strips is exactly what the chat page and the continue door write", () => {
+    const chat = src("app/chat/page.tsx");
+    // The needles are SOURCE text: a backslash and an "n", never a newline.
+    expect(chat).toContain("return `Conversation so far:\\n${lines.join(\"\\n\")}`;");
+    expect(chat).toContain("const openingTask = recap ? `${recap}\\n\\n---\\n\\n${task}` : task;");
+    expect(chat).toContain('`Use the "${activeSkill}" skill for this — load it with skill_load first.\\n\\n`');
+    expect(CHAT_RECAP_SEP).toBe("\n\n---\n\n");
+    const orch = readFileSync(path.join(ROOT, "..", "src", "iron_jarvis", "agents", "orchestrator.py"), "utf8").replace(
+      /\r\n/g,
+      "\n",
+    );
+    expect(orch).toContain('f"{message}\\n\\n[Continuing an earlier session. Original task: "');
+    expect(orch).toContain(`s.summary = "${RESTART_SUMMARY}"`);
+  });
+});
+
+describe("a run a restart cut off — the offer and the summary", () => {
+  const cut = { status: "failed", interrupted_at: "2026-10-18T09:00:00", origin: null };
+  it("Continue is offered exactly where the bell offers it", () => {
+    expect(offersRestartContinue(cut, [{ parent_id: null }])).toBe(true);
+    expect(offersRestartContinue({ ...cut, origin: "job:mission" }, [])).toBe(true);
+    expect(offersRestartContinue({ ...cut, origin: MISSION_MEMBER_ORIGIN }, [])).toBe(false);
+    expect(offersRestartContinue(cut, [{ parent_id: null }, { parent_id: "run_p" }])).toBe(false);
+    expect(offersRestartContinue({ ...cut, interrupted_at: null }, [])).toBe(false);
+    expect(offersRestartContinue({ ...cut, status: "completed" }, [])).toBe(false);
+  });
+  it("the stock summary is hidden under the line, and in words once answered", () => {
+    expect(shownSummary(RESTART_SUMMARY, true)).toBeNull();
+    expect(shownSummary(RESTART_SUMMARY, false)).toBe("Stopped when Iron Jarvis restarted.");
+    expect(shownSummary("Wrote summary.md", true)).toBe("Wrote summary.md");
+    expect(shownSummary("", false)).toBeNull();
+    expect(shownSummary(null, false)).toBeNull();
   });
 });

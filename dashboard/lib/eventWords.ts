@@ -8,7 +8,7 @@
  * feed: ~11 test files mock `@/components/TimeTravelFeed` with a factory that
  * exports the component alone, and a mocked module throws on any other
  * export. So the table lives here, dependency-light, and the feed re-exports
- * it (one table, never two — `dashboard/__tests__/run-page-v13540.test.tsx`
+ * it (one table, never two — `dashboard/__tests__/run-page-words-v13540.test.ts`
  * pins the feed's copy equal to this one until it does).
  */
 

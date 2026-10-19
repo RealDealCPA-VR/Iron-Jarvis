@@ -75,9 +75,12 @@ import { phaseLabel } from "@/lib/stepWords";
 import {
   findContinuation,
   liveEventWords,
+  offersRestartContinue,
+  RESTART_WORDS,
   runModelWords,
   runTitle,
   RUN_TITLE_FALLBACK,
+  shownSummary,
   type ContinuationRow,
 } from "@/components/sessions/runPageWords";
 
@@ -151,6 +154,11 @@ export default function SessionDetailPage({
   // can pick its own conversation back up. The tag clears once continued or
   // dismissed.
   const interrupted = status === "failed" && !!session?.interrupted_at;
+  // v1.354.0 review: Continue / Dismiss (and a resuming follow-up) only
+  // where the bell offers them — never on a mission teammate or a delegated
+  // child, whose job continues from the run that started it.
+  const restartOffer = session ? offersRestartContinue(session, runs) : false;
+  const summaryShown = session ? shownSummary(session.summary, interrupted) : null;
 
   /* ---- The receipt's words (v1.354.0, G20) -------------------------------
    * The task's first line is the title (the id sits behind a copy button);
@@ -359,7 +367,7 @@ export default function SessionDetailPage({
         // v1.354.0 (G20): a follow-up to a run a restart cut off RESUMES its
         // own conversation (v1.337.0), the same as the restart Continue —
         // the run picks up where it was, with these words added.
-        ...(interrupted ? { resume: true } : {}),
+        ...(restartOffer ? { resume: true } : {}),
       });
       if (s?.id) router.push(`/sessions/${s.id}`);
     } catch (err) {
@@ -564,25 +572,33 @@ export default function SessionDetailPage({
                 >
                   <div className="flex items-center gap-2 font-medium text-tone-warn">
                     <History size={14} aria-hidden="true" className="shrink-0" />
-                    <span>Stopped when Iron Jarvis restarted</span>
+                    <span>{RESTART_WORDS}</span>
                   </div>
-                  <p className="mt-0.5 text-zinc-400">
-                    Continue picks up its own conversation where it left off.
-                  </p>
-                  <InterruptedJobActions
-                    job={{
-                      id: session.id,
-                      task: session.task,
-                      agentType: session.agent_type,
-                      interruptedAt: session.interrupted_at ?? "",
-                      origin: session.origin ?? null,
-                      projectId: session.project_id ?? null,
-                    }}
-                    onGone={onInterruptedGone}
-                  />
+                  {restartOffer ? (
+                    <>
+                      <p className="mt-0.5 text-zinc-400">
+                        Continue picks up its own conversation where it left off.
+                      </p>
+                      <InterruptedJobActions
+                        job={{
+                          id: session.id,
+                          task: session.task,
+                          agentType: session.agent_type,
+                          interruptedAt: session.interrupted_at ?? "",
+                          origin: session.origin ?? null,
+                          projectId: session.project_id ?? null,
+                        }}
+                        onGone={onInterruptedGone}
+                      />
+                    </>
+                  ) : (
+                    <p data-testid="session-interrupted-part" className="mt-0.5 text-zinc-400">
+                      It was part of a bigger job. Continue that job instead.
+                    </p>
+                  )}
                 </div>
               )}
-              {session.summary && (
+              {summaryShown && (
                 // The summary is model-written markdown (v1.230.0, U2): it
                 // renders through the shared chat renderer, never as raw text
                 // with its asterisks showing. v1.314.0 (UX wave 2): it sits
@@ -592,7 +608,7 @@ export default function SessionDetailPage({
                   data-testid="session-summary"
                   className="mb-4 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5 text-sm text-zinc-300"
                 >
-                  <Markdown content={session.summary} />
+                  <Markdown content={summaryShown} />
                 </div>
               )}
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

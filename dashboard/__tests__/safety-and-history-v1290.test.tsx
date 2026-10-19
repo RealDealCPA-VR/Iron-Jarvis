@@ -293,7 +293,8 @@ describe("Safety checks card (v1.290.0)", () => {
     );
     expect(screen.queryByTestId("safety-empty")).toBeNull();
     expect(document.body.textContent).not.toMatch(/No safety findings/);
-    expect(screen.queryByText(/Daemon offline/i)).toBeNull();
+    // v1.354.0 (G30): the OfflineHint's words moved; check both.
+    expect(screen.queryByText(/Daemon offline|Iron Jarvis isn't responding/i)).toBeNull();
   });
 
   it("the 7 days switch asks for hours=168 and the empty copy says 7 days", async () => {

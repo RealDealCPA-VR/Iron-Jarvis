@@ -450,3 +450,70 @@ describe("a run a restart cut off", () => {
     expect(post?.body).toEqual({ message: "try again", wait: false });
   });
 });
+
+/* ---- v1.354.0 review: what the receipt still got wrong --------------------
+ * (1) A run opened from a chat that already had messages carries the chat's
+ *     recap first ("Conversation so far:\n…\n\n---\n\n<the ask>"), so the
+ *     title read "Conversation so far:".
+ * (2) The reconcile's stock summary "interrupted by a daemon restart" sat
+ *     right under "Stopped when Iron Jarvis restarted".
+ * (3) A mission teammate / delegated child was offered the restart Continue
+ *     the bell deliberately withholds (v1.309.0, contract 7).
+ */
+describe("v1.354.0 review — the receipt for real runs", () => {
+  it("a run opened from an ongoing chat is titled by its ask, never 'Conversation so far:'", async () => {
+    setRun({
+      task:
+        "Conversation so far:\nUser: hello\nAssistant: Here is a rule\n\n---\n\nand more\n\n---\n\nSummarise the lease for Dana",
+    });
+    open();
+    const h1 = await screen.findByRole("heading", { level: 1 });
+    expect(h1.textContent).toContain("Summarise the lease for Dana");
+    expect(h1.textContent).not.toContain("Conversation so far");
+  });
+
+  it("the reconcile's 'daemon' summary never shows under the restart line", async () => {
+    setRun({ status: "failed", interrupted_at: "2026-10-18T09:01:00.000000", summary: "interrupted by a daemon restart" });
+    open();
+    await screen.findByTestId("session-interrupted");
+    expect(screen.queryByTestId("session-summary")).toBeNull();
+    expect(document.body.textContent ?? "").not.toMatch(/daemon/i);
+  });
+
+  it("once the offer is answered, the stock summary reads in the app's words", async () => {
+    setRun({ status: "failed", interrupted_at: null, summary: "interrupted by a daemon restart" });
+    open();
+    const summary = await screen.findByTestId("session-summary");
+    expect(summary.textContent).toContain("Stopped when Iron Jarvis restarted.");
+    expect(document.body.textContent ?? "").not.toMatch(/daemon/i);
+  });
+
+  it.each([
+    ["a mission teammate", { origin: "job:mission-member" }, undefined],
+    [
+      "a delegated child",
+      {},
+      {
+        runs: [{ id: "run_c", agent_type: "builder", state: "failed", steps: 2, parent_id: "run_p", result: "" }],
+        tools: [],
+      },
+    ],
+  ])("%s says it stopped but offers no Continue of its own, and a follow-up does not resume", async (_n, over, transcript) => {
+    setRun({ status: "failed", interrupted_at: "2026-10-18T09:01:00.000000", summary: "", ...over }, transcript);
+    api.postResponses[`/sessions/${ID}/continue`] = { id: "session_next" };
+    open();
+    const line = await screen.findByTestId("session-interrupted");
+    expect(line.textContent).toContain("Stopped when Iron Jarvis restarted");
+    expect(within(line).queryByRole("button", { name: "Continue" })).toBeNull();
+    expect(within(line).getByTestId("session-interrupted-part")).toBeInTheDocument();
+    // Still tells the truth about how it ended.
+    expect(screen.getByTestId("session-interrupted-chip").textContent).toBe("Interrupted");
+    const box = screen.getByPlaceholderText(/Send a follow-up/);
+    fireEvent.change(box, { target: { value: "try again" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+    });
+    const post = api.posts.find((p) => p.path === `/sessions/${ID}/continue`);
+    expect(post?.body).toEqual({ message: "try again", wait: false });
+  });
+});

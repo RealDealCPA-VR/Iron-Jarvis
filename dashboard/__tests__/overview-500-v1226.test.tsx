@@ -83,6 +83,8 @@ describe("Overview on a 500 from /ui/system-map (v1.226.0 rule, v1.334.0 endpoin
     expect(alert.textContent).toMatch(/OperationalError/);
     expect(screen.queryByTestId("system-map")).toBeNull();
     // The daemon-offline hint is NOT shown either (status 500 !== 0).
-    expect(screen.queryByText(/Daemon offline/i)).toBeNull();
+    // v1.354.0 (G30): the hint says "Iron Jarvis isn't responding" now; the
+    // old words alone would make this check pass whatever was shown.
+    expect(screen.queryByText(/Daemon offline|Iron Jarvis isn't responding/i)).toBeNull();
   });
 });
