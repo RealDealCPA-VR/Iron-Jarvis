@@ -172,7 +172,11 @@ describe("lib/runningNow: the rows, in words", () => {
   });
 
   it("a schedule reads 'Schedule · nightly-brief · 3 min' and opens its run; a mission opens its mission screen", () => {
-    const items = runningItems([SCHEDULE, MISSION, DONE], [], Date.now());
+    // A FIXED clock: the run started 3 min 5 s before `now` whatever the
+    // runner's speed (SCHEDULE's own stamp was taken at file load).
+    const now = Date.parse("2026-10-18T12:00:00Z");
+    const started = { ...SCHEDULE, created_at: "2026-10-18T11:56:55" }; // naive UTC, as stored
+    const items = runningItems([started, MISSION, DONE], [], now);
     const sched = items.find((i) => i.key === "s:s-sched")!;
     expect(sched.line).toBe("Schedule · nightly-brief · 3 min");
     expect(sched.href).toBe("/sessions/s-sched");
