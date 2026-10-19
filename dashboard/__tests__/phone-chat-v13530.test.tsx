@@ -72,7 +72,7 @@ vi.mock("next/navigation", () => ({
 
 import NotificationsPage from "@/components/settings/pages/NotificationsPage";
 import HelpPage from "@/app/help/page";
-import { AUTO_SENDERS_KEY, privateChatId, withPhoneChat } from "@/lib/phoneChat";
+import { AUTO_INBOUND_KEY, AUTO_SENDERS_KEY, privateChatId, withPhoneChat } from "@/lib/phoneChat";
 import { NAV_ENTRIES } from "@/lib/nav";
 import { __resetApiCache } from "@/lib/apiCache";
 
@@ -118,13 +118,31 @@ describe("lib/phoneChat: who may talk once chat is ticked", () => {
   it("chat on: listening on, and an EMPTY list gets the private chat id", () => {
     // The form also notes what it filled (review, v1.353.0) so a corrected
     // chat ID can move it; the note is not a field and is never posted.
+    // v1.353.0 integrate (moved on purpose): it also notes the listening
+    // value it switched on, so unticking chat can put it back (test below).
     expect(withPhoneChat({ chat_enabled: "true", chat_id: "4242" })).toEqual({
       chat_enabled: "true",
       chat_id: "4242",
       inbound_enabled: "true",
       allowed_senders: "4242",
       [AUTO_SENDERS_KEY]: "4242",
+      [AUTO_INBOUND_KEY]: "false",
     });
+  });
+
+  it("v1.353.0 integrate: unticking chat turns off the listening the tick turned on — and only that", () => {
+    const ticked = withPhoneChat({ chat_enabled: "true", chat_id: "4242", inbound_enabled: "false" });
+    expect(ticked.inbound_enabled).toBe("true");
+    const unticked = withPhoneChat({ ...ticked, chat_enabled: "false" });
+    expect(unticked.inbound_enabled).toBe("false");
+    expect(AUTO_INBOUND_KEY in unticked).toBe(false);
+    // The person's own listening switch (on before chat) stays on.
+    const own = withPhoneChat({ chat_enabled: "true", chat_id: "4242", inbound_enabled: "true" });
+    expect(AUTO_INBOUND_KEY in own).toBe(false);
+    expect(withPhoneChat({ ...own, chat_enabled: "false" }).inbound_enabled).toBe("true");
+    // Re-ticking does not overwrite the first note with the form's own "true".
+    const again = withPhoneChat({ ...withPhoneChat({ ...ticked, chat_id: "4343" }) });
+    expect(again[AUTO_INBOUND_KEY]).toBe("false");
   });
 
   it("a list the form filled follows the chat ID; a group keeps it; an edited list is the person's", () => {

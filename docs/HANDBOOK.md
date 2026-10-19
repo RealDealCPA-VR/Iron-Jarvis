@@ -131,7 +131,10 @@ searching.
   You, Train), **System** (Sessions, Activity, Usage, Fleet, Self-development,
   Updates, Help) — plus **Setup**, and a **Status** tab: what was the Overview
   (running work, health, failing background tasks, recent events, the
-  getting-started checklist).
+  getting-started checklist). Since v1.353.0 each column lists its everyday
+  pages first; the developer pages (Webhooks, Artifacts, Secrets, Local
+  fleet, Self-development, Session board) sit under that column's **More**,
+  and typing in the filter still finds them.
 - **Settings, in seven groups.** **Models**, **Connections**, **Agents &
   automation**, **Memory & you**, **Permissions & ledger**, **Appearance**,
   **System**. Search finds any setting by what you would call it. Pages that
@@ -714,7 +717,10 @@ with the request typed in.
   writable), the run works in a scratch workspace and says so on its
   session row instead of pretending it worked in your folder.
 - **Channels**: desktop notifications, Slack, Telegram (chat-id
-  auto-detect), email — with per-destination event routing.
+  auto-detect), email — with per-destination event routing. Since v1.353.0
+  two-way Telegram chat is set up on one screen: after the chat ID is
+  detected, tick the chat switch right under it and the allowed sender fills
+  in from your own private chat (nothing to type, no Advanced fold).
 - **A dead phone token is visible, and a dropped message says so**
   (v1.231.0): if your Telegram bot token is revoked or rotated (or your
   mailbox refuses the IMAP login), the Channels row turns red with **Not
@@ -1129,7 +1135,9 @@ that tried to give Jarvis instructions, and a control Jarvis cannot read still
 stop and ask — those are decisions that stay yours. *The work is folded:* while
 Jarvis works a page, the steps ("Clicking 'Next'…", "Typing into 'Search' —
 done.") sit behind one **Working** line you can expand; when the turn ends it
-reads "4 steps". A notice that a different model answered stays visible.
+reads like "4 steps · 1 failed · 12 s" (amber when a step failed; no time when
+the sidebar did not send that task itself). A notice that a different model
+answered stays visible.
 
 **Auto-allow actually allows (v1.270.1).** With the switch on, v1.270.0 skipped
 the card but still refused the action a moment later ("needs your approval in
@@ -1864,6 +1872,104 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Connect what you use, and a clean first five minutes (v1.353.0)
+
+A new install now tells you what it found, offers what you already have in
+one press, and sends you to one place for each kind of thing. The chat looks
+the same.
+
+- **Installing.** The release page names the file to download
+  (`Iron-Jarvis-Setup-<version>.exe`; ignore the `.blockmap` and `latest.yml`
+  files) and what to press at Windows' "Windows protected your PC" warning:
+  **More info**, then **Run anyway**.
+- **Choosing what answers you.** The empty chat's heading reads "Ready —
+  choose what answers you". If Ollama is running on this PC with a model
+  downloaded, **Use Ollama (on this PC) for answers** connects it and
+  chooses it in one press (if it isn't running, the press says so and changes
+  nothing; an address you saved yourself is never replaced). After any press
+  the home keeps saying "Done — Claude (your Claude Code sign-in) answers you
+  now." in the words you pressed. If you already chose a model, a press
+  changes nothing and says so.
+- **Signing in without a terminal.** Signed out of Claude Code or Codex? On
+  **Settings › Connections › Accounts & keys** (and on the chat's door), **Sign
+  in to Claude Code** opens a sign-in window inside the app: type /login
+  there and finish in your browser; the row turns green by itself. A tool
+  that isn't installed links to its maker's page. The Local Ollama row offers
+  **Use Ollama on this PC**, **Get Ollama** when it isn't running, or says
+  "Not answering at the address you saved" when an address you saved is down.
+- **Model names, not codes.** The model menu groups models as Anthropic,
+  Claude Code, Codex, Your model server and OpenCode, and your own endpoints
+  by the names you gave them. In Settings › Models the default model is
+  picked from a list (Other… still takes any model id), and the list follows
+  the provider chosen in the same form.
+- **The machine check and your apps, on the home.** The empty chat shows one
+  quiet line such as "This PC: 5 of 6 helpers ready — Reading old .doc and .xls
+  files · Details" while setup is unfinished. Once a real model answers, a
+  second line offers **Connect the apps you use — GitHub, Notion, Slack…**,
+  which opens the Directory. The getting-started checklist has the same
+  optional step, **Connect the apps you use**, and its **Open the Directory**
+  press goes to the same place.
+- **One Connections home.** Settings › Connections › Apps & tools (the
+  Directory) names the tools your other apps already use ("Found 3 tools in
+  Claude Desktop and Cursor") with an **Import** button (nothing is added
+  until you tick tools and press **Add selected**), says what is built in
+  (files, web, images, spreadsheets, memory), and links the other ways to
+  connect. Packs you added yourself are grouped **Added by you**, described
+  by what their tools do. A group with nothing in it has no filter chip.
+- **What a card needs, before you press Connect.** Gmail says "Needs a
+  one-time Google developer setup"; Google Drive, OneDrive and Dropbox say
+  their developer setup until it is done, with **How to set it up**; a pack
+  whose helper program is missing says "Needs Node.js". After a Drive sign-in
+  the card says "Now choose a folder for memory." Puppeteer is no longer
+  offered: the **Your browser** card opens the browser settings. Slack uses
+  the package its makers now maintain, and GitHub, Postgres and Google Maps
+  say they use an older package.
+- **Asking chat what it can do.** "What can you do?" and how-do-I questions
+  ("how do I chat with you from my phone") are answered from this Handbook.
+- **When something is not set up, the reply leaves a button to the fix.**
+  "Find my tax files in Google Drive" with Drive not set up ends with
+  **Connect Google Drive in Settings**; a question about your browser when
+  it isn't paired ends with **Pair your browser** (or **Turn on browser
+  access**); asking to connect "puppeteer" or "the browser" points at the
+  browser settings with the same button. A card you declined leaves no
+  button. Asking for a picture, video or song with no media service connected
+  shows the secure **Pixio API key** card straight away (the offline demo
+  does this too), and the key goes in Settings › Connections › Accounts &
+  keys. Connecting an app that signs in through the browser, or one that
+  only needs a key, no longer shows a "connect an app" approval first: the
+  key card itself is the question.
+- **Build panes say what happened.** A pane that went quiet while you weren't
+  looking reads **stopped — take a look** in grey (no green check: it may
+  have stopped on an error). A pane whose coding tool is waiting on a
+  question shows in the bell as "Claude Code in Build is waiting for you"
+  (not on Build itself), and as a Windows notification when the window is
+  closed to the tray. A failed Build-pane chat turn has **Retry**, and its
+  receipt reads "answered by <model>" like chat, with each file listed once.
+- **The browser says what happened.** A finished sidebar task folds to a
+  line like "4 steps · 1 failed · 12 s". The agent browser's approval queue
+  answers **Allow once** or **Deny** like every other approval, and says the
+  truth: the agent's step stops there; allow it, then ask the agent to do
+  that step again within 15 minutes. The bell row reads "A website action is
+  waiting for your OK". Settings › Connections › Browser no longer promises
+  desktop control.
+- **Your approval setting is one dial.** Settings › Permissions' **Approvals
+  in chat** and the chat's permission chip are the same setting: change one
+  and a new chat starts from it, and a press on the chip shows up in
+  Settings.
+- **Local only asks first for a cloud endpoint.** In a chat kept on this PC,
+  a model server you added that is really in the cloud now shows the
+  "Send this message to …? It will leave this PC." card before anything is
+  sent, instead of a refusal after the press.
+- **Phone chat on one screen.** Typing "phone" in Ctrl K finds
+  Notifications. On the Telegram form, tick chat right under the detected
+  chat ID and the allowed sender fills in from your own private chat; untick
+  it and listening goes back off. Help leads with two-way messaging; its
+  "dashboard on your phone" recipe is marked Advanced and lists what it
+  really needs.
+- **Everything is tiered.** Each column lists everyday pages first, with
+  developer pages under **More**; hovering a sidebar row such as Build says
+  what it is for.
 
 ## One set of words for what happened, where, and what needs your OK (v1.352.0)
 

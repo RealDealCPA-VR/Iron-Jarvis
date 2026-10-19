@@ -47,8 +47,11 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { YourBrowserCard } from "@/components/browser/YourBrowserCard";
 import { PageGrid } from "@/components/PageGrid";
-// v1.353.0 (G54): the app's one "Denied" sentence (dependency-free).
-import { answeredLine } from "@/lib/approvalWords";
+// v1.353.0 (G54): the app's one "Denied" sentence (dependency-free), and
+// (integrate) the app's one pair of answer words — the queue card says
+// "Allow once" / "Deny" like every other ask (an approval here lets the
+// agent's next identical step run ONCE, so "once" is literally true).
+import { ALLOW_ONCE, DENY, answeredLine } from "@/lib/approvalWords";
 
 /* -------------------------------------------------------------------------- */
 /*  Local contracts (daemon additions not yet in lib/types)                    */
@@ -277,14 +280,14 @@ function ApprovalCard({
           disabled={busy !== null}
           className="btn-accent flex-1 py-1.5 text-xs"
         >
-          {busy === "approve" ? <LoaderInline label="Approving…" /> : (<><Check size={14} /> Approve</>)}
+          {busy === "approve" ? <LoaderInline label="Allowing…" /> : (<><Check size={14} /> {ALLOW_ONCE}</>)}
         </button>
         <button
           onClick={() => resolve("deny")}
           disabled={busy !== null}
           className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-rose-500/40 hover:text-rose-300 disabled:opacity-40"
         >
-          {busy === "deny" ? <LoaderInline label="Denying…" /> : (<><X size={14} /> Deny</>)}
+          {busy === "deny" ? <LoaderInline label="Denying…" /> : (<><X size={14} /> {DENY}</>)}
         </button>
       </div>
     </div>
@@ -453,7 +456,7 @@ const RUN_FINISHED_EVENTS = { types: ["computeruse.run_finished"] };
  *  promised a resume that never happened. */
 export const WEBSITE_QUEUE_SENTENCE =
   "When the agent wants to do something sensitive or destructive on a website, its step stops here. " +
-  "Approve it, then ask the agent to do that step again within 15 minutes; it will run once.";
+  `Press ${ALLOW_ONCE}, then ask the agent to do that step again within 15 minutes; it will run once.`;
 /** Said for a few seconds after an Approve lands. */
 export const WEBSITE_APPROVED_SENTENCE = "Approved. Ask the agent to try that step again.";
 /** How long the answered line stays. */
@@ -665,8 +668,8 @@ export default function ComputerUsePage() {
               never on a machine with logged-in accounts or files you can&apos;t afford to lose.
               The agent can only open the sites and do the things you allow in the two lists below,
               and anything sensitive — typing credentials, payments, or destructive/transactional
-              clicks — <span className="font-semibold text-amber-100">pauses for your explicit
-              approval</span>.
+              clicks — <span className="font-semibold text-amber-100">needs your explicit
+              approval first</span>.
             </p>
           </div>
         </div>

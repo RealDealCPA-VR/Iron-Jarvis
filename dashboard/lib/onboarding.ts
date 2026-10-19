@@ -138,7 +138,12 @@ export function decodeOnboardingModel(raw: unknown): OnboardingModel | null {
  *  G34, the ollama row only): Ollama answers on this PC with a model to use,
  *  from the daemon's cached probe — true even before its address is saved,
  *  which is exactly when the one press can save it. */
-export type HealthRow = ProviderHealth & { sign_in_fix?: string; detected?: boolean };
+export type HealthRow = ProviderHealth & {
+  sign_in_fix?: string;
+  detected?: boolean;
+  /** v1.353.0 (ollama row only): the user saved an Ollama address. */
+  address_saved?: boolean;
+};
 
 /**
  * v1.313.0 (contract U1-1): THE one truth for "replies are a scripted demo".

@@ -203,7 +203,12 @@ async def test_guide_search_and_read(populated):
     res = await _run(app, "guide_search", {"query": "how do updates install", "k": 4})
     assert res.ok and res.data["hits"]
     label = res.data["hits"][0]["label"]
-    assert label.startswith("The Handbook")
+    # v1.353.0 (moved on purpose): the README's Install section grew (lane
+    # 3A's sign-in / Ollama step) and its second chunk -- "Updates install
+    # themselves ... click Restart to update" -- now ranks first. That is a
+    # right answer too; what this pins is that a USER doc answers it (never
+    # the agent manual) and that the section read back says the real step.
+    assert label.startswith(("The Handbook", "README"))
     read = await _run(app, "guide_read", {"label": label})
     assert read.ok and "Restart to update" in read.output
     whole = await _run(app, "guide_read", {"doc": "vocabulary"})

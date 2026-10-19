@@ -105,7 +105,9 @@ def test_list_connectors_http(tmp_path):
         assert body["connectors"], "the gallery is not empty"
         # Curated categories first, then the dynamic groups (the user's own
         # MCP servers + memory sources) so the gallery can order + filter them.
-        assert body["categories"] == [*CATEGORY_ORDER, "Custom", "Memory"]
+        # v1.353.0 (moved on purpose): the user's own packs are "Added by
+        # you" (connectors.service.USER_CATEGORY), as their cards say.
+        assert body["categories"] == [*CATEGORY_ORDER, "Added by you", "Memory"]
         for row in body["connectors"]:
             assert {"connected", "status", "fields", "unlocks"} <= set(row), row["id"]
         assert _row(client, "github")["connected"] is False

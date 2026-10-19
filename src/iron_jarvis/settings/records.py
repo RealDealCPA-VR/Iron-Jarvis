@@ -55,7 +55,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from ..core.ids import new_id
-from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
+from ..tools.base import Reversibility, SpendCheck, Tool, ToolContext, ToolResult
 
 log = logging.getLogger("ironjarvis.settings")
 
@@ -114,8 +114,14 @@ _WORKFLOW_WORDS = re.compile(r"\bworkflows?\b", re.IGNORECASE)
 _CHANNEL_WORDS = re.compile(
     r"\b(?:notification channels?|channels?|telegram|slack|discord|two.?way)\b", re.IGNORECASE
 )
+# v1.353.0 integrate (G41): the three drives join the list, so "find my tax
+# files in Google Drive" arms app_connect -- and a Drive that is not set up
+# answers with the "Connect Google Drive in Settings" button (daemon/doors.
+# failure_door_for), not silence. A question ("is my Google Drive
+# connected?") still drops app_connect (is_question).
 _APP_WORDS = re.compile(
-    r"\b(?:connect (?:my|to|the)|notion|github|sentry|stripe|brave search|google maps|connectors?)\b",
+    r"\b(?:connect (?:my|to|the)|notion|github|sentry|stripe|brave search|google maps"
+    r"|google drive|onedrive|dropbox|connectors?)\b",
     re.IGNORECASE,
 )
 _WEBHOOK_WORDS = re.compile(r"\bweb ?hooks?\b", re.IGNORECASE)
@@ -1423,6 +1429,30 @@ class AppConnectTool(_RecordTool):
     def _target(self, args: dict[str, Any]) -> str:
         return str(args.get("app") or "").strip().lower()
 
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
+        """No "connect an app" approval card for a call that CHANGES NOTHING
+        (v1.353.0 integrate; the v1.227.0 rule "an Allow that cannot run is a
+        lie"). Two shapes:
+
+        * an app that cannot be connected from chat -- one that signs in
+          through the browser (Google Drive, OneDrive, Dropbox, Gmail), the
+          browser itself, or no app at all: the call answers with where it IS
+          connected and leaves the fix button (``doors.failure_door_for``);
+        * an app whose one secret is an API key (Pixio): the call only shows
+          the SECURE key card, which is its own consent -- nothing is saved
+          until the user pastes a key there.
+
+        Everything else (an MCP app that is connected the moment the call
+        runs) keeps the card: ``None`` = the ordinary permission verdict. A
+        DENY rule still refuses all of it (the lanes read ``ask`` only when
+        the mode is not DENY)."""
+        from ..connectors.catalog import get_connector
+
+        conn = get_connector(self._target(args))
+        if conn is None or conn.connect_via in ("oauth", "api_key"):
+            return SpendCheck(ask=False, cost_note="changes nothing by itself")
+        return None
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from ..connectors.catalog import CATALOG, get_connector
         from ..connectors.service import _secret_name
@@ -1430,6 +1460,20 @@ class AppConnectTool(_RecordTool):
         cid = self._target(args)
         conn = get_connector(cid)
         if conn is None:
+            from ..connectors.catalog import get_link_card
+
+            # v1.353.0 integrate: the browser is set up on its own page (the
+            # Directory's "Your browser" card points there) -- say where,
+            # instead of "there is no app called 'puppeteer'". The failed
+            # call leaves the "Pair your browser" button (doors.failure_door_for).
+            if get_link_card(cid) is not None:
+                return ToolResult(
+                    ok=False,
+                    error=(
+                        "Your browser isn't connected from chat: pair the Iron Jarvis "
+                        "browser add-on in Settings › Connections › Browser."
+                    ),
+                )
             known = ", ".join(c.id for c in CATALOG)
             return ToolResult(ok=False, error=f"There is no app called {cid!r}. Known: {known}.")
         if conn.connect_via == "oauth":

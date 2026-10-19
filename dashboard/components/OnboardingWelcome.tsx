@@ -45,10 +45,19 @@ const STEP_LINK: Record<string, { href: string; cta: string }> = {
   // /memory?scope=lessons stays a dead end for a user with zero lessons.
   teach_style: { href: `/chat?ask=${encodeURIComponent(TEACH_EXAMPLE)}`, cta: "Teach it in Chat" },
   set_up_voice: { href: "/connections", cta: "Enable voice" },
+  // v1.353.0 (G36): the optional "Connect the apps you use" step opens the
+  // Directory — the SAME place (and address) the empty chat's apps line
+  // uses (components/chat/HomeReadiness), never a wrong door.
+  connect_apps: { href: "/marketplace", cta: "Open the Directory" },
 };
 
 function stepLink(step: OnboardingStep) {
-  return STEP_LINK[step.key] ?? { href: "/sessions", cta: "Get started" };
+  // A step this table does not know yet but the daemon gave a place to
+  // (`href`) opens that place, before the generic fallback.
+  return (
+    STEP_LINK[step.key] ??
+    (step.href ? { href: step.href, cta: "Open" } : { href: "/sessions", cta: "Get started" })
+  );
 }
 
 /** v1.310.0 (W2-2): a check row may carry a plain `label` beside its mono name. */

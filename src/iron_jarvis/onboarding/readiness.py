@@ -48,6 +48,24 @@ def _check_label(name: str) -> str:
     return CHECK_LABELS.get(name) or name.replace("_", " ").strip().capitalize()
 
 
+def _ollama_press_connects(cfg) -> bool:
+    """True when the one press for Ollama would connect it (v1.353.0
+    integrate): no address saved yet AND the cached probe sees Ollama
+    answering on this PC with a model -- exactly when ``POST /onboarding/
+    use-model`` saves this PC's address as part of the press. The same
+    answer /health's ollama row carries as ``detected`` (and the chat doors
+    and the composer's suggestion offer), so the Overview's one-press card
+    offers what the chat offers. Never blocks (``ollama_seen.seen``)."""
+    try:
+        if (getattr(cfg, "ollama_base_url", None) or "").strip():
+            return False  # a saved address is the user's; the press won't adopt
+        from ..providers import ollama_seen
+
+        return bool(ollama_seen.seen(None))
+    except Exception:  # noqa: BLE001 — never breaks the Overview
+        return False
+
+
 def end_user_checks() -> dict:
     """The machine checks a NON-developer should see (v1.310.0, W2-2).
 
@@ -106,7 +124,11 @@ def model_choice(platform) -> dict:
         order = list(USE_MODEL_CLIS) + list(USE_MODEL_LOCAL) + list(API_PROVIDERS)
         for name in order:
             row = rows.get(name)
-            if not row or not row.get("available") or row.get("inherited_from"):
+            if not row or row.get("inherited_from"):
+                continue
+            if not row.get("available") and not (
+                name == "ollama" and _ollama_press_connects(cfg)
+            ):
                 continue
             usable.append(
                 {

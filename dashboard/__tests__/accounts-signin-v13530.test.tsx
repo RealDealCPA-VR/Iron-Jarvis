@@ -243,6 +243,18 @@ describe("G34 — the Local Ollama row tells the truth and offers the one press"
     expect(card().textContent).not.toMatch(/appears automatically/);
   });
 
+  it("v1.353.0 integrate: a saved Ollama address that does not answer says so — never 'Get Ollama'", async () => {
+    health([OLLAMA({ detected: false, address_saved: true })]);
+    render(<ConnectionsPage />);
+    const row = await screen.findByTestId("ollama-not-answering");
+    expect(row.textContent).toMatch(/Not answering at the address you saved/);
+    expect(row.textContent).toMatch(/Rescan local CLIs/);
+    // The press it names is on this card.
+    expect(within(card()).getByRole("button", { name: /Rescan local CLIs/ })).toBeTruthy();
+    expect(screen.queryByTestId("get-ollama-row")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Use Ollama on this PC" })).toBeNull();
+  });
+
   it("CONTROL: a connected Ollama is green with no press", async () => {
     health([OLLAMA({ available: true, detected: true })]);
     render(<ConnectionsPage />);

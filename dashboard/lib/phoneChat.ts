@@ -32,6 +32,14 @@
 /** Where the form notes the allowed-senders value it filled in itself. */
 export const AUTO_SENDERS_KEY = "__phone_chat_auto_senders";
 
+/** v1.353.0 integrate: where the form notes the listening value it had
+ *  BEFORE ticking chat switched listening on. Unticking chat puts it back, so
+ *  tick-then-untick saves a destination that does not listen (the listening
+ *  switch sits under Advanced, where nobody would look). A listening switch
+ *  the person turned on themselves is never noted, and stays on. Like the
+ *  senders note, it is not a field, so the save never sends it. */
+export const AUTO_INBOUND_KEY = "__phone_chat_auto_inbound";
+
 /** The id a private Telegram chat carries, which is the sender's user id; null
  *  for a group (negative), a blank or anything that is not a whole number. */
 export function privateChatId(chatId: string | undefined): string | null {
@@ -42,8 +50,21 @@ export function privateChatId(chatId: string | undefined): string | null {
 /** The form values with the phone-chat defaults applied. Values are the wire's
  *  strings ("true"/"false" for the switches). Unchanged when chat is off. */
 export function withPhoneChat(values: Record<string, string>): Record<string, string> {
-  if ((values.chat_enabled ?? "").trim().toLowerCase() !== "true") return values;
+  const listening = (values.inbound_enabled ?? "").trim().toLowerCase() === "true";
+  if ((values.chat_enabled ?? "").trim().toLowerCase() !== "true") {
+    // Chat off: listening the FORM switched on for chat goes back to what it
+    // was (only while it is still on — a later change is the person's).
+    const prior = values[AUTO_INBOUND_KEY];
+    if (prior === undefined) return values;
+    const next: Record<string, string> = { ...values };
+    delete next[AUTO_INBOUND_KEY];
+    if (listening) next.inbound_enabled = prior;
+    return next;
+  }
   const next: Record<string, string> = { ...values, inbound_enabled: "true" };
+  if (!listening && values[AUTO_INBOUND_KEY] === undefined) {
+    next[AUTO_INBOUND_KEY] = values.inbound_enabled ?? "false";
+  }
   const list = (values.allowed_senders ?? "").trim();
   const filled = values[AUTO_SENDERS_KEY];
   if (!list || (filled !== undefined && list === filled)) {

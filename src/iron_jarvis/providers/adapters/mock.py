@@ -19,6 +19,13 @@ from typing import Any
 from .base import LLMAdapter, LLMMessage, LLMResponse, ToolCall
 
 
+#: The start of the chat's "no media service" Tools line
+#: (``daemon.chat_turn.NO_MEDIA_CONNECT_LINE``; pinned equal by
+#: tests/test_integrate_wave3_v13530.py — the provider layer does not import
+#: the daemon).
+NO_MEDIA_MARK = "NO MEDIA SERVICE:"
+
+
 class MockLLMAdapter(LLMAdapter):
     provider = "mock"
     model = "mock-1"
@@ -41,7 +48,7 @@ class MockLLMAdapter(LLMAdapter):
     ) -> LLMResponse:
         if self._script:
             return self._script.pop(0)
-        return self._default_behavior(messages, tools)
+        return self._default_behavior(messages, tools, system)
 
     async def stream(
         self,
@@ -68,15 +75,29 @@ class MockLLMAdapter(LLMAdapter):
 
     @staticmethod
     def _default_behavior(
-        messages: list[LLMMessage], tools: list[dict[str, Any]]
+        messages: list[LLMMessage], tools: list[dict[str, Any]], system: str = ""
     ) -> LLMResponse:
         task = next(
             (m.content for m in messages if m.role == "user"), "(unspecified task)"
         )
         has_tool_result = any(m.role == "tool" for m in messages)
         tool_names = {t["name"] for t in tools}
+        # v1.353.0 integrate: the chat said "no media service is connected"
+        # (chat_turn.NO_MEDIA_CONNECT_LINE, swapped in for generate_media) —
+        # the demo model does what that line tells a real one: app_connect
+        # for pixio, which shows the secure key card. Before this the demo
+        # answered a fresh install's "make a picture" with its scripted
+        # "Wrote RESULT.md" line and no card.
+        wants_media_key = "app_connect" in tool_names and NO_MEDIA_MARK in (system or "")
 
         if not has_tool_result:
+            if wants_media_key:
+                return LLMResponse(
+                    tool_calls=[
+                        ToolCall(id="call_1", name="app_connect", arguments={"app": "pixio"})
+                    ],
+                    finish_reason="tool_use",
+                )
             # MEDIA IN CHAT (v1.346.0): with ``generate_media`` armed (a
             # media-making sentence ask-armed it), the demo model MAKES the
             # media — the one action the sentence asked for — so the whole
@@ -125,6 +146,14 @@ class MockLLMAdapter(LLMAdapter):
                     finish_reason="tool_use",
                 )
 
+        if wants_media_key:
+            return LLMResponse(
+                text=(
+                    "Nothing can be made yet: no image, video or music service is"
+                    " connected. Paste your Pixio key in the secure card, then ask again."
+                ),
+                finish_reason="stop",
+            )
         if "generate_media" in tool_names:
             # The media call ran (it is made first above): the chat lanes put
             # the picture / the "it will appear here" words in the reply.

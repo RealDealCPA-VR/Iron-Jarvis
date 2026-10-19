@@ -124,7 +124,7 @@ describe("the Approval queue says what really happens (G54)", () => {
   it("after Approve: 'Approved. Ask the agent to try that step again.' — for a few seconds, then quiet", async () => {
     api.approvals = [APPROVAL];
     render(<BrowserPage />);
-    const approve = await screen.findByRole("button", { name: /Approve/ });
+    const approve = await screen.findByRole("button", { name: /Allow once/ });
     // The live region is on the page BEFORE its words change (a screen
     // reader hears the answer).
     const live = screen.getByTestId("cu-answered-note");
@@ -136,7 +136,7 @@ describe("the Approval queue says what really happens (G54)", () => {
     expect(WEBSITE_APPROVED_SENTENCE).toBe("Approved. Ask the agent to try that step again.");
     expect(api.posts.map((p) => p.path)).toEqual(["/computeruse/approvals/ap_1/approve"]);
     // The answered card leaves the queue; the sentence stays where it was.
-    await waitFor(() => expect(screen.queryByRole("button", { name: /Approve/ })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Allow once/ })).not.toBeInTheDocument());
     expect(screen.getByTestId("cu-answered-note").textContent).toBe(WEBSITE_APPROVED_SENTENCE);
     await act(async () => {
       vi.advanceTimersByTime(WEBSITE_ANSWER_LINGER_MS + 50);
@@ -157,7 +157,7 @@ describe("the Approval queue says what really happens (G54)", () => {
     api.approvals = [APPROVAL];
     api.failApprove = true;
     render(<BrowserPage />);
-    fireEvent.click(await screen.findByRole("button", { name: /Approve/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Allow once/ }));
     expect(await screen.findByText(/already answered/)).toBeInTheDocument();
     expect(screen.getByTestId("cu-answered-note").textContent).toBe("");
   });
@@ -179,6 +179,26 @@ describe("the Approval queue says what really happens (G54)", () => {
     expect(await screen.findByText("Open the pricing page")).toBeInTheDocument();
     expect(screen.getByText(/Click a run to inspect its recorded trace/)).toBeInTheDocument();
     expect(screen.queryByText(RUNS_EMPTY_SENTENCE)).not.toBeInTheDocument();
+  });
+});
+
+describe("v1.353.0 integrate: the queue card answers in the app's one approval language", () => {
+  it("its two buttons are lib/approvalWords' Allow once / Deny — never 'Approve'", async () => {
+    const words = await import("@/lib/approvalWords");
+    api.approvals = [APPROVAL];
+    render(<BrowserPage />);
+    const allow = await screen.findByRole("button", { name: new RegExp(`^\\s*${words.ALLOW_ONCE}\\s*$`) });
+    const deny = screen.getByRole("button", { name: new RegExp(`^\\s*${words.DENY}\\s*$`) });
+    expect(allow.textContent?.trim()).toBe("Allow once");
+    expect(deny.textContent?.trim()).toBe("Deny");
+    expect(screen.queryByRole("button", { name: /^\s*Approve\s*$/ })).not.toBeInTheDocument();
+    // The queue's sentence names the button the user will press.
+    expect(WEBSITE_QUEUE_SENTENCE).toContain(`Press ${words.ALLOW_ONCE}, then ask the agent`);
+    // The answered line keeps the bell's past-tense word ("Approved.").
+    expect(WEBSITE_APPROVED_SENTENCE.startsWith(words.answeredLine("approved").split(" ")[0])).toBe(true);
+    // The safety explainer no longer promises a pause that resumes.
+    expect(document.body.textContent ?? "").not.toMatch(/pauses for your explicit/);
+    expect(document.body.textContent ?? "").toMatch(/needs your explicit\s+approval first/);
   });
 });
 

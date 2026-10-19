@@ -19,12 +19,16 @@ def register(app: FastAPI, d) -> None:
     def list_connectors_route() -> dict[str, Any]:
         from ...connectors import list_connectors
         from ...connectors.catalog import CATEGORY_ORDER
+        from ...connectors.service import USER_CATEGORY
 
         return {
             "connectors": list_connectors(d.platform),
-            # Dynamic categories (the user's own MCP servers + memory sources)
-            # ride at the end so the gallery groups + filters them properly.
-            "categories": [*CATEGORY_ORDER, "Custom", "Memory"],
+            # Dynamic categories (the user's own packs + memory sources) ride
+            # at the end so the gallery groups + filters them properly.
+            # v1.353.0 integrate (G42): the user's own packs are "Added by
+            # you" (service.USER_CATEGORY), the category their cards carry --
+            # the list said "Custom", an always-empty chip.
+            "categories": [*CATEGORY_ORDER, USER_CATEGORY, "Memory"],
         }
 
     @app.post("/connectors/{connector_id}/connect")

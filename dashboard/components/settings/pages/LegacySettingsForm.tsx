@@ -32,7 +32,7 @@ import { PageGrid } from "@/components/PageGrid";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { ThemeMaker } from "@/components/ThemeMaker";
 import { providerDisplay } from "@/lib/onboarding";
-import { useModels } from "@/lib/useModels";
+import { DefaultModelPicker } from "@/components/settings/DefaultModelPicker";
 
 type FieldType = "text" | "number" | "boolean" | "select";
 type Value = string | number | boolean;
@@ -125,7 +125,7 @@ const FIELDS: FieldDef[] = [
   {
     // v1.314.0: rendered as a <select> of the chosen provider's models (the
     // /models catalogue), with "Other…" keeping free-text entry — see
-    // DefaultModelControl. The saved value is always the model id.
+    // components/settings/DefaultModelPicker. The saved value is always the model id.
     key: "default_model",
     label: "Default model",
     type: "text",
@@ -546,74 +546,10 @@ function FieldRow({
   );
 }
 
-/** The "Other…" option's value: never a real model id. */
-const OTHER_MODEL = "__other_model__";
-
-/**
- * v1.314.0 (UX wave 2): Default model as a picker. The user used to need the
- * exact model id by heart; now the list is the chosen provider's models from
- * the one catalogue (`useModels` — the same /models the title-bar switcher
- * reads), re-scoped when the provider above changes. "Other…" reveals the old
- * free-text box, so any id the catalogue does not list can still be saved,
- * and a saved model the catalogue does not list stays shown and selected —
- * never silently replaced. The value saved is always the model id.
+/* The default-model picker is components/settings/DefaultModelPicker (v1.353.0:
+ * the control this form drew since v1.314.0, lifted so the schema-driven
+ * Settings row uses the SAME one — one picker, not two copies).
  */
-function DefaultModelControl({
-  provider,
-  value,
-  onChange,
-}: {
-  provider: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const { models } = useModels();
-  const [other, setOther] = useState(false);
-  const scoped = useMemo(
-    () => models.filter((m) => m.provider === provider),
-    [models, provider],
-  );
-  const known = scoped.some((m) => m.model === value);
-  return (
-    <div className="space-y-2">
-      <select
-        value={other ? OTHER_MODEL : value}
-        onChange={(e) => {
-          if (e.target.value === OTHER_MODEL) {
-            setOther(true);
-            return;
-          }
-          setOther(false);
-          onChange(e.target.value);
-        }}
-        aria-label="Default model"
-        className="field"
-      >
-        {/* The saved id stays visible even when this provider's list lacks it. */}
-        {!other && !known && <option value={value}>{value || "Not set"}</option>}
-        {scoped.map((m) => (
-          <option key={m.model} value={m.model}>
-            {m.name && m.name !== m.model ? `${m.name} (${m.model})` : m.model}
-            {m.available === false ? " — not connected" : ""}
-          </option>
-        ))}
-        <option value={OTHER_MODEL}>Other… (type a model id)</option>
-      </select>
-      {other && (
-        <input
-          type="text"
-          value={value}
-          placeholder="claude-opus-4-8"
-          onChange={(e) => onChange(e.target.value)}
-          aria-label="Default model id"
-          spellCheck={false}
-          autoFocus
-          className="field font-mono text-[13px]"
-        />
-      )}
-    </div>
-  );
-}
 
 /* ---- Local model capabilities (verify-all) -------------------------------- */
 
@@ -1278,7 +1214,7 @@ export default function SettingsPage() {
                             onChange={(v) => update(f.key, v)}
                             control={
                               f.key === "default_model" ? (
-                                <DefaultModelControl
+                                <DefaultModelPicker
                                   provider={savedProvider}
                                   value={String(form.default_model ?? "")}
                                   onChange={(v) => update("default_model", v)}

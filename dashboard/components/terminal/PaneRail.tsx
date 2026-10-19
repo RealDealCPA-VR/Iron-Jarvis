@@ -209,7 +209,9 @@ export interface RailPane {
 function stateTone(state: PaneDisplay): string {
   if (state === "blocked") return "text-tone-warn";
   if (state === "working") return "text-accent-soft";
-  if (state === "done") return "text-tone-success";
+  // v1.353.0 (G52): "stopped — take a look" is not a success — the same
+  // quiet zinc as PaneState's done look (no green anywhere for it).
+  if (state === "done") return "text-zinc-300";
   return "";
 }
 

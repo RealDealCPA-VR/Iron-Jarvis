@@ -782,13 +782,16 @@ export interface OAuthMessage {
 
 /* ---- Onboarding / first-run / doctor ------------------------------------- */
 export interface OnboardingStep {
-  key: string; // connect_ai | first_session | work_with_document | teach_style | set_up_voice
+  key: string; // connect_ai | first_session | work_with_document | teach_style | set_up_voice | connect_apps
   title: string;
   detail: string;
   done: boolean;
   action: string;
-  /** Optional steps (e.g. set_up_voice) never gate first_run or become next_step. */
+  /** Optional steps (e.g. set_up_voice, connect_apps) never gate first_run or become next_step. */
   optional?: boolean;
+  /** v1.353.0: where the step is done, when the daemon names it
+   *  (connect_apps → "/marketplace", the Directory). */
+  href?: string;
 }
 
 /** Server-side dictation readiness, surfaced on GET /onboarding. */

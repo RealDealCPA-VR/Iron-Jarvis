@@ -817,8 +817,25 @@ def register(app: FastAPI, d) -> None:
         """
         from ...onboarding.checklist import default_is_mock, provider_label
 
+        def already_chose() -> dict[str, Any]:
+            current = str(d.platform.config.default_provider)
+            return {
+                "promoted": None,
+                "reason": (
+                    f"You already chose {provider_label(d.platform, current)} "
+                    "for answers, so nothing changed. You can switch any "
+                    "time on the Connections page."
+                ),
+            }
+
         name = (body.provider or "").strip().lower()
         if name == "ollama":
+            # v1.353.0 integrate: a press that will change nothing (the user
+            # already chose a model -- a second window's press) saves nothing
+            # either: it says so BEFORE the address is touched, instead of
+            # saving it and then answering "nothing changed".
+            if not default_is_mock(d.platform):
+                return already_chose()
             # v1.353.0 (G34): one press connects a running Ollama AND chooses
             # it -- the doors offer "Use Ollama (on this PC) for answers" as
             # soon as /health's cached probe sees it.
@@ -860,15 +877,7 @@ def register(app: FastAPI, d) -> None:
         cfg = d.platform.config
         with use_model_lock:
             if not default_is_mock(d.platform):
-                current = str(cfg.default_provider)
-                return {
-                    "promoted": None,
-                    "reason": (
-                        f"You already chose {provider_label(d.platform, current)} "
-                        "for answers, so nothing changed. You can switch any "
-                        "time on the Connections page."
-                    ),
-                }
+                return already_chose()
             cfg.default_provider = target
             cfg.default_model = model
             d._persist_config(["default_provider", "default_model"])

@@ -1699,6 +1699,7 @@ function CliProviderRow({
   signedOut = false,
   notInstalled = false,
   detected = false,
+  addressSaved = false,
   report = [],
   envelopeModels = [],
 }: {
@@ -1714,6 +1715,9 @@ function CliProviderRow({
   notInstalled?: boolean;
   /** v1.353.0 (G34, Ollama only): running on this PC, address not saved. */
   detected?: boolean;
+  /** v1.353.0 integrate (Ollama only): the user saved an address of their
+   *  own — while it does not answer, the row says so, not "Get Ollama". */
+  addressSaved?: boolean;
   /** Model report card rows (v1.169.0) — rendered only for LOCAL providers
    *  (ollama, opencode-cli); the cloud CLI rows never get a report line. */
   report?: QualityRow[];
@@ -1739,6 +1743,11 @@ function CliProviderRow({
     </div>
   ) : isOllama && detected ? (
     <UseOllamaAction />
+  ) : isOllama && addressSaved ? (
+    <div data-testid="ollama-not-answering" className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+      Not answering at the address you saved. Make sure Ollama is running there, then press
+      Rescan local CLIs.
+    </div>
   ) : isOllama ? (
     <div data-testid="get-ollama-row" className="mt-1 text-[11px] leading-relaxed text-zinc-500">
       Not running on this PC.{" "}
@@ -1934,6 +1943,11 @@ export default function ConnectionsPage() {
   // v1.353.0 (G34): Ollama answers on this PC but is not connected yet.
   const ollamaDetected = (daemonProviders as HealthRow[]).some(
     (p) => p.provider === "ollama" && !p.available && p.detected === true,
+  );
+  // v1.353.0 integrate: an Ollama address the user saved that does not
+  // answer — the row says so rather than "Get Ollama".
+  const ollamaAddressSaved = (daemonProviders as HealthRow[]).some(
+    (p) => p.provider === "ollama" && p.address_saved === true,
   );
 
   // Which models a LOCAL provider's row can Measure (v1.201.0): the models
@@ -2276,6 +2290,7 @@ export default function ConnectionsPage() {
                 signedOut={isSignedOut(info.provider)}
                 notInstalled={isNotInstalled(info.provider)}
                 detected={info.provider === "ollama" && ollamaDetected}
+                addressSaved={info.provider === "ollama" && ollamaAddressSaved}
                 report={qualityRows}
                 envelopeModels={envelopeModelsFor(info.provider)}
               />

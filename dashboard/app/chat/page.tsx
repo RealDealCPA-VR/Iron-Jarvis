@@ -233,6 +233,7 @@ import {
 } from "@/components/chat/HomeReadiness";
 import { PermissionChip } from "@/components/chat/PermissionChip";
 import { asPermissionMode, type PermissionMode } from "@/lib/permissionLevels";
+import { readDeviceApproval, writeDeviceApproval } from "@/lib/approvalDefault";
 import {
   COMPOSER_CARD_EDGE,
   COMPOSER_ICON_BUTTON,
@@ -3761,12 +3762,32 @@ export default function ChatPage() {
   // a thread's saved setup overrides it on open; New chat returns to the
   // default. Changing it in an open thread persists with that thread.
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("approve_for_me");
+  // v1.353.0: true once THIS conversation's posture was decided here (a
+  // thread's saved setup restored it, or the user pressed the chip), so the
+  // device default read below never overrides it. A new chat clears it.
+  const approvalPinnedRef = useRef(false);
   useEffect(() => {
     try {
       setApprovalMode(asApprovalMode(localStorage.getItem(APPROVAL_MODE_KEY)));
     } catch {
       /* storage unavailable — the default stands */
     }
+    // v1.353.0: Settings › Permissions "Approvals in chat" (also set by
+    // chat's settings tools) IS the default — read once per visit
+    // (lib/approvalDefault). Not set = the chip's own default stands.
+    let alive = true;
+    void readDeviceApproval().then((mode) => {
+      if (!alive || !mode) return;
+      try {
+        localStorage.setItem(APPROVAL_MODE_KEY, mode);
+      } catch {
+        /* storage unavailable — this visit still starts from it */
+      }
+      if (!approvalPinnedRef.current) setApprovalMode(mode);
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
   // v1.332.0: "LOCAL ONLY". Wired like the posture above: hydrated from the
   // user's last choice after mount, a thread's saved setup overrides it on
@@ -5835,6 +5856,7 @@ export default function ChatPage() {
     } catch {
       setApprovalMode("approve_for_me");
     }
+    approvalPinnedRef.current = false; // v1.353.0: the device default may land
     // v1.332.0: so does "Local only": the user's last choice.
     setLocalOnlyNow(readLocalOnlyDefault());
     threadDocsRef.current = [];
@@ -5887,6 +5909,7 @@ export default function ChatPage() {
       // on — a YOLO thread reopening as ask-everything would re-card work
       // the user already waved through.
       setApprovalMode(asApprovalMode(setup.approval_mode));
+      approvalPinnedRef.current = true; // v1.353.0: the thread's own posture wins
       // v1.332.0: the chat comes back local only exactly when it was saved so
       // (the daemon stores true only; absent = off).
       setLocalOnlyNow(setup.local_only === true);
@@ -10019,6 +10042,7 @@ export default function ChatPage() {
     } catch {
       setApprovalMode("approve_for_me");
     }
+    approvalPinnedRef.current = false; // v1.353.0: the device default may land
     // v1.332.0: a new chat starts local only when the user's last choice was.
     setLocalOnlyNow(readLocalOnlyDefault());
     setLocalRefusal(null);
@@ -13048,6 +13072,10 @@ export default function ChatPage() {
                               /* best-effort */
                             }
                             markSetupChanged();
+                            // v1.353.0: the same dial as Settings › Permissions
+                            // "Approvals in chat" — save it there too.
+                            approvalPinnedRef.current = true;
+                            void writeDeviceApproval(mode);
                           }}
                           onOpenChange={setPermissionMenuOpen}
                         />

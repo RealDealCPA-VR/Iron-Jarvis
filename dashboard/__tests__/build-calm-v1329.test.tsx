@@ -197,6 +197,15 @@ describe("the terminal list is rows, not cards", () => {
     expect(screen.getByTestId("rail-cli-t1").textContent).toBe("Claude Code");
   });
 
+  it("v1.353.0 (G52): a quiet pane's rail word is grey, never the success green", () => {
+    renderRail([pane({ state: "done" })]);
+    const row = screen.getByTestId("rail-row-t1");
+    const word = within(row).getByText("stopped — take a look");
+    expect(tokens(word.className)).toContain("text-zinc-300");
+    expect(word.className).not.toMatch(/tone-success/);
+    expect(row.innerHTML).not.toMatch(/tone-success/);
+  });
+
   it("no row is a bordered or accent box; the open one only has a subtle fill", () => {
     renderRail([pane(), pane({ id: "t2", label: "Supplier sync", state: "blocked" })]);
     for (const id of ["t1", "t2"]) {

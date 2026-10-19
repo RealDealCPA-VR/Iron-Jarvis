@@ -13,7 +13,12 @@
  *
  * WHICH MODEL A MESSAGE WILL USE: the one-turn choice ("Try again with…"),
  * else the chat's pick, else the project's default, else the app's default
- * (/health). A model asks first when its catalog row is not `kind: "local"`.
+ * (/health). A model asks first when its catalog row says it does not stay
+ * on the user's network (v1.353.0: the row's `on_this_network`, the SAME
+ * predicate the daemon refuses by — `egress.stays_on_this_network` — so an
+ * endpoint the user pointed at a cloud server asks up front instead of being
+ * refused after the press; a row with no such answer, from an older daemon,
+ * falls back to `kind: "local"`).
  * A model the catalog does not list asks too (fail closed: the daemon treats a
  * model it cannot place as cloud). Two cases never ask here, and the daemon
  * still guards both: no model known yet (nothing to name; the daemon picks
@@ -70,6 +75,19 @@ export function writeLocalOnlyDefault(on: boolean): void {
 export interface LocalOnlyRow extends CatalogRow {
   kind?: string;
   available?: boolean;
+  /** v1.352.0 (G21): the daemon's own answer to "does this model stay on
+   *  the user's network". Absent on an older daemon. */
+  on_this_network?: boolean;
+}
+
+/** v1.353.0: true when a catalog row is KNOWN to stay on the user's network.
+ *  The row's `on_this_network` decides when the daemon sent one (a "local"
+ *  class endpoint pointed at a cloud server says false); an older daemon's
+ *  row falls back to its class. Never true for a row the catalog lacks. */
+export function staysOnThisNetwork(row: LocalOnlyRow | undefined): boolean {
+  if (!row) return false;
+  if (typeof row.on_this_network === "boolean") return row.on_this_network;
+  return row.kind === "local";
 }
 
 /** "provider::model" → its two halves ("" each when it is not that shape). */
@@ -133,7 +151,7 @@ export function cloudAskFor(
   if (!p || p === "auto") return null;
   const row =
     models.find((m) => m.provider === p && m.model === model) ?? models.find((m) => m.provider === p);
-  if (row?.kind === "local") return null;
+  if (staysOnThisNetwork(row)) return null;
   return { provider: p, model, name: cloudModelName(p, model, models) };
 }
 

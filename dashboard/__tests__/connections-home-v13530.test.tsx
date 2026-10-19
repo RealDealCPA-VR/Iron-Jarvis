@@ -317,6 +317,22 @@ describe("G42: the Directory is one Connections home", () => {
     expect(within(more).getByRole("link", { name: /Add a tool by config \(advanced\)/ })).toBeTruthy();
   });
 
+  it("v1.353.0 integrate: a group with no card gets no chip (the daemon names 'Added by you' on every install)", async () => {
+    api.connectors = [connector("github", "GitHub"), connector("pixio", "Pixio", { category: "AI & Media" })];
+    api.categories = ["Developer", "Storage", "AI & Media", "Added by you", "Memory"];
+    render(<DirectoryPage />);
+    await screen.findByTestId("connector-card-github");
+    const chips = screen.getByRole("group", { name: /Filter by category/ });
+    const names = within(chips)
+      .getAllByRole("button")
+      .map((b) => b.textContent?.trim());
+    expect(names).toEqual(["All", "Developer", "AI & Media"]);
+    // The summary counts the same groups.
+    expect((screen.getByTestId("directory-summary").textContent ?? "").replace(/\s+/g, " ")).toMatch(
+      /\b2 categories\b/,
+    );
+  });
+
   it("no card says MCP: the mechanism tag is gone (a tooltip on the category line), and 'one tap' too", async () => {
     api.connectors = [
       connector("github", "GitHub"),

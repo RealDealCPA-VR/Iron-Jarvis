@@ -59,9 +59,16 @@ const FILTER_MAX = 12;
 type Where = "local" | "cli" | "api";
 
 /** Where a catalog row runs. A keyless API name served by a logged-in CLI is
- *  flat-rate ("cli"), the same rule the composer's menu applies (v1.230.0). */
-export function whereItRuns(m: Pick<ModelOption, "kind" | "inherited_from">): Where | undefined {
+ *  flat-rate ("cli"), the same rule the composer's menu applies (v1.230.0).
+ *  v1.353.0: a "local"-class endpoint whose row says `on_this_network: false`
+ *  (a cloud server the user added as an endpoint) runs in the cloud — the
+ *  composer's badge, the receipt and the local-only ask all say so, and the
+ *  privacy line must not promise it stays on this computer. */
+export function whereItRuns(
+  m: Pick<ModelOption, "kind" | "inherited_from" | "on_this_network">,
+): Where | undefined {
   if (m.inherited_from) return "cli";
+  if (m.kind === "local" && m.on_this_network === false) return "api";
   return m.kind;
 }
 

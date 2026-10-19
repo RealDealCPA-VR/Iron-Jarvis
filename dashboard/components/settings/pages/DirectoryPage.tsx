@@ -940,7 +940,9 @@ function ImportFromApps({ onImported }: { onImported: () => void }) {
             type="button"
             data-testid="directory-import-open"
             aria-expanded={open}
-            aria-controls="directory-import-door"
+            // Only while the door is on the page: an id that names nothing
+            // is a broken reference for a screen reader (v1.353.0 integrate).
+            aria-controls={open ? "directory-import-door" : undefined}
             onClick={() => setOpen((v) => !v)}
             className="btn-ghost px-3 py-1 text-[12px]"
           >
@@ -1071,12 +1073,14 @@ export default function MarketplacePage() {
   // v1.353.0: a group the daemon's category list does not name yet (a card's
   // own category, e.g. "Added by you") still gets its chip, after the rest —
   // the same rule the grouping above follows.
+  // v1.353.0 integrate: and a group with no card gets no chip — the daemon's
+  // list names "Added by you" and "Memory" on every install, and a chip that
+  // opens an empty gallery is a dead end.
   const chips = useMemo(() => {
     const named = new Set(categories);
-    const extra = Array.from(new Set(connectors.map((c) => c.category))).filter(
-      (cat) => cat && !named.has(cat),
-    );
-    return ["All", ...categories, ...extra];
+    const carried = new Set(connectors.map((c) => c.category));
+    const extra = Array.from(carried).filter((cat) => cat && !named.has(cat));
+    return ["All", ...categories.filter((cat) => carried.has(cat)), ...extra];
   }, [categories, connectors]);
 
   return (
@@ -1143,7 +1147,7 @@ export default function MarketplacePage() {
             </span>
             <span aria-hidden="true">·</span>
             <span>
-              {categories.length} categor{categories.length === 1 ? "y" : "ies"}
+              {chips.length - 1} categor{chips.length - 1 === 1 ? "y" : "ies"}
             </span>
           </p>
         </Reveal>

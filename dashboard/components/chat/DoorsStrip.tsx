@@ -8,7 +8,10 @@
  *
  * The doors are SERVER truth: the daemon derives them from tools that
  * executed OK this turn (never armed-but-refused ones), dedupes, caps at 4,
- * and persists them with the message — files are deliberately EXCLUDED
+ * and persists them with the message. Since v1.353.0 (G41) a call that FAILED
+ * because something is not set up adds its fix door too ("Connect Google
+ * Drive in Settings", "Pair your browser" — daemon/doors.failure_door_for);
+ * a call the user declined or the rules refused still adds none. Files are deliberately EXCLUDED
  * because the ArtifactsRail owns files. This strip renders exactly what the
  * daemon says and never derives doors of its own: a client-side guess would
  * be the kind of small lie the TurnReceipt exists to end.

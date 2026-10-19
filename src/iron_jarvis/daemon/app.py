@@ -2144,6 +2144,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     )
                 except Exception:  # noqa: BLE001 — health must never fail
                     row["detected"] = False
+                # v1.353.0 integrate: whether the user saved an Ollama
+                # address (a config read). A saved address that does not
+                # answer is "not answering there" -- never "Get Ollama", which
+                # the one press would not act on (it never overwrites it).
+                row["address_saved"] = bool(
+                    (getattr(platform.config, "ollama_base_url", None) or "").strip()
+                )
         return rows
 
     # --- Chat (direct conversation — frontier-chat parity) -----------------

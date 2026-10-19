@@ -541,11 +541,37 @@ def test_connect_my_google_drive_leaves_a_connect_in_settings_button_stream_lane
     _check_fixture("google_drive", _done(frames)["doors"])
 
 
-def test_a_declined_connect_leaves_no_button(app):
+def test_a_declined_connect_leaves_no_button(app, monkeypatch):
+    # v1.353.0 integrate (moved on purpose): app_connect for an app that
+    # signs in through the browser no longer shows an approval card (its
+    # `spend_check` -- the call changes nothing; see the test below). The
+    # LANE's rule this pins -- a call the user declined leaves no fix button
+    # (`refusal_label` set) -- is kept by giving the tool its old card here.
+    from iron_jarvis.settings.records import AppConnectTool
+
+    async def _card(self, args, ctx):  # noqa: ANN001 — the pre-integrate verdict
+        return None
+
+    monkeypatch.setattr(AppConnectTool, "spend_check", _card)
     model = _StreamModel([[ToolCall(id="c1", name="app_connect", arguments={"app": "google_drive"})], []])
     app.state.platform.router.stream = model
-    frames = _stream(app, _body("connect my Google Drive"), answer="deny")
+    cards: list = []
+    frames = _stream(app, _body("connect my Google Drive"), answer="deny", cards=cards)
+    assert cards, "anti-vacuity: the card was shown and declined"
     assert _done(frames)["doors"] == []
+
+
+def test_connect_my_google_drive_asks_no_card_and_leaves_the_button(app):
+    """v1.353.0 integrate: "connect my Google Drive" with Drive not set up
+    shows NO "connect an app" card first -- an Allow for a call that can only
+    answer "connect it in Settings" approves nothing (the v1.227.0 rule) --
+    and the reply ends with the button to the fix."""
+    model = _StreamModel([[ToolCall(id="c1", name="app_connect", arguments={"app": "google_drive"})], []])
+    app.state.platform.router.stream = model
+    cards: list = []
+    frames = _stream(app, _body("connect my Google Drive"), cards=cards)
+    assert cards == []
+    assert _done(frames)["doors"] == [DRIVE_DOOR]
 
 
 def test_a_refusal_the_registry_made_leaves_no_button_stream_lane(app):

@@ -112,7 +112,26 @@ def door_for(tool_name: str, result: Any) -> dict[str, str] | None:
     that also appends to ``tools_used``); this function only maps the name and
     optionally enriches the label from ``result.data``. Never raises — a door
     is decoration, and no decoration is worth failing the turn over.
+
+    v1.353.0 integrate: ``browser_get_status`` is the one browser tool chat
+    offers while browser access is off (the default), and it SUCCEEDS with
+    the state as data. When that state is "not set up" it opens the same fix
+    door a browser refusal leaves (:data:`_BROWSER_FIX_DOORS`): a paired
+    browser with access off → "Turn on browser access"; no browser → "Pair
+    your browser". A browser that is connected with access on → no door.
     """
+    if tool_name == "browser_get_status":
+        try:
+            data = getattr(result, "data", None)
+            if not isinstance(data, dict):
+                return None
+            code = str(data.get("code") or "")
+            if not code and data.get("connected") and str(data.get("access") or "off") == "off":
+                code = "BROWSER_ACCESS_OFF"
+            label = _BROWSER_FIX_DOORS.get(code)
+            return {"href": _BROWSER_FIX_HREF, "label": label} if label else None
+        except Exception:  # noqa: BLE001 — no door beats no reply
+            return None
     spec = _CATALOG.get(tool_name)
     if spec is None:
         return None
@@ -192,7 +211,7 @@ def failure_door_for(tool_name: str, args: Any, result: Any) -> dict[str, str] |
                 return {"href": _BROWSER_FIX_HREF, "label": label}
             return None
         if name == "app_connect":
-            from ..connectors.catalog import get_connector
+            from ..connectors.catalog import get_connector, get_link_card
 
             app = str(args.get("app") or "").strip().lower() if isinstance(args, dict) else ""
             conn = get_connector(app) if app else None
@@ -201,6 +220,10 @@ def failure_door_for(tool_name: str, args: Any, result: Any) -> dict[str, str] |
                     "href": _APPS_FIX_HREF,
                     "label": f"Connect {_clean_name(conn.name)} in Settings",
                 }
+            # v1.353.0 integrate: the browser ("puppeteer" until G43) is set up
+            # on the Browser page -- the SAME button a browser refusal leaves.
+            if conn is None and app and get_link_card(app) is not None:
+                return {"href": _BROWSER_FIX_HREF, "label": _BROWSER_FIX_DOORS["BROWSER_NOT_CONNECTED"]}
         return None
     except Exception:  # noqa: BLE001 — no door beats no reply
         return None

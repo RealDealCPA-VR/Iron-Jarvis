@@ -426,6 +426,14 @@ export function SettingsHome() {
                         changed={!same(form[d.key], original[d.key])}
                         highlight={d.key === focusKey}
                         providerOptions={d.key === "default_provider" ? providerOptions : undefined}
+                        // v1.353.0 (G57): the default-model list follows the
+                        // provider chosen in THIS form, saved or not — never the
+                        // old provider's models paired with the new provider.
+                        modelProvider={
+                          d.key === "default_model"
+                            ? String(form.default_provider ?? "") || undefined
+                            : undefined
+                        }
                         onChange={(v) => setForm((f) => ({ ...f, [d.key]: v }))}
                       />
                     ))}

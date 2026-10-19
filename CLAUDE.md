@@ -3547,6 +3547,86 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **ONE place for each kind of thing, and a refusal leaves the door the other
+  surfaces already use** (v1.353.0, product-readiness Wave 3, G33-G38,
+  G40-G43, G45, G51-G54, G56-G58, G66, G71; lanes 3A-3E + integrate).
+  FIRST RUN (3A): `providers/ollama_seen` is the ONE cached "Ollama answers on
+  this PC with a model" (`seen()` never blocks — one background refresh, 20 s
+  TTL; `probe_now()` is for the press); /health's ollama row carries
+  `detected` and (integrate) `address_saved`; /models greys a detected
+  Ollama until `providers.available('ollama')`; `POST /onboarding/use-model
+  {ollama}` saves `http://localhost:11434` through the one settings writer
+  ONLY when no address is saved, and (integrate) answers "You already chose
+  …" BEFORE touching anything when the default is not the demo;
+  `readiness.model_choice().usable` offers a detected unsaved Ollama like the
+  chat doors (`_ollama_press_connects`). Accounts' Sign in goes through
+  `lib/cliSignIn` (POST /terminals/launch {cli, account:"default"}); the
+  chat home's `components/chat/HomeReadiness` lines come from ONE GET
+  /onboarding per visit (never polled); checklist `connect_apps` is optional
+  (never next_step) with `href: "/marketplace"` = OnboardingWelcome
+  `STEP_LINK.connect_apps` ("Open the Directory") = the apps line's link.
+  Menu names: `lib/onboarding.modelGroupName` / `providerHeading` (a brand
+  keeps its casing). The default-model list is ONE control
+  (`components/settings/DefaultModelPicker`, the legacy form uses it too) and
+  SettingsHome passes the FORM's `default_provider` (`modelProvider`).
+  CHAT LANES (3B, MIRROR NOTE): the Guide rule in `tools/autoselect` answers
+  "what can you do" / how-do-I; `chat_turn.media_service_ready` (off-loop,
+  `MEDIA_READY_TIMEOUT_S`), `swap_media_for_connect` (stream lane only — the
+  POST lane never ask-arms) and `no_media_service_line` (both lanes; the
+  offline demo `providers/adapters/mock.NO_MEDIA_MARK` keys on it, pinned
+  equal); `daemon/doors.failure_door_for` appended at both lanes' failed-tool
+  site ONLY when `refusal_label` is empty (a declined card or a registry
+  refusal leaves no door); `chat_turn.app_tool_words` is the twin of
+  lib/toolWords appToolParts. Integrate: `settings/records._APP_WORDS` knows
+  google drive / onedrive / dropbox; app_connect's `spend_check` returns
+  `ask=False` for a call that CHANGES NOTHING (an OAuth app, the browser, an
+  unknown app, an api_key app whose secure card is its own consent) — an MCP
+  app keeps its card and a DENY still refuses (lanes read `ask` only when the
+  mode is not DENY); `catalog.get_link_card` / `LINK_ALIASES` ("puppeteer",
+  "browser") → app_connect answers where the browser is set up and
+  `failure_door_for` returns the SAME "Pair your browser" door; `door_for
+  ("browser_get_status")` opens that door from the status READ (the one
+  browser tool chat offers while access is off). CONNECTIONS (3C): GET
+  /connectors rows gain `needs`, `package_note`, `href`, `action`, MCP
+  `runtime_ready`/`runtime`/`runtime_url` (the launcher's own resolver),
+  OAuth `oauth_client_configured`, drives' `memory_source`, and `catalog_id`
+  when `PACK_ALIASES` lights a card under the pack's real id; user packs are
+  `service.USER_CATEGORY` "Added by you" and the route's `categories` lists
+  it (integrate); the Directory shows a chip only for a group with a card.
+  `catalog.LINK_CARDS` stay OUT of `CATALOG`. Slack's existing packs are NOT
+  migrated (`RENAMED_PACKAGES` is for wrong names the app shipped — the
+  user's call). BUILD/BROWSER (3D): pane names live in THREE places pinned
+  equal (`terminals/ai_clis.AI_CLIS`, `lib/paneAsks.PANE_CLI_NAMES`,
+  desktop/main.js `PANE_CLI_NAMES`; tests/test_pane_asks_v13530.py); the bell
+  polls GET /terminals/activity every 15 s and is quiet on Build (a
+  `next/navigation` mock of a test rendering NotificationBell must export
+  `usePathname`); "stopped — take a look" is grey everywhere (PaneState AND
+  PaneRail); the Browser queue answers with `lib/approvalWords` ALLOW_ONCE /
+  DENY. SAY-WHAT-IT-IS (3E): release.yml's RELEASE_NOTES (a tag push by hand
+  — the commit touches a workflow); `lib/phoneChat` notes what the form
+  filled (`AUTO_SENDERS_KEY`) and the listening it switched on
+  (`AUTO_INBOUND_KEY`, integrate: unticking chat puts it back); notes are
+  never posted. WAVE-2 FOLLOW-UPS (integrate): `lib/localOnly.cloudAskFor`
+  decides by the row's `on_this_network` (`staysOnThisNetwork`; absent → the
+  class), the regenerate menu's privacy line too; `device.approval_mode`
+  ("Approvals in chat") IS the chat chip's default — `lib/approvalDefault`
+  reads GET /settings/device once per visit (a thread's saved posture or a
+  chip press wins: `approvalPinnedRef`) and a chip press PUTs it back.
+  THE RULE A FUTURE CHANGE MUST KEEP: a link from one Settings section to
+  another uses the relocated alias (`/marketplace`, `/computeruse`,
+  `/channels`, `/connections`) or SettingsHome's `goTo`, NEVER
+  `/settings?section=` — SettingsHome reads the section once on mount and the
+  App Router does not remount on a search-param change (the URL changes,
+  nothing else). A NEW fix door reuses a door that exists (same href, same
+  words) rather than minting a second address for the same place. Pins:
+  `tests/test_{first_run_models,chat_guide_media_doors,connections_home,
+  pane_asks,release_notes,help_selfcare,integrate_wave3}_v13530.py`,
+  `dashboard/__tests__/{first-run-home,accounts-signin,fix-doors,
+  connections-home,pane-chat-retry,pane-needs-you,browser-approval-copy,
+  everything-tiers,phone-chat,wave2-followups,wave3-seams,
+  settings-default-model}-v13530.test.tsx` + `sidepanel-summary-v13530.test.ts`
+  (runs the BUILT add-on) (every lane and integrator change mutation-checked
+  red).
 - **One vocabulary, one receipt, one approval language** (v1.352.0,
   product-readiness Wave 2, G16/G17/G19/G21-G27; lanes 2A-2D + integrate).
   HELPER-AGENT RECEIPT (2A): `RunResultCard.runEnd` — cancelled = neutral

@@ -73,6 +73,10 @@ vi.mock("@/lib/api", () => ({
   },
   post: async () => ({}),
   put: async (path: string, body: Record<string, unknown>) => {
+    // v1.353.0: a press on the permission chip also saves this device's
+    // "Approvals in chat" (lib/approvalDefault, pinned in
+    // wave2-followups-v13530); this file pins the THREAD's saves only.
+    if (path === "/settings/device") return {};
     H.api.puts.push({ path, body });
     const m = /^\/chat\/threads\/(.+)$/.exec(path);
     return { id: m && m[1] !== "new" ? m[1] : "t1", title: "t" };

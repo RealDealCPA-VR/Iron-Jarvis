@@ -437,6 +437,22 @@ LINK_CARDS: list[Connector] = [
     ),
 ]
 
+#: v1.353.0 integrate: names a model (or an old Handbook) may still use for
+#: the browser — "puppeteer" was a catalog entry until G43 — mapped to the
+#: link card that now stands for it. Read by :func:`get_link_card` only:
+#: ``get_connector`` still answers real connectors alone.
+LINK_ALIASES: dict[str, str] = {
+    "puppeteer": "browser_addon",
+    "browser": "browser_addon",
+}
+
+
+def get_link_card(connector_id: str) -> Connector | None:
+    """The LINK card *connector_id* names (its id or an alias), or None."""
+    key = (connector_id or "").strip().lower()
+    key = LINK_ALIASES.get(key, key)
+    return next((c for c in LINK_CARDS if c.id == key), None)
+
 #: Category display order for the gallery.
 CATEGORY_ORDER = [
     "Developer",

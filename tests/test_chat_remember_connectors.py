@@ -193,6 +193,8 @@ def test_connectors_list_includes_user_mcp_server(tmp_path):
     # beside "Your own MCP server."); tests/test_connections_home_v13530.py
     # pins the words.
     assert entry["category"] == "Added by you" and entry["connected"] is True
+    # The card's category is one the gallery lists (v1.353.0 integrate).
+    assert entry["category"] in out["categories"]
     assert entry["tools_loaded"] == 1 and entry["tool_names"] == ["search"]
     assert entry["source"] == "user"
 
