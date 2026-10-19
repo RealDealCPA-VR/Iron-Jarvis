@@ -266,7 +266,7 @@ Wave 8 ("close the re-audit") worked through section 0's lists in five lanes (8A
 - the demo reply's opening line;
 - the bell's short run id;
 - the advanced paths listed in 0.6.
-- A parked workflow that is cancelled while it waits keeps "Needs you" until its next run.
+- (Closed by the re-review: a parked workflow cancelled while it waits now settles its row as stopped, and the chat's first read of Microsoft 365 after a restart waits for its sign-in check instead of saying "not signed in yet".)
 - Microsoft 365, GitHub's server, the other-computer setup and LM Studio have never been tried live.
 
 ---

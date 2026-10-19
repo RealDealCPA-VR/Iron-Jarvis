@@ -318,6 +318,11 @@ class Platform:
     #: Share my profile with Build (v1.306.0): keeps the generated profile
     #: block in a switched-on CLI's instruction files (``profile/share.py``).
     profile_share: "object | None" = None
+    #: v1.358.0 re-review: ``settle_stopped_waiting(run_id) -> bool`` — the
+    #: Workflows page's Cancel of a WAITING scheduled run settles that
+    #: schedule's "Needs you" row (the cancel publishes no completion).
+    #: ``None`` on a platform whose builder did not set it.
+    settle_stopped_waiting: "Any" = None
     #: MCP packs whose handshake was DEFERRED (v1.311.0): the server configs
     #: ``build_platform(defer_mcp=True)`` left for the daemon lifespan to load
     #: through :func:`load_deferred_mcp`. Empty on every platform built
@@ -1793,6 +1798,21 @@ def build_platform(
             _restamp_parked(name, *words)
 
     event_bus.add_handler(_settle_parked_workflow)
+
+    def _settle_stopped_waiting(run_id: str) -> bool:
+        # v1.358.0 re-review: the Workflows page's Cancel of a WAITING run
+        # ends it in the route itself (no engine loop is running) and
+        # publishes no ``workflow.completed``, so the handler above never
+        # saw it and the row kept "Needs you" until the next fire. The
+        # route calls this (sync; it runs on the threadpool). Only a run a
+        # schedule parked, and only while its row still says needs_you.
+        hit = _parked_runs.settle(str(run_id or ""))
+        if hit is None:
+            return False
+        name, ref = hit
+        return _restamp_parked(name, *_run_outcome.workflow_stopped_waiting(ref))
+
+    platform.settle_stopped_waiting = _settle_stopped_waiting
 
     def _deliver_outcome(task, payload: dict, status: str, detail: str) -> None:
         # A schedule is explicit intent, so the default audience is EVERY

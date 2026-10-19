@@ -1909,7 +1909,8 @@ setting you turn on. The look of the app is the same.
   - A scheduled workflow waiting for your answer reads **Needs you**. Once
     you answer and it finishes, its row says so ("Your workflow “Weekly
     report” finished after your answer.") and the home line stops counting
-    it.
+    it. If you stop it on the Workflows page before you answer, its row says
+    it was stopped before you answered.
   - A goal that did not run reads **Skipped** and says why. A run that failed
     after nobody answered its question reads **Failed**, like its own page,
     and starts with "it asked for your OK and nobody answered in time".

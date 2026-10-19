@@ -258,6 +258,45 @@ def seen(
     return current[1] if current is not None else None
 
 
+#: How long a BLOCKING reader waits for the very first verdict
+#: (:func:`seen_settled`) before it settles for "not known yet".
+FIRST_WAIT_S = 5.0
+
+
+def seen_settled(
+    platform,
+    server: str,
+    identity: str = "",
+    *,
+    wait_s: float = FIRST_WAIT_S,
+    spawn: Callable[[Callable[[], None]], None] | None = None,
+) -> Verdict | None:
+    """:func:`seen`, but when this app has NO verdict yet — the first read
+    since Iron Jarvis started, or since the app was saved again — wait up to
+    ``wait_s`` for the check that read just started (v1.358.0 re-review).
+
+    For the chat's grounding (``app_names.app_states``, already off the
+    loop): its FIRST turn after a restart that named the app read ``None``
+    and told the model "not signed in yet" for a user who IS signed in.
+    This only waits for the one background check :func:`seen` started (never
+    a second call into the app); a check still out after ``wait_s`` leaves
+    ``None`` — "not known yet", read as before. BLOCKING: never call it on
+    the event loop (the card's listing keeps :func:`seen`)."""
+    verdict = seen(platform, server, identity, spawn=spawn)
+    if verdict is not None or wait_s <= 0:
+        return verdict
+    deadline = time.monotonic() + wait_s
+    while True:
+        with _lock:
+            entry = _answers.get(server)
+            if entry is not None and entry[2] == identity:
+                return entry[1]
+            running = server in _inflight
+        if not running or time.monotonic() >= deadline:
+            return None
+        time.sleep(0.05)
+
+
 def _thread(fn: Callable[[], None]) -> None:
     threading.Thread(target=fn, name="signin-seen", daemon=True).start()
 

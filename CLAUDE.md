@@ -3662,8 +3662,16 @@ does not need a bump, stop and bump it.
   `tool-lines-v13580.json` (`IJ_REGEN_TOOL_LINES=1`),
   `desktop-tool-words-v13580.json` and `wave8-seams-v13580.json`
   (`IJ_REGEN_WAVE8_SEAMS=1`) (every lane, review and integrator change
-  mutation-checked red). Known: a parked run cancelled while waiting publishes
-  no completion, so its row keeps "Needs you" until the next fire; the
+  mutation-checked red). (re-review) A WAITING run cancelled from the
+  Workflows page publishes no completion, so the cancel route calls
+  `platform.settle_stopped_waiting(run_id)` (the same parked map, restamped
+  only while the row still reads `needs_you`,
+  `run_outcome.workflow_stopped_waiting`); and the chat's
+  `app_names._signin_unfinished` reads `signin_seen.seen_settled` — off the
+  loop, it waits ≤ `FIRST_WAIT_S` for the ONE check its read starts, because
+  the first turn after a restart told the model "not signed in yet" for a
+  signed-in user (the card keeps the non-blocking `seen`). Pins:
+  `tests/test_rereview_wave8_v13580.py`. Known: the
   key-refused verdict is process memory; agent runs pass no `apps_on`;
   apps-by-name arming is stream-only; the bell's ask row still links the run
   by its short id; mission's refusal line still names a built-in by its spaced

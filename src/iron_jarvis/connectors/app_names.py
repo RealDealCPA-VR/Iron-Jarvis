@@ -373,7 +373,13 @@ def _signin_unfinished(platform: Any, conn: Any, cid: str) -> str:
         return ""
     try:
         server = _configured_name(platform, cid) or cid
-        verdict = signin_seen.seen(platform, server, signin_identity(_server_cfg(platform, server)))
+        # v1.358.0 re-review: the FIRST read after a restart had no verdict
+        # and told the model "not signed in yet" for a user who is signed
+        # in; this reader is already off the loop, so it waits (bounded) for
+        # the check that read starts. A still-unknown answer reads as before.
+        verdict = signin_seen.seen_settled(
+            platform, server, signin_identity(_server_cfg(platform, server))
+        )
     except Exception:  # noqa: BLE001 — unsure is "not signed in yet"
         verdict = None
     if verdict is not None and getattr(verdict, "signed_in", False):

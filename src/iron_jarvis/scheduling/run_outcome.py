@@ -156,6 +156,16 @@ def workflow_answered(run_status: object, ref: object) -> tuple[str, str] | None
     return None
 
 
+def workflow_stopped_waiting(ref: object) -> tuple[str, str]:
+    """A PARKED scheduled workflow that was STOPPED while it still waited
+    for the person (v1.358.0 re-review): the ``(last_status, detail)`` its
+    row now says. The Workflows page's Cancel of a waiting run publishes no
+    completion, so the row kept "Needs you" — and the home line counted it —
+    over a run whose own page said Stopped, until the next fire."""
+    name = " ".join(str(ref or "").split()) or "inline"
+    return STATUS_CANCELLED, f"Your workflow “{name}” was stopped before you answered."
+
+
 def goal_skipped_detail(reason: object) -> str:
     """The row detail for a goal iteration the engine REFUSED (``skipped``,
     v1.358.0 lane 8A): nothing ran, and why, in the engine's own words."""

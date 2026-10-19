@@ -251,6 +251,17 @@ def register(app: FastAPI, d) -> None:
             db.commit()
             db.refresh(rec)
             status = rec.status
+        if status == "cancelled":
+            # v1.358.0 re-review: a WAITING run ends here, with no engine loop
+            # to publish ``workflow.completed`` — so a schedule that parked it
+            # is told directly, or its row keeps "Needs you" over a run its own
+            # page calls Stopped. Best effort; never fails the cancel.
+            settle = getattr(d.platform, "settle_stopped_waiting", None)
+            if callable(settle):
+                try:
+                    settle(run_id)
+                except Exception:  # noqa: BLE001 — the cancel already landed
+                    pass
         if current:
             try:
                 d.orchestrator.cancel_session(current)
