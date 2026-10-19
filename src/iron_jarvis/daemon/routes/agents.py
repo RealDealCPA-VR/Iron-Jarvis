@@ -3316,9 +3316,11 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail=str(exc.detail))
         store = getattr(d.platform, "assignments", None)
         if store is None:
+            # v1.358.0 (lane 8E, G76): the canon's words — a queued task, and
+            # Iron Jarvis (never "assignments" or "this daemon").
             raise HTTPException(
                 status_code=503,
-                detail="assignments are not available on this daemon — restart it",
+                detail="Queued tasks are not available right now. Restart Iron Jarvis to bring them back.",
             )
         raw = store.inbox(assignee) or {}
         inbox = {

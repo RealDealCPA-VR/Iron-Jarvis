@@ -189,7 +189,9 @@ def test_the_cross_check_fixture_covers_every_kind_of_tool():
     kinds = {r["kind"] for r in rows}
     assert {"table", "browser", "app", "unknown"} <= kinds, kinds
     # every card phrase is in the fixture, so the vitest half checks them all
-    table = {r["tool"] for r in rows if r["kind"] == "table"}
+    # ("ahead" rows count: once the card gains those words they must agree,
+    # which both halves already check)
+    table = {r["tool"] for r in rows if r["kind"] in ("table", "ahead")}
     assert set(_ts_words()) <= table, sorted(set(_ts_words()) - table)
 
 

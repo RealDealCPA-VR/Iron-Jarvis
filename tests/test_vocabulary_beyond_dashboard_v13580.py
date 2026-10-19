@@ -428,3 +428,18 @@ def test_the_readme_names_what_the_app_shows_without_a_model():
     assert state == "Demo replies"
     assert f"**{state}** strip" in readme
     assert "Simulated mode" not in readme and "offline demo" not in readme
+
+def test_an_agents_inbox_without_its_queue_says_so_in_the_canons_words(tmp_path):
+    """routes/agents.py's 503 (the re-audit's I. daemon list): it said
+    "assignments are not available on this daemon — restart it"."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.app import create_app
+
+    app = create_app(str(tmp_path))
+    app.state.platform.assignments = None
+    res = TestClient(app).get("/agents/builder/inbox")
+    assert res.status_code == 503, res.text
+    detail = res.json()["detail"]
+    assert detail == "Queued tasks are not available right now. Restart Iron Jarvis to bring them back."
+    assert not _hits(detail), detail
