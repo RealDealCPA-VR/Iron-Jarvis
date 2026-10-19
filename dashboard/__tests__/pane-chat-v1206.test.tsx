@@ -614,7 +614,7 @@ describe("mid-turn approval (BC1 D1)", () => {
     S.stream.approval = APPROVAL;
     render(<PaneChat paneId="p1" cwd={CWD} />);
     fireEvent.click(
-      screen.getByRole("button", { name: /allow for this conversation/i }),
+      screen.getByRole("button", { name: /allow for this chat/i }),
     );
     await waitFor(() => {
       const dec = H.api.posts.find((p) => p.path === "/chat/approvals/apr_1");

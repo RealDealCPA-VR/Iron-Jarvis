@@ -430,10 +430,15 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("device.theme", "Theme", "appearance", "string",
       "The theme on this device (a built-in Mark or one of your own).", tier="allow", store="device",
       aliases=("theme", "colors", "dark mode", "light mode")),
+    # v1.352.0 (G24): the chat chip's OWN words for the three levels
+    # (dashboard/lib/permissionLevels.ts PERMISSION_LEVELS), so Settings, the
+    # composer's chip and an agent's setup name a level the same way — and
+    # "Don't ask" typed in chat finds `yolo` (the settings tools match a
+    # label as well as a value). Pinned equal: tests/test_approval_words_v13520.py.
     S("device.approval_mode", "Approvals in chat", "permissions", "enum",
       "How chat asks before acting, on this device.",
-      options=(("always_ask", "Ask for approval"), ("approve_for_me", "Approve for me"),
-               ("yolo", "Auto-approve")),
+      options=(("always_ask", "Ask first"), ("approve_for_me", "Ask when risky"),
+               ("yolo", "Don't ask")),
       tier="allow", floor_when=("yolo",), store="device", aliases=("approvals", "approval mode")),
     S("device.chat_persona", "Chat persona", "appearance", "string",
       "The persona new chats start with on this device.", tier="allow", store="device"),

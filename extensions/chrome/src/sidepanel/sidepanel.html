@@ -39,7 +39,9 @@
   `open` (the `history` frame); the `+` icon in the header starts a new one.
   The header's Auto-allow switch (`#auto`, shown at Interactive) is the ONE
   control for the ordinary approval cards: on, page actions run without a card;
-  off, the card is Allow · Always allow · Deny. Payments, passwords, deletions
+  off, the card is Allow · Allow all page actions · Deny (v1.352.0: it said
+  "Always allow", which in the chat means ONE exact call, not every tab).
+  Payments, passwords, deletions
   and pages that tried to instruct Jarvis still ask — that floor is the
   daemon's, not this page's. Each turn's steps fold into a collapsed
   <details class="work"> whose summary reads "Working · <the latest step>"
@@ -698,10 +700,12 @@
       <div class="row">
         <button class="primary" id="approve" type="button" title="Runs this one action.">Allow</button>
         <!-- v1.270.0: the switch, from the card. This action runs and Auto-allow
-             turns on, so nothing asks again until you turn it off. The daemon's
+             turns on, so nothing asks again until you turn it off. v1.352.0
+             (G24): named for what it does, "Allow all page actions"; the
+             chat's "Always allow exactly this" is one exact call. The daemon's
              "tab" and "task" scopes still exist for the chat page's card; the
              sidebar offers ONE wider answer, the one the user asked for. -->
-        <button id="approve-always" type="button" title="Runs this action and turns Auto-allow on: page actions stop asking until you turn it off. Payments, passwords and deletions still ask.">Always allow</button>
+        <button id="approve-always" type="button" title="Runs this action and turns Auto-allow on for every tab: page actions stop asking until you turn it off. Payments, passwords and deletions still ask.">Allow all page actions</button>
         <button class="ghost" id="deny" type="button" title="Refuses this action; Jarvis is told you declined.">Deny</button>
       </div>
     </div>

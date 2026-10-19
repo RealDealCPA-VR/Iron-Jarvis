@@ -38,6 +38,18 @@ import { MISSION_ORIGIN, sessionHref } from "@/lib/missionLinks";
 import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
 import { PLAN_TOOL } from "@/lib/toolWords";
+// v1.352.0 (G24/G25): the chat card's own answer words, dependency-free.
+import {
+  ALLOW_ONCE,
+  ALWAYS_EXACT,
+  ANSWERED_LINGER_MS,
+  DENY,
+  answeredLine,
+  askSentence,
+  runSubject,
+  scopeLabel,
+  undoLine,
+} from "@/lib/approvalWords";
 
 /** One /diagnostics → background_loops entry (daemon/app.py `_tick`). */
 type LoopHealth = { ok?: boolean; last_error?: string; error?: string; at?: string };
@@ -955,6 +967,14 @@ interface PendingAgentApproval {
   /** v1.350.0: approved once or declined, nothing wider (the plan approval
    *  says `once_only`): the row offers no "Allow for this run". */
   onceOnly?: boolean;
+  /** v1.352.0 (G24): the first line of the asking run's task ("for: …") and
+   *  its origin ("schedule:nightly-brief" → "Your nightly-brief run"). Absent
+   *  on an older daemon: the row says "An agent run" and no "for:" line. */
+  task?: string;
+  origin?: string;
+  /** v1.352.0 (G25): the daemon's undo verdict for the tool — true = it can
+   *  be undone, false = it may not be; absent = nothing to undo (a read). */
+  reversible?: boolean;
 }
 
 /** v1.351.0 (G03, with G05): a CHAT turn parked on its own approval card
@@ -1027,26 +1047,44 @@ function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
     ...(typeof r.mission_id === "string" && r.mission_id ? { missionId: r.mission_id } : {}),
     ...(typeof r.project_id === "string" && r.project_id ? { projectId: r.project_id } : {}),
     ...(r.once_only === true ? { onceOnly: true } : {}),
+    // v1.352.0: words about the run (a string, never arguments) and the undo
+    // verdict (a real boolean only).
+    ...(typeof r.task === "string" && r.task.trim() ? { task: r.task.trim() } : {}),
+    ...(typeof r.origin === "string" && r.origin.trim() ? { origin: r.origin.trim() } : {}),
+    ...(typeof r.reversible === "boolean" ? { reversible: r.reversible } : {}),
   };
 }
 
-/** One paused agent ask in the dropdown: tool name + session link + Approve
- *  once / Allow for this run / Deny, POSTing the same route the chat card
- *  posts. "Allow for this run" (v1.232.0, audit A9) is the card's
+/** One paused agent ask in the dropdown: WHO asks and WHAT it wants, in the
+ *  chat card's words (v1.352.0, G24): "Your nightly-brief run wants to save
+ *  a file" (the raw tool id in the title), "for: <the run's task>", whether
+ *  it can be undone (G25), and the card's three answers — Allow once / Allow
+ *  for this run / Deny (lib/approvalWords) — POSTing the same route the chat
+ *  card posts. "Allow for this run" (v1.232.0, audit A9) is the card's
  *  "conversation" answer: the daemon widens the run's grant, releases every
  *  sibling ask of the same tool at once (a 28-file batch is one click, not
  *  28 at 15 s poll lag each) and keeps the grant for the run's continues. A
  *  404 means it was answered elsewhere or timed out (the pause window is
  *  bounded) — the row leaves without a retry; any other failure keeps the
- *  row answerable. */
+ *  row answerable. A landed answer hands the row to the bell, which says
+ *  what happened for a few seconds (`AgentAnsweredRow`) before it leaves. */
 type AgentAnswer = "once" | "conversation" | "deny" | "always";
+
+/** Where a run's ask opens: its mission screen, else its session page. */
+function agentAskHref(ask: PendingAgentApproval): string | null {
+  if (ask.missionId) return missionPath(ask.missionId, ask.projectId ?? "");
+  return ask.sessionId ? `/sessions/${encodeURIComponent(ask.sessionId)}` : null;
+}
 
 function AgentApprovalRow({
   ask,
   onGone,
+  onAnswered,
 }: {
   ask: PendingAgentApproval;
   onGone: (id: string) => void;
+  /** The answer landed: the bell shows the outcome, then drops the row. */
+  onAnswered: (ask: PendingAgentApproval, outcome: "approved" | "denied") => void;
 }) {
   const [busy, setBusy] = useState<AgentAnswer | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1068,9 +1106,13 @@ function AgentApprovalRow({
       setBusy(null); // daemon blip — keep the row answerable
       return;
     }
-    onGone(ask.id); // unmounts this row — no state updates past this point
+    // Unmounts this row (the bell draws the outcome in its place) — no state
+    // updates past this point.
+    onAnswered(ask, decision === "deny" ? "denied" : "approved");
   }
 
+  const planAsk = ask.tool === PLAN_TOOL;
+  const undo = planAsk ? null : undoLine(ask.reversible);
   return (
     <li data-testid="bell-agent-approval" className="px-4 py-3">
       <div className="flex items-start gap-3">
@@ -1081,14 +1123,14 @@ function AgentApprovalRow({
           <span className="block text-sm font-medium text-zinc-100">
             An agent is asking permission
           </span>
-          <p className="mt-0.5 text-[12px] leading-snug text-amber-200">
-            {ask.tool === PLAN_TOOL ? (
+          <p data-testid="bell-approval-line" className="mt-0.5 text-[12px] leading-snug text-amber-200">
+            {planAsk ? (
               // v1.350.0: the plan approval is not a tool to run.
-              <>It wants you to approve its plan</>
+              <>{runSubject(ask.origin)} wants you to approve its plan</>
             ) : (
-              <>
-                It wants to run <span className="font-mono">{ask.tool}</span>
-              </>
+              // v1.352.0: the tool in plain words; the exact id it will run
+              // stays in the title (the record a grant is keyed on).
+              <span title={`The exact tool: ${ask.tool}`}>{askSentence(ask.origin, ask.tool)}</span>
             )}
             {ask.count > 1 ? (
               <span data-testid="bell-approval-count"> × {ask.count} (one answer covers all)</span>
@@ -1098,24 +1140,42 @@ function AgentApprovalRow({
               ? `The run waits up to ${Math.max(1, Math.round(ask.timeoutS / 60))} min for you.`
               : "The run is waiting for you."}
           </p>
-          <div className="mt-1.5 flex items-center gap-1.5">
+          {ask.task ? (
+            <p
+              data-testid="bell-approval-task"
+              title={ask.task}
+              className="mt-0.5 truncate text-[11px] text-zinc-500"
+            >
+              for: {ask.task}
+            </p>
+          ) : null}
+          {undo ? (
+            <p
+              data-testid="bell-approval-undo"
+              data-reversible={ask.reversible ? "true" : "false"}
+              className="mt-0.5 text-[11px] text-zinc-500"
+            >
+              {undo}
+            </p>
+          ) : null}
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               onClick={() => void answer("once")}
               disabled={busy !== null}
               className="btn-accent px-3 py-1.5 text-[12px] disabled:opacity-50"
             >
-              {busy === "once" ? "Approving…" : "Approve once"}
+              {busy === "once" ? "Approving…" : ALLOW_ONCE}
             </button>
-            {!ask.onceOnly && !(ask.tool === PLAN_TOOL) && (
+            {!ask.onceOnly && !planAsk && (
               <button
                 type="button"
                 onClick={() => void answer("conversation")}
                 disabled={busy !== null}
-                title={`Approve ${ask.tool} for the rest of this run. Every pending ask for it clears at once.`}
+                title={`Allow ${ask.tool} for the rest of this run. Every pending ask for it clears at once.`}
                 className="rounded-lg border border-cyan-500/25 bg-cyan-500/[0.06] px-3 py-1.5 text-[12px] text-cyan-200 transition-colors hover:border-cyan-400/40 disabled:opacity-50"
               >
-                {busy === "conversation" ? "Allowing…" : "Allow for this run"}
+                {busy === "conversation" ? "Allowing…" : scopeLabel("run")}
               </button>
             )}
             {ask.canAlways && (
@@ -1129,7 +1189,7 @@ function AgentApprovalRow({
                 title={`Allow ${ask.tool} with exactly these arguments in this run's scope for 30 days. You can take it back on the Autonomy page.`}
                 className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-200 disabled:opacity-50"
               >
-                {busy === "always" ? "Allowing…" : "Always allow exactly this"}
+                {busy === "always" ? "Allowing…" : ALWAYS_EXACT}
               </button>
             )}
             <button
@@ -1138,7 +1198,7 @@ function AgentApprovalRow({
               disabled={busy !== null}
               className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:border-rose-500/30 hover:text-rose-200 disabled:opacity-50"
             >
-              {busy === "deny" ? "Denying…" : "Deny"}
+              {busy === "deny" ? "Denying…" : DENY}
             </button>
           </div>
           {error && <p className="mt-1 text-[11px] text-rose-300">{error}</p>}
@@ -1169,6 +1229,46 @@ function AgentApprovalRow({
             {ask.requestedAt ? <>· {clockTime(ask.requestedAt)}</> : null}
           </span>
         </div>
+      </div>
+    </li>
+  );
+}
+
+/** An agent ask answered from this dropdown (v1.352.0, G24): the row stays
+ *  for `ANSWERED_LINGER_MS` saying what happened — "Approved. The run
+ *  continues · Open run" or "Denied. That action will not run." — so an
+ *  answer never just vanishes. A live region announces it; it never counts
+ *  on the badge (nothing waits on the user any more). */
+function AgentAnsweredRow({
+  ask,
+  outcome,
+}: {
+  ask: PendingAgentApproval;
+  outcome: "approved" | "denied";
+}) {
+  const href = agentAskHref(ask);
+  return (
+    <li data-testid="bell-agent-answered" data-outcome={outcome} className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.03] text-zinc-400">
+          {outcome === "denied" ? <ShieldAlert size={15} /> : <ShieldCheck size={15} />}
+        </span>
+        <p role="status" className="min-w-0 flex-1 pt-1.5 text-[12px] leading-snug text-zinc-300">
+          {answeredLine(outcome)}
+          {outcome === "approved" && !href ? "." : null}
+          {outcome === "approved" && href ? (
+            <>
+              {" · "}
+              <Link
+                data-testid="bell-agent-answered-open"
+                href={href}
+                className="text-accent-soft transition-colors hover:text-accent"
+              >
+                Open run
+              </Link>
+            </>
+          ) : null}
+        </p>
       </div>
     </li>
   );
@@ -1342,6 +1442,35 @@ export function NotificationBell() {
   const handleAgentAskGone = (id: string) => {
     setAnsweredAgentAsks((prev) => new Set(prev).add(id));
     reloadAgentAsks();
+  };
+  // v1.352.0 (G24): an ask answered HERE says what happened for a few
+  // seconds before it leaves. Held by the bell, not the row: the answer's own
+  // `approval.resolved` re-polls the list at once, and a row that lived on
+  // the poll would vanish with it.
+  const [answeredRows, setAnsweredRows] = useState<
+    { ask: PendingAgentApproval; outcome: "approved" | "denied" }[]
+  >([]);
+  const answeredTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  useEffect(() => {
+    const timers = answeredTimers.current;
+    return () => {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+    };
+  }, []);
+  const handleAgentAskAnswered = (ask: PendingAgentApproval, outcome: "approved" | "denied") => {
+    setAnsweredRows((prev) => [...prev.filter((r) => r.ask.id !== ask.id), { ask, outcome }]);
+    handleAgentAskGone(ask.id);
+    const timers = answeredTimers.current;
+    const old = timers.get(ask.id);
+    if (old) clearTimeout(old);
+    timers.set(
+      ask.id,
+      setTimeout(() => {
+        timers.delete(ask.id);
+        setAnsweredRows((prev) => prev.filter((r) => r.ask.id !== ask.id));
+      }, ANSWERED_LINGER_MS),
+    );
   };
 
   // v1.333.0: the busy-runs ask (the newest runs.busy), until it is answered
@@ -1670,7 +1799,8 @@ export function NotificationBell() {
               {count === 0 &&
               activity.length === 0 &&
               awayShown.length === 0 &&
-              conflicts.length === 0 ? (
+              conflicts.length === 0 &&
+              answeredRows.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
                   <Inbox size={22} className="text-zinc-600" />
                   {pollError ? (
@@ -1690,11 +1820,17 @@ export function NotificationBell() {
                   {/* Paused agent asks first — the pause window is bounded, so
                       these degrade into a silent deny if left waiting. Section
                       absent entirely when none pend (honest empty behavior). */}
+                  {/* v1.352.0 (G24): what an answer given here did, for a
+                      few seconds, where its row was. */}
+                  {answeredRows.map(({ ask, outcome }) => (
+                    <AgentAnsweredRow key={`answered:${ask.id}`} ask={ask} outcome={outcome} />
+                  ))}
                   {agentAsks.map((ask) => (
                     <AgentApprovalRow
                       key={ask.id}
                       ask={ask}
                       onGone={handleAgentAskGone}
+                      onAnswered={handleAgentAskAnswered}
                     />
                   ))}
 

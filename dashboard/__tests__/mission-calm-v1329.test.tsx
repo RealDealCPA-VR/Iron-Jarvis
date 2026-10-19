@@ -161,7 +161,9 @@ describe("a teammate card says the mock in the chat's words", () => {
 
   it("control: a real model keeps the receipt's tense and the quiet colour", async () => {
     const line = await modelLine(member({ provider: "fleet-custom", model: "glm-5.3-flash" }));
-    expect(line.textContent).toBe("Answered by fleet-custom · glm-5.3-flash");
+    // v1.352.0 (G23): "<verb> <model> on <endpoint>"; the raw stamp is the title.
+    expect(line.textContent).toBe("Answered by glm-5.3-flash on fleet-custom");
+    expect(line.getAttribute("title")).toBe("fleet-custom · glm-5.3-flash");
     expect(line.className).toContain("text-zinc-500");
     expect(line.className).not.toContain("tone-warn");
   });

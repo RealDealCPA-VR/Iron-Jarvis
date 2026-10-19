@@ -61,14 +61,16 @@ afterEach(() => cleanup());
 
 describe("ApprovalCard", () => {
   it("shows the exact command before asking for a decision", () => {
-    render(<ApprovalCard approval={APPROVAL} />);
+    // v1.352.0 (G24): the chat's card (scope "chat") names its wider answer
+    // "Allow for this chat"; an agent run's card says "for this run".
+    render(<ApprovalCard approval={APPROVAL} scope="chat" />);
     expect(screen.getByTestId("chat-approval-card")).toBeInTheDocument();
     expect(screen.getByText("shell")).toBeInTheDocument();
     // The payload, verbatim, in a block — not a summary of it.
     expect(screen.getByText("git status")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /allow once/i })).toBeEnabled();
     expect(
-      screen.getByRole("button", { name: /allow for this conversation/i }),
+      screen.getByRole("button", { name: /allow for this chat/i }),
     ).toBeEnabled();
     expect(screen.getByRole("button", { name: /deny/i })).toBeEnabled();
   });
@@ -89,7 +91,7 @@ describe("ApprovalCard", () => {
       <ApprovalCard approval={APPROVAL} onConversation={onConversation} />,
     );
     fireEvent.click(
-      screen.getByRole("button", { name: /allow for this conversation/i }),
+      screen.getByRole("button", { name: /allow for this chat/i }),
     );
     await waitFor(() => expect(onConversation).toHaveBeenCalledWith("shell"));
     unmount();

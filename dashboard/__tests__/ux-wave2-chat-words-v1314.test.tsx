@@ -507,7 +507,7 @@ function leadOf(re: RegExp): HTMLElement {
 describe("approval card says the action in words (approval-card-tool-ids)", () => {
   it("write_file leads with 'save a file'; the exact tool id and every answer stay", () => {
     render(
-      <ApprovalCard approval={{ id: "apr_w", callId: "c1", tool: "write_file", args: { path: LONG_PATH } }} />,
+      <ApprovalCard approval={{ id: "apr_w", callId: "c1", tool: "write_file", args: { path: LONG_PATH } }} scope="chat" />,
     );
     const card = screen.getByTestId("chat-approval-card");
     const lead = leadOf(/Your call/);
@@ -517,14 +517,14 @@ describe("approval card says the action in words (approval-card-tool-ids)", () =
     expect(card.getAttribute("aria-label")).toBe("Approve write_file?");
     // Every consent answer is still there.
     expect(screen.getByRole("button", { name: "Allow once" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Allow for this conversation" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow for this chat" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
     expect(screen.getByTestId("approval-waiting")).toBeTruthy();
   });
 
   it("a long argument wraps in full instead of being cut off", () => {
     render(
-      <ApprovalCard approval={{ id: "apr_w", callId: "c1", tool: "write_file", args: { path: LONG_PATH } }} />,
+      <ApprovalCard approval={{ id: "apr_w", callId: "c1", tool: "write_file", args: { path: LONG_PATH } }} scope="chat" />,
     );
     const line = screen.getByText((_, el) => !!el && el.tagName === "P" && (el.textContent ?? "").includes(LONG_PATH));
     expect(line.textContent).toContain(LONG_PATH);

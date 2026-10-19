@@ -297,7 +297,7 @@ describe("on the chat page: the plan to approve, then the checklist ticking", ()
     const card = await planCard();
     expect(within(card).getAllByTestId("approval-plan-step").map((li) => li.textContent)).toEqual(GOALS);
     expect(card.textContent).toContain("The assistant wants to follow this plan");
-    expect(within(card).queryByRole("button", { name: "Allow for this conversation" })).toBeNull();
+    expect(within(card).queryByRole("button", { name: "Allow for this chat" })).toBeNull();
     expect(within(card).queryByRole("button", { name: "Always allow exactly this" })).toBeNull();
     expect(within(card).queryByTestId("approval-local-only")).toBeNull();
     expect(within(card).getByRole("button", { name: "Deny" })).toBeTruthy();
@@ -325,7 +325,7 @@ describe("on the chat page: the plan to approve, then the checklist ticking", ()
     // already read, so the card still shows what will be approved.
     expect(FX.allow.pending_row).not.toHaveProperty("args");
     expect(within(card).getAllByTestId("approval-plan-step").map((li) => li.textContent)).toEqual(GOALS);
-    expect(within(card).queryByRole("button", { name: "Allow for this conversation" })).toBeNull();
+    expect(within(card).queryByRole("button", { name: "Allow for this chat" })).toBeNull();
     expect(within(card).queryByTestId("approval-local-only")).toBeNull();
     fireEvent.click(within(card).getByRole("button", { name: "Deny" }));
     await waitFor(() =>
@@ -348,14 +348,14 @@ describe("on the chat page: the plan to approve, then the checklist ticking", ()
     render(<ChatPage />);
     const live = await screen.findByTestId("chat-approval-card", {}, { timeout: 10_000 });
     expect(live.getAttribute("aria-label")).toBe("Approve web_fetch?");
-    expect(within(live).queryByRole("button", { name: "Allow for this conversation" })).toBeNull();
+    expect(within(live).queryByRole("button", { name: "Allow for this chat" })).toBeNull();
     // The polled ask is next in the dock: answer the first to bring it up.
     await waitFor(() => expect(screen.getByTestId("dock-ask-count").textContent).toBe("1 of 2"));
     fireEvent.click(within(live).getByRole("button", { name: "Deny" }));
     await land({ type: "approval.resolved", session_id: "s1", payload: { approval_id: "ask-live", decision: "deny" } });
     await waitFor(() => expect(screen.getByTestId("chat-approval-card").getAttribute("aria-label")).toBe("Approve web_search?"));
     const polled = screen.getByTestId("chat-approval-card");
-    expect(within(polled).queryByRole("button", { name: "Allow for this conversation" })).toBeNull();
+    expect(within(polled).queryByRole("button", { name: "Allow for this chat" })).toBeNull();
   }, 20_000);
 
   it("anti-vacuity: any other ask of the same run still offers the conversation answer", async () => {
@@ -369,7 +369,7 @@ describe("on the chat page: the plan to approve, then the checklist ticking", ()
     ];
     render(<ChatPage />);
     const card = await screen.findByTestId("chat-approval-card", {}, { timeout: 10_000 });
-    expect(await within(card).findByRole("button", { name: "Allow for this conversation" })).toBeTruthy();
+    expect(await within(card).findByRole("button", { name: "Allow for this chat" })).toBeTruthy();
     expect(within(card).queryByTestId("approval-plan")).toBeNull();
   }, 20_000);
 });

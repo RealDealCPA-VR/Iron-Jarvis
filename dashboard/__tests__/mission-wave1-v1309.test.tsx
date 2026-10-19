@@ -716,8 +716,10 @@ describe("the mission says which model did the work", () => {
     at("?mission=s1");
     render(<AgentsPage />);
     const receipt = await screen.findByTestId("mission-receipt");
-    expect(receipt.textContent).toContain("claude-cli");
-    expect(receipt.textContent).toContain("claude-opus");
+    // v1.352.0 (G23): the model on the place it ran, in words ("Claude
+    // Code"); the raw stamp stays in the line's title.
+    expect(receipt.textContent).toContain("claude-opus on Claude Code");
+    expect(receipt.querySelector('[title="claude-cli · claude-opus"]')).not.toBeNull();
     expect(receipt.hasAttribute("data-mock")).toBe(false);
   });
 
@@ -819,8 +821,9 @@ describe("one teammate", () => {
     const cards = await screen.findAllByTestId("mission-approval");
     const mine = cards.find((c) => c.textContent?.includes("writer"));
     expect(mine).toBeTruthy();
-    expect(mine!.textContent).toContain("shell");
-    fireEvent.click(within(mine!).getByText("Allow for this task"));
+    // v1.352.0 (G23/G24): the card's words for the tool and its answers.
+    expect(mine!.textContent).toContain("wants to run a command");
+    fireEvent.click(within(mine!).getByText("Allow for this run"));
     await waitFor(() =>
       expect(H.posts.find((p) => p.path === "/chat/approvals/a2")?.body).toEqual({ decision: "conversation" }),
     );
@@ -979,26 +982,26 @@ describe("the receipt says what happened, not 'answered' (review: TurnReceipt ru
     const receipt = await screen.findByTestId("mission-receipt");
     expect(receipt.textContent).toContain("fleet-custom");
     expect(receipt.textContent).not.toMatch(/answered/i);
-    expect(receipt.textContent).toMatch(/^Tried fleet-custom/);
+    expect(receipt.textContent).toMatch(/^Tried glm-5\.3 on fleet-custom/);
   });
 
   it("a stopped mission ran on it, a running one is working on it, a completed one was answered by it", async () => {
     H.api["/sessions/s1/mission"] = ended("cancelled", { provider: "claude-cli", model: "claude-opus" });
     at("?mission=s1");
     render(<AgentsPage />);
-    expect((await screen.findByTestId("mission-receipt")).textContent).toMatch(/^Ran on claude-cli/);
+    expect((await screen.findByTestId("mission-receipt")).textContent).toMatch(/^Ran on claude-opus on Claude Code/);
     cleanup();
 
     H.api["/sessions/s1/mission"] = { ...VIEW, session: { ...VIEW.session, provider: "claude-cli", model: "claude-opus" } };
     at("?mission=s1");
     render(<AgentsPage />);
-    expect((await screen.findByTestId("mission-receipt")).textContent).toMatch(/^Working on claude-cli/);
+    expect((await screen.findByTestId("mission-receipt")).textContent).toMatch(/^Working on claude-opus on Claude Code/);
     cleanup();
 
     H.api["/sessions/s1/mission"] = ended("completed", { provider: "claude-cli", model: "claude-opus" });
     at("?mission=s1");
     render(<AgentsPage />);
-    expect((await screen.findByTestId("mission-receipt")).textContent).toMatch(/^Answered by claude-cli/);
+    expect((await screen.findByTestId("mission-receipt")).textContent).toMatch(/^Answered by claude-opus on Claude Code/);
   });
 });
 

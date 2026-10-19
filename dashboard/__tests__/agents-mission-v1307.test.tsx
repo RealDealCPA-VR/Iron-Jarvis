@@ -417,7 +417,8 @@ describe("the mission screen", () => {
     at("?mission=s1");
     render(<AgentsPage />);
     const card = await screen.findByTestId("mission-approval");
-    expect(card.textContent).toContain("web search");
+    // v1.352.0 (G23): the approval card's words for the tool.
+    expect(card.textContent).toContain("Jarvis wants to search the web");
     fireEvent.click(within(card).getByText("Allow once"));
     await waitFor(() =>
       expect(H.posts.find((p) => p.path === "/chat/approvals/a1")?.body).toEqual({ decision: "once" }),

@@ -41,6 +41,7 @@ from ...memory import commit as _commit
 from ...core.approvals import DECISIONS, ChatApprovals
 from ...core.grants import args_hash as _grant_hash
 from ...core.turns import CHAT_INFLIGHT, TURNS, thread_key
+from ...tools.reversible import reversible_flag as _reversible_flag
 from ...eval.pricing import UsageTally
 from ...providers import egress as _egress
 from ...providers.reasoning import normalize_level
@@ -255,6 +256,32 @@ def _words(items: list[str]) -> str:
 def _sse(event: str, data: dict[str, Any]) -> str:
     """Serialize one Server-Sent Event frame (FX-01 wire format)."""
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+#: How much of an asking run's task the pending listing carries (v1.352.0,
+#: G24): the bell's one "for: …" line, never the whole brief.
+_ASK_TASK_CHARS = 120
+
+
+def _ask_task_line(task: Any) -> str | None:
+    """The first non-blank line of a run's task, whitespace folded, masked
+    (``detections.redact.mask`` — the listing fans out to every page on a
+    poll, and a task may quote a pasted key), cut to ``_ASK_TASK_CHARS`` with
+    an ellipsis. ``None`` when there is no text. Never raises."""
+    try:
+        from ...detections.redact import mask
+
+        for line in str(task or "").splitlines():
+            text = " ".join(line.split())
+            if not text:
+                continue
+            text = str(mask(text) or "")
+            if len(text) > _ASK_TASK_CHARS:
+                text = text[: _ASK_TASK_CHARS - 1].rstrip() + "…"
+            return text or None
+    except Exception:  # noqa: BLE001 — wording only, never a broken listing
+        return None
+    return None
 
 
 #: Seconds of silence on a chat stream before the daemon sends a keepalive
@@ -1092,6 +1119,11 @@ def register(app: FastAPI, d) -> None:
             # reloads mid-ask draws the same two buttons the live event did.
             if payload.get("once_only") is True:
                 meta[aid]["once_only"] = True
+            # v1.352.0 (G25) — a FLAG, never args: whether the asked action
+            # can be undone (the runtime's `approval.requested` carries it;
+            # absent for a read-only tool), so the bell says it too.
+            if isinstance(payload.get("reversible"), bool):
+                meta[aid]["reversible"] = payload["reversible"]
         # Ids with no event row are DROPPED, not padded with "unknown": the
         # chat stream lane files into this same registry but announces via
         # its SSE frame only — that ask's one answering surface is the chat
@@ -1107,14 +1139,22 @@ def register(app: FastAPI, d) -> None:
         # present on EVERY row, null when there is none — so the bell can say
         # "Open the mission" and the user answers the ask IN CONTEXT. Ids
         # only; the never-args rule above is untouched.
-        def _places(session_ids: set[str]) -> dict[str, tuple[str | None, str | None]]:
+        # WHAT THE ASKING RUN IS (v1.352.0, G24): additive ``task`` (the first
+        # line of the run's own task, cut to ``_ASK_TASK_CHARS`` and masked —
+        # the bell's "for: …" line) and ``origin`` (what started it,
+        # "schedule:nightly-brief" — the bell's "Your nightly-brief run"),
+        # both on EVERY row, null when unknown. Read off the SAME Session row
+        # read below, in the same worker hop; never the tool's arguments.
+        def _places(
+            session_ids: set[str],
+        ) -> dict[str, tuple[str | None, str | None, str | None, str | None]]:
             # BLOCKING (one row read + one parent walk per distinct asking
             # session — a handful) — hopped off the loop below. Never raises:
             # an unreadable chain is "no mission", never a broken listing.
             from ...agents.team import MISSION_ORIGIN, mission_root
             from ...core.models import Session
 
-            out: dict[str, tuple[str | None, str | None]] = {}
+            out: dict[str, tuple[str | None, str | None, str | None, str | None]] = {}
             for sid in session_ids:
                 if not sid:
                     continue
@@ -1122,6 +1162,8 @@ def register(app: FastAPI, d) -> None:
                     with session_scope(d.platform.engine) as db:
                         row = db.get(Session, sid)
                         own_project = getattr(row, "project_id", None) if row else None
+                        task_line = _ask_task_line(getattr(row, "task", None) if row else None)
+                        origin = (str(getattr(row, "origin", "") or "").strip() or None) if row else None
                     root = mission_root(d.platform.engine, sid)
                     # Only a coordinator-origin ROOT is a mission: a plain job
                     # is its own root and never invents one.
@@ -1132,16 +1174,20 @@ def register(app: FastAPI, d) -> None:
                     project_id = own_project or (
                         getattr(root, "project_id", None) if is_mission else None
                     )
-                    out[sid] = (mission_id, project_id or None)
+                    out[sid] = (mission_id, project_id or None, task_line, origin)
                 except Exception:  # noqa: BLE001
-                    out[sid] = (None, None)
+                    out[sid] = (None, None, None, None)
             return out
 
         places = await asyncio.to_thread(_places, {row["session_id"] for row in listed})
         for row in listed:
-            mission_id, project_id = places.get(row["session_id"], (None, None))
+            mission_id, project_id, task_line, origin = places.get(
+                row["session_id"], (None, None, None, None)
+            )
             row["mission_id"] = mission_id
             row["project_id"] = project_id
+            row["task"] = task_line
+            row["origin"] = origin
         # v1.351.0 (G05): the chats waiting on the user with nobody watching,
         # after the agent asks (their own shape — see the docstring).
         return {"approvals": listed + chat_rows}
@@ -4326,6 +4372,16 @@ async def chat_stream(
                                     if CHAT_ASK_TIMEOUT_S else 0
                                 ),
                             }
+                            # CAN IT BE UNDONE (v1.352.0, G25): the tool's
+                            # own undo contract, so the card says "You can
+                            # undo this" / "This may not be undoable" BEFORE
+                            # the user answers. Left out for a read-only
+                            # tool (nothing to undo). MIRROR NOTE (lock-step):
+                            # the runtime's `approval.requested` carries the
+                            # same key from the same helper.
+                            _rev = _reversible_flag(_t)
+                            if _rev is not None:
+                                _frame["reversible"] = _rev
                             if _sc is not None:
                                 # v1.346.0: what this call would spend, in
                                 # the service's words — the card's one quiet

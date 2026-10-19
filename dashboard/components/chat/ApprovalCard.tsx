@@ -13,7 +13,9 @@
 // THE THREE ANSWERS MEAN DIFFERENT THINGS and the card says so rather than
 // leaving it to hover text:
 //   Allow once             this call only; the next call asks again.
-//   Allow for conversation the rest of this turn is granted server-side, and
+//   Allow for this chat    (the `conversation` answer; "Allow for this run"
+//                          on an agent run's ask, v1.352.0)
+//                          the rest of this turn is granted server-side, and
 //                          `onConversation` hands the tool to the composer's
 //                          armed set so LATER turns arm it via the existing
 //                          "+"-menu machinery — one grant store, not two.
@@ -63,15 +65,57 @@
 // text cut with "Show in full"; a path is never cut). It draws the REDACTED
 // arguments the approval frame carries and nothing more. The buttons, their
 // words, ids and the dock's keys are unchanged.
+//
+// ONE SET OF WORDS (v1.352.0, G24): the answers are named in lib/approvalWords
+// and re-exported from here, so the bell and the mission screen say exactly
+// what this card says. The wider answer is named for WHERE it applies: "Allow
+// for this chat" on a chat's card (docked, or with a composer to arm), "Allow
+// for this run" on an agent run's ask (the session page, a project's paused
+// task) — an agent run has no conversation. The posted value is still
+// `conversation`.
+//
+// CAN IT BE UNDONE (v1.352.0, G25): the daemon says whether the tool keeps an
+// inverse (`reversible`), and the card says it in ONE quiet line under what
+// will run: "You can undo this." or "This may not be undoable." A read-only
+// tool, and the plan ask, get no line: there is nothing to undo.
 
 import { useState } from "react";
 import { ApprovalPreview } from "@/components/chat/ApprovalPreview";
 import { LoaderInline } from "@/components/ui";
 import { post } from "@/lib/api";
 import { exampleValue } from "@/lib/approvalPreview";
+import {
+  ALLOW_ONCE,
+  ALLOW_TAB,
+  ALWAYS_EXACT,
+  DENY,
+  scopeLabel,
+  scopeNoun,
+  undoLine,
+  type ApprovalScope,
+} from "@/lib/approvalWords";
 import { isBuiltinBrowserTool, PLAN_TOOL, toolWords } from "@/lib/toolWords";
 import type { PendingApproval } from "@/lib/useChatStream";
 import { ShieldQuestion } from "lucide-react";
+
+// The card's labels ARE the app's approval words: one definition, read by
+// every answering surface (the bell imports lib/approvalWords directly, so it
+// never pulls this card into every page).
+export {
+  ALLOW_ONCE,
+  ALLOW_TAB,
+  ALWAYS_EXACT,
+  APPROVAL_LABELS,
+  DENY,
+  scopeLabel,
+  undoLine,
+  type ApprovalScope,
+} from "@/lib/approvalWords";
+
+/** The ask as this card reads it: the stream's pending approval, plus the
+ *  daemon's `reversible` flag (G25; absent on an older daemon and for a
+ *  read-only tool). */
+export type ApprovalAsk = PendingApproval & { reversible?: boolean };
 
 /** One example call of a batch, on one compact line. Strings are verbatim (a
  *  path is the record); a nested value is summarised, never raw JSON. */
@@ -103,16 +147,22 @@ export function ApprovalCard({
   approval,
   onConversation,
   docked = false,
+  scope,
 }: {
-  approval: PendingApproval;
-  /** Called on "Allow for this conversation" so the page adds the tool to the
+  approval: ApprovalAsk;
+  /** Called on "Allow for this chat" so the page adds the tool to the
    *  composer's armed set — the persistence half of that button's promise. */
   onConversation?: (tool: string) => void;
   /** Calm chat W1-6 (v1.326.0): drawn in the composer's place. The dock's
    *  own card (components/chat/DockAsk) is the box, so the card drops its
    *  own border and tint and keeps only its padding. */
   docked?: boolean;
+  /** v1.352.0 (G24): where the wider answer applies. Unset = a chat's card
+   *  when it is docked or has a composer to arm (`onConversation`), else an
+   *  agent run's ask (the session page, a project's paused task). */
+  scope?: ApprovalScope;
 }) {
+  const where: ApprovalScope = scope ?? (docked || onConversation ? "chat" : "run");
   // Which button is in flight; the card disables itself after one click. The
   // resolved frame (or stream end) unmounts it — a second decision has no
   // write path.
@@ -169,6 +219,8 @@ export function ApprovalCard({
       {approval.tool}
     </code>
   );
+  const undo = undoLine(approval.reversible);
+  const noun = scopeNoun(where);
   return (
     <div
       role="alertdialog"
@@ -224,6 +276,18 @@ export function ApprovalCard({
         </p>
       )}
 
+      {/* v1.352.0 (G25): can it be undone, in the cost line's quiet style.
+          Never on a plan ask (a plan is not an action). */}
+      {!planAsk && undo && (
+        <p
+          data-testid="approval-undo"
+          data-reversible={approval.reversible ? "true" : "false"}
+          className="text-[11px] leading-relaxed text-zinc-400"
+        >
+          {undo}
+        </p>
+      )}
+
       <p data-testid="approval-waiting" className="text-[11px] font-medium text-tone-warn">
         {waitingLine(approval.timeoutS)}
       </p>
@@ -240,15 +304,16 @@ export function ApprovalCard({
           </>
         ) : batch ? (
           <>
-            “Allow these {count}” runs exactly these calls; “this conversation”
-            stops asking for {approval.tool} here; Deny refuses all {count} and
-            the assistant is told you declined.
+            “Allow these {count}” runs exactly these calls; “{noun}” stops
+            asking for {approval.tool} here; Deny refuses all {count} and the
+            assistant is told you declined.
           </>
         ) : (
           <>
-            The turn is paused until you answer. “Once” runs only this call;
-            “this conversation” stops asking for {approval.tool} here; Deny
-            refuses it and the assistant is told you declined.
+            The {where === "run" ? "run" : "turn"} is paused until you answer.
+            “Once” runs only this call; “{noun}” stops asking for{" "}
+            {approval.tool} here; Deny refuses it and the assistant is told you
+            declined.
           </>
         )}
       </p>
@@ -287,7 +352,7 @@ export function ApprovalCard({
             disabled={!!sent}
             className="btn-accent text-xs"
           >
-            {sent === "tab" ? <LoaderInline label="Allowing…" /> : "Allow for this tab"}
+            {sent === "tab" ? <LoaderInline label="Allowing…" /> : ALLOW_TAB}
           </button>
         )}
         <button
@@ -303,21 +368,19 @@ export function ApprovalCard({
           ) : batch ? (
             `Allow these ${count}`
           ) : (
-            "Allow once"
+            ALLOW_ONCE
           )}
         </button>
         {!onceOnly && (
           <button
             type="button"
+            data-testid="approval-scope"
+            data-scope={where}
             onClick={() => void decide("conversation")}
             disabled={!!sent}
             className="btn-ghost text-xs"
           >
-            {sent === "conversation" ? (
-              <LoaderInline label="Allowing…" />
-            ) : (
-              "Allow for this conversation"
-            )}
+            {sent === "conversation" ? <LoaderInline label="Allowing…" /> : scopeLabel(where)}
           </button>
         )}
         {canAlways && (
@@ -329,7 +392,7 @@ export function ApprovalCard({
             title={`Allow ${approval.tool} with exactly these arguments here for 30 days`}
             className="btn-ghost text-xs"
           >
-            {sent === "always" ? <LoaderInline label="Allowing…" /> : "Always allow exactly this"}
+            {sent === "always" ? <LoaderInline label="Allowing…" /> : ALWAYS_EXACT}
           </button>
         )}
         <button
@@ -339,7 +402,7 @@ export function ApprovalCard({
           disabled={!!sent}
           className="btn-ghost text-xs text-tone-danger"
         >
-          {sent === "deny" ? <LoaderInline label="Declining…" /> : batch ? `Deny all ${count}` : "Deny"}
+          {sent === "deny" ? <LoaderInline label="Declining…" /> : batch ? `Deny all ${count}` : DENY}
         </button>
       </div>
     </div>

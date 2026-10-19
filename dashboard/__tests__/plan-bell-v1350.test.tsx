@@ -74,14 +74,19 @@ beforeEach(() => getMock.mockReset());
 afterEach(() => cleanup());
 
 describe("the bell's plan ask", () => {
-  it("reads 'It wants you to approve its plan' and offers Approve once and Deny only", async () => {
+  // v1.352.0 (G24, changed on purpose): the row names who asks ("An agent
+  // run", "Your nightly-brief run") and answers in the chat card's words
+  // ("Allow once"); the tool in plain words, its id in the title.
+  it("reads 'An agent run wants you to approve its plan' and offers Allow once and Deny only", async () => {
     expect(ROW.tool).toBe("approve_plan");
     expect(ROW.once_only).toBe(true);
     mockPending([ROW]);
     render(<NotificationBell />);
     const row = await openRow();
-    expect(sentence(row)).toBe("It wants you to approve its plan. The run is waiting for you.");
-    expect(within(row).getByRole("button", { name: "Approve once" })).toBeTruthy();
+    expect(sentence(row)).toBe("An agent run wants you to approve its plan. The run is waiting for you.");
+    expect(within(row).getByRole("button", { name: "Allow once" })).toBeTruthy();
+    // A plan is not an action: no undo line.
+    expect(within(row).queryByTestId("bell-approval-undo")).toBeNull();
     expect(within(row).getByRole("button", { name: "Deny" })).toBeTruthy();
     expect(within(row).queryByRole("button", { name: "Allow for this run" })).toBeNull();
   });
@@ -91,7 +96,7 @@ describe("the bell's plan ask", () => {
     mockPending([bare]);
     render(<NotificationBell />);
     const row = await openRow();
-    expect(sentence(row)).toBe("It wants you to approve its plan. The run is waiting for you.");
+    expect(sentence(row)).toBe("An agent run wants you to approve its plan. The run is waiting for you.");
     expect(within(row).queryByRole("button", { name: "Allow for this run" })).toBeNull();
   });
 
@@ -99,7 +104,7 @@ describe("the bell's plan ask", () => {
     mockPending([{ id: "apr_9", tool: "web_fetch", session_id: "s1", requested_at: "2026-10-17T12:00:00", once_only: true }]);
     render(<NotificationBell />);
     const row = await openRow();
-    expect(sentence(row)).toBe("It wants to run web_fetch. The run is waiting for you.");
+    expect(sentence(row)).toBe("An agent run wants to read a web page. The run is waiting for you.");
     expect(within(row).queryByRole("button", { name: "Allow for this run" })).toBeNull();
   });
 
@@ -107,7 +112,7 @@ describe("the bell's plan ask", () => {
     mockPending([{ id: "apr_1", tool: "edit_file", session_id: "s1", requested_at: "2026-10-10T10:00:00" }]);
     render(<NotificationBell />);
     const row = await openRow();
-    expect(sentence(row)).toBe("It wants to run edit_file. The run is waiting for you.");
+    expect(sentence(row)).toBe("An agent run wants to change a file. The run is waiting for you.");
     expect(within(row).getByRole("button", { name: "Allow for this run" })).toBeTruthy();
   });
 });

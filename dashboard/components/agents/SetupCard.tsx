@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { API_BASE, ApiError, del, get, ijToken, patch, post, put } from "@/lib/api";
 import type { AgentApprovalMode, DynamicAgent, ModelOption } from "@/lib/types";
+import { PERMISSION_LEVELS } from "@/lib/permissionLevels";
 import { AllowanceMeter } from "./RosterStrip";
 import {
   Badge,
@@ -601,10 +602,40 @@ function reportsToLabel(value: string): string {
   return agentLabel(value, { builtin: !value.includes(":") });
 }
 
-const APPROVAL_OPTIONS: { value: AgentApprovalMode; label: string }[] = [
-  { value: "", label: "Ask me as usual" },
-  { value: "approve_for_me", label: "Approve for me" },
-  { value: "always_ask", label: "Always ask me" },
+/** v1.352.0 (G24): the chat chip's own words for the approval levels
+ *  (lib/permissionLevels), strictest first like the chip's menu. An agent's
+ *  record stores "" (the usual: what the door that starts it asks for, else
+ *  Ask when risky), "always_ask" or "approve_for_me". "Don't ask" is shown
+ *  for the same three words and cannot be picked: it is consent to one
+ *  watched chat turn, never a standing posture for an agent working on its
+ *  own (the daemon lands it as Ask when risky at every door). */
+const APPROVAL_OPTIONS: {
+  value: AgentApprovalMode | "yolo";
+  label: string;
+  title: string;
+  disabled?: boolean;
+}[] = [
+  {
+    value: "",
+    label: `As usual (${PERMISSION_LEVELS.approve_for_me.label})`,
+    title: "Follows the chat or job that starts it; on its own it asks when risky.",
+  },
+  {
+    value: "always_ask",
+    label: PERMISSION_LEVELS.always_ask.label,
+    title: PERMISSION_LEVELS.always_ask.description,
+  },
+  {
+    value: "approve_for_me",
+    label: PERMISSION_LEVELS.approve_for_me.label,
+    title: PERMISSION_LEVELS.approve_for_me.description,
+  },
+  {
+    value: "yolo",
+    label: `${PERMISSION_LEVELS.yolo.label} (chat only)`,
+    title: "Only a chat turn you are watching can skip the asks. An agent always asks when risky.",
+    disabled: true,
+  },
 ];
 
 /**
@@ -668,7 +699,7 @@ function EmployeeFields({
             className="field text-xs"
           >
             {APPROVAL_OPTIONS.map((o) => (
-              <option key={o.value || "usual"} value={o.value}>
+              <option key={o.value || "usual"} value={o.value} title={o.title} disabled={o.disabled}>
                 {o.label}
               </option>
             ))}

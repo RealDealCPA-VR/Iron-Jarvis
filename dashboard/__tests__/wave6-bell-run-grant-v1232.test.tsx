@@ -109,9 +109,10 @@ describe("A9 — the bell offers a grant wider than one call", () => {
     });
   });
 
-  it("Approve once still posts 'once' — the new answer did not replace it", async () => {
+  // v1.352.0 (G24): "Approve once" is the chat card's "Allow once" now.
+  it("Allow once still posts 'once' — the new answer did not replace it", async () => {
     await openBell();
-    fireEvent.click(screen.getAllByRole("button", { name: /^approve once$/i })[1]);
+    fireEvent.click(screen.getAllByRole("button", { name: /^allow once$/i })[1]);
     await waitFor(() => {
       expect(postMock).toHaveBeenCalledWith("/chat/approvals/apr_2", { decision: "once" });
     });

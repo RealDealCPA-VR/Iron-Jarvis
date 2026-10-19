@@ -44,7 +44,7 @@ import {
 import type { PendingApproval } from "@/lib/useChatStream";
 
 const card = (approval: Omit<PendingApproval, "callId"> & { callId?: string }) =>
-  render(<ApprovalCard approval={{ callId: "c1", ...approval }} />);
+  render(<ApprovalCard approval={{ callId: "c1", ...approval }} scope="chat" />);
 
 const preview = () => screen.getByTestId("approval-preview");
 const rowsOf = (el: HTMLElement, kind?: string) =>
@@ -56,7 +56,8 @@ const numbered = (n: number, prefix = "line") =>
 
 const decisionButtons = () => {
   expect(screen.getByRole("button", { name: "Allow once" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Allow for this conversation" })).toBeTruthy();
+  // v1.352.0 (G24): the chat card names its wider answer for the chat.
+  expect(screen.getByRole("button", { name: "Allow for this chat" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
 };
 

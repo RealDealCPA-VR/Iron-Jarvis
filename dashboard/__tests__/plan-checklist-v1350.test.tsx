@@ -1148,7 +1148,9 @@ describe("the plan ask: approve_plan's steps as a numbered list on the ordinary 
     // (a listing or a session row carries no flags): Allow once and Deny, no
     // conversation answer, and not the local-only line.
     expect(screen.getByRole("button", { name: "Allow once" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Allow for this conversation" })).toBeNull();
+    // v1.352.0 (G24): the wider answer is named for its scope; neither shows.
+    expect(screen.queryByRole("button", { name: /^Allow for this (chat|run|conversation)$/ })).toBeNull();
+    expect(screen.queryByTestId("approval-scope")).toBeNull();
     expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
     expect(screen.queryByTestId("approval-local-only")).toBeNull();
     expect(screen.getByText(/No step runs until you answer\. “Allow once” lets it follow this plan; Deny ends the run before any step runs\./)).toBeTruthy();

@@ -268,7 +268,8 @@ describe("a mission's paused ask in the bell opens the mission (W2-5)", () => {
     expect(link.getAttribute("href")).toBe(missionPath("m1", "p1"));
     // The answer buttons stay on the row: the link adds context, it does not
     // replace answering from the bell.
-    expect(within(row).getByRole("button", { name: "Approve once" })).toBeTruthy();
+    // v1.352.0 (G24): the chat card's words.
+    expect(within(row).getByRole("button", { name: "Allow once" })).toBeTruthy();
   });
 
   it("a mission with no project opens /agents?mission=<id> alone", async () => {
@@ -299,7 +300,9 @@ describe("a teammate card's model line follows the member's status (the receipt 
     at("?mission=s1");
     render(<AgentsPage />);
     const text = await modelLine("writer");
-    expect(text).toMatch(/^Tried fleet-custom/);
+    // v1.352.0 (G23): "<verb> <model> on <endpoint>" (no catalog here, so
+    // the endpoint reads as its id).
+    expect(text).toMatch(/^Tried glm-5\.3-flash on fleet-custom/);
     expect(text).not.toMatch(/answered/i);
   });
 
@@ -310,15 +313,15 @@ describe("a teammate card's model line follows the member's status (the receipt 
     ]);
     at("?mission=s1");
     render(<AgentsPage />);
-    expect(await modelLine("writer")).toMatch(/^Working on fleet-custom/);
-    expect(await modelLine("checker")).toMatch(/^Working on fleet-custom/);
+    expect(await modelLine("writer")).toMatch(/^Working on glm-5\.3-flash on fleet-custom/);
+    expect(await modelLine("checker")).toMatch(/^Working on glm-5\.3-flash on fleet-custom/);
   });
 
   it("a DONE teammate was answered by it", async () => {
     H.api["/sessions/s1/mission"] = view("completed", [member("researcher", "done")]);
     at("?mission=s1");
     render(<AgentsPage />);
-    expect(await modelLine("researcher")).toMatch(/^Answered by fleet-custom · glm-5\.3-flash/);
+    expect(await modelLine("researcher")).toMatch(/^Answered by glm-5\.3-flash on fleet-custom/);
   });
 
   it("control: a STOPPED teammate ran on it, and a mock teammate still says no real model ran", async () => {
@@ -328,7 +331,7 @@ describe("a teammate card's model line follows the member's status (the receipt 
     ]);
     at("?mission=s1");
     render(<AgentsPage />);
-    expect(await modelLine("writer")).toMatch(/^Ran on fleet-custom/);
+    expect(await modelLine("writer")).toMatch(/^Ran on glm-5\.3-flash on fleet-custom/);
     expect(await modelLine("researcher")).toMatch(/no real model ran/i);
   });
 });

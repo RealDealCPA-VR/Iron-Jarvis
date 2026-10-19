@@ -40,7 +40,13 @@ def _client(tmp_path) -> TestClient:
 # v1.247.0: + the wait (a number) — still never args.
 # v1.310.0 (W2-5): + mission_id / project_id (ids, null when none) so the bell
 # can open the mission — still never args.
-ALLOWED_KEYS = {"id", "tool", "session_id", "requested_at", "timeout_s", "mission_id", "project_id"}
+# v1.352.0 (G24, changed on purpose): + task (the asking run's first task line,
+# masked, <= 120 chars) and origin (what started it) on EVERY row, null when
+# unknown — words about the RUN, still never the call's arguments.
+ALLOWED_KEYS = {
+    "id", "tool", "session_id", "requested_at", "timeout_s", "mission_id", "project_id",
+    "task", "origin",
+}
 
 
 def test_no_pending_approvals_is_an_honest_empty_list(tmp_path):

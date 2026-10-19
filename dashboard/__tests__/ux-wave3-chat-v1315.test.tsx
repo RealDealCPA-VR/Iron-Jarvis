@@ -821,11 +821,11 @@ const PY_BROWSER_TOOLS = Array.from(
 
 describe("the tab answer is for the BUILT-IN browser tools only (carry-approval-browser-list)", () => {
   it("an agent-made browser_backup gets every other answer but not 'Allow for this tab'", () => {
-    render(<ApprovalCard approval={{ id: "apr_x", callId: "c1", tool: "browser_backup", args: {} }} />);
+    render(<ApprovalCard approval={{ id: "apr_x", callId: "c1", tool: "browser_backup", args: {} }} scope="chat" />);
     expect(screen.queryByTestId("approval-tab")).toBeNull();
     expect(screen.queryByTestId("approval-tab-note")).toBeNull();
     expect(screen.getByRole("button", { name: "Allow once" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Allow for this conversation" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow for this chat" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
   });
 

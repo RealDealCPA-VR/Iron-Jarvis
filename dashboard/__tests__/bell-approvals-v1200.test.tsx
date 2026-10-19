@@ -127,7 +127,10 @@ describe("pending agent approvals in the bell", () => {
 
     const row = await screen.findByTestId("bell-agent-approval");
     expect(row.textContent).toContain("An agent is asking permission");
-    expect(row.textContent).toContain("shell");
+    // v1.352.0 (G24, changed on purpose): the tool in the chat card's words;
+    // the exact id stays on the row, in the sentence's title.
+    expect(row.textContent).toContain("An agent run wants to run a command");
+    expect(row.querySelector('[title="The exact tool: shell"]')).not.toBeNull();
     // Session link points at the run the ask came from.
     const link = row.querySelector('a[href="/sessions/session_job42"]');
     expect(link).not.toBeNull();
@@ -168,7 +171,8 @@ describe("answering an agent ask", () => {
     await screen.findByTestId("bell-agent-approval");
 
     const before = pendingCalls();
-    fireEvent.click(screen.getByRole("button", { name: "Approve once" }));
+    // v1.352.0 (G24): the chat card's words, "Allow once".
+    fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
 
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith(
@@ -216,11 +220,13 @@ describe("answering an agent ask", () => {
     await openBell();
     await screen.findByTestId("bell-agent-approval");
 
-    fireEvent.click(screen.getByRole("button", { name: "Approve once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
     await waitFor(() =>
       expect(screen.queryByTestId("bell-agent-approval")).toBeNull(),
     );
     expect(postMock).toHaveBeenCalledTimes(1); // never retried
+    // Answered ELSEWHERE: nothing to confirm from here.
+    expect(screen.queryByTestId("bell-agent-answered")).toBeNull();
   });
 
   it("a non-404 failure keeps the row answerable with the error inline", async () => {
@@ -231,11 +237,12 @@ describe("answering an agent ask", () => {
     await openBell();
     await screen.findByTestId("bell-agent-approval");
 
-    fireEvent.click(screen.getByRole("button", { name: "Approve once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
     await screen.findByText("daemon offline");
     expect(screen.getByTestId("bell-agent-approval")).toBeInTheDocument();
+    expect(screen.queryByTestId("bell-agent-answered")).toBeNull();
     // Not stuck in "Approving…": the user can fix connectivity and retry.
-    expect(screen.getByRole("button", { name: "Approve once" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Allow once" })).not.toBeDisabled();
     expect(screen.getByRole("button", { name: "Deny" })).not.toBeDisabled();
   });
 });

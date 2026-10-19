@@ -15,6 +15,12 @@
 // id>/cancel` — the daemon ends that run between steps and the coordinator
 // is told the user stopped it; the rest of the team carries on). The list is
 // memoised: the screen re-renders on a real change only, never per token.
+//
+// v1.352.0 (G23): the chat's words. The model line names the model and the
+// endpoint the user set up ("Answered by fleet on DGX Spark", lib/ranOnWords;
+// the raw stamp in its title), a waiting teammate says what it wants in the
+// approval card's words ("Waiting for your OK to save a file."), and a
+// finished teammate says how long it took, in the chat receipt's clock words.
 
 import Link from "next/link";
 import { memo, useState } from "react";
@@ -22,6 +28,10 @@ import { ChevronDown, ChevronRight, ExternalLink, Square } from "lucide-react";
 import { post } from "@/lib/api";
 // v1.350.0 re-review: the plan approval's name (dependency-free).
 import { PLAN_TOOL } from "@/lib/toolWords";
+import { askPhrase } from "@/lib/approvalWords";
+import { ranOnWords, tookMs, type RanOnRow } from "@/lib/ranOnWords";
+import { useModels } from "@/lib/useModels";
+import { secondsText } from "@/components/chat/TurnReceipt";
 import AgentFace, { type FaceMood } from "@/components/agents/AgentFace";
 import {
   baseName,
@@ -153,19 +163,32 @@ function StopTeammate({ m, onChanged }: { m: MissionMember; onChanged: () => voi
   );
 }
 
+/** A teammate that has stopped working, for good or ill: it has a duration. */
+const FINISHED: ReadonlySet<MemberStatus> = new Set(["done", "failed", "cancelled"]);
+
+/** How long a FINISHED teammate took ("2 min 5 s"), or null. */
+export function memberTook(m: Pick<MissionMember, "status" | "started_at" | "finished_at">): string | null {
+  if (!FINISHED.has(m.status)) return null;
+  return secondsText(tookMs(m.started_at, m.finished_at));
+}
+
 function AgentCard({
   m,
   open,
   onToggle,
   onChanged,
+  catalog,
 }: {
   m: MissionMember;
   open: boolean;
   onToggle: () => void;
   onChanged: () => void;
+  catalog: readonly RanOnRow[] | undefined;
 }) {
   const key = m.session_id ?? m.agent;
   const ranOn = [m.provider, m.model].filter((x, i, all) => x && all.indexOf(x) === i).join(" · ");
+  const words = ranOnWords(m.provider, m.model, catalog);
+  const took = memberTook(m);
   return (
     <li
       data-testid={`mission-card-${m.agent}`}
@@ -186,7 +209,22 @@ function AgentCard({
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
               <span className="truncate text-[13px] font-semibold text-zinc-100">{m.name}</span>
-              <span className={`shrink-0 text-[11px] ${STATUS_TONE[m.status]}`}>{statusWord(m.status)}</span>
+              <span className="flex shrink-0 items-baseline gap-1 text-[11px]">
+                <span className={STATUS_TONE[m.status]}>{statusWord(m.status)}</span>
+                {/* v1.352.0 (G23): how long a finished teammate took, quiet,
+                    in the chat receipt's clock words. */}
+                {took && (
+                  <span
+                    data-testid={`mission-card-took-${m.agent}`}
+                    title="How long it took"
+                    className="tabular-nums text-zinc-500"
+                  >
+                    <span aria-hidden="true">· </span>
+                    <span className="sr-only">took </span>
+                    {took}
+                  </span>
+                )}
+              </span>
             </div>
             <div className="truncate text-[12px] text-zinc-400" title={m.task}>
               {m.task || "—"}
@@ -212,6 +250,7 @@ function AgentCard({
           {ranOn && (
             <div
               data-testid={`mission-card-model-${m.agent}`}
+              title={ranOn}
               className={`text-[12px] ${m.provider === "mock" ? "text-tone-warn" : "text-zinc-500"}`}
             >
               {/* v1.310.0: the coordinator receipt's tense, by THIS
@@ -223,7 +262,8 @@ function AgentCard({
               {m.provider === "mock" ? (
                 <MockRanOn answered={m.status === "done"} ranOn={ranOn} />
               ) : (
-                `${receiptVerbFor(m.status)} ${ranOn}`
+                // v1.352.0 (G23): "Answered by fleet on DGX Spark".
+                `${receiptVerbFor(m.status)} ${words.text || ranOn}`
               )}
             </div>
           )}
@@ -240,11 +280,16 @@ function AgentCard({
             </div>
           )}
           {m.waiting_on && (
-            <div className="text-tone-warn">
-              {/* v1.350.0 re-review: the plan approval is not a tool to use. */}
+            <div
+              data-testid={`mission-card-waiting-${m.agent}`}
+              title={m.waiting_on.tool === PLAN_TOOL ? undefined : `The exact tool: ${m.waiting_on.tool}`}
+              className="text-tone-warn"
+            >
+              {/* v1.350.0 re-review: the plan approval is not a tool to use.
+                  v1.352.0 (G23): the approval card's words for the tool. */}
               {m.waiting_on.tool === PLAN_TOOL
                 ? "Waiting for you to approve its plan."
-                : `Waiting for your OK to use ${m.waiting_on.tool.replace(/_/g, " ")}.`}
+                : `Waiting for your OK to ${askPhrase(m.waiting_on.tool)}.`}
             </div>
           )}
           {m.result && (
@@ -286,6 +331,9 @@ export const AgentCards = memo(function AgentCards({
   onChanged?: () => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
+  // v1.352.0 (G23): the catalog the model menu reads (one shared, cached read
+  // per window), so a card names the endpoint the user set up.
+  const { models } = useModels();
   if (members.length === 0) {
     return (
       <p data-testid="mission-cards-empty" className="px-1 text-[12px] text-zinc-500">
@@ -306,6 +354,7 @@ export const AgentCards = memo(function AgentCards({
             open={open === key}
             onToggle={() => setOpen(open === key ? null : key)}
             onChanged={onChanged}
+            catalog={models}
           />
         );
       })}

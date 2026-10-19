@@ -45,6 +45,7 @@ from ..providers.adapters.base import LLMMessage
 from ..sandbox.native import host_os_line
 from ..tools.base import SpendCheck, ToolContext, spend_checks_for, spend_words_for
 from ..tools.permissions import SAFE_HEADLESS_TOOLS
+from ..tools.reversible import reversible_flag
 from . import chat_delivery as _chat_delivery
 from . import decompose as _decompose
 from . import transcript as _transcript
@@ -2576,6 +2577,15 @@ class AgentRuntime:
                 and tc.name != PLAN_APPROVAL_TOOL
             ),
         }
+        # CAN IT BE UNDONE (v1.352.0, G25): the tool's own undo contract, so
+        # the bell (and the pending listing that copies this key) says "You
+        # can undo this" / "This may not be undoable" before the user answers.
+        # Left out for a read-only tool and the plan ask (no tool behind it).
+        # MIRROR NOTE (lock-step): the stream lane's `approval` frame carries
+        # the same key from the same helper.
+        _rev = reversible_flag(tool)
+        if _rev is not None:
+            requested["reversible"] = _rev
         if tc.name == PLAN_APPROVAL_TOOL:
             # v1.350.0: a plan is approved or declined, nothing wider — the
             # card's "Allow once" + "Deny" (the chat lane's local-only flag).

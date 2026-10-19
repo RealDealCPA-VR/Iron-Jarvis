@@ -31,6 +31,14 @@
 //   the growing tail is re-parsed (the chat stream's split, lib/streamSplit),
 //   and the live text is read from the mission's store HERE, so a token flush
 //   re-renders this panel and nothing else on the screen.
+//
+// v1.352.0 (product-readiness G23/G24) — the chat's words:
+// * The receipt names the model and the endpoint the user set up ("Answered
+//   by fleet on DGX Spark", lib/ranOnWords over the model menu's catalog),
+//   the raw stamp kept in its title.
+// * An ask reads like the chat card ("Jarvis wants to save a file", the tool
+//   id in the title) and offers the card's answers (lib/approvalWords): Allow
+//   once, Allow for this run, Deny — never "Decline" or "for this task".
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -43,6 +51,9 @@ import { DocPreview } from "@/components/chat/DocPreview";
 import { readSessionPlan } from "@/components/chat/PlanChecklist";
 import { stepGoalText, type PlanView } from "@/lib/planChecklist";
 import { PLAN_TOOL } from "@/lib/toolWords";
+import { ALLOW_ONCE, DENY, askPhrase, scopeLabel, undoLine } from "@/lib/approvalWords";
+import { ranOnWords, type RanOnRow } from "@/lib/ranOnWords";
+import { useModels } from "@/lib/useModels";
 import {
   MISSION_TERMINAL,
   baseName,
@@ -109,6 +120,7 @@ function ApprovalCard({
   // the ask is out): approving a plan you cannot read is not a decision. A
   // 404 (no copy) leaves the words and the two answers.
   const planAsk = waiting.tool === PLAN_TOOL;
+  const undo = undoLine((waiting as WaitingOn & { reversible?: unknown }).reversible);
   const [plan, setPlan] = useState<PlanView | null>(null);
   useEffect(() => {
     if (!planAsk || !session) return;
@@ -142,13 +154,21 @@ function ApprovalCard({
     >
       {planAsk ? (
         <div>
-          <strong>{who}</strong> wants you to approve its plan. No step runs until you answer; Decline ends its run
+          <strong>{who}</strong> wants you to approve its plan. No step runs until you answer; Deny ends its run
           before any step runs.
         </div>
       ) : (
-        <div>
-          <strong>{who}</strong> wants to use <strong>{waiting.tool.replace(/_/g, " ")}</strong>. Nothing runs until
-          you answer.
+        <div data-testid="mission-approval-ask">
+          {/* v1.352.0 (G23): the approval card's words for the tool; the
+              exact id it will run stays in the title. */}
+          <strong>{who}</strong> wants to <strong title={`The exact tool: ${waiting.tool}`}>{askPhrase(waiting.tool)}</strong>.
+          Nothing runs until you answer.
+        </div>
+      )}
+      {/* v1.352.0 (G25): can it be undone, when the daemon said so. */}
+      {!planAsk && undo && (
+        <div data-testid="mission-approval-undo" className="mt-0.5 text-[12px] text-zinc-400">
+          {undo}
         </div>
       )}
       {planAsk && plan ? (
@@ -173,7 +193,7 @@ function ApprovalCard({
       ) : null}
       <div className="mt-2 flex flex-wrap gap-2">
         <button type="button" disabled={busy} className="btn-accent px-3 py-1 text-xs" onClick={() => void answer("once")}>
-          Allow once
+          {ALLOW_ONCE}
         </button>
         {!planAsk && (
           <button
@@ -182,11 +202,11 @@ function ApprovalCard({
             className="btn-ghost px-3 py-1 text-xs"
             onClick={() => void answer("conversation")}
           >
-            Allow for this task
+            {scopeLabel("run")}
           </button>
         )}
         <button type="button" disabled={busy} className="btn-ghost px-3 py-1 text-xs" onClick={() => void answer("deny")}>
-          Decline
+          {DENY}
         </button>
       </div>
       {note && <div className="mt-1 text-[12px] text-tone-warn">{note}</div>}
@@ -345,14 +365,17 @@ function receiptVerb(view: MissionView): string {
   return receiptVerbFor(status, view.session.interrupted);
 }
 
-/** Who did the work: provider · model, quiet; amber when the mock answered
- *  (nothing real ran), with the daemon's route note when a failover touched
- *  the mission. Renders nothing when the daemon said nothing. */
-function MissionReceipt({ view }: { view: MissionView }) {
+/** Who did the work: the model on the endpoint, quiet ("Answered by fleet on
+ *  DGX Spark", v1.352.0 G23 — the raw stamp in the title); amber when the
+ *  mock answered (nothing real ran), with the daemon's route note when a
+ *  failover touched the mission. Renders nothing when the daemon said
+ *  nothing. */
+function MissionReceipt({ view, catalog }: { view: MissionView; catalog: readonly RanOnRow[] | undefined }) {
   const { provider, model, route_note: note } = view.session;
   if (!provider && !model && !note) return null;
   const mock = provider === "mock";
   const pair = [provider, model].filter((x, i, all) => x && all.indexOf(x) === i).join(" · ");
+  const words = ranOnWords(provider, model, catalog);
   const answered = view.session.status === "completed";
   return (
     <div
@@ -369,8 +392,8 @@ function MissionReceipt({ view }: { view: MissionView }) {
           </Link>
         </span>
       ) : pair ? (
-        <span>
-          {receiptVerb(view)} {pair}
+        <span title={pair}>
+          {receiptVerb(view)} {words.text || pair}
         </span>
       ) : null}
       {note && <div className={`${pair || mock ? "mt-0.5 " : ""}text-tone-warn`}>{note}</div>}
@@ -395,6 +418,9 @@ export function MissionOutput({
   onOpen: (id: string, projectId: string) => void;
 }) {
   const live = useMissionLive(liveStore);
+  // v1.352.0 (G23): the model menu's catalog (one shared, cached read per
+  // window), so the receipt names the endpoint the user set up.
+  const { models } = useModels();
   const [tab, setTab] = useState<OutputTab>("report");
   const [picked, setPicked] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
@@ -695,7 +721,7 @@ export function MissionOutput({
           ))}
       </div>
 
-      {view && <MissionReceipt view={view} />}
+      {view && <MissionReceipt view={view} catalog={models} />}
 
       {terminal && !continuedAs && (
         <div data-testid="mission-followup" className="flex items-end gap-2 border-t hairline px-4 py-3">

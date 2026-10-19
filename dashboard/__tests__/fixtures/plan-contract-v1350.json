@@ -120,7 +120,9 @@
       "timeout_s": 0,
       "once_only": true,
       "mission_id": null,
-      "project_id": null
+      "project_id": null,
+      "task": "Create a file named statements.txt that notes the three quarterly statements, and after that produce a second file name…",
+      "origin": "chat"
     },
     "plan_done": {
       "run_id": "r1",

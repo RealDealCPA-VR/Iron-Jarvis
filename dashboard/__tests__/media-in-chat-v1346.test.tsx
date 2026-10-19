@@ -105,10 +105,10 @@ describe("the approval card says what a generation would spend", () => {
   });
 
   it("renders nothing extra without one: the card's text is today's, byte for byte", () => {
-    const { unmount } = render(<ApprovalCard approval={WITH_COST} />);
+    const { unmount } = render(<ApprovalCard approval={WITH_COST} scope="chat" />);
     const withText = screen.getByTestId("chat-approval-card").textContent ?? "";
     unmount();
-    render(<ApprovalCard approval={BASE} />);
+    render(<ApprovalCard approval={BASE} scope="chat" />);
     const card = screen.getByTestId("chat-approval-card");
     expect(within(card).queryByTestId("approval-cost")).toBeNull();
     const plain = card.textContent ?? "";
@@ -119,7 +119,8 @@ describe("the approval card says what a generation would spend", () => {
     expect(plain).toContain("generate_media");
     expect(plain).toContain("Waiting for you.");
     expect(plain).toContain(
-      "The turn is paused until you answer. “Once” runs only this call; “this conversation” stops asking for generate_media here; Deny refuses it and the assistant is told you declined.",
+      // v1.352.0 (G24, changed on purpose): the wider answer is "this chat".
+      "The turn is paused until you answer. “Once” runs only this call; “this chat” stops asking for generate_media here; Deny refuses it and the assistant is told you declined.",
     );
     expect(plain).not.toContain("credits");
     // The answers are unchanged.
@@ -127,7 +128,7 @@ describe("the approval card says what a generation would spend", () => {
       within(card)
         .getAllByRole("button")
         .map((b) => b.textContent?.trim()),
-    ).toEqual(["Allow once", "Allow for this conversation", "Deny"]);
+    ).toEqual(["Allow once", "Allow for this chat", "Deny"]);
   });
 
   it("a local-only media card keeps its once-only shape AND shows the cost", () => {

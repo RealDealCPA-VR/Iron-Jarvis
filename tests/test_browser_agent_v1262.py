@@ -381,7 +381,7 @@ def test_the_card_is_three_answers_and_the_panel_explains_its_mode():
     """
     html = _src(_ADDON / "sidepanel.html")
     assert re.search(r'id="approve"[^>]*>\s*Allow\s*<', html), "no Allow button"
-    assert re.search(r'id="approve-always"[^>]*>\s*Always allow\s*<', html), "no Always-allow button"
+    assert re.search(r'id="approve-always"[^>]*>\s*Allow all page actions\s*<', html), "no Allow-all-page-actions button"
     assert 'id="approve-task"' not in html and 'id="approve-tab"' not in html, (
         "the sidebar's card grew back a per-task or per-tab button beside the switch"
     )

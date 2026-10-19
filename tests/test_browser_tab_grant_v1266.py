@@ -417,7 +417,7 @@ def test_the_addon_reports_closed_tabs_and_its_browser_session():
     # case above still drives them). The header still reads `tab_allowed`,
     # because a grant the chat page made is a fact this panel should show.
     assert 'id="approve-tab"' not in panel_html, "the per-tab button is back beside the switch"
-    assert re.search(r'id="approve-always"[^>]*>\s*Always allow\s*<', panel_html), "no Always-allow button"
+    assert re.search(r'id="approve-always"[^>]*>\s*Allow all page actions\s*<', panel_html), "no Allow-all-page-actions button"
     assert 'id="auto"' in panel_html and 'role="switch"' in panel_html, "no Auto-allow switch"
     assert 'payload["tab_allowed"] !== true' in panel_ts, "the header does not read tab_allowed"
     assert "onActivated" in panel_ts and "PANEL_ACTION_OPEN" in panel_ts, "no re-ask on a tab switch"

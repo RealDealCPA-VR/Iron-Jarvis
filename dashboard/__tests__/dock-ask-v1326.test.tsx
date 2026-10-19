@@ -195,7 +195,7 @@ describe("DockAsk — the card in the composer's place", () => {
 
   it("Enter on a focused button inside the card is that button's own, never Allow", async () => {
     renderDock([asApproval(APPROVAL)]);
-    const conv = screen.getByRole("button", { name: /allow for this conversation/i });
+    const conv = screen.getByRole("button", { name: /allow for this chat/i });
     conv.focus();
     fireEvent.keyDown(conv, { key: "Enter" });
     await new Promise((r) => setTimeout(r, 20));
@@ -314,7 +314,7 @@ describe("DockAsk — the card in the composer's place", () => {
 
   it("'Allow for this conversation' still reaches the page's grant handler", async () => {
     const { props } = renderDock([asApproval(APPROVAL)]);
-    fireEvent.click(screen.getByRole("button", { name: /allow for this conversation/i }));
+    fireEvent.click(screen.getByRole("button", { name: /allow for this chat/i }));
     await waitFor(() => expect(props.onConversation).toHaveBeenCalledWith("shell"));
     await act(async () => {});
   });

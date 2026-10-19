@@ -93,20 +93,21 @@ describe("the stream keeps once_only", () => {
 
 describe("a local-only card offers Allow once and Deny only", () => {
   it("shows two answers and the quiet line, and posts once", async () => {
-    render(<ApprovalCard approval={LOCAL} />);
+    render(<ApprovalCard approval={LOCAL} scope="chat" />);
     const card = screen.getByTestId("chat-approval-card");
     expect(buttonNames(card)).toEqual(["Allow once", "Deny"]);
     expect(within(card).getByTestId("approval-local-only").textContent).toBe(LINE);
     expect(within(card).queryByTestId("approval-tab-note")).toBeNull();
     expect(within(card).queryByTestId("approval-always-note")).toBeNull();
-    expect(card.textContent).not.toContain("this conversation");
+    // v1.352.0 (G24): the chat card's wider answer is "this chat".
+    expect(card.textContent).not.toContain("this chat");
     fireEvent.click(within(card).getByText("Allow once"));
     await vi.waitFor(() => expect(H.post).toHaveBeenCalledTimes(1));
     expect(H.post.mock.calls[0][1]).toEqual({ decision: "once" });
   });
 
   it("the line is calm: no box, whole pixels, no spaced dash", () => {
-    render(<ApprovalCard approval={LOCAL} />);
+    render(<ApprovalCard approval={LOCAL} scope="chat" />);
     const line = screen.getByTestId("approval-local-only");
     expect(line.className).not.toMatch(/\b(border|rounded|bg-)/);
     expect(line.className).not.toMatch(/\.5px|\[\d+\.\d+px\]/);
@@ -114,12 +115,12 @@ describe("a local-only card offers Allow once and Deny only", () => {
   });
 
   it("control: outside local only the same browser card keeps every answer", () => {
-    render(<ApprovalCard approval={NAV} />);
+    render(<ApprovalCard approval={NAV} scope="chat" />);
     const card = screen.getByTestId("chat-approval-card");
     expect(buttonNames(card)).toEqual([
       "Allow for this tab",
       "Allow once",
-      "Allow for this conversation",
+      "Allow for this chat",
       "Always allow exactly this",
       "Deny",
     ]);
@@ -149,7 +150,7 @@ describe("the dock draws the same once-only card", () => {
 
   it("control: a card that is not local only keeps its wider answers in the dock", () => {
     dock(NAV);
-    expect(screen.getByText("Allow for this conversation")).toBeTruthy();
+    expect(screen.getByText("Allow for this chat")).toBeTruthy();
     expect(screen.queryByText(LINE)).toBeNull();
   });
 });

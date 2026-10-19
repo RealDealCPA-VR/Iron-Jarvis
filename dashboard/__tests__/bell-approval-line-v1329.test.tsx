@@ -7,6 +7,10 @@
  * read as a placeholder). Now: "It wants to run edit_file. The run is waiting
  * for you." and, with a clock, "... The run waits up to 5 min for you.". The
  * batch count keeps its own element (bell-approval-count).
+ *
+ * v1.352.0 (G24, changed on purpose): the row names WHO asks and says the
+ * tool in the chat card's words ("An agent run wants to change a file."); the
+ * exact id stays in the sentence's title. Still two plain sentences.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -66,7 +70,7 @@ function mockPending(approvals: unknown[]) {
 async function askLine(): Promise<string> {
   fireEvent.click(await screen.findByRole("button", { name: /notification/i }));
   const row = await screen.findByTestId("bell-agent-approval");
-  const p = row.querySelector("p")!;
+  const p = row.querySelector('[data-testid="bell-approval-line"]')!;
   return (p.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
@@ -78,11 +82,11 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("the bell's permission row reads as two sentences", () => {
-  it("no clock: 'It wants to run edit_file. The run is waiting for you.'", async () => {
+  it("no clock: 'An agent run wants to change a file. The run is waiting for you.'", async () => {
     mockPending([ASK]);
     render(<NotificationBell />);
     const line = await askLine();
-    expect(line).toBe("It wants to run edit_file. The run is waiting for you.");
+    expect(line).toBe("An agent run wants to change a file. The run is waiting for you.");
     expect(line).not.toMatch(/(^|\s)[—–](\s|$)/);
   });
 
@@ -90,7 +94,7 @@ describe("the bell's permission row reads as two sentences", () => {
     mockPending([{ ...ASK, count: 3, timeout_s: 300 }]);
     render(<NotificationBell />);
     const line = await askLine();
-    expect(line).toBe("It wants to run edit_file × 3 (one answer covers all). The run waits up to 5 min for you.");
+    expect(line).toBe("An agent run wants to change a file × 3 (one answer covers all). The run waits up to 5 min for you.");
     expect(screen.getByTestId("bell-approval-count").textContent).toBe(" × 3 (one answer covers all)");
   });
 });

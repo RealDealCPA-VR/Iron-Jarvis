@@ -324,7 +324,7 @@ describe("an approval takes the composer's place", () => {
   it("'Allow for this conversation' still reaches the pane's grant path", async () => {
     const onConversation = vi.fn();
     render(<PaneAsk approval={APPROVAL as never} onConversation={onConversation} />);
-    fireEvent.click(screen.getByRole("button", { name: /allow for this conversation/i }));
+    fireEvent.click(screen.getByRole("button", { name: /allow for this chat/i }));
     await waitFor(() => expect(onConversation).toHaveBeenCalledWith("shell"));
   });
 });

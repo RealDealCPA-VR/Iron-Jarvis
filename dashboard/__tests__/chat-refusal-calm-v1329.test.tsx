@@ -259,7 +259,7 @@ async function askFor(approval: typeof SHELL_ASK) {
 }
 
 async function allowForConversation() {
-  fireEvent.click(await screen.findByRole("button", { name: /allow for this conversation/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /allow for this chat/i }));
   await waitFor(() =>
     expect(H.api.posts.some((p) => p.path === `/chat/approvals/${SHELL_ASK.id}`)).toBe(true),
   );

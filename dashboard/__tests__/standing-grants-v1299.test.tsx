@@ -123,12 +123,12 @@ const ASK = { id: "apr_1", callId: "c1", tool: "shell", args: { command: "git st
 
 describe("ApprovalCard — Always allow exactly this (v1.299.0)", () => {
   it("is absent when the ask does not carry can_always (today's card)", () => {
-    render(<ApprovalCard approval={ASK} />);
+    render(<ApprovalCard approval={ASK} scope="chat" />);
     expect(screen.queryByTestId("approval-always")).toBeNull();
     expect(screen.queryByTestId("approval-always-note")).toBeNull();
     // The three answers of today are still there.
     expect(screen.getByRole("button", { name: /allow once/i })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /allow for this conversation/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /allow for this chat/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^deny$/i })).toBeEnabled();
   });
 
