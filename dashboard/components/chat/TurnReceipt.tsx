@@ -888,9 +888,11 @@ export function TurnReceipt({
   }
   if (refitText) {
     // v1.355.0 (G55): the same quiet class as an adapted turn — Iron Jarvis
-    // recovered on the user's behalf, and the answer did not see the oldest
-    // messages. Said where the user reads the reply; why is on hover and in
-    // the expanded receipt (a phone has no hover).
+    // recovered on the user's behalf (left the oldest messages out, or with
+    // `dropped: 0` only shortened this reply's earlier step results). Said
+    // where the user reads the reply; why (`refitTitle`, the words for what
+    // actually happened) is on hover and in the expanded receipt (a phone
+    // has no hover).
     parts.push(
       <span key="refit" data-testid="turn-refit" title={refitWhy} className="text-zinc-500">
         {refitText}
@@ -1132,8 +1134,9 @@ export function TurnReceipt({
               </div>
             </div>
           )}
-          {/* v1.355.0 (G55): why older messages were left out, in words a
-              phone can read (the collapsed part's title needs a pointer). */}
+          {/* v1.355.0 (G55): why the reply was refitted (older messages left
+              out, or only earlier step results shortened), in words a phone
+              can read (the collapsed part's title needs a pointer). */}
           {refitText && (
             <div className="flex items-start gap-2">
               <Scissors size={12} className="mt-0.5 shrink-0 text-zinc-500" />
