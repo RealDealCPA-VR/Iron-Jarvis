@@ -2376,22 +2376,27 @@ export default function ConnectionsPage() {
       {/* v1.354.0 (G48): REST hookups are connection CHECKS only: no tool can
           call one yet, so a card promising to "connect any service" was a
           dead end for a new user. They sit in a closed fold after every real
-          door (a quiet line, no box); anyone who made one still finds it. */}
-      <Reveal>
-        <details data-testid="more-ways-to-connect" className="group/more">
-          <summary className="flex w-fit cursor-pointer select-none items-center gap-1.5 text-[12px] font-medium text-zinc-400 transition-colors hover:text-zinc-200 [&::-webkit-details-marker]:hidden">
-            <ChevronRight
-              size={13}
-              aria-hidden
-              className="shrink-0 transition-transform duration-200 motion-reduce:transition-none group-open/more:rotate-90"
-            />
-            More ways to connect (advanced)
-          </summary>
-          <div className="mt-3">
-            <RestHookups />
-          </div>
-        </details>
-      </Reveal>
+          door (a quiet line, no box); anyone who made one still finds it.
+          Offline, RestHookups renders nothing (the page shows the one
+          offline hint), so the fold is not drawn either: no line that opens
+          onto an empty space. */}
+      {!offline && (
+        <Reveal>
+          <details data-testid="more-ways-to-connect" className="group/more">
+            <summary className="flex w-fit cursor-pointer select-none items-center gap-1.5 text-[12px] font-medium text-zinc-400 transition-colors hover:text-zinc-200 [&::-webkit-details-marker]:hidden">
+              <ChevronRight
+                size={13}
+                aria-hidden
+                className="shrink-0 transition-transform duration-200 motion-reduce:transition-none group-open/more:rotate-90"
+              />
+              More ways to connect (advanced)
+            </summary>
+            <div className="mt-3">
+              <RestHookups />
+            </div>
+          </details>
+        </Reveal>
+      )}
 
       {!offline && (
         <Reveal>

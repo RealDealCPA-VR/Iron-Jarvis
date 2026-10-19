@@ -43,6 +43,8 @@ const hooks = vi.hoisted(() => {
     posts: [] as { path: string; body: unknown }[],
     /** Answers for POST …/verify, taken in order (an Error is thrown). */
     verify: [] as unknown[],
+    /** A read's error by path (status 0 = the daemon is not answering). */
+    errors: {} as Record<string, { status: number; message: string }>,
   };
 });
 
@@ -71,7 +73,7 @@ vi.mock("@/lib/api", () => ({
 vi.mock("@/lib/useApi", () => {
   const read = (p: string | null) => ({
     data: p ? (hooks.responses[p] ?? null) : null,
-    error: null,
+    error: p ? (hooks.errors[p] ?? null) : null,
     loading: false,
     reload: () => {},
   });
@@ -129,6 +131,7 @@ vi.mock("@/components/BrandGlyph", () => ({ ProviderMark: () => null, BrandGlyph
 
 import ConnectionsPage from "@/components/settings/pages/ConnectionsPage";
 import { RestHookups } from "@/components/connections/RestHookups";
+import { OFFLINE_TITLE } from "@/lib/offlineWords";
 import {
   MODEL_SERVERS_TITLE,
   OWN_ENDPOINT_LABEL,
@@ -197,6 +200,7 @@ beforeEach(() => {
   hooks.responses = {};
   hooks.posts = [];
   hooks.verify = [];
+  hooks.errors = {};
 });
 afterEach(() => cleanup());
 
@@ -367,6 +371,26 @@ describe("G48: Accounts & keys hides the dead-end REST hookups and says Add a to
     const item = within(screen.getByRole("menu")).getByRole("menuitem", { name: /Add a tool/ });
     expect(item.getAttribute("href")).toBe("/tools");
     expect(document.body.textContent).not.toMatch(/Extensions \(MCP\)/);
+  });
+
+  it("offline: no fold that opens onto nothing (RestHookups draws nothing then)", async () => {
+    // Online, the same page draws the fold (anti-vacuity: the mock can draw it).
+    seed(customRow());
+    render(<ConnectionsPage />);
+    expect(await screen.findByTestId("more-ways-to-connect")).toBeInTheDocument();
+    cleanup();
+
+    // Iron Jarvis not answering: every read fails with status 0.
+    seed(customRow());
+    hooks.errors["/connections"] = { status: 0, message: "offline" };
+    hooks.errors["/integrations"] = { status: 0, message: "offline" };
+    render(<ConnectionsPage />);
+    // The page is in its offline state (its one hint) and still draws its doors...
+    expect((await screen.findAllByText(OFFLINE_TITLE)).length).toBeGreaterThan(0);
+    expect(screen.getByText("Where else things connect")).toBeInTheDocument();
+    // ...but no "More ways to connect" line whose inside would be empty.
+    expect(screen.queryByTestId("more-ways-to-connect")).toBeNull();
+    expect(screen.queryByText("More ways to connect (advanced)")).toBeNull();
   });
 
   it("the hookups card says it is a check only and points at the real door", () => {
