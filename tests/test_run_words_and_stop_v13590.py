@@ -346,6 +346,45 @@ def test_only_a_waiting_unattended_run_is_stopped_and_an_answer_that_won_is_left
     assert orch.stop_unattended() == [], "nothing is stopped twice"
 
 
+def test_a_run_parked_before_the_person_mark_existed_is_stopped_too(tmp_path):
+    """v1.359.0 review: on an UPGRADED install the schema reconcile adds
+    ``started_by`` nullable, so a workflow a schedule parked before v1.352.0
+    holds NULL there — and parked runs survive restarts by design. The engine
+    reads NULL as "" (unattended); SQL's ``NULL != 'person'`` is NULL, so the
+    first cut left that run waiting under Emergency stop. Driven through a
+    real upgrade (the column dropped and re-added by ``build_platform``).
+    MUTATION: drop the ``started_by IS NULL`` arm -> it keeps waiting (red)."""
+    from sqlalchemy import text
+
+    home = str(tmp_path / "home")
+    p = build_platform(home)
+    with session_scope(p.engine) as db:
+        rec = WorkflowRunRecord(workflow_name="old-nightly", status="waiting", waiting_json='{"index": 0}')
+        db.add(rec)
+        db.commit()
+        rid = rec.id
+    with p.engine.connect() as conn:
+        conn.execute(text("ALTER TABLE workflowrunrecord DROP COLUMN started_by"))
+        conn.commit()
+    p.engine.dispose()
+
+    upgraded = build_platform(home)
+    with upgraded.engine.connect() as conn:
+        on_disk = conn.execute(
+            text("SELECT started_by FROM workflowrunrecord WHERE id = :i"), {"i": rid}
+        ).scalar_one()
+    assert on_disk is None, "anti-vacuity: the row really reads NULL, as on an upgraded install"
+
+    stopped = Orchestrator(upgraded).stop_unattended()
+
+    assert rid in stopped, stopped
+    with session_scope(upgraded.engine) as db:
+        got = db.get(WorkflowRunRecord, rid)
+        assert got.status == "cancelled" and got.waiting_json == ""
+        assert json.loads(got.notes_json) == [EMERGENCY_STOP_STOPPED]
+    upgraded.engine.dispose()
+
+
 # =========================================================================== #
 # (5) a run's failure says what to do where a run is read
 # =========================================================================== #

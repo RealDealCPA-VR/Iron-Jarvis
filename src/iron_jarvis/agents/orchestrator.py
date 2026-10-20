@@ -1716,6 +1716,7 @@ class Orchestrator:
         reads Stopped, not Needs you. BLOCKING (SQLite); returns the run ids
         it stopped; never raises."""
         try:
+            from sqlalchemy import or_ as _sql_or
             from sqlalchemy import update as _sql_update
 
             from ..workflows.engine import STARTED_BY_PERSON
@@ -1726,7 +1727,15 @@ class Orchestrator:
                     select(WorkflowRunRecord.id, WorkflowRunRecord.notes_json)
                     .where(
                         WorkflowRunRecord.status == "waiting",
-                        WorkflowRunRecord.started_by != STARTED_BY_PERSON,
+                        # v1.359.0 review: a row parked before v1.352.0 on an
+                        # UPGRADED install holds NULL here (the reconcile adds
+                        # the column nullable), and SQL's ``NULL != 'person'``
+                        # is NULL — the row was skipped while the engine reads
+                        # it as "" (unattended). NULL is not a person.
+                        _sql_or(
+                            WorkflowRunRecord.started_by.is_(None),  # type: ignore[union-attr]
+                            WorkflowRunRecord.started_by != STARTED_BY_PERSON,
+                        ),
                     )
                     .limit(max(int(limit), 1))
                 ).all()
