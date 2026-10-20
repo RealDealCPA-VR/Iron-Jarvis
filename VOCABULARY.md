@@ -124,6 +124,44 @@ The program is **Iron Jarvis** in all of these; where the desktop has to tell
 its two children apart, the window's own server is **the Iron Jarvis
 dashboard**.
 
+### Everything Iron Jarvis answers (v1.360.0)
+
+The v1.358.0 scan still read a FIXED list of daemon files, so sentences
+outside it reached people in retired words: the Status map's "N of M tool
+packs running" and "N open panes", an extension's failure reason "the pack's
+server couldn't be reached" (with a fix pointing at "Tools → Connected
+packs"), the queue's "no assignment …" / "assign the job to a worker agent",
+"This mission is still running", "no such connector", "check the daemon
+logs". `tests/test_vocabulary_daemon_answers_v13600.py` widens it two ways,
+so a new sentence is read the day it lands:
+
+- **every sentence** in every `daemon/routes/*.py` (a glob, not a list), the
+  extension failure words (`mcp/tools.py`), the import door
+  (`mcp/import_config.py`, `import_sources.py`, `pack_door.py`), the request
+  models' 422 sentences (`daemon/schemas.py`), the Directory's card lines
+  (`connectors/service.py`) and the queue (`assignments/`);
+- **every answer position** anywhere else in `src/iron_jarvis`: an
+  exception's message (`HTTPException(detail=…)`, `ValueError("…")` — a route
+  hands `str(exc)` back) and any value under an answer key (`detail`,
+  `reason`, `fix`, `note`, `error`, `summary`, `title`, `message`, `hint`,
+  `words`, `held_reason`, `blocked_reason`, `why`).
+
+Its `ALLOW` holds the deliberate uses (a stored vault description the Secrets
+page reads as a marker, a prompt only the model reads, the file name
+`daemon.log`); its `PENDING` holds lines in files a wave's lane did not own,
+reworded by the integrator and deleted with their fix. The words that
+replaced the retired ones: an MCP server is an **extension** ("the
+extension's server exited", "Tools → Connected extensions", "N of M
+extensions running"); a Build window is a **terminal** ("N open terminals",
+"This terminal's shell has ended — open a new terminal."); a queued unit of
+work is a **queued task** ("no queued task 'x'", "the supervisor cannot take
+a queued task"); the team's one task is an **objective** ("objective not
+found"); a Directory row is a **connection** ("no such connection"). Ids,
+keys, routes and API fields (`assignment_id`, `/assignments`, the
+`pack_restart` tool) are the wire and keep their names. "plug-in" is retired
+here but not on the scanner's word list, so the run-without-asking note
+("extension tools") is pinned by hand.
+
 ## Reserved
 
 - **Pack** — reserved for the future staff-export bundle ("hand your setup to

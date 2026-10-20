@@ -56,7 +56,7 @@ def caller_assignment_depth(engine, session_id: str) -> int:
 class AssignWorkTool(Tool):
     name = "assign_work"
     description = (
-        "Queue a job for another agent. It does NOT run now: the assignment waits "
+        "Queue a task for another agent. It does NOT run now: the queued task waits "
         "until that agent is free, then runs as its own session. Use it for work "
         "that can happen later; use spawn_agent when you need the result in this "
         "run. Args: agent (a builtin type like 'builder' or a custom agent's "
@@ -84,7 +84,7 @@ class AssignWorkTool(Tool):
 
         store = getattr(self.platform, "assignments", None)
         if store is None:
-            return ToolResult(ok=False, output="", error="assignments are not available")
+            return ToolResult(ok=False, output="", error="queued tasks are not available right now")
         agent = str(args.get("agent") or "").strip()
         task = str(args.get("task") or "")
         reason = str(args.get("reason") or "")

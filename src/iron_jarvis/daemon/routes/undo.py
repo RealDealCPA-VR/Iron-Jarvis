@@ -327,7 +327,7 @@ async def perform_undo(d, action_id: str) -> dict[str, Any]:
             status_code=500,
             detail=(
                 "the action was reverted on disk but the audit ledger could not "
-                "be updated — check the daemon logs; the timeline may still show "
+                "be updated (Iron Jarvis kept the details in its log); the timeline may still show "
                 "it as undoable"
             ),
         )

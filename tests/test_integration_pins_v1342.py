@@ -48,7 +48,7 @@ def _failed_record(**extra):
     rec = {
         "state": "failed",
         "last_error": "MCPServerStopped: pack 'dying': the MCP server closed the connection (exit code 1)",
-        "reason": "the pack's server exited (exit code 1)",
+        "reason": "the extension's server exited (exit code 1)",
         "fix": "read its last output below; a missing key or setting is the usual cause",
         "stderr_tail": "Error: BRAVE_API_KEY is not set",
         "failures": 0,
@@ -104,7 +104,8 @@ def test_system_map_counts_an_ok_pack_as_running(tmp_path, monkeypatch):
     monkeypatch.setattr(mcp_tools, "load_status", lambda name: {"state": "ok", "last_error": None})
     body = TestClient(app).get("/ui/system-map").json()
     tools = {n["key"]: n for a in body["areas"] for n in a["nodes"]}["tools"]
-    assert tools["detail"].startswith("1 of 1 tool pack running"), tools["detail"]
+    # v1.360.0 (lane 10C, G76; moved on purpose): the canon's "extension".
+    assert tools["detail"].startswith("1 of 1 extension running"), tools["detail"]
     assert tools["attention"] is None
 
 
@@ -125,7 +126,7 @@ def test_directory_row_for_a_failed_pack_carries_reason_fix_and_last_output(tmp_
     assert row["connected"] is True  # the connection exists; it is the LOAD that failed
     assert row["tools_loaded"] == 0
     assert row["detail"].startswith("MCPServerStopped: pack 'dying'")
-    assert row["reason"] == "the pack's server exited (exit code 1)"
+    assert row["reason"] == "the extension's server exited (exit code 1)"
     assert row["fix"].startswith("read its last output below")
     assert row["stderr_tail"] == "Error: BRAVE_API_KEY is not set"
 

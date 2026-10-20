@@ -406,7 +406,7 @@ def register(app: FastAPI, d) -> None:
         import threading as _threading
 
         _threading.Timer(0.2, _app._graceful_stop).start()
-        return {"ok": True, "detail": "daemon shutting down"}
+        return {"ok": True, "detail": "Iron Jarvis is shutting down"}
 
     @app.get("/schedules")
     def list_schedules() -> dict[str, Any]:

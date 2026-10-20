@@ -100,9 +100,9 @@ def _store_snippet(cwd: str, uploads, name: str, blob: bytes):
     if (cwd or "").strip():
         base = Path(cwd)
         if not base.is_dir():
-            note = f"the pane's folder does not exist ({cwd})"
+            note = f"the terminal's folder does not exist ({cwd})"
         elif is_protected_path(str(base)):
-            note = f"the pane's folder is protected ({cwd})"
+            note = f"the terminal's folder is protected ({cwd})"
         else:
             parts = _SNIPPET_DIR.split("/")
             folder = base.joinpath(*parts)
@@ -115,7 +115,7 @@ def _store_snippet(cwd: str, uploads, name: str, blob: bytes):
                 target.write_bytes(blob)
                 return target, "pane", ""
             except OSError as exc:
-                note = f"the pane's folder is not writable ({exc.__class__.__name__})"
+                note = f"the terminal's folder is not writable ({exc.__class__.__name__})"
     else:
         note = "this terminal has no working directory"
     uploads.mkdir(parents=True, exist_ok=True)
@@ -613,25 +613,25 @@ def register(app: FastAPI, d) -> None:
         if not cf:
             raise HTTPException(
                 status_code=409,
-                detail="This pane was not opened by Continue on the next account, so there "
+                detail="This terminal was not opened by Continue on the next account, so there "
                 "is no carried conversation to hand off.",
             )
         carried = cf.get("carried_path")
         if not carried or not Path(carried).is_file():
             raise HTTPException(
                 status_code=409,
-                detail="No conversation was carried into this pane, so there is nothing to "
-                "hand off — type /clear in the pane to start fresh.",
+                detail="No conversation was carried into this terminal, so there is nothing to "
+                "hand off — type /clear in the terminal to start fresh.",
             )
         if not session.watching_resume():
             raise HTTPException(
                 status_code=409,
-                detail="This pane has already left the carried conversation, so there is "
+                detail="This terminal has already left the carried conversation, so there is "
                 "nothing to hand off again.",
             )
         if not session.alive:
             raise HTTPException(
-                status_code=409, detail="This pane's shell has ended — open a new pane."
+                status_code=409, detail="This terminal's shell has ended — open a new terminal."
             )
         # Never /exit a Claude that is mid-answer or waiting on a question.
         state = session.activity().state.value
@@ -642,7 +642,7 @@ def register(app: FastAPI, d) -> None:
         if state == "blocked":
             raise HTTPException(
                 status_code=409,
-                detail="Claude is waiting for an answer in this pane — answer it or press Esc, "
+                detail="Claude is waiting for an answer in this terminal — answer it or press Esc, "
                 "then try again.",
             )
         from_title = cf.get("from_title") or "the other account"
@@ -655,7 +655,7 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(
                 status_code=409,
                 detail=f"The handoff could not be written ({type(exc).__name__}), so nothing "
-                "in the pane was touched.",
+                "in the terminal was touched.",
             ) from None
         new_sid = str(uuid.uuid4())
         line = shell_line(
@@ -675,7 +675,7 @@ def register(app: FastAPI, d) -> None:
         if not _quit_claude(session):
             raise HTTPException(
                 status_code=409,
-                detail="Could not see the shell prompt in this pane, so nothing else was "
+                detail="Could not see the shell prompt in this terminal, so nothing else was "
                 f"typed. The handoff is saved at {path}; if Claude has exited, run: {line}",
             )
         session.write(line + "\r")

@@ -23,21 +23,30 @@
  *   Your browser /   the saved settings values SettingsHome already read,
  *   Agent browser    worded by the ONE schema's labels and options
  *   Approval level   the level new chats start in on this window, read the
- *                    way the chat page reads it (lib/permissionLevels)
+ *                    way the chat page reads it (lib/permissionLevels);
+ *                    v1.360.0: its reading sentence comes from the SAME
+ *                    `reads` facts as the Reading files row
+ *                    (`readsLevelLine`), so the two rows never disagree, and
+ *                    those facts are handed to the chat's chip
+ *                    (lib/readFacts.noteReadFacts)
  *   Standing grants  GET /grants (live ones)
  *
  * A fact that cannot be read says so; it never reads as "nothing".
  */
 
-import { useId, type ReactNode } from "react";
+import { useEffect, useId, type ReactNode } from "react";
 import { useApi } from "@/lib/useApi";
 import {
-  PERMISSION_LEVELS,
   READS_LINE,
+  permissionLevel,
   permissionToneText,
   readChatPermissionMode,
+  readScope,
+  readsLevelLine,
   type PermissionMode,
+  type ReadFacts,
 } from "@/lib/permissionLevels";
+import { noteReadFacts } from "@/lib/readFacts";
 import type { SchemaSetting } from "@/components/settings/SettingRow";
 
 /** GET /settings/access (daemon/routes/access_summary.py). `chosen` (v1.356.0,
@@ -45,7 +54,7 @@ import type { SchemaSetting } from "@/components/settings/SettingRow";
  *  `install` = the installation's own limit is on. An older daemon sends
  *  neither. */
 export interface AccessFacts {
-  reads?: { limited?: boolean; folders?: string[]; chosen?: string[]; install?: boolean };
+  reads?: ReadFacts;
   writes?: { chat_files_dir?: string };
 }
 
@@ -69,24 +78,24 @@ export const NEVER_READ_LINE = "The folders that hold its keys and its own recor
  *  route could not be read (an older daemon): the desktop default, said with
  *  its one exception. */
 export function readsSentence(facts: AccessFacts | null): string {
-  const reads = facts?.reads;
-  if (!facts || !reads) {
-    return `${READS_LINE}, at every approval level, unless this install limits it to chosen folders. ${NEVER_READ_LINE}`;
-  }
-  if (reads.limited) {
-    // v1.356.0 (G81): the user's own folders, named as they typed them.
-    const chosen = (reads.chosen ?? []).filter((f) => typeof f === "string" && f.trim());
-    if (chosen.length > 0) {
-      const where = reads.install ? " (where this install allows)" : "";
-      return `Reads files only in the folders you chose${where}, without asking: ${chosen.join(", ")}, and in its own working folders. ${NEVER_READ_LINE}`;
+  // v1.360.0: one decision (lib/permissionLevels readScope) for this row AND
+  // the reading sentence every approval level carries.
+  const scope = readScope(facts?.reads);
+  switch (scope.kind) {
+    case "unknown":
+      return `${READS_LINE}, at every approval level, unless this install limits it to chosen folders. ${NEVER_READ_LINE}`;
+    case "chosen": {
+      // v1.356.0 (G81): the user's own folders, named as they typed them.
+      const where = scope.install ? " (where this install allows)" : "";
+      return `Reads files only in the folders you chose${where}, without asking: ${scope.folders.join(", ")}, and in its own working folders. ${NEVER_READ_LINE}`;
     }
-    const folders = (reads.folders ?? []).filter((f) => typeof f === "string" && f.trim());
-    if (folders.length === 0) {
+    case "nothing":
       return "This install limits reading to a list of folders, and none of them could be found, so it reads no files.";
-    }
-    return `Reads files only in the folders this install allows, without asking: ${folders.join(", ")}. ${NEVER_READ_LINE}`;
+    case "install":
+      return `Reads files only in the folders this install allows, without asking: ${scope.folders.join(", ")}. ${NEVER_READ_LINE}`;
+    default:
+      return `${READS_LINE}, at every approval level. ${NEVER_READ_LINE}`;
   }
-  return `${READS_LINE}, at every approval level. ${NEVER_READ_LINE}`;
 }
 
 /** "Saving files": the file tools' confinement, and where a chat outside a
@@ -167,6 +176,11 @@ export function AccessSummary({
 
   // Reading / saving: the route's facts; any failure reads as "unknown".
   const facts = access.data ?? (access.error ? null : undefined);
+  // v1.360.0: the chat's chip says the same reading sentence; hand it what
+  // this block just read (it re-reads when the folders setting is saved).
+  useEffect(() => {
+    if (access.data) noteReadFacts(access.data.reads);
+  }, [access.data]);
 
   // Apps.
   const apps = connectedApps(connectors.data?.connectors);
@@ -180,9 +194,10 @@ export function AccessSummary({
   const agentDef = def("agent_browser_enabled");
   const agentOn = values.agent_browser_enabled;
 
-  // The level new chats start in, on this window.
+  // The level new chats start in, on this window. v1.360.0: its reading
+  // sentence follows the facts the Reading files row shows.
   const mode: PermissionMode = readChatPermissionMode();
-  const level = PERMISSION_LEVELS[mode];
+  const level = permissionLevel(mode, readsLevelLine(facts?.reads));
 
   // Standing grants.
   const grantCount = grants.data?.grants?.length ?? null;

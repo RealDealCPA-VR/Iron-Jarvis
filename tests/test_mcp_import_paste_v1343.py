@@ -508,6 +508,11 @@ def test_preview_lists_names_only_and_never_the_planted_token(client):
         "disabled": False,
         "exists_as": "",
         "blurb": "Repos, issues, and pull requests.",
+        # v1.360.0 (G49, added on purpose): what the row runs, read off its
+        # masked command line (an unknown launcher is the program itself),
+        # and an address row's host ("" for a stdio row).
+        "program": NO_SUCH_COMMAND,
+        "host": "",
     }
     assert "env" not in gh and "headers" not in gh
     # Nothing was added by a preview.
@@ -788,7 +793,7 @@ def test_replace_whose_vault_refuses_the_new_values_puts_the_old_pack_back(clien
     (skip,) = out["skipped"]
     assert skip["name"] == "github"
     assert skip["why"].startswith("the vault could not store GITHUB_TOKEN")
-    assert "the earlier pack was put back" in skip["why"]
+    assert "the earlier extension was put back" in skip["why"]  # v1.360.0 (G76, moved on purpose)
     assert "could not be" not in skip["why"], "the old value was re-stored"
     assert _entry(platform, "github")["args"] == ["keep"]
     assert _entry(platform, "github")["env_secrets"] == {"GITHUB_TOKEN": "mcp.github.GITHUB_TOKEN"}
@@ -821,7 +826,7 @@ def test_replace_put_back_names_the_key_it_could_not_restore(client, monkeypatch
     )
     assert res.status_code == 200, res.text
     (skip,) = res.json()["skipped"]
-    assert "the earlier pack was put back" in skip["why"]
+    assert "the earlier extension was put back" in skip["why"]  # v1.360.0 (G76, moved on purpose)
     assert "GITHUB_TOKEN could not be" in skip["why"]
     assert old not in res.text and TOKEN not in res.text
     assert _entry(platform, "github")["env_secrets"] == {"GITHUB_TOKEN": "mcp.github.GITHUB_TOKEN"}

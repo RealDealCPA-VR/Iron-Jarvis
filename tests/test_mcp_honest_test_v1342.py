@@ -113,7 +113,7 @@ CRASH_TEXT = (
 
 def test_a_closed_connection_is_classified_as_a_crash_not_unreachable():
     verdict = classify_load_failure({"command": "npx"}, CRASH_TEXT)
-    assert verdict["reason"] == "the pack's server exited (exit code 1)"
+    assert verdict["reason"] == "the extension's server exited (exit code 1)"
     assert verdict["fix"] == "read its last output below; a missing key or setting is the usual cause"
     assert "reached" not in verdict["reason"], "the connect branch misread the crash"
 
@@ -122,12 +122,12 @@ def test_a_crash_whose_tail_names_a_missing_file_is_still_a_crash():
     # The tail is the CHILD's problem (its own ENOENT), not our launcher's.
     text = CRASH_TEXT.replace("the pack needs a key", "ENOENT: no such file or directory, open x.json")
     verdict = classify_load_failure({"command": "npx"}, text)
-    assert verdict["reason"].startswith("the pack's server exited")
+    assert verdict["reason"].startswith("the extension's server exited")
 
 
 def test_a_crash_without_an_exit_code_still_says_exited():
     verdict = classify_load_failure(None, "MCPServerStopped: the MCP server closed the connection")
-    assert verdict["reason"] == "the pack's server exited"
+    assert verdict["reason"] == "the extension's server exited"
     assert verdict["fix"]
 
 
@@ -147,7 +147,7 @@ def test_a_probe_of_a_dying_pack_reports_the_crash_with_its_masked_tail():
     failure = errors["dying"]
     assert failure["error"].startswith("MCPServerStopped: pack 'dying': "), failure["error"]
     assert "the MCP server closed the connection (exit code 1)" in failure["error"]
-    assert failure["reason"] == "the pack's server exited (exit code 1)"
+    assert failure["reason"] == "the extension's server exited (exit code 1)"
     assert failure["fix"] == "read its last output below; a missing key or setting is the usual cause"
     assert "BRAVE_API_KEY=***" in failure["stderr_tail"], failure["stderr_tail"]
     assert "the pack needs a key" in failure["stderr_tail"]
@@ -223,7 +223,7 @@ def test_test_route_answers_the_real_crash_not_advertised_no_tools(tmp_path):
     assert "advertised no tools" not in (r["error"] or "")
     assert r["error"].startswith("MCPServerStopped: pack 'dying': "), r["error"]
     assert "the MCP server closed the connection (exit code 1)" in r["error"]
-    assert r["reason"] == "the pack's server exited (exit code 1)"
+    assert r["reason"] == "the extension's server exited (exit code 1)"
     assert r["fix"] == "read its last output below; a missing key or setting is the usual cause"
     assert "BRAVE_API_KEY=***" in r["stderr_tail"]
     _assert_no_secret(r["error"])
@@ -277,7 +277,7 @@ def test_directory_test_reports_the_real_error(tmp_path):
     assert "advertised no tools" not in (r["error"] or "")
     assert r["error"].startswith("MCPServerStopped: pack 'dying': "), r["error"]
     assert "closed the connection (exit code 1)" in r["error"]
-    assert r["reason"] == "the pack's server exited (exit code 1)"
+    assert r["reason"] == "the extension's server exited (exit code 1)"
     assert "BRAVE_API_KEY=***" in r["stderr_tail"]
     _assert_no_secret(r["stderr_tail"])
     assert load_status("dying") is None
@@ -305,11 +305,11 @@ def test_call_failures_flip_the_record_to_failing_and_announce_once_per_episode(
     rec = load_status("srv")
     assert rec["state"] == "failing" and rec["failures"] == 1
     assert rec["last_error"].startswith("MCPServerStopped:")
-    assert rec["reason"] == "the pack's server exited (exit code 2)"
+    assert rec["reason"] == "the extension's server exited (exit code 2)"
     assert first == {
         "name": "srv",
         "error": "MCPServerStopped: the MCP server closed the connection (exit code 2)",
-        "reason": "the pack's server exited (exit code 2)",
+        "reason": "the extension's server exited (exit code 2)",
         "fix": "read its last output below; a missing key or setting is the usual cause",
     }
     assert _pack_failed(bus) == [first]
@@ -415,7 +415,7 @@ def test_execute_notes_a_failure_on_the_context_bus_and_a_success_after():
     announced = [e for e in bus.history if e.type == EVENT_PACK_FAILED]
     assert len(announced) == 1, "one announcement per episode, awaited before the result"
     assert announced[0].payload["name"] == "srv"
-    assert announced[0].payload["reason"] == "the pack's server exited (exit code 1)"
+    assert announced[0].payload["reason"] == "the extension's server exited (exit code 1)"
 
     answering = FakeTransport({"tools/call": {"content": [{"type": "text", "text": "hi"}]}})
     tool.client = mcp_tools_mod.MCPClient(answering, name="srv")
@@ -463,7 +463,7 @@ def test_mcp_servers_row_carries_state_failures_and_stderr_tail(tmp_path):
     rows = {r["name"]: r for r in client.get("/mcp/servers").json()["servers"]}
     dying = rows["dying"]
     assert dying["state"] == "failed" and dying["failures"] == 0
-    assert dying["reason"] == "the pack's server exited (exit code 1)"
+    assert dying["reason"] == "the extension's server exited (exit code 1)"
     assert "BRAVE_API_KEY=***" in dying["stderr_tail"]
     _assert_no_secret(dying["stderr_tail"])
     _assert_no_secret(dying["last_error"])
@@ -502,6 +502,6 @@ def test_add_route_note_for_a_crashing_pack_names_the_crash(tmp_path):
         "/mcp/servers", json={"name": "dying", "command": sys.executable, "args": [SERVER, "--mode", "die"]}
     ).json()
     assert r["tools_loaded"] == 0
-    assert "did not start: the pack's server exited (exit code 1)" in r["note"]
+    assert "did not start: the extension's server exited (exit code 1)" in r["note"]
     row = client.get("/mcp/servers").json()["servers"][0]
     assert row["state"] == "failed" and "BRAVE_API_KEY=***" in row["stderr_tail"]

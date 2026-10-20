@@ -26,11 +26,23 @@
  * read. So every level's description says so (`READS_LINE`), and Settings ›
  * Permissions & ledger opens with the same fact (components/settings/
  * AccessSummary.tsx).
+ *
+ * v1.360.0 (the v1.356.0 G81 regression): since "Folders Jarvis may read"
+ * exists, "anywhere" is only true while nothing limits reading. The reading
+ * sentence is worked out from the SAME facts the Access summary's Reading
+ * files row reads (GET /settings/access `reads`): `readScope` is the one
+ * decision, `readsLevelLine` the short sentence a level carries, and
+ * `permissionLevel(mode, readsLine)` a level with it. `PERMISSION_LEVELS`
+ * keeps the desktop default ("anywhere") for a caller that knows nothing
+ * about the setting; the chat chip (via lib/readFacts) and the Access
+ * summary pass what they know.
  */
 
 export type PermissionMode = "always_ask" | "approve_for_me" | "yolo";
 
-/** The one sentence every level carries: reading never asks (v1.352.0, G27). */
+/** The reading sentence while nothing limits reading: reading never asks
+ *  (v1.352.0, G27). Also what a level says while the limit is not known (an
+ *  older Iron Jarvis, or before the first answer). */
 export const READS_LINE = "Reads files anywhere on this PC without asking";
 
 export type PermissionTone = "neutral" | "warn";
@@ -44,23 +56,87 @@ export interface PermissionLevel {
   tone: PermissionTone;
 }
 
-export const PERMISSION_LEVELS: Readonly<Record<PermissionMode, PermissionLevel>> = {
-  always_ask: {
-    label: "Ask first",
-    description: `Asks before it edits files, uses the internet or runs commands. ${READS_LINE}`,
-    tone: "neutral",
-  },
+/** What each level does, before its reading sentence. */
+const LEVEL_DOES: Readonly<Record<PermissionMode, { label: string; does: string; tone: PermissionTone }>> = {
+  always_ask: { label: "Ask first", does: "Asks before it edits files, uses the internet or runs commands.", tone: "neutral" },
   approve_for_me: {
     label: "Ask when risky",
-    description: `Edits files and searches the web on its own, asks before running commands. ${READS_LINE}`,
+    does: "Edits files and searches the web on its own, asks before running commands.",
     tone: "neutral",
   },
-  yolo: {
-    label: "Don't ask",
-    description: `Runs commands and edits files without asking you first. ${READS_LINE}. Use with care`,
-    tone: "warn",
-  },
+  yolo: { label: "Don't ask", does: "Runs commands and edits files without asking you first.", tone: "warn" },
 };
+
+/** One level whose description carries `readsLine` (a `readsLevelLine`;
+ *  left out or blank = READS_LINE). An unknown mode reads as the default. */
+export function permissionLevel(mode: PermissionMode, readsLine: string = READS_LINE): PermissionLevel {
+  const row = LEVEL_DOES[mode] ?? LEVEL_DOES.approve_for_me;
+  const reads = (readsLine || "").trim() || READS_LINE;
+  const description = row.tone === "warn" ? `${row.does} ${reads}. Use with care` : `${row.does} ${reads}`;
+  return { label: row.label, description, tone: row.tone };
+}
+
+export const PERMISSION_LEVELS: Readonly<Record<PermissionMode, PermissionLevel>> = {
+  always_ask: permissionLevel("always_ask"),
+  approve_for_me: permissionLevel("approve_for_me"),
+  yolo: permissionLevel("yolo"),
+};
+
+/* ------------------------------------------------------- what it may read */
+
+/** GET /settings/access `reads` (daemon/routes/access_summary.py): `limited`
+ *  = something limits reading; `chosen` = the user's "Folders Jarvis may
+ *  read" as typed (v1.356.0, G81); `install` = the installation's own limit
+ *  is on; `folders` = what the gate allows. An older Iron Jarvis sends some
+ *  of these or none. */
+export interface ReadFacts {
+  limited?: boolean;
+  folders?: string[];
+  chosen?: string[];
+  install?: boolean;
+}
+
+/** Where reading reaches, decided ONCE for every sentence about it. */
+export type ReadScope =
+  | { kind: "unknown" }
+  | { kind: "anywhere" }
+  | { kind: "chosen"; folders: string[]; install: boolean }
+  | { kind: "install"; folders: string[] }
+  | { kind: "nothing" };
+
+function nonBlank(list: unknown): string[] {
+  return Array.isArray(list) ? list.filter((f): f is string => typeof f === "string" && f.trim() !== "") : [];
+}
+
+/** The reading facts in one decision: the user's own folders first (named
+ *  as typed), else the install's list, else nothing readable; no limit is
+ *  "anywhere"; no facts is "unknown" (never a claim). */
+export function readScope(reads: ReadFacts | null | undefined): ReadScope {
+  if (!reads || typeof reads !== "object") return { kind: "unknown" };
+  if (!reads.limited) return { kind: "anywhere" };
+  const chosen = nonBlank(reads.chosen);
+  if (chosen.length > 0) return { kind: "chosen", folders: chosen, install: reads.install === true };
+  const folders = nonBlank(reads.folders);
+  if (folders.length === 0) return { kind: "nothing" };
+  return { kind: "install", folders };
+}
+
+/** The reading sentence a level carries, from the same facts as the Access
+ *  summary's Reading files row. Short on purpose (the chip's menu is narrow):
+ *  that row names the folders themselves. Unknown = READS_LINE. */
+export function readsLevelLine(reads: ReadFacts | null | undefined): string {
+  const scope = readScope(reads);
+  switch (scope.kind) {
+    case "chosen":
+      return `Reads files only in the folders you chose${scope.install ? " (where this install allows)" : ""}, without asking`;
+    case "install":
+      return "Reads files only in the folders this install allows, without asking";
+    case "nothing":
+      return "Reads no files, because none of the folders it may read could be found";
+    default:
+      return READS_LINE;
+  }
+}
 
 /** Strictest first, the order the menu lists them. */
 export const PERMISSION_MODES: readonly PermissionMode[] = ["always_ask", "approve_for_me", "yolo"];

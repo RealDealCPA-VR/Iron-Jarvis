@@ -1059,7 +1059,7 @@ def _put_back_pack(d, row: dict[str, Any], values: dict[str, str], why: str) -> 
             secrets.set(vault_name, value, kind="api_key", description=f"MCP pack {name}: {key}")
         except Exception:  # noqa: BLE001 — names only
             lost.append(key)
-    note = f"{why}; the earlier pack was put back"
+    note = f"{why}; the earlier extension was put back"
     if lost:
         note += f", but its stored {', '.join(sorted(lost))} could not be; enter it again in Settings"
     return note
@@ -1072,7 +1072,7 @@ def _plain_validation_words(exc: BaseException) -> str:
         line = line.strip()
         if line.startswith("Value error, "):
             return line[len("Value error, "):].split(" [type=", 1)[0]
-    return text.splitlines()[0][:200] if text else "the pack could not be read"
+    return text.splitlines()[0][:200] if text else "the extension could not be read"
 
 
 def mcp_server_row(d, s: dict[str, Any]) -> dict[str, Any]:
@@ -1265,7 +1265,7 @@ def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
     if body.name is not None and body.name.strip() != name:
         raise HTTPException(
             status_code=422,
-            detail="the name cannot change; remove the pack and add it again under the new name",
+            detail="the name cannot change; remove the extension and add it again under the new name",
         )
     old = servers[idx]
     row = json.loads(json.dumps(old))
@@ -1419,12 +1419,12 @@ def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
     if is_http:
         url = (url or "").strip()
         if not url:
-            raise HTTPException(status_code=422, detail=f"an {transport} pack needs a url")
+            raise HTTPException(status_code=422, detail=f"an {transport} extension needs a url")
         if not url.lower().startswith(("http://", "https://")):
             raise HTTPException(status_code=422, detail="the url must start with http:// or https://")
     else:
         if not (command or "").strip():
-            raise HTTPException(status_code=422, detail="a stdio pack needs a command")
+            raise HTTPException(status_code=422, detail="an extension that runs on this PC needs a command")
 
     # -- the new row: today's stored shapes, byte for byte ----------------- #
     if is_http:
@@ -1482,7 +1482,7 @@ def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
             status_code=503,
             detail=(
                 f"the vault could not store {', '.join(refused)} "
-                f"({type(exc).__name__}); the pack was not changed"
+                f"({type(exc).__name__}); the extension was not changed"
             ),
         )
     servers[idx] = new
@@ -4080,7 +4080,7 @@ def register(app: FastAPI, d) -> None:
         else:
             raise HTTPException(status_code=400, detail="paste a config block, a command line or a URL")
         if not body.names:
-            raise HTTPException(status_code=400, detail="choose at least one pack to add")
+            raise HTTPException(status_code=400, detail="choose at least one extension to add")
         return _apply_specs(
             d, specs, list(body.names), dict(body.overrides or {}), bool(body.auto_approve), bool(body.replace)
         )
@@ -4201,9 +4201,9 @@ def register(app: FastAPI, d) -> None:
             "auto_approve_global": bool(body.auto_approve),
             "auto_approve_effective": bool(body.auto_approve),
             "note": (
-                "saved — restart Iron Jarvis so autonomous agents may use plug-in tools without asking"
+                "saved — restart Iron Jarvis so autonomous agents may use extension tools without asking"
                 if body.auto_approve
-                else "saved — every plug-in will ask before use again after the next restart"
+                else "saved — every extension will ask before use again after the next restart"
             ),
         }
 
@@ -4246,7 +4246,7 @@ def register(app: FastAPI, d) -> None:
                 "ok": False,
                 "count": 0,
                 "tools": [],
-                "error": failure.get("error") or "the pack did not start",
+                "error": failure.get("error") or "the extension did not start",
                 "reason": failure.get("reason") or "",
                 "fix": failure.get("fix") or "",
                 "stderr_tail": failure.get("stderr_tail") or "",
@@ -4334,7 +4334,7 @@ def register(app: FastAPI, d) -> None:
             if body.name is not None and body.name.strip() != name:
                 raise HTTPException(
                     status_code=422,
-                    detail="the name cannot change; remove the pack and add it again under the new name",
+                    detail="the name cannot change; remove the extension and add it again under the new name",
                 )
             if edit_fields <= {"name"}:
                 # A bare switch: the Tools row's and the Directory card's.

@@ -66,8 +66,8 @@ def resolve_assignee(d, raw: str) -> str:
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "the supervisor cannot take an assignment — it runs other "
-                    "agents; assign the job to a worker agent instead"
+                    "the supervisor cannot take a queued task — it runs other "
+                    "agents; give the task to a worker agent instead"
                 ),
             )
         return name
@@ -119,7 +119,7 @@ def _row(store, record) -> dict[str, Any]:
 def _get_or_404(store, assignment_id: str):
     record = store.get(assignment_id)
     if record is None:
-        raise HTTPException(status_code=404, detail=f"no assignment {assignment_id!r}")
+        raise HTTPException(status_code=404, detail=f"no queued task {assignment_id!r}")
     return record
 
 
@@ -134,8 +134,8 @@ _ALLOWED_FROM = {
 }
 _REFUSAL_WORDS = {
     "cancel": "it has already finished",
-    "unblock": "only a blocked assignment can be unblocked",
-    "retry": "only a finished (done, failed or cancelled) assignment can be retried",
+    "unblock": "only a blocked task can be unblocked",
+    "retry": "only a finished (done, failed or cancelled) task can be retried",
 }
 
 
@@ -143,7 +143,7 @@ def _refuse(verb: str, assignment_id: str, status: str) -> HTTPException:
     return HTTPException(
         status_code=409,
         detail=(
-            f"cannot {verb} assignment {assignment_id!r}: it is {status or 'unknown'} "
+            f"cannot {verb} task {assignment_id!r}: it is {status or 'unknown'} "
             f"— {_REFUSAL_WORDS[verb]}"
         ),
     )

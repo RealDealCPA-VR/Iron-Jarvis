@@ -175,7 +175,8 @@ def test_create_refuses_a_custom_coordinator(platform, store):
 def test_create_caps_the_queue_per_assignee(store):
     for i in range(MAX_QUEUED_PER_ASSIGNEE):
         store.create("builder", f"job {i}")
-    with pytest.raises(ValueError, match="already has 20 assignments waiting"):
+    # v1.360.0 (lane 10C, G76; moved on purpose): the canon's "task".
+    with pytest.raises(ValueError, match="already has 20 queued tasks waiting"):
         store.create("builder", "one more")
     # Another agent's queue is its own.
     store.create(NAME, "fine")

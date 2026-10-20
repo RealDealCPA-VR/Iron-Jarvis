@@ -597,22 +597,22 @@ def register(app: FastAPI, d) -> None:
 
         prev = d.orchestrator.get_session(session_id)
         if prev is None or getattr(prev, "origin", None) != MISSION_ORIGIN:
-            raise HTTPException(status_code=404, detail="mission not found")
+            raise HTTPException(status_code=404, detail="objective not found")
         if prev.status in (SessionStatus.ACTIVE, SessionStatus.QUEUED):
             raise HTTPException(
                 status_code=409,
-                detail="This mission is still running. Wait for it to finish before retrying.",
+                detail="This objective is still running. Wait for it to finish before retrying.",
             )
         store = getattr(d.platform, "worklist", None)
         if store is None:  # pragma: no cover - a platform without the store
-            raise HTTPException(status_code=409, detail="this mission has no worklist")
+            raise HTTPException(status_code=409, detail="this objective has no worklist")
         board_id = await asyncio.to_thread(store.root_session_for, session_id)
         summary = await asyncio.to_thread(store.summary, board_id)
         if int(summary.get("total") or 0) == 0:
-            raise HTTPException(status_code=409, detail="this mission has no worklist")
+            raise HTTPException(status_code=409, detail="this objective has no worklist")
         failed = int(summary.get("failed") or 0)
         if failed == 0:
-            raise HTTPException(status_code=409, detail="nothing failed in this mission")
+            raise HTTPException(status_code=409, detail="nothing failed in this objective")
         reuse = await asyncio.to_thread(_managed_reuse_path, d, prev)
         # The orchestrator's continue lock: a /continue and a retry can never
         # both claim one folder (a double without one runs unserialised).
@@ -622,14 +622,14 @@ def register(app: FastAPI, d) -> None:
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        "A follow-up of this mission is already running or "
+                        "A follow-up of this objective is already running or "
                         "queued. Wait for it to finish before retrying."
                     ),
                 )
             try:
                 session = await d.orchestrator.rerun_session(session_id)
             except KeyError:
-                raise HTTPException(status_code=404, detail="mission not found")
+                raise HTTPException(status_code=404, detail="objective not found")
             except (PermissionError, RuntimeError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
             if reuse and getattr(d.orchestrator, "_git_sessions", {}).get(session.id) is None:
@@ -643,7 +643,7 @@ def register(app: FastAPI, d) -> None:
                         pass
                     raise HTTPException(
                         status_code=500,
-                        detail=f"could not reuse the mission's folder: {exc}",
+                        detail=f"could not reuse the objective's folder: {exc}",
                     )
         try:
             await asyncio.to_thread(store.reset_failed, board_id)

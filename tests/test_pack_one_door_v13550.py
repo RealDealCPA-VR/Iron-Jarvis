@@ -189,11 +189,11 @@ def test_a_failed_connect_names_the_real_reason(client, github):
     body = res.json()
     assert body["tools_loaded"] == 0
     assert body["note"] == service.DID_NOT_START_NOTE  # the card's own next step, unchanged
-    assert body["reason"] == "the pack refused our credentials", body
+    assert body["reason"] == "the extension refused our credentials", body
     assert "ghp_expired_or_wrong" not in res.text
     row = _row(client, "github")
     assert row["connected"] is True and row["status"] == "failed"
-    assert row["reason"] == "the pack refused our credentials"
+    assert row["reason"] == "the extension refused our credentials"
     assert _entry(p, "github") is not None, "the connection is saved; Change key or Retry repairs it"
 
 

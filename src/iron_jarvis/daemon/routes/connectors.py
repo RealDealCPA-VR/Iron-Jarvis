@@ -36,7 +36,7 @@ def register(app: FastAPI, d) -> None:
         from ...connectors import connect, get_connector
 
         if get_connector(connector_id) is None:
-            raise HTTPException(status_code=404, detail="no such connector")
+            raise HTTPException(status_code=404, detail="no such connection")
         try:
             return connect(d.platform, connector_id, body.values)
         except ValueError as exc:
@@ -53,7 +53,7 @@ def register(app: FastAPI, d) -> None:
         try:
             return test(d.platform, connector_id)
         except KeyError:
-            raise HTTPException(status_code=404, detail="no such connector")
+            raise HTTPException(status_code=404, detail="no such connection")
 
     @app.delete("/connectors/{connector_id}")
     def disconnect_route(connector_id: str) -> dict[str, Any]:
@@ -62,4 +62,4 @@ def register(app: FastAPI, d) -> None:
         try:
             return disconnect(d.platform, connector_id)
         except KeyError:
-            raise HTTPException(status_code=404, detail="no such connector")
+            raise HTTPException(status_code=404, detail="no such connection")

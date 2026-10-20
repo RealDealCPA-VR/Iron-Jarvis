@@ -246,13 +246,13 @@ class AssignmentStore:
         """
         name = " ".join(str(raw or "").split())
         if not name:
-            raise ValueError("an assignment needs an assignee — a builtin type or a custom agent")
+            raise ValueError("a queued task needs an assignee — a builtin type or a custom agent")
         if self._validator is not None:
             return self._validator(name)
         low = name.casefold()
         if low.startswith(REMOTE_PREFIX):
             raise ValueError(
-                f"{name} is a remote agent — assignments to remote agents are not supported yet"
+                f"{name} is a remote agent — queued tasks for remote agents are not supported yet"
             )
         from ..core.models import AgentType
         from ..agents.types import get_agent_definition
@@ -296,7 +296,7 @@ class AssignmentStore:
             ) from None
         if agent_type is AgentType.SUPERVISOR:
             raise ValueError(
-                "the supervisor cannot take an assignment — assign work to a specialist "
+                "the supervisor cannot take a queued task — give the work to a specialist "
                 "agent (builder/researcher/reviewer) instead"
             )
         if "delegate" in (get_agent_definition(agent_type).tools or []):
@@ -326,7 +326,7 @@ class AssignmentStore:
         name = self.resolve_assignee(assignee)
         text_ = str(task or "").strip()
         if not text_:
-            raise ValueError("an assignment needs a task — say what the agent should do")
+            raise ValueError("a queued task needs a task description — say what the agent should do")
         text_ = text_[:MAX_TASK_CHARS]
         try:
             depth_n = int(depth or 0)
@@ -334,7 +334,7 @@ class AssignmentStore:
             depth_n = 0
         if depth_n > MAX_DEPTH:
             raise ValueError(
-                f"an agent's assignment may not queue another assignment this deep "
+                f"an agent's queued task may not queue another task this deep "
                 f"(depth {depth_n} > {MAX_DEPTH}) — do the work directly instead"
             )
         try:
@@ -369,7 +369,7 @@ class AssignmentStore:
             ).all()
             if len(queued) >= MAX_QUEUED_PER_ASSIGNEE:
                 raise ValueError(
-                    f"{name} already has {len(queued)} assignments waiting — let it work "
+                    f"{name} already has {len(queued)} queued tasks waiting — let it work "
                     "through them, or cancel some, before queueing more"
                 )
             record = AssignmentRecord(

@@ -47,8 +47,11 @@ PY_FILES = (
     SRC / "agents" / "task_door.py",
     # v1.358.0 (integrate): the reworded 503s ("… is not available right
     # now. Restart Iron Jarvis …", never "this daemon"), the Pixio key
-    # sentences and the parked-workflow store. routes/assignments.py is NOT
-    # here yet: its refusals still say "assignment"/"job" (a later wave).
+    # sentences and the parked-workflow store. v1.360.0 (lane 10C): every
+    # route module (routes/assignments.py included, its refusals now say
+    # "task"), the extension failure words, the import door, the queue and
+    # every ANSWER position in the daemon are read by the successor,
+    # tests/test_vocabulary_daemon_answers_v13600.py.
     SRC / "scheduling" / "parked_runs.py",
     SRC / "daemon" / "routes" / "coach.py",
     SRC / "daemon" / "routes" / "grants.py",

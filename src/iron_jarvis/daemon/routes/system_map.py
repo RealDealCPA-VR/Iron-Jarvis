@@ -254,8 +254,8 @@ def _work(d, db, since) -> list[dict[str, Any]]:
         alive = [r for r in rows if r.get("alive") is not False]
         busy = sum(1 for r in alive if r.get("state") in ("working", "blocked"))
         return _node(
-            "build", "Build", "/terminals", setup=len(alive), used=busy, live=busy, unit="pane",
-            detail=f"{len(alive)} open pane{'s' if len(alive) != 1 else ''}; a pane counts as in use while its program works.",
+            "build", "Build", "/terminals", setup=len(alive), used=busy, live=busy, unit="terminal",
+            detail=f"{len(alive)} open terminal{'s' if len(alive) != 1 else ''}; a terminal counts as in use while its program works.",
         )
 
     def documents() -> dict[str, Any]:
@@ -698,8 +698,8 @@ def _setup(d, db, since, failing_packs: list[dict[str, str]]) -> list[dict[str, 
         )
         names = ", ".join(p["name"] for p in failing_packs)
         return _node(
-            "tools", "Tools", "/tools", setup=len(packs) + custom, used=used, live=0, unit="pack",
-            detail=f"{ready} of {on} tool pack{'s' if on != 1 else ''} running"
+            "tools", "Tools", "/tools", setup=len(packs) + custom, used=used, live=0, unit="extension",
+            detail=f"{ready} of {on} extension{'s' if on != 1 else ''} running"
             + (f" ({off} switched off)" if off else "")
             + (f", plus {custom} custom tool{'s' if custom != 1 else ''}." if custom else "."),
             attention=f"Didn't start: {names}" if failing_packs else None,

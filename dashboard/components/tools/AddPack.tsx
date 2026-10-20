@@ -19,7 +19,9 @@
  *
  * v1.354.0 (G49, "import that explains itself"): the door a new user meets
  * FIRST is (a); every row says in one line what the tool does (the catalog's
- * blurb the daemon matched by package, else "A tool from <app>") and keeps
+ * blurb the daemon matched by package; v1.360.0: else what it IS, its name
+ * in words and the program it runs here or its web address's host, and once
+ * it is added the tools it loaded) and keeps
  * the launch command and key names under Details; the outcome lists the tool
  * names a pack loaded and where to switch it on in a chat; a pack that did
  * not start offers a button to its row (and Install Node.js when the reason
@@ -132,8 +134,10 @@ function InstallNode({ testId }: { testId: string }) {
 /* ---------------------------------------------------------------- rows */
 
 /** The one preview list every door ends in. `app` names where the rows came
- *  from ("A tool from <app>", "turned off in <app>"); `detailsOpen` opens
- *  each row's Details (the paste door: the user typed the config). */
+ *  from ("turned off in <app>"); `detailsOpen` opens each row's Details (the
+ *  paste door: the user typed the config); `loaded` (v1.360.0, G49) = the
+ *  tool names of the packs this door just added, which take over a row's
+ *  one line. */
 function PreviewList({
   rows,
   selected,
@@ -143,6 +147,7 @@ function PreviewList({
   app,
   showOrigin = false,
   detailsOpen = false,
+  loaded,
 }: {
   rows: ImportRow[];
   selected: Set<string>;
@@ -152,6 +157,7 @@ function PreviewList({
   app: string;
   showOrigin?: boolean;
   detailsOpen?: boolean;
+  loaded?: Record<string, string[]>;
 }) {
   if (rows.length === 0) return null;
   return (
@@ -202,9 +208,10 @@ function PreviewList({
                 <Badge value={`${secretKeys.length} in vault`} tone="violet" variant="calm" keepCase />
               )}
             </div>
-            {/* v1.354.0 (G49): what it does, in one line. */}
+            {/* v1.354.0 (G49): what it does, in one line (v1.360.0: what it
+                is, then the tools it loaded once added). */}
             <p className="mt-1 text-[12px] text-zinc-400" data-testid={`import-about-${row.name}`}>
-              {rowAbout(row, app)}
+              {rowAbout(row, app, loaded?.[row.name])}
             </p>
             {/* v1.355.0: a sign-in of the same name is not this server. */}
             {signedInWords(row) && (
@@ -328,11 +335,12 @@ function RowJump({
 
 /** The tool names each pack loaded, read ONCE after an apply that started
  *  at least one pack (GET /mcp/servers `tool_names`). `null` until read;
- *  a failed read leaves the outcome as it was (counts only). */
-function useToolNames(result: ApplyResult): Record<string, string[]> | null {
+ *  a failed read leaves the outcome as it was (counts only). v1.360.0: read
+ *  by the door, so the outcome AND the preview rows share the one read. */
+function useToolNames(result: ApplyResult | null): Record<string, string[]> | null {
   const [names, setNames] = useState<Record<string, string[]> | null>(null);
   useEffect(() => {
-    if (!result.added.some((a) => !packDidNotStart(a))) return;
+    if (!result || !result.added.some((a) => !packDidNotStart(a))) return;
     let live = true;
     get<{ servers?: { name?: unknown; tool_names?: unknown }[] }>("/mcp/servers")
       .then((res) => {
@@ -353,14 +361,36 @@ function useToolNames(result: ApplyResult): Record<string, string[]> | null {
   return names;
 }
 
+/** v1.360.0 (G49): the tool names of the packs THIS apply added and started,
+ *  by pack name (a pack added switched off, or one that did not start, has
+ *  none). They take over each such row's one line. */
+function addedTools(result: ApplyResult | null, names: Record<string, string[]> | null): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  if (!result || !names) return out;
+  for (const a of result.added) {
+    if (addedSwitchedOff(a) || packDidNotStart(a)) continue;
+    const list = names[a.name];
+    if (list && list.length > 0) out[a.name] = list;
+  }
+  return out;
+}
+
 /** What apply answered, row by row. v1.351.0 (G08): a pack that loaded NO
  *  tools was saved but did not start, so its row carries the warning triangle
  *  and "Added, but it didn't start: <why>." in the warn tone, never the green
  *  check. v1.354.0 (G49): "Open its row below to retry." is a button to the
  *  row, a started pack names its tools, and the outcome ends with where to
  *  switch them on in a chat. */
-function ApplyOutcome({ result, rowsHere }: { result: ApplyResult; rowsHere: boolean }) {
-  const toolNames = useToolNames(result);
+function ApplyOutcome({
+  result,
+  rowsHere,
+  toolNames,
+}: {
+  result: ApplyResult;
+  rowsHere: boolean;
+  /** The door's one read of GET /mcp/servers (useToolNames). */
+  toolNames: Record<string, string[]> | null;
+}) {
   const anyStarted = result.added.some((a) => !packDidNotStart(a));
   return (
     <div className="mt-3 space-y-1" data-testid="import-outcome">
@@ -477,6 +507,7 @@ function PasteDoor({ onAdded, rowsHere }: { onAdded: () => void; rowsHere: boole
   const [busy, setBusy] = useState<"preview" | "apply" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ApplyResult | null>(null);
+  const toolNames = useToolNames(result);
   const sel = useSelection();
 
   async function runPreview(raw: string) {
@@ -579,6 +610,7 @@ function PasteDoor({ onAdded, rowsHere }: { onAdded: () => void; rowsHere: boole
         onOverride={sel.setOverride}
         app={PASTE_APP}
         detailsOpen
+        loaded={addedTools(result, toolNames)}
       />
       {rows.length > 0 && (
         <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -600,7 +632,7 @@ function PasteDoor({ onAdded, rowsHere }: { onAdded: () => void; rowsHere: boole
           <span className="text-[11px] text-zinc-600">An extension that is already added is skipped.</span>
         </div>
       )}
-      {result && <ApplyOutcome result={result} rowsHere={rowsHere} />}
+      {result && <ApplyOutcome result={result} rowsHere={rowsHere} toolNames={toolNames} />}
     </div>
   );
 }
@@ -619,6 +651,7 @@ function SourceGroup({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ApplyResult | null>(null);
+  const toolNames = useToolNames(result);
   const rows: ImportRow[] = source.servers ?? [];
   const sel = useSelection(rows);
   // v1.353.0 (G42): the Directory re-reads the list after an import; a row
@@ -691,6 +724,7 @@ function SourceGroup({
             onOverride={sel.setOverride}
             app={appName(source)}
             showOrigin
+            loaded={addedTools(result, toolNames)}
           />
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <button
@@ -716,7 +750,7 @@ function SourceGroup({
           <ErrorNote>{error}</ErrorNote>
         </div>
       )}
-      {result && <ApplyOutcome result={result} rowsHere={rowsHere} />}
+      {result && <ApplyOutcome result={result} rowsHere={rowsHere} toolNames={toolNames} />}
     </div>
   );
 }

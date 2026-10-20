@@ -451,7 +451,7 @@ def register(app: FastAPI, d) -> None:
         """Media jobs, newest first; ``thread_id`` scopes to one chat."""
         jobs = getattr(d.platform, "media_jobs", None)
         if jobs is None:
-            raise HTTPException(status_code=503, detail="media jobs are not available")
+            raise HTTPException(status_code=503, detail="Making media is not available right now. Restart Iron Jarvis to bring it back.")
         rows = jobs.list_jobs(thread_id=thread_id.strip(), limit=limit)
         return {"jobs": rows, "count": len(rows)}
 
@@ -460,10 +460,10 @@ def register(app: FastAPI, d) -> None:
         """One media job (404 unknown)."""
         jobs = getattr(d.platform, "media_jobs", None)
         if jobs is None:
-            raise HTTPException(status_code=503, detail="media jobs are not available")
+            raise HTTPException(status_code=503, detail="Making media is not available right now. Restart Iron Jarvis to bring it back.")
         row = jobs.get_job(job_id.strip())
         if row is None:
-            raise HTTPException(status_code=404, detail="no such media job")
+            raise HTTPException(status_code=404, detail="no such media task")
         return row
 
     @app.get("/creative/items")

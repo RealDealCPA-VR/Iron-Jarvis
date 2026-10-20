@@ -18,9 +18,15 @@
  * placed inside it was cut off at that section's edge. On a phone's new chat
  * that hid the "Ask first" row, and a tap on it landed on the page.
  *
- * Pure: it holds only its own open/closed state. Saving the pick (the
+ * It holds only its own open/closed state. Saving the pick (the
  * conversation's setup, the user's default for new chats) stays the page's
  * job through `onChange`, which fires only when the pick CHANGES.
+ *
+ * v1.360.0 (the v1.356.0 G81 regression): each level's reading sentence
+ * follows "Folders Jarvis may read". The chip reads it from lib/readFacts
+ * (GET /settings/access, the Access summary's own facts), asked when the
+ * user reaches for the chip (pointer over it, focus, open), never on mount;
+ * until an answer lands it says what it always said (READS_LINE).
  *
  * Keyboard: Enter/Space or ArrowDown/ArrowUp on the chip opens the menu with
  * the current level active; arrows move (wrapping), Home/End jump, Enter or
@@ -33,12 +39,14 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Shield, ShieldAlert } from "lucide-react";
 import {
-  PERMISSION_LEVELS,
   PERMISSION_MODES,
   asPermissionMode,
+  permissionLevel,
   permissionToneText,
+  readsLevelLine,
   type PermissionMode,
 } from "@/lib/permissionLevels";
+import { refreshReadFacts, useReadFacts } from "@/lib/readFacts";
 
 export interface PermissionChipProps {
   /** The conversation's level (a wire value; an unknown one reads as the default). */
@@ -182,7 +190,9 @@ export function PermissionChip({
   onOpenChange,
 }: PermissionChipProps) {
   const current = asPermissionMode(value);
-  const level = PERMISSION_LEVELS[current];
+  // v1.360.0: the reading sentence follows the readable-folders setting.
+  const readsLine = readsLevelLine(useReadFacts());
+  const level = permissionLevel(current, readsLine);
   const [open, setOpen] = useState(false);
   const onOpenChangeRef = useRef(onOpenChange);
   onOpenChangeRef.current = onOpenChange;
@@ -224,6 +234,7 @@ export function PermissionChip({
 
   function openMenu() {
     if (disabled) return;
+    refreshReadFacts();
     sizeRef.current = undefined;
     layout();
     setActive(Math.max(0, PERMISSION_MODES.indexOf(current)));
@@ -372,7 +383,7 @@ export function PermissionChip({
       className="z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-white/10 bg-ink-900/95 p-1 shadow-xl shadow-black/30 outline-none backdrop-blur-xl"
     >
       {PERMISSION_MODES.map((mode, i) => {
-        const row = PERMISSION_LEVELS[mode];
+        const row = permissionLevel(mode, readsLine);
         const checked = mode === current;
         const on = i === active;
         const tone = permissionToneText(row.tone);
@@ -425,6 +436,8 @@ export function PermissionChip({
         disabled={disabled}
         onClick={() => (open ? close(false) : openMenu())}
         onKeyDown={onChipKeyDown}
+        onPointerEnter={() => refreshReadFacts()}
+        onFocus={() => refreshReadFacts()}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}

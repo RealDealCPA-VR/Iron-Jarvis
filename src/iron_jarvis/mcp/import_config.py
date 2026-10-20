@@ -309,17 +309,28 @@ class PackSpec:
         args and the url are shown MASKED (``detections.redact.mask``): a
         pasted ``docker run -e TOKEN=ghp_... img`` or a ``?api_key=`` url
         carries its secret in the text itself, and the row is read by the
-        browser. The spec in memory keeps the real values for the add."""
+        browser. The spec in memory keeps the real values for the add.
+
+        v1.360.0 (G49): ``program`` (a stdio row: what its command line runs,
+        :func:`program_of`) and ``host`` (an http/sse row: its address's host,
+        :func:`host_of`), both read off the MASKED parts, so a row the catalog
+        does not know can still say what it is in plain words."""
         from ..detections.redact import mask
         from .secrets import is_secret_key
 
         env_keys = sorted(self.env)
+        command = mask(self.command)
+        args = [mask(a) for a in self.args]
+        url = mask(self.url)
+        stdio = self.transport == "stdio"
         return {
             "name": self.name,
             "transport": self.transport,
-            "command": mask(self.command),
-            "args": [mask(a) for a in self.args],
-            "url": mask(self.url),
+            "command": command,
+            "args": args,
+            "url": url,
+            "program": program_of(command, args) if stdio else "",
+            "host": "" if stdio else host_of(url),
             "header_names": sorted(self.headers),
             "env_keys": [k for k in env_keys if not is_secret_key(k)],
             "secret_keys": [k for k in env_keys if is_secret_key(k)],
@@ -852,8 +863,24 @@ def _name_from_url(url: str) -> str:
     return name or safe_name("host-" + host)
 
 
-def _name_from_command(command: str, args: list[str]) -> str:
-    cmd = command.lower().rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+def _strip_ext(text: str, exts: tuple[str, ...]) -> str:
+    """Each of ``exts`` in turn, cut once from the end, any case."""
+    for ext in exts:
+        if text.lower().endswith(ext):
+            text = text[: -len(ext)]
+    return text
+
+
+def _program_tail(command: str, args: list[str]) -> tuple[str, str]:
+    """What a command line runs, by its own last name with its CASE KEPT:
+    the package an ``npx``/``uvx`` line fetches, the image a ``docker run``
+    starts, the script a ``node``/``python`` line runs, else the program
+    itself (``C:/qb/QuickBooks-MCP.exe`` → ``QuickBooks-MCP``). Returns
+    ``(tail, cmd)`` where ``cmd`` is the launcher, lowercased. The one reading
+    of a command line behind both :func:`_name_from_command` (a pack name)
+    and :func:`program_words` (what a preview row says it runs, v1.360.0)."""
+    base = str(command or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    cmd = base.lower()
     for ext in (".cmd", ".exe"):
         cmd = cmd.removesuffix(ext)
     rest = list(args)
@@ -909,12 +936,48 @@ def _name_from_command(command: str, args: list[str]) -> str:
         for ext in _PROGRAM_EXTS:
             pkg = pkg.removesuffix(ext)
     else:
-        pkg = cmd
-        for ext in _PROGRAM_EXTS:
-            pkg = pkg.removesuffix(ext)
+        # The program itself, its case kept (the extensions cut in the same
+        # order as before, any case, so a lowercased reading is unchanged).
+        pkg = _strip_ext(_strip_ext(base, (".cmd", ".exe")), _PROGRAM_EXTS)
     tail = _package_tail(pkg) if pkg else cmd
+    return tail, cmd
+
+
+def _name_from_command(command: str, args: list[str]) -> str:
+    tail, cmd = _program_tail(command, args)
     name = safe_name(tail)
     return name or safe_name(cmd)
+
+
+#: The longest program name a preview row says (a longer one is not a name).
+_PROGRAM_SHOWN_MAX = 80
+
+
+def program_of(command: str, args: list[str]) -> str:
+    """What a stdio server's command line runs, for a person (v1.360.0,
+    G49): the package, image, script or program by its own name, case kept
+    (``quickbooks-desktop-mcp``, ``server-filesystem``); ``""`` when the line
+    names nothing readable. It reads the line it is GIVEN: the preview passes
+    the MASKED line, so it never shows more than the row already does, and a
+    masked piece is never a name."""
+    from ..detections.redact import MASK
+
+    tail, _cmd = _program_tail(command, args)
+    tail = tail.strip()
+    if not tail or MASK in tail or any(ch.isspace() for ch in tail) or len(tail) > _PROGRAM_SHOWN_MAX:
+        return ""
+    return tail
+
+
+def host_of(url: str) -> str:
+    """The host of a server's address, lowercased (``mcp.example.com``);
+    ``""`` when there is none. Never the path, the query or a login."""
+    from urllib.parse import urlsplit
+
+    try:
+        return (urlsplit(str(url or "").strip()).hostname or "").lower()
+    except ValueError:
+        return ""
 
 
 def _name_for_entry(entry: dict[str, Any]) -> str:

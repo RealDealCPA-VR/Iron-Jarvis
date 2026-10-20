@@ -455,7 +455,7 @@ def resolve_launcher(command: str) -> str:
 
     cmd = (command or "").strip()
     if not cmd:
-        raise FileNotFoundError("this pack has no launcher command configured")
+        raise FileNotFoundError("this extension has no launcher command configured")
     if _os.sep in cmd or (_os.altsep and _os.altsep in cmd):
         return cmd  # an explicit path: the user's choice, never rewritten
     from ..terminals.ai_clis import _find
@@ -469,7 +469,7 @@ def resolve_launcher(command: str) -> str:
     }.get(cmd.lower().removesuffix(".cmd"), f"install '{cmd}'")
     raise FileNotFoundError(
         f"launcher '{cmd}' was not found on PATH or in the usual install "
-        f"folders — {hint}, restart Iron Jarvis, then press Retry on the pack"
+        f"folders — {hint}, restart Iron Jarvis, then press Retry on the extension"
     )
 
 
@@ -707,8 +707,8 @@ def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict
     if missing is not None:
         name = f" {missing}" if missing else ""
         return {
-            "reason": f"the package{name} is not in its registry, so the pack's name for it is wrong",
-            "fix": "edit the pack in Settings → Tools and correct the package name (its README gives the exact one)",
+            "reason": f"the package{name} is not in its registry, so the extension's name for it is wrong",
+            "fix": "edit the extension in Settings → Tools and correct the package name (its README gives the exact one)",
         }
 
     # A CRASH (v1.342.0): the pack's server started and then exited — at the
@@ -719,7 +719,7 @@ def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict
     if _is_crash_text(low):
         exit_code = _exit_code_in(raw)
         return {
-            "reason": "the pack's server exited"
+            "reason": "the extension's server exited"
             + (f" (exit code {exit_code})" if exit_code is not None else ""),
             "fix": "read its last output below; a missing key or setting is the usual cause",
         }
@@ -746,7 +746,7 @@ def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict
             if present:
                 reason = (
                     f"{launcher} exists on this PC but not on the PATH Iron Jarvis "
-                    f"was started with, so the pack could not launch"
+                    f"was started with, so the extension could not start"
                 )
                 fix = (
                     "Restart Iron Jarvis from a terminal that can run "
@@ -763,30 +763,30 @@ def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict
                 )
             return {"reason": reason, "fix": fix}
         return {
-            "reason": f"a file the pack needs to start wasn't found ({raw})",
-            "fix": "Check the pack's command and arguments on Tools → Connected packs, then press Retry.",
+            "reason": f"a file the extension needs to start wasn't found ({raw})",
+            "fix": "Check the extension's command and arguments on Tools → Connected extensions, then press Retry.",
         }
     if "timeouterror" in low or "did not respond within" in low:
         return {
-            "reason": "the pack didn't answer in time",
+            "reason": "the extension didn't answer in time",
             "fix": "Press Retry; if it keeps timing out, start its server by hand once to see what it prints.",
         }
     if "permission" in low or "winerror 5" in low:
         return {
-            "reason": "the pack's launcher was refused by the operating system",
-            "fix": "Check the file's permissions, or reinstall the pack's program.",
+            "reason": "the extension's launcher was refused by the operating system",
+            "fix": "Check the file's permissions, or reinstall the extension's program.",
         }
     if "401" in raw or "403" in raw or "unauthorized" in low or "forbidden" in low:
         return {
-            "reason": "the pack refused our credentials",
+            "reason": "the extension refused our credentials",
             "fix": (
                 "Change its key or token (Change key on its Directory card, or Edit "
-                "on Tools → Connected packs), then press Retry."
+                "on Tools → Connected extensions), then press Retry."
             ),
         }
     if "connect" in low or "refused" in low or "unreachable" in low:
         return {
-            "reason": "the pack's server couldn't be reached",
+            "reason": "the extension's server couldn't be reached",
             "fix": "Check its address, and that the server is running, then press Retry.",
         }
     # Unknown: say so rather than invent a cause, and keep the raw text visible.
@@ -903,7 +903,7 @@ def note_call_failure(
     (published unless ``publish=False`` — an async caller awaits
     :func:`_announce_pack_failed` itself), else ``None``.
     """
-    masked = _mask_text(error) or "the pack's call failed"
+    masked = _mask_text(error) or "the extension's call failed"
     cfg = _LOAD_CFGS.get(name)
     verdict = classify_load_failure(cfg, masked)
     client = live_client(name)
@@ -1097,9 +1097,9 @@ def packs_starting_note(names: "list[str]") -> str:
     if not names:
         return ""
     return (
-        "These tool packs are still starting, so their tools are not available "
+        "These extensions are still starting, so their tools are not available "
         "in this reply: " + ", ".join(names) + ". If the user asks for one of "
-        "their tools, say the pack is still starting and to try again in a "
+        "their tools, say the extension is still starting and to try again in a "
         "moment — never that the tool does not exist."
     )
 

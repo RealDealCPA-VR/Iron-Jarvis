@@ -187,8 +187,10 @@ describe("G49: Bring your tools from Claude, Codex, Cursor…", () => {
     expect(api.gets.filter((g) => g === "/mcp/import/sources")).toHaveLength(1);
     // The catalog's line when the daemon matched the package...
     expect(within(gh).getByTestId("import-about-github").textContent).toBe("Repos, issues, and pull requests.");
-    // ...else where it came from.
-    expect(screen.getByTestId("import-about-ledger-tool").textContent).toBe("A tool from Claude Desktop");
+    // ...else (v1.360.0, G49 — moved on purpose from "A tool from Claude
+    // Desktop", which said nothing about what it is) its name in words and
+    // what it runs; this older row carries no `program`, so no parenthesis.
+    expect(screen.getByTestId("import-about-ledger-tool").textContent).toBe("Ledger Tool · runs a program on this PC");
     // The launch command and the key names are folded, not on the row.
     const details = within(gh).getByTestId("import-details-github") as HTMLDetailsElement;
     expect(details.tagName).toBe("DETAILS");
@@ -323,7 +325,8 @@ describe("G49: Bring your tools from Claude, Codex, Cursor…", () => {
     fireEvent.blur(box);
     const pasted = await screen.findByTestId("import-row-pasted");
     expect((within(pasted).getByTestId("import-details-pasted") as HTMLDetailsElement).open).toBe(true);
-    expect(within(pasted).getByTestId("import-about-pasted").textContent).toBe("A tool from the pasted text");
+    // v1.360.0 (G49, moved on purpose): what it is, not where it came from.
+    expect(within(pasted).getByTestId("import-about-pasted").textContent).toBe("Pasted · runs a program on this PC");
   });
 });
 
@@ -467,8 +470,13 @@ describe("lib/addPackWords", () => {
     expect(words.mentionsNode("npm ERR! 404")).toBe(true);
     expect(words.mentionsNode("uvx is not installed")).toBe(false);
     expect(words.mentionsNode(null)).toBe(false);
-    expect(words.rowAbout({ ...LEDGER, blurb: "  " } as never, "Cursor")).toBe("A tool from Cursor");
-    expect(words.rowAbout({ ...LEDGER, blurb: null } as never, "")).toBe("A tool from another app");
+    // v1.360.0 (G49, moved on purpose): a row with no blurb says what it is.
+    expect(words.rowAbout({ ...LEDGER, blurb: "  " } as never, "Cursor")).toBe("Ledger Tool · runs a program on this PC");
+    expect(words.rowAbout({ ...LEDGER, blurb: null, program: "ledger-mcp" } as never, "")).toBe(
+      "Ledger Tool · runs a program on this PC (ledger-mcp)",
+    );
+    // Only a row with no name at all still says where it came from.
+    expect(words.rowAbout({ ...LEDGER, name: "", blurb: null } as never, "")).toBe("A tool from another app");
     expect(words.existsWords({ ...LEDGER, exists: true } as never)).toBe("already added");
     expect(words.offWords("Claude Desktop")).toBe("turned off in Claude Desktop");
     expect(words.startsTicked(LEDGER as never)).toBe(true);

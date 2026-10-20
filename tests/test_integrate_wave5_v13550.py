@@ -486,7 +486,7 @@ def test_an_older_github_pack_says_so_and_how_to_switch(client):
 
 def test_a_refused_pack_key_names_the_change_key_press():
     words = mcp_tools_mod.classify_load_failure({"command": "npx"}, "HTTPStatusError: 401 Unauthorized")
-    assert words["reason"] == "the pack refused our credentials"
+    assert words["reason"] == "the extension refused our credentials"
     assert "Change key" in words["fix"] and "Retry" in words["fix"]
 
 

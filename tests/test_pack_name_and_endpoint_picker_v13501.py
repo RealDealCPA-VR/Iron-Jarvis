@@ -131,7 +131,7 @@ def test_a_registry_404_reads_as_a_wrong_package_name_naming_it():
     assert "mcp-server-nope is not in its registry" in uv["reason"]
     # An ordinary crash keeps the crash words (the new branch is narrow).
     crash = classify_load_failure({"command": "npx"}, "the MCP server closed the connection (exit code 1); its last output: missing key")
-    assert crash["reason"] == "the pack's server exited (exit code 1)"
+    assert crash["reason"] == "the extension's server exited (exit code 1)"
 
 
 # --------------------------------------------------------------------------- #

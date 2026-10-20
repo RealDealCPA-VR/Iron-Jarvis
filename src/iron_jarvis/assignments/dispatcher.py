@@ -57,9 +57,9 @@ IDLE_INTERVAL_S = 60.0
 #: is handed back to ``queued`` — the create→start window is milliseconds.
 STALE_CLAIM_S = 300
 #: The held sentences (the dashboard prints them verbatim).
-HELD_BUSY = "{name} is busy with another assignment"
+HELD_BUSY = "{name} is busy with another queued task"
 HELD_SLOTS = "every session slot is busy — waiting for one to free"
-HELD_GONE = "{name} no longer exists — cancel this assignment or re-create the agent"
+HELD_GONE = "{name} no longer exists — cancel this task or re-create the agent"
 HELD_NO_ORCH = "the agent orchestrator is not ready yet"
 
 TickHook = Callable[[str, bool, BaseException | None], None]
@@ -366,13 +366,13 @@ class AssignmentDispatcher:
                     raise RuntimeError(HELD_GONE.format(name=assignee))
                 if definition.type is AgentType.SUPERVISOR:
                     raise RuntimeError(
-                        f"{assignee} is based on the supervisor and cannot take an assignment"
+                        f"{assignee} is based on the supervisor and cannot take a queued task"
                     )
                 agent_type = definition.type
             else:
                 agent_type = AgentType(assignee)
                 if agent_type is AgentType.SUPERVISOR:
-                    raise RuntimeError("the supervisor cannot take an assignment")
+                    raise RuntimeError("the supervisor cannot take a queued task")
                 get_agent_definition(agent_type)  # existence check
             workspace_root = str(payload.get("workspace_root") or "").strip() or None
             if workspace_root:

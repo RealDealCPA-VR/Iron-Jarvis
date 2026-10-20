@@ -74,7 +74,7 @@ logger = get_logger(__name__)
 #: send a harness to check its token, and the token is not the problem.
 NOT_READY_MESSAGE = (
     "the Iron Jarvis MCP server is not ready on this install; restart Iron "
-    "Jarvis and relaunch the harness from the Build pane"
+    "Jarvis and relaunch the harness from its Build terminal"
 )
 
 #: The 405 sentence for ``GET /mcp``. Names what to do instead, because a bare

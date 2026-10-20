@@ -773,7 +773,8 @@ def test_claude_that_does_not_exit_leaves_the_pane_alone_and_says_what_to_type(c
     r = c.post(f"/terminals/{pid}/start-fresh-with-handoff")
     assert r.status_code == 409
     detail = r.json()["detail"]
-    assert detail.startswith("Could not see the shell prompt in this pane")
+    # v1.360.0 (lane 10C, G76; moved on purpose): the canon's "terminal".
+    assert detail.startswith("Could not see the shell prompt in this terminal")
     assert "if Claude has exited, run: " in detail and "--add-dir=" in detail
     assert str(Path(s["sid"]) / "handoff.md") in detail
     typed = be.written[len(before):]
@@ -785,7 +786,7 @@ def test_claude_that_does_not_exit_leaves_the_pane_alone_and_says_what_to_type(c
     "screen,words",
     [
         (("✻ Thinking… (esc to interrupt)",), "Claude is still answering — press Esc, then try again."),
-        (("Do you want to proceed?", "❯ 1. Yes", "  2. No"), "Claude is waiting for an answer in this pane"),
+        (("Do you want to proceed?", "❯ 1. Yes", "  2. No"), "Claude is waiting for an answer in this terminal"),
     ],
 )
 def test_a_busy_claude_is_never_exited(client, fake, repo, screen, words):
@@ -810,7 +811,7 @@ def test_a_pane_not_opened_by_continue_is_refused(client, fake, repo):
     before = list(be.written)
     r = c.post(f"/terminals/{pane['id']}/start-fresh-with-handoff")
     assert r.status_code == 409
-    assert r.json()["detail"].startswith("This pane was not opened by Continue on the next account")
+    assert r.json()["detail"].startswith("This terminal was not opened by Continue on the next account")
     assert be.written == before
     assert c.post("/terminals/nope/start-fresh-with-handoff").status_code == 404
 

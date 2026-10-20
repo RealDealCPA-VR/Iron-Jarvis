@@ -7,7 +7,10 @@
  *  - the doors' names: "Bring your tools from Claude, Codex, Cursor…" first,
  *    the paste box as "Paste from a website or README (advanced)";
  *  - what a found tool does in ONE line: the catalog's blurb the daemon
- *    matched by package (`blurb`), else "A tool from <app>";
+ *    matched by package (`blurb`), else (v1.360.0, G49) what it IS from what
+ *    the import already knows: its name in words, and the program it runs
+ *    on this PC (`program`) or the host of its web address (`host`); once
+ *    it is added, the tools it loaded take over that line;
  *  - "turned off in <app>" for a server its app has switched off (`disabled`)
  *    and the "already …" words for one connected here another way
  *    (`exists_as`);
@@ -31,8 +34,11 @@ import type { PreviewRow } from "@/lib/mcpImport";
  *  claim). */
 /** A preview row as the door reads it. v1.354.0 integrate: `disabled`,
  *  `exists_as` and `blurb` now live on `PreviewRow` itself (lib/mcpImport);
- *  the name stays for the callers that use it. */
-export type ImportRow = PreviewRow;
+ *  the name stays for the callers that use it. v1.360.0 (G49): `program`
+ *  (a stdio row: what its command line runs, read off the masked line by
+ *  mcp/import_config.program_of) and `host` (an address row: its host). An
+ *  older daemon sends neither, and the line then says less, never more. */
+export type ImportRow = PreviewRow & { program?: string | null; host?: string | null };
 
 /** The doors, in the order a new user meets them. */
 export const DOOR_LABELS = {
@@ -44,12 +50,103 @@ export const DOOR_LABELS = {
 /** Where the paste door's rows came from, said in the row's words. */
 export const PASTE_APP = "the pasted text";
 
-/** What a found tool does, in one line: the catalog's blurb when the daemon
- *  matched the package, else where it came from. */
-export function rowAbout(row: ImportRow, app: string): string {
+/** Casing for words a server's name is often written with. Casing ONLY:
+ *  nothing here says what a server does. */
+const NAME_CASE: Readonly<Record<string, string>> = {
+  ai: "AI",
+  api: "API",
+  aws: "AWS",
+  crm: "CRM",
+  csv: "CSV",
+  db: "DB",
+  erp: "ERP",
+  gcp: "GCP",
+  http: "HTTP",
+  llm: "LLM",
+  ocr: "OCR",
+  pdf: "PDF",
+  qb: "QB",
+  sql: "SQL",
+  ssh: "SSH",
+  url: "URL",
+  github: "GitHub",
+  gitlab: "GitLab",
+  hubspot: "HubSpot",
+  linkedin: "LinkedIn",
+  mongodb: "MongoDB",
+  mysql: "MySQL",
+  onedrive: "OneDrive",
+  openai: "OpenAI",
+  paypal: "PayPal",
+  postgresql: "PostgreSQL",
+  quickbooks: "QuickBooks",
+  sharepoint: "SharePoint",
+  sqlite: "SQLite",
+  youtube: "YouTube",
+};
+
+/** Words that name the mechanism, not the thing ("quickbooks-mcp-server"). */
+const MECHANISM_WORDS = new Set(["mcp", "server", "mcpserver"]);
+
+/**
+ * A server's name in words: "quickbooks-desktop" -> "QuickBooks Desktop",
+ * "brave_search" -> "Brave Search", "mcp-server-git" -> "Git". A word the name
+ * already capitalises keeps its case; "mcp"/"server" are dropped unless
+ * nothing else is left. Never more than the name says.
+ */
+export function serverLabel(name: string): string {
+  const raw = (name ?? "").trim();
+  const words = raw.split(/[\s_.\-\/@]+/).filter(Boolean);
+  const kept = words.filter((w) => !MECHANISM_WORDS.has(w.toLowerCase()));
+  const shown = (kept.length > 0 ? kept : words).map((w) => {
+    const known = NAME_CASE[w.toLowerCase()];
+    if (known) return known;
+    return /[A-Z]/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1);
+  });
+  return shown.join(" ") || raw;
+}
+
+/** What a found server that runs on this PC is, after its name. */
+export const RUNS_HERE = "runs a program on this PC";
+/** What a found server reached by a web address is, after its name. */
+export const AT_ADDRESS = "reached at a web address";
+
+/** The host of an address, for an older daemon that sent no `host`. */
+function hostFromUrl(url: string | null | undefined): string {
+  try {
+    return new URL((url ?? "").trim()).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * What a found tool is, in one line.
+ *  - once added, the tools it loaded take over ("QuickBooks Desktop · 3
+ *    tools: create invoice, list customers and get report");
+ *  - the catalog's blurb when the daemon matched the package;
+ *  - else (v1.360.0, G49) its name in words and what the import knows about
+ *    it: "QuickBooks Desktop · runs a program on this PC
+ *    (quickbooks-desktop-mcp)" or "Linear · reached at a web address
+ *    (mcp.linear.app)". Never a capability the import does not know.
+ * `app` names where the rows came from; it is only said for a row with no
+ * name at all.
+ */
+export function rowAbout(row: ImportRow, app: string, tools?: readonly string[] | null): string {
+  const label = serverLabel(row.name ?? "");
+  const loaded = (tools ?? []).filter((t) => typeof t === "string" && t.trim() !== "");
+  if (label && loaded.length > 0) {
+    return `${label} · ${loaded.length} tool${loaded.length === 1 ? "" : "s"}: ${toolNamesLine(loaded)}`;
+  }
   const blurb = typeof row.blurb === "string" ? row.blurb.trim() : "";
   if (blurb) return blurb;
-  return `A tool from ${app || "another app"}`;
+  if (!label) return `A tool from ${app || "another app"}`;
+  if (row.transport === "http" || row.transport === "sse") {
+    const host = (typeof row.host === "string" ? row.host.trim() : "") || hostFromUrl(row.url);
+    return host ? `${label} · ${AT_ADDRESS} (${host})` : `${label} · ${AT_ADDRESS}`;
+  }
+  const program = typeof row.program === "string" ? row.program.trim() : "";
+  return program ? `${label} · ${RUNS_HERE} (${program})` : `${label} · ${RUNS_HERE}`;
 }
 
 /** True when the app it came from has it switched off. Only a real `true`

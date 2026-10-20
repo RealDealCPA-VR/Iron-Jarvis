@@ -285,6 +285,11 @@ def test_sources_lists_every_known_file_with_readable_flags_and_never_a_value(cl
         "disabled": False,
         "exists_as": "",
         "blurb": "Read the history, diffs, and branches of a local git repo.",
+        # v1.360.0 (G49, added on purpose): what the row runs, read off its
+        # masked command line (an unknown launcher is the program itself),
+        # and an address row's host ("" for a stdio row).
+        "program": NO_SUCH,
+        "host": "",
     }
     assert by_name["notion"]["transport"] == "http"
     assert by_name["notion"]["origin"] == "C:\\work\\app"

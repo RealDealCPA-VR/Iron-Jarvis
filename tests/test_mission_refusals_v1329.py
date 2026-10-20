@@ -71,7 +71,8 @@ def test_a_running_mission_is_refused_in_plain_sentences(tmp_path):
         after = _count_missions(c)
     assert res.status_code == 409, res.text
     detail = res.json()["detail"]
-    assert detail == "This mission is still running. Wait for it to finish before retrying."
+    # v1.360.0 (lane 10C, G76; moved on purpose): the canon's "objective".
+    assert detail == "This objective is still running. Wait for it to finish before retrying."
     assert not any(d in detail for d in DASHES), detail
     assert after == before, "a refused retry must not start a mission"
 
@@ -100,7 +101,7 @@ def test_a_follow_up_already_working_is_refused_in_plain_sentences(tmp_path, mon
     assert res.status_code == 409, res.text
     detail = res.json()["detail"]
     assert detail == (
-        "A follow-up of this mission is already running or queued. "
+        "A follow-up of this objective is already running or queued. "
         "Wait for it to finish before retrying."
     )
     assert not any(d in detail for d in DASHES), detail

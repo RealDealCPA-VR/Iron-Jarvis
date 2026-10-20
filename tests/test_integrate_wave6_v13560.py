@@ -166,7 +166,8 @@ def test_a_switched_off_pack_reads_off_on_every_surface_and_on_again_needs_no_to
     # --- the Status map and the doctor count it apart ----------------------
     smap = client.get("/ui/system-map").json()
     tools_star = next(s for a in smap["areas"] for s in a["nodes"] if s["key"] == "tools")
-    assert tools_star["detail"].startswith("0 of 0 tool packs running (1 switched off)")
+    # v1.360.0 (lane 10C, G76; moved on purpose): the canon's "extension".
+    assert tools_star["detail"].startswith("0 of 0 extensions running (1 switched off)")
     doctor = importlib.import_module("iron_jarvis.onboarding.doctor")
     check = doctor.check_mcp(p)
     assert check["ok"] is True
