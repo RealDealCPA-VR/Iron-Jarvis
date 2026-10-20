@@ -338,6 +338,24 @@ describe("the run page says whether the work stayed on this network", () => {
     expect(modelValue().textContent).toBe("OpenAI · gpt-x");
     expect(screen.queryByTestId("run-where")).toBeNull();
   });
+
+  it("a run stopped while still queued never reached a model, so it claims neither (nothing was sent)", async () => {
+    // Review, v1.360.1: "· cloud" here would say a message left the network
+    // when no agent run ever started (an empty transcript).
+    setRun({ provider: "openai", model: "gpt-x", status: "cancelled" });
+    const detail = api.responses[`/sessions/${ID}`] as { transcript: { runs: unknown[]; tools: unknown[] } };
+    detail.transcript.runs = [];
+    detail.transcript.tools = [];
+    api.responses["/models"] = {
+      models: [{ provider: "openai", model: "gpt-x", on_this_network: false }],
+    };
+    setReceipt("openai", false);
+    open();
+    await screen.findByTestId("session-files");
+    expect(modelValue().textContent).toBe("OpenAI · gpt-x");
+    expect(screen.queryByTestId("run-where")).toBeNull();
+    expect(modelValue().textContent).not.toMatch(/local|cloud/);
+  });
 });
 
 describe("moving between runs on one page: a run's line reads only its OWN receipt", () => {

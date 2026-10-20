@@ -186,8 +186,12 @@ export default function SessionDetailPage({
   // until it lands, or when it cannot say, the /models row decides; unknown
   // says nothing. A run still going has not written its served model yet.
   const [receipt, setReceipt] = useState<SessionResult | null>(null);
+  // A run stopped while it was still queued never reached a model (no agent
+  // run in its transcript): saying "cloud" there would claim a message left
+  // the network when nothing was sent, so it says nothing (review, v1.360.1).
+  const reachedAModel = runs.length > 0;
   const where =
-    session && !isActive
+    session && !isActive && reachedAModel
       ? runWhere(session.provider, session.model, catalog, receipt?.session_id === id ? receipt : null)
       : null;
   const recordId = useId();
