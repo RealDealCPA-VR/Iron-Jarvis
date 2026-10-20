@@ -1093,7 +1093,24 @@ _ABOUT_JARVIS_STRONG_RX = re.compile(
     r"|\bcomputer\s+use\b|\bbuild\s+panes?\b|\btool\s+packs?\b|\breflex(?:es)?\b|\bsentinels?\b"
     r"|\bautonomy\b|\blocal[\s-]+only\b|\bphone\s+chat\b|\bread[\s-]+aloud\b|\bthe\s+directory\b"
     r"|\bthe\s+handbook\b|\beverything\s+page\b|\bmodel\s+server\b|\bdefault\s+model\b"
-    r"|\bknowledge\s+graph\b|\btime\s+travel\b|\bmissions?\b|\bemergency\s+stop\b",
+    r"|\bknowledge\s+graph\b|\btime\s+travel\b|\bmissions?\b|\bemergency\s+stop\b"
+    # v1.361.0 (lane 11B, the final hunt's regression 5): Handbook features
+    # the first cut left out — each armed the Guide up to v1.359.0 ("how do
+    # I add a rest hookup", "how do I open the status page", "how do I
+    # connect my dgx spark", "how do I use the bell", "how do I connect my
+    # claude subscription"). "a status page for my website", "the spark
+    # plug" and "the bell on my bike" are not these.
+    r"|\brest\s+hookups?\b|\bthe\s+status\s+page\b|\bdgx\s+sparks?\b"
+    r"|\b(?:my|the|our)\s+sparks?\b(?!\s+(?:plugs?|clusters?|jobs?|sessions?|shell|sql|streaming"
+    r"|dataframes?|context|of|in|on|between)\b)"
+    r"|\breadable\s+folders?\b|\bcreative\s+gallery\b"
+    r"|\bthe\s+(?:notification\s+)?bell\b(?!\s+(?:on|of|in|at|for|to|tower|pepper|curve|jar)\b)"
+    r"|\b(?:connect|use|link|add|set\s*up|setup|sign\s+in\s+(?:to|with)|log\s+in\s+(?:to|with))\s+"
+    r"(?:my\s+|a\s+|the\s+)?(?:claude|chatgpt|codex|openai)\s+(?:subscriptions?|plans?|accounts?)\b"
+    # ...and "you" / "your" as the one asked, in words the first cut missed
+    # ("how do I change your personality", "a folder you can read").
+    r"|\byour\s+(?:personality|persona|instructions|behaviou?r)\b"
+    r"|\byou\s+(?:can|could|will)\s+(?:read|see|reach|use|access|open)\b",
     re.IGNORECASE,
 )
 #: ...or a feature word of the Handbook / Everything list that other
@@ -1125,7 +1142,28 @@ _ABOUT_JARVIS_FEATURE_RX = re.compile(
     r"|\b(?:use|enable|disable|turn\s+(?:on|off))\s+(?:the\s+)?voice\b|\bvoice\s+(?:mode"
     r"|input|chat|replies|commands?)\b|\bknowledge\s+base\b"
     r"|\busage\s+page\b|\bfile\s+search\b|\bself[\s-]development\b"
-    r"|\bsession\s+board\b|\bconnections\s+page\b",
+    r"|\bsession\s+board\b|\bconnections\s+page\b"
+    # v1.361.0 (lane 11B, the final hunt's regression 5): phone chat, another
+    # computer running Jarvis, the model providers and the Browser page —
+    # "how do I connect my phone", "how do I chat from my phone", "how do I
+    # add another computer", "how do I add a provider", "how do I connect
+    # openai", "how do I use the browser". Not "connect my phone to my car",
+    # "connect another computer to my wifi" or "change my internet
+    # provider".
+    r"|\b(?:connect|pair|link|add|set\s*up|setup|hook\s+up)\s+(?:my|a|the)\s+phone\b"
+    r"(?!\s+(?:to|with|and)\b)"
+    r"|\b(?:chat|talk)\s+(?:from|on|with|using)\s+my\s+phone\b"
+    r"|\b(?:another|a\s+second|my\s+other|my\s+second)\s+(?:computer|pc|machine|laptop)\b"
+    r"(?!\s+(?:to|with|on)\s+(?:my|the|a|our)\s+"
+    r"(?:wi-?fi|network|router|printer|monitors?|tv|internet|hotspot|domain)\b)"
+    r"|\b(?:add|change|switch|set\s*up|setup|connect|configure|remove|pick|choose)\s+"
+    r"(?:(?:a|an|the|my|another|new|default|different)\s+){0,2}(?:(?:model|ai|llm)\s+)?providers?\b"
+    r"(?!\s+(?:to|for|in|on)\s+(?:my|our|the)\s+(?:insurance|health|network|plan|policy)\b)"
+    r"|\b(?:connect|add|link|set\s*up|setup|sign\s+in\s+(?:to|with)|log\s+in\s+(?:to|with))\s+"
+    r"(?:my\s+)?(?:openai|anthropic|claude|chatgpt|gemini|grok|deepseek|groq|openrouter|mistral)\b"
+    r"|\buse\s+the\s+browser\s*(?:\Z|[?.!])"
+    r"|\b(?:files?|documents?|docs|pdfs?|images?|photos?|pictures?)\s+(?:to|into)\s+"
+    r"(?:a|the|this|my)\s+chat\b",
     re.IGNORECASE,
 )
 #: v1.360.0 fix round (lane 10B, G38): a page or setting word that ALSO has
@@ -1142,7 +1180,11 @@ _ABOUT_JARVIS_FEATURE_RX = re.compile(
 _PAGE_WORDS = (
     r"(?:settings|setting|projects?|goal|sessions?|templates?|secrets?|packs?|chats?|models?"
     r"|themes?|palettes?|terminals?|panes?|fleet|memory|memories|notifications?|updates?"
-    r"|usage)"
+    r"|usage"
+    # v1.361.0 (lane 11B, the final hunt's regression 5): backups and past
+    # conversations ("how do I set up a backup", "how do I find a past
+    # conversation") — as the verb's own object only, like the rest.
+    r"|backups?|conversations?)"
 )
 #: The singular words whose bare form is mostly the everyday thing ("add
 #: memory" to a laptop, "set a goal", "a setting" on a camera) — an article
@@ -1248,18 +1290,34 @@ def _how_to_is_about_jarvis(sentence: str) -> bool:
         return False
 
 
+#: v1.361.0 (lane 11B, the final hunt's regression 5): the app named
+#: ANYWHERE in the message — "Hi Jarvis! How do I connect my phone?", "I'm
+#: new to Jarvis. How do I set it up?" put the name in another sentence.
+_NAMES_JARVIS_RX = re.compile(r"\b(?:iron\s*)?jarvis\b|\bthis\s+app\b", re.IGNORECASE)
+
+
 def _guide_fires(msg: str) -> bool:
     """Does the Guide rule award on *msg* (v1.360.0, lane 10B)? Every branch
     as before, except the how-do-I one, which counts only in a sentence about
-    Iron Jarvis (:func:`_how_to_is_about_jarvis`). Bounded: at most twelve
-    matches are read. Never raises (a fault awards, the older reading)."""
+    Iron Jarvis (:func:`_how_to_is_about_jarvis`) — or (v1.361.0, lane 11B)
+    in a message that names the app in another sentence ("I'm new to
+    Jarvis. How do I set it up?"), unless the how-to puts its thing inside
+    another product ("Hey Jarvis. How do I turn off autocorrect on my
+    iPhone?"). Bounded: at most twelve matches are read.
+    Never raises (a fault awards, the older reading)."""
     try:
+        named = None
         for i, m in enumerate(_GUIDE_RX.finditer(msg)):
             if i >= 12:
                 return False
             if m.group("guide_howdo") is None:
                 return True
-            if _how_to_is_about_jarvis(_sentence_around(msg, m.start(), m.end())):
+            sentence = _sentence_around(msg, m.start(), m.end())
+            if _how_to_is_about_jarvis(sentence):
+                return True
+            if named is None:
+                named = _NAMES_JARVIS_RX.search(msg[:4000]) is not None
+            if named and not _ELSEWHERE_RX.search(sentence):
                 return True
         return False
     except Exception:  # noqa: BLE001

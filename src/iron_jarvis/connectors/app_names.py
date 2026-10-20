@@ -58,6 +58,19 @@ from typing import Any
 #: The longest message text the matcher reads (the autoselect bound).
 _MAX_TEXT = 4000
 
+#: v1.361.0 (lane 11B, the final hunt's regression 6): "outlook" in lower
+#: case names the app only where the everyday word cannot stand — after a
+#: place or a possessive ("in outlook", "from my outlook") and not followed
+#: by the view's own words ("my outlook on life", "my outlook is bright"),
+#: or before the app's own things ("outlook inbox"). "give me your outlook
+#: on the market" and "the outlook for 2027" stay the word.
+_LOWER_OUTLOOK = (
+    r"(?:(?<=\bin\s)|(?<=\bon\s)|(?<=\bto\s)|(?<=\bvia\s)|(?<=\bfrom\s)|(?<=\binto\s)"
+    r"|(?<=\bmy\s)|(?<=\bour\s)|(?<=\busing\s)|(?<=\bthrough\s))"
+    r"outlook(?!\s+(?:on|for|of|about|is|was|has|had|remains|looks|seems|changed|will|would)\b)"
+    r"|outlook(?=\s+(?:calendars?|inbox(?:es)?|mail|e-?mails?|accounts?|contacts?|folders?)\b)"
+)
+
 #: Words people use for a catalog app beyond its catalog name. Regex
 #: fragments, matched case-insensitively between word boundaries.
 ALIASES: dict[str, tuple[str, ...]] = {
@@ -89,6 +102,11 @@ ALIASES: dict[str, tuple[str, ...]] = {
         r"(?-i:Outlook)",
         r"outlook\.com",
         r"my\s+(?:outlook\s+)?calendar(?!\s+years?\b)",
+        # v1.361.0 (lane 11B): a lower-case "outlook" where it can only be
+        # the app — a place ("in outlook", "from my outlook") or the app's
+        # own things ("outlook inbox") — never the view ("my outlook on
+        # life", "the outlook for the market").
+        _LOWER_OUTLOOK,
     ),
 }
 
@@ -141,12 +159,17 @@ _GENERIC_MAIL_RX = re.compile(
 #: "my calendar" (never "my calendar year"), and not "my Outlook calendar".
 _GENERIC_CALENDAR_RX = re.compile(r"\bmy\s+calendar(?!\s+years?\b)", re.IGNORECASE)
 #: Each kind's apps BY NAME: a message that names one is not generic.
+#: v1.361.0 (lane 11B): with the lower-case "outlook" the app's own alias
+#: reads ("what's on my calendar in outlook" names Microsoft 365, as the
+#: capitalised one always did).
 _MAIL_BRAND_RX = re.compile(
-    r"\bg-?mail\b|\bmicrosoft\s*365\b|\boffice\s*365\b|\bm365\b|\boutlook\.com\b|(?-i:\bOutlook\b)",
+    r"\bg-?mail\b|\bmicrosoft\s*365\b|\boffice\s*365\b|\bm365\b|\boutlook\.com\b|(?-i:\bOutlook\b)"
+    r"|\b(?:" + _LOWER_OUTLOOK + r")\b",
     re.IGNORECASE,
 )
 _CALENDAR_BRAND_RX = re.compile(
-    r"\bmicrosoft\s*365\b|\boffice\s*365\b|\bm365\b|\boutlook\.com\b|(?-i:\bOutlook\b)",
+    r"\bmicrosoft\s*365\b|\boffice\s*365\b|\bm365\b|\boutlook\.com\b|(?-i:\bOutlook\b)"
+    r"|\b(?:" + _LOWER_OUTLOOK + r")\b",
     re.IGNORECASE,
 )
 
@@ -457,23 +480,48 @@ _ACT_VERB = (
     r"|add|put|delete|remove|move|copy|download|sync|archive|update|edit|rename|star|label"
     r"|store|back\s+up|export|import|query|summari[sz]e|scan|sort|organi[sz]e|clean\s+up"
     r"|clear|empty|reply\s+to|forward|charge|refund|message|ping|notify|track|assign|close"
-    r"|merge|review|comment\s+on|attach|create|make|file|raise|start|book|invite)"
+    r"|merge|review|comment\s+on|attach|create|make|file|raise|start|book|invite"
+    # v1.361.0 (lane 11B, the final hunt's regression 1): sending mail and
+    # booking a message act on the app too ("email my gmail contacts",
+    # "schedule a slack message for Monday").
+    r"|e-?mail|schedule)"
 )
-#: The verb OPENS the app's clause (after a polite or "can you" lead-in).
-_ACT_HEAD_RX = re.compile(
+#: The polite or "can you" lead-in before a verb that opens the clause.
+_LEAD_IN = (
     r"\A\s*(?:(?:please|now|ok(?:ay)?|hey|jarvis|so)[\s,]+)*"
     r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|i\s+(?:want|need)\s+(?:you\s+)?to\s+"
     r"|go\s+ahead\s+and\s+|help\s+me\s+)?"
-    + _ACT_VERB + r"\b",
+)
+#: The verb OPENS the app's clause (after a polite or "can you" lead-in).
+#: v1.361.0 (lane 11B): "I need" / "I want" open it too ("I need the
+#: invoices from stripe for March", "I need my stripe numbers").
+_ACT_HEAD_RX = re.compile(
+    _LEAD_IN + r"(?:" + _ACT_VERB + r"|i\s+(?:need|want)|i['’]d\s+like)\b",
+    re.IGNORECASE,
+)
+#: v1.361.0 (lane 11B, the final hunt's regression 1): the chat verbs that
+#: say WHERE something is said or done — "DM Bob on slack", "ask Bob on
+#: slack if he's free", "tell the team on slack", "let the team know on
+#: slack", "remind me on slack", "run this query against postgres", "catch
+#: me up on slack". They count only with the app as the PLACE (a "to / on /
+#: via / against <app>" before it), never with the app as their object:
+#: "run postgres in docker" is not the user's Postgres.
+_PLACE_HEAD_RX = re.compile(
+    _LEAD_IN
+    + r"(?:dm|ask|tell|let\s+(?:[\w'’-]+\s+){1,3}know|remind|text|run|catch\s+(?:me|us)\s+up)\b",
     re.IGNORECASE,
 )
 #: Nothing but "me", "all (of) the", a determiner and a freshness word
 #: between that verb and the app: the app is the verb's own object.
+#: v1.361.0 (lane 11B): or a person's possessive ("reply to Dana's gmail").
 _OBJECT_GAP_RX = re.compile(
-    r"(?:\s+(?:me|us))?\s+(?:all\s+(?:of\s+)?)?(?:(?:the|my|our|this|that)\s+)?"
+    r"(?:\s+(?:me|us))?\s+(?:all\s+(?:of\s+)?)?"
+    r"(?:(?:the|my|our|this|that|(?!(?:it|that|what|who|there|here|let|he|she)['’]s)[a-z][\w-]*['’]s)\s+)?"
     r"(?:(?:new|latest|recent|last|open|unread|old|today['’]?s)\s+)?",
     re.IGNORECASE,
 )
+#: The gap ends in the user's own possessive ("show my ", "send me my ").
+_OWNED_GAP_RX = re.compile(r"\b(?:my|our)\s+\Z", re.IGNORECASE)
 #: A clear place IN the app ("the folder in Dropbox", "the refund in
 #: Stripe", "how much space is left in Dropbox") — the user's own, by itself.
 _IN_APP_RX = re.compile(r"\b(?:in|inside|within)\s+(?:the\s+|my\s+|our\s+)?\Z", re.IGNORECASE)
@@ -481,7 +529,81 @@ _IN_APP_RX = re.compile(r"\b(?:in|inside|within)\s+(?:the\s+|my\s+|our\s+)?\Z", 
 #: GitHub") — the user's own only beside an acting verb (:data:`_ACT_HEAD_RX`):
 #: "alternatives to Slack" and "an article on Stripe" are not.
 _TO_FROM_APP_RX = re.compile(
-    r"\b(?:to|into|onto|from|on|through|across|via)\s+(?:the\s+|my\s+|our\s+)?\Z", re.IGNORECASE
+    r"\b(?:to|into|onto|from|on|through|across|via|against)\s+(?:the\s+|my\s+|our\s+)?\Z",
+    re.IGNORECASE,
+)
+#: v1.361.0 (lane 11B, the final hunt's regression 1): the app as the PLACE
+#: of an everyday question or request with no acting verb in front ("did
+#: anyone message me on slack?", "how many open issues do we have on
+#: github?", "how much did we make on stripe this month?", "what broke last
+#: night according to sentry?") — the user's own only when the sentence is
+#: theirs or asks (:data:`_FIRST_PERSON_RX`, :data:`_LOOSE_ASK_RX`). "with"
+#: and "to" are left out on purpose: "integrate our checkout with Stripe"
+#: and "we moved to Notion" are about the app, never data in it.
+_LOOSE_PLACE_RX = re.compile(
+    r"\b(?:on|via|through|from|across|over|against|according\s+to)\s+(?:the\s+|my\s+|our\s+)?\Z",
+    re.IGNORECASE,
+)
+#: The user speaks of themselves ("I", "me", "my", "we", "us", "our").
+_FIRST_PERSON_RX = re.compile(
+    r"\b(?:i|me|my|mine|myself|we|us|our|ours|ourselves)\b", re.IGNORECASE
+)
+#: The sentence asks: a question mark, a question word opening it, or
+#: "any…" / "how many" / "how much" anywhere in it.
+_LOOSE_ASK_RX = re.compile(
+    r"\?|\A\s*(?:who|what|when|where|which|why|whose|how|did|do|does|is|are|was|were|has"
+    r"|have|any|can|could)\b|\b(?:any(?:one|body|thing)?|how\s+(?:many|much))\b",
+    re.IGNORECASE,
+)
+#: Moving away from the app is about the app, never its data ("migrate our
+#: data from postgres to mysql", "we're switching from slack").
+_SWITCH_RX = re.compile(
+    r"\b(?:migrat\w*|switch\w*|convert\w*|transition\w*|mov(?:e|ed|es|ing)\s+(?:away|over|off)"
+    r"|cancel\w*|unsubscrib\w*)\b",
+    re.IGNORECASE,
+)
+#: v1.361.0 (lane 11B, regression 1): "use <app> to …" — the app as the
+#: instrument of a request ("use slack to tell Ben I'm out", "use github to
+#: find the bug report").
+_USE_APP_RX = re.compile(_LEAD_IN + r"use\s+(?:my\s+|our\s+|the\s+)?\Z", re.IGNORECASE)
+_TO_VERB_AFTER_RX = re.compile(r"\A\s+to\s+[a-z]", re.IGNORECASE)
+#: v1.361.0 (lane 11B, regression 1): the app named as a LABEL before the
+#: request — "gmail: anything from the IRS?", "dropbox - find the 2023
+#: receipts", "on github, list my open PRs", "from postgres, how many users
+#: signed up yesterday?". A bare label takes ":" or a dash; a place ("on /
+#: in / from <app>") also takes a comma ("Notion, Obsidian or Logseq?" is a
+#: list, not a label).
+_LABEL_BEFORE_RX = re.compile(
+    r"\A\s*(?:(?P<place>on|in|from|via|through|over|inside|within)\s+(?:the\s+|my\s+|our\s+)?)?\Z",
+    re.IGNORECASE,
+)
+_LABEL_COLON_RX = re.compile(r"\A(?:['’]s)?\s*(?::|[-–—](?=\s))\s*", re.IGNORECASE)
+_LABEL_COMMA_RX = re.compile(r"\A(?:['’]s)?\s*(?::|,|[-–—](?=\s))\s*", re.IGNORECASE)
+#: A noun phrase, never a request ("list of the best repos").
+_NOUN_OF_RX = re.compile(r"\A\s*[\w'’-]+\s+of\b", re.IGNORECASE)
+#: v1.361.0 (lane 11B, regression 4): a catalog app that is a SERVICE the
+#: user works WITH (``connect_via == "api_key"``: Pixio) is the user's own
+#: when it is the instrument — "generate an image with pixio", "make an
+#: image using pixio", "use pixio to make a video", "can pixio make me a
+#: logo?", "pixio make me an image of a cat". "what can pixio do?" and "is
+#: pixio better than midjourney?" stay questions about it.
+_WITH_APP_RX = re.compile(
+    r"\b(?:with|using|via|through|on|in)\s+(?:my\s+|our\s+|the\s+)?\Z", re.IGNORECASE
+)
+_USE_SERVICE_RX = re.compile(_LEAD_IN + r"(?:use|try)\s+(?:my\s+|our\s+|the\s+)?\Z", re.IGNORECASE)
+_SERVICE_SUBJECT_RX = re.compile(
+    r"\A\s*(?:(?:please|hey|ok(?:ay)?|jarvis|so)[\s,]+)*(?:(?:can|could|will|would)\s+)?\Z",
+    re.IGNORECASE,
+)
+_SERVICE_MAKES_RX = re.compile(
+    r"\A\s+(?:make|generate|create|draw|render|animate|produce|design|paint|compose|write"
+    r"|sing|turn|upscale|edit|extend|narrate|voice|dub|illustrate|sketch|remix|restyle)\b",
+    re.IGNORECASE,
+)
+#: A message that is nothing but the app, perhaps with a thing kept in it
+#: ("gmail", "github issues?", "Notion?") — a terse request for it.
+_ONLY_THE_APP_BEFORE_RX = re.compile(
+    r"\A\s*(?:(?:please|hey|ok(?:ay)?|jarvis|so)[\s,]+)*(?:(?:my|our|the)\s+)?\Z", re.IGNORECASE
 )
 #: A piece of writing ABOUT the app, right before it ("a LinkedIn post about
 #: our GitHub launch", "a blog post on Notion") — a topic, never the user's
@@ -518,7 +640,56 @@ _DATA_NOUN_RX = re.compile(
     r"|images?|scans?|uploads?|attachments?|storage|space|data|drive|templates?|wiki"
     # v1.360.0 re-review: what an app shows the user about their own account
     # ("check my Stripe dashboard", "my GitHub notifications").
-    r"|bookmarks?|history|settings|dashboards?|notifications?|mentions?)\b",
+    r"|bookmarks?|history|settings|dashboards?|notifications?|mentions?"
+    # v1.361.0 (lane 11B, the final hunt's regression 2): a mailbox's and a
+    # repo's own sorting ("create a gmail filter for newsletters", "update
+    # the github labels").
+    r"|labels?|filters?)\b",
+    re.IGNORECASE,
+)
+#: v1.361.0 (lane 11B, the final hunt's regression 2): more of what the user
+#: keeps or sees in an app — counted only after "my <app>" / "our <app>",
+#: where the possessive already says whose ("list my stripe disputes", "did
+#: my github workflow pass?", "is my postgres server up?", "what's on my
+#: notion todo list"). Without the possessive several are the app's own
+#: product words ("review the GitHub workflows in this PR", "the Slack
+#: status page"), so they never widen :data:`_DATA_NOUN_RX`.
+_OWNED_NOUN_RX = re.compile(
+    r"\A(?:['’]s)?\s+(?:disputes?|revenue|sales|products?|prices?|unreads?|status(?:es)?"
+    r"|huddles?|workflows?|builds?|actions?|runs?|checks?|gists?|stars?|profiles?|servers?"
+    r"|instances?|quotas?|usage|limits?|links?|todos?|to-?do|kanban|lists?|numbers|stats"
+    r"|statistics|metrics|analytics|orders?|plans?|billing|teams?|members?|users?|followers?"
+    r"|sites?|spaces?|groups?|drafts?|sent|spam|trash|outbox|archives?|usernames?|handles?"
+    r"|keys?|tokens?|secrets?|webhooks?|deployments?|releases?|tags?|forks?|discussions?"
+    r"|reactions?|statuses|snippets?|queries|schemas?|backups?|credits?|generations?|songs?"
+    r"|videos?|reports?|bills?|receipts?|statements?|deposits?|fees?)\b",
+    re.IGNORECASE,
+)
+#: v1.361.0 (lane 11B): after an acting verb and "my <app>" any thing the
+#: user keeps is theirs ("update my github profile", "send me my dropbox
+#: link") — except a word that makes the app a MODIFIER of something else
+#: (the re-review's "share our GitHub launch post", "update our Slack
+#: logo"), which stays door-free.
+_MODIFIER_WORDS = (
+    r"(?:launch(?:es)?|logos?|icons?|badges?|buttons?|brand(?:ing)?|announcements?"
+    r"|integrations?|migrations?|posts?|part(?:y|ies)|bots?|clones?|versions?|themes?|colou?rs?"
+    r"|fonts?|styles?|swag|stickers?|shirts?|mugs?|hoodies?|interviews?|jobs?|offers?|stocks?"
+    r"|shares?|certifications?|courses?|exams?|competitors?|alternatives?|clients?|librar(?:y|ies)"
+    r"|packages?|plugins?|extensions?|widgets?|embeds?|copy|knock-?offs?|links?)\b"
+)
+_MODIFIER_NOUN_RX = re.compile(r"\A(?:['’]s)?\s+" + _MODIFIER_WORDS, re.IGNORECASE)
+#: ... and the same after a joined name that is not a catalog app ("add the
+#: Stripe and PayPal buttons to checkout" is about buttons).
+_JOINED_MODIFIER_RX = re.compile(
+    r"\A\s*(?:,\s*)?(?:and|or|&|/)\s+(?:[\w.'’-]+\s+){1,2}?" + _MODIFIER_WORDS, re.IGNORECASE
+)
+#: v1.361.0 (lane 11B): the app's PRODUCT side said in the sentence ("is
+#: there a free plan on Notion?", "can I host a website on github pages?")
+#: — the loose place rule never reads that as the user's own data.
+_PRODUCT_SIDE_RX = re.compile(
+    r"\bfree\s+(?:plans?|tiers?|trials?|versions?|accounts?)\b|\bpricing\b|\bgithub\s+pages\b"
+    r"|\bapis?\b|\bsdks?\b|\bdocs\b|\bdocumentation\b|\bstatus\s+page\b|\bheadquarter\w*\b"
+    r"|\bfounded\b|\bceo\b|\bipo\b|\bhiring\b|\bcareers?\b",
     re.IGNORECASE,
 )
 #: What may follow "my <app>" when the app ITSELF is what the user owns ("my
@@ -585,11 +756,180 @@ def _acts_on_app(clause: str, after: str) -> bool:
     the footer", "update the Slack logo", "review the Postgres migration"
     and "share our GitHub launch post" are about a link, a logo, a migration
     and a post, never the user's data in the app (each offered its Connect
-    door)."""
+    door).
+
+    v1.361.0 (lane 11B, the final hunt's regression 2): with "my" / "our"
+    right before the app, any thing after it is the user's own ("update my
+    github profile", "send me my dropbox link", "list my stripe disputes")
+    unless it makes the app a modifier (:data:`_MODIFIER_NOUN_RX` — "share
+    our GitHub launch post")."""
     m = _ACT_HEAD_RX.match(clause)
-    if m is None or _OBJECT_GAP_RX.fullmatch(clause[m.end():]) is None:
+    if m is None:
         return False
-    return _PHRASE_END_RX.match(after) is not None or _DATA_NOUN_RX.match(after) is not None
+    gap = clause[m.end():]
+    if _OBJECT_GAP_RX.fullmatch(gap) is None:
+        return False
+    if _JOINED_MODIFIER_RX.match(after) is not None:
+        # v1.361.0 (lane 11B): "add the Stripe and PayPal buttons" — the
+        # joined names qualify the buttons.
+        return False
+    if _PHRASE_END_RX.match(after) is not None or _DATA_NOUN_RX.match(after) is not None:
+        return True
+    return (
+        _OWNED_GAP_RX.search(gap) is not None
+        and _MODIFIER_NOUN_RX.match(after) is None
+        and re.match(r"\A(?:['’]s)?\s+[a-z]", after, re.IGNORECASE) is not None
+    )
+
+
+@lru_cache(maxsize=1)
+def _service_ids() -> frozenset[str]:
+    """The catalog apps that are services the user works WITH, not stores of
+    their data (``connect_via == "api_key"`` — Pixio). Never raises."""
+    try:
+        from .catalog import CATALOG
+
+        return frozenset(c.id for c in CATALOG if getattr(c, "connect_via", "") == "api_key")
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
+def _sentence_asks(t: str, start: int, end: int) -> bool:
+    """Does the sentence the app sits in ask (:data:`_LOOSE_ASK_RX`, its own
+    closing "?" included)? Pure."""
+    sentence = _sentence_of(t, start, end)
+    stop = _SENTENCE_BREAK_RX.search(t, end)
+    closes = t[stop.start()] if stop is not None else ""
+    return closes == "?" or _LOOSE_ASK_RX.search(sentence) is not None
+
+
+def _label_request(t: str, start: int, end: int, clause: str) -> bool:
+    """Is the app named as a LABEL before a request — "gmail: anything from
+    the IRS?", "dropbox - find the 2023 receipts", "on github, list my open
+    PRs" (v1.361.0, lane 11B, the final hunt's regression 1)? The clause
+    before it is empty or only a place; the words after the label open with
+    an acting verb, ask, or are the user's own. Pure."""
+    lead = _LABEL_BEFORE_RX.match(clause)
+    if lead is None:
+        return False
+    after = t[end:end + 240]
+    sep = (_LABEL_COMMA_RX if lead.group("place") else _LABEL_COLON_RX).match(after)
+    if sep is None or not after[: sep.end()].strip():
+        return False
+    tail = after[sep.end():]
+    stop = _SENTENCE_BREAK_RX.search(tail)
+    rest = tail[: stop.end()] if stop is not None else tail
+    if not rest.strip():
+        return False
+    if _NOUN_OF_RX.match(rest) is None and (
+        _ACT_HEAD_RX.match(rest) is not None or _PLACE_HEAD_RX.match(rest) is not None
+    ):
+        return True
+    return "?" in rest or _LOOSE_ASK_RX.search(rest) is not None or (
+        _FIRST_PERSON_RX.search(rest) is not None
+    )
+
+
+def _own_verdict(
+    t: str, start: int, end: int, blanked: str, *, cid: str = "", after: "str | None" = None
+) -> "bool | None":
+    """The reading behind :func:`_for_own_data`, in three answers: ``True``
+    — named for the user's own data in it (or to connect it); ``False`` —
+    named in research ABOUT it, a topic, an explanation or a comparison (an
+    explicit "not own"); ``None`` — no signal either way (no door by
+    itself; v1.361.0, lane 11B: an app coordinated with one that IS the
+    user's own — "search dropbox and google drive for the lease" — takes
+    its neighbour's answer in :func:`own_data_apps`).
+
+    *after* is the text after the app's words (by default ``t[end:]``;
+    :func:`own_data_apps` passes the text after the LAST app of a
+    coordination — "the Slack and GitHub links" are links). Pure."""
+    from ..tools.autoselect import (
+        _OWN_APP_WORDS_RX,
+        _OWN_BEFORE_APP_RX,
+        _RESEARCH_AFTER_APP_RX,
+    )
+
+    hit = t[start:end]
+    if after is None:
+        after = t[end:end + 120]
+    clause = _clause_before(t, start)
+    if _CONNECT_VERB_RX.match(hit.lstrip()) or _CONNECT_VERB_RX.search(clause):
+        return True
+    if _STATE_AFTER_RX.match(after) or (
+        _STATE_BARE_RX.match(after)
+        and (_STATE_BARE_END_RX.match(after) or _STATE_ASKED_RX.search(clause))
+    ):
+        return True
+    if _HOW_TO_RX.search(clause) or _WHAT_IS_RX.search(clause) or _TOPIC_RX.search(clause):
+        return False
+    if _OWN_APP_WORDS_RX.match(hit):
+        return True
+    if _OWN_BEFORE_APP_RX.search(clause) and (
+        _PHRASE_END_RX.match(after) or _DATA_NOUN_RX.match(after)
+        # v1.361.0 (lane 11B, regression 2): what the user keeps or sees in
+        # the app, after "my <app>" ("did my github workflow pass?").
+        or _OWNED_NOUN_RX.match(after)
+    ):
+        return True
+    if _RESEARCH_AFTER_APP_RX.match(after) is not None:
+        return False
+    if _RESEARCH_BEFORE_RX.search(clause):
+        return False
+    sentence = _sentence_of(t, start, end)
+    if _COMPARE_RX.search(sentence) or _PRICE_RX.search(sentence) or _EXPLAIN_RX.search(sentence):
+        return False
+    if _WEB_SEARCH_RX.search(blanked) is not None:
+        return False
+    if _IN_APP_RX.search(clause):
+        return True
+    acting = _ACT_HEAD_RX.match(clause) is not None
+    # v1.361.0 (lane 11B, regression 1): the chat verbs that say where
+    # ("DM Bob on slack", "run this query against postgres").
+    placing = acting or _PLACE_HEAD_RX.match(clause) is not None
+    if placing and _TO_FROM_APP_RX.search(clause):
+        return True
+    if _acts_on_app(clause, after):
+        return True
+    if _DATA_NOUN_RX.match(after) and (placing or _ASKS_IN_RX.search(sentence)):
+        return True
+    asks = _sentence_asks(t, start, end)
+    # v1.361.0 (lane 11B): every reading below comes after the research,
+    # topic, explain, compare and web-search exits above.
+    # "use slack to tell Ben I'm out" — the app as the instrument.
+    if _USE_APP_RX.match(clause) and _TO_VERB_AFTER_RX.match(after):
+        return True
+    # A service the user works WITH (Pixio): "generate an image with pixio",
+    # "use pixio", "can pixio make me a logo?" (regression 4).
+    if cid in _service_ids() and (
+        _WITH_APP_RX.search(clause)
+        or _USE_SERVICE_RX.match(clause)
+        or (_SERVICE_SUBJECT_RX.match(clause) and _SERVICE_MAKES_RX.match(after))
+    ):
+        return True
+    # "did anyone message me on slack?", "how much did we make on stripe
+    # this month?" — the app as the place of the user's own question
+    # (regression 1); moving away from the app is never its data.
+    if (
+        _LOOSE_PLACE_RX.search(clause)
+        and (_FIRST_PERSON_RX.search(sentence) or asks)
+        and not _SWITCH_RX.search(sentence)
+        and not _PRODUCT_SIDE_RX.search(sentence)
+    ):
+        return True
+    # "gmail: anything from the IRS?", "on github, list my open PRs".
+    if _label_request(t, start, end, clause):
+        return True
+    # "gmail", "github issues?" — nothing but the app (and a thing in it).
+    if _ONLY_THE_APP_BEFORE_RX.match(t[:start]) and re.fullmatch(
+        r"(?:(?:['’]s)?\s+[\w-]+)?\s*[?.!]*\s*", t[end:]
+    ) and (
+        not t[end:].strip(" ?.!")
+        or _DATA_NOUN_RX.match(t[end:]) is not None
+        or _OWNED_NOUN_RX.match(t[end:]) is not None
+    ):
+        return True
+    return None
 
 
 def _for_own_data(t: str, start: int, end: int, blanked: str) -> bool:
@@ -612,8 +952,9 @@ def _for_own_data(t: str, start: int, end: int, blanked: str) -> bool:
     * an app word that is the user's own ("my inbox", "my calendar") → own;
       "my <app>" / "our <app>" → own when the app ITSELF is what they own
       ("my Dropbox?", "my gmail for the invoice") or a thing they keep in it
-      follows ("our Slack channel") — never when the app only qualifies
-      another word ("our GitHub launch");
+      follows ("our Slack channel", v1.361.0: "my stripe disputes", "my
+      github workflow") — never when the app only qualifies another word
+      ("our GitHub launch");
     * the app's public things after its name ("the Stripe API docs"),
       research words before it ("reviews of Notion"), a comparison or a
       price question, a request to explain ("explain how postgres indexes
@@ -623,7 +964,14 @@ def _for_own_data(t: str, start: int, end: int, blanked: str) -> bool:
     * an acting verb ("search", "show me", "save", "pull") with the app as
       its object ("search github for issues") or as the place the data goes
       to or comes from ("save it to Notion", "pull the invoices from
-      Stripe") → own;
+      Stripe") → own; v1.361.0 (lane 11B, the final hunt's regressions):
+      also the chat verbs with the app as the place ("DM Bob on slack",
+      "remind me on slack", "run this query against postgres"), "use <app>
+      to …", a service the user works with as the instrument ("generate an
+      image with pixio"), the app as the place of the user's own question
+      ("did anyone message me on slack?"), the app as a label before a
+      request ("gmail: anything from the IRS?") and a message that is
+      nothing but the app ("gmail");
     * a thing kept in the app right after its name, asked about or acted on
       ("any new Sentry errors today?") → own;
     * anything else → not own: no door.
@@ -631,49 +979,7 @@ def _for_own_data(t: str, start: int, end: int, blanked: str) -> bool:
     The web rule's own readings (``tools.autoselect._searches_in_the_app``,
     v1.358.0 — its possessive, own-word and public-things regexes) are
     imported, never copied. Pure."""
-    from ..tools.autoselect import (
-        _OWN_APP_WORDS_RX,
-        _OWN_BEFORE_APP_RX,
-        _RESEARCH_AFTER_APP_RX,
-    )
-
-    hit = t[start:end]
-    after = t[end:end + 120]
-    clause = _clause_before(t, start)
-    if _CONNECT_VERB_RX.match(hit.lstrip()) or _CONNECT_VERB_RX.search(clause):
-        return True
-    if _STATE_AFTER_RX.match(after) or (
-        _STATE_BARE_RX.match(after)
-        and (_STATE_BARE_END_RX.match(after) or _STATE_ASKED_RX.search(clause))
-    ):
-        return True
-    if _HOW_TO_RX.search(clause) or _WHAT_IS_RX.search(clause) or _TOPIC_RX.search(clause):
-        return False
-    if _OWN_APP_WORDS_RX.match(hit):
-        return True
-    if _OWN_BEFORE_APP_RX.search(clause) and (
-        _PHRASE_END_RX.match(after) or _DATA_NOUN_RX.match(after)
-    ):
-        return True
-    if _RESEARCH_AFTER_APP_RX.match(after) is not None:
-        return False
-    if _RESEARCH_BEFORE_RX.search(clause):
-        return False
-    sentence = _sentence_of(t, start, end)
-    if _COMPARE_RX.search(sentence) or _PRICE_RX.search(sentence) or _EXPLAIN_RX.search(sentence):
-        return False
-    if _WEB_SEARCH_RX.search(blanked) is not None:
-        return False
-    if _IN_APP_RX.search(clause):
-        return True
-    acting = _ACT_HEAD_RX.match(clause) is not None
-    if acting and _TO_FROM_APP_RX.search(clause):
-        return True
-    if _acts_on_app(clause, after):
-        return True
-    if _DATA_NOUN_RX.match(after) and (acting or _ASKS_IN_RX.search(sentence)):
-        return True
-    return False
+    return _own_verdict(t, start, end, blanked) is True
 
 
 def _sentence_of(t: str, start: int, end: int) -> str:
@@ -690,11 +996,30 @@ def _sentence_of(t: str, start: int, end: int) -> str:
     )
 
 
+#: v1.361.0 (lane 11B, the final hunt's regression 3): the words that join
+#: two apps into one place ("dropbox and google drive", "slack, gmail or
+#: notion").
+_COORD_RX = re.compile(
+    r"\A\s*(?:,\s*(?:(?:and|or|&|plus|nor)\s+)?|(?:and|or|&|\+|/|plus|nor|as\s+well\s+as)\s+)"
+    r"(?:(?:also|then)\s+)?(?:(?:the|my|our|in|on|from|into|to)\s+)?\Z",
+    re.IGNORECASE,
+)
+
+
 def own_data_apps(text: str) -> list[str]:
     """The catalog ids *text* names for the user's own data in them (or to
     connect them), in catalog order — research about an app is left out
     (:func:`_for_own_data`). The same matcher as :func:`apps_named`. Never
-    raises; a fault names nothing."""
+    raises; a fault names nothing.
+
+    v1.361.0 (lane 11B, the final hunt's regression 3): apps joined by
+    "and" / "or" / a comma are ONE place. Each is read with the words after
+    the last of them ("the Slack and GitHub links" are links), and one that
+    has no signal of its own takes its neighbour's own-data answer — "search
+    dropbox and google drive for the lease" offers both, "check slack and
+    gmail for anything urgent" both; an explicit "not own" (a comparison,
+    research) is never overridden, so "compare Slack and Teams" stays
+    door-free."""
     t = str(text or "")[:_MAX_TEXT]
     try:
         hits = app_name_hits(t)
@@ -705,9 +1030,41 @@ def own_data_apps(text: str) -> list[str]:
             for i in range(start, min(end, len(chars))):
                 chars[i] = " "
         blanked = "".join(chars)
+        # Every place the text names an app (two aliases of one app at one
+        # place read once), left to right. Overlapping places of different
+        # apps ("connect Slack and the file system") are each read; they are
+        # never joined below (no words between them).
+        spans: list[tuple[str, int, int]] = sorted(set(hits), key=lambda h: (h[1], -h[2], h[0]))
+        # Coordinated runs: [i, j] share one place.
+        joined = [
+            i + 1 < len(spans) and _COORD_RX.match(t[spans[i][2]:spans[i + 1][1]]) is not None
+            for i in range(len(spans))
+        ]
+        verdicts: list["bool | None"] = []
+        for i, (cid, start, end) in enumerate(spans):
+            last = i
+            while last < len(spans) - 1 and joined[last]:
+                last += 1
+            after_end = spans[last][2]
+            verdicts.append(
+                _own_verdict(t, start, end, blanked, cid=cid, after=t[after_end:after_end + 120])
+            )
+        # A run's unread member takes an own neighbour's answer (both ways).
+        changed = True
+        while changed:
+            changed = False
+            for i in range(len(spans)):
+                if verdicts[i] is not None:
+                    continue
+                if (i > 0 and joined[i - 1] and verdicts[i - 1] is True) or (
+                    joined[i] and verdicts[i + 1] is True
+                ):
+                    verdicts[i] = True
+                    changed = True
+        own = {cid for (cid, _s, _e), v in zip(spans, verdicts) if v is True}
         out: list[str] = []
-        for cid, start, end in hits:
-            if cid not in out and _for_own_data(t, start, end, blanked):
+        for cid, _start, _end in hits:
+            if cid in own and cid not in out:
                 out.append(cid)
         return out
     except Exception:  # noqa: BLE001 — no door beats a broken turn
