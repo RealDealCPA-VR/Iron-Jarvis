@@ -41,6 +41,7 @@ import { PageGrid } from "@/components/PageGrid";
 // workflow editor's own label map covers only its five agents, so "guide" or
 // "maintainer" used to read as raw lowercase ids here.
 import { agentLabel } from "@/lib/agentWorlds";
+import { modelPickTitle, modelPickWords } from "@/lib/onboarding";
 
 /** One thing a template needs before it can actually run (v1.128.0). */
 interface Requirement {
@@ -446,8 +447,8 @@ export default function TemplatesPage() {
                       </option>
                     )}
                     {models.map((m) => (
-                      <option key={modelKey(m)} value={modelKey(m)}>
-                        {m.provider} · {m.model}
+                      <option key={modelKey(m)} value={modelKey(m)} title={modelPickTitle(m)}>
+                        {modelPickWords(m)}
                       </option>
                     ))}
                   </select>

@@ -1,5 +1,13 @@
 {
   "lines": {
+    "app_connect": {
+      "ok": "connected an app",
+      "failed": "tried an app connection and it failed"
+    },
+    "app_health": {
+      "ok": "checked how Iron Jarvis is doing",
+      "failed": "tried a health check and it failed"
+    },
     "app_search": {
       "ok": "searched your Iron Jarvis setup",
       "failed": "tried a setup search and it failed"
@@ -7,6 +15,14 @@
     "app_status": {
       "ok": "checked your Iron Jarvis setup",
       "failed": "tried a setup check and it failed"
+    },
+    "assign_work": {
+      "ok": "queued a task for a teammate",
+      "failed": "tried a queued task and it failed"
+    },
+    "batch_documents": {
+      "ok": "worked through a folder of documents",
+      "failed": "tried a document batch and it failed"
     },
     "blackboard_read": {
       "ok": "read the team's notes",
@@ -68,21 +84,89 @@
       "ok": "used your browser",
       "failed": "tried a browser step and it failed"
     },
+    "capability_propose": {
+      "ok": "suggested a new ability for Iron Jarvis",
+      "failed": "tried an ability suggestion and it failed"
+    },
+    "channel_connect": {
+      "ok": "connected a messaging channel",
+      "failed": "tried a channel connection and it failed"
+    },
+    "channel_toggle": {
+      "ok": "switched a messaging channel's listening",
+      "failed": "tried a channel switch and it failed"
+    },
+    "code_load": {
+      "ok": "opened a saved script",
+      "failed": "tried a script read and it failed"
+    },
+    "code_run": {
+      "ok": "ran a saved script",
+      "failed": "tried a saved script run and it failed"
+    },
+    "code_search": {
+      "ok": "searched its saved scripts",
+      "failed": "tried a script search and it failed"
+    },
     "compare_documents": {
       "ok": "compared documents",
       "failed": "tried a document compare and it failed"
+    },
+    "computer_use_status": {
+      "ok": "checked the computer control settings",
+      "failed": "tried a computer control check and it failed"
+    },
+    "config_change": {
+      "ok": "changed a setting",
+      "failed": "tried a setting change and it failed"
+    },
+    "config_change_protected": {
+      "ok": "changed a protected setting",
+      "failed": "tried a protected setting change and it failed"
+    },
+    "config_list": {
+      "ok": "looked up your settings",
+      "failed": "tried a settings lookup and it failed"
+    },
+    "config_secret": {
+      "ok": "asked for a key",
+      "failed": "tried a key request and it failed"
+    },
+    "config_set": {
+      "ok": "changed a setting",
+      "failed": "tried a setting change and it failed"
+    },
+    "config_undo": {
+      "ok": "undid a change",
+      "failed": "tried an undo and it failed"
     },
     "convert_document": {
       "ok": "made 1 file",
       "failed": "tried a file save and it failed"
     },
+    "create_agent": {
+      "ok": "created a new agent",
+      "failed": "tried an agent creation and it failed"
+    },
     "delegate": {
       "ok": "handed work to a teammate",
       "failed": "tried a hand-off and it failed"
     },
+    "delegate_remote": {
+      "ok": "handed work to another computer",
+      "failed": "tried a hand-off to another computer and it failed"
+    },
+    "excel_accounts_diff": {
+      "ok": "compared a workbook's accounts",
+      "failed": "tried an account compare and it failed"
+    },
     "excel_apply_spec": {
       "ok": "changed 1 file",
       "failed": "tried a file change and it failed"
+    },
+    "excel_formula_check": {
+      "ok": "checked a formula",
+      "failed": "tried a formula check and it failed"
     },
     "excel_profile": {
       "ok": "read 1 file",
@@ -91,6 +175,34 @@
     "excel_query": {
       "ok": "queried a workbook",
       "failed": "tried a workbook query and it failed"
+    },
+    "excel_sheet_spec": {
+      "ok": "captured a sheet's layout",
+      "failed": "tried a sheet layout capture and it failed"
+    },
+    "generate_media": {
+      "ok": "made an image, video or sound",
+      "failed": "tried a media generation and it failed"
+    },
+    "goal_add": {
+      "ok": "added a goal",
+      "failed": "tried a goal addition and it failed"
+    },
+    "goal_delete": {
+      "ok": "dropped a goal",
+      "failed": "tried a goal removal and it failed"
+    },
+    "goal_list": {
+      "ok": "checked your goals",
+      "failed": "tried a goal check and it failed"
+    },
+    "goal_update": {
+      "ok": "updated a goal",
+      "failed": "tried a goal update and it failed"
+    },
+    "grant_revoke": {
+      "ok": "took back an always-allow",
+      "failed": "tried an always-allow removal and it failed"
     },
     "guide_read": {
       "ok": "read the Iron Jarvis guide",
@@ -116,6 +228,18 @@
       "ok": "made 1 file",
       "failed": "tried a file save and it failed"
     },
+    "integration_list": {
+      "ok": "listed your web services",
+      "failed": "tried a service listing and it failed"
+    },
+    "integration_test": {
+      "ok": "tested a web service",
+      "failed": "tried a web service test and it failed"
+    },
+    "list_agents": {
+      "ok": "listed the agents",
+      "failed": "tried an agent listing and it failed"
+    },
     "ltm_append": {
       "ok": "added to your knowledge base",
       "failed": "tried a knowledge base note and it failed"
@@ -136,6 +260,38 @@
       "ok": "saved to its memory",
       "failed": "tried a memory save and it failed"
     },
+    "notify": {
+      "ok": "sent a notification",
+      "failed": "tried a notification and it failed"
+    },
+    "pack_restart": {
+      "ok": "restarted an extension",
+      "failed": "tried an extension restart and it failed"
+    },
+    "pack_status": {
+      "ok": "checked your extensions",
+      "failed": "tried an extension check and it failed"
+    },
+    "pane_list": {
+      "ok": "listed your terminals",
+      "failed": "tried a terminal listing and it failed"
+    },
+    "pane_read": {
+      "ok": "read a terminal",
+      "failed": "tried a terminal read and it failed"
+    },
+    "pane_send": {
+      "ok": "typed into a terminal",
+      "failed": "tried a terminal entry and it failed"
+    },
+    "pane_spawn": {
+      "ok": "opened a terminal",
+      "failed": "tried a new terminal and it failed"
+    },
+    "pane_wait": {
+      "ok": "waited for a terminal",
+      "failed": "tried a terminal wait and it failed"
+    },
     "pdf_arrange": {
       "ok": "changed 1 file",
       "failed": "tried a file change and it failed"
@@ -152,6 +308,30 @@
       "ok": "made 1 file",
       "failed": "tried a file save and it failed"
     },
+    "pixio_generate": {
+      "ok": "made an image, video or sound",
+      "failed": "tried a media generation and it failed"
+    },
+    "pixio_models": {
+      "ok": "listed the media models",
+      "failed": "tried a media model listing and it failed"
+    },
+    "pixio_params": {
+      "ok": "checked a media model's options",
+      "failed": "tried a media model check and it failed"
+    },
+    "pixio_status": {
+      "ok": "checked on a media generation",
+      "failed": "tried a media check and it failed"
+    },
+    "pixio_upload": {
+      "ok": "published a file for a media generation",
+      "failed": "tried a media upload and it failed"
+    },
+    "provider_rescan": {
+      "ok": "looked again for your models",
+      "failed": "tried a model rescan and it failed"
+    },
     "recall_lessons": {
       "ok": "checked its lessons",
       "failed": "tried a lesson check and it failed"
@@ -159,6 +339,22 @@
     "redact_pii": {
       "ok": "made 1 file",
       "failed": "tried a file save and it failed"
+    },
+    "redact_scan": {
+      "ok": "scanned a document for private details",
+      "failed": "tried a private details scan and it failed"
+    },
+    "reflex_create": {
+      "ok": "made a rule",
+      "failed": "tried a rule creation and it failed"
+    },
+    "reflex_delete": {
+      "ok": "removed a rule",
+      "failed": "tried a rule removal and it failed"
+    },
+    "reflex_update": {
+      "ok": "changed a rule",
+      "failed": "tried a rule change and it failed"
     },
     "rename_real_file": {
       "ok": "used rename real file",
@@ -171,6 +367,46 @@
     "run_code": {
       "ok": "ran 1 command",
       "failed": "tried a command and it failed"
+    },
+    "run_doctor": {
+      "ok": "ran the health checks",
+      "failed": "tried a health check run and it failed"
+    },
+    "schedule_create": {
+      "ok": "made a schedule",
+      "failed": "tried a schedule creation and it failed"
+    },
+    "schedule_delete": {
+      "ok": "removed a schedule",
+      "failed": "tried a schedule removal and it failed"
+    },
+    "schedule_update": {
+      "ok": "changed a schedule",
+      "failed": "tried a schedule change and it failed"
+    },
+    "secret_list": {
+      "ok": "listed your saved keys",
+      "failed": "tried a key listing and it failed"
+    },
+    "secret_set": {
+      "ok": "saved a key",
+      "failed": "tried a key save and it failed"
+    },
+    "sentinel_add": {
+      "ok": "set up a watcher",
+      "failed": "tried a watcher setup and it failed"
+    },
+    "sentinel_delete": {
+      "ok": "removed a watcher",
+      "failed": "tried a watcher removal and it failed"
+    },
+    "sentinel_update": {
+      "ok": "switched a watcher on or off",
+      "failed": "tried a watcher switch and it failed"
+    },
+    "skill_create": {
+      "ok": "saved a new skill",
+      "failed": "tried a skill save and it failed"
     },
     "skill_load": {
       "ok": "loaded a skill",
@@ -187,6 +423,62 @@
     "spawn_agent": {
       "ok": "started a helper agent",
       "failed": "tried a helper agent start and it failed"
+    },
+    "tool_create": {
+      "ok": "made a new tool",
+      "failed": "tried a tool creation and it failed"
+    },
+    "tool_delete": {
+      "ok": "removed a custom tool",
+      "failed": "tried a tool removal and it failed"
+    },
+    "tool_list": {
+      "ok": "listed the custom tools",
+      "failed": "tried a tool listing and it failed"
+    },
+    "web_action": {
+      "ok": "acted on a web page",
+      "failed": "tried a web page action and it failed"
+    },
+    "web_look": {
+      "ok": "looked at a web page",
+      "failed": "tried a web page look and it failed"
+    },
+    "webhook_add": {
+      "ok": "added a webhook",
+      "failed": "tried a webhook addition and it failed"
+    },
+    "webhook_delete": {
+      "ok": "removed a webhook",
+      "failed": "tried a webhook removal and it failed"
+    },
+    "webhook_update": {
+      "ok": "changed a webhook",
+      "failed": "tried a webhook change and it failed"
+    },
+    "workflow_create": {
+      "ok": "saved a workflow",
+      "failed": "tried a workflow save and it failed"
+    },
+    "workflow_delete": {
+      "ok": "removed a workflow",
+      "failed": "tried a workflow removal and it failed"
+    },
+    "workflow_list": {
+      "ok": "listed your workflows",
+      "failed": "tried a workflow listing and it failed"
+    },
+    "workflow_run": {
+      "ok": "started a workflow",
+      "failed": "tried a workflow start and it failed"
+    },
+    "workflow_schedule": {
+      "ok": "scheduled a workflow",
+      "failed": "tried a workflow schedule and it failed"
+    },
+    "workflow_update": {
+      "ok": "changed a workflow",
+      "failed": "tried a workflow change and it failed"
     },
     "worklist_next": {
       "ok": "picked the next item to work on",

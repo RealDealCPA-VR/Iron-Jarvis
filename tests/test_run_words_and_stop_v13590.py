@@ -329,16 +329,13 @@ def test_emergency_stop_stops_a_parked_scheduled_workflow_and_its_row_says_stopp
         r = client.post("/autonomy/kill", json={"enabled": True})
         assert r.status_code == 200, r.text
         assert r.json()["kill_switch"] is True
-        assert isinstance(r.json()["stopped"], int), r.json()
-        # v1.359.0 review: the route stops what it finds AND the platform's
-        # config.changed watcher (a bus worker thread) runs the same
-        # stop_unattended for this same write. Whichever reaches the parked
-        # run first stops it (compare-and-set) and settles its row, so the
-        # route's own count can read 0 and the row can settle a moment after
-        # the answer (reproduced by holding the route's call 0.5 s; it failed
-        # 1 run in ~40 here). Wait for the ROW, the thing asserted;
-        # ``test_only_a_waiting_unattended_run_is_stopped...`` pins that
-        # stop_unattended returns the run it stopped.
+        # v1.359.0 integrate: the route stops what it finds BEFORE it answers,
+        # and the platform's config.changed watcher leaves the route's own
+        # write (actor "autonomy_page") to the route, so the count is the
+        # route's and the Autonomy flash can say "Stopped 1 running task".
+        # (The review saw the two race; the watcher guard is pinned in
+        # tests/test_integrate_wave9_v13590.py.)
+        assert r.json()["stopped"] >= 1, r.json()
         deadline = time.monotonic() + 10
         row = _schedule_row(client, "fire-gated")
         while row["last_status"] != ro.STATUS_CANCELLED and time.monotonic() < deadline:
@@ -350,7 +347,7 @@ def test_emergency_stop_stops_a_parked_scheduled_workflow_and_its_row_says_stopp
         assert run["waiting_json"] == "" and run["finished_at"], run
         assert EMERGENCY_STOP_STOPPED in json.loads(run["notes_json"]), "its page says why"
         row = _schedule_row(client, "fire-gated")
-        assert (row["last_status"], row["last_detail"]) == ro.workflow_stopped_waiting("gated")
+        assert (row["last_status"], row["last_detail"]) == ro.workflow_stopped_waiting("gated", by_emergency_stop=True)
         assert client.get("/ui/status-line").json()["short_schedules"] == 0
         # Nothing left to answer: the stopped run refuses an answer.
         assert client.post(f"/workflows/runs/{parked}/answer", json={"answer": "yes"}).status_code == 409
@@ -375,7 +372,7 @@ def test_the_settings_row_stops_a_parked_workflow_too(tmp_path):
         while row["last_status"] != ro.STATUS_CANCELLED and time.monotonic() < deadline:
             time.sleep(0.05)
             row = _schedule_row(client, "fire-gated")
-        assert (row["last_status"], row["last_detail"]) == ro.workflow_stopped_waiting("gated")
+        assert (row["last_status"], row["last_detail"]) == ro.workflow_stopped_waiting("gated", by_emergency_stop=True)
         assert client.get(f"/workflows/runs/{parked}").json()["status"] == "cancelled"
 
 
@@ -495,14 +492,6 @@ def test_a_scheduled_run_that_timed_out_says_what_to_do_where_a_run_is_read(tmp_
     assert fw.current_surface() == fw.SURFACE_CHAT, "and the run's surface ends with it"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "needs the integrator's platform.py edit (lane 9A notes): a fire whose run RAISED "
-        "records str(exc), the raw 'claude-cli: CLI timed out ...', instead of the run's own "
-        "summary. Once the edit lands this XPASSes: remove this mark."
-    ),
-)
 def test_the_schedules_row_reads_the_runs_own_sentence(tmp_path, monkeypatch):
     """THE ACCEPTANCE on the Schedules row itself."""
     _client, body, _seen = _timed_out_schedule(tmp_path, monkeypatch)

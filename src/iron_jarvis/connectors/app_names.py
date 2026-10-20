@@ -122,9 +122,21 @@ CONNECT_VERB = (
 )
 
 #: Brand names that are also everyday words: these readings are not the app.
+#: v1.359.0 integrate (lane 9C review): a named app that is not connected now
+#: puts a Connect door under the reply, so a false reading shows. "I have no
+#: notion what to write" / "the faintest notion" and "there is slack in the
+#: schedule" / "slack in the plan" are the words, not the apps ("is Slack
+#: connected?" and "any Notion pages" still name them).
 _NOT_THE_APP: dict[str, str] = {
-    "notion": r"(?<![Aa] )(?<![Tt]he )\bnotion\b(?!\s+(?:that|of)\b)",
-    "slack": r"(?<![Ss]ome )(?<![Uu]p the )\bslack\b(?!\s+off\b)",
+    "notion": (
+        r"(?<![Aa] )(?<![Tt]he )(?<!no )(?<!faintest )(?<!slightest )(?<!vague )"
+        r"\bnotion\b(?!\s+(?:that|of)\b)"
+    ),
+    "slack": (
+        r"(?<![Ss]ome )(?<![Uu]p the )(?<!there is )(?<!there's )(?<!little )(?<!more )"
+        r"\bslack\b(?!\s+off\b)(?!\s+in\s+(?:the|my|our|your|this)\s+"
+        r"(?:schedule|plan|timeline|budget|rope|line|chain|system|week|day)\b)"
+    ),
     "stripe": r"(?<![Aa] )\bstripe\b(?!\s+(?:on|of|across|down|along|pattern|through)\b)",
 }
 

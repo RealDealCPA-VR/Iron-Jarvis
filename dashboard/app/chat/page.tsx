@@ -4684,7 +4684,11 @@ export default function ChatPage() {
     const row = models.find((m) => m.provider === provider && m.model === model);
     // v1.329.0: no label → the name people say ("Opus 4.8"), derived only
     // from what the id spells; an id it cannot read stays as it is.
-    return row ? modelText(row) : friendlyModelName(modelLabel);
+    // v1.359.0 integrate (lane 9B review): a pick /models does not list (yet:
+    // a restored thread while the catalog loads, or an endpoint since
+    // removed) reads in the menu's words too, never "subscription".
+    if (row) return modelText(row);
+    return provider && model ? modelText({ provider, model }) : friendlyModelName(modelLabel);
   }, [choice, models, modelLabel, defaultModelName, defaultProviderId]);
   /** The record behind the trigger's words: provider · model id. */
   const modelTriggerRaw = useMemo(() => {

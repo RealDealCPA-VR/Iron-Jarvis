@@ -497,6 +497,22 @@ DEMO_ANSWER_NOTE = (
     "Note: this answer came from the demo model on that computer: a scripted "
     "demo, not real answers. Choose a model there to get real answers."
 )
+#: v1.359.0 integrate (lane 9A review): the demo model's own reply now opens
+#: by saying what it is (``mock.DEMO_OPENING``), so the note after it says
+#: only what to do — the demo is named ONCE, as the chat's ``demo_note`` does.
+DEMO_ANSWER_SHORT_NOTE = "Note: choose a model on that computer to get real answers."
+
+
+def _demo_note_for(text: str) -> str:
+    """The demo note this answer gets: the short one when the answer already
+    opens with the demo's own sentence, else :data:`DEMO_ANSWER_NOTE`."""
+    try:
+        from ..providers.adapters.mock import DEMO_OPENING
+    except Exception:  # noqa: BLE001 — the full note is never wrong
+        DEMO_OPENING = ""
+    if DEMO_OPENING and str(text or "").lstrip().startswith(DEMO_OPENING):
+        return DEMO_ANSWER_SHORT_NOTE
+    return DEMO_ANSWER_NOTE
 
 
 def _answered_by_demo(session: Any) -> bool:
@@ -520,7 +536,7 @@ def _reply_message(session: Any) -> str:
     from .chat_delivery import content_for_session
 
     text = str(mask(content_for_session(session)) or "").strip()
-    demo = ("\n\n" + DEMO_ANSWER_NOTE) if _answered_by_demo(session) else ""
+    demo = ("\n\n" + _demo_note_for(text)) if _answered_by_demo(session) else ""
     room = REPLY_MESSAGE_CHARS - len(demo)
     if len(text) > room:
         note = "\n\n(The answer was longer; the rest is on the other computer.)"

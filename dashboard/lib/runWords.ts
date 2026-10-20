@@ -89,6 +89,82 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   guide_read: { did: "Read the Iron Jarvis guide", noun: "guide read" },
   app_search: { did: "Searched your Iron Jarvis setup", noun: "setup search", nouns: "setup searches" },
   app_status: { did: "Checked your Iron Jarvis setup", noun: "setup check" },
+  // v1.359.0 integrate (lane 9A review): every other registered built-in, in
+  // the Python twin's words (agents/mission._RUN_TOOL_WORDS; the tool-lines
+  // fixture holds the two equal), so no line reads a built-in's spaced id.
+  app_health: { did: "Checked how Iron Jarvis is doing", noun: "health check" },
+  assign_work: { did: "Queued a task for a teammate", noun: "queued task" },
+  batch_documents: { did: "Worked through a folder of documents", noun: "document batch", nouns: "document batches" },
+  capability_propose: { did: "Suggested a new ability for Iron Jarvis", noun: "ability suggestion" },
+  channel_connect: { did: "Connected a messaging channel", noun: "channel connection" },
+  channel_toggle: { did: "Switched a messaging channel's listening", noun: "channel switch", nouns: "channel switches" },
+  code_load: { did: "Opened a saved script", noun: "script read" },
+  code_run: { did: "Ran a saved script", noun: "saved script run" },
+  code_search: { did: "Searched its saved scripts", noun: "script search", nouns: "script searches" },
+  computer_use_status: { did: "Checked the computer control settings", noun: "computer control check" },
+  config_change: { did: "Changed a setting", noun: "setting change" },
+  config_change_protected: { did: "Changed a protected setting", noun: "protected setting change" },
+  config_list: { did: "Looked up your settings", noun: "settings lookup" },
+  config_secret: { did: "Asked for a key", noun: "key request" },
+  config_set: { did: "Changed a setting", noun: "setting change" },
+  config_undo: { did: "Undid a change", noun: "undo" },
+  create_agent: { did: "Created a new agent", noun: "agent creation" },
+  delegate_remote: { did: "Handed work to another computer", noun: "hand-off to another computer", nouns: "hand-offs to another computer" },
+  excel_accounts_diff: { did: "Compared a workbook's accounts", noun: "account compare" },
+  excel_formula_check: { did: "Checked a formula", noun: "formula check" },
+  excel_sheet_spec: { did: "Captured a sheet's layout", noun: "sheet layout capture" },
+  goal_add: { did: "Added a goal", noun: "goal addition" },
+  goal_delete: { did: "Dropped a goal", noun: "goal removal" },
+  goal_list: { did: "Checked your goals", noun: "goal check" },
+  goal_update: { did: "Updated a goal", noun: "goal update" },
+  grant_revoke: { did: "Took back an always-allow", noun: "always-allow removal" },
+  integration_list: { did: "Listed your web services", noun: "service listing" },
+  integration_test: { did: "Tested a web service", noun: "web service test" },
+  list_agents: { did: "Listed the agents", noun: "agent listing" },
+  notify: { did: "Sent a notification", noun: "notification" },
+  pack_restart: { did: "Restarted an extension", noun: "extension restart" },
+  pack_status: { did: "Checked your extensions", noun: "extension check" },
+  pane_list: { did: "Listed your terminals", noun: "terminal listing" },
+  pane_read: { did: "Read a terminal", noun: "terminal read" },
+  pane_send: { did: "Typed into a terminal", noun: "terminal entry", nouns: "terminal entries" },
+  pane_spawn: { did: "Opened a terminal", noun: "new terminal" },
+  pane_wait: { did: "Waited for a terminal", noun: "terminal wait" },
+  pixio_generate: { did: "Made an image, video or sound", noun: "media generation" },
+  pixio_models: { did: "Listed the media models", noun: "media model listing" },
+  pixio_params: { did: "Checked a media model's options", noun: "media model check" },
+  pixio_status: { did: "Checked on a media generation", noun: "media check" },
+  pixio_upload: { did: "Published a file for a media generation", noun: "media upload" },
+  provider_rescan: { did: "Looked again for your models", noun: "model rescan" },
+  redact_scan: { did: "Scanned a document for private details", noun: "private details scan" },
+  reflex_create: { did: "Made a rule", noun: "rule creation" },
+  reflex_delete: { did: "Removed a rule", noun: "rule removal" },
+  reflex_update: { did: "Changed a rule", noun: "rule change" },
+  run_doctor: { did: "Ran the health checks", noun: "health check run" },
+  schedule_create: { did: "Made a schedule", noun: "schedule creation" },
+  schedule_delete: { did: "Removed a schedule", noun: "schedule removal" },
+  schedule_update: { did: "Changed a schedule", noun: "schedule change" },
+  secret_list: { did: "Listed your saved keys", noun: "key listing" },
+  secret_set: { did: "Saved a key", noun: "key save" },
+  sentinel_add: { did: "Set up a watcher", noun: "watcher setup" },
+  sentinel_delete: { did: "Removed a watcher", noun: "watcher removal" },
+  sentinel_update: { did: "Switched a watcher on or off", noun: "watcher switch", nouns: "watcher switches" },
+  skill_create: { did: "Saved a new skill", noun: "skill save" },
+  tool_create: { did: "Made a new tool", noun: "tool creation" },
+  tool_delete: { did: "Removed a custom tool", noun: "tool removal" },
+  tool_list: { did: "Listed the custom tools", noun: "tool listing" },
+  web_action: { did: "Acted on a web page", noun: "web page action" },
+  web_look: { did: "Looked at a web page", noun: "web page look" },
+  webhook_add: { did: "Added a webhook", noun: "webhook addition" },
+  webhook_delete: { did: "Removed a webhook", noun: "webhook removal" },
+  webhook_update: { did: "Changed a webhook", noun: "webhook change" },
+  workflow_create: { did: "Saved a workflow", noun: "workflow save" },
+  workflow_delete: { did: "Removed a workflow", noun: "workflow removal" },
+  workflow_list: { did: "Listed your workflows", noun: "workflow listing" },
+  workflow_run: { did: "Started a workflow", noun: "workflow start" },
+  workflow_schedule: { did: "Scheduled a workflow", noun: "workflow schedule" },
+  workflow_update: { did: "Changed a workflow", noun: "workflow change" },
+  app_connect: { did: "Connected an app", noun: "app connection" },
+  generate_media: { did: "Made an image, video or sound", noun: "media generation" },
 };
 
 /** One failed call of a KNOWN step kind (lib/stepWords), as a noun. A kind
@@ -166,7 +242,7 @@ function sharedKind(tool: string): WorkKind | null {
  * The calls of `tool` that WORKED, counted: "Searched your chats 83 times",
  * "Read 2 files", "Used rename real file". Null for no calls.
  */
-export function toolDidWords(tool: string, n: number): string | null {
+export function toolDidWords(tool: string, n: number, name?: unknown): string | null {
   const c = count(n);
   if (!c) return null;
   const id = typeof tool === "string" ? tool.trim() : "";
@@ -176,30 +252,41 @@ export function toolDidWords(tool: string, n: number): string | null {
   }
   const kind = sharedKind(id);
   if (kind) return capFirst(STEP_WORDS[kind].count(c));
-  const own = `Used ${toolOwnName(id)}`;
+  const own = `Used ${rowName(name) || toolOwnName(id)}`;
   return c === 1 ? own : `${own} ${c} times`;
+}
+
+/** The daemon's own words for a connected app's tool on a `tools_used` /
+ *  `tools_failed` row (v1.359.0 integrate, lane 9A review: `name`,
+ *  agents/outcome._tool_row — "Gmail › search messages", the catalog's name,
+ *  the words the run's "Step by step" and the chat footnote use). Only a
+ *  short plain string counts; anything else reads as no name. */
+export function rowName(name: unknown): string {
+  if (typeof name !== "string") return "";
+  const n = name.replace(/\s+/g, " ").trim();
+  return n && n.length <= 160 && !/[\u0000-\u001f\u007f<>]/.test(n) ? n : "";
 }
 
 /**
  * The calls of `tool` that FAILED, counted: "One memory lookup failed",
  * "3 chat searches failed", "One rename real file call failed". Null for none.
  */
-export function toolFailedWords(tool: string, n: number): string | null {
+export function toolFailedWords(tool: string, n: number, name?: unknown): string | null {
   const c = count(n);
   if (!c) return null;
-  const { noun, nouns } = failedNouns(tool);
+  const { noun, nouns } = failedNouns(tool, name);
   if (c === 1) return `One ${noun} failed`;
   return `${c} ${nouns ?? `${noun}s`} failed`;
 }
 
 /** One failed call of `tool` as a noun ("memory lookup", "file read",
  *  "rename real file call"), with its plural when not just "+s". */
-function failedNouns(tool: unknown): { noun: string; nouns?: string } {
+function failedNouns(tool: unknown, name?: unknown): { noun: string; nouns?: string } {
   const id = typeof tool === "string" ? tool.trim() : "";
   if (has(AGENT_TOOLS, id)) return AGENT_TOOLS[id];
   const kind = sharedKind(id);
   const k = kind ? KIND_NOUN[kind] : undefined;
-  return k ?? { noun: `${toolOwnName(id)} call` };
+  return k ?? { noun: `${rowName(name) || toolOwnName(id)} call` };
 }
 
 /** ONE failed call, said first on its error row: "Memory lookup failed",
@@ -225,8 +312,8 @@ export interface RunActionLine {
  * failed call is said once, as failed. Junk entries are skipped.
  */
 export function runActionLines(
-  used: ReadonlyArray<{ tool?: unknown; count?: unknown }> | null | undefined,
-  failed?: ReadonlyArray<{ tool?: unknown; count?: unknown }> | null,
+  used: ReadonlyArray<{ tool?: unknown; count?: unknown; name?: unknown }> | null | undefined,
+  failed?: ReadonlyArray<{ tool?: unknown; count?: unknown; name?: unknown }> | null,
 ): RunActionLine[] {
   const bad = new Map<string, number>();
   for (const f of Array.isArray(failed) ? failed : []) {
@@ -239,9 +326,9 @@ export function runActionLines(
     seen.add(u.tool);
     const total = count(u.count);
     const nBad = Math.min(bad.get(u.tool) ?? 0, total);
-    const ok = toolDidWords(u.tool, total - nBad);
+    const ok = toolDidWords(u.tool, total - nBad, u.name);
     if (ok) out.push({ tool: u.tool, text: ok, failed: false });
-    const no = toolFailedWords(u.tool, nBad);
+    const no = toolFailedWords(u.tool, nBad, u.name);
     if (no) out.push({ tool: u.tool, text: no, failed: true });
   }
   return out;

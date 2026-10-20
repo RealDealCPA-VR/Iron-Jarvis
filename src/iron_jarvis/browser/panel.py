@@ -394,6 +394,21 @@ def parse_sse(chunk: str) -> list[tuple[str, dict[str, Any]]]:
     return out
 
 
+#: The sidebar's demo notice when the reply already says it is the demo
+#: (v1.359.0 integrate): only what to do, so the demo is named once.
+DEMO_SHORT_NOTICE = "Choose a model in Iron Jarvis to get real answers."
+
+
+def _opens_as_demo(reply: object) -> bool:
+    """Does this reply open with the demo model's own first sentence
+    (``providers.adapters.mock.DEMO_OPENING``)? Never raises."""
+    try:
+        from ..providers.adapters.mock import DEMO_OPENING
+    except Exception:  # noqa: BLE001 — the full notice is never wrong
+        return False
+    return bool(DEMO_OPENING) and str(reply or "").lstrip().startswith(DEMO_OPENING)
+
+
 class PanelTurns:
     """One panel conversation: start it, narrate it, stop it, answer its asks.
 
@@ -1064,8 +1079,13 @@ class PanelTurns:
         await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
 
     @staticmethod
-    def _route_notice(route: Any) -> str:
-        """One sentence for a failover or a mock answer; ``""`` for everything else."""
+    def _route_notice(route: Any, reply: str = "") -> str:
+        """One sentence for a failover or a mock answer; ``""`` for everything else.
+
+        ``reply`` (v1.359.0 integrate, lane 9A review): the demo model's own
+        reply opens by saying what it is (``mock.DEMO_OPENING``), so the
+        notice above it then says only what to do — the demo is named ONCE,
+        as the chat's ``demo_note`` does."""
         if not isinstance(route, dict):
             return ""
         reason = str(route.get("reason") or "")
@@ -1081,6 +1101,8 @@ class PanelTurns:
             # v1.357.0 (G76): the demo's one name and sentence. Not "no real
             # model is connected": the default can still be the demo model
             # while a real one is connected.
+            if _opens_as_demo(reply):
+                return DEMO_SHORT_NOTICE
             return (
                 "Answered by the demo model: a scripted demo, not real answers. "
                 "Choose a model in Iron Jarvis to get real answers."
@@ -1453,7 +1475,10 @@ class PanelTurns:
             # (a different model answered) and the mock (no real model at all).
             # Silence there would be the v1.165.0 accountability hole, one
             # surface over.
-            notice = self._route_notice(data.get("route"))
+            notice = self._route_notice(
+                data.get("route"),
+                str(data.get("text") or "") or "".join(self._answer),
+            )
             if notice:
                 await self.emit(conn, P.PANEL_EVENT_TOOL, {"name": "route", "text": notice})
             # NEVER AN EMPTY ANSWER. The panel paints its reply from `delta`

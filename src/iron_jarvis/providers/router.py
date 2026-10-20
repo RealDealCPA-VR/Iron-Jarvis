@@ -438,6 +438,26 @@ _NO_STAND_IN = (
 )
 
 
+def _another_model() -> str:
+    """The refusal's "pick another model" clause, worded for WHERE it is read
+    (v1.359.0 integrate, lane 9A review): a chat keeps "pick another model for
+    this chat" byte for byte; inside a run (``failure_words.run_surface``: a
+    schedule's fire, a background job, a helper agent) it is "choose another
+    model in Settings", because a run has no "this chat" to pick in. Only the
+    folded technical text carries these words; the headline and fix the user
+    reads come from ``failure_words.friendly_error``, which already did this."""
+    if _failure_words.current_surface() == _failure_words.SURFACE_RUN:
+        return f"choose another model in {_failure_words.RUN_MODEL_PLACE}"
+    return "pick another model for this chat"
+
+
+def _retry_words() -> str:
+    """"retry" in a chat, "run it again" in a run (see :func:`_another_model`)."""
+    if _failure_words.current_surface() == _failure_words.SURFACE_RUN:
+        return "run it again"
+    return "retry"
+
+
 def _short_detail(text: str, wanted: str, status: "int | None") -> str:
     """The endpoint's own error detail for the answered-error refusal, minus
     the adapter's ``"<provider> API error <status>:"`` prefix (the refusal
@@ -910,7 +930,7 @@ class ModelRouter:
                 text += " No substitute was tried because strict model pin is on."
             else:
                 text += _NO_STAND_IN
-            text += " Wait it out, or pick another model for this chat and retry."
+            text += f" Wait it out, or {_another_model()} and {_retry_words()}."
             return self._tag_refusal(ProviderError(text), kind, wanted, retry_in=retry_in)
         if kind == "signed_out":
             # v1.234.0: the CLI is on disk and said it is not signed in. The
@@ -957,7 +977,7 @@ class ModelRouter:
             )
             if pinned:
                 text += " Strict model pin is on as well."
-            text += " Check that endpoint or pick another model for this chat and retry."
+            text += f" Check that endpoint or {_another_model()} and {_retry_words()}."
             return self._tag_refusal(ProviderError(text), kind, wanted)
         lead = {
             "timeout": f"{name} didn't respond in time",
@@ -974,28 +994,27 @@ class ModelRouter:
             detail += " No substitute was tried because strict model pin is on."
         else:
             detail += _NO_STAND_IN
+        other, again = _another_model(), _retry_words()
         fix = {
             # It IS up — the honest advice is time (a cold 30B/70B load), not a
             # restart of something that never went down.
-            "timeout": (
-                " Give it time to finish loading, or pick another model for"
-                " this chat, and retry."
-            ),
-            "interrupted": (
-                " Check that endpoint, or pick another model for this chat,"
-                " and retry."
-            ),
+            "timeout": f" Give it time to finish loading, or {other}, and {again}.",
+            "interrupted": f" Check that endpoint, or {other}, and {again}.",
         }.get(
             kind,
-            " Bring that endpoint back up, or pick another model for this"
-            " chat, and retry.",
+            f" Bring that endpoint back up, or {other}, and {again}.",
         )
         if kind == "interrupted" and not is_local_provider(wanted):
             # v1.287.0 (chat-07 review): a cloud API has no endpoint the user
             # runs, so "check that endpoint" names nothing they can check.
+            first = (
+                "Run it again"
+                if _failure_words.current_surface() == _failure_words.SURFACE_RUN
+                else "Press Retry"
+            )
             fix = (
-                " Press Retry. If it keeps happening, check your internet"
-                " connection or pick another model for this chat."
+                f" {first}. If it keeps happening, check your internet"
+                f" connection or {other}."
             )
         return self._tag_refusal(ProviderError(detail + fix), kind, wanted, partial=partial)
 

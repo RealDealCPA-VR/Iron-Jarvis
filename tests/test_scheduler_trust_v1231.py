@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlmodel import select
 
-from iron_jarvis.agents.orchestrator import Orchestrator
+from iron_jarvis.agents.orchestrator import STOPPED_SUMMARY, Orchestrator
 from iron_jarvis.core.db import init_db, make_engine, session_scope
 from iron_jarvis.core.ids import utcnow
 from iron_jarvis.core.models import AgentType, SessionStatus
@@ -365,7 +365,10 @@ def test_cancel_reaches_a_schedule_fired_session_promptly(platform):
     assert seen["ended"] == "cancelled"
     row = orch.get_session(seen["sid"])
     assert row.status is SessionStatus.CANCELLED
-    assert "cancelled" in (row.summary or "").lower()
+    # v1.359.0 (changed on purpose, lane 9A): a stopped run's summary is the
+    # shared stopped sentence, not the engine's "Session cancelled by the
+    # user." — the status above still says CANCELLED.
+    assert row.summary == STOPPED_SUMMARY
 
 
 @pytest.mark.asyncio

@@ -1772,7 +1772,9 @@ class Orchestrator:
         for run_id in stopped:
             if callable(settle):
                 try:
-                    settle(run_id)
+                    # v1.359.0 integrate: the row names Emergency stop as
+                    # what stopped it (only stop_unattended calls this).
+                    settle(run_id, by_emergency_stop=True)
                 except Exception:  # noqa: BLE001 — the run already stopped
                     log.exception("could not settle the schedule row of %s", run_id)
         return stopped

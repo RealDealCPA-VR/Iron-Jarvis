@@ -9,7 +9,7 @@ import { useApi } from "@/lib/useApi";
 import { useModels } from "@/lib/useModels";
 import type { SessionView, ModelOption, Health } from "@/lib/types";
 import { ErrorNote, LoaderInline } from "./ui";
-import { providerDisplay } from "@/lib/onboarding";
+import { modelPickTitle, modelPickWords, providerDisplay } from "@/lib/onboarding";
 import { DEMO_MODEL } from "@/lib/demoWords";
 import { agentLabel } from "@/lib/agentWorlds";
 import { VoiceInput, appendDictation } from "./VoiceInput";
@@ -18,12 +18,12 @@ import { VoiceInput, appendDictation } from "./VoiceInput";
  *  focus THIS form's box (one box — never a second copy of the form). */
 export const NEW_SESSION_TASK_ID = "new-session-task";
 
-/** v1.314.0 (UX wave 2): a model the user reads in words. "mock" is the demo
- *  model; its model id ("mock-1") adds nothing a user can act on, so the demo
- *  reads "Demo model (scripted)" alone. The option VALUE stays the raw key. */
-function modelWords(provider: string, model: string): string {
-  return provider === "mock" ? providerDisplay(provider) : `${providerDisplay(provider)} · ${model}`;
-}
+/* v1.314.0 (UX wave 2): a model the user reads in words — "mock" is the demo
+ * model and reads "Demo model (scripted)" alone; the option VALUE stays the
+ * raw key. v1.359.0 integrate (lane 9B review): the words are the one
+ * model-list rule, `lib/onboarding.modelPickWords`, so this list never reads
+ * "Claude Code · subscription" or "custom · fleet"; the raw pair is the
+ * option's title. */
 
 // Fallback only — the real list comes live from GET /agents (builtin + dynamic)
 // so memory/maintainer/automation and custom agents aren't silently dropped.
@@ -309,14 +309,17 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
                 ? // v1.314.0: the provider in words; the model id only for a real one.
                   health.default_provider === "mock"
                   ? `Default · ${providerDisplay(health.default_provider)}`
-                  : `Default · ${providerDisplay(health.default_provider)} / ${health.default_model}`
+                  : `Default · ${modelPickWords({
+                      provider: health.default_provider,
+                      model: health.default_model ?? "",
+                    })}`
                 : "Default"}
             </option>
             {models.map((m) => {
               const avail = isAvailable(m);
               return (
-                <option key={optKey(m)} value={optKey(m)} disabled={!avail}>
-                  {m.name ? `${m.name} · ${m.model}` : modelWords(m.provider, m.model)}
+                <option key={optKey(m)} value={optKey(m)} disabled={!avail} title={modelPickTitle(m)}>
+                  {modelPickWords(m)}
                   {avail ? "" : " — not connected"}
                 </option>
               );

@@ -12,6 +12,8 @@
  * model) is never remembered, because the menu already opens on it.
  */
 
+import { modelRowName } from "@/lib/onboarding";
+
 export const RECENT_MODELS_KEY = "ij_chat_model_recent";
 export const RECENT_MODELS_MAX = 3;
 
@@ -44,8 +46,10 @@ export function rememberRecentModel(choice: string): string[] {
   return next;
 }
 
-/** Rows whose provider, model id, display name or picker label (v1.300.0,
- *  "Opus 5.5") contain `query` (case-insensitive). */
+/** Rows whose provider, model id, display name, picker label (v1.300.0,
+ *  "Opus 5.5") or the words the menu SHOWS for the row (v1.359.0,
+ *  `modelRowName`: "Your Claude plan", "Your model server", "Opus 4.8")
+ *  contain `query` (case-insensitive). A person types what they read. */
 export function matchModels<
   T extends { provider: string; model: string; name?: string; label?: string },
 >(
@@ -57,7 +61,8 @@ export function matchModels<
   if (!q) return [];
   const out: T[] = [];
   for (const m of rows) {
-    if (`${m.label ?? ""} ${m.name ?? ""} ${m.provider} ${m.model}`.toLowerCase().includes(q)) {
+    const shown = modelRowName(m);
+    if (`${m.label ?? ""} ${m.name ?? ""} ${shown} ${m.provider} ${m.model}`.toLowerCase().includes(q)) {
       out.push(m);
       if (out.length >= max) break;
     }

@@ -1895,6 +1895,56 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## The last raw words go, the Connect button always shows, and Emergency stop stops everything (v1.359.0)
+
+The last places the app spoke in its own internal words now speak plainly.
+Naming an app you haven't connected always gives you its Connect button, and
+Emergency stop now also stops scheduled work that was waiting for your
+answer. The look of the app is the same.
+
+- **A run's log says what happened, in words.**
+  - Every step of a run reads as what it did: "queued a task for a
+    teammate", "switched a watcher on or off", "typed into a terminal", never
+    an internal name with spaces in it.
+  - A step that was refused says what it set out to do: "Builder tried to
+    save a file, but it was not given that tool, so nothing ran".
+  - A connected app's step reads the way the chat names it,
+    "Gmail › search messages", both in "Step by step" and in "What it did".
+  - A run you stop says "The agent was stopped before it finished." (or
+    "…before it started." if it was still waiting its turn). Older stopped
+    runs read the same sentence on their page.
+  - When a run fails, the advice fits where you read it: "Run it again, or
+    choose another model in Settings." Chat keeps "Press Retry, or pick
+    another model for this chat." A scheduled run that failed shows that
+    sentence on its Schedules row, never the raw error text.
+- **The demo says it is the demo.** Before you choose a model, the demo
+  model's reply opens "This is the demo model: a scripted demo, not real
+  answers." It says it saved RESULT.md only when that really happened, and it
+  is named once: in chat, in the browser sidebar, and in the reply another
+  computer gets back.
+- **Model names in words, in every list.** The model menu, the Try again
+  menu, Settings' default model, an agent's preferred model, a terminal's
+  model, templates, a project's default and the New task form all read
+  "Your Claude plan", "Your ChatGPT plan", "Your model server" or "Opus 4.8".
+  The exact name is in the hover text. Typing "Claude plan" or "model
+  server" in the model menu's filter finds the row.
+- **Connections reads Claude Code, Codex and OpenCode**, and the bell names a
+  run that needs your OK by its task. The run's short code is only in the
+  hover text.
+- **The Connect button always shows.** Ask about your own things in an app
+  you haven't connected ("find my tax files in Google Drive", "post this to
+  Slack") and the reply ends with that app's **Connect … in Settings**
+  button, whatever the AI does. Two apps share one button. A question about
+  an app itself ("how much does Dropbox cost?") offers nothing. Everyday
+  words aren't mistaken for apps either: "no notion" isn't Notion, and
+  "slack in the schedule" isn't Slack.
+- **Emergency stop stops everything that runs on its own.** Turning it on
+  now also stops a scheduled workflow that is waiting for your answer. Its
+  Schedules row says "Emergency stop was turned on, so your workflow … was
+  stopped before you answered." Work you started yourself keeps going,
+  including a workflow you ran that is waiting for you. The Autonomy page's
+  "Stopped N running tasks" counts everything it stopped.
+
 ## Every screen tells one story, chat picks the right tools, another computer by a switch (v1.358.0)
 
 What a run did now reads the same on every screen, chat reaches the web and

@@ -271,6 +271,41 @@ Wave 8 ("close the re-audit") worked through section 0's lists in five lanes (8A
 
 ---
 
+## 0c. After wave 9 (v1.359.0)
+
+Wave 9 ("the last remainders") worked through 0b's open rows in three lanes (9A run words and Emergency stop, 9B the dashboard's last raw words, 9C the Connect door). Each lane had a reviewer, and an integrator joined them. The scores in section 0 are still the re-audit's. Every fix below is pinned by a test that went red when the fix was removed. The running app was not re-checked live.
+
+**0b's remainders, closed:**
+- **G19:** no line in a run's log reads a built-in by its spaced id, whether the call worked, failed, was refused or is waiting. Before, a refusal read "tried write file" and about 70 built-ins had no words at all ("used assign work"). Every registered built-in now has words in both twins (`agents/mission._RUN_TOOL_WORDS` and `lib/runWords` AGENT_TOOLS), and a test fails on a new one that has none. A connected app's tool reads as the chat footnote names it ("Gmail › search messages"), both in the run log and in the run card's "What it did".
+- **G41:** naming an app that is not connected, for your own data in it, always puts its Connect button under the reply, whatever the model does. Research about an app ("how much does Dropbox cost?") offers nothing. It is one door at the same address as app_connect's own door (the Directory). "I have no notion what to write" and "there is slack in the schedule" no longer offer Notion or Slack.
+- **G13:** Emergency stop now also stops a scheduled workflow that is waiting on a question, including runs parked before the person mark existed. Its Schedules row reads "Emergency stop was turned on, so your workflow … was stopped before you answered." A workflow a person ran keeps waiting. The kill route's "Stopped N running tasks" count is now always its own: the settings watcher no longer races it.
+
+**0b "Still open", closed:**
+- **The model menu's "subscription" / "fleet":** the menu now reads "Your Claude plan", "Your ChatGPT plan" and "Your model server". The integrator found six more model lists printing "claude-cli · subscription": Settings' default model, an agent's preferred model, a terminal's assist model, templates, a project's default and the New task form. All seven lists now share one rule (`lib/onboarding.modelPickWords`), with the raw id in the hover text. The Try-again menu and the composer's filter follow the same words.
+- **"Claude Code CLI" on Connections:** the rows read Claude Code, Codex and OpenCode.
+- **"Session cancelled by the user.":** a stopped run says "The agent was stopped before it finished." in its summary, its chat line and the reply home. Runs stored before this release read the same sentence on the run page.
+- **The demo reply's opening:** it now opens "This is the demo model: a scripted demo, not real answers." and claims RESULT.md only when the save really happened. The demo is named once in the chat, on the task door and in the browser sidebar.
+- **The bell's short run id:** the ask row links the run by its task, and the id is only in the hover text.
+- **A run's failure advice:** inside a run it says "Run it again, or choose another model in Settings.", including the router's technical text. The Schedules row of a run that raised reads the run's own sentence, not raw CLI text. Chat keeps "Press Retry, or pick another model for this chat." word for word.
+
+**What honestly remains:**
+- **The approval card's words for rarer built-ins:** `lib/toolWords` words about 15 built-ins. A card asking for one of the others ("assign work", "schedule delete") still says "run <its id>", with the id kept on the card because a grant is keyed on it. The run log and the desktop toast's twins are unchanged by this wave. Wording them means `lib/toolWords` WORDS, `mission.ASK_WORDS`, `desktop/main.js` TOOL_WORDS and their fixture, kept equal.
+- **Advanced paths from 0.6:**
+  - the REST service's "Config (JSON)" box;
+  - the agent form's "http-task (task API)";
+  - OAuth client steps;
+  - "ollama pull llama3.2";
+  - "Tools → Connected packs";
+  - "Pending approval id=<id>";
+  - "Attaching to sessions…";
+  - the nav's "Sentinels", "Reflexes" and "Artifacts";
+  - `routes/assignments.py`'s "no assignment …".
+- **Not pinned:** Emergency stop's compare-and-set on a waiting workflow. Only a race between its read and its update would show it, and the read already filters.
+- **Never tried live:** Microsoft 365, GitHub's server, two physical PCs on the task door and LAN setting (the Windows Firewall prompt too), LM Studio/llama.cpp, a real CRM through rest_call, a Gemini key and Ollama on this PC.
+- **Owner decisions, unchanged:** G83 (curated directory feed), G85 (desktop-control pack) and G86 (bundled local model). A user with no key and no signed-in CLI still has to install Ollama and download a model before the first real answer.
+
+---
+
 ## 1. Overall product-readiness score: **55 / 100**
 
 The goal: a completely new user can install Jarvis, understand it, connect their existing tools and AI, get useful work done, and understand exactly what happened, without learning how it is built.

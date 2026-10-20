@@ -123,6 +123,27 @@ _LIST_CAP = 50
 _ERROR_CHARS = 300
 
 
+def _tool_row(tool: str, count: int) -> dict[str, Any]:
+    """One ``tools_used`` / ``tools_failed`` row. A connected app's tool
+    (``mcp__<app>__<tool>``) also carries ``name``, the words the run's
+    "Step by step" and the chat footnote use ("Gmail › search messages",
+    ``mission.app_tool_display``) — v1.359.0 integrate (lane 9A review): the
+    run card's "What it did" said "Used gmail: search messages" (the pack id)
+    two lines above "Gmail › search messages". Every other row keeps its exact
+    shape ``{tool, count}``; a name that cannot be read is left out."""
+    row: dict[str, Any] = {"tool": tool, "count": count}
+    if str(tool or "").startswith("mcp__"):
+        try:
+            from .mission import app_tool_display
+
+            name = app_tool_display(tool)
+        except Exception:  # noqa: BLE001 — the dashboard names it by its id
+            name = None
+        if name:
+            row["name"] = name
+    return row
+
+
 def _envelope_path(journal: UndoJournal) -> str:
     """The target path packed into the journal's ``pre_inline`` envelope."""
     try:
@@ -372,10 +393,10 @@ def session_result(
             changed = [p for p in changed if p not in created]
 
             out["tools_used"] = [
-                {"tool": t, "count": n} for t, n in sorted(used.items())
+                _tool_row(t, n) for t, n in sorted(used.items())
             ][:_LIST_CAP]
             out["tools_failed"] = [
-                {"tool": t, "count": n} for t, n in sorted(failed.items())
+                _tool_row(t, n) for t, n in sorted(failed.items())
             ][:_LIST_CAP]
             out["files_created_total"] = len(created)
             out["files_changed_total"] = len(changed)

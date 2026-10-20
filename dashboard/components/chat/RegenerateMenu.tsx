@@ -31,7 +31,7 @@ import { ChevronDown, RefreshCw } from "lucide-react";
 import type { ModelOption } from "@/lib/types";
 import { matchModels } from "@/lib/recentModels";
 import { providerDisplay } from "@/lib/onboarding";
-import { ModelRowChips, modelText } from "@/components/ModelRowBits";
+import { ModelRowChips, modelText, modelTitle } from "@/components/ModelRowBits";
 
 export interface RegenerateMenuProps {
   /** The model catalog (GET /models, as the composer's menu has it). */
@@ -352,7 +352,10 @@ export function RegenerateMenu({
           <>
             <span
               className="min-w-0 truncate font-mono text-[12px]"
-              title={item.row.label ? item.row.model : undefined}
+              // v1.359.0 integrate (lane 9B review): an unlabelled row reads in
+              // words ("Opus 4.8", "Your Claude plan"), so the raw id rides the
+              // title whenever the words are not the id, like the composer menu.
+              title={modelTitle(item.row)}
             >
               {modelText(item.row)}
             </span>

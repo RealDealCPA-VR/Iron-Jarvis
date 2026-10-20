@@ -5174,7 +5174,7 @@ def is_demo_route(provider: str, reason: str) -> bool:
     return (provider or "") == "mock" and (reason or "") == "mock"
 
 
-def demo_note(tools_used: list[str]) -> str:
+def demo_note(tools_used: list[str], reply: str = "") -> str:
     """The ONE note an offline-demo reply carries (v1.351.0, G10).
 
     BEFORE: a brand-new user who pressed "What can you do?" before choosing a
@@ -5195,6 +5195,15 @@ def demo_note(tools_used: list[str]) -> str:
     scripted demo, not real answers" -- the receipt under this reply says
     "Demo answer. No AI model ran.", so the note no longer gives the same
     thing a second name ("the offline demo")."""
+    # v1.359.0 (lane 9A): the demo model's reply now opens by saying what
+    # it is (``providers.adapters.mock.DEMO_OPENING``, the canon's words), so
+    # the note says only what to do: the chat names the demo ONCE.
+    try:
+        from ..providers.adapters.mock import DEMO_OPENING
+    except Exception:  # noqa: BLE001 — the full note is never wrong
+        DEMO_OPENING = ""
+    if DEMO_OPENING and str(reply or "").lstrip().startswith(DEMO_OPENING):
+        return "\n\n_Note: Choose a model above to get real answers._"
     wrote = bool(set(tools_used or []) & _FILE_CHANGING_TOOLS)
     return (
         "\n\n_Note: this reply came from the demo model: a scripted demo, not"
@@ -7765,7 +7774,7 @@ async def run_chat_turn(
             # so and names the real fix (choose a model), in place of the two
             # file notes below, whose "arm a document tool" is the wrong fix
             # for a scripted reply. MIRROR NOTE (lock-step): routes/chat.py.
-            reply += demo_note(tools_used)
+            reply += demo_note(tools_used, reply)
         else:
             reply += _creation_honesty_note(body, armed, tools_used)
             # v1.153.2: and check the reply's own CLAIMS against the

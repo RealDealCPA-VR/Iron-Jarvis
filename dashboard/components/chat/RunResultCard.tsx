@@ -60,8 +60,10 @@ export interface RunResult {
   task: string;
   summary: string;
   steps: number;
-  tools_used: { tool: string; count: number }[];
-  tools_failed: { tool: string; count: number }[];
+  // v1.359.0 integrate: `name` on a connected app's tool row ("Gmail ›
+  // search messages", agents/outcome._tool_row); absent for other tools.
+  tools_used: { tool: string; count: number; name?: string }[];
+  tools_failed: { tool: string; count: number; name?: string }[];
   files_created: string[];
   files_changed: string[];
   /** The same files as ABSOLUTE paths (v1.155.0) — the lists above are

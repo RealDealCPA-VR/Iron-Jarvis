@@ -50,6 +50,7 @@ import { agentLabel } from "@/lib/agentWorlds";
 import type { RemoteAgentInfo } from "./identity";
 import { AnotherJarvisCard } from "./AnotherJarvisCard";
 import { TASK_DOOR_PATH } from "@/lib/anotherJarvis";
+import { modelPickTitle, modelPickWords } from "@/lib/onboarding";
 
 /** v1.357.0 (G61): is this base URL another computer's Iron Jarvis task door?
  *  (The daemon's `task_door.is_task_door_url`: the path is exactly the door.) */
@@ -1169,9 +1170,14 @@ function DynamicRow({
           {agent.name}
         </span>
         {agent.model && (
-          <span className={MODEL_CHIP}>
+          <span
+            className={MODEL_CHIP}
+            title={agent.provider ? modelPickTitle({ provider: agent.provider, model: agent.model }) : undefined}
+          >
             <Cpu size={10} />
-            {agent.provider ? `${agent.provider} · ${agent.model}` : agent.model}
+            {agent.provider
+              ? modelPickWords({ provider: agent.provider, model: agent.model })
+              : agent.model}
           </span>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -1383,12 +1389,14 @@ function DynamicRow({
                     would silently read "Default model" about a pinned agent. */}
                 {storedModelPick && !models.some((m) => modelKey(m) === storedModelPick) && (
                   <option value={storedModelPick}>
-                    {agent.provider ? `${agent.provider} · ${agent.model}` : agent.model}
+                    {agent.provider
+                      ? modelPickWords({ provider: agent.provider, model: agent.model ?? "" })
+                      : agent.model}
                   </option>
                 )}
                 {models.map((m) => (
-                  <option key={modelKey(m)} value={modelKey(m)}>
-                    {m.provider} · {m.model}
+                  <option key={modelKey(m)} value={modelKey(m)} title={modelPickTitle(m)}>
+                    {modelPickWords(m)}
                   </option>
                 ))}
               </select>
@@ -1710,8 +1718,8 @@ export function YourAgentsSection({
           >
             <option value="">Default model</option>
             {models.map((m) => (
-              <option key={modelKey(m)} value={modelKey(m)}>
-                {m.provider} · {m.model}
+              <option key={modelKey(m)} value={modelKey(m)} title={modelPickTitle(m)}>
+                {modelPickWords(m)}
               </option>
             ))}
           </select>

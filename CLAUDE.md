@@ -3547,6 +3547,97 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A run speaks in the log's words, the Connect door never waits for the
+  model, a model is named the menu's way in every list, and Emergency stop
+  leaves nothing unattended running OR parked** (v1.359.0, product-readiness
+  Wave 9 "the last remainders"; lanes 9A-9C + integrate). RUN WORDS (9A,
+  G19): `agents/mission.do_words(tool)` is the ONE source of "what a call set
+  out to do" (the card's `ASK_WORDS` first, a connected app's tool by
+  `app_tool_display` = `chat_turn.app_tool_words` — "Gmail › search
+  messages", the chat footnote's own helper — else the log's past line put in
+  the present through `_PRESENT`) for every refusal, declined-ask and waiting
+  line. (integrate) EVERY registered built-in has words in
+  `mission._RUN_TOOL_WORDS` (+ its verb in `_PRESENT`) and its twin
+  `lib/runWords` AGENT_TOOLS — the tool-lines fixture
+  (`IJ_REGEN_TOOL_LINES=1`) holds them equal, and
+  `test_every_registered_builtin_is_worded_in_the_run_log` builds the real
+  registry and FAILS on a new built-in with no words; ledger rows of an
+  app's tool carry `name` (`outcome._tool_row`, only `mcp__` rows — every
+  other row keeps exactly `{tool, count}`) and `runActionLines` /
+  `stampTools` prefer it (`runWords.rowName`). STOPPED: `orchestrator.
+  STOPPED_SUMMARY` IS `chat_delivery.STOPPED_SENTENCE` ("The agent was
+  stopped before it finished.") at every stop site, `STOPPED_BEFORE_START`
+  for a queued stop; rows stored before keep `LEGACY_STOPPED_SUMMARY`, which
+  the run page maps (`runPageWords.OLD_STOPPED_SUMMARIES`, pinned to the
+  Python constants). SURFACE: `failure_words.run_surface()` wraps every
+  `run_session`; inside it the fix reads "Run it again, or choose another
+  model in Settings." (`SURFACE_RUN`), and (integrate) the router's
+  refusal text follows it too (`router._another_model` / `_retry_words` —
+  the chat's words byte for byte outside a run); the platform's schedule
+  fire records the run's OWN failed summary when the run raised (never
+  `str(exc)`; a `_ScheduledRunFailed` keeps its own reason). DEMO:
+  `mock.DEMO_OPENING` opens every demo reply and RESULT.md is claimed only
+  when its write really saved; `chat_turn.demo_note(tools_used, reply)`
+  (both lanes, MIRROR NOTE), (integrate) `task_door._demo_note_for` and the
+  sidebar's `_route_notice(route, reply)` say only the fix when the reply
+  already opens with it — the demo is named ONCE. EMERGENCY STOP (G13):
+  `Orchestrator._stop_waiting_workflows` (called by `stop_unattended`)
+  compare-and-sets every WAITING workflow run that no person started
+  (`started_by` != "person", NULL included — runs parked before v1.352.0),
+  notes `EMERGENCY_STOP_STOPPED` on the run and settles its row through
+  `platform.settle_stopped_waiting(run_id, by_emergency_stop=True)` →
+  `run_outcome.workflow_stopped_waiting(ref, by_emergency_stop=True)`
+  ("Emergency stop was turned on, so your workflow … was stopped before you
+  answered."; the Workflows page's Cancel keeps the plain sentence).
+  (integrate) `platform._emergency_stop_watch` IGNORES a `config.changed`
+  whose actor is "autonomy_page": the kill route stops synchronously itself,
+  and the watcher racing it took the compare-and-set, so the route answered
+  `stopped: 0`; every other door (Settings row, Ctrl K, chat) is still the
+  watcher's. MODEL WORDS (9B): `lib/onboarding.modelRowName` is the ONE rule
+  for a menu row (label, else the plan / server for a provider-default id,
+  "Your model server" for the "fleet" alias, else `friendlyModelName`);
+  `ModelRowBits.modelText` / `modelTitle` (raw id in the title) feed the
+  composer menu and (integrate) the Try-again menu's title; (integrate)
+  `modelPickWords` / `modelPickTitle` are the same rule with the provider's
+  group name for a model LIST — the Settings default model
+  (`modelOptionText`), an agent's preferred model, a terminal's model,
+  templates, a project's default and the New task form; `matchModels`
+  searches the shown words (the optional "answered by your model server"
+  was NOT taken: the mission receipt reads "<model> on <place>", so it
+  named the place twice);
+  Connections rows read `providerDisplay` names; the bell's ask row links the
+  run by its task (id in the title). CONNECT DOOR (9C, G41): the grounding hop
+  reads `connectors/app_names.connect_offers` (the apps-section matcher +
+  wave 8's research-vs-own-data rule, autoselect's regexes imported) onto
+  `_Grounding.apps_offer`, never into the prompt; both lanes call
+  `doors.with_connect_door(door_entries, _grounding.apps_offer,
+  connect_offered)` right before the done frame / response (MIRROR NOTE);
+  `doors.connect_label` is the one source of the words (app_connect's own
+  fix door uses it) and `_APPS_FIX_HREF` the one address (== lib/relocated's
+  `/marketplace`); apps share one door, a fix door app_connect left is
+  widened in place, the door keeps a place past `MAX_DOORS`, no second offer
+  when app_connect ran or carded (stream), a registry refusal is not an
+  offer, low trust and local only still get it; comparison/price/"who
+  founded" questions offer nothing; (integrate) "no notion" / "slack in the
+  schedule" are the words, not the apps (`_NOT_THE_APP`). THE RULE A FUTURE
+  CHANGE MUST KEEP: a new built-in tool gets words in `_RUN_TOOL_WORDS` +
+  AGENT_TOOLS (+ `_PRESENT` for a new verb) or the registry pin fails; a new
+  model list names a model through `modelPickWords`, never `${provider} ·
+  ${model}`; a new door that stops unattended work is reached by
+  `stop_unattended` and settles the row it parked; a new surface that shows
+  the demo's words checks `DEMO_OPENING` first. Pins: `tests/test_{run_words_
+  and_stop,connect_door,integrate_wave9}_v13590.py`, `dashboard/__tests__/
+  {last-words-model-rows,last-words-connections,last-words-bell,connect-door,
+  wave9-seams}-v13590.test.tsx`, fixtures `connect-door-v13590.json`
+  (`IJ_REGEN_CONNECT_DOOR=1`), `tool-lines-v13580.json` and
+  `wave5-seams-v13550.json` (regenerated: the run's words) (every lane,
+  review and integrator change mutation-checked red). Known: the approval
+  CARD words only ~15 built-ins (`lib/toolWords` WORDS == `mission.
+  ASK_WORDS` == main.js TOOL_WORDS); a card for a rarer one still reads "run
+  <its id>"; the compare-and-set on `waiting` is not pinned (only a
+  read-to-update race shows it); Microsoft 365, GitHub's server, two PCs and
+  LM Studio never tried live.
+
 - **Every surface gives ONE verdict per run; chat picks the right tools; the
   Directory and chat agree; another computer comes in by a setting**
   (v1.358.0, product-readiness Wave 8 "close the re-audit": its 14 regressions
@@ -3677,10 +3768,9 @@ does not need a bump, stop and bump it.
   signed-in user (the card keeps the non-blocking `seen`). Pins:
   `tests/test_rereview_wave8_v13580.py`. Known: the
   key-refused verdict is process memory; agent runs pass no `apps_on`;
-  apps-by-name arming is stream-only; the bell's ask row still links the run
-  by its short id; mission's refusal line still names a built-in by its spaced
-  id ("tried write file"); not tried on two physical PCs, the Windows Firewall
-  prompt unverified.
+  apps-by-name arming is stream-only; not tried on two physical PCs, the
+  Windows Firewall prompt unverified. (The bell's short run id and the
+  mission's "tried write file" refusal line were fixed in v1.359.0.)
 
 - **Another Jarvis is a teammate through ONE door; every pack lives in ONE
   catalog file; a saved web service is callable, carded and kept away; the

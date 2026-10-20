@@ -3,7 +3,7 @@
   "banner": {
     "_raised_words": {
       "fix": "Bring it back up, or choose another model in Settings, and run it again.",
-      "technical": "Office Spark isn't connected right now, so this turn was not answered. No substitute was used on purpose. A stand-in answer would look like real work that never happened. Bring that endpoint back up, or pick another model for this chat, and retry.",
+      "technical": "Office Spark isn't connected right now, so this turn was not answered. No substitute was used on purpose. A stand-in answer would look like real work that never happened. Bring that endpoint back up, or choose another model in Settings, and run it again.",
       "title": "Office Spark isn't connected right now"
     },
     "event": {

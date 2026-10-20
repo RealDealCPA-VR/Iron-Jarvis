@@ -208,7 +208,13 @@ async def test_a_fresh_desk_on_the_demo_model_says_so_in_the_asking_chat(tmp_pat
     await _wait_runs_settle(desk)
     assert len(net.caught) == 1, net.caught
     message = net.caught[0]["message"]
-    assert message.endswith(td.DEMO_ANSWER_NOTE), message
+    # v1.359.0 integrate (moved on purpose): the demo model's own answer now
+    # opens by saying what it is (mock.DEMO_OPENING), so the note after it is
+    # the short one and the demo is named ONCE (lane 9A review, follow-up 4).
+    # An answer that does not open that way still gets the full note (the
+    # cut test below).
+    assert message.endswith(td.DEMO_ANSWER_SHORT_NOTE), message
+    assert message.lower().count("demo model") == 1, message
     # The demo's one name and sentence (VOCABULARY.md; lib/demoWords).
     assert _canon("DEMO_MODEL") in td.DEMO_ANSWER_NOTE
     assert _canon("DEMO_REPLIES") in td.DEMO_ANSWER_NOTE

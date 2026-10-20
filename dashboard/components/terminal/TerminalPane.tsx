@@ -72,6 +72,7 @@ import {
   type OpenedPane,
 } from "@/components/terminal/PaneAccountChip";
 import { paneFrameClass } from "@/components/terminal/paneFrame";
+import { modelPickTitle, modelPickWords } from "@/lib/onboarding";
 
 type AIResult = {
   reply: string;
@@ -1538,8 +1539,12 @@ export function TerminalPane({
         >
           <option value="">default model</option>
           {models.map((m) => (
-            <option key={`${m.provider}::${m.model}`} value={`${m.provider}::${m.model}`}>
-              {m.provider} · {m.model}
+            <option
+              key={`${m.provider}::${m.model}`}
+              value={`${m.provider}::${m.model}`}
+              title={modelPickTitle(m)}
+            >
+              {modelPickWords(m)}
             </option>
           ))}
         </select>

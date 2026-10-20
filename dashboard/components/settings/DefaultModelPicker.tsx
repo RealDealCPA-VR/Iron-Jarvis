@@ -21,16 +21,18 @@ import { useMemo, useState } from "react";
 import { useDaemon } from "@/lib/daemon";
 import { useModels } from "@/lib/useModels";
 import type { ModelOption } from "@/lib/types";
+import { modelRowName } from "@/lib/onboarding";
 
 /** The "Other…" option's value: never a real model id. */
 const OTHER_MODEL = "__other_model__";
 
-/** A model as a person reads it: its catalogue name ("Opus 5.5"), else the
- *  endpoint's own name when it is not the id again, else the id. */
-export function modelOptionText(m: Pick<ModelOption, "model" | "label" | "name">): string {
-  const label = (m.label || "").trim();
-  if (label && label !== m.model) return label;
-  return m.model;
+/** A model as a person reads it: its catalogue name ("Opus 5.5"), else
+ *  (v1.359.0 integrate, lane 9B review) the menu row's own words
+ *  (`modelRowName`: "Your Claude plan", "Your model server", "Opus 4.8") —
+ *  this list printed "subscription" and "fleet". The list is ONE provider's,
+ *  so no provider prefix; the raw id stays the option's title. */
+export function modelOptionText(m: Pick<ModelOption, "provider" | "model" | "label" | "name">): string {
+  return modelRowName(m);
 }
 
 export function DefaultModelPicker({

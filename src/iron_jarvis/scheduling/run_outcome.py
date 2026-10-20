@@ -156,13 +156,23 @@ def workflow_answered(run_status: object, ref: object) -> tuple[str, str] | None
     return None
 
 
-def workflow_stopped_waiting(ref: object) -> tuple[str, str]:
+def workflow_stopped_waiting(ref: object, *, by_emergency_stop: bool = False) -> tuple[str, str]:
     """A PARKED scheduled workflow that was STOPPED while it still waited
     for the person (v1.358.0 re-review): the ``(last_status, detail)`` its
     row now says. The Workflows page's Cancel of a waiting run publishes no
     completion, so the row kept "Needs you" — and the home line counted it —
-    over a run whose own page said Stopped, until the next fire."""
+    over a run whose own page said Stopped, until the next fire.
+
+    ``by_emergency_stop`` (v1.359.0 integrate, lane 9A review): Emergency
+    stop stopped it, not a Cancel press, and the row says so — the run's own
+    page already carried ``EMERGENCY_STOP_STOPPED`` in its notes."""
     name = " ".join(str(ref or "").split()) or "inline"
+    if by_emergency_stop:
+        return (
+            STATUS_CANCELLED,
+            f"Emergency stop was turned on, so your workflow “{name}” was stopped"
+            " before you answered.",
+        )
     return STATUS_CANCELLED, f"Your workflow “{name}” was stopped before you answered."
 
 

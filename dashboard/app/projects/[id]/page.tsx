@@ -65,6 +65,7 @@ import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo } from "@/lib/format";
 import { missionPath } from "@/lib/mission";
 import { sessionHref } from "@/lib/missionLinks";
+import { modelPickTitle, modelPickWords } from "@/lib/onboarding";
 
 /** GET /projects/{id} → the project (plus workspace fields) and recent sessions. */
 interface ProjectWorkspace extends Project {
@@ -866,8 +867,12 @@ function ProjectWorkspaceInner({
                           </option>
                         )}
                       {availableModels.map((m) => (
-                        <option key={`${m.provider}::${m.model}`} value={`${m.provider}::${m.model}`}>
-                          {m.name || m.provider} / {m.model}
+                        <option
+                          key={`${m.provider}::${m.model}`}
+                          value={`${m.provider}::${m.model}`}
+                          title={modelPickTitle(m)}
+                        >
+                          {modelPickWords(m)}
                         </option>
                       ))}
                     </select>

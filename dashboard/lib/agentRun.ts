@@ -23,6 +23,7 @@
  */
 
 import { normalizeIso } from "@/lib/format";
+import { rowName } from "@/lib/runWords";
 import { readSavedPlan, toSavedPlan, type PlanView, type SavedPlan } from "@/lib/planChecklist";
 
 /** v1.352.0 (G16/G19): how a run ENDED, as the session row says it. */
@@ -39,6 +40,10 @@ export interface AgentRunTool {
   tool: string;
   count: number;
   failed: number;
+  /** v1.359.0 integrate: a connected app's tool in the daemon's words
+   *  ("Gmail › search messages"; the ledger row's `name`). Absent for every
+   *  other tool and on older stamps, which read as they did. */
+  name?: string;
 }
 
 /** At most this many tools are kept on a stamp. The ledger lists a run's
@@ -182,7 +187,7 @@ export function stampTools(
   const seen = new Set<string>();
   for (const u of Array.isArray(used) ? used : []) {
     if (out.length >= STAMP_TOOLS_MAX) break;
-    const r = u as { tool?: unknown; count?: unknown; failed?: unknown } | null;
+    const r = u as { tool?: unknown; count?: unknown; failed?: unknown; name?: unknown } | null;
     if (!r || typeof r.tool !== "string" || !TOOL_ID.test(r.tool) || seen.has(r.tool)) continue;
     const count = countOrNull(r.count);
     if (count === null || count === 0) continue;
@@ -190,7 +195,8 @@ export function stampTools(
     // A saved stamp carries `failed` on the entry; a ledger result carries
     // a separate `tools_failed` list.
     const nBad = countOrNull(r.failed) ?? bad.get(r.tool) ?? 0;
-    out.push({ tool: r.tool, count, failed: Math.min(nBad, count) });
+    const name = rowName(r.name);
+    out.push({ tool: r.tool, count, failed: Math.min(nBad, count), ...(name ? { name } : {}) });
   }
   return out;
 }

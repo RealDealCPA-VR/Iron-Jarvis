@@ -322,6 +322,34 @@ export function modelRowName(m: { provider: string; model: string; label?: strin
   return friendlyModelName(model);
 }
 
+/** One model as a model LIST names it outside the composer's two-level menu
+ *  (v1.359.0 integrate, lane 9B review): the Settings default-model list, an
+ *  agent's preferred model, a terminal's assist model, a template, a
+ *  project's default and the New-task form all printed "claude-cli ·
+ *  subscription" / "custom · fleet". Now one rule: the provider group's name
+ *  (`modelGroupName`) and the row's own words (`modelRowName`), "Claude
+ *  Code · Opus 4.8" / "Your model server · qwen3"; a provider-default row is
+ *  its plan or server alone ("Your Claude plan"); the demo model is the demo
+ *  model. The raw `provider · model` belongs in the option's title. */
+export function modelPickWords(m: {
+  provider: string;
+  model: string;
+  label?: string | null;
+  name?: string;
+}): string {
+  if (m.provider === "mock") return providerDisplay("mock");
+  const words = modelRowName(m);
+  if (isProviderDefaultModel(m.model)) return words;
+  const group = modelGroupName({ provider: m.provider, model: m.model, name: m.name });
+  if (!group || group === words) return words;
+  return `${group} · ${words}`;
+}
+
+/** The record behind `modelPickWords`, for an option's title. */
+export function modelPickTitle(m: { provider: string; model: string }): string {
+  return [m.provider, m.model].filter(Boolean).join(" · ");
+}
+
 export interface AnswerCandidate {
   /** What the press posts to W2-1 (a CLI name stays the CLI name; the daemon
    *  promotes it to the inherited API name so the quality dial applies). */

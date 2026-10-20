@@ -199,13 +199,33 @@ export function isRestartSummary(summary: string | null | undefined): boolean {
 /** The origin a mission's teammate runs under (agents/team.py). */
 export const MISSION_MEMBER_ORIGIN = "job:mission-member";
 
+/* ---- A run that was stopped (v1.359.0 integrate, lane 9A review) --------- */
+
+/** The shared stopped sentences a stopped run's summary reads since v1.359.0
+ *  (agents/orchestrator.STOPPED_SUMMARY / STOPPED_BEFORE_START, which ARE
+ *  agents/chat_delivery.STOPPED_SENTENCE / STOPPED_BEFORE_START_SENTENCE; the
+ *  chat page's own words for a stop). Pinned equal from Python. */
+export const STOPPED_SUMMARY = "The agent was stopped before it finished.";
+export const STOPPED_BEFORE_START = "The agent was stopped before it started.";
+
+/** What the engine wrote on a stopped run before v1.359.0 (the session and
+ *  "cancelled" were the engine's words). Rows on disk keep them, so the run
+ *  page reads them as the sentences above — like the old restart words. */
+export const OLD_STOPPED_SUMMARIES: Readonly<Record<string, string>> = {
+  "session cancelled by the user.": STOPPED_SUMMARY,
+  "cancelled while queued (never started).": STOPPED_BEFORE_START,
+};
+
 /** The summary the receipt shows. The reconcile's stock words are hidden
  *  while the "Stopped when Iron Jarvis restarted" line stands (it says the
  *  same, in words), and read as that sentence once the offer is answered;
+ *  an older stopped run's engine words read as the shared stopped sentence;
  *  every other summary is shown as it is. */
 export function shownSummary(summary: string | null | undefined, interrupted: boolean): string | null {
   const s = (summary ?? "").trim();
   if (!s) return null;
+  const old = OLD_STOPPED_SUMMARIES[s.toLowerCase()];
+  if (old) return old;
   if (!isRestartSummary(s)) return summary ?? null;
   return interrupted ? null : RESTART_SUMMARY;
 }

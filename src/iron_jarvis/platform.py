@@ -1799,7 +1799,7 @@ def build_platform(
 
     event_bus.add_handler(_settle_parked_workflow)
 
-    def _settle_stopped_waiting(run_id: str) -> bool:
+    def _settle_stopped_waiting(run_id: str, *, by_emergency_stop: bool = False) -> bool:
         # v1.358.0 re-review: the Workflows page's Cancel of a WAITING run
         # ends it in the route itself (no engine loop is running) and
         # publishes no ``workflow.completed``, so the handler above never
@@ -1810,7 +1810,11 @@ def build_platform(
         if hit is None:
             return False
         name, ref = hit
-        return _restamp_parked(name, *_run_outcome.workflow_stopped_waiting(ref))
+        # v1.359.0 integrate: Emergency stop's own stop says so on the row.
+        return _restamp_parked(
+            name,
+            *_run_outcome.workflow_stopped_waiting(ref, by_emergency_stop=by_emergency_stop),
+        )
 
     platform.settle_stopped_waiting = _settle_stopped_waiting
 
@@ -2290,7 +2294,25 @@ def build_platform(
                 _log.warning(
                     "schedule %r failed (%s)", task.name, type(exc).__name__, exc_info=True
                 )
-                detail = _run_outcome.failure_detail(str(exc))
+                # v1.359.0 (lane 9A): a fire whose run started and then
+                # RAISED reads the run's OWN sentence (its summary, worded for
+                # a run), never the raw exception text.
+                reason = str(exc)
+                sid = fired["session_id"]
+                if (
+                    sid
+                    and platform.orchestrator is not None
+                    and not isinstance(exc, _ScheduledRunFailed)
+                ):
+                    try:
+                        row = platform.orchestrator.get_session(sid)
+                        status = getattr(getattr(row, "status", None), "value", None)
+                        summary = str(getattr(row, "summary", "") or "").strip()
+                        if status == "failed" and summary:
+                            reason = summary
+                    except Exception:  # noqa: BLE001 - the raw reason still lands
+                        pass
+                detail = _run_outcome.failure_detail(reason)
                 _record_outcome(task.name, "error", detail, fired["session_id"])
                 _deliver_outcome(task, payload, "error", detail)
                 return
@@ -2486,6 +2508,17 @@ def build_platform(
             return
         keys = (getattr(ev, "payload", None) or {}).get("keys") or []
         if "autonomy_kill_switch" not in keys:
+            return
+        # v1.359.0 (integrate, lane 9A review): POST /autonomy/kill stops
+        # unattended work ITSELF, synchronously, before it answers (its
+        # ``stopped`` count is the Autonomy flash's "Stopped N running
+        # tasks"). This watcher runs the SAME stop on a bus worker thread, and
+        # the two raced the compare-and-set: when the watcher won, the route
+        # answered ``stopped: 0``. The route's own writes carry
+        # actor="autonomy_page", so the watcher leaves them to the route and
+        # still covers every other door that flips the switch (Settings row,
+        # Ctrl K, chat).
+        if (getattr(ev, "payload", None) or {}).get("actor") == "autonomy_page":
             return
         from .agents.orchestrator import emergency_stop_on
 

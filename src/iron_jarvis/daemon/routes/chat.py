@@ -5186,7 +5186,7 @@ async def chat_stream(
                 # v1.351.0 (G10): the OFFLINE DEMO answered — one note that
                 # names the real fix, in place of the two file notes. MIRROR
                 # NOTE (lock-step): chat_turn.run_chat_turn.
-                reply += _chat_turn.demo_note(tools_used)
+                reply += _chat_turn.demo_note(tools_used, reply)
             else:
                 reply += _creation_honesty_note(body, armed, tools_used)
                 # v1.153.2: and check the reply's own CLAIMS against the
