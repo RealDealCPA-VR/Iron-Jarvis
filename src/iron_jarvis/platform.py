@@ -73,6 +73,7 @@ from .worklist import WORKLIST_TOOL_NAMES, WorklistStore, worklist_tools
 from .worklist import models as _wl_models  # noqa: F401  (registers WorklistItem)
 from .comm import Notifier, build_notifier, httpx_get, httpx_post, notify_tools
 from .comm import models as _comm_models  # noqa: F401  (registers InboundOffsetRecord)
+from .comm.notifier import schedule_fire as _schedule_fire
 from .filesearch import FileSearchService, filesearch_tools
 from .integrations import IntegrationRegistry, integration_tools
 from .integrations import models as _intg_models  # noqa: F401
@@ -1818,7 +1819,9 @@ def build_platform(
 
     platform.settle_stopped_waiting = _settle_stopped_waiting
 
-    def _deliver_outcome(task, payload: dict, status: str, detail: str) -> None:
+    def _deliver_outcome(
+        task, payload: dict, status: str, detail: str, *, bell_says: bool = False
+    ) -> None:
         # A schedule is explicit intent, so the default audience is EVERY
         # destination ("This PC" included) — the pre-v1.119 default (default
         # channel only) meant results landed on the mock channel and nobody
@@ -1836,10 +1839,30 @@ def build_platform(
         head = _run_outcome.delivery_head(status)
         message = f"Schedule “{task.name}”: {head}" + (f" — {excerpt}" if excerpt else "")
         try:
-            targets = payload.get("notify_channels") or platform.notifier.channels()
-            platform.notifier.notify(message, list(targets))
+            targets = list(payload.get("notify_channels") or platform.notifier.channels())
+            if bell_says:
+                # v1.360.0 (lane 10A, G03): ONE notice per outcome on this
+                # PC. The bell rings this outcome (window open) and the
+                # desktop app's tray watcher says it (no window), in the
+                # bell's words, so "This PC" stays quiet for exactly this
+                # case; every other destination still gets the schedule's
+                # own line.
+                targets = platform.notifier.without_desktop(targets)
+            if targets:
+                platform.notifier.notify(message, targets)
         except Exception:  # noqa: BLE001
             pass
+
+    def _bell_says(fired: dict, status: str) -> bool:
+        """v1.360.0 (lane 10A): does the bell (and, in the tray, the desktop
+        app's watcher) already announce THIS fire's outcome? Only when the
+        fire ran something the bell reads — a session (``session.completed``
+        of origin ``schedule:``/``goal:``, a failed or short one rings), a
+        workflow run (a failed ``workflow.completed`` rings; a run parked on
+        the user is the bell's waiting row) — AND the outcome fell short. A
+        fire that failed before any run (no session, a workflow that was not
+        found) has no bell row: "This PC" keeps saying it."""
+        return bool(fired.get("run")) and status in _run_outcome.SHORT_STATUSES
 
     # -- the weekly memory review (v1.143.0) --------------------------------
     # The memory-review schedule is the ONE task schedule whose prompt must not
@@ -2130,11 +2153,18 @@ def build_platform(
                 # A review that died mid-run is a FAILED run, not an absent one:
                 # the card must show it, and a failed run structurally cannot
                 # advance the cursor. The schedule's own error path is unchanged.
+                # v1.360.0 (lane 10A): run_session finalized the run failed
+                # before re-raising, so the bell has its row.
+                fired["run"] = True
                 _record_memory_review(
                     review, session.id, False, f"{type(exc).__name__}: {exc}"
                 )
                 raise
             status = getattr(done.status, "value", str(done.status))
+            # v1.360.0 (lane 10A): a run that ENDED published its
+            # ``session.completed`` (the bell's row); one woken without a
+            # slot at shutdown did not.
+            fired["run"] = status in ("completed", "failed", "cancelled")
             summary = (done.summary or "").strip()
             _record_memory_review(
                 review, session.id, status == "completed", summary or f"session {status}"
@@ -2181,6 +2211,10 @@ def build_platform(
                 # v1.358.0 (integrate): this fire did not park — an older
                 # parked run of this schedule no longer speaks for its row.
                 await asyncio.to_thread(_parked_runs.clear, task.name)
+            # v1.360.0 (lane 10A): a run record that failed published its
+            # ``workflow.completed`` (the bell's failed row); one parked on the
+            # user is the bell's waiting row.
+            fired["run"] = status in ("failed", "waiting")
             if status == "failed":
                 raise RuntimeError(f"workflow “{ref}” run failed — see its run history")
             if status == "waiting":
@@ -2223,6 +2257,9 @@ def build_platform(
             sid = str(result.get("session_id") or "")
             if sid:
                 fired["session_id"] = sid
+                # v1.360.0 (lane 10A): a goal iteration whose session ran
+                # published its ``session.completed`` (origin ``goal:``).
+                fired["run"] = True
             if not result.get("ok"):
                 if sid:
                     # A session really ran and did not complete — surface it
@@ -2260,7 +2297,12 @@ def build_platform(
                 )
                 return
             try:
-                detail = await _dispatch_scheduled(task, payload, fired)
+                # v1.360.0 (lane 10A): a run this fire starts is announced by
+                # this schedule's own delivery below (which honours its
+                # notify / notify_channels), never a second time by the
+                # notifier's generic run alert.
+                with _schedule_fire(task.name):
+                    detail = await _dispatch_scheduled(task, payload, fired)
             except asyncio.CancelledError:
                 # STOPPED MID-RUN (v1.351.0, G13): a Cancel on the session or
                 # Emergency stop. ``cancel_session`` cancels the task that
@@ -2314,12 +2356,16 @@ def build_platform(
                         pass
                 detail = _run_outcome.failure_detail(reason)
                 _record_outcome(task.name, "error", detail, fired["session_id"])
-                _deliver_outcome(task, payload, "error", detail)
+                _deliver_outcome(
+                    task, payload, "error", detail, bell_says=_bell_says(fired, "error")
+                )
                 return
             status = _run_outcome.fire_status(fired.get("outcome"))
             _record_outcome(task.name, status, detail, fired["session_id"])
             if status != _run_outcome.STATUS_CANCELLED:
-                _deliver_outcome(task, payload, status, detail)
+                _deliver_outcome(
+                    task, payload, status, detail, bell_says=_bell_says(fired, status)
+                )
 
         return _fire()
 

@@ -265,9 +265,12 @@ class DesktopChannel(Channel):
     it is only recorded in the event log. (Corrected v1.351.0, G03 — this
     docstring used to promise the opposite.) What still reaches a user with no
     window: the desktop app's own ``installAskWatcher`` toasts asks that wait
-    on them, and the bell replays the finished and failed unattended runs it
-    missed (``session.completed`` and the rest, via ``GET /audit``) the next
-    time a window opens.
+    on them AND (v1.360.0, lane 10A) unattended runs that failed or fell
+    short, in the bell's words (``planRunOutcomeNotifications``), and the bell
+    replays the finished and failed unattended runs it missed
+    (``session.completed`` and the rest, via ``GET /audit``) the next time a
+    window opens. For exactly the run outcomes the bell rings this channel is
+    QUIET (``notifier.bell_pings``): one notice per outcome on this PC.
 
     The sink is a class attribute rather than a constructor arg on purpose:
     channels are built in two places (boot + the add-channel route) through a

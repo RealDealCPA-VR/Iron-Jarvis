@@ -9,7 +9,9 @@ message whenever a *subscribed* event type fires (e.g. ``review.requested``,
 from __future__ import annotations
 
 import re
-from typing import Any, Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Callable, Iterator
 
 from ..core.events import EventType
 from .base import Channel
@@ -372,6 +374,157 @@ def format_event(event: Any) -> str:
     return UNKNOWN_EVENT_LINE
 
 
+# --------------------------------------------------------------------------- #
+# ONE NOTICE PER OUTCOME (v1.360.0, lane 10A — the re-audit's G03 regression)
+# --------------------------------------------------------------------------- #
+#
+# One failed scheduled run used to raise up to THREE desktop notifications
+# while a window was open, in different words: the bell's own ping ("Your
+# schedule X could not finish"), the schedule's delivery to "This PC"
+# ("Schedule “X”: FAILED — …") and this notifier's generic session.completed
+# alert to "This PC" ("Your schedule X could not finish — …"); a failed
+# workflow rang a step row AND a workflow row, and "This PC" toasted both.
+#
+# Who owns the desktop notice for a run's outcome:
+#
+# * a window is open → the dashboard's bell, which pings exactly the rows
+#   `bell_pings` describes (its twin is NotificationBell `toActivity`: a row
+#   that is neither null nor quiet; both read
+#   dashboard/__tests__/fixtures/one-notice-v13600.json);
+# * the app sits in the tray → desktop/main.js's run-outcome watcher, which
+#   says the bell's attention rows in the bell's words (the renderer, and so
+#   both the bell and the "This PC" bridge, is gone then);
+# * the "This PC" destination stays QUIET for exactly those outcomes
+#   (`Notifier.on_event` here, `platform._deliver_outcome` for a schedule's
+#   own delivery), and for a workflow STEP's completion: its workflow's own
+#   notice says how the workflow ended.
+#
+# And a run a SCHEDULE started is announced by that schedule's own delivery
+# (which honours its `notify` / `notify_channels`), so inside a schedule fire
+# this notifier sends no generic run alert to ANY destination — one notice
+# per outcome on the phone too (it used to get the schedule's line AND this
+# alert, and `notify: false` silenced only the first).
+
+#: The run-outcome alerts the rules above apply to.
+RUN_OUTCOME_EVENTS: frozenset[str] = frozenset(
+    {EventType.SESSION_COMPLETED, EventType.WORKFLOW_COMPLETED}
+)
+
+
+def _origin_kind(payload: dict) -> str:
+    origin = _text(payload.get("origin"))
+    return origin.partition(":")[0].strip()
+
+
+def is_workflow_step(payload: dict) -> bool:
+    """A ``session.completed`` of one STEP of a workflow (origin
+    ``workflow:<name>``): its workflow's own completion says how it ended."""
+    return _origin_kind(payload) == "workflow"
+
+
+def bell_pings(event: Any) -> bool:
+    """Does the dashboard bell raise a desktop ping for this event while a
+    window is open? The Python twin of ``NotificationBell.toActivity`` for the
+    two run-outcome types (a row that is neither null nor ``quiet``):
+
+    * ``session.completed`` of an UNATTENDED door (schedule, goal, workflow
+      step, reflex, phone, autonomy, another computer) that did not end
+      cleanly done and was not stopped by the user — the bell's "could not
+      finish" / "needs you" / "finished, but part of it failed" rows;
+    * ``session.completed`` of a mission's root run, unless stopped;
+    * ``workflow.completed`` that FAILED.
+
+    A run with no session id has no bell row. Never raises."""
+    try:
+        etype = _event_field(event, "type")
+        payload = _event_field(event, "payload", {}) or {}
+        if not isinstance(payload, dict):
+            return False
+        if etype == EventType.WORKFLOW_COMPLETED:
+            return _text(payload.get("status")) == "failed"
+        if etype != EventType.SESSION_COMPLETED:
+            return False
+        if not _text(_event_field(event, "session_id")):
+            return False
+        status = _text(payload.get("status"))
+        if status == "cancelled":
+            return False
+        origin = _text(payload.get("origin"))
+        if origin == _MISSION_ORIGIN:
+            return True
+        if _origin_kind(payload) not in _UNATTENDED_SUBJECT:
+            return False
+        ran = status == "completed" and payload.get("ok") is not False
+        done = ran and _text(payload.get("outcome")) == "completed"
+        return not done
+    except Exception:  # noqa: BLE001 — a wording rule must never drop an alert
+        return False
+
+
+def bell_attention(event: Any) -> bool:
+    """The bell's ATTENTION rows among the ones it pings (counted on its
+    badge): every unattended shortfall and a failed workflow — never a
+    mission's row. Exactly what desktop/main.js says while the app sits in
+    the tray."""
+    if not bell_pings(event):
+        return False
+    payload = _event_field(event, "payload", {}) or {}
+    return not (
+        _event_field(event, "type") == EventType.SESSION_COMPLETED
+        and _text(payload.get("origin")) == _MISSION_ORIGIN
+    )
+
+
+class _FireScope:
+    """One schedule fire's announcing window. ``open`` is cleared when the
+    fire returns, so work it started that outlives it (a background run
+    copies the context) is announced as usual."""
+
+    __slots__ = ("name", "open")
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.open = True
+
+
+_SCHEDULE_FIRE: ContextVar["_FireScope | None"] = ContextVar(
+    "iron_jarvis_schedule_fire", default=None
+)
+
+
+@contextmanager
+def schedule_fire(name: str) -> Iterator[None]:
+    """Mark everything this fire runs as announced by the schedule's own
+    delivery (``platform._run_scheduled``). The event bus runs its handlers
+    through ``asyncio.to_thread``, which copies the context, so the notifier
+    sees the mark for every run the fire awaits."""
+    scope = _FireScope(str(name or ""))
+    token = _SCHEDULE_FIRE.set(scope)
+    try:
+        yield
+    finally:
+        scope.open = False
+        _SCHEDULE_FIRE.reset(token)
+
+
+def in_schedule_fire() -> bool:
+    """Is the current code running inside a schedule fire that will deliver
+    its own notice?"""
+    scope = _SCHEDULE_FIRE.get()
+    return bool(scope is not None and scope.open)
+
+
+def is_desktop_channel(channel: Any) -> bool:
+    """The "This PC" destination (a ``DesktopChannel``, whatever name it was
+    registered under)."""
+    try:
+        from .channels import DesktopChannel
+
+        return isinstance(channel, DesktopChannel)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class Notifier:
     def __init__(
         self,
@@ -405,6 +558,12 @@ class Notifier:
 
     def channels(self) -> list[str]:
         return sorted(self._channels)
+
+    def without_desktop(self, names: list[str]) -> list[str]:
+        """``names`` minus the "This PC" destinations (v1.360.0, lane 10A):
+        for an outcome the bell (window open) or the desktop app's tray
+        watcher (no window) already says on this PC."""
+        return [n for n in names if not is_desktop_channel(self._channels.get(n))]
 
     # -- routing ---------------------------------------------------------
     def _targets(self, channels: list[str] | None) -> list[str]:
@@ -453,6 +612,20 @@ class Notifier:
             if not (getattr(ch, "config", None) or {}).get("events")
             or etype in (ch.config.get("events") or [])
         ]
+        if etype in RUN_OUTCOME_EVENTS:
+            # v1.360.0 (lane 10A): ONE notice per outcome. A run a schedule
+            # started is said by that schedule's own delivery, on every
+            # destination; on this PC the bell / the tray watcher say what
+            # they ring, and a workflow's own notice says its steps.
+            if in_schedule_fire():
+                return {}
+            payload = _event_field(event, "payload", {}) or {}
+            if bell_pings(event) or (
+                etype == EventType.SESSION_COMPLETED
+                and isinstance(payload, dict)
+                and is_workflow_step(payload)
+            ):
+                targets = self.without_desktop(targets)
         if not targets:
             return {}
         return self.notify(self._formatter(event), targets)

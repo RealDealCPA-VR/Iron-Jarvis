@@ -63,6 +63,8 @@ import {
 } from "@/lib/agentRun";
 import { PlanChecklist } from "@/components/chat/PlanChecklist";
 import { isPlanProgressLine, planCountWords, readSavedPlan, type PlanView } from "@/lib/planChecklist";
+import { statusWords, toneTextClass } from "@/lib/statusWords";
+import type { Tone } from "@/components/ui";
 
 /* ------------------------------------------------------------------- words */
 
@@ -119,20 +121,76 @@ export function stepsWords(steps: number | null): string | null {
  *  and a failed one "could not finish". A stamp from before v1.352.0 has no
  *  status and reads exactly as it did. */
 export function settledRunWords(name: string, run: AgentRunStamp): string {
+  const p = settledRunParts(name, run);
+  return `${p.lead}${p.verdict ? `${p.sep}${p.verdict}` : ""}${p.rest}`;
+}
+
+/**
+ * v1.360.0 (lane 10A): the settled row's words in the three parts it draws,
+ * so the VERDICT keeps its colour and never truncates away.
+ *
+ * The re-audit's regression (v1.358.0, one receipt): the reply under the row
+ * dropped the card's red "Failed" / amber "Part failed" headline, leaving the
+ * verdict as the LAST words of the row's grey truncating line, so a narrow
+ * window cut "· failed" first and nothing on screen was coloured. Now:
+ *
+ *   lead     the part that may truncate ("The researcher worked for 2 min 5 s
+ *            · 6 steps", or just the name when the verdict is the sentence);
+ *   verdict  how it ended ("failed", "part failed", "needs you", "stopped",
+ *            "could not finish", "hit its step limit"), drawn shrink-0 in its
+ *            statusWords tone (the Schedules row's `toneTextClass`);
+ *   rest     what follows a verdict that IS the sentence (" · 6 steps").
+ *
+ * Joined they are `settledRunWords`, byte for byte (the row's textContent and
+ * every test that reads it are unchanged). A run that simply finished has no
+ * verdict: the whole line is the lead, as before.
+ */
+export interface SettledRunParts {
+  lead: string;
+  /** " · " after a worked-for line, " " after a bare name. */
+  sep: string;
+  verdict: string | null;
+  /** statusWords' tone for the verdict: "red" (failed), "amber" (needs you,
+   *  part failed), "slate" (stopped), or null with no verdict. */
+  tone: Tone | null;
+  rest: string;
+}
+
+/** The verdict's tone from the ONE status table (lib/statusWords): a failed
+ *  run red, a run that needs the user or partly failed amber, a stopped one
+ *  slate. A run stopped at its step limit reads amber, as the run's card
+ *  headline does ("Stopped at its step limit", RunResultCard.runEnd). A
+ *  stamp with an outcome and no status is a run that ended (completed). */
+export function verdictTone(run: Pick<AgentRunStamp, "status" | "outcome" | "stepLimit">): Tone {
+  if (run.status === "failed" && run.stepLimit) return "amber";
+  const status = run.status ?? (run.outcome ? "completed" : null);
+  return statusWords(status, run.outcome ?? null).tone;
+}
+
+export function settledRunParts(name: string, run: AgentRunStamp): SettledRunParts {
   const dur = secondsText(runDurationMs(run));
-  const end = runEndWords(run);
-  let head: string;
-  let tail = end;
-  if (dur) head = `${name} worked for ${dur}`;
-  else if (run.status === "cancelled") {
-    head = `${name} was stopped`;
-    tail = null; // said already
-  } else if (run.status === "failed") {
-    head = run.stepLimit ? `${name} hit its step limit` : `${name} could not finish`;
-    tail = null;
-  } else head = `${name} finished`;
   const steps = stepsWords(run.steps);
-  return [head, steps, tail].filter(Boolean).join(" · ");
+  const tone = verdictTone(run);
+  if (dur) {
+    const lead = [`${name} worked for ${dur}`, steps].filter(Boolean).join(" · ");
+    const end = runEndWords(run);
+    return end ? { lead, sep: " · ", verdict: end, tone, rest: "" } : { lead, sep: "", verdict: null, tone: null, rest: "" };
+  }
+  // No known length: when the run did not simply finish, the verdict IS the
+  // sentence ("The researcher could not finish · 6 steps").
+  const verdict =
+    run.status === "cancelled"
+      ? "was stopped"
+      : run.status === "failed"
+        ? run.stepLimit
+          ? "hit its step limit"
+          : "could not finish"
+        : null;
+  if (verdict) return { lead: name, sep: " ", verdict, tone, rest: steps ? ` · ${steps}` : "" };
+  // "finished" (with a needs-you / part-failed end said after it, as before).
+  const lead = [`${name} finished`, steps].filter(Boolean).join(" · ");
+  const end = runEndWords(run);
+  return end ? { lead, sep: " · ", verdict: end, tone, rest: "" } : { lead, sep: "", verdict: null, tone: null, rest: "" };
 }
 
 /* ------------------------------------------------------------ the registry */
@@ -376,8 +434,33 @@ export function AgentRunSettled({ name, run, why, children }: AgentRunSettledPro
   const [open, setOpen] = useState(false);
   const bodyId = useId();
   const words = settledRunWords(name, run);
+  const parts = settledRunParts(name, run);
   const plan = useMemo(() => readSavedPlan(run.plan), [run.plan]);
   const canOpen = !!why || !!plan || children != null;
+  // v1.360.0 (lane 10A): the verdict sits OUTSIDE the truncating part, in its
+  // own tone token (never a literal hue), so a narrow window cuts the length
+  // and the steps first and "· failed" stays on screen and coloured. The full
+  // line is the words' title for the rare row cut anyway.
+  const wordsEl = (
+    <span data-testid="agent-run-words" title={words} className="flex min-w-0 items-baseline">
+      <span data-testid="agent-run-lead" className="min-w-0 truncate">
+        {parts.lead}
+      </span>
+      {parts.verdict ? (
+        <>
+          <span className="shrink-0 whitespace-pre">{parts.sep}</span>
+          <span
+            data-testid="agent-run-verdict"
+            data-tone={parts.tone ?? undefined}
+            className={`shrink-0 whitespace-pre ${parts.tone ? toneTextClass(parts.tone) : ""}`.trim()}
+          >
+            {parts.verdict}
+          </span>
+          {parts.rest ? <span className="shrink-0 whitespace-pre">{parts.rest}</span> : null}
+        </>
+      ) : null}
+    </span>
+  );
   return (
     <div data-testid="agent-run-row" data-state="settled" className="grid gap-1.5">
       <div className="flex min-w-0 items-center gap-3">
@@ -391,17 +474,13 @@ export function AgentRunSettled({ name, run, why, children }: AgentRunSettledPro
             className={TOGGLE}
           >
             <Bot size={14} aria-hidden="true" className="shrink-0 text-accent-soft" />
-            <span data-testid="agent-run-words" className="min-w-0 truncate">
-              {words}
-            </span>
+            {wordsEl}
             <Chevron open={open} />
           </button>
         ) : (
           <div className="flex min-w-0 flex-1 items-center gap-2 text-[13px] leading-5 text-zinc-500">
             <Bot size={14} aria-hidden="true" className="shrink-0 text-accent-soft" />
-            <span data-testid="agent-run-words" className="min-w-0 truncate">
-              {words}
-            </span>
+            {wordsEl}
           </div>
         )}
         <Link

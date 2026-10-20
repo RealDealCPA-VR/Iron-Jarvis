@@ -337,12 +337,17 @@ function SessionsList() {
               title={`All sessions${sessions.length ? ` · ${sessions.length}` : ""}`}
               icon={<Boxes size={15} />}
               right={
+                // v1.360.0 (lane 10A, G80's other half): the same rule as
+                // "Clear finished" above. The neutral grey and the accent
+                // hover belong to the FIRST press (`idleClassName`); the
+                // armed "Clean up now?" wears ConfirmButton's calm danger
+                // cue, which a forced `!text-zinc-400` had painted grey.
                 <ConfirmButton
                   label="Clean up leftover folders"
                   confirmLabel="Clean up now?"
                   onConfirm={pruneWorktrees}
                   title="Remove the git worktrees left behind by failed or deleted sessions"
-                  className="!text-zinc-400 hover:!text-accent-soft"
+                  idleClassName="!text-zinc-400 hover:!text-accent-soft"
                 />
               }
             >

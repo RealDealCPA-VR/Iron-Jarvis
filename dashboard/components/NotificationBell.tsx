@@ -31,6 +31,7 @@ import { ApiError, get, post, put } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
 import { usePolledApi } from "@/lib/useApi";
 import { useDesktopNotifications } from "@/lib/useDesktopNotifications";
+import { isPopoutWindow } from "@/lib/desktopShell";
 import type { ComputerUseStatus, IJEvent, WorkflowRun } from "@/lib/types";
 import { clockTime, formatTokens } from "@/lib/format";
 import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
@@ -151,6 +152,17 @@ export interface ActivityItem {
    *  nobody was watching when it happened, so the badge is how they learn.
    *  Never set together with `quiet`. */
   attention?: boolean;
+  /** v1.360.0 (lane 10A): the run a workflow STEP's row is about (its
+   *  session id). Set only on those rows, so the workflow's own failed row
+   *  can stand in for them (`oneRowPerWorkflow`). */
+  session?: string;
+  /** v1.360.0 (lane 10A): on a FAILED workflow's row, the step sessions its
+   *  run held (`workflow.completed` `sessions`): their rows fold into it. */
+  covers?: readonly string[];
+  /** v1.360.0 (lane 10A): the step rows this workflow row stands in for
+   *  (set by `oneRowPerWorkflow`): a step already pinged or already seen
+   *  means the workflow's row is neither pinged nor counted again. */
+  absorbs?: readonly string[];
 }
 
 /** v1.309.0 (contract 8): where an agent's row opens — THAT agent on Your
@@ -332,7 +344,62 @@ function unattendedCompletion(
     title: `${UNATTENDED_SUBJECT[door.kind](door.name)} ${words}`,
     body: clip(p.summary),
     ...(v.done ? { quiet: true } : { attention: true }),
+    // v1.360.0 (lane 10A): a workflow step's row names its run, so the
+    // workflow's own failed row can say it once (`oneRowPerWorkflow`).
+    ...(door.kind === "workflow" ? { session: sid } : {}),
   };
+}
+
+/** v1.360.0 (lane 10A): is this bell in a popped-out module's window? Never
+ *  throws (a test's partial `lib/desktopShell` mock reads as the main
+ *  window). */
+function inPopout(): boolean {
+  try {
+    return isPopoutWindow();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * v1.360.0 (lane 10A, the re-audit's G03 regression): ONE row per failed
+ * workflow. A step that failed rang "A step of your workflow X could not
+ * finish" and, a moment later, its run rang "Your workflow X could not
+ * finish" — two rows (and two desktop pings) for one outcome. The FAILED
+ * workflow's row (`covers` = its run's step sessions) stands in for the
+ * step rows of that run: they leave the list and are recorded on it
+ * (`absorbs`), so a step already pinged or already seen keeps the workflow
+ * row from being pinged or counted a second time. A step row whose workflow
+ * finished (a step its author let fail, a retry) stays: nothing else says
+ * it. Rows from `alsoCovered` (the live list, for the replayed one) fold
+ * the same way. Order is kept; nothing else changes.
+ */
+export function oneRowPerWorkflow(
+  rows: readonly ActivityItem[],
+  alsoCovered: readonly ActivityItem[] = [],
+): ActivityItem[] {
+  const coverOf = new Map<string, number>();
+  rows.forEach((r, i) => {
+    for (const s of r.covers ?? []) if (!coverOf.has(s)) coverOf.set(s, i);
+  });
+  const coveredElsewhere = new Set<string>();
+  for (const r of alsoCovered) for (const s of r.covers ?? []) coveredElsewhere.add(s);
+  if (!coverOf.size && !coveredElsewhere.size) return [...rows];
+  const absorbed = new Map<number, string[]>();
+  const out: (ActivityItem | null)[] = rows.map((r) => r);
+  rows.forEach((r, i) => {
+    if (!r.session) return;
+    const at = coverOf.get(r.session);
+    if (at !== undefined && at !== i) {
+      out[i] = null;
+      absorbed.set(at, [...(absorbed.get(at) ?? []), r.id]);
+    } else if (coveredElsewhere.has(r.session)) {
+      out[i] = null;
+    }
+  });
+  return out
+    .map((r, i) => (r && absorbed.has(i) ? { ...r, absorbs: absorbed.get(i) } : r))
+    .filter((r): r is ActivityItem => r !== null);
 }
 
 /** v1.358.0 (lane 8A): a browser task's tone, drawn by the row's icon — an
@@ -415,6 +482,11 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     const name = typeof p.workflow === "string" ? p.workflow.trim() : "";
     const subject = name ? `Your workflow ${name}` : "A workflow";
     if (status === "failed") {
+      // v1.360.0 (lane 10A): the run's step sessions, so this row stands in
+      // for its failed step's row (`oneRowPerWorkflow`) — one row, one ping.
+      const covers = Array.isArray(p.sessions)
+        ? p.sessions.filter((s): s is string => typeof s === "string" && s !== "")
+        : [];
       return {
         id: e.id,
         ts: e.ts,
@@ -423,6 +495,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
         title: `${subject} could not finish`,
         body: "The Workflows page shows which step stopped.",
         attention: true,
+        ...(covers.length ? { covers } : {}),
       };
     }
     if (status === "completed") {
@@ -1700,7 +1773,9 @@ export function NotificationBell() {
       seen.add(item.id);
       out.push(item);
     }
-    return out;
+    // v1.360.0 (lane 10A): a failed workflow is ONE row (its step's row
+    // folds into it).
+    return oneRowPerWorkflow(out);
   }, [events]);
   const activity = useMemo(() => pickShown(allActivity), [allActivity]);
 
@@ -1737,7 +1812,12 @@ export function NotificationBell() {
   }, []);
   const awayShown = useMemo(() => {
     const live = new Set(allActivity.map((a) => a.id));
-    return pickShown(away.filter((a) => !live.has(a.id)));
+    return pickShown(
+      oneRowPerWorkflow(
+        away.filter((a) => !live.has(a.id)),
+        allActivity,
+      ),
+    );
   }, [away, allActivity]);
 
   // v1.351.0 (G03/G04): failures and shortfalls of unattended work count on
@@ -1753,8 +1833,20 @@ export function NotificationBell() {
         .join("\n"),
     [activity, awayShown],
   );
+  // v1.360.0 (lane 10A): a failed workflow's row that stands in for a step
+  // row the user already saw is seen too — one outcome, counted once.
+  const absorbedBy = useMemo(() => {
+    const m = new Map<string, readonly string[]>();
+    for (const a of [...activity, ...awayShown]) if (a.absorbs?.length) m.set(a.id, a.absorbs);
+    return m;
+  }, [activity, awayShown]);
   const unseen = attentionKey
-    ? attentionKey.split("\n").filter((id) => !seenAttention.has(id)).length
+    ? attentionKey
+        .split("\n")
+        .filter(
+          (id) =>
+            !seenAttention.has(id) && !(absorbedBy.get(id) ?? []).some((s) => seenAttention.has(s)),
+        ).length
     : 0;
   useEffect(() => {
     if (!open) return;
@@ -1876,12 +1968,27 @@ export function NotificationBell() {
   // history), so a page reload can't re-fire a backlog of old notifications.
   // (v1.351.0: the replayed "While you were away" rows are a separate list
   // and never ping; the newest LIVE row is read before the 6-row cut.)
+  //
+  // v1.360.0 (lane 10A, G03): this ping is the ONE desktop notice for a run's
+  // outcome while a window is open — the daemon keeps "This PC" quiet for
+  // exactly these rows (comm/notifier.bell_pings), and the desktop app says
+  // the same rows itself while it sits in the tray. A failed workflow's row
+  // that stands in for a step row already pinged is not pinged again.
+  // A popped-out module's window holds its own bell (and its own events
+  // socket): the MAIN window speaks for the app, as the "This PC" bridge
+  // does, so one outcome is never pinged once per window — and the desktop
+  // app's tray watcher keys on that same main window.
   const prevActivityId = useRef<string | null>(null);
+  const pingedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const latest = allActivity[0];
     if (!latest || prevActivityId.current === latest.id) return;
     prevActivityId.current = latest.id;
     if (latest.quiet) return; // v1.305.0: a dropdown row, never a desktop ping
+    if (inPopout()) return;
+    if (latest.absorbs?.some((id) => pingedRef.current.has(id))) return;
+    pingedRef.current.add(latest.id);
+    if (pingedRef.current.size > 200) pingedRef.current = new Set([...pingedRef.current].slice(-100));
     notify(latest.title, latest.body || "Open the dashboard for details.", () =>
       setOpen(true),
     );

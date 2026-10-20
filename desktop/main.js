@@ -504,6 +504,9 @@ function maybeShowTrayHint() {
 // close()) skips the 'close' handler, so no prompt/recursion.
 function hideToTray() {
   if (!mainWin || mainWin.isDestroyed()) return;
+  // v1.360.0 (lane 10A): the bell was alive until now; the tray's run
+  // watcher must not repeat what it already pinged.
+  runOutcomeWindowSeenAt = Date.now();
   maybeShowTrayHint();
   flushWindowState();
   if (mainWin.isFullScreen()) mainWin.setFullScreen(false);
@@ -3012,6 +3015,194 @@ function planPaneNotifications(seen, panes, windowOpen) {
   return { seen: next, notify };
 }
 
+// A RUN THAT ENDED BADLY WHILE THE APP SITS IN THE TRAY (v1.360.0, lane 10A).
+// The re-audit's "Did it fail?" remainder: a failed unattended run raised no
+// OS notice while the window was closed to the tray (the renderer — the
+// bell AND the "This PC" bridge — is destroyed there), so a 3 am schedule
+// that failed was seen only when the window came back. The watcher reads the
+// same persisted events the bell replays (GET /audit, session.completed +
+// workflow.completed) on the ask watcher's tick and says the bell's
+// ATTENTION rows — a schedule, goal, workflow step, reflex, phone request,
+// autonomy run or another computer's task that failed or fell short, and a
+// workflow that failed — in the bell's own words (dashboard
+// components/NotificationBell `toActivity`; both read
+// dashboard/__tests__/fixtures/one-notice-v13600.json). ONE notice per
+// outcome: while a window is open the bell owns it (the event is recorded
+// here, never announced, so a later close does not repeat it); a failed
+// workflow is one notice — its step's notice stands in for it, or it stands
+// in for its step; and the daemon keeps "This PC" quiet for exactly these.
+const RUN_OUTCOME_AUDIT_TYPES = "session.completed,workflow.completed";
+//: Entries one read asks for (the bell's own replay reads 50).
+const RUN_OUTCOME_LIMIT = 50;
+//: How many seen ids the watcher remembers (newest kept).
+const RUN_OUTCOME_SEEN_MAX = 400;
+let runOutcomeState = { seen: {}, announced: {} };
+//: The audit `since` of the next read: the app's start, then the newest
+//: entry seen (inclusive — `seen` drops the repeat).
+let runOutcomeSince = new Date().toISOString();
+//: The last moment a window was open (ms; 0 = none yet). The bell pinged
+//: what ended before it, so the tray never says it again.
+let runOutcomeWindowSeenAt = 0;
+
+//: How a row names each unattended door (the bell's UNATTENDED_SUBJECT; a
+//: goal's suffix is an internal id and is never shown).
+const RUN_OUTCOME_SUBJECT = {
+  schedule: (n) => (n ? `Your schedule ${n}` : "A schedule"),
+  goal: () => "Your goal's run",
+  workflow: (n) => (n ? `A step of your workflow ${n}` : "A workflow step"),
+  reflex: (n) => (n ? `Your reflex ${n}` : "A reflex rule"),
+  comm: (n) => (n ? `Your request from ${n}` : "A request from your phone"),
+  autonomy: () => "An autonomy run",
+  // lib/remoteTask.remoteTaskSubject
+  remote: (n) => `A task from ${(n || "").trim() || "another computer"}`,
+};
+
+// lib/plainText.plainText + summaryLine: a run's summary as one line of
+// plain words (a model writes markdown; a toast shows text).
+function runOutcomePlainText(md) {
+  return String(md || "")
+    .replace(/```[^\n]*\n?/g, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, "")
+    .replace(/(\*\*|__)(?=\S)([\s\S]+?)(?<=\S)\1/g, "$2")
+    .replace(/\*(?=\S)([^*]+?)(?<=\S)\*/g, "$1")
+    .replace(/(?<![\w])_(?=\S)([^_]+?)(?<=\S)_(?![\w])/g, "$1")
+    .replace(/~~(.+?)~~/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// The bell's `clip`: flattened first, then cut at 140.
+function runOutcomeClip(text) {
+  const raw = typeof text === "string" ? text : "";
+  const s = runOutcomePlainText(raw.replace(/(^|\s)#{1,6}(?=\s)/g, "$1")).trim();
+  return s.length > 140 ? `${s.slice(0, 139)}…` : s;
+}
+
+// An audit `ts` (naive UTC, or with a zone) in ms, or 0.
+function runOutcomeTsMs(ts) {
+  const s = typeof ts === "string" ? ts.trim() : "";
+  if (!s) return 0;
+  const ms = Date.parse(/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(s) ? s : `${s}Z`);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+// One audit entry ({id, type, session_id, payload}) as the bell's ATTENTION
+// row, or null (a clean finish, a run the user stopped, a mission, a chat, an
+// untagged run — the bell rings none of them as attention).
+function runOutcomeNotice(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const id = typeof entry.id === "string" ? entry.id : "";
+  const p = entry.payload && typeof entry.payload === "object" ? entry.payload : {};
+  if (!id) return null;
+  if (entry.type === "workflow.completed") {
+    if (p.status !== "failed") return null;
+    const name = typeof p.workflow === "string" ? p.workflow.trim() : "";
+    const covers = Array.isArray(p.sessions)
+      ? p.sessions.filter((s) => typeof s === "string" && s !== "")
+      : [];
+    return {
+      id,
+      ts: runOutcomeTsMs(entry.ts),
+      title: `${name ? `Your workflow ${name}` : "A workflow"} could not finish`,
+      body: "The Workflows page shows which step stopped.",
+      href: "/workflows",
+      covers,
+    };
+  }
+  if (entry.type !== "session.completed") return null;
+  const sid = typeof entry.session_id === "string" ? entry.session_id : "";
+  if (!sid) return null;
+  const origin = typeof p.origin === "string" ? p.origin.trim() : "";
+  const i = origin.indexOf(":");
+  const kind = (i >= 0 ? origin.slice(0, i) : origin).trim();
+  if (!Object.prototype.hasOwnProperty.call(RUN_OUTCOME_SUBJECT, kind)) return null;
+  const name = i >= 0 ? origin.slice(i + 1).trim() : "";
+  const status = typeof p.status === "string" ? p.status : "";
+  if (status === "cancelled") return null;
+  const outcome = typeof p.outcome === "string" ? p.outcome : "";
+  const ran = status === "completed" && p.ok !== false;
+  if (ran && outcome === "completed") return null; // a clean finish is quiet
+  const words = !ran
+    ? "could not finish"
+    : outcome === "needs_you"
+      ? "needs you"
+      : outcome === "completed_with_failures"
+        ? "finished, but part of it failed"
+        : "finished. Check what it did";
+  return {
+    id,
+    ts: runOutcomeTsMs(entry.ts),
+    title: `${RUN_OUTCOME_SUBJECT[kind](name)} ${words}`,
+    body: runOutcomeClip(p.summary),
+    href: `/sessions/${encodeURIComponent(sid)}`,
+    ...(kind === "workflow" ? { session: sid } : {}),
+  };
+}
+
+function runOutcomeBounded(map) {
+  const keys = Object.keys(map);
+  if (keys.length <= RUN_OUTCOME_SEEN_MAX) return map;
+  const out = {};
+  for (const k of keys.slice(-RUN_OUTCOME_SEEN_MAX)) out[k] = map[k];
+  return out;
+}
+
+// WHAT TO SAY — pure, like planAskNotifications. `entries` are the audit's,
+// newest first. Every entry is recorded once; only with no window open is a
+// notice raised, and never for a run that ended while a window was still
+// open (`windowSeenAt`, ms: the bell pinged it). A failed workflow and its
+// failed step are ONE notice: in one read the workflow's stands in for the
+// step's; across reads a step already announced (or seen while a window was
+// open) stands in for the workflow's.
+function planRunOutcomeNotifications(state, entries, windowOpen, windowSeenAt) {
+  const seen = { ...((state && state.seen) || {}) };
+  const announced = { ...((state && state.announced) || {}) };
+  const fresh = [];
+  const list = Array.isArray(entries) ? [...entries].reverse() : []; // oldest first
+  for (const entry of list) {
+    const id = entry && typeof entry.id === "string" ? entry.id : "";
+    if (!id || seen[id]) continue;
+    seen[id] = true;
+    const notice = runOutcomeNotice(entry);
+    if (notice) fresh.push(notice);
+  }
+  const coveredHere = new Set();
+  for (const n of fresh) for (const s of n.covers || []) coveredHere.add(s);
+  const notify = [];
+  for (const n of fresh) {
+    if (n.session && coveredHere.has(n.session)) continue; // its workflow's notice says it
+    if ((n.covers || []).some((s) => announced[s])) continue; // its step's notice said it
+    if (n.session) announced[n.session] = true;
+    const bellHadIt = windowOpen || (windowSeenAt > 0 && n.ts > 0 && n.ts <= windowSeenAt);
+    if (!bellHadIt) notify.push({ id: n.id, title: n.title, body: n.body, href: n.href });
+  }
+  return {
+    state: { seen: runOutcomeBounded(seen), announced: runOutcomeBounded(announced) },
+    notify,
+  };
+}
+
+// The newest `ts` in an audit answer (newest first), or "" — the next read's
+// `since`. The audit stamps naive UTC; the daemon reads it back the same way.
+function runOutcomeNewestTs(entries) {
+  const first = Array.isArray(entries) && entries.length ? entries[0] : null;
+  return first && typeof first.ts === "string" ? first.ts : "";
+}
+
+function runOutcomePath(since) {
+  const q = new URLSearchParams({
+    type: RUN_OUTCOME_AUDIT_TYPES,
+    since,
+    limit: String(RUN_OUTCOME_LIMIT),
+  });
+  return `/audit?${q.toString()}`;
+}
+
 function setAskWaitingTooltip(count) {
   askWaitingCount = count;
   if (_trayDegraded.size) return; // a degraded service is the louder truth
@@ -3040,6 +3231,10 @@ function showAskNotification(item) {
       } else if (item.paneId) {
         // v1.353.0 (G52): a waiting Build pane opens Build on THAT pane.
         mainWin.loadURL(`${DASHBOARD_URL}/terminals?focus=${encodeURIComponent(item.paneId)}`);
+      } else if (typeof item.href === "string" && item.href.startsWith("/")) {
+        // v1.360.0 (lane 10A): a run that ended badly opens where its bell
+        // row opens (the run, or the Workflows page).
+        mainWin.loadURL(`${DASHBOARD_URL}${item.href}`);
       } else if (item.sessionId) {
         mainWin.loadURL(`${DASHBOARD_URL}/sessions/${item.sessionId}`);
       }
@@ -3077,6 +3272,29 @@ function installAskWatcher() {
       })
       .catch(() => {
         /* daemon busy or down — try again on the next tick */
+      });
+    // v1.360.0 (lane 10A): unattended runs that failed or fell short, read
+    // on the same tick from the events the bell replays. Read with a window
+    // open too, so what the bell already pinged is recorded and a later
+    // close never repeats it.
+    daemonRequest("GET", runOutcomePath(runOutcomeSince), null)
+      .then((res) => {
+        const entries = res && Array.isArray(res.entries) ? res.entries : null;
+        if (!entries) return; // nothing readable — keep what we know
+        const open = !!(mainWin && !mainWin.isDestroyed());
+        if (open) runOutcomeWindowSeenAt = Date.now();
+        const plan = planRunOutcomeNotifications(
+          runOutcomeState,
+          entries,
+          open,
+          runOutcomeWindowSeenAt,
+        );
+        runOutcomeState = plan.state;
+        runOutcomeSince = runOutcomeNewestTs(entries) || runOutcomeSince;
+        for (const item of plan.notify) showAskNotification(item);
+      })
+      .catch(() => {
+        /* daemon busy or down (or an older daemon) — try again on the next tick */
       });
   };
   setInterval(tick, ASK_WATCH_MS);

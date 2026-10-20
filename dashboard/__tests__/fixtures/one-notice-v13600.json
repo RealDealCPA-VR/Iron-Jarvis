@@ -1,0 +1,265 @@
+{
+  "_about": "v1.360.0 lane 10A: ONE notice per run outcome. Each case is a persisted event (the audit's shape: id, type, session_id, ts, payload). `pings` = the dashboard bell raises a desktop ping for it while a window is open (so the daemon keeps 'This PC' quiet: comm/notifier.bell_pings); `attention` = it counts on the bell's badge, and the desktop app says it while it sits in the tray (comm/notifier.bell_attention, desktop/main.js runOutcomeNotice); `title` / `body` / `href` = the bell row's words, which the tray notice repeats. Read by tests/test_one_notice_v13600.py (Python + main.js under node) and dashboard/__tests__/one-notice-v13600.test.tsx (the real bell).",
+  "cases": [
+    {
+      "case": "schedule-failed",
+      "event": {
+        "id": "evt_sched_failed",
+        "type": "session.completed",
+        "session_id": "session_sf",
+        "ts": "2026-10-19T03:00:05.123456",
+        "payload": {
+          "status": "failed",
+          "ok": false,
+          "summary": "The run failed: the inbox could not be reached.",
+          "origin": "schedule:morning-brief",
+          "project_id": null,
+          "outcome": null
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "title": "Your schedule morning-brief could not finish",
+      "body": "The run failed: the inbox could not be reached.",
+      "href": "/sessions/session_sf"
+    },
+    {
+      "case": "schedule-needs-you",
+      "event": {
+        "id": "evt_sched_ny",
+        "type": "session.completed",
+        "session_id": "session_sn",
+        "ts": "2026-10-19T03:01:00",
+        "payload": {
+          "status": "completed",
+          "ok": true,
+          "summary": "# Final Report\n\n## What happened\n\nThe **inbox** was _tidied_ but one move needs your OK.",
+          "origin": "schedule:morning-brief",
+          "project_id": null,
+          "outcome": "needs_you"
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "title": "Your schedule morning-brief needs you",
+      "body": "Final Report What happened The inbox was tidied but one move needs your OK.",
+      "href": "/sessions/session_sn"
+    },
+    {
+      "case": "schedule-part-failed",
+      "event": {
+        "id": "evt_sched_pf",
+        "type": "session.completed",
+        "session_id": "session_sp",
+        "ts": "2026-10-19T03:02:00",
+        "payload": {
+          "status": "completed",
+          "summary": "Moved 9 of 10 files.",
+          "origin": "schedule:tidy-scans",
+          "project_id": null,
+          "outcome": "completed_with_failures"
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "title": "Your schedule tidy-scans finished, but part of it failed",
+      "body": "Moved 9 of 10 files.",
+      "href": "/sessions/session_sp"
+    },
+    {
+      "case": "schedule-done",
+      "event": {
+        "id": "evt_sched_done",
+        "type": "session.completed",
+        "session_id": "session_sd",
+        "ts": "2026-10-19T03:03:00",
+        "payload": {
+          "status": "completed",
+          "ok": true,
+          "summary": "Wrote the brief.",
+          "origin": "schedule:morning-brief",
+          "project_id": null,
+          "outcome": "completed"
+        }
+      },
+      "pings": false,
+      "attention": false
+    },
+    {
+      "case": "schedule-stopped",
+      "event": {
+        "id": "evt_sched_stop",
+        "type": "session.completed",
+        "session_id": "session_ss",
+        "ts": "2026-10-19T03:04:00",
+        "payload": {
+          "status": "cancelled",
+          "summary": "The agent was stopped before it finished.",
+          "origin": "schedule:morning-brief",
+          "project_id": null,
+          "outcome": null
+        }
+      },
+      "pings": false,
+      "attention": false
+    },
+    {
+      "case": "goal-failed",
+      "event": {
+        "id": "evt_goal_failed",
+        "type": "session.completed",
+        "session_id": "session_gf",
+        "ts": "2026-10-19T03:05:00",
+        "payload": {
+          "status": "failed",
+          "summary": "The run failed: Claude Code is signed out.",
+          "origin": "goal:goal_7f2a",
+          "project_id": null,
+          "outcome": null
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "title": "Your goal's run could not finish",
+      "body": "The run failed: Claude Code is signed out.",
+      "href": "/sessions/session_gf"
+    },
+    {
+      "case": "remote-task-failed",
+      "event": {
+        "id": "evt_remote_failed",
+        "type": "session.completed",
+        "session_id": "session_rf",
+        "ts": "2026-10-19T03:06:00",
+        "payload": {
+          "status": "failed",
+          "summary": "",
+          "origin": "remote:desk",
+          "project_id": null,
+          "outcome": null
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "title": "A task from desk could not finish",
+      "body": "",
+      "href": "/sessions/session_rf"
+    },
+    {
+      "case": "workflow-step-failed",
+      "event": {
+        "id": "evt_step_failed",
+        "type": "session.completed",
+        "session_id": "session_w1",
+        "ts": "2026-10-19T03:07:00",
+        "payload": {
+          "status": "failed",
+          "summary": "The run failed: the report folder is missing.",
+          "origin": "workflow:Weekly report",
+          "project_id": null,
+          "outcome": null
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "title": "A step of your workflow Weekly report could not finish",
+      "body": "The run failed: the report folder is missing.",
+      "href": "/sessions/session_w1"
+    },
+    {
+      "case": "workflow-failed",
+      "event": {
+        "id": "evt_wf_failed",
+        "type": "workflow.completed",
+        "session_id": null,
+        "ts": "2026-10-19T03:07:01",
+        "payload": {
+          "workflow": "Weekly report",
+          "status": "failed",
+          "run_id": "wfr_1",
+          "sessions": ["session_w1"]
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "title": "Your workflow Weekly report could not finish",
+      "body": "The Workflows page shows which step stopped.",
+      "href": "/workflows"
+    },
+    {
+      "case": "workflow-step-done",
+      "event": {
+        "id": "evt_step_done",
+        "type": "session.completed",
+        "session_id": "session_w2",
+        "ts": "2026-10-19T03:08:00",
+        "payload": {
+          "status": "completed",
+          "ok": true,
+          "summary": "Drafted the report.",
+          "origin": "workflow:Weekly report",
+          "project_id": null,
+          "outcome": "completed"
+        }
+      },
+      "pings": false,
+      "attention": false
+    },
+    {
+      "case": "workflow-done",
+      "event": {
+        "id": "evt_wf_done",
+        "type": "workflow.completed",
+        "session_id": null,
+        "ts": "2026-10-19T03:08:01",
+        "payload": {
+          "workflow": "Weekly report",
+          "status": "completed",
+          "run_id": "wfr_2",
+          "sessions": ["session_w2"]
+        }
+      },
+      "pings": false,
+      "attention": false
+    },
+    {
+      "case": "mission-done",
+      "event": {
+        "id": "evt_mission_done",
+        "type": "session.completed",
+        "session_id": "session_m1",
+        "ts": "2026-10-19T03:09:00",
+        "payload": {
+          "status": "completed",
+          "ok": true,
+          "summary": "Here is the plan.",
+          "origin": "job:mission",
+          "project_id": null,
+          "outcome": "completed"
+        }
+      },
+      "pings": true,
+      "attention": false,
+      "title": "Your objective is done",
+      "body": "Here is the plan."
+    },
+    {
+      "case": "chat-run-failed",
+      "event": {
+        "id": "evt_chat_failed",
+        "type": "session.completed",
+        "session_id": "session_c1",
+        "ts": "2026-10-19T03:10:00",
+        "payload": {
+          "status": "failed",
+          "summary": "The run failed: nothing answered.",
+          "origin": null,
+          "project_id": null,
+          "outcome": null
+        }
+      },
+      "pings": false,
+      "attention": false
+    }
+  ]
+}
