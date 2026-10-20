@@ -35,7 +35,7 @@ Nothing here has run in the packaged app yet. Section 0d's scores and counts are
 | 7 | The second app in "X and Y" lost its door. | **Fixed.** One door names both ("Connect Google Drive and Dropbox in Settings"). "compare Slack and Teams" offers none. | same |
 | 8 | Asking to use Pixio lost "Connect Pixio in Settings". | **Fixed.** An API-key service used as the instrument counts. "is pixio better than midjourney?" offers nothing. | same |
 | 9 | The Guide was not armed for Handbook how-tos outside its word lists, or when "Jarvis" was in an earlier sentence. | **Fixed.** All 15 of the hunt's sentences are armed. "how do I make a cake" and "how do I fix my bike chain" are not. | same |
-| 10 | Lower-case "my calendar … in outlook" lost the Microsoft 365 door, and the model was told never to guess. | **Fixed.** (integrate) "In my outlook, the market will recover" names no app. A sentence that opens with "in/from my/our outlook," is the idiom for "in my view". It was the one false door the lower-case reading created; a mid-sentence place keeps its door. | same + `test_the_view_idiom_is_not_the_app_on_either_lane` |
+| 10 | Lower-case "my calendar … in outlook" lost the Microsoft 365 door, and the model was told never to guess. | **Fixed.** (integrate) "In my outlook, the market will recover" names no app. A sentence that opens with "in/from my/our outlook" is the idiom for "in my view". (re-review) That holds with or without a comma: "in my outlook the market will recover" and "From my outlook as an investor this is risky" had kept a new false door that neither v1.359.0 nor v1.360.1 gave. The app's own things after the word ("In my outlook inbox, …", "from my outlook account, …") and a place in the middle of a sentence keep the door. | same + `test_the_view_idiom_is_not_the_app_on_either_lane` |
 | 11 | The approval chip's menu was not placed again when its rows grew after it opened. | **Fixed.** It is measured again whenever the reading sentence changes; focus is still given once. | `labels-say-it-once-v13610.test.tsx` (1) |
 | 12 | The substitute receipt said the machine twice. | **Fixed.** "answered by Spark B (you asked for Claude Code) · local". | `labels-say-it-once-v13610.test.tsx` (2), `wave11-seams-v13610.test.tsx` (c) |
 | 13 | OpenCode on "<server>/fleet" lost its name on the run page and under "Ran on". | **Fixed.** The run page reads "OpenCode · Your model server" (the model list's words); "Ran on" reads "your model server on OpenCode". | `labels-say-it-once-v13610.test.tsx` (3), `wave11-seams-v13610.test.tsx` (c) |
@@ -70,7 +70,7 @@ Nothing here has run in the packaged app yet. Section 0d's scores and counts are
   - Research in label form ("Notion: what is it?").
   - "I need a break from slack".
   - Coordination spillover ("I love notion and my gmail is full").
-  - Statements such as "we built our startup on stripe".
+  - Statements such as "we built our startup on stripe", "I love the new dark mode on slack" or (re-review) "my team moved from slack to teams last year": `_SWITCH_RX` vetoes "switching / migrating / moving away or off", not a plain "moved from".
   - A capitalised "In my Outlook, …" still names the app.
   - "Jarvis, how do I change a tire?" arms the Guide (the name in the same sentence, accepted since v1.360.0).
 - **Run page and receipt can differ.** For a cloud call that went out and then failed before any step, token or tool call, the run page says nothing while the receipt says cloud.

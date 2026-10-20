@@ -470,6 +470,17 @@ DOOR = [
     ('find the invoice in my outlook, then forward it to Jim', ['microsoft_365']),
     ("what's in my outlook inbox?", ['microsoft_365']),
     ('In outlook, find the email from Dana', ['microsoft_365']),
+    # --- re-review (v1.361.0): the opening is the idiom with or without the
+    # comma ("as a manager", "as an investor" follow it as often); neither
+    # v1.359.0 nor v1.360.1 offered a door here. The app's own things after
+    # the word, and a place in the middle of a sentence, keep the door.
+    ('in my outlook the market will recover', []),  # NAMES NO APP
+    ('In my outlook as a manager, people come first', []),  # NAMES NO APP
+    ('From my outlook as an investor this is risky', []),  # NAMES NO APP
+    ('Thanks. From our outlook the risk is low', []),  # NAMES NO APP
+    ('In my outlook inbox, find the email from Dana', ['microsoft_365']),
+    ('from my outlook account, forward the receipt to Jim', ['microsoft_365']),
+    ('save it in my outlook as a draft', ['microsoft_365']),
     ('what can pixio do?', []),
     ('is pixio any good?', []),
     ('what is pixio?', []),

@@ -3594,9 +3594,11 @@ does not need a bump, stop and bump it.
   itself an acting verb is vetoed by `_SWITCH_RX` (review: "I need to switch
   from slack to teams"). Lower-case "outlook" after a place or possessive
   is Microsoft 365 (`_LOWER_OUTLOOK`, in the alias and both brand regexes)
-  except (integrate) a SENTENCE opening "in/from my/our outlook," — the "in
+  except (integrate) a SENTENCE opening "in/from my/our outlook" — the "in
   my view" idiom (`_OUTLOOK_VIEW_IDIOM`, one fixed-width lookbehind per
-  opening). Guide (`tools/autoselect`): Jarvis or "this app" anywhere in
+  opening; re-review: with or without the comma — "From my outlook as an
+  investor …" was a new false door; "outlook inbox/account/…" still names
+  the app through the guard-free second alternative). Guide (`tools/autoselect`): Jarvis or "this app" anywhere in
   the message arms a how-to unless `_ELSEWHERE_RX`; each new Handbook word
   carries an everyday-sense guard. THE TABLE IS THE RULE: every phrasing
   lives in `tests/test_matcher_tables_v13610.py` with its verdict (it

@@ -269,7 +269,13 @@ def test_every_guide_row_arms_the_guide_the_same_way_on_both_chat_lanes(app):
 
 @pytest.mark.parametrize(
     "text",
-    ["In my outlook, the market will recover", "From my outlook, this looks bad"],
+    [
+        "In my outlook, the market will recover",
+        "From my outlook, this looks bad",
+        # re-review (v1.361.0): the opening is the idiom without a comma too.
+        "in my outlook the market will recover",
+        "From my outlook as an investor this is risky",
+    ],
 )
 def test_the_view_idiom_is_not_the_app_on_either_lane(app, text):
     platform = app.state.platform

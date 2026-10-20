@@ -71,6 +71,14 @@ _MAX_TEXT = 4000
 #: lookbehind is fixed-width, so each opening is its own lookbehind; a
 #: mid-sentence place ("find the invoice in my outlook, then forward it")
 #: keeps its reading, and a capitalised "Outlook" always names the app.
+#: v1.361.0 re-review: the opening is the idiom with or without the comma
+#: ("in my outlook the market will recover", "From my outlook as an
+#: investor this is risky", "in my outlook as a manager, people come
+#: first" each offered the Microsoft 365 door, which neither v1.359.0 nor
+#: v1.360.1 did). The app's own things after the word ("In my outlook
+#: inbox, …", "from my outlook account, …") still name it through the
+#: second alternative of :data:`_LOWER_OUTLOOK`, which this guard does not
+#: cover.
 _OUTLOOK_VIEW_IDIOM = (
     r"(?!(?:"
     + "|".join(
@@ -79,7 +87,7 @@ _OUTLOOK_VIEW_IDIOM = (
         for prep in ("in", "from")
         for poss in ("my", "our")
     )
-    + r")outlook\s*,)"
+    + r")outlook\b)"
 )
 _LOWER_OUTLOOK = (
     _OUTLOOK_VIEW_IDIOM
