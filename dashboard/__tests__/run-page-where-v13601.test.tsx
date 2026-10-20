@@ -12,10 +12,17 @@
  * Harness: the REAL session page (app/sessions/[id]/page.tsx) with only the
  * transport mocked (run-page-v13540's). The receipt is the read SessionFiles
  * already makes (GET /sessions/{id}/result); the page adds no request of its
- * own, and that is pinned too.
+ * own, and that is pinned too (a plain `get` AND a read through its data
+ * hooks).
+ *
+ * Review (v1.360.1): the guards that keep a run's line on its OWN receipt
+ * (the page's session_id check, SessionFiles' "the panel moved on" check)
+ * and SessionFiles' ref'd callback (a new function must not restart the
+ * load) had no pin; each now goes red when removed. Held reads stand in for
+ * the slow answer, never a guessed delay.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 
 const api = vi.hoisted(() => {
   class FakeApiError extends Error {
@@ -27,6 +34,9 @@ const api = vi.hoisted(() => {
   }
   return {
     gets: [] as string[],
+    // Every path the page's data hooks read (useApi / usePolledApi): a
+    // second read of the receipt through a hook is a request too.
+    hooks: [] as string[],
     responses: {} as Record<string, unknown>,
     FakeApiError,
   };
@@ -53,26 +63,25 @@ vi.mock("@/lib/api", () => ({
     if (r === undefined) {
       return Promise.reject(new api.FakeApiError(`unmocked GET ${path}`, 404));
     }
-    return Promise.resolve(r);
+    // A function is a read the test holds: it answers when the test says so.
+    return typeof r === "function" ? (r as () => Promise<unknown>)() : Promise.resolve(r);
   },
   post: () => Promise.resolve({}),
   put: () => Promise.resolve({}),
   del: () => Promise.resolve({}),
 }));
-vi.mock("@/lib/useApi", () => ({
-  useApi: (path: string | null) => ({
-    data: path ? api.responses[path] ?? null : null,
-    error: null,
-    loading: false,
-    reload: () => {},
-  }),
-  usePolledApi: (path: string | null) => ({
-    data: path ? api.responses[path] ?? null : null,
-    error: null,
-    loading: false,
-    reload: () => {},
-  }),
-}));
+vi.mock("@/lib/useApi", () => {
+  const read = (path: string | null) => {
+    if (path) api.hooks.push(path);
+    return {
+      data: path ? api.responses[path] ?? null : null,
+      error: null,
+      loading: false,
+      reload: () => {},
+    };
+  };
+  return { useApi: read, usePolledApi: read };
+});
 vi.mock("@/lib/useRunStream", () => ({
   useRunStream: () => ({ ...H.run, start: () => {}, stop: () => {} }),
 }));
@@ -123,11 +132,15 @@ vi.mock("framer-motion", async () => {
 import SessionDetailPage from "@/app/sessions/[id]/page";
 import { replyWhere, WHERE_LOCAL_TITLE } from "@/components/chat/TurnReceipt";
 import { runWhere } from "@/components/sessions/runPageWords";
+import { SessionFiles, type SessionResult } from "@/components/sessions/SessionFiles";
 import type { SessionView } from "@/lib/types";
 
 const ID = "session_where_13601";
 const WS = "C:/Users/me/Documents/Iron Jarvis/2026-10-20 where";
 const RESULT = `/sessions/${ID}/result`;
+/** A second run, for moving between runs on the same page. */
+const ID_B = "session_where_13601_b";
+const RESULT_B = `/sessions/${ID_B}/result`;
 
 function fakeParams(id: string): Promise<{ id: string }> {
   const p = Promise.resolve({ id });
@@ -136,8 +149,12 @@ function fakeParams(id: string): Promise<{ id: string }> {
 }
 
 function setRun(over: Partial<SessionView> & Record<string, unknown> = {}) {
+  setRunFor(ID, over);
+}
+
+function setRunFor(id: string, over: Partial<SessionView> & Record<string, unknown> = {}) {
   const session = {
-    id: ID,
+    id,
     task: "Summarise the engagement letter",
     agent_type: "builder",
     provider: "openai",
@@ -149,7 +166,7 @@ function setRun(over: Partial<SessionView> & Record<string, unknown> = {}) {
     finished_at: "2026-10-20T09:02:05.000000",
     ...over,
   } as unknown as SessionView;
-  api.responses[`/sessions/${ID}`] = {
+  api.responses[`/sessions/${id}`] = {
     session,
     transcript: {
       runs: [{ id: "run_1", agent_type: "builder", state: "completed", steps: 3, parent_id: null, result: "done" }],
@@ -162,9 +179,13 @@ function setRun(over: Partial<SessionView> & Record<string, unknown> = {}) {
  *  It carries one file so the files panel renders: its rows on screen are
  *  the proof the receipt LANDED, which the "says nothing" cases wait for. */
 function setReceipt(provider: string, onThisNetwork: boolean | null) {
-  api.responses[RESULT] = {
+  api.responses[RESULT] = receiptFor(ID, provider, onThisNetwork);
+}
+
+function receiptFor(id: string, provider: string, onThisNetwork: boolean | null) {
+  return {
     found: true,
-    session_id: ID,
+    session_id: id,
     status: "completed",
     provider,
     model: "",
@@ -173,6 +194,15 @@ function setReceipt(provider: string, onThisNetwork: boolean | null) {
     files_changed: [],
     documents: [`${WS}/summary.md`],
   };
+}
+
+/** A receipt read the test answers by hand (`release`). */
+function heldRead(): { read: () => Promise<unknown>; release: (body: unknown) => void } {
+  let answer: (body: unknown) => void = () => {};
+  const pending = new Promise<unknown>((resolve) => {
+    answer = resolve;
+  });
+  return { read: () => pending, release: (body) => answer(body) };
 }
 
 function open() {
@@ -193,6 +223,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   api.gets = [];
+  api.hooks = [];
   api.responses = {};
 });
 
@@ -212,8 +243,10 @@ describe("the run page says whether the work stayed on this network", () => {
     expect(where.className).toBe("text-zinc-500");
     // The raw stamp is still the record, on the model's own words.
     expect(modelValue().querySelector("[title]")?.getAttribute("title")).toBe("fleet-a1b2c3 / llama-3-70b");
-    // No request of its own: the receipt is SessionFiles' one read.
+    // No request of its own: the receipt is SessionFiles' one read, and the
+    // page reads it through none of its data hooks either.
     expect(api.gets.filter((p) => p === RESULT)).toHaveLength(1);
+    expect(api.hooks).not.toContain(RESULT);
   });
 
   it("a cloud run: the Model line ends '· cloud', with the receipt's cloud words on hover", async () => {
@@ -304,6 +337,80 @@ describe("the run page says whether the work stayed on this network", () => {
     await screen.findByTestId("session-files");
     expect(modelValue().textContent).toBe("OpenAI · gpt-x");
     expect(screen.queryByTestId("run-where")).toBeNull();
+  });
+});
+
+describe("moving between runs on one page: a run's line reads only its OWN receipt", () => {
+  it("the last run's receipt is not read for the next run while its own read is out", async () => {
+    // Run A (cloud) is read; the page then moves to run B on the same
+    // provider, with no catalog row, while B's own read is still out. B says
+    // nothing until B's receipt lands; A's receipt never speaks for it.
+    setRun({ provider: "openai", model: "gpt-x" });
+    setReceipt("openai", false);
+    setRunFor(ID_B, { provider: "openai", model: "gpt-y", task: "A second run" });
+    const heldB = heldRead();
+    api.responses[RESULT_B] = heldB.read;
+    const view = open();
+    await waitFor(() => expect(modelValue().textContent).toBe("OpenAI · gpt-x · cloud"));
+    view.rerender(<SessionDetailPage params={fakeParams(ID_B)} />);
+    await waitFor(() => expect(modelValue().textContent).toMatch(/^OpenAI · gpt-y/));
+    expect(modelValue().textContent).toBe("OpenAI · gpt-y");
+    expect(screen.queryByTestId("run-where")).toBeNull();
+    // B's own receipt lands: now B says where B ran.
+    await act(async () => {
+      heldB.release(receiptFor(ID_B, "openai", false));
+    });
+    await waitFor(() => expect(modelValue().textContent).toBe("OpenAI · gpt-y · cloud"));
+  });
+
+  it("a read of the last run that lands late never replaces the next run's receipt", async () => {
+    // A's read is still out when the page moves to B; B's lands first, then
+    // A's. B keeps saying where B ran (no catalog row to fall back on).
+    setRun({ provider: "openai", model: "gpt-x" });
+    const heldA = heldRead();
+    api.responses[RESULT] = heldA.read;
+    setRunFor(ID_B, { provider: "openai", model: "gpt-y", task: "A second run" });
+    api.responses[RESULT_B] = receiptFor(ID_B, "openai", false);
+    const view = open();
+    await waitFor(() => expect(modelValue().textContent).toBe("OpenAI · gpt-x"));
+    view.rerender(<SessionDetailPage params={fakeParams(ID_B)} />);
+    await waitFor(() => expect(modelValue().textContent).toBe("OpenAI · gpt-y · cloud"));
+    await act(async () => {
+      heldA.release(receiptFor(ID, "openai", false));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(modelValue().textContent).toBe("OpenAI · gpt-y · cloud");
+  });
+});
+
+describe("SessionFiles hands its read up without a second one", () => {
+  const panel = (onResult: (r: SessionResult) => void, reloadNonce = 0) => (
+    <SessionFiles
+      sessionId={ID}
+      workspacePath={WS}
+      active={false}
+      onPreview={() => {}}
+      reloadNonce={reloadNonce}
+      onResult={onResult}
+    />
+  );
+
+  it("a new callback each render neither reloads the panel nor misses the next read", async () => {
+    setReceipt("openai", false);
+    const first = vi.fn();
+    const second = vi.fn();
+    const view = render(panel(first));
+    await waitFor(() => expect(first).toHaveBeenCalledTimes(1));
+    expect(first.mock.calls[0][0]).toMatchObject({ session_id: ID, on_this_network: false });
+    // A page that hands a new function on each render is not a reason to
+    // read again (the effect must not restart on the callback).
+    view.rerender(panel(second));
+    expect(api.gets.filter((p) => p === RESULT)).toHaveLength(1);
+    // The next real read (a reload) answers the newest callback only.
+    view.rerender(panel(second, 1));
+    await waitFor(() => expect(second).toHaveBeenCalledTimes(1));
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(api.gets.filter((p) => p === RESULT)).toHaveLength(2);
   });
 });
 
