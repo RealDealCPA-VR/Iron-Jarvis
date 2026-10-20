@@ -28,8 +28,16 @@ Rules that keep it honest:
   v1.357.0 (G82): those four took the Tools page's names (one catalog, one
   name); the names they had before stay in :data:`ALIASES`, so "set up
   sequential thinking" and "connect the filesystem" still name them.
-* "my email" / "my inbox" mean Gmail only when no other mail service is named
-  ("check my Outlook inbox" names no catalog app).
+* "my email" / "my inbox" are matched under Gmail only when no other mail
+  service is named ("check my Outlook inbox" names Microsoft 365). v1.360.0
+  (lane 10B): an everyday word names a KIND of app — :func:`resolve_kinds`
+  turns it into the mail (or calendar) app the user CONNECTED, or one choice
+  naming every app of that kind when none is; "my calendar" is never offered
+  as Microsoft 365 on those words alone.
+* v1.360.0 (lane 10B): the Connect door is for the user's OWN data only, and
+  the default is no door (:func:`_for_own_data`): "stripe the table rows",
+  "explain how postgres indexes work" and "a post about our GitHub launch"
+  name no data of the user's.
 * Claude Code and Codex are not catalog apps; :func:`clis_named` finds them so
   the section can say whether they are signed in, from the CACHED verdict
   (``ProviderManager.cli_login_status`` — never a probe).
@@ -106,6 +114,40 @@ _GMAIL_WORDS = re.compile(
 )
 _OTHER_MAIL = re.compile(
     r"\b(?:outlook|hotmail|yahoo|icloud|exchange|proton\s*mail|aol)\b", re.IGNORECASE
+)
+
+# --------------------------------------------------------------------------- #
+# v1.360.0 (lane 10B): an EVERYDAY word names a KIND of app, not Gmail.
+# --------------------------------------------------------------------------- #
+#: The catalog apps of each kind an everyday word can mean. "check my inbox"
+#: named Gmail for everyone, so an Outlook (Microsoft 365) user got "Connect
+#: Gmail in Settings" and "Gmail: not connected" while Microsoft 365's tools
+#: stayed unarmed (the final re-audit's regression). Google Calendar has no
+#: catalog card, so "my calendar" can only ever be Microsoft 365 here — and
+#: that is exactly why it is never OFFERED on those words alone.
+KIND_APPS: dict[str, tuple[str, ...]] = {
+    "mail": ("gmail", "microsoft_365"),
+    "calendar": ("microsoft_365",),
+}
+#: The catalog id the everyday words of each kind are matched under (the
+#: matcher's own reading, :data:`_GMAIL_WORDS` and ``ALIASES``).
+_KIND_HIT_ID: dict[str, str] = {"mail": "gmail", "calendar": "microsoft_365"}
+#: The everyday mail words — :data:`_GMAIL_WORDS` without Gmail's own name.
+_GENERIC_MAIL_RX = re.compile(
+    r"\bmy\s+e-?mails?\b" + _NOT_MAIL_ITSELF + _NOT_A_PASTED_ONE
+    + r"|\b(?:my|the)\s+(?:e-?mail\s+)?(?:inbox|mailbox)\b" + _NOT_MAIL_ITSELF,
+    re.IGNORECASE,
+)
+#: "my calendar" (never "my calendar year"), and not "my Outlook calendar".
+_GENERIC_CALENDAR_RX = re.compile(r"\bmy\s+calendar(?!\s+years?\b)", re.IGNORECASE)
+#: Each kind's apps BY NAME: a message that names one is not generic.
+_MAIL_BRAND_RX = re.compile(
+    r"\bg-?mail\b|\bmicrosoft\s*365\b|\boffice\s*365\b|\bm365\b|\boutlook\.com\b|(?-i:\bOutlook\b)",
+    re.IGNORECASE,
+)
+_CALENDAR_BRAND_RX = re.compile(
+    r"\bmicrosoft\s*365\b|\boffice\s*365\b|\bm365\b|\boutlook\.com\b|(?-i:\bOutlook\b)",
+    re.IGNORECASE,
 )
 
 #: Catalog apps whose name is an everyday word: they count only beside a
@@ -237,6 +279,93 @@ def wants_connect(text: str) -> bool:
     return bool(CONNECT_INTENT.search(str(text or "")[:_MAX_TEXT]))
 
 
+def generic_kinds(text: str) -> list[str]:
+    """The KINDS of app *text* names only by an everyday word (v1.360.0,
+    lane 10B): ``"mail"`` for "check my inbox" / "what's in my email today"
+    and ``"calendar"`` for "what's on my calendar", each only when the message
+    names no app of that kind by its own name ("check my Gmail", "my Outlook
+    inbox", "my Outlook calendar") and, for mail, no other mail service
+    ("my Yahoo inbox" names no catalog app at all). Order: mail, calendar.
+    Pure; never raises."""
+    t = str(text or "")[:_MAX_TEXT]
+    out: list[str] = []
+    try:
+        if (
+            _GENERIC_MAIL_RX.search(t)
+            and not _MAIL_BRAND_RX.search(t)
+            and not _OTHER_MAIL.search(t)
+        ):
+            out.append("mail")
+        if _GENERIC_CALENDAR_RX.search(t) and not _CALENDAR_BRAND_RX.search(t):
+            out.append("calendar")
+    except Exception:  # noqa: BLE001 — a matcher fault names no kind
+        return []
+    return out
+
+
+def kind_candidates(text: str, named: list[str]) -> list[str]:
+    """*named* plus every catalog app of each kind *text* names only by an
+    everyday word (:func:`generic_kinds`) — the apps whose loaded tools the
+    grounding hop reads (``live_tools``, on the loop) so the kind can be
+    resolved to the one that is connected. Order kept, deduped. Never
+    raises."""
+    out = [c for c in (named or []) if c]
+    try:
+        for kind in generic_kinds(text):
+            for cid in KIND_APPS.get(kind, ()):
+                if cid not in out:
+                    out.append(cid)
+    except Exception:  # noqa: BLE001
+        return [c for c in (named or []) if c]
+    return out
+
+
+def resolve_kinds(
+    text: str, named: list[str], live: dict[str, list[str]]
+) -> tuple[list[str], dict[str, list[str]]]:
+    """The apps the message really means, and the kinds left as a CHOICE
+    (v1.360.0, lane 10B — the final re-audit's regression: "check my inbox"
+    meant Gmail for everyone).
+
+    *named* is :func:`apps_named`; *live* is :func:`live_tools` over
+    :func:`kind_candidates` (an MCP app is in it once it is SAVED: connected,
+    off, not working or not signed in yet — each says its own state). For
+    each kind *text* names only by an everyday word:
+
+    * an app of that kind is saved → the word means THAT app (Microsoft 365
+      for an Outlook user, Gmail for a Gmail user, both when both are saved):
+      its state is said, its tools are armed (stream lane), no door;
+    * none is saved → mail stays a choice between every mail app of the
+      catalog (one door names them all, once — never Gmail alone);
+      the calendar is a choice with nothing to offer (the only calendar card
+      is Microsoft 365, and "my calendar" does not say Outlook).
+
+    Returns ``(named, choices)`` — *named* with the everyday word's app
+    replaced by the saved ones (or every app of the kind, for a choice), and
+    ``choices`` = ``{kind: [its apps]}`` for :func:`app_states` to fold into
+    one row. Never raises (a fault answers *named* unchanged)."""
+    out = [c for c in (named or []) if c]
+    choices: dict[str, list[str]] = {}
+    try:
+        for kind in generic_kinds(text):
+            hit_id = _KIND_HIT_ID[kind]
+            apps = list(KIND_APPS.get(kind, ()))
+            saved = [cid for cid in apps if cid in (live or {})]
+            pick = saved or apps
+            if not saved:
+                choices[kind] = list(apps)
+            # The everyday word's app takes the picked apps' place, in order.
+            nxt: list[str] = []
+            for c in out if hit_id in out else [*out, hit_id]:
+                for cid in pick if c == hit_id else [c]:
+                    if cid not in nxt:
+                        nxt.append(cid)
+            out = nxt
+        return out, choices
+    except Exception:  # noqa: BLE001 — knowing the apps never breaks a turn
+        return [c for c in (named or []) if c], {}
+
+
 # --------------------------------------------------------------------------- #
 # v1.359.0 (G41): the Connect door, without the model.
 # --------------------------------------------------------------------------- #
@@ -260,7 +389,9 @@ _RESEARCH_BEFORE_RX = re.compile(
     r"|\b(?:reviews?|alternatives?|competitors?|history|pricing|prices?|costs?|docs"
     r"|documentation|features?|tutorials?|guides?|news)\s+(?:of|for|to|on|about)"
     r"|\b(?:vs\.?|versus|than|compared\s+(?:to|with)|instead\s+of|like|similar\s+to)"
-    r"|\bwho\s+(?:founded|owns|owned|made|makes|created|runs|bought|acquired))"
+    r"|\bwho\s+(?:founded|owns|owned|made|makes|created|runs|bought|acquired)"
+    # v1.360.0 (lane 10B): the product's news, never the user's own data.
+    r"|\bwhat(?:['’]s|\s+is)\s+new\s+(?:in|on|with))"
     r"\s+(?:the\s+)?\Z",
     re.IGNORECASE,
 )
@@ -313,28 +444,156 @@ def _clause_before(t: str, start: int) -> str:
     return head[last.end():] if last is not None else head
 
 
+#: v1.360.0 (lane 10B, the final re-audit's G41 regression): the verbs that
+#: ACT on what is in an app — search it, open it, list, read, save to, post
+#: to, pull from, refund in. A sentence that opens with one and has the app
+#: as its object ("search github for …", "show me the Slack messages") or as
+#: its place ("save it to Notion", "pull the invoices from Stripe") is about
+#: the user's own data in it. Writing verbs are left out on purpose: "write a
+#: post about our GitHub launch" is a topic, not the user's GitHub.
+_ACT_VERB = (
+    r"(?:search(?:\s+through)?|find|check|look\s+(?:up|in|into|through|at|for)|go\s+through"
+    r"|browse|open|list|show|read|get|fetch|pull(?:\s+up)?|grab|upload|save|send|post|share"
+    r"|add|put|delete|remove|move|copy|download|sync|archive|update|edit|rename|star|label"
+    r"|store|back\s+up|export|import|query|summari[sz]e|scan|sort|organi[sz]e|clean\s+up"
+    r"|clear|empty|reply\s+to|forward|charge|refund|message|ping|notify|track|assign|close"
+    r"|merge|review|comment\s+on|attach|create|make|file|raise|start|book|invite)"
+)
+#: The verb OPENS the app's clause (after a polite or "can you" lead-in).
+_ACT_HEAD_RX = re.compile(
+    r"\A\s*(?:(?:please|now|ok(?:ay)?|hey|jarvis|so)[\s,]+)*"
+    r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|i\s+(?:want|need)\s+(?:you\s+)?to\s+"
+    r"|go\s+ahead\s+and\s+|help\s+me\s+)?"
+    + _ACT_VERB + r"\b",
+    re.IGNORECASE,
+)
+#: Nothing but "me", "all (of) the", a determiner and a freshness word
+#: between that verb and the app: the app is the verb's own object.
+_OBJECT_GAP_RX = re.compile(
+    r"(?:\s+(?:me|us))?\s+(?:all\s+(?:of\s+)?)?(?:(?:the|my|our|this|that)\s+)?"
+    r"(?:(?:new|latest|recent|last|open|unread|old|today['’]?s)\s+)?",
+    re.IGNORECASE,
+)
+#: A clear place IN the app ("the folder in Dropbox", "the refund in
+#: Stripe", "how much space is left in Dropbox") — the user's own, by itself.
+_IN_APP_RX = re.compile(r"\b(?:in|inside|within)\s+(?:the\s+|my\s+|our\s+)?\Z", re.IGNORECASE)
+#: A place the data goes to or comes from ("to Notion", "from Stripe", "on
+#: GitHub") — the user's own only beside an acting verb (:data:`_ACT_HEAD_RX`):
+#: "alternatives to Slack" and "an article on Stripe" are not.
+_TO_FROM_APP_RX = re.compile(
+    r"\b(?:to|into|onto|from|on|through|across|via)\s+(?:the\s+|my\s+|our\s+)?\Z", re.IGNORECASE
+)
+#: A piece of writing ABOUT the app, right before it ("a LinkedIn post about
+#: our GitHub launch", "a blog post on Notion") — a topic, never the user's
+#: data in the app, a possessive included.
+_TOPIC_RX = re.compile(
+    r"\b(?:posts?|articles?|blogs?|essays?|papers?|pieces?|talks?|lectures?|courses?|books?"
+    r"|reports?|presentations?|slides?|decks?|thoughts?|opinions?|takes?|tips|guides?"
+    r"|tutorials?|videos?|podcasts?|tweets?|announcements?|newsletters?|press\s+releases?"
+    r"|stor(?:y|ies)|poems?|songs?|jokes?|captions?|bios?|summary|overview)\s+"
+    r"(?:about|on|regarding|announcing|celebrating|introducing)\s+(?:(?:my|our|the)\s+)?\Z",
+    re.IGNORECASE,
+)
+#: A request to explain the app or how something in it works ("explain how
+#: postgres indexes work", "teach me postgres joins", "describe Notion") —
+#: research, unless the user's own data is said first ("explain my Stripe
+#: payouts").
+_EXPLAIN_RX = re.compile(
+    r"\A\s*(?:(?:please|can\s+you|could\s+you)\s+)?(?:explain|describe|teach\s+me|define"
+    r"|tell\s+me\s+(?:about|how|what|why|more))\b"
+    r"|\bhow\s+(?:[\w'’-]+\s+){1,4}works?\b",
+    re.IGNORECASE,
+)
+#: Something the user keeps in an app, right after its name ("Dropbox
+#: files", "the Slack messages", "Sentry errors", "Notion templates"). An app
+#: name followed by any OTHER word is a modifier of that word ("our GitHub
+#: launch", "our Notion launch party"), never the app itself.
+_DATA_NOUN_RX = re.compile(
+    r"\A(?:['’]s)?\s+(?:accounts?|inbox(?:es)?|mailbox(?:es)?|mail|e-?mails?|messages?|threads?"
+    r"|chats?|dms?|channels?|workspaces?|files?|folders?|docs?|documents?|pages?|notes?"
+    r"|notebooks?|databases?|tables?|rows?|records?|entries|repos?|repositories|projects?"
+    r"|issues?|pull\s+requests?|prs?|branches|commits?|invoices?|payments?|payouts?|charges?"
+    r"|customers?|subscriptions?|refunds?|transactions?|balance|events?|meetings?|appointments?"
+    r"|calendar|contacts?|tasks?|boards?|cards?|errors?|alerts?|logs?|photos?|pictures?"
+    r"|images?|scans?|uploads?|attachments?|storage|space|data|drive|templates?|wiki"
+    r"|bookmarks?|history|settings)\b",
+    re.IGNORECASE,
+)
+#: What may follow "my <app>" when the app ITSELF is what the user owns ("my
+#: Dropbox?", "my gmail for the invoice", "my Google Drive connected?",
+#: "check my gmail online"): punctuation, the end, or one of these words.
+_PHRASE_END_RX = re.compile(
+    r"\A(?:['’]s)?\s*(?:\Z|[^\w\s]|(?:for|in|to|from|with|on|at|of|about|into|by|under|over"
+    r"|since|after|before|and|or|but|so|then|nor|if|when|while|because|than|as|is|are|was"
+    r"|were|has|have|had|does|do|did|can|could|will|would|should|might|must|isn['’]t"
+    r"|aren['’]t|doesn['’]t|don['’]t|hasn['’]t|haven['’]t|won['’]t|wasn['’]t|can['’]t|keeps?"
+    r"|says?|shows?|connected|linked|set|signed|hooked|working|online|now|today|tomorrow"
+    r"|yesterday|again|too|please|right|first|later|here|there|still|yet|already|anymore"
+    r"|properly|correctly|that|which|where|who|this|it|me|us)\b)",
+    re.IGNORECASE,
+)
+#: The app itself is asked about being connected ("is github connected?",
+#: "Slack isn't linked").
+_STATE_AFTER_RX = re.compile(
+    r"\A\s+(?:(?:is|isn['’]t|is\s+not|still|not)\s+)?(?:connected|linked|hooked\s+up"
+    r"|signed\s+in|set\s+up)\b",
+    re.IGNORECASE,
+)
+#: A question about what is in the app ("any new Sentry errors today?",
+#: "which Notion pages mention Q3").
+_ASKS_IN_RX = re.compile(
+    r"\?|\b(?:any|which|what|how\s+many|did\s+i|do\s+i|have\s+i|are\s+there|is\s+there)\b",
+    re.IGNORECASE,
+)
+
+
+def _acts_on_app(clause: str) -> bool:
+    """Does *clause* (the words before the app) open with an acting verb
+    whose object is the app itself ("search ", "show me the ", "summarize
+    my ")? Pure."""
+    m = _ACT_HEAD_RX.match(clause)
+    return m is not None and _OBJECT_GAP_RX.fullmatch(clause[m.end():]) is not None
+
+
 def _for_own_data(t: str, start: int, end: int, blanked: str) -> bool:
     """Is the app named at ``t[start:end]`` named for the user's OWN data in
-    it (or to connect it), rather than in research ABOUT it? The web rule's
-    own reading (``tools.autoselect._searches_in_the_app``, v1.358.0 — its
-    possessive, own-word and public-things regexes, imported, never copied),
-    widened from "a search verb aimed into the app" to any message:
+    it (or to connect it), rather than in research ABOUT it — or not about
+    the app at all ("stripe the table rows")?
 
-    * a connect / set-up verb before it (or in a generic app's own match) →
-      own (the user wants it connected);
-    * a how-to question, or "what is <app>" → research;
-    * "my <app>", "our <app>", or an app word that is the user's own ("my
-      inbox", "my calendar") → own;
-    * the app's public things after its name ("the Stripe API docs", "Notion
-      templates", "the Dropbox desktop app"), research words before it
-      ("reviews of Notion", "alternatives to Slack", "news about GitHub") or
-      a comparison or a price question in its sentence ("stripe vs square",
-      "should I use Dropbox or Google Drive?", "how much does Dropbox
-      cost?") → research;
-    * a web search said in so many words ("search online for …") → research;
-    * anything else ("find my tax files in Google Drive", "post it to Slack",
-      "search github for issues about login") → own: with the app not
-      connected, the web cannot reach what is in it. Pure."""
+    v1.360.0 (lane 10B, the final re-audit's G41 regression): the default is
+    NOT OWN. v1.359.0 read anything that was not research as the user's own
+    data, so "stripe the table rows" offered "Connect Stripe", "explain how
+    postgres indexes work" offered Postgres, "the sentry stood guard at the
+    gate in my story" offered Sentry and "Write a LinkedIn post about our
+    GitHub launch" offered GitHub. Now the door needs a signal that the
+    message is about the user's own data in that app:
+
+    * a connect / set-up verb before it (or in a generic app's own match),
+      or the app asked about as connected ("is github connected?") → own;
+    * a how-to question, "what is <app>", or a piece of writing about it
+      ("a post about our GitHub launch") → not own;
+    * an app word that is the user's own ("my inbox", "my calendar") → own;
+      "my <app>" / "our <app>" → own when the app ITSELF is what they own
+      ("my Dropbox?", "my gmail for the invoice") or a thing they keep in it
+      follows ("our Slack channel") — never when the app only qualifies
+      another word ("our GitHub launch");
+    * the app's public things after its name ("the Stripe API docs"),
+      research words before it ("reviews of Notion"), a comparison or a
+      price question, a request to explain ("explain how postgres indexes
+      work"), or a web search said in so many words → not own;
+    * a clear place in the app ("the folder in Dropbox", "the refund in
+      Stripe") → own;
+    * an acting verb ("search", "show me", "save", "pull") with the app as
+      its object ("search github for issues") or as the place the data goes
+      to or comes from ("save it to Notion", "pull the invoices from
+      Stripe") → own;
+    * a thing kept in the app right after its name, asked about or acted on
+      ("any new Sentry errors today?") → own;
+    * anything else → not own: no door.
+
+    The web rule's own readings (``tools.autoselect._searches_in_the_app``,
+    v1.358.0 — its possessive, own-word and public-things regexes) are
+    imported, never copied. Pure."""
     from ..tools.autoselect import (
         _OWN_APP_WORDS_RX,
         _OWN_BEFORE_APP_RX,
@@ -342,21 +601,39 @@ def _for_own_data(t: str, start: int, end: int, blanked: str) -> bool:
     )
 
     hit = t[start:end]
+    after = t[end:end + 120]
     clause = _clause_before(t, start)
     if _CONNECT_VERB_RX.match(hit.lstrip()) or _CONNECT_VERB_RX.search(clause):
         return True
-    if _HOW_TO_RX.search(clause) or _WHAT_IS_RX.search(clause):
-        return False
-    if _OWN_APP_WORDS_RX.match(hit) or _OWN_BEFORE_APP_RX.search(clause):
+    if _STATE_AFTER_RX.match(after):
         return True
-    if _RESEARCH_AFTER_APP_RX.match(t[end:end + 120]) is not None:
+    if _HOW_TO_RX.search(clause) or _WHAT_IS_RX.search(clause) or _TOPIC_RX.search(clause):
+        return False
+    if _OWN_APP_WORDS_RX.match(hit):
+        return True
+    if _OWN_BEFORE_APP_RX.search(clause) and (
+        _PHRASE_END_RX.match(after) or _DATA_NOUN_RX.match(after)
+    ):
+        return True
+    if _RESEARCH_AFTER_APP_RX.match(after) is not None:
         return False
     if _RESEARCH_BEFORE_RX.search(clause):
         return False
     sentence = _sentence_of(t, start, end)
-    if _COMPARE_RX.search(sentence) or _PRICE_RX.search(sentence):
+    if _COMPARE_RX.search(sentence) or _PRICE_RX.search(sentence) or _EXPLAIN_RX.search(sentence):
         return False
-    return _WEB_SEARCH_RX.search(blanked) is None
+    if _WEB_SEARCH_RX.search(blanked) is not None:
+        return False
+    if _IN_APP_RX.search(clause):
+        return True
+    acting = _ACT_HEAD_RX.match(clause) is not None
+    if acting and _TO_FROM_APP_RX.search(clause):
+        return True
+    if _acts_on_app(clause):
+        return True
+    if _DATA_NOUN_RX.match(after) and (acting or _ASKS_IN_RX.search(sentence)):
+        return True
+    return False
 
 
 def _sentence_of(t: str, start: int, end: int) -> str:
@@ -410,14 +687,24 @@ def connect_offers(text: str, rows: list[dict[str, Any]]) -> list[dict[str, str]
             r for r in rows or []
             if isinstance(r, dict) and r.get("state") == "not_connected"
             and r.get("id") and r.get("id") not in CLI_WORDS
+            # v1.360.0 (lane 10B): a kind said but never offered ("my
+            # calendar" — its only card is not what the words named).
+            and r.get("offer", True) is not False
         ]
         if not cands:
             return []
         own = set(own_data_apps(text))
-        return [
-            {"id": str(r["id"]), "name": str(r.get("name") or r["id"])}
-            for r in cands if r["id"] in own
-        ]
+        out: list[dict[str, Any]] = []
+        for r in cands:
+            if r["id"] not in own:
+                continue
+            offer: dict[str, Any] = {"id": str(r["id"]), "name": str(r.get("name") or r["id"])}
+            if r.get("ids"):
+                # A CHOICE (v1.360.0): every app the door names, so an
+                # app_connect card for any one of them is the offer.
+                offer["ids"] = [str(i) for i in r["ids"]]
+            out.append(offer)
+        return out
     except Exception:  # noqa: BLE001
         return []
 
@@ -450,11 +737,52 @@ def live_tools(platform: Any, app_ids: list[str]) -> dict[str, list[str]]:
     return out
 
 
+#: v1.360.0 (lane 10B): what a CHOICE row is called in the apps section.
+_KIND_WORDS: dict[str, str] = {"mail": "Email", "calendar": "Calendar"}
+
+
+def _fold_choices(rows: list[dict[str, Any]], choices: "dict[str, list[str]] | None") -> list[dict[str, Any]]:
+    """Fold the rows of each kind left as a choice (:func:`resolve_kinds`)
+    into ONE row (v1.360.0, lane 10B): ``{id, ids, kind, choice: True,
+    offer, name, state: "not_connected", …}``. Mail names every mail app of
+    the catalog once ("Gmail or Microsoft 365 (…)"), offered as one door;
+    the calendar is said and never offered (its only card is Microsoft 365,
+    which "my calendar" does not name). Never raises (rows come back as they
+    were)."""
+    if not choices:
+        return rows
+    try:
+        from .catalog import get_connector
+
+        out = list(rows)
+        for kind, apps in choices.items():
+            ids = [str(a) for a in apps or [] if a]
+            if not ids:
+                continue
+            at = next((i for i, r in enumerate(out) if r.get("id") in ids), len(out))
+            out = [r for r in out if r.get("id") not in ids]
+            names = []
+            for cid in ids:
+                conn = get_connector(cid)
+                names.append(str(conn.name) if conn is not None else cid)
+            offer = kind != "calendar"
+            row = {
+                "id": ids[0], "ids": ids, "kind": kind, "choice": True, "offer": offer,
+                "name": " or ".join(names) if offer else _KIND_WORDS.get(kind, kind),
+                "state": "not_connected", "tools": 0, "needs": "", "note": "",
+            }
+            out.insert(min(at, len(out)), row)
+        return out
+    except Exception:  # noqa: BLE001 — rows as they were beat no rows
+        return rows
+
+
 def app_states(
     platform: Any,
     app_ids: list[str],
     live: dict[str, list[str]],
     clis: list[str] | None = None,
+    choices: "dict[str, list[str]] | None" = None,
 ) -> list[dict[str, Any]]:
     """One row per named app (and named CLI): ``{id, name, state, tools,
     needs, note}`` where ``state`` is ``connected`` / ``not_working`` /
@@ -463,7 +791,12 @@ def app_states(
     ``not_connected`` (CLIs: ``signed_in`` / ``signed_out`` /
     ``not_installed`` / ``unknown``). BLOCKING (the connections table, the
     memory bases): call it OFF the loop. Never raises; a row it cannot read
-    is left out rather than guessed."""
+    is left out rather than guessed.
+
+    *choices* (v1.360.0, lane 10B): the kinds :func:`resolve_kinds` left as a
+    choice — their apps' rows are folded into ONE row each
+    (:func:`_fold_choices`), so "check my inbox" with no mail app says "no
+    mail app is connected" once, never "Gmail: not connected"."""
     from .catalog import get_connector
 
     rows: list[dict[str, Any]] = []
@@ -526,6 +859,7 @@ def app_states(
             rows.append(row)
         except Exception:  # noqa: BLE001 — one app's fault drops only its row
             continue
+    rows = _fold_choices(rows, choices)
     for cli in clis or []:
         try:
             st = platform.providers.cli_login_status(cli) or {}
@@ -663,6 +997,33 @@ def apps_section(rows: list[dict[str, Any]]) -> str:
         for r in rows:
             name = str(r.get("name") or r.get("id") or "")
             state = r.get("state")
+            if r.get("choice") and r.get("kind") == "mail":
+                # v1.360.0 (lane 10B): "check my inbox" with no mail app
+                # saved — every mail app of the catalog, once, never Gmail
+                # alone (an Outlook user was told "Gmail: not connected").
+                line = (
+                    f"- Email: no mail app is connected ({name} can be). If answering"
+                    " needs what is in the user's own mail, tell the user plainly and"
+                    " offer to connect the one they use (the app_connect tool does that"
+                    f" when it is offered; otherwise {APPS_PLACE}). Never search the web"
+                    " for what is in it. If answering needs neither, say nothing about it."
+                )
+                lines.append(line)
+                continue
+            if r.get("choice"):
+                # v1.360.0 (lane 10B): "my calendar" with no calendar app
+                # saved. Said, never offered: the only calendar card is
+                # Microsoft 365, and "my calendar" does not say Outlook.
+                line = (
+                    f"- {_KIND_WORDS.get(str(r.get('kind') or ''), name)}: no"
+                    f" {str(r.get('kind') or 'such')} app is connected. If answering needs"
+                    f" the user's own {str(r.get('kind') or 'one')}, say so plainly and point"
+                    f" to {APPS_PLACE}, which lists the apps that can be connected; never"
+                    " guess which app they use and never search the web for it. If"
+                    " answering does not need it, say nothing about it."
+                )
+                lines.append(line)
+                continue
             if state == "connected":
                 n = int(r.get("tools") or 0)
                 line = f"- {name}: connected" + (

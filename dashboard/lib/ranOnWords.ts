@@ -13,10 +13,12 @@
  *                fleet box), else lib/onboarding.providerDisplay ("Claude
  *                Code", "your own endpoint").
  *
- * So a local fleet run reads "fleet on DGX Spark" and a subscription run
- * "Opus 5.5 on Claude Code". Nothing is invented: an id nobody named stays as
- * it is, and the raw `provider · model` pair rides along as the line's title
- * (the record of what the daemon stamped).
+ * So a local run reads "glm on DGX Spark" and a subscription run "Opus 5.5
+ * on Claude Code". Nothing is invented: an id nobody named stays as it is,
+ * and the raw `provider · model` pair rides along as the line's title (the
+ * record of what the daemon stamped). v1.360.0 (lane 10B): the "fleet" alias
+ * in front of the user's own servers reads ONE name, the machine's ("DGX
+ * Spark") or "your model server" — the reply's and the menu's words.
  *
  * A config-seeded endpoint is its own provider ("custom", "ollama") while the
  * catalog also lists it as the fleet node `fleet-<id>` carrying the user's
@@ -28,7 +30,7 @@
  */
 
 import { answeredModelName } from "@/lib/answeredModel";
-import { providerDisplay } from "@/lib/onboarding";
+import { isServerAlias, providerDisplay } from "@/lib/onboarding";
 
 /** The catalog fields this reads (a GET /models row). */
 export interface RanOnRow {
@@ -80,7 +82,11 @@ export function ranOnWords(
   const rows = rowsOf(catalog);
   const where = endpointLabel(p, rows);
   const name = m ? (answeredModelName({ provider: p, model: m }, rows) ?? m) : "";
-  const text = name && where && name !== where ? `${name} on ${where}` : name || where;
+  // v1.360.0 (lane 10B): the "fleet" alias IS its place — named by the
+  // machine ("DGX Spark") or "your model server" — so it is said once,
+  // never "fleet on DGX Spark" nor "your model server on your own endpoint".
+  const alias = isServerAlias(m) && !!name;
+  const text = alias ? name : name && where && name !== where ? `${name} on ${where}` : name || where;
   const title = [p, m].filter((x, i, all) => x && all.indexOf(x) === i).join(" · ");
   return { text, title };
 }

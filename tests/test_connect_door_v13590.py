@@ -277,7 +277,10 @@ def test_both_lanes_offer_the_same_doors_for_the_same_message(app, text):
         ("create a GitHub issue for the login bug", "Connect GitHub in Settings"),
         ("look up the invoice in my Dropbox", "Connect Dropbox in Settings"),
         # The Directory card's own name (catalog.py), never a second spelling.
-        ("what's on my calendar tomorrow?", "Connect Microsoft 365 (Outlook, Calendar, OneDrive) in Settings"),
+        # v1.360.0 (lane 10B, on purpose): only words that NAME Microsoft 365
+        # ("my Outlook calendar") offer it; a bare "my calendar" offers no
+        # door (tests/test_chat_matches_meant_v13600.py).
+        ("what's on my Outlook calendar tomorrow?", "Connect Microsoft 365 (Outlook, Calendar, OneDrive) in Settings"),
         ("is my OneDrive connected?", "Connect OneDrive in Settings"),
     ],
 )

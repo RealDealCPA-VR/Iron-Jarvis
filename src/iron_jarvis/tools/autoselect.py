@@ -1059,6 +1059,124 @@ _RECORD_NOUN = (
 #: the web rule by IDENTITY (v1.354.0, G39: :func:`_web_signal_is_an_app`).
 _WEB_WEIGHTS: dict[str, int] = {"web_search": 8, "web_fetch": 3}
 
+#: THE GUIDE RULE (v1.224.0; v1.353.0 G38; v1.360.0 lane 10B) — its pattern
+#: and its weights, one object each so the rule loop can tell the rule by
+#: IDENTITY (:func:`_guide_fires`). See the rule's note in ``_RULES``.
+_GUIDE_RX = re.compile(
+    r"\b(?:iron\s*jarvis|this\s+app|the\s+app|the\s+dashboard|"
+    r"which\s+page|what\s+page|where\s+in\s+the\s+app|"
+    r"what\s+(?:else\s+)?(?:can|could)\s+you\s+(?:do(?!\s+(?:about|to)\b)|help(?:\s+me)?\s+with)|"
+    r"what\s+are\s+you\s+able\s+to\s+do|"
+    r"what\s+are\s+your\s+(?:capabilities|abilities|features)|"
+    r"(?P<guide_howdo>how\s+do\s+i\s+(?:use|set|find|open|turn|enable|disable|change|configure|"
+    r"connect|schedule|chat|text|add|install|pair|send|automate))|"
+    r"can\s+(?:i|you)\b[^.!?\n]{0,60}?\b(?:(?:from|on)\s+my\s+(?:phone|browser)|on\s+a\s+schedule)|"
+    r"do\s+i\s+have\s+(?:a|an|any)\s+(?:project|workflow|schedule|reflex|goal|skill|agent)|"
+    r"where\s+(?:is|are)\s+my\s+(?:project|workflow|schedule|reflex|goal|skill|agent)s?)\b",
+    re.IGNORECASE,
+)
+_GUIDE_WEIGHTS: dict[str, int] = {"guide_search": 6, "app_search": 5, "app_status": 3}
+
+#: v1.360.0 (lane 10B, G38): a how-do-I question is about IRON JARVIS when it
+#: names the app or asks the app itself — "Jarvis", "here", "this app", "the
+#: dashboard", or "you" as the one being asked ("chat with you", "text you",
+#: "send you a file", "your settings")...
+_ABOUT_JARVIS_STRONG_RX = re.compile(
+    r"\b(?:iron\s*)?jarvis\b|\bhere\b|\bthis\s+(?:app|chat)\b|\bthe\s+(?:app|dashboard)\b"
+    r"|\b(?:with|to|for|from)\s+you\b"
+    r"|\b(?:text|send|ask|teach|give|show|tell|let|get|make|use|connect|call|message|email"
+    r"|remind|train|pair|link|talk\s+to|reach)\s+you\b"
+    r"|\byour\s+(?:own\s+)?(?:settings|memory|tools|skills|features|handbook|help|abilities"
+    r"|capabilities|voice|name|models?|agents?)\b"
+    # ...or a feature only Iron Jarvis has (the Handbook / Everything words
+    # nothing else uses).
+    r"|\bcomputer\s+use\b|\bbuild\s+panes?\b|\btool\s+packs?\b|\breflex(?:es)?\b|\bsentinels?\b"
+    r"|\bautonomy\b|\blocal[\s-]+only\b|\bphone\s+chat\b|\bread[\s-]+aloud\b|\bthe\s+directory\b"
+    r"|\bthe\s+handbook\b|\beverything\s+page\b|\bmodel\s+server\b|\bdefault\s+model\b"
+    r"|\bknowledge\s+graph\b|\btime\s+travel\b|\bmissions?\b|\bemergency\s+stop\b",
+    re.IGNORECASE,
+)
+#: ...or a feature word of the Handbook / Everything list that other
+#: programs also use ("a workflow", "a schedule", "the add-on", "a tool") —
+#: counted only when the sentence does not put it inside another product
+#: ("schedule a task in Windows", "automate Excel with Python").
+_ABOUT_JARVIS_FEATURE_RX = re.compile(
+    r"\bworkflows?\b|\bwebhooks?\b|\bagents?\b|\bskills?\b|\btools?\b|\badd-?ons?\b"
+    r"|\bextensions?\b|\bautomat(?:e|es|ed|ing|ion|ions)\b|\bschedules\b"
+    r"|\b(?:a|the|my|this|that|its|new)\s+schedule\b"
+    r"|\bschedul(?:e|ing)\b(?!\s+(?:a|an|the|my|our)\s+(?:meeting|call|appointment|interview"
+    r"|zoom|teams|doctor|visit|tweet|post|email|e-mail|message|text))"
+    r"|\bpair(?:ing)?\s+(?:my\s+|the\s+|a\s+)?browser\b|\btelegram\b|\bdictation\b"
+    r"|\bapprovals?\b|\bundo\b|\bmemory\s+bases?\b|\bpersonas?\b|\bartifacts?\b",
+    re.IGNORECASE,
+)
+#: The sentence puts the feature word inside another product.
+_ELSEWHERE_RX = re.compile(
+    r"\b(?:in|on|with|using|into|for)\s+(?:the\s+|my\s+)?(?:windows|mac(?:os)?|linux|ubuntu"
+    r"|iphone|ipad|ios|android|chrome|edge|firefox|safari|excel|word|outlook|teams|zoom|python"
+    r"|vba|javascript|node(?:\.?js)?|npm|git|docker|vs\s*code|visual\s+studio|wordpress"
+    r"|shopify|quickbooks|zapier|ifttt|power\s+automate|selenium|jira|trello|asana|salesforce"
+    r"|hubspot|discord|minecraft|photoshop|premiere|blender|unity|unreal)\b",
+    re.IGNORECASE,
+)
+#: A catalog app beside a connect verb ("how do I connect gmail") — setting
+#: an app up is done in Iron Jarvis.
+_HOWDO_CONNECT_RX = re.compile(
+    r"\bhow\s+do\s+i\s+(?:connect|add|install|set\s*up|setup|link|pair|enable|turn\s+on"
+    r"|hook\s+up|sign\s+in\s+to|log\s+in\s+to)\b",
+    re.IGNORECASE,
+)
+
+
+def _sentence_around(msg: str, start: int, end: int) -> str:
+    """The sentence ``msg[start:end]`` sits in (bounded to 240 characters
+    each way). Pure."""
+    head = msg[max(0, start - 240):start]
+    cut = max((head.rfind(c) for c in ".!?\n"), default=-1)
+    tail = msg[end:end + 240]
+    stops = [i for i in (tail.find(c) for c in ".!?\n") if i >= 0]
+    return head[cut + 1:] + msg[start:end] + (tail[: min(stops)] if stops else tail)
+
+
+def _how_to_is_about_jarvis(sentence: str) -> bool:
+    """Is this how-do-I sentence about IRON JARVIS (v1.360.0, lane 10B,
+    G38)? Its name, "here", "this app", "you" as the one asked, a feature
+    only it has — or a shared feature word not put inside another product,
+    or a catalog app beside a connect verb. "how do I connect my printer to
+    wifi", "how do I send a wire transfer", "how do I install node" are
+    none of these. Never raises (a fault reads as not about the app: the
+    lookups are a nicety, never the answer)."""
+    try:
+        if _ABOUT_JARVIS_STRONG_RX.search(sentence):
+            return True
+        if _ABOUT_JARVIS_FEATURE_RX.search(sentence) and not _ELSEWHERE_RX.search(sentence):
+            return True
+        if _HOWDO_CONNECT_RX.search(sentence):
+            from ..connectors.app_names import apps_named
+
+            return bool(apps_named(sentence))
+        return False
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _guide_fires(msg: str) -> bool:
+    """Does the Guide rule award on *msg* (v1.360.0, lane 10B)? Every branch
+    as before, except the how-do-I one, which counts only in a sentence about
+    Iron Jarvis (:func:`_how_to_is_about_jarvis`). Bounded: at most twelve
+    matches are read. Never raises (a fault awards, the older reading)."""
+    try:
+        for i, m in enumerate(_GUIDE_RX.finditer(msg)):
+            if i >= 12:
+                return False
+            if m.group("guide_howdo") is None:
+                return True
+            if _how_to_is_about_jarvis(_sentence_around(msg, m.start(), m.end())):
+                return True
+        return False
+    except Exception:  # noqa: BLE001
+        return True
+
 #: The web rule's words minus the bare search verbs ("search", "look up",
 #: "browse") and with "google" only as itself (never "Google Drive"/"Google
 #: Maps", which are apps). When a message names a catalog app, only one of
@@ -2364,21 +2482,19 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
     # is left out. The awarded tools are READ-ONLY lookups (AUTO_SAFE_TOOLS),
     # so a sentence that only looks like a question about the app costs a
     # schema and nothing else.
+    #
+    # v1.360.0 (lane 10B, the final re-audit's G38 regression): the how-do-I
+    # branch (named ``guide_howdo``) armed the Handbook for ANY how-to — "how
+    # do I connect my printer to wifi", "how do I send a wire transfer", "how
+    # do I install node" — so a real model could spend a round on the
+    # Handbook. That branch now counts only when its sentence is about Iron
+    # Jarvis (:func:`_how_to_is_about_jarvis`: its name, "you" as the one
+    # asked, "here" / "this app", a feature word of the Handbook / Everything
+    # list, or a catalog app beside a connect verb). The other branches name
+    # the app or ask it about itself, and stay as they were.
     (
-        re.compile(
-            r"\b(?:iron\s*jarvis|this\s+app|the\s+app|the\s+dashboard|"
-            r"which\s+page|what\s+page|where\s+in\s+the\s+app|"
-            r"what\s+(?:else\s+)?(?:can|could)\s+you\s+(?:do(?!\s+(?:about|to)\b)|help(?:\s+me)?\s+with)|"
-            r"what\s+are\s+you\s+able\s+to\s+do|"
-            r"what\s+are\s+your\s+(?:capabilities|abilities|features)|"
-            r"how\s+do\s+i\s+(?:use|set|find|open|turn|enable|disable|change|configure|"
-            r"connect|schedule|chat|text|add|install|pair|send|automate)|"
-            r"can\s+(?:i|you)\b[^.!?\n]{0,60}?\b(?:(?:from|on)\s+my\s+(?:phone|browser)|on\s+a\s+schedule)|"
-            r"do\s+i\s+have\s+(?:a|an|any)\s+(?:project|workflow|schedule|reflex|goal|skill|agent)|"
-            r"where\s+(?:is|are)\s+my\s+(?:project|workflow|schedule|reflex|goal|skill|agent)s?)\b",
-            re.IGNORECASE,
-        ),
-        {"guide_search": 6, "app_search": 5, "app_status": 3},
+        _GUIDE_RX,
+        _GUIDE_WEIGHTS,
     ),
     # --- the app's HEALTH (v1.344.0, "Jarvis looks after itself") -----------
     # "something is broken", "why did that fail", "is the app healthy", "what
@@ -2835,6 +2951,10 @@ def select_auto_tools(
             # v1.354.0 (G39): the web rule stays quiet when its only signal
             # is a catalog app's name (the app is searched, not the web).
             if weights is _WEB_WEIGHTS and _web_signal_is_an_app(msg, tuple(apps_on or ())):
+                continue
+            # v1.360.0 (lane 10B, G38): a how-to question about something
+            # else ("how do I install node") does not ask the Guide.
+            if weights is _GUIDE_WEIGHTS and not _guide_fires(msg):
                 continue
             bump(weights)
     cut = cutbox[0]

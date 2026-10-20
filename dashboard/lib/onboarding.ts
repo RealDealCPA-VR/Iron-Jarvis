@@ -298,9 +298,70 @@ export function isProviderDefaultModel(model: string | null | undefined): boolea
 /** The alias docs/LOCAL-MODELS.md tells a model-server owner to keep in
  *  front of their servers ("fleet"; OpenCode writes it "<its server>/fleet").
  *  It means "whatever my own servers run", so a row says that. */
-function isServerAlias(model: string): boolean {
-  const m = model.trim().toLowerCase();
+export function isServerAlias(model: string | null | undefined): boolean {
+  const m = (model ?? "").trim().toLowerCase();
   return m === "fleet" || m.endsWith("/fleet");
+}
+
+/** v1.360.0 (lane 10B): the server alias's name mid-sentence ("answered by
+ *  your model server") when the machine behind it has no name the user gave
+ *  it. A row or heading says it in sentence case (`providerHeading`). */
+export const SERVER_PICK_WORDS = "your model server";
+
+/** v1.360.0 (lane 10B): the labels the daemon's fleet registry gives the
+ *  two config endpoint slots until the user names the machine
+ *  (`FleetRegistry.seeded`; the daemon's twin is
+ *  `chat_turn.SEED_ENDPOINT_LABELS`, pinned equal). Not a machine's name. */
+export const SEED_ENDPOINT_LABELS: Readonly<Record<string, string>> = {
+  custom: "Custom endpoint",
+  ollama: "Ollama endpoint",
+};
+
+/** A catalog row as `machineName` reads it (a GET /models row). */
+export interface NamedRow {
+  provider: string;
+  model?: string;
+  name?: string | null;
+}
+
+/** The NAME THE USER GAVE the machine behind `provider` (v1.360.0, lane
+ *  10B, G21), or "": the route's own label (the daemon's `route.label`),
+ *  else the row's `name`, else — for a config slot ("custom", "ollama"),
+ *  which the catalog also lists as its fleet node `fleet-<id>` with the
+ *  user's label (lib/ranOnWords says the same) — that twin's name. A
+ *  registry default label ("Custom endpoint") and the bare id are not
+ *  names. Pure. */
+export function machineName(
+  provider: string | null | undefined,
+  opts: {
+    label?: string | null;
+    name?: string | null;
+    model?: string | null;
+    catalog?: readonly NamedRow[] | null;
+  } = {},
+): string {
+  const p = (provider ?? "").trim();
+  if (!p) return "";
+  const slot = p.startsWith("fleet-") ? p.slice("fleet-".length) : p;
+  const usable = (raw: string | null | undefined): string => {
+    const v = (typeof raw === "string" ? raw : "").replace(/\s+/g, " ").trim();
+    if (!v || v === p || v === slot || v === SEED_ENDPOINT_LABELS[slot]) return "";
+    if (opts.model && v === opts.model.trim()) return "";
+    return v;
+  };
+  const direct = usable(opts.label) || usable(opts.name);
+  if (direct) return direct;
+  const rows = Array.isArray(opts.catalog) ? opts.catalog : [];
+  const fromRows = (id: string): string => {
+    for (const row of rows) {
+      if (row && row.provider === id) {
+        const v = usable(row.name);
+        if (v) return v;
+      }
+    }
+    return "";
+  };
+  return fromRows(p) || (p.startsWith("fleet-") ? "" : fromRows(`fleet-${p}`));
 }
 
 /** What a model-menu ROW calls its model (v1.359.0, lane 9B), from the
@@ -309,8 +370,17 @@ function isServerAlias(model: string): boolean {
  *  plan", "Your ChatGPT plan", "Your model server"); the "fleet" alias by
  *  "Your model server"; else the name the id spells (friendlyModelName:
  *  "Opus 4.8"; an id it cannot read stays as it is, nothing invented). The
- *  raw id belongs in the row's title (`ModelRowBits.modelTitle`). */
-export function modelRowName(m: { provider: string; model: string; label?: string | null }): string {
+ *  raw id belongs in the row's title (`ModelRowBits.modelTitle`).
+ *
+ *  v1.360.0 (lane 10B): the "fleet" alias is ONE name everywhere — the
+ *  machine's name when the user gave it one (the row's own `name`, or with
+ *  `catalog` the config slot's fleet twin: `machineName`), else "Your model
+ *  server" — the words the reply's receipt, the helper row and card, the
+ *  mission screen and the run page now use for the same pick. */
+export function modelRowName(
+  m: { provider: string; model: string; label?: string | null; name?: string | null },
+  catalog?: readonly NamedRow[] | null,
+): string {
   const label = typeof m.label === "string" ? m.label.trim() : "";
   if (label) return label;
   const model = (m.model ?? "").trim();
@@ -318,7 +388,9 @@ export function modelRowName(m: { provider: string; model: string; label?: strin
     const cli = SUBSCRIPTION_CLIS.find((c) => c.provider === m.provider);
     return cli?.planName || providerHeading(m.provider) || m.model;
   }
-  if (isServerAlias(model)) return providerHeading("custom");
+  if (isServerAlias(model)) {
+    return machineName(m.provider, { name: m.name, model, catalog }) || providerHeading("custom");
+  }
   return friendlyModelName(model);
 }
 

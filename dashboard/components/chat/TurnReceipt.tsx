@@ -812,7 +812,15 @@ export function TurnReceipt({
   // cloud"). Elsewhere (the Build pane) the endpoint's name already IS who
   // answered, so only the local / cloud word is added.
   const where = replyWhere(rt);
-  const whereOnInline = !!(rt && !warning && inline && where?.on);
+  // v1.360.0 (lane 10B): who answered, in the receipt's words. When that IS
+  // the place (the "fleet" alias named by the machine: "answered by DGX
+  // Spark"), the place is not said twice; the local / cloud word stays.
+  const who = rt ? answeredName(rt, modelName) : "";
+  const placeLabel = typeof rt?.label === "string" ? rt.label.replace(/\s+/g, " ").trim() : "";
+  const namedByPlace = !!(where?.on && placeLabel && who === placeLabel);
+  const whereOnInline = !!(rt && !warning && inline && where?.on && !namedByPlace);
+  const whereTail: "local" | "cloud" | null =
+    where?.tail ?? (namedByPlace && inline && !warning ? (rt?.on_this_network ? "local" : "cloud") : null);
   if (rt) {
     parts.push(
       warning ? (
@@ -837,7 +845,7 @@ export function TurnReceipt({
         <span key="who" data-testid="turn-answered-by" title={rawRoute(rt)}>
           answered by{" "}
           <span className="text-zinc-400">
-            {answeredName(rt, modelName)}
+            {who}
           </span>
           {whereOnInline ? (
             <span data-testid="turn-where-on" title={where?.title}>
@@ -862,10 +870,10 @@ export function TurnReceipt({
       </span>,
     );
   }
-  if (where?.tail) {
+  if (where && whereTail) {
     parts.push(
       <span key="where" data-testid="turn-where" title={where.title} className="text-zinc-500">
-        {where.tail}
+        {whereTail}
       </span>,
     );
   }

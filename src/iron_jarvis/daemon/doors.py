@@ -37,7 +37,10 @@ not connected — for the user's own data in it, never in research about it
 (``connectors.app_names.connect_offers``) — puts that app's Connect door
 under the reply whether or not the model called ``app_connect``
 (:func:`with_connect_door`; the same Directory door and words, one door for
-every app named, each app once).
+every app named, each app once). v1.360.0 (lane 10B): an everyday word with
+no app of its kind connected ("check my inbox") is ONE offer naming every
+app of that kind ("Connect Gmail or Microsoft 365 (…) in Settings"), never
+Gmail alone.
 """
 
 from __future__ import annotations
@@ -314,7 +317,11 @@ def with_connect_door(entries: Any, offers: Any, offered: Any = ()) -> list[Any]
                 continue
             cid = str(row.get("id") or "")
             name = _clean_name(row.get("name") or "")
-            if cid and name and cid not in skip and name not in names:
+            # v1.360.0 (lane 10B): a CHOICE ("Gmail or Microsoft 365 (…)" for
+            # "check my inbox" with no mail app) carries every app it names;
+            # an app_connect card for any one of them was the offer.
+            ids = {str(i) for i in (row.get("ids") or []) if i} or {cid}
+            if cid and name and not (ids & skip) and name not in names:
                 names.append(name)
         if not names:
             return base

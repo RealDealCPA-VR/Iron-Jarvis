@@ -1439,6 +1439,14 @@ def _saved_workflows_block(platform) -> str:
         return ""
 
 
+#: v1.360.0 (lane 10B, G21): the labels ``fleet.registry.FleetRegistry.
+#: seeded`` gives the two config endpoint slots until the user names the
+#: machine (pinned equal to the registry; the dashboard's twin is
+#: ``lib/onboarding.SEED_ENDPOINT_LABELS``). Not a machine's name, so never
+#: the receipt's "on <label>".
+SEED_ENDPOINT_LABELS: dict[str, str] = {"custom": "Custom endpoint", "ollama": "Ollama endpoint"}
+
+
 def route_label(platform: Any, provider: str) -> str:
     """The name the user gave the endpoint that answered, for the receipt
     (calm chat W11, v1.330.0): a ``fleet-<id>`` provider's node label
@@ -1449,8 +1457,25 @@ def route_label(platform: Any, provider: str) -> str:
     ever saw as "Spark proxy (L4)". Read through the router's own
     ``_endpoint_label`` (v1.329.0), the same name a refusal uses. The raw id
     stays on the route's ``provider``. WORDING ONLY: any fault answers "".
-    MIRROR NOTE (lock-step): both chat lanes call this for ``route.label``."""
+    MIRROR NOTE (lock-step): both chat lanes call this for ``route.label``.
+
+    v1.360.0 (lane 10B, the final re-audit's G21): the user's OWN model
+    server — the ``custom`` endpoint (their default route, "fleet" in front
+    of several boxes) and the ``ollama`` slot — is named too, by the label
+    the user gave its fleet node ("DGX Spark", the name the mission screen
+    and the run page already use); a reply through it read "answered by
+    fleet · local", never the machine. The registry's own default label
+    (:data:`SEED_ENDPOINT_LABELS`) is not a name and answers ``""``."""
     p = str(provider or "")
+    if p in SEED_ENDPOINT_LABELS:
+        try:
+            node = platform.fleet.get(p)
+            label = " ".join(str(getattr(node, "label", "") or "").split())
+        except Exception:  # noqa: BLE001 — wording only, never a new failure
+            return ""
+        if not label or label in (p, SEED_ENDPOINT_LABELS[p]):
+            return ""
+        return label[:80]
     if not p.startswith("fleet-"):
         return ""
     try:
@@ -6114,19 +6139,35 @@ async def _gather_grounding(
     # nothing is named. Never raises.
     _apps_named: list[str] = []
     _clis_named: list[str] = []
+    _app_choices: dict[str, list[str]] = {}
     _last_text = ""
     try:
-        from ..connectors.app_names import apps_named, clis_named, live_tools
+        from ..connectors.app_names import (
+            apps_named,
+            clis_named,
+            kind_candidates,
+            live_tools,
+            resolve_kinds,
+        )
 
         _last_text = _last_user_text(getattr(body, "messages", None) or [])
         _apps_named = apps_named(_last_text)
         _clis_named = clis_named(_last_text)
         if _apps_named:
+            # v1.360.0 (lane 10B): an everyday word names a KIND of app —
+            # "check my inbox" is the mail app the user CONNECTED (Microsoft
+            # 365 for an Outlook user), never Gmail for everyone. The kind's
+            # apps' loaded tools are read here, on the loop, like every
+            # named app's; the word then means the saved one (its state
+            # said, its tools armed) or stays a choice (one door, every
+            # mail app named once).
+            _live = live_tools(platform, kind_candidates(_last_text, _apps_named))
+            _apps_named, _app_choices = resolve_kinds(_last_text, _apps_named, _live)
             out.apps_named = list(_apps_named)
-            out.apps_live = live_tools(platform, _apps_named)
+            out.apps_live = {c: v for c, v in _live.items() if c in _apps_named}
     except Exception:  # noqa: BLE001 — knowing the apps never breaks a turn
         log.debug("naming the apps in a chat message failed", exc_info=True)
-        _apps_named, _clis_named = [], []
+        _apps_named, _clis_named, _app_choices = [], [], {}
 
     def _project_text() -> tuple[str, str, list[str]]:
         # v1.298.0: the instructions and brief are SCANNED for prompt
@@ -6277,7 +6318,7 @@ async def _gather_grounding(
                 connected_ids,
             )
 
-            rows = app_states(platform, _apps_named, out.apps_live, _clis_named)
+            rows = app_states(platform, _apps_named, out.apps_live, _clis_named, _app_choices)
             return apps_section(rows), connected_ids(rows), connect_offers(_last_text, rows)
         except Exception:  # noqa: BLE001 — knowing the apps never breaks a turn
             log.debug("the named-apps section failed", exc_info=True)

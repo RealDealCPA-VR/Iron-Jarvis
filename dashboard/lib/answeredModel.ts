@@ -14,20 +14,47 @@
  * v1.359.0 (lane 9B): a route whose model is the provider's own default
  * ("subscription" under Claude Code and Codex) is answered by THAT
  * provider: "answered by Claude Code", never "answered by subscription".
+ *
+ * v1.360.0 (lane 10B, the final re-audit): the "fleet" alias in front of the
+ * user's own model server is ONE name everywhere — the machine's name when
+ * the user gave it one (the route's own `label`, the one the daemon now
+ * sends for the custom endpoint too, else the catalog's: lib/onboarding
+ * `machineName`), else "your model server" — never "answered by fleet"
+ * while the model menu said "Your model server" for the same pick.
  */
 
 import { friendlyModelName } from "@/lib/friendlyModelName";
-import { isProviderDefaultModel, providerDisplay } from "@/lib/onboarding";
+import {
+  isProviderDefaultModel,
+  isServerAlias,
+  machineName,
+  providerDisplay,
+  SERVER_PICK_WORDS,
+} from "@/lib/onboarding";
 
 export interface AnsweredRoute {
   provider: string;
   model?: string;
+  /** v1.360.0: the name the user gave the endpoint that answered (the
+   *  daemon's `route.label`; absent on older replies and on runs). */
+  label?: string;
 }
 
 export interface CatalogRow {
   provider: string;
   model: string;
   label?: string;
+  /** v1.360.0: the endpoint's name (a GET /models row's `name`). */
+  name?: string | null;
+}
+
+/** The server alias's name for a route (v1.360.0, lane 10B): the machine's
+ *  name when known, else "your model server". */
+export function serverPickName(route: AnsweredRoute, models: readonly CatalogRow[]): string {
+  return (
+    machineName(route.provider, { label: route.label, model: route.model, catalog: models }) ||
+    SERVER_PICK_WORDS
+  );
 }
 
 export function answeredModelName(
@@ -43,5 +70,6 @@ export function answeredModelName(
     const who = providerDisplay(route.provider);
     if (who && who !== route.provider) return who;
   }
+  if (isServerAlias(model)) return serverPickName(route, models);
   return friendlyModelName(model);
 }

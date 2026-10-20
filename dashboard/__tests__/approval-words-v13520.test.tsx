@@ -10,7 +10,9 @@
  * notifications and next/link are stand-ins.
  *
  * THE ACCEPTANCE LINES, as a new user would read them:
- *  - a mission run on the local fleet: "Answered by fleet on DGX Spark";
+ *  - a mission run on the local fleet: "Answered by DGX Spark" (v1.360.0,
+ *    lane 10B: the "fleet" alias reads the machine's name, the one name the
+ *    reply, the menu and the run page use; it read "fleet on DGX Spark");
  *  - a waiting teammate: "Waiting for your OK to save a file.";
  *  - each finished teammate shows how long it took ("2 min 5 s");
  *  - a schedule's ask in the bell: "Your nightly-brief run wants to save a
@@ -414,11 +416,11 @@ const renderOutput = (v: MissionView) =>
   render(<MissionOutput view={v} liveStore={liveStore} objective="" onChanged={() => {}} onOpen={() => {}} />);
 
 describe("the mission screen uses chat's words (G23)", () => {
-  it("a mission on the local fleet reads 'Answered by fleet on DGX Spark' (the raw stamp in the title)", async () => {
+  it("a mission on the local fleet reads 'Answered by DGX Spark' (the raw stamp in the title)", async () => {
     H.api["/models"] = CATALOG;
     renderOutput(view());
     const receipt = await screen.findByTestId("mission-receipt");
-    await waitFor(() => expect(folded(receipt.textContent)).toBe("Answered by fleet on DGX Spark"));
+    await waitFor(() => expect(folded(receipt.textContent)).toBe("Answered by DGX Spark"));
     expect(receipt.querySelector('[title="custom · fleet"]')).not.toBeNull();
     expect(H.gets).toContain("/models");
   });
@@ -426,7 +428,9 @@ describe("the mission screen uses chat's words (G23)", () => {
   it("before the catalog answers it still names the place in words, never 'custom · fleet'", () => {
     renderOutput(view());
     const receipt = screen.getByTestId("mission-receipt");
-    expect(folded(receipt.textContent)).toBe("Answered by fleet on your own endpoint");
+    // v1.360.0 (lane 10B): the machine is not known yet, so the alias is
+    // "your model server" (the model menu's words), never "fleet".
+    expect(folded(receipt.textContent)).toBe("Answered by your model server");
     expect(receipt.textContent).not.toContain("·");
   });
 
@@ -517,7 +521,10 @@ describe("the receipt's words, as data", () => {
       title: "claude-cli · claude-opus-5-5",
     });
     // A catalog that has not arrived (or a stand-in that is not a list).
-    expect(ranOnWords("custom", "fleet", undefined).text).toBe("fleet on your own endpoint");
+    // v1.360.0 (lane 10B): the "fleet" alias is said once, by the machine's
+    // name when known, else "your model server".
+    expect(ranOnWords("custom", "fleet", CATALOG.models).text).toBe("DGX Spark");
+    expect(ranOnWords("custom", "fleet", undefined).text).toBe("your model server");
   });
 
   it("a duration needs both ends in order; nothing is guessed", () => {
