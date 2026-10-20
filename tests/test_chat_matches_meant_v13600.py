@@ -230,6 +230,14 @@ NOT_OWN = [
     "Slack got connected to Teams in 2020",
     "GitHub got set up as a nonprofit",
     "Stripe got linked to the scandal",
+    # v1.360.0 review (round 3): the topic rule (_TOPIC_RX) and the explain
+    # rule (_EXPLAIN_RX) went unpinned — disabling either left every row
+    # above green. Each pair below names the app right after "my"/"our" or
+    # beside a thing kept in it, so ONLY that rule keeps it door-free.
+    "write a poem about my Dropbox",
+    "draft a blog post about our Slack",
+    "explain what Stripe payouts are",
+    "can you explain what GitHub issues are?",
 ]
 
 #: Sentences about the user's OWN data in the app (or connecting it) — each
@@ -272,6 +280,11 @@ OWN = [
     ("did slack get connected?", ["slack"]),
     ("did github get set up", ["github"]),
     ("has my notion got connected yet", ["notion"]),
+    # v1.360.0 review (round 3): "my <app>" that IS what the user owns,
+    # followed by a state, the end or a question mark (_PHRASE_END_RX) —
+    # unpinned until now: disabling that rule left every row above green.
+    ("my Slack is full of noise, help", ["slack"]),
+    ("can you see my Google Drive?", ["google_drive"]),
 ]
 
 
