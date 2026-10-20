@@ -25,7 +25,7 @@ from .core.db import open_db, persist_event, search_index as shared_search_index
 from typing import TYPE_CHECKING, Any
 
 from .core.db import session_scope
-from .core.events import EventBus
+from .core.events import EventBus, EventType
 from .core.streams import StreamHub
 
 if TYPE_CHECKING:  # annotation only — the namespace is optional at runtime and
@@ -73,6 +73,7 @@ from .worklist import WORKLIST_TOOL_NAMES, WorklistStore, worklist_tools
 from .worklist import models as _wl_models  # noqa: F401  (registers WorklistItem)
 from .comm import Notifier, build_notifier, httpx_get, httpx_post, notify_tools
 from .comm import models as _comm_models  # noqa: F401  (registers InboundOffsetRecord)
+from .comm.notifier import bell_pings as _bell_pings
 from .comm.notifier import schedule_fire as _schedule_fire
 from .filesearch import FileSearchService, filesearch_tools
 from .integrations import IntegrationRegistry, integration_tools
@@ -1861,8 +1862,41 @@ def build_platform(
         workflow run (a failed ``workflow.completed`` rings; a run parked on
         the user is the bell's waiting row) — AND the outcome fell short. A
         fire that failed before any run (no session, a workflow that was not
-        found) has no bell row: "This PC" keeps saying it."""
-        return bool(fired.get("run")) and status in _run_outcome.SHORT_STATUSES
+        found) has no bell row: "This PC" keeps saying it.
+
+        (lane 10A review) The row's status is not the only judge: a goal
+        iteration whose session finished with an expired ask (or a failed
+        change) reads ``ok`` on the row while the bell rings "Your goal's run
+        needs you", so ``fired["rings"]`` carries the bell's OWN rule
+        (``notifier.bell_pings``) on the run's real end."""
+        return bool(fired.get("run")) and (
+            status in _run_outcome.SHORT_STATUSES or bool(fired.get("rings"))
+        )
+
+    def _session_rings(sid: str) -> bool:
+        """Does the bell ring the ``session.completed`` session ``sid``
+        published? ``notifier.bell_pings`` read off the stored row (status,
+        outcome, origin) — never a second copy of the rule. BLOCKING (one
+        SQLite read); called through ``asyncio.to_thread``. A fault reads as
+        "no": "This PC" then keeps its notice (two beats none)."""
+        try:
+            row = platform.orchestrator.get_session(sid)
+            if row is None:
+                return False
+            status = getattr(getattr(row, "status", None), "value", None)
+            return _bell_pings(
+                {
+                    "type": EventType.SESSION_COMPLETED,
+                    "session_id": sid,
+                    "payload": {
+                        "status": str(status or getattr(row, "status", "") or ""),
+                        "outcome": getattr(row, "outcome", None) or None,
+                        "origin": str(getattr(row, "origin", "") or ""),
+                    },
+                }
+            )
+        except Exception:  # noqa: BLE001 — a wording rule never drops a notice
+            return False
 
     # -- the weekly memory review (v1.143.0) --------------------------------
     # The memory-review schedule is the ONE task schedule whose prompt must not
@@ -2177,6 +2211,20 @@ def build_platform(
             # start) is ``cancelled``. ``_fire`` turns this into the row.
             outcome = str(getattr(done, "outcome", None) or "")
             fired["outcome"] = outcome
+            # v1.360.0 (lane 10A review): the bell's own rule on this run's
+            # end (a run with no verdict reads "ok" on the row but the bell
+            # rings "finished. Check what it did").
+            fired["rings"] = _bell_pings(
+                {
+                    "type": EventType.SESSION_COMPLETED,
+                    "session_id": session.id,
+                    "payload": {
+                        "status": status,
+                        "outcome": outcome or None,
+                        "origin": str(getattr(session, "origin", "") or f"schedule:{task.name}"),
+                    },
+                }
+            )
             if status == "cancelled":
                 fired["outcome"] = _run_outcome.STATUS_CANCELLED
                 return _run_outcome.plain_sentence(summary) or _run_outcome.STOPPED_NO_WORDS
@@ -2273,6 +2321,12 @@ def build_platform(
                 # (``skipped``), never "ok"/"Done".
                 fired["outcome"] = _run_outcome.STATUS_SKIPPED
                 return _run_outcome.goal_skipped_detail(reason)
+            if sid:
+                # v1.360.0 (lane 10A review): an iteration the engine counts
+                # as done can still be a session the bell rings ("needs you",
+                # "part of it failed") — then the bell is this outcome's one
+                # desktop notice, not "This PC".
+                fired["rings"] = await asyncio.to_thread(_session_rings, sid)
             detail = f"goal iteration {int(result.get('iteration') or 0)} completed"
             if result.get("satisfied"):
                 detail += " — goal satisfied"

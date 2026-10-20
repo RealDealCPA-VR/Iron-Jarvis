@@ -300,6 +300,98 @@ def test_notify_false_silences_the_runs_generic_alert_too(tmp_path, monkeypatch,
     assert desktop_sink == [], desktop_sink
 
 
+# (lane 10A review) The row's status is not the bell's rule: a GOAL schedule
+# whose iteration the engine counts as done reads "ok" on the row, while its
+# session ended with an expired ask — the bell rings "Your goal's run needs
+# you", and "This PC" used to add "Schedule “g”: done — …" beside it.
+
+
+def _goal_fire(tmp_path, monkeypatch, *, ask_expired: bool):
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.ids import new_id
+    from iron_jarvis.core.models import EventRecord, Session
+    from iron_jarvis.scheduling.models import ScheduledTaskRecord
+
+    app, client = _app(tmp_path)
+    platform = app.state.platform
+    monkeypatch.setattr(platform.orchestrator.runtime, "run", _fake_run(AgentState.COMPLETED, "Did part."))
+
+    def expire(ev) -> None:
+        if not ask_expired or ev.type != EventType.SESSION_CREATED or not ev.session_id:
+            return
+        with session_scope(platform.engine) as db:
+            row = db.get(Session, ev.session_id)
+            if row is None or not str(row.origin or "").startswith("goal:"):
+                return
+            db.add(
+                EventRecord(
+                    id=new_id("evt"),
+                    type=EventType.APPROVAL_RESOLVED,
+                    session_id=ev.session_id,
+                    payload_json=json.dumps({"approval_id": "a1", "decision": "timeout"}),
+                )
+            )
+            db.commit()
+
+    platform.event_bus.add_handler(expire)
+    completed = _completed(platform)
+    r = client.post(
+        "/goals",
+        json={
+            "name": "inbox zero",
+            "contract_text": "Create a file summarizing the task.",
+            "budget": {"max_tokens": 1_000_000},
+        },
+    )
+    assert r.status_code == 200, r.text
+    with session_scope(platform.engine) as db:
+        db.add(
+            ScheduledTaskRecord(
+                name="g",
+                cron="0 9 * * *",
+                trigger_type="cron",
+                kind="goal",
+                payload_json=json.dumps({"goal_id": r.json()["goal"]["id"]}),
+            )
+        )
+        db.commit()
+    mock = _mock(app)
+    before = len(mock.sent)
+    body = client.post("/schedules/g/run").json()
+    [ev] = [c for c in completed if c["session_id"] == body["last_session_id"]]
+    return SimpleNamespace(body=body, ev=ev, phone=mock.sent[before:])
+
+
+def test_a_goal_schedule_whose_run_needs_you_is_the_bells_one_notice(
+    tmp_path, monkeypatch, desktop_sink
+):
+    out = _goal_fire(tmp_path, monkeypatch, ask_expired=True)
+    assert out.body["last_status"] == "ok", out.body  # the engine counted the iteration
+    assert bell_pings(out.ev), out.ev  # … and the bell rings "needs you"
+    assert desktop_sink == [], desktop_sink  # so "This PC" says nothing beside it
+    assert len(out.phone) == 1 and out.phone[0].startswith("Schedule “g”: "), out.phone
+
+
+def test_a_clean_goal_schedule_keeps_its_one_this_pc_notice(tmp_path, monkeypatch, desktop_sink):
+    out = _goal_fire(tmp_path, monkeypatch, ask_expired=False)
+    assert not bell_pings(out.ev), out.ev  # a clean run is a quiet bell row
+    assert len(desktop_sink) == 1 and desktop_sink[0].startswith("Schedule “g”: done"), desktop_sink
+
+
+def test_a_task_run_with_no_verdict_is_the_bells_one_notice(tmp_path, monkeypatch, desktop_sink):
+    # A ledger read that gave no verdict: the row reads "ok", the bell rings
+    # "Your schedule … finished. Check what it did".
+    import iron_jarvis.agents.outcome as outcome_mod
+
+    monkeypatch.setattr(outcome_mod, "derive_outcome", lambda *a, **k: None)
+    out = _fire(tmp_path, monkeypatch, AgentState.COMPLETED, "Drafted the brief.")
+    assert out.body["last_status"] == "ok", out.body
+    [ev] = [c for c in out.completed if c["session_id"] == out.body["last_session_id"]]
+    assert bell_pings(ev), ev
+    assert desktop_sink == [], desktop_sink
+    assert len(out.phone) == 1, out.phone
+
+
 # --------------------------------------------------------------------------- #
 # (d) the tray: desktop/main.js says the bell's attention rows, once
 # --------------------------------------------------------------------------- #
