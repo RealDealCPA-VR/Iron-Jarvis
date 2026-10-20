@@ -23,7 +23,7 @@ import { replyWhere, type ReplyWhere } from "@/components/chat/TurnReceipt";
 import { humanSummary } from "@/lib/eventWords";
 import { stepPhrase, stepPhraseText } from "@/lib/stepWords";
 import { statusWords } from "@/lib/statusWords";
-import { isServerAlias, modelRowName, providerDisplay } from "@/lib/onboarding";
+import { isOwnServerSlot, isServerAlias, modelRowName, providerDisplay } from "@/lib/onboarding";
 import { endpointLabel, type RanOnRow } from "@/lib/ranOnWords";
 import { normalizeIso } from "@/lib/format";
 import { CONTINUE_AFTER_RESTART } from "@/components/InterruptedJobs";
@@ -132,12 +132,49 @@ export function runModelWords(
   // alias IS its place — the machine's name ("DGX Spark") or "Your model
   // server", the model menu's own words — said once, never "DGX Spark ·
   // fleet" beside a reply that says "answered by DGX Spark".
-  if (isServerAlias(m)) return modelRowName({ provider: p, model: m }, catalog);
+  // v1.361.0: only for the user's OWN server slots. A program that reaches
+  // the server through its own alias (OpenCode's "<server>/fleet") keeps its
+  // name, the model list's words: "OpenCode · Your model server".
+  if (isServerAlias(m)) {
+    const name = modelRowName({ provider: p, model: m }, catalog);
+    const program = isOwnServerSlot(p) ? "" : providerDisplay(p);
+    return program ? `${program} · ${name}` : name;
+  }
   const endpoint = p.startsWith("fleet-") || p === "custom";
   let where = endpoint ? endpointLabel(p, catalog) : providerDisplay(p);
   // A row that names its MODEL in `name` is not a place.
   if (!where || where === m) where = providerDisplay(p);
   return m ? `${where} · ${m}` : where;
+}
+
+/** A transcript run as far as {@link runReachedAModel} reads it (GET
+ *  /sessions/{id} sends the whole AgentRun row, tokens included). */
+export interface ReachedRun {
+  steps?: unknown;
+  input_tokens?: unknown;
+  output_tokens?: unknown;
+}
+
+const positive = (v: unknown): boolean => typeof v === "number" && Number.isFinite(v) && v > 0;
+
+/**
+ * v1.361.0: whether the run's work was SENT to a model, from its own
+ * transcript. The run page says "local" / "cloud" only then: an agent run's
+ * row is saved before its first model call, so a run the router refused
+ * before sending anything (an unconnected cloud provider) has a failed run
+ * with no step, no tokens and no tool call, and "· cloud" there said a
+ * message left the network when nothing did. A step counts once a model
+ * answered it; a tool call is one a model asked for. The daemon's receipt
+ * reads the same record (agents/outcome.reached_a_model) and says null.
+ */
+export function runReachedAModel(
+  runs: readonly ReachedRun[] | null | undefined,
+  tools?: readonly unknown[] | null,
+): boolean {
+  if (Array.isArray(tools) && tools.length > 0) return true;
+  return (Array.isArray(runs) ? runs : []).some(
+    (r) => !!r && (positive(r.steps) || positive(r.input_tokens) || positive(r.output_tokens)),
+  );
 }
 
 /** A GET /models row as far as {@link runWhere} reads it. */

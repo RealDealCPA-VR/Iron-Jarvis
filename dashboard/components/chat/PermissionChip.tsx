@@ -257,21 +257,30 @@ export function PermissionChip({
   }, [disabled, open]);
 
   // Keys are read on the menu, so it takes focus when it opens (without
-  // scrolling anything to it). Then the placement is worked out again from the
-  // menu's REAL box, before paint: the guess in `openMenu` cannot know how its
-  // descriptions wrapped.
+  // scrolling anything to it), once per opening.
+  useLayoutEffect(() => {
+    if (open) menuRef.current?.focus({ preventScroll: true });
+  }, [open]);
+
+  // Then the placement is worked out again from the menu's REAL box, before
+  // paint: the guess in `openMenu` cannot know how its descriptions wrapped.
+  // v1.361.0: and again whenever the rows' words change while it is open. The
+  // reading sentence (`readsLine`) is asked for when the user reaches for the
+  // chip, so a tap can open the menu before the answer lands; the longer
+  // "only in the folders you chose" rows then wrap to more lines, and a menu
+  // hung above the chip on its old height would grow past the window's top.
   useLayoutEffect(() => {
     if (!open) return;
     const menu = menuRef.current;
-    menu?.focus({ preventScroll: true });
     if (!menu || typeof window === "undefined") return;
     const box = menu.getBoundingClientRect();
     if (!(box.width > 0 && box.height > 0)) return;
     sizeRef.current = { width: box.width, height: naturalHeight(menu, box.height) };
     layout(sizeRef.current);
-    // `layout` reads only refs and setters; this runs once per opening.
+    // `layout` reads only refs and setters; this runs once per opening and
+    // once per change of the rows' words while open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, readsLine]);
 
   // The menu is fixed to the window, so it follows the chip when anything
   // scrolls or the window resizes, and closes when the chip itself goes away

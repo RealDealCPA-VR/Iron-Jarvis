@@ -183,6 +183,57 @@ def _rel(path: str, workspace: str) -> str:
 #: Newest action lines a receipt carries (v1.351.0, G18).
 RECEIPT_ACTIVITY_MAX = 20
 
+#: v1.361.0: the persisted events that prove a run's request went OUT to a
+#: model. The router publishes ``provider.routed`` right before it calls an
+#: adapter (after every refusal it can make first: not connected, local only,
+#: an open circuit, a dead local box), ``provider.failover`` on a
+#: substitute's first frame, and the runtime one ``llm.completed`` per
+#: answered step.
+DISPATCH_EVENTS = (
+    EventType.PROVIDER_ROUTED,
+    EventType.PROVIDER_FAILOVER,
+    EventType.LLM_COMPLETED,
+)
+
+
+def reached_a_model(db, session_id: str, provider: str) -> bool:
+    """Whether this session's work was SENT to a model (v1.361.0).
+
+    ``on_this_network`` says where a message went; a run the router refused
+    before sending anything (an unconnected cloud provider) went nowhere, and
+    "cloud" there tells the user their message left the network when nothing
+    did. The AgentRun row is saved before the first model call, so "a run
+    exists" is not the signal: the record is — a step a model answered (or its
+    tokens), a tool call a model asked for, or the router's own dispatch
+    events. The demo model runs in-process and is never refused, so it counts
+    as reached. Each read is indexed; any fault answers True, which keeps the
+    pre-v1.361.0 judgement rather than hiding a real one."""
+    if provider == "mock":
+        return True
+    try:
+        for run in db.exec(select(AgentRun).where(AgentRun.session_id == session_id)):
+            if (
+                int(getattr(run, "steps", 0) or 0) > 0
+                or int(getattr(run, "input_tokens", 0) or 0) > 0
+                or int(getattr(run, "output_tokens", 0) or 0) > 0
+            ):
+                return True
+        if db.exec(
+            select(ToolInvocation.id).where(ToolInvocation.session_id == session_id).limit(1)
+        ).first() is not None:
+            return True
+        return (
+            db.exec(
+                select(EventRecord.id)
+                .where(EventRecord.session_id == session_id)
+                .where(EventRecord.type.in_(DISPATCH_EVENTS))  # type: ignore[attr-defined]
+                .limit(1)
+            ).first()
+            is not None
+        )
+    except Exception:  # noqa: BLE001 — a receipt line, never the result
+        return True
+
 
 def _fill_receipt(out: dict[str, Any], db, session: Session, manager: Any, config: Any) -> None:
     """The receipt half of :func:`session_result` (v1.351.0, G18), filled in
@@ -199,7 +250,9 @@ def _fill_receipt(out: dict[str, Any], db, session: Session, manager: Any, confi
         out["route_note"] = ""
     try:
         provider = out.get("provider") or ""
-        if provider:
+        # v1.361.0: judged only when the work reached a model — a run the
+        # router refused before sending anything says nowhere (None).
+        if provider and reached_a_model(db, session.id, provider):
             from ..providers.egress import stays_on_this_network
 
             out["on_this_network"] = bool(stays_on_this_network(provider, manager, config))
@@ -237,7 +290,8 @@ def session_result(
     refused, else ``""`` — the mission screen's words), ``on_this_network``
     (``egress.stays_on_this_network`` for the run's provider; ``manager`` /
     ``config`` let it read a local endpoint's URL; ``None`` when there is no
-    provider to judge) and ``activity`` (the newest
+    provider to judge, or (v1.361.0) when the work never reached a model —
+    :func:`reached_a_model`) and ``activity`` (the newest
     ``RECEIPT_ACTIVITY_MAX`` plain action lines, oldest first, in the mission
     screen's words: ``{at, who, session_id, text, tone}``). Each of the three
     is its own try: a failed read costs that key's value, never the result.

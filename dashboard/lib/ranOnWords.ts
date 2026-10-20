@@ -30,7 +30,7 @@
  */
 
 import { answeredModelName } from "@/lib/answeredModel";
-import { isServerAlias, providerDisplay } from "@/lib/onboarding";
+import { isOwnServerSlot, isServerAlias, providerDisplay } from "@/lib/onboarding";
 
 /** The catalog fields this reads (a GET /models row). */
 export interface RanOnRow {
@@ -85,7 +85,10 @@ export function ranOnWords(
   // v1.360.0 (lane 10B): the "fleet" alias IS its place — named by the
   // machine ("DGX Spark") or "your model server" — so it is said once,
   // never "fleet on DGX Spark" nor "your model server on your own endpoint".
-  const alias = isServerAlias(m) && !!name;
+  // v1.361.0: only on the user's OWN server slots. A program reaching the
+  // server through its own alias (OpenCode's "<server>/fleet") is the place
+  // the run ran in, and keeps its name: "your model server on OpenCode".
+  const alias = isServerAlias(m) && !!name && (!p || isOwnServerSlot(p));
   const text = alias ? name : name && where && name !== where ? `${name} on ${where}` : name || where;
   const title = [p, m].filter((x, i, all) => x && all.indexOf(x) === i).join(" · ");
   return { text, title };

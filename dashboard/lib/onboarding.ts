@@ -303,6 +303,16 @@ export function isServerAlias(model: string | null | undefined): boolean {
   return m === "fleet" || m.endsWith("/fleet");
 }
 
+/** v1.361.0: the providers that ARE the user's own model server — the two
+ *  config slots ("custom", "ollama") and every fleet node (`fleet-<id>`).
+ *  Their "fleet" pick is named by the machine alone. A program that reaches
+ *  a server through its own alias (OpenCode's "<server>/fleet") is not one
+ *  of them: it keeps its own name beside the server's. */
+export function isOwnServerSlot(provider: string | null | undefined): boolean {
+  const p = (provider ?? "").trim();
+  return p === "custom" || p === "ollama" || p.startsWith("fleet-");
+}
+
 /** v1.360.0 (lane 10B): the server alias's name mid-sentence ("answered by
  *  your model server") when the machine behind it has no name the user gave
  *  it. A row or heading says it in sentence case (`providerHeading`). */
@@ -352,9 +362,17 @@ export function machineName(
   const direct = usable(opts.label) || usable(opts.name);
   if (direct) return direct;
   const rows = Array.isArray(opts.catalog) ? opts.catalog : [];
+  const wanted = (opts.model ?? "").trim();
+  // v1.361.0: only a row that describes THIS pick names its machine — the
+  // pick's own row, or any row of a fleet node (every row of `fleet-<id>`
+  // carries the node's label). A config slot's OTHER rows are not its name:
+  // a detected Ollama row's `name` is that model's id ("llama3"), and the
+  // "fleet" pick was named after it everywhere.
+  const describes = (row: NamedRow, id: string): boolean =>
+    !wanted || id.startsWith("fleet-") || (row.model ?? "").trim() === wanted;
   const fromRows = (id: string): string => {
     for (const row of rows) {
-      if (row && row.provider === id) {
+      if (row && row.provider === id && describes(row, id)) {
         const v = usable(row.name);
         if (v) return v;
       }

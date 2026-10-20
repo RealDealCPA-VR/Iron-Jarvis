@@ -817,10 +817,14 @@ export function TurnReceipt({
   // Spark"), the place is not said twice; the local / cloud word stays.
   const who = rt ? answeredName(rt, modelName) : "";
   const placeLabel = typeof rt?.label === "string" ? rt.label.replace(/\s+/g, " ").trim() : "";
+  // Decided once, for the amber line as much as the plain one (v1.361.0: a
+  // substitute named by its machine read "answered by Spark B (you asked for
+  // Claude Code) · on Spark B").
   const namedByPlace = !!(where?.on && placeLabel && who === placeLabel);
   const whereOnInline = !!(rt && !warning && inline && where?.on && !namedByPlace);
   const whereTail: "local" | "cloud" | null =
-    where?.tail ?? (namedByPlace && inline && !warning ? (rt?.on_this_network ? "local" : "cloud") : null);
+    where?.tail ??
+    (namedByPlace && (warning || inline) ? (rt?.on_this_network ? "local" : "cloud") : null);
   if (rt) {
     parts.push(
       warning ? (
@@ -861,9 +865,11 @@ export function TurnReceipt({
       ),
     );
   }
-  if (where && warning && where.on) {
+  if (where && warning && where.on && !namedByPlace) {
     // A substitute that answered from a named endpoint: say which, after the
-    // amber words (they already name the model and why).
+    // amber words (they already name the model and why). When the amber words
+    // already name the machine, it is not said twice: the local / cloud word
+    // takes its place (`whereTail`).
     parts.push(
       <span key="where-on" data-testid="turn-where-on" title={where.title} className="text-zinc-500">
         {where.on}

@@ -79,6 +79,7 @@ import {
   offersRestartContinue,
   RESTART_WORDS,
   runModelWords,
+  runReachedAModel,
   runTitle,
   runWhere,
   RUN_TITLE_FALLBACK,
@@ -189,7 +190,11 @@ export default function SessionDetailPage({
   // A run stopped while it was still queued never reached a model (no agent
   // run in its transcript): saying "cloud" there would claim a message left
   // the network when nothing was sent, so it says nothing (review, v1.360.1).
-  const reachedAModel = runs.length > 0;
+  // v1.361.0: nor did a run the router refused before sending anything (its
+  // agent run is saved before the first model call, so "a run exists" is not
+  // the sign): only a step a model answered, its tokens, or a tool call it
+  // asked for is (runPageWords.runReachedAModel).
+  const reachedAModel = runReachedAModel(runs, tools);
   const where =
     session && !isActive && reachedAModel
       ? runWhere(session.provider, session.model, catalog, receipt?.session_id === id ? receipt : null)
