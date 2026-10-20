@@ -279,7 +279,21 @@ def test_emergency_stop_stops_a_parked_scheduled_workflow_and_its_row_says_stopp
         r = client.post("/autonomy/kill", json={"enabled": True})
         assert r.status_code == 200, r.text
         assert r.json()["kill_switch"] is True
-        assert r.json()["stopped"] >= 1, "the page can say it stopped something"
+        assert isinstance(r.json()["stopped"], int), r.json()
+        # v1.359.0 review: the route stops what it finds AND the platform's
+        # config.changed watcher (a bus worker thread) runs the same
+        # stop_unattended for this same write. Whichever reaches the parked
+        # run first stops it (compare-and-set) and settles its row, so the
+        # route's own count can read 0 and the row can settle a moment after
+        # the answer (reproduced by holding the route's call 0.5 s; it failed
+        # 1 run in ~40 here). Wait for the ROW, the thing asserted;
+        # ``test_only_a_waiting_unattended_run_is_stopped...`` pins that
+        # stop_unattended returns the run it stopped.
+        deadline = time.monotonic() + 10
+        row = _schedule_row(client, "fire-gated")
+        while row["last_status"] != ro.STATUS_CANCELLED and time.monotonic() < deadline:
+            time.sleep(0.05)
+            row = _schedule_row(client, "fire-gated")
 
         run = client.get(f"/workflows/runs/{parked}").json()
         assert run["status"] == "cancelled", run
