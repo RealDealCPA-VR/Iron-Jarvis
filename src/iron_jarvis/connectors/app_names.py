@@ -533,10 +533,31 @@ _PHRASE_END_RX = re.compile(
     re.IGNORECASE,
 )
 #: The app itself is asked about being connected ("is github connected?",
-#: "Slack isn't linked").
+#: "Slack isn't linked"). v1.360.0 review (lane 10B): a state word said
+#: straight after the app counts only as a question or a claim about the
+#: connection — "is" / "has been" before the state word, "is" (or "has",
+#: "did", …) right before the app, or nothing after it but the end, a
+#: question mark or a time word ("github connected?", "slack set up yet") —
+#: never a news sentence ("Slack set up a new pricing tier", "GitHub
+#: connected millions of developers"), which offered the door.
+_STATE_WORDS = r"(?:connected|linked|hooked\s+up|signed\s+in|set\s+up)\b"
 _STATE_AFTER_RX = re.compile(
-    r"\A\s+(?:(?:is|isn['’]t|is\s+not|still|not)\s+)?(?:connected|linked|hooked\s+up"
-    r"|signed\s+in|set\s+up)\b",
+    r"\A\s+(?:is|isn['’]t|was|wasn['’]t|still|not"
+    r"|(?:(?:has|hasn['’]t|have|haven['’]t)\s+)?been)\s+(?:still\s+|not\s+)?" + _STATE_WORDS,
+    re.IGNORECASE,
+)
+#: The state word straight after the app ("github connected …").
+_STATE_BARE_RX = re.compile(r"\A\s+" + _STATE_WORDS, re.IGNORECASE)
+#: ... and nothing after it but the end, punctuation or a time word.
+_STATE_BARE_END_RX = re.compile(
+    r"\A\s+" + _STATE_WORDS + r"\s*(?:\Z|[?.!,;:]|(?:yet|now|already|properly|correctly"
+    r"|right|anymore|again|still)\b)",
+    re.IGNORECASE,
+)
+#: ... or the app is asked about ("is github connected", "has my Slack …").
+_STATE_ASKED_RX = re.compile(
+    r"\b(?:is|isn['’]t|was|wasn['’]t|are|aren['’]t|has|hasn['’]t|have|haven['’]t|did"
+    r"|didn['’]t)\s+(?:my\s+|our\s+|the\s+)?\Z",
     re.IGNORECASE,
 )
 #: A question about what is in the app ("any new Sentry errors today?",
@@ -605,7 +626,10 @@ def _for_own_data(t: str, start: int, end: int, blanked: str) -> bool:
     clause = _clause_before(t, start)
     if _CONNECT_VERB_RX.match(hit.lstrip()) or _CONNECT_VERB_RX.search(clause):
         return True
-    if _STATE_AFTER_RX.match(after):
+    if _STATE_AFTER_RX.match(after) or (
+        _STATE_BARE_RX.match(after)
+        and (_STATE_BARE_END_RX.match(after) or _STATE_ASKED_RX.search(clause))
+    ):
         return True
     if _HOW_TO_RX.search(clause) or _WHAT_IS_RX.search(clause) or _TOPIC_RX.search(clause):
         return False

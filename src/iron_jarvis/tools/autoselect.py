@@ -1107,7 +1107,30 @@ _ABOUT_JARVIS_FEATURE_RX = re.compile(
     r"|\bschedul(?:e|ing)\b(?!\s+(?:a|an|the|my|our)\s+(?:meeting|call|appointment|interview"
     r"|zoom|teams|doctor|visit|tweet|post|email|e-mail|message|text))"
     r"|\bpair(?:ing)?\s+(?:my\s+|the\s+|a\s+)?browser\b|\btelegram\b|\bdictation\b"
-    r"|\bapprovals?\b|\bundo\b|\bmemory\s+bases?\b|\bpersonas?\b|\bartifacts?\b",
+    r"|\bapprovals?\b|\bundo\b|\bmemory\s+bases?\b|\bpersonas?\b|\bartifacts?\b"
+    # v1.360.0 review (lane 10B): the Everything list's PAGES and the
+    # settings a first week asks about — "how do I open settings", "how do I
+    # add a project", "how do I change the model", "how do I add an api key"
+    # armed the Guide from v1.224.0 to v1.359.0 and must keep doing so.
+    # Each is written so an everyday sense does not match ("pack a suitcase",
+    # "a model airplane", "add memory to my laptop", "my data usage").
+    r"|\bsettings\b|\b(?:a|the|this|that|my)\s+setting\b|\bprojects?\b"
+    r"|\b(?:a|the|my|this|that|new)\s+goal\b|\bsessions?\b|\btemplates?\b|\bsecrets?\b"
+    r"|\bapi[\s-]*keys?\b|\b(?:openai|anthropic|gemini|grok|xai|deepseek|groq|openrouter"
+    r"|mistral|pixio|elevenlabs)\s+(?:api\s+)?keys?\b|\bmcp\b"
+    r"|\b(?:a|the|this|that|my|new|tool|mcp)\s+packs?\b(?!\s+of\b)|\bpacks\b(?!\s+of\b)"
+    r"|\b(?:a|an|the|this|that|my|new|old|every|all|other)\s+(?:new\s+|old\s+)?chats?\b"
+    r"|\bchats\b|\bmodels\b|\b(?:the|a|my|your|another|which|different|default|local|ai)"
+    r"\s+(?:ai\s+|local\s+|default\s+|chat\s+)?model\b(?!\s+(?:airplane|plane|car|train"
+    r"|kit|railway|ship|rocket|house|home))|\b(?:ai|model|default|cloud|local)\s+providers?\b"
+    r"|\bthemes?\b|\bpalettes?\b|\b(?:dark|light)\s+mode\b|\bterminals?\b|\bpanes?\b"
+    r"|\bbuild\s+(?:mode|page|tab)\b|\bfleet\b|\bollama\b|\blm\s*studio\b|\bllama\.?cpp\b"
+    r"|\b(?:use|enable|disable|turn\s+(?:on|off))\s+(?:the\s+)?voice\b|\bvoice\s+(?:mode"
+    r"|input|chat|replies|commands?)\b|\bmemories\b|\b(?:a|the|my|this|that)\s+memory\b"
+    r"(?!\s+(?:card|stick|module|slot|chip|leak|usage))|\bknowledge\s+base\b"
+    r"|\bnotifications?\b|\b(?:an?|the|latest|new)\s+updates?\b|\bupdates\b"
+    r"|\b(?:my|the)\s+usage\b|\busage\s+page\b|\bfile\s+search\b|\bself[\s-]development\b"
+    r"|\bsession\s+board\b|\bconnections\s+page\b",
     re.IGNORECASE,
 )
 #: The sentence puts the feature word inside another product.
@@ -1116,7 +1139,9 @@ _ELSEWHERE_RX = re.compile(
     r"|iphone|ipad|ios|android|chrome|edge|firefox|safari|excel|word|outlook|teams|zoom|python"
     r"|vba|javascript|node(?:\.?js)?|npm|git|docker|vs\s*code|visual\s+studio|wordpress"
     r"|shopify|quickbooks|zapier|ifttt|power\s+automate|selenium|jira|trello|asana|salesforce"
-    r"|hubspot|discord|minecraft|photoshop|premiere|blender|unity|unreal)\b",
+    r"|hubspot|discord|minecraft|photoshop|premiere|blender|unity|unreal"
+    # v1.360.0 review: machine-learning libraries ("train a model in pytorch").
+    r"|pytorch|tensorflow|keras|sklearn|scikit-learn|hugging\s*face)\b",
     re.IGNORECASE,
 )
 #: A catalog app beside a connect verb ("how do I connect gmail") — setting
@@ -1152,9 +1177,11 @@ def _how_to_is_about_jarvis(sentence: str) -> bool:
         if _ABOUT_JARVIS_FEATURE_RX.search(sentence) and not _ELSEWHERE_RX.search(sentence):
             return True
         if _HOWDO_CONNECT_RX.search(sentence):
-            from ..connectors.app_names import apps_named
+            from ..connectors.app_names import apps_named, clis_named
 
-            return bool(apps_named(sentence))
+            # v1.360.0 review: Claude Code / Codex are connected here too
+            # ("how do I connect claude code").
+            return bool(apps_named(sentence) or clis_named(sentence))
         return False
     except Exception:  # noqa: BLE001
         return False

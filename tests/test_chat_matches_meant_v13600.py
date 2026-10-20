@@ -220,6 +220,11 @@ NOT_OWN = [
     "who runs Sentry these days",
     "tell me more about Dropbox",
     "postgres is an object-relational database",
+    # v1.360.0 review: a state word in a news sentence is not "is it
+    # connected?" (the first cut offered the door for all three).
+    "Slack set up a new pricing tier",
+    "Stripe set up shop in Dublin last year",
+    "GitHub connected millions of developers",
 ]
 
 #: Sentences about the user's OWN data in the app (or connecting it) — each
@@ -251,6 +256,13 @@ OWN = [
     ("create a GitHub issue for the login bug", ["github"]),
     ("find my tax files in Google Drive", ["google_drive"]),
     ("search github for issues about login", ["github"]),
+    # v1.360.0 review: every way of asking whether the app is connected.
+    ("github connected?", ["github"]),
+    ("why isn't slack connected", ["slack"]),
+    ("has github been connected", ["github"]),
+    ("Notion isn't connected yet, right?", ["notion"]),
+    ("slack set up yet", ["slack"]),
+    ("is github connected to my account", ["github"]),
 ]
 
 
@@ -517,6 +529,91 @@ def test_a_how_to_about_something_else_arms_no_guide_lookup(text):
 
 def test_the_guide_probe_table_is_wide_both_ways():
     assert len(ABOUT_JARVIS) >= 20 and len(NOT_ABOUT_JARVIS) >= 20
+
+
+# v1.360.0 review (lane 10B): the gate's first cut knew a dozen feature words
+# and none of the Everything list's PAGES or the settings a first week asks
+# about, so every question below — each of which armed the Guide from
+# v1.224.0 to v1.359.0 — lost the Handbook. The acceptance names "a
+# feature/page/setting word from the Handbook/Everything list".
+ABOUT_JARVIS_PAGES = [
+    "how do I open settings",
+    "how do I find the settings",
+    "how do I change the theme",
+    "how do I add a project",
+    "how do I set up a goal",
+    "how do I change the model",
+    "how do I add a model",
+    "how do I change the default provider",
+    "how do I add an api key",
+    "how do I add my openai key",
+    "how do I add a secret",
+    "how do I add an MCP server",
+    "how do I install a pack",
+    "how do I open a new chat",
+    "how do I use the terminal",
+    "how do I use build mode",
+    "how do I set up the fleet",
+    "how do I install ollama",
+    "how do I use voice",
+    "how do I add a memory",
+    "how do I use the knowledge base",
+    "how do I turn off notifications",
+    "how do I install the update",
+    "how do I find my old sessions",
+    "how do I use a template",
+    "how do I connect claude code",
+]
+
+#: The everyday sense of those same words is not a question about the app.
+#: Every row opens with one of the Guide rule's how-do-I verbs, so the GATE is
+#: what refuses it (asserted below), never a rule that did not match at all.
+NOT_ABOUT_JARVIS_EVERYDAY = [
+    "how do I open a pack of gum",
+    "how do I set up a model railway",
+    "how do I add memory to my laptop",
+    "how do I find my data usage",
+    "how do I change my internet provider",
+    "how do I set goals for the new year",
+    "how do I change the model in pytorch",
+    "how do I find new connections on linkedin",
+    "how do I change my voice for a podcast",
+    "how do I change the oil in my car",
+    "how do I turn off notifications on my iphone",
+    "how do I change the theme in vs code",
+    "how do I open a terminal on mac",
+    "how do I enable dark mode in Windows",
+    "how do I find my tax return",
+    "how do I set up a 401k",
+    "how do I chat with customers on my website",
+    "how do I install python on windows",
+    "how do I connect two monitors",
+    "how do I send money to my brother",
+]
+
+
+@pytest.mark.parametrize("text", ABOUT_JARVIS_PAGES)
+def test_a_how_to_about_a_jarvis_page_or_setting_asks_the_guide(text):
+    """MUTATION: drop the page/setting words from ``_ABOUT_JARVIS_FEATURE_RX``
+    -> every row here is red."""
+    picked = set(select_auto_tools(text, cap=99))
+    assert GUIDE <= picked, (text, sorted(picked))
+
+
+@pytest.mark.parametrize("text", NOT_ABOUT_JARVIS_EVERYDAY)
+def test_the_everyday_sense_of_a_page_word_arms_no_guide_lookup(text):
+    """MUTATION: widen a page word to its bare form (``packs?``, ``memory``),
+    drop the "model airplane" look-ahead or "pytorch" from the other-product
+    list -> its everyday row is red."""
+    from iron_jarvis.tools.autoselect import _GUIDE_RX
+
+    m = _GUIDE_RX.search(text)
+    assert m is not None and m.group("guide_howdo"), f"anti-vacuity: {text!r} reaches the gate"
+    assert not (GUIDE & set(select_auto_tools(text, cap=99))), text
+
+
+def test_the_page_word_tables_are_wide_both_ways():
+    assert len(ABOUT_JARVIS_PAGES) >= 20 and len(NOT_ABOUT_JARVIS_EVERYDAY) >= 20
 
 
 # =========================================================================== #
