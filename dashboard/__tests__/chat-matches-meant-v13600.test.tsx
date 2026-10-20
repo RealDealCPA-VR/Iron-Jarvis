@@ -98,6 +98,20 @@ describe("one name for the 'fleet' pick, on every surface", () => {
     expect(modelPickWords({ provider: "fleet-custom", model: "fleet", name: "DGX Spark" })).toBe("DGX Spark");
   });
 
+  it("a model LIST hands the catalog it holds to the row's rule (fix round: one name everywhere)", () => {
+    // The config slot's row carries no name; with the list's catalog it is
+    // the machine, under the provider's group like every other list entry.
+    expect(modelPickWords({ provider: "custom", model: "fleet" }, CATALOG)).toBe("Your model server · DGX Spark");
+    // No catalog, or a machine nobody named: the words the menu always had.
+    expect(modelPickWords({ provider: "custom", model: "fleet" })).toBe("Your model server");
+    expect(modelPickWords({ provider: "custom", model: "fleet" }, UNNAMED)).toBe("Your model server");
+    expect(modelPickWords({ provider: "custom", model: "fleet" }, null)).toBe("Your model server");
+    // Every other model keeps its own words, catalog or not.
+    expect(modelPickWords({ provider: "custom", model: "glm" }, CATALOG)).toBe("Your model server · glm");
+    expect(modelPickWords({ provider: "claude-cli", model: "subscription" }, CATALOG)).toBe("Your Claude plan");
+    expect(modelPickWords({ provider: "mock", model: "mock" }, CATALOG)).toBe(modelPickWords({ provider: "mock", model: "mock" }));
+  });
+
   it("who answered: the machine's name when known, else 'your model server' — never 'fleet'", () => {
     // The daemon's route.label (the reply).
     expect(answeredModelName({ provider: "custom", model: "fleet", label: "DGX Spark" }, [])).toBe("DGX Spark");

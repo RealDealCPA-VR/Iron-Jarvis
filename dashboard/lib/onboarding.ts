@@ -402,15 +402,23 @@ export function modelRowName(
  *  (`modelGroupName`) and the row's own words (`modelRowName`), "Claude
  *  Code · Opus 4.8" / "Your model server · qwen3"; a provider-default row is
  *  its plan or server alone ("Your Claude plan"); the demo model is the demo
- *  model. The raw `provider · model` belongs in the option's title. */
-export function modelPickWords(m: {
-  provider: string;
-  model: string;
-  label?: string | null;
-  name?: string;
-}): string {
+ *  model. The raw `provider · model` belongs in the option's title.
+ *
+ *  v1.360.0 (lane 10B fix): `catalog` (the GET /models rows the list already
+ *  holds) is handed to `modelRowName`, so the "fleet" pick in a list reads
+ *  the machine's name ("Your model server · DGX Spark") exactly as the
+ *  reply, the menu and the run page say it; without it, "Your model server". */
+export function modelPickWords(
+  m: {
+    provider: string;
+    model: string;
+    label?: string | null;
+    name?: string | null;
+  },
+  catalog?: readonly NamedRow[] | null,
+): string {
   if (m.provider === "mock") return providerDisplay("mock");
-  const words = modelRowName(m);
+  const words = modelRowName(m, catalog);
   if (isProviderDefaultModel(m.model)) return words;
   const group = modelGroupName({ provider: m.provider, model: m.model, name: m.name });
   if (!group || group === words) return words;
