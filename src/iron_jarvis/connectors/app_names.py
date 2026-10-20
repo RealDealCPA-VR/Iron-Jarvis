@@ -499,6 +499,12 @@ _ACT_HEAD_RX = re.compile(
     _LEAD_IN + r"(?:" + _ACT_VERB + r"|i\s+(?:need|want)|i['’]d\s+like)\b",
     re.IGNORECASE,
 )
+#: ...and the clause opened by an acting VERB itself (the v1.360.0 head):
+#: an "I need / I want / I'd like" head that is not one is vetoed by
+#: :data:`_SWITCH_RX` (v1.361.0 lane 11B review: "I need to switch from
+#: slack to teams" and "I'd like to unsubscribe from stripe emails" are about
+#: the app, as "we're switching from slack to teams" is).
+_VERB_HEAD_RX = re.compile(_LEAD_IN + _ACT_VERB + r"\b", re.IGNORECASE)
 #: v1.361.0 (lane 11B, the final hunt's regression 1): the chat verbs that
 #: say WHERE something is said or done — "DM Bob on slack", "ask Bob on
 #: slack if he's free", "tell the team on slack", "let the team know on
@@ -884,6 +890,11 @@ def _own_verdict(
     if _IN_APP_RX.search(clause):
         return True
     acting = _ACT_HEAD_RX.match(clause) is not None
+    if acting and _VERB_HEAD_RX.match(clause) is None and _SWITCH_RX.search(clause):
+        # v1.361.0 lane 11B review: "I need to switch from slack to teams" —
+        # an "I need / I want" head never makes moving away from the app
+        # its data (the loose place rule below says the same).
+        acting = False
     # v1.361.0 (lane 11B, regression 1): the chat verbs that say where
     # ("DM Bob on slack", "run this query against postgres").
     placing = acting or _PLACE_HEAD_RX.match(clause) is not None

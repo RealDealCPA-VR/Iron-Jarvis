@@ -515,6 +515,17 @@ DOOR = [
     ('add the Stripe button and the PayPal logo', []),
     # joined apps are read with the words after the LAST of them
     ('update the Slack and GitHub screenshots in the docs', []),
+    # --- lane 11B review: "I need / I want / I'd like" open the clause with a
+    # direct object only; with "to <verb>" the verb decides, so moving away
+    # from an app stays about the app (as "we're switching…" above), both ways
+    ('I need to switch from slack to teams', []),
+    ('I want to migrate from notion to obsidian', []),
+    ("I'd like to unsubscribe from stripe emails", []),
+    ('I need you to pull the invoices from stripe', ['stripe']),
+    ("I'd like the invoices from stripe for March", ['stripe']),
+    ('I want to see the slack messages from today', ['slack']),
+    # an acting verb keeps the place even beside a switching word
+    ('download the converted pdf from dropbox', ['dropbox']),
 ]
 
 #: ``(text, armed)`` — does Auto arm the Guide's three lookups
