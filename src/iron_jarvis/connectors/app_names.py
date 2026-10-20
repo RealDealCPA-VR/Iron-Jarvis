@@ -546,12 +546,14 @@ _STATE_AFTER_RX = re.compile(
     r"|(?:(?:has|hasn['’]t|have|haven['’]t)\s+)?been)\s+(?:still\s+|not\s+)?" + _STATE_WORDS,
     re.IGNORECASE,
 )
-#: The state word straight after the app ("github connected …").
-_STATE_BARE_RX = re.compile(r"\A\s+" + _STATE_WORDS, re.IGNORECASE)
+#: The state word straight after the app ("github connected …"), or after
+#: "get"/"got" (v1.360.0 fix round: "did slack get connected?").
+_STATE_GOT = r"(?:(?:get|got|gotten|getting)\s+)?"
+_STATE_BARE_RX = re.compile(r"\A\s+" + _STATE_GOT + _STATE_WORDS, re.IGNORECASE)
 #: ... and nothing after it but the end, punctuation or a time word.
 _STATE_BARE_END_RX = re.compile(
-    r"\A\s+" + _STATE_WORDS + r"\s*(?:\Z|[?.!,;:]|(?:yet|now|already|properly|correctly"
-    r"|right|anymore|again|still)\b)",
+    r"\A\s+" + _STATE_GOT + _STATE_WORDS + r"\s*(?:\Z|[?.!,;:]|(?:yet|now|already|properly"
+    r"|correctly|right|anymore|again|still)\b)",
     re.IGNORECASE,
 )
 #: ... or the app is asked about ("is github connected", "has my Slack …").

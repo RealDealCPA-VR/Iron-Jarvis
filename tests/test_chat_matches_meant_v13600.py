@@ -225,6 +225,11 @@ NOT_OWN = [
     "Slack set up a new pricing tier",
     "Stripe set up shop in Dublin last year",
     "GitHub connected millions of developers",
+    # v1.360.0 fix round: "got <state word>" in a news sentence is not
+    # "is it connected?" either.
+    "Slack got connected to Teams in 2020",
+    "GitHub got set up as a nonprofit",
+    "Stripe got linked to the scandal",
 ]
 
 #: Sentences about the user's OWN data in the app (or connecting it) — each
@@ -263,6 +268,10 @@ OWN = [
     ("Notion isn't connected yet, right?", ["notion"]),
     ("slack set up yet", ["slack"]),
     ("is github connected to my account", ["github"]),
+    # v1.360.0 fix round: asked with "get" / "got".
+    ("did slack get connected?", ["slack"]),
+    ("did github get set up", ["github"]),
+    ("has my notion got connected yet", ["notion"]),
 ]
 
 
@@ -595,7 +604,8 @@ NOT_ABOUT_JARVIS_EVERYDAY = [
 @pytest.mark.parametrize("text", ABOUT_JARVIS_PAGES)
 def test_a_how_to_about_a_jarvis_page_or_setting_asks_the_guide(text):
     """MUTATION: drop the page/setting words from ``_ABOUT_JARVIS_FEATURE_RX``
-    -> every row here is red."""
+    or the ``_page_word_is_the_object`` check (v1.360.0 fix round) -> the
+    rows each one reads are red."""
     picked = set(select_auto_tools(text, cap=99))
     assert GUIDE <= picked, (text, sorted(picked))
 
@@ -614,6 +624,97 @@ def test_the_everyday_sense_of_a_page_word_arms_no_guide_lookup(text):
 
 def test_the_page_word_tables_are_wide_both_ways():
     assert len(ABOUT_JARVIS_PAGES) >= 20 and len(NOT_ABOUT_JARVIS_EVERYDAY) >= 20
+
+
+# v1.360.0 fix round (lane 10B): the review's page words matched ANYWHERE in
+# the sentence, so the everyday sense of each still asked the Guide — 23 of 40
+# probes below did ("find a project manager", "change the settings on my tv",
+# "send updates to my clients", "use a resume template"). A page word with an
+# everyday sense now counts only as the thing the how-do-I verb acts on, with
+# nothing after it but the end, a page word, a short relative clause or a
+# phrase about another page or a model.
+NOT_ABOUT_JARVIS_PAGE_SENSE = [
+    "how do I find a project manager",
+    "how do I send a project proposal",
+    "how do I find a session musician",
+    "how do I find the theme of a poem",
+    "how do I send updates to my clients",
+    "how do I add updates to my linkedin profile",
+    "how do I use a resume template",
+    "how do I find a lease template",
+    "how do I change my settings on my tv",
+    "how do I change the settings on my camera",
+    "how do I find the settings on my router",
+    "how do I open a new chat on whatsapp",
+    "how do I add a goal to my fitness app",
+    "how do I send notifications to my team",
+    "how do I add a model to my portfolio",
+    "how do I schedule a dentist appointment",
+    "how do I send my project to the client",
+    "how do I install a terminal block",
+    "how do I install new window panes",
+    "how do I change my memory foam pillow",
+    "how do I find my memories of childhood",
+    "how do I install a fleet tracking system",
+    "how do I add vehicles to my fleet",
+    "how do I find where the terminal is at the airport",
+    # "memory", "goal" and "setting" need an article before them.
+    "how do I add memory",
+    "how do I install more memory",
+]
+
+#: ...while the same words, said about the app, keep asking the Guide.
+ABOUT_JARVIS_PAGE_SENSE = [
+    "how do I change the model to claude",
+    "how do I change the theme to dark",
+    "how do I find the settings page",
+    "how do I turn notifications off",
+    "how do I add a memory to a project",
+    "how do I set the fleet up",
+    "how do I change which model answers",
+    "how do I open settings and change the theme",
+    "how do I find where the settings are",
+    "how do I use different models for different chats",
+    "how do I find my project folder",
+    "how do I change the chat settings",
+    "how do I use the dark theme",
+    "how do I change the model you use",
+    "how do I turn on notifications",
+    "how do I find my chat history",
+    "how do I set up a new project",
+    "how do I add a template to a project",
+    "how do I change my default model",
+    "how do I use local models",
+    "how do I find old chats",
+    "how do I install updates",
+]
+
+
+@pytest.mark.parametrize("text", NOT_ABOUT_JARVIS_PAGE_SENSE)
+def test_a_page_word_in_its_everyday_sense_arms_no_guide_lookup(text):
+    """MUTATION: put the review's bare page words back into
+    ``_ABOUT_JARVIS_FEATURE_RX`` (``projects?``, ``settings``, ``updates``,
+    ``templates?``, ``fleet`` anywhere), or let ``_PAGE_TAIL_OK_RX`` accept
+    any tail -> rows here are red. The dentist row is the "schedule a <word>
+    appointment" look-ahead."""
+    from iron_jarvis.tools.autoselect import _GUIDE_RX
+
+    m = _GUIDE_RX.search(text)
+    assert m is not None and m.group("guide_howdo"), f"anti-vacuity: {text!r} reaches the gate"
+    assert not (GUIDE & set(select_auto_tools(text, cap=99))), text
+
+
+@pytest.mark.parametrize("text", ABOUT_JARVIS_PAGE_SENSE)
+def test_a_page_word_said_about_the_app_still_asks_the_guide(text):
+    """MUTATION: drop the ``_page_word_is_the_object`` check, or the tail's
+    "to <a page or a model>" / "page" / "and <verb>" branches -> rows here are
+    red."""
+    picked = set(select_auto_tools(text, cap=99))
+    assert GUIDE <= picked, (text, sorted(picked))
+
+
+def test_the_page_sense_tables_are_wide_both_ways():
+    assert len(NOT_ABOUT_JARVIS_PAGE_SENSE) >= 20 and len(ABOUT_JARVIS_PAGE_SENSE) >= 20
 
 
 # =========================================================================== #

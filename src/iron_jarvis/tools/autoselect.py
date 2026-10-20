@@ -1104,35 +1104,94 @@ _ABOUT_JARVIS_FEATURE_RX = re.compile(
     r"\bworkflows?\b|\bwebhooks?\b|\bagents?\b|\bskills?\b|\btools?\b|\badd-?ons?\b"
     r"|\bextensions?\b|\bautomat(?:e|es|ed|ing|ion|ions)\b|\bschedules\b"
     r"|\b(?:a|the|my|this|that|its|new)\s+schedule\b"
-    r"|\bschedul(?:e|ing)\b(?!\s+(?:a|an|the|my|our)\s+(?:meeting|call|appointment|interview"
-    r"|zoom|teams|doctor|visit|tweet|post|email|e-mail|message|text))"
+    # v1.360.0 fix round (lane 10B): a word or two may sit between the
+    # article and the appointment ("schedule a dentist appointment").
+    r"|\bschedul(?:e|ing)\b(?!\s+(?:a|an|the|my|our)\s+(?:[a-z'-]+\s+){0,2}(?:meeting|call"
+    r"|appointment|interview|zoom|teams|doctor|visit|tweet|post|email|e-mail|message|text"
+    r"|haircut|consultation|lesson|class|exam|massage|delivery|pickup|inspection))"
     r"|\bpair(?:ing)?\s+(?:my\s+|the\s+|a\s+)?browser\b|\btelegram\b|\bdictation\b"
     r"|\bapprovals?\b|\bundo\b|\bmemory\s+bases?\b|\bpersonas?\b|\bartifacts?\b"
     # v1.360.0 review (lane 10B): the Everything list's PAGES and the
-    # settings a first week asks about — "how do I open settings", "how do I
-    # add a project", "how do I change the model", "how do I add an api key"
-    # armed the Guide from v1.224.0 to v1.359.0 and must keep doing so.
-    # Each is written so an everyday sense does not match ("pack a suitcase",
-    # "a model airplane", "add memory to my laptop", "my data usage").
-    r"|\bsettings\b|\b(?:a|the|this|that|my)\s+setting\b|\bprojects?\b"
-    r"|\b(?:a|the|my|this|that|new)\s+goal\b|\bsessions?\b|\btemplates?\b|\bsecrets?\b"
+    # settings a first week asks about armed the Guide from v1.224.0 to
+    # v1.359.0 and must keep doing so. The words here have no everyday sense
+    # ("how do I add an api key", "how do I add an MCP server", "how do I
+    # install ollama"); the page words that DO ("settings", "a project", "the
+    # model", "a template") are read by _PAGE_OBJECT_RX below.
     r"|\bapi[\s-]*keys?\b|\b(?:openai|anthropic|gemini|grok|xai|deepseek|groq|openrouter"
-    r"|mistral|pixio|elevenlabs)\s+(?:api\s+)?keys?\b|\bmcp\b"
-    r"|\b(?:a|the|this|that|my|new|tool|mcp)\s+packs?\b(?!\s+of\b)|\bpacks\b(?!\s+of\b)"
-    r"|\b(?:a|an|the|this|that|my|new|old|every|all|other)\s+(?:new\s+|old\s+)?chats?\b"
-    r"|\bchats\b|\bmodels\b|\b(?:the|a|my|your|another|which|different|default|local|ai)"
-    r"\s+(?:ai\s+|local\s+|default\s+|chat\s+)?model\b(?!\s+(?:airplane|plane|car|train"
-    r"|kit|railway|ship|rocket|house|home))|\b(?:ai|model|default|cloud|local)\s+providers?\b"
-    r"|\bthemes?\b|\bpalettes?\b|\b(?:dark|light)\s+mode\b|\bterminals?\b|\bpanes?\b"
-    r"|\bbuild\s+(?:mode|page|tab)\b|\bfleet\b|\bollama\b|\blm\s*studio\b|\bllama\.?cpp\b"
+    r"|mistral|pixio|elevenlabs)\s+(?:api\s+)?keys?\b|\bmcp\b|\b(?:tool|mcp)\s+packs?\b"
+    r"|\b(?:ai|model|default|cloud|local)\s+providers?\b"
+    r"|\b(?:dark|light)\s+mode\b|\bbuild\s+(?:mode|page|tab)\b|\bollama\b|\blm\s*studio\b"
+    r"|\bllama\.?cpp\b"
     r"|\b(?:use|enable|disable|turn\s+(?:on|off))\s+(?:the\s+)?voice\b|\bvoice\s+(?:mode"
-    r"|input|chat|replies|commands?)\b|\bmemories\b|\b(?:a|the|my|this|that)\s+memory\b"
-    r"(?!\s+(?:card|stick|module|slot|chip|leak|usage))|\bknowledge\s+base\b"
-    r"|\bnotifications?\b|\b(?:an?|the|latest|new)\s+updates?\b|\bupdates\b"
-    r"|\b(?:my|the)\s+usage\b|\busage\s+page\b|\bfile\s+search\b|\bself[\s-]development\b"
+    r"|input|chat|replies|commands?)\b|\bknowledge\s+base\b"
+    r"|\busage\s+page\b|\bfile\s+search\b|\bself[\s-]development\b"
     r"|\bsession\s+board\b|\bconnections\s+page\b",
     re.IGNORECASE,
 )
+#: v1.360.0 fix round (lane 10B, G38): a page or setting word that ALSO has
+#: an everyday sense counts only as the thing the how-do-I verb acts on —
+#: nothing but an article or a plain adjective between them ("how do I
+#: change the default model", "how do I find my old sessions") — and with
+#: nothing after it but the end, a page word ("the settings page"), a short
+#: relative clause ("the model you use") or a phrase about another page or a
+#: model ("change the model to claude", "add a memory to a project"). The
+#: review's first cut matched these words anywhere, so "how do I find a
+#: project manager", "use a resume template", "change the settings on my
+#: tv", "send updates to my clients" and "find the theme of a poem" asked
+#: the Guide.
+_PAGE_WORDS = (
+    r"(?:settings|setting|projects?|goal|sessions?|templates?|secrets?|packs?|chats?|models?"
+    r"|themes?|palettes?|terminals?|panes?|fleet|memory|memories|notifications?|updates?"
+    r"|usage)"
+)
+#: The singular words whose bare form is mostly the everyday thing ("add
+#: memory" to a laptop, "set a goal", "a setting" on a camera) — an article
+#: is required before them.
+_PAGE_NEEDS_ARTICLE = frozenset({"memory", "goal", "setting"})
+_PAGE_ARTICLE = (
+    r"(?:a|an|the|my|our|your|this|that|these|those|its|new|old|another|all|other|every|some"
+    r"|any|default|local|ai|cloud|current|different|dark|light|chat|saved|past|open"
+    r"|which|where|what)"
+)
+_PAGE_OBJECT_RX = re.compile(
+    r"\bhow\s+do\s+i\s+(?:use|set\s*up|setup|set|find|open|turn|enable|disable|change"
+    r"|configure|connect|schedule|chat|text|add|install|pair|send|automate)"
+    r"(?:\s+(?:on|off|up|out))?"
+    r"(?P<dets>(?:\s+" + _PAGE_ARTICLE + r"){0,3})"
+    r"\s+(?P<word>" + _PAGE_WORDS + r")\b(?P<tail>[^.!?\n]{0,120})",
+    re.IGNORECASE,
+)
+#: Another page, a model or a place in this app — what may follow the page
+#: word in a phrase ("to claude", "to a project", "to dark").
+_PAGE_THING = (
+    r"(?:" + _PAGE_WORDS + r"|claude|gpt[\w.-]*|openai|anthropic|gemini|grok|xai|deepseek"
+    r"|llama|qwen|mistral|ollama|openrouter|groq|sonnet|opus|haiku|codex|local|cloud|dark"
+    r"|light|default|jarvis|agents?|workflows?|skills?|tools?)\b"
+)
+_PAGE_TAIL_OK_RX = re.compile(
+    r"\A(?:\s*(?:\Z|[?,;:])"
+    r"|\s+(?:page|tab|screen|menu|panel|button|list|history|folder|view|options?|settings?"
+    r"|answers|replies|runs|i|you|it|jarvis)\b"
+    r"|\s+(?:off|on|up|back|again|please|now|here|is|are)\s*(?:\Z|[?,;:])"
+    # "... and change the theme": a second step in the app.
+    r"|\s+(?:and|or|then)\s+(?:use|set|find|open|turn|enable|disable|change|configure"
+    r"|connect|add|install|pair|switch|pick|choose)\b"
+    r"|\s+(?:to|for|in|on|into|from|with|of|and|or|then|between)\s+"
+    r"(?:(?:" + _PAGE_ARTICLE + r"|each)\s+){0,2}" + _PAGE_THING + r")",
+    re.IGNORECASE,
+)
+
+
+def _page_word_is_the_object(sentence: str) -> bool:
+    """Does a how-do-I verb act on a page / setting word of Iron Jarvis
+    (:data:`_PAGE_OBJECT_RX`, :data:`_PAGE_TAIL_OK_RX`)? Pure."""
+    for m in _PAGE_OBJECT_RX.finditer(sentence):
+        word = m.group("word").lower()
+        if word in _PAGE_NEEDS_ARTICLE and not m.group("dets").strip():
+            continue
+        if _PAGE_TAIL_OK_RX.match(m.group("tail")):
+            return True
+    return False
 #: The sentence puts the feature word inside another product.
 _ELSEWHERE_RX = re.compile(
     r"\b(?:in|on|with|using|into|for)\s+(?:the\s+|my\s+)?(?:windows|mac(?:os)?|linux|ubuntu"
@@ -1174,7 +1233,9 @@ def _how_to_is_about_jarvis(sentence: str) -> bool:
     try:
         if _ABOUT_JARVIS_STRONG_RX.search(sentence):
             return True
-        if _ABOUT_JARVIS_FEATURE_RX.search(sentence) and not _ELSEWHERE_RX.search(sentence):
+        if (
+            _ABOUT_JARVIS_FEATURE_RX.search(sentence) or _page_word_is_the_object(sentence)
+        ) and not _ELSEWHERE_RX.search(sentence):
             return True
         if _HOWDO_CONNECT_RX.search(sentence):
             from ..connectors.app_names import apps_named, clis_named
