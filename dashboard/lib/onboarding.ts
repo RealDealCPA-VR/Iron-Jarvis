@@ -413,7 +413,7 @@ export function modelPickWords(
     provider: string;
     model: string;
     label?: string | null;
-    name?: string | null;
+    name?: string;
   },
   catalog?: readonly NamedRow[] | null,
 ): string {
