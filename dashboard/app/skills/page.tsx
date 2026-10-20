@@ -91,6 +91,7 @@ import {
   LoaderInline,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
+import { modelPickTitle, modelPickWords } from "@/lib/onboarding";
 import { PageShell, Reveal } from "@/components/motion";
 import { PageGrid } from "@/components/PageGrid";
 
@@ -662,8 +663,9 @@ export default function SkillsPage() {
                         <div className="flex items-center justify-between gap-2 border-b border-white/[0.06] px-3.5 py-2">
                           <span className="inline-flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-zinc-500">
                             <Cpu size={11} className="shrink-0" />
-                            <span className="truncate">
-                              {applyResult.provider} · {applyResult.model}
+                            {/* v1.359.0 re-review: the model in words, raw pair as title. */}
+                            <span className="truncate" title={modelPickTitle(applyResult)}>
+                              {modelPickWords(applyResult)}
                             </span>
                           </span>
                           <CopyButton text={applyResult.reply} />

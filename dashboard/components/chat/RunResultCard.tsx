@@ -50,6 +50,7 @@ import { runActionLines, stepFailedWords } from "@/lib/runWords";
 import { statusWords } from "@/lib/statusWords";
 import { runActivity, RunActivityFold } from "@/components/chat/RunActivity";
 import { friendlyModelName } from "@/lib/friendlyModelName";
+import { answeredModelName } from "@/lib/answeredModel";
 import { providerDisplay } from "@/lib/onboarding";
 import { replyWhere, secondsText } from "@/components/chat/TurnReceipt";
 
@@ -219,11 +220,14 @@ export function RunMeta({ result }: { result: RunResult }) {
   const parts: ReactNode[] = [];
   const provider = (result.provider ?? "").trim();
   const model = (result.model ?? "").trim();
+  // v1.359.0 re-review: the reply receipt's own rule (lib/answeredModel), so
+  // a run on a CLI's default model reads "answered by Claude Code", never
+  // "answered by subscription".
   const who =
     provider === "mock"
       ? providerDisplay("mock")
       : model
-        ? friendlyModelName(model)
+        ? answeredModelName({ provider, model }, []) ?? friendlyModelName(model)
         : providerDisplay(provider);
   if (who) {
     const title = [providerDisplay(provider), model].filter(Boolean).join(" · ");

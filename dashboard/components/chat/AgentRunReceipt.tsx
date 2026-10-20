@@ -35,6 +35,7 @@ import { post, ApiError } from "@/lib/api";
 import { WorkRow } from "@/components/chat/WorkLine";
 import { runActionLines } from "@/lib/runWords";
 import { friendlyModelName } from "@/lib/friendlyModelName";
+import { answeredModelName } from "@/lib/answeredModel";
 import { providerDisplay } from "@/lib/onboarding";
 import { replyWhere } from "@/components/chat/TurnReceipt";
 import { runActivity, RunActivityFold } from "@/components/chat/RunActivity";
@@ -45,7 +46,9 @@ import type { AgentRunStamp } from "@/lib/agentRun";
 export function runModelName(run: Pick<AgentRunStamp, "provider" | "model">): string {
   if (run.provider === "mock") return providerDisplay("mock");
   const model = (run.model ?? "").trim();
-  if (model) return friendlyModelName(model);
+  // v1.359.0 re-review: the reply receipt's rule, so a run on a CLI's
+  // default model reads "Ran on Claude Code", never "Ran on subscription".
+  if (model) return answeredModelName({ provider: run.provider ?? "", model }, []) ?? friendlyModelName(model);
   return providerDisplay(run.provider ?? "");
 }
 

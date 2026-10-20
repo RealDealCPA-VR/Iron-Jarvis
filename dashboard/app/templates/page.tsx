@@ -41,7 +41,7 @@ import { PageGrid } from "@/components/PageGrid";
 // workflow editor's own label map covers only its five agents, so "guide" or
 // "maintainer" used to read as raw lowercase ids here.
 import { agentLabel } from "@/lib/agentWorlds";
-import { modelPickTitle, modelPickWords } from "@/lib/onboarding";
+import { modelPickTitle, modelPickWords, modelRowName } from "@/lib/onboarding";
 
 /** One thing a template needs before it can actually run (v1.128.0). */
 interface Requirement {
@@ -563,9 +563,16 @@ export default function TemplatesPage() {
                             <span title={t.agent_type}>
                               <Badge value={nameOf(t.agent_type)} tone="violet" keepCase />
                             </span>
+                            {/* v1.359.0 re-review: the model in words (the
+                                picker's rule), never "subscription"; the raw
+                                pair is the chip's title. */}
                             {t.provider && t.model && (
-                              <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500">
-                                <Cpu size={11} /> {t.model}
+                              <span
+                                data-testid="template-model"
+                                title={modelPickTitle({ provider: t.provider, model: t.model })}
+                                className="inline-flex items-center gap-1 text-[11px] text-zinc-500"
+                              >
+                                <Cpu size={11} /> {modelRowName({ provider: t.provider, model: t.model })}
                               </span>
                             )}
                           </div>

@@ -2013,8 +2013,9 @@ export function TerminalPane({
                     <Play size={11} /> Type it in
                   </button>
                 )}
-                <span className="text-[10px] text-zinc-600">
-                  {aiResult.provider} · {aiResult.model}
+                {/* v1.359.0 re-review: the model in words, raw pair as title. */}
+                <span className="text-[10px] text-zinc-600" title={modelPickTitle(aiResult)}>
+                  {modelPickWords(aiResult)}
                 </span>
                 {(aiResult.skills ?? []).map((s) => (
                   <span
