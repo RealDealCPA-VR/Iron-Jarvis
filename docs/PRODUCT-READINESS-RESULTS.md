@@ -1,4 +1,4 @@
-# Iron Jarvis Product-Readiness Audit: Final Report (v1.350.2, HEAD 94043cfb) and Re-audit (v1.357.0)
+# Iron Jarvis Product-Readiness Audit: Final Report (v1.350.2, HEAD 94043cfb) and Re-audits (v1.357.0, final v1.359.0)
 
 **What this report is built on.** Seven audit lanes covered sections A to O. Each lane's PARTIAL and FAIL findings were then re-checked against the code by a hostile verifier, and against the running app using read-only requests. Where the auditors and verifiers disagreed, the verifier's version is used. Claims the verifiers disproved are left out, for example the bell's "Computer-use run failed — awaiting_approval" row, which is dead code because nothing publishes that event.
 
@@ -11,6 +11,237 @@ This synthesis re-confirmed six anchors directly in the tree:
 - Both chat lanes tell every model "You run locally on the user's machine" (`chat_turn.py:5640`, `routes/chat.py:2954`).
 
 The checklist has **213 items: 41 PASS, 169 PARTIAL, 3 FAIL.**
+
+---
+
+## 0d. Final re-audit (v1.359.0, 2026-10-19)
+
+**What was re-checked, and how.** Nine build waves (v1.351.0 to v1.359.0) have now shipped 83 of the 86 gaps in section 9. The owner chose not to build G83, G85 and G86. Waves 8 and 9 (sections 0b and 0c) worked through the 14 regressions and 8 partly met gaps that the v1.357.0 re-audit (section 0) found.
+
+Seven re-audit lanes then re-marked all 213 checklist items against the code at HEAD `02bd7c83` (v1.359.0). The lanes used the same groups as before: A-B, C-D-O, E-J, F-K, G-N, H-I-M and L. Each lane:
+- re-read the code behind every item and every gap in its sections, and checked each gap against its acceptance;
+- ran the pinned tests for its areas one file at a time. All were green: for example 289 pytest and 358 vitest tests for A-B, and 234 pytest and 233 vitest tests for G-N;
+- sent read-only GET requests to the running app. It still reports v1.354.0, so live checks cover waves 1 to 4 only;
+- ran read-only probes where reading the code was not enough. Lanes probed the Connect-door matcher, the tool selector (side by side with v1.350.2) and the failure-words classifier.
+
+This synthesis then checked the lanes' surprising and contested claims directly in the tree. Every one held:
+- **The two desktop notices for one failed schedule.** Read in `NotificationBell.tsx`, `platform.py` and `comm/integrations.py`.
+- **The false Connect doors and the Outlook case.** Re-run through `connect_offers` at HEAD.
+- **The Guide rule firing on unrelated how-to questions.** Re-run through `select_auto_tools`.
+- **Seven claims read at the lines the lanes cited:** the "reads anywhere" words, the grey helper-run verdict, the armed delete press, the Status map's "tool packs", the custom endpoint's missing label (`chat_turn.py:1453-1455`), the import placeholder (`addPackWords.ts:49-53`) and Help's stale catch-all.
+
+Where lanes proposed different scores for a category, I used the median, rounded down, as in section 0. Lanes disagreed about three gaps: G49, G61 and G76. For each I kept the stricter verdict, because the code supports it (see 0d.4).
+
+### 0d.1 Overall score: **74 / 100** (55 at the first audit, 70 at the v1.357.0 re-audit)
+
+The twelve categories now average 75.1. I score 74, one point lower, for two reasons:
+- **Several of the larger pieces have never run against the real service:** Microsoft 365, GitHub's remote server, the Gemini key, the task door between two PCs, `rest_call`, LM Studio and Ollama.
+- **The newest waves are not on the user's install.** It runs v1.354.0. v1.355.0 to v1.358.0 are published. v1.359.0 is pushed, and its Tests and Release runs were still going when this was written.
+
+152 of 213 items now pass, up from 41 at the first audit and 130 at v1.357.0. None fail. 79 of the 83 built gaps meet their acceptance in the code.
+
+The problems section 0 named are fixed in the code:
+- The Schedules row leads with Needs you, Part failed or Failed, and a scheduled workflow parked on a question reads Needs you.
+- Web research that names an app reaches the web again.
+- Chat picks the 24 tools of an app that fit the message, so GitHub's pull-request tools stay in reach.
+- A failure names its provider ("Claude Code didn't answer in time").
+- One helper run shows one receipt, with a plain step-by-step log.
+- The desktop shell says "Iron Jarvis".
+- The Directory's built-ins and its "N connected" count agree with its cards.
+- Emergency stop also stops a scheduled workflow that is waiting on a question.
+
+What holds the score at 74 is a shorter list of narrower problems:
+- **Background failures.** A failed unattended run raises no OS notification while the app sits in the tray. While a window is open, it raises two.
+- **The user's own machine is never named.** A reply from their model server says "local", never which machine.
+- **False Connect offers.** The new Connect door offers to connect Stripe for "stripe the table rows" and Postgres for a question about Postgres. It offers Gmail to an Outlook user.
+- **Raw failure text.** A failure the word table does not recognise still reads as raw CLI text on the run page, the Schedules row and the bell.
+- **Terminal sign-in steps.** The Connections Rescan note and Jarvis's own health answers still tell a signed-out user to open a terminal.
+- **Setup still needed.**
+  - Gmail and Google Drive still need a Google developer setup.
+  - A user with no key and no CLI still needs Ollama and a model download of about 2 GB (G86, the owner's call).
+
+### 0d.2 Category scores
+
+| Category | First audit | v1.357.0 | Now | Why |
+|---|---|---|---|---|
+| Action clarity | 60 | 77 | 83 | Schedules, missions, helper runs, the work line and the browser sidebar lead with the ledger's verdict from one status table, and a helper run has one receipt. The chat line still names the model but not the harness or, for the user's own model server, the machine. @-agent replies say only "from X · time", and a Build pane can only say "take a look". One failed schedule raises two notices in different words. |
+| Execution visibility | 62 | 76 | 78 | Running now, the bell's rule and replay, the waiting-chat notice and the step-by-step log all work. Three cases are still silent: a failed unattended run while the app is in the tray, a chat ask while the user is on another page of the same window, and a helper run that ends after the user left its chat (unread dot only). |
+| Connections | 42 | 58 | 66 | Fixed since v1.357.0: GitHub's tool ranking, the Directory's built-ins and count, Microsoft 365's sign-in state, key checks on save, LM Studio and llama.cpp detection, and a Jarvis-to-Jarvis setting. Still open:<br>• Gmail and Drive need a Google developer setup.<br>• Slack is two unrelated things.<br>• There is no single Connected view, and two model-server forms remain.<br>• Continue follows only a token saved in the chat's own card.<br>• Phone chat cannot use a connected app it is told about.<br>• The new Connect door misfires. |
+| Import/discovery | 45 | 74 | 76 | The scanner, the off and already-here states, vaulted secrets and an outcome that names the real Tools menu all hold, and local model servers are detected. Nothing appears at first run. Every server outside the catalog reads only "A tool from <app>". |
+| First-run experience | 52 | 70 | 74 | The release page explains the download, the empty chat shows the machine check, the confirmation uses the pressed words and the demo says what it is. Every local model server is one press. Still missing: a path for a user with no key or CLI (G86). Sign-in and the model download happen in a terminal pane, most apps need developer credentials, and the Rescan note says to open a terminal. |
+| Error/recovery UX | 60 | 70 | 75 | Chat, the Build pane, banners, the bell, Status and Schedules give a plain headline, folded detail, a fix and a "not affected" line. Recovery is announced. Four things still fall short:<br>• Unrecognised failures read raw outside chat.<br>• The terminal sign-in steps survive in three places.<br>• Pack fixes point at a "Connected packs" section that does not exist.<br>• Help's catch-all points at a removed card. |
+| Consistency | 40 | 60 | 68 | One status table, one approval vocabulary, one helper-run receipt and calm badges are real. Still inconsistent:<br>• Receipts are separate components.<br>• The Session board files stopped runs under red "Failed".<br>• 73 files keep boxed red notes.<br>• Asks come in four layouts.<br>• One model is "Your model server" in the menu and "fleet" on the receipt.<br>• One schedule failure reads "could not finish", "FAILED" and "Failed".<br>• The chat line reads "Ran history_search" where the run log says "Searched your chats". |
+| Discoverability | 50 | 63 | 65 | Everything is tiered, phone chat and self-care can be found, how-do-I questions reach the Guide, and naming an unconnected app leaves its Connect door. Chat never suggests a mission. "what are missions", "what is build for" and "what apps can you work with?" arm nothing, and "summarize my latest emails" reaches for web search. |
+| Beginner friendliness | 45 | 63 | 69 | "Daemon" is gone from the desktop shell, and model rows, Connections and Secrets read in words. Still in jargon: the chat preflight prints "claude-cli" with a terminal recipe, the Status map says "tool packs" and "panes", extension failures say "the pack", and the nav keeps Sentinels, Reflexes and Artifacts. |
+| Trust | 55 | 70 | 76 | Emergency stop stops self-started work, including parked workflows. No model is told it runs locally. Reading is disclosed and can be limited, and every ask says who, why and whether it can be undone. Gaps: the run page and mission screen never say local or cloud, and the user's own model server is never named. The approval chip says "reads anywhere" after reading is limited. |
+| Stability | 85 | 92 | 93 | All 14 stability items pass. Small gaps: an @-agent round has no Stop, and a failed unattended run raises no OS toast while the app is in the tray. |
+| Marketplace/capability readiness | 58 | 76 | 78 | One catalog and one add/remove door, with permissions, On/Off, repair, a sign-in state and key checks carried as data. Models, agents, channels, web services and local servers keep their own row shapes. A refused key reads green again after a restart, because key verdicts live in memory. Intent matching is by name only, works only on the chat page, and now shows false Connect doors. |
+
+Where lanes disagreed (median, rounded down):
+- **Connections:** 70 from C-D-O and 62 from F-K. F-K judged from the chat side and counted the phone lane and the Continue limits.
+- **Error/recovery:** between 72 and 78 across five lanes.
+- **Execution visibility:** between 78 and 80.
+- **Consistency:** between 67 and 70.
+- **Action clarity:** 82 and 84.
+- **Beginner friendliness:** 68 and 70.
+- **Discoverability:** 65 and 66.
+
+The other five categories were scored by one lane each.
+
+### 0d.3 PASS / PARTIAL / FAIL (first audit → v1.357.0 → now)
+
+| Section | Items | PASS | PARTIAL | FAIL |
+|---|---|---|---|---|
+| A. Actions self-evident (incl. 12 surfaces) | 33 | 3 → 13 → 24 | 30 → 20 → 9 | 0 → 0 → 0 |
+| B. Execution receipt | 24 | 10 → 22 → 23 | 14 → 2 → 1 | 0 → 0 → 0 |
+| C. Connections | 21 | 2 → 10 → 12 | 17 → 11 → 9 | 2 → 0 → 0 |
+| D. Import | 16 | 1 → 13 → 14 | 15 → 3 → 2 | 0 → 0 → 0 |
+| E. First run | 11 | 1 → 5 → 6 | 10 → 6 → 5 | 0 → 0 → 0 |
+| F. Natural-language discovery | 6 | 0 → 0 → 1 | 6 → 6 → 5 | 0 → 0 → 0 |
+| G. Error & recovery | 10 | 4 → 7 → 8 | 6 → 3 → 2 | 0 → 0 → 0 |
+| H. Consistency | 15 | 2 → 9 → 9 | 13 → 6 → 6 | 0 → 0 → 0 |
+| I. Engine room | 14 | 2 → 10 → 12 | 11 → 4 → 2 | 1 → 0 → 0 |
+| J. Discoverability | 5 | 0 → 2 → 2 | 5 → 3 → 3 | 0 → 0 → 0 |
+| K. Trust | 11 | 1 → 5 → 8 | 10 → 6 → 3 | 0 → 0 → 0 |
+| L. "Did it work?" | 14 | 2 → 9 → 8 | 12 → 5 → 6 | 0 → 0 → 0 |
+| M. "What does this mean?" | 8 | 0 → 3 → 3 | 8 → 5 → 5 | 0 → 0 → 0 |
+| N. Stability | 14 | 11 → 14 → 14 | 3 → 0 → 0 | 0 → 0 → 0 |
+| O. Marketplace readiness | 11 | 2 → 8 → 8 | 9 → 3 → 3 | 0 → 0 → 0 |
+| **Total** | **213** | **41 → 130 → 152** | **169 → 83 → 61** | **3 → 0 → 0** |
+
+Notes on the counts:
+- **Source.** Every count comes from the lanes' item-by-item marks. No lane missed an item, so no old status was carried forward, and each lane's summary agrees with its own marks.
+- **L has one PASS fewer than at v1.357.0 (9 → 8).** The v1.357.0 lanes' item marks are not kept in this report, so the item that moved cannot be named. Each of L's six PARTIAL marks points to a gap that is in the code today:
+  - Build panes say only "take a look".
+  - Rarer built-in tools show raw ids.
+  - Approving an agent-browser step resumes nothing until the agent tries again.
+  - A remote task has no end state.
+  - Nothing reaches the user from the tray.
+  - Rarer approval asks use raw ids.
+
+  None of them is a fix that was undone. The closest to a step back is the grey helper-run verdict (regression 5).
+- **H, J, M, N and O** have the same counts as at v1.357.0.
+- **One cause, three items.** A "Which machine/node", B "Machine/node" and K "Which machine" are all PARTIAL because `route_label` names only `fleet-*` providers (`chat_turn.py:1453-1455`).
+- **B "Harness" passes while A "Which agent/harness" is PARTIAL**, as before. The harness is recorded and named on the run page, but never in words on the chat line.
+
+### 0d.4 Gaps whose acceptance is not fully met
+
+79 of the 83 built gaps meet their acceptance. These 4 are partly met:
+
+| Gap | What works now | What remains |
+|---|---|---|
+| G21 Replies say where they ran | A fleet node's reply says "on <label>", Claude's says "· cloud", and the menu badges say "on your plan" / "pay per use". | `route_label` names only `fleet-*` providers (`chat_turn.py:1453-1455`). The user's default route is custom/fleet, so a reply from their DGX box reads "answered by fleet · local", never "on DGX Spark", although the mission screen and run page name the same box. The run page never says local or cloud. |
+| G49 Import explains itself | The sources door comes first, the command sits under Details, and the outcome lists tool names and names Tools › Connections. | A server outside the catalog reads only "A tool from <app>" (`lib/addPackWords.ts:49-53`). Live, all six servers found on this PC read that way. Lane H-I-M called it met; lane C-D-O called it partly met, because the acceptance asks for a one-line description of each found tool. The stricter verdict stands. |
+| G61 Remote Jarvis node | A token-guarded task door, one low-trust run per task and one reply home from every ending. A "reach this Iron Jarvis from my network" setting is applied at every start, and the register form picks the task API itself. Tested with two real app factories on one machine. | Never run on two physical PCs, which is what the acceptance names. A Windows Firewall block of the newly listening app is neither detected nor explained. Both PCs need the setting on and a restart before a reply can come home. Section 0b counted it "met in code"; two lanes here call it partly met. |
+| G76 One vocabulary | `VOCABULARY.md` is the canon. One scan covers every dashboard string, and a second covers `main.js`, the schema and a fixed list of daemon files. | The backend scan is a fixed file list, so daemon sentences outside it still reach users:<br>• the Status map's "4 of 4 tool packs running." and "0 open panes" (`system_map.py:258, 701-703`; live on v1.354.0);<br>• extension failure reasons such as "the pack's server couldn't be reached", whose fix points at "Tools → Connected packs" (`mcp/tools.py:767, 784`), while the section is titled "Connected extensions";<br>• Directory memory cards: "A memory brain…" (`connectors/service.py:717-752`);<br>• "plug-in tools" (`routes/agents.py:4203-4206`).<br>Section 0b counted it met. |
+
+Met, with remainders worth knowing:
+- **G03 / G05 (the bell and waiting chats).** A failed unattended run raises no OS toast while the app is in the tray (`comm/channels.py:255-270`). A chat waiting for an OK while the user is on another page of the same window is listed nowhere but the sidebar's dot (`routes/chat.py:1042-1046`).
+- **G15 (connect in chat and continue).** Continue appears only for a token saved in the chat's own card. It does not appear for a Pixio key, or for an app connected in Settings.
+- **G22 / G24 (tool and approval words).** About 40 built-ins have words on the chat line and approval card. The rest read "Ran guide_search" and "run assign_work" (`lib/workTarget.ts:56-107`; `lib/approvalWords.ts:69-71`).
+- **G28 (failures in plain words).** Failures the classifier does not recognise fall back to raw text outside chat (`failure_words.py:584-597`).
+- **G33 (sign in from Accounts).** The Accounts rows have Sign in. The same card's Rescan note still prints the terminal recipe in a green success note (`routes/connections.py:1031`).
+- **G39 (chat knows apps by name).** Arming happens only on the chat page (the stream lane) and only by app name. The phone lane is told an app is connected but gets none of its tools.
+- **G41 (refusals leave a fix button).** The Connect door misfires (regressions 2 and 3).
+- **G81 (limit which folders Jarvis reads).** The approval words still say "reads anywhere" after reading is limited (regression 4).
+
+### 0d.5 Regressions found
+
+1. **Two desktop notices for one failed or needs-you scheduled run while a window is open** (v1.351.0, G03). Confirmed by reading the code; not reproduced live.
+   - The bell's unattended rule pings "Your schedule X could not finish" (`NotificationBell.tsx:298-336, 1879-1888`).
+   - The schedule's own This PC delivery also toasts "Schedule “X”: FAILED — The run failed: …" (`platform.py:1821-1842`; `comm/integrations.py:174-177`; DesktopNotifyBridge).
+   - A failed scheduled workflow also rings two bell rows (`NotificationBell.tsx:407-427`).
+2. **The v1.359.0 Connect door misreads everyday and research sentences** (G41). Confirmed by running `connect_offers` at HEAD:
+   - "stripe the table rows" offers "Connect Stripe in Settings";
+   - "explain how postgres indexes work" offers Postgres;
+   - "the sentry stood guard at the gate in my story" offers Sentry.
+
+   Before v1.359.0 these only armed `app_connect`, which the model could ignore. Causes: `app_names.py:130-141` (`_NOT_THE_APP` does not cover these words), `:249` (`_HOW_TO_RX` needs "how to/do/does"), and `:316-359` (`_for_own_data` defaults to the user's own data).
+3. **An Outlook user is offered Gmail.** With Microsoft 365 connected and Gmail not, "check my inbox" and "what's in my email today" put "Connect Gmail in Settings" under the reply. The apps section tells the model "Gmail: not connected", and Microsoft 365's tools are not armed. Confirmed by probe. The matcher is older (`app_names.py:101-110`); the visible door is new in v1.359.0.
+4. **"Reads files anywhere on this PC without asking" after reading is limited** (v1.356.0, G81). `READS_LINE` (`lib/permissionLevels.ts:34`) is in all three level descriptions. The chat's approval chip shows it, and so does the Access summary's Approval level row, directly under a Reading files row that says Jarvis reads only the chosen folders.
+5. **Plausible: a helper run's verdict lost its colour and can be cut off** (v1.358.0, one receipt). Not checked at phone width.
+   - The paired reply drops the card's red "Failed" or amber "Part failed" headline (`RunResultCard.tsx:416-470`).
+   - The verdict is now the last words of the settled row's grey span, which truncates and has no title (`AgentRunRow.tsx:121-137, 394-402`). A narrow window cuts "· failed" first.
+   - The agent's own chat line still says a failure in words.
+6. **Minor: the Guide rule fires on unrelated how-to questions** (v1.353.0, G38). "how do I connect my printer to wifi", "how do I send a wire transfer" and "how do I install node" now arm `guide_search`, `app_search` and `app_status`. At v1.350.2 they armed nothing. Not run against a live model.
+7. **Minor, carried since v1.356.0: the armed "Clean up now?" press on Sessions is still grey.** Its caller forces `!text-zinc-400` (`app/sessions/page.tsx:340-346`). Wave 8 fixed only the "Clear finished…" button beside it.
+8. **Minor, deliberate (v1.359.0): one model, two names.** The model menu calls the user's own server "Your model server" (`lib/onboarding.ts:313-322`). The reply, the helper row and card, and the run page call the same pick "fleet" (`lib/answeredModel.ts:33-46`).
+
+None of the waves added boxed cards or literal colours to the calm chat. The new pieces are plain lines and folds in theme tone tokens.
+
+### 0d.6 Engine-room leaks remaining
+
+On paths a typical user reaches:
+
+| Where | What the user sees |
+|---|---|
+| `providers/cli_auth.py:50-58` (SIGN_IN_FIX). Shown after Rescan on Settings › Connections, inside a green success note (`routes/connections.py:1031`; `ConnectionsPage.tsx:2164-2173`). Also on the welcome card's Optional extras (`onboarding/doctor.py:742-747`), in Jarvis's own health answers and in the use-model refusal (`routes/settings.py:96`). | "Claude Code isn't signed in. Open a terminal, run `claude`, then `/login`, then click Test on Connections." |
+| `components/chat/PreflightNote.tsx:50-68` (above the composer); `components/agents/mission/MissionComposer.tsx:41-80` | "claude-cli is installed but not signed in… Run `claude` in a terminal, then /login"; "Your default model, fleet-custom, isn't reachable right now." |
+| `providers/failure_words.py:584-597` (raw fallback) on the run page, Schedules row and bell | "The run failed: codex-cli: CLI exited 1: error: unexpected status 400 Bad Request: model is not supported" |
+| `lib/workTarget.ts:56-107`; `lib/stepWords.ts:184` (chat work line and receipt) | "Ran guide_search", "Ran remember_preference", "Ran history_search", counted as "ran 1 tool". The run log words the same tools ("Searched your chats"). |
+| `lib/approvalWords.ts:69-71`; `components/chat/ApprovalCard.tsx:241-244`; `desktop/main.js:2871-2872` | "The assistant wants to run pack_restart", "run assign_work"; the desktop toast says "use pack restart" |
+| `daemon/routes/system_map.py:258, 701-703` (Everything › Status; live on v1.354.0) | "4 of 4 tool packs running.", "0 open panes" |
+| `mcp/tools.py:705-790` (Directory card and Tools row reasons) | "the pack's server couldn't be reached", "…on Tools → Connected packs, then press Retry." The section is titled "Connected extensions". |
+| `connectors/service.py:717-752` (Directory memory cards) | "A memory brain served by a tool you added.", "An external RAG service.", "A custom memory source." |
+| `app/help/page.tsx:560-575` (Help › Something else?) | "The System health card on the Overview (switch on Advanced at the bottom of the nav)". Neither exists any more. |
+| `components/settings/pages/ToolsPage.tsx:1672-1675` | "Extensions add bigger abilities — files, repositories, memory", while the Directory lists files as built in |
+| `lib/nav.ts:249, 284, 415` | "Sentinels", "Reflexes", "Artifacts" |
+| `lib/answeredModel.ts:33-46`, run page (the user's own endpoint) | "answered by fleet", "Ran on fleet", "DGX Spark · fleet", where the menu says "Your model server" |
+| `daemon/routes/agents.py:4203-4206` | "…so autonomous agents may use plug-in tools without asking" |
+| `app/schedules/page.tsx:1040-1046`; `app/sessions/page.tsx:288` | "open session"; "No orphaned worktrees to prune." |
+
+Advanced or rare paths:
+
+| Where | What the user sees |
+|---|---|
+| `lib/addPackWords.ts:41` | "HTTP server" (the third add door) |
+| `components/agents/SetupCard.tsx:1879-1881, 2377-2379` | "http-task (task API)", "openai-chat (chat/completions)" for an address that is not a task door |
+| `connections/RestHookups.tsx:181-185` | A raw "Config (JSON)" box |
+| `connections/specs.py:254, 272`; `ConnectionsPage.tsx:1056-1059` | Google Cloud / Entra OAuth client steps; "<provider>_oauth_client_id" |
+| `components/memory/baseCatalog.ts:96-99`; `settings/pages/LegacySettingsForm.tsx:569-575` | "An MCP memory server … Claude-Desktop-style config"; "MCP integrations" |
+| `connections/EndpointModelPicker.tsx:65` | "Server type: OpenAI-compatible / Anthropic-compatible", always shown |
+| `daemon/routes/settings.py:936` | "ollama pull llama3.2" |
+| `mcp/tools.py:752-755` | "Restart Iron Jarvis from a terminal that can run npx…" |
+| `computeruse/tools.py:271-277`; `settings/pages/BrowserPage.tsx:240` | "Pending approval id=<id>."; "run ad-hoc" |
+| `app/terminals/page.tsx:1072, 1375`; `MoodOrb.tsx:58-60, 205`; `StatusOverview.tsx:308` | "Attaching to sessions…", "this terminal has no cwd", "Thinking — a session is in flight", "· stream offline" |
+| `comm/channels.py:289`; `desktop/main.js:3962` | "(daemon not up)"; "Iron Jarvis — dashboard did not start" |
+| `TurnReceipt.tsx:1086-1090` (expanded receipt) | "(default)", "(prompted-tools)", "auto-tier", "context 43%". Acceptable as Level 2 detail. |
+
+Until it updates, the user's install (v1.354.0) also still shows the Status-map words fixed in v1.356.0: "Ready: anthropic, claude-cli, codex-cli, custom".
+
+### 0d.7 Not built, by the owner's decision
+
+- **G83, curated directory feed.** `connectors/catalog.py` is still the only source of Directory cards. Because there is one catalog, a feed added later would only add rows to it.
+- **G85, desktop-control pack.** Jarvis cannot click around other desktop apps. Settings says so plainly ("Your browser add-on and the agent browser."), so nothing over-promises.
+- **G86, bundled local model.** A user with no API key and no signed-in CLI still has to install Ollama and download a starter model of about 2 GB before the first real answer. The one-press Ollama and the download button shorten that path, but not to five minutes. This is now the largest single gap to the checklist's five-minute first run.
+
+### 0d.8 Never proven live
+
+- **Microsoft 365.** Nobody has signed in to Microsoft through it. The tests use a stand-in that lists the real server's tool names (`tests/test_microsoft_365_v13560.py`).
+- **Another Jarvis (the task door and the network setting).** Tested with two real app factories on one machine. Never tried on two physical PCs, and the Windows Firewall prompt on the first network listen is unverified.
+- **`rest_call`.** Never run against a real CRM or any real service. It takes bearer keys only.
+- **GitHub's maintained remote server.** Never connected live. The tool ranking was tested with the tool names from GitHub's README.
+- **Gemini API key.** There is no key on this PC, so Google has never answered through it.
+- **Ollama, LM Studio and llama.cpp.** None is installed here. The one-press use, the detection and the starter-model download are verified in code and tests only.
+- **Slack.** `@zencoderai/slack-mcp-server` 0.0.1 has never been run against Slack.
+- **Smaller pieces.** The mission cost note has never been seen against a real priced mission, the context refit has never triggered live, and Open folder (a POST) was not exercised live.
+- **Waves 5 to 9 overall.** v1.355.0 to v1.359.0 were judged from code and tests. The running app is v1.354.0, and the newest published release is v1.358.0. v1.359.0 is pushed (`02bd7c83`), and its Tests and Release runs were in progress when this was written.
+
+### 0d.9 Verdict
+
+Iron Jarvis is now a product a general user can live in day to day. The first audit's worst problems are gone from the code: false "ok" and "Done", silent unattended failures, green badges on broken packs, "daemon" on the screen, raw tool ids in chat, two receipts for one run, and an Emergency stop that did not stop. Schedules, missions, helper runs, the bell, the Directory and the error lines now say what chat says. 152 of 213 items pass, none fail, and 79 of the 83 built gaps meet their acceptance.
+
+It is not finished. 61 items are still PARTIAL. The problems left are narrower, but users will meet them:
+- failed background work that is silent in the tray and doubled while a window is open;
+- Connect doors offered for everyday words, and Gmail offered to an Outlook user;
+- a reply from their own model server that never names the machine;
+- raw CLI text for failures the word table does not know;
+- terminal sign-in instructions after Rescan;
+- "reads anywhere" shown after reading is limited.
+
+The most valuable next wave would fix those six, put the custom endpoint's label on the receipt, and widen the backend vocabulary scan to every user-facing daemon sentence.
+
+After that, the largest remaining steps are not code. One is proving Microsoft 365, GitHub's server, the Gemini key and the two-PC task door against the real thing. The other is the owner's decision on G86. Without a bundled model, someone with no key and no CLI cannot reach a real answer in five minutes.
 
 ---
 
