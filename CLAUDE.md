@@ -3579,7 +3579,11 @@ does not need a bump, stop and bump it.
   never "ok" under a bell saying "needs you"). The helper row's verdict sits
   OUTSIDE its truncating span in a tone token (`AgentRunRow.settledRunParts`).
   CHAT (10B, MIRROR NOTE): `connectors/app_names` defaults to NOT own data —
-  `connect_offers` needs an own-data signal; mail/calendar words resolve to
+  `connect_offers` needs an own-data signal (re-review: an acting verb's
+  object is the app ITSELF only when the end, a joining word or a kept thing
+  follows it — `_acts_on_app(clause, after)` — so "remove the GitHub link
+  from the footer" offers no door; `tests/test_rereview_wave10_v13600.py`);
+  mail/calendar words resolve to
   the CONNECTED app of that kind (`resolve_kinds`, wired into
   `_gather_grounding` for both lanes), else ONE door naming both mail
   choices; "my calendar" with none offers nothing; the door's href is

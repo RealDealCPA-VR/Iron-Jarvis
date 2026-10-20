@@ -511,12 +511,14 @@ _EXPLAIN_RX = re.compile(
 _DATA_NOUN_RX = re.compile(
     r"\A(?:['’]s)?\s+(?:accounts?|inbox(?:es)?|mailbox(?:es)?|mail|e-?mails?|messages?|threads?"
     r"|chats?|dms?|channels?|workspaces?|files?|folders?|docs?|documents?|pages?|notes?"
-    r"|notebooks?|databases?|tables?|rows?|records?|entries|repos?|repositories|projects?"
+    r"|notebooks?|databases?|dbs?|tables?|rows?|records?|entries|repos?|repositories|projects?"
     r"|issues?|pull\s+requests?|prs?|branches|commits?|invoices?|payments?|payouts?|charges?"
     r"|customers?|subscriptions?|refunds?|transactions?|balance|events?|meetings?|appointments?"
     r"|calendar|contacts?|tasks?|boards?|cards?|errors?|alerts?|logs?|photos?|pictures?"
     r"|images?|scans?|uploads?|attachments?|storage|space|data|drive|templates?|wiki"
-    r"|bookmarks?|history|settings)\b",
+    # v1.360.0 re-review: what an app shows the user about their own account
+    # ("check my Stripe dashboard", "my GitHub notifications").
+    r"|bookmarks?|history|settings|dashboards?|notifications?|mentions?)\b",
     re.IGNORECASE,
 )
 #: What may follow "my <app>" when the app ITSELF is what the user owns ("my
@@ -570,12 +572,24 @@ _ASKS_IN_RX = re.compile(
 )
 
 
-def _acts_on_app(clause: str) -> bool:
+def _acts_on_app(clause: str, after: str) -> bool:
     """Does *clause* (the words before the app) open with an acting verb
     whose object is the app itself ("search ", "show me the ", "summarize
-    my ")? Pure."""
+    my ")? Pure.
+
+    v1.360.0 re-review: the object is the app ITSELF only when nothing but
+    the end, punctuation or a joining word follows it ("search github for
+    issues", "open Notion") or a thing kept in it does ("show me the Slack
+    messages") — the possessive rule's own test. An app name followed by any
+    other word is a modifier of that word, so "remove the GitHub link from
+    the footer", "update the Slack logo", "review the Postgres migration"
+    and "share our GitHub launch post" are about a link, a logo, a migration
+    and a post, never the user's data in the app (each offered its Connect
+    door)."""
     m = _ACT_HEAD_RX.match(clause)
-    return m is not None and _OBJECT_GAP_RX.fullmatch(clause[m.end():]) is not None
+    if m is None or _OBJECT_GAP_RX.fullmatch(clause[m.end():]) is None:
+        return False
+    return _PHRASE_END_RX.match(after) is not None or _DATA_NOUN_RX.match(after) is not None
 
 
 def _for_own_data(t: str, start: int, end: int, blanked: str) -> bool:
@@ -655,7 +669,7 @@ def _for_own_data(t: str, start: int, end: int, blanked: str) -> bool:
     acting = _ACT_HEAD_RX.match(clause) is not None
     if acting and _TO_FROM_APP_RX.search(clause):
         return True
-    if _acts_on_app(clause):
+    if _acts_on_app(clause, after):
         return True
     if _DATA_NOUN_RX.match(after) and (acting or _ASKS_IN_RX.search(sentence)):
         return True
