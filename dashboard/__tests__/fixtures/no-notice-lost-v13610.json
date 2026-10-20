@@ -1,0 +1,205 @@
+{
+  "_about": "v1.361.0 lane 11A: what the REAL daemon publishes for a failed workflow (tests/test_no_notice_lost_v13610.py writes it with IJ_REGEN_NO_NOTICE_LOST=1; dashboard/__tests__/no-notice-lost-v13610.test.tsx feeds it through the real bell). `audit` is GET /audit's answer (newest first), ids and times made stable.",
+  "retried_then_tool_failed": {
+    "events": [
+      {
+        "type": "workflow.completed",
+        "session_id": null,
+        "payload": {
+          "workflow": "Nightly",
+          "status": "failed",
+          "run_id": "wfrun_01",
+          "sessions": [
+            "session_02",
+            "session_03"
+          ],
+          "failed_session": ""
+        }
+      },
+      {
+        "type": "session.completed",
+        "session_id": "session_03",
+        "payload": {
+          "status": "completed",
+          "summary": "Wrote the summary.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": "completed"
+        }
+      },
+      {
+        "type": "session.completed",
+        "session_id": "session_02",
+        "payload": {
+          "status": "failed",
+          "summary": "The inbox could not be reached.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": null
+        }
+      }
+    ],
+    "audit": [
+      {
+        "id": "evt_04",
+        "ts": "2026-10-20T03:00:03",
+        "type": "workflow.completed",
+        "kind": "action",
+        "actor": "workflow.completed",
+        "session_id": null,
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "workflow.completed",
+        "payload": {
+          "workflow": "Nightly",
+          "status": "failed",
+          "run_id": "wfrun_01",
+          "sessions": [
+            "session_02",
+            "session_03"
+          ],
+          "failed_session": ""
+        }
+      },
+      {
+        "id": "evt_05",
+        "ts": "2026-10-20T03:00:02",
+        "type": "session.completed",
+        "kind": "lifecycle",
+        "actor": "workflow:Nightly",
+        "session_id": "session_03",
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "session.completed",
+        "payload": {
+          "status": "completed",
+          "summary": "Wrote the summary.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": "completed"
+        }
+      },
+      {
+        "id": "evt_06",
+        "ts": "2026-10-20T03:00:01",
+        "type": "session.completed",
+        "kind": "lifecycle",
+        "actor": "workflow:Nightly",
+        "session_id": "session_02",
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "session.completed",
+        "payload": {
+          "status": "failed",
+          "summary": "The inbox could not be reached.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": null
+        }
+      }
+    ]
+  },
+  "halted_by_agent_step": {
+    "events": [
+      {
+        "type": "workflow.completed",
+        "session_id": null,
+        "payload": {
+          "workflow": "Nightly",
+          "status": "failed",
+          "run_id": "wfrun_01",
+          "sessions": [
+            "session_02"
+          ],
+          "failed_session": "session_02"
+        }
+      },
+      {
+        "type": "session.completed",
+        "session_id": "session_02",
+        "payload": {
+          "status": "failed",
+          "summary": "The inbox could not be reached.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": null
+        }
+      }
+    ],
+    "audit": [
+      {
+        "id": "evt_03",
+        "ts": "2026-10-20T03:00:02",
+        "type": "workflow.completed",
+        "kind": "action",
+        "actor": "workflow.completed",
+        "session_id": null,
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "workflow.completed",
+        "payload": {
+          "workflow": "Nightly",
+          "status": "failed",
+          "run_id": "wfrun_01",
+          "sessions": [
+            "session_02"
+          ],
+          "failed_session": "session_02"
+        }
+      },
+      {
+        "id": "evt_04",
+        "ts": "2026-10-20T03:00:01",
+        "type": "session.completed",
+        "kind": "lifecycle",
+        "actor": "workflow:Nightly",
+        "session_id": "session_02",
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "session.completed",
+        "payload": {
+          "status": "failed",
+          "summary": "The inbox could not be reached.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": null
+        }
+      }
+    ]
+  }
+}

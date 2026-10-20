@@ -365,9 +365,18 @@ def test_an_agent_ask_is_one_notice_on_this_pc(tmp_path, desktop_sink):
 
 def test_the_bells_count_ping_is_the_main_windows_only():
     """The "N pending" ping skips a popped-out window like the activity ping
-    does: one notice per ask on this PC, never once per window."""
+    does: one notice per ask on this PC, never once per window.
+
+    v1.361.0 (lane 11A, moved on purpose): this pin read the v1.360.1 gate
+    ``!inPopout()``, which silenced EVERY pop-out — with the main window in
+    the tray most notices then raised no toast at all (the final hunt's
+    regression 1). The gate is now "a window that does not speak":
+    the main window while it is open, else the one pop-out the desktop app
+    names. Behaviour pinned in tests/test_no_notice_lost_v13610.py and
+    dashboard/__tests__/no-notice-lost-v13610.test.tsx."""
     bell = BELL.read_text(encoding="utf-8").replace("\r\n", "\n")
-    assert "if (count > prev && !inPopout()) {" in bell
+    assert "if (count > prev && !quietHere()) {" in bell
+    assert "!inPopout()" not in bell
 
 
 # --------------------------------------------------------------------------- #

@@ -2131,7 +2131,11 @@ function createMainWindow() {
 
   mainWin.on("closed", () => {
     mainWin = null;
+    // v1.361.0 (lane 11A): closed to the tray, ONE pop-out speaks for the app.
+    announcePopoutSpeaker();
   });
+  // v1.361.0 (lane 11A): the main window speaks again; every pop-out is quiet.
+  announcePopoutSpeaker();
 
   // A frozen or crashed renderer must self-heal, never strand the user
   // (v1.130.0). Attached per-creation: hide-to-tray destroys the window and
@@ -3118,6 +3122,9 @@ function runOutcomeNotice(entry) {
       body: "The Workflows page shows which step stopped.",
       href: "/workflows",
       covers,
+      // v1.361.0 (lane 11A): the run of the step that ENDED it ("" = a step
+      // with no run of its own); absent on an event an older build wrote.
+      ...(typeof p.failed_session === "string" ? { endedBy: p.failed_session } : {}),
     };
   }
   if (entry.type !== "session.completed") return null;
@@ -3164,7 +3171,11 @@ function runOutcomeBounded(map) {
 // open (`windowSeenAt`, ms: the bell pinged it). A failed workflow and its
 // failed step are ONE notice: in one read the workflow's stands in for the
 // step's; across reads a step already announced (or seen while a window was
-// open) stands in for the workflow's.
+// open) stands in for the workflow's — v1.361.0 (lane 11A): only the step
+// that ENDED the run (`endedBy`, the bell's `standsInFor`); an earlier attempt
+// that failed and was retried is another outcome, so the workflow's own
+// failure is still said (an event an older build wrote names no step: any
+// covered step stands in, as in v1.360.0).
 function planRunOutcomeNotifications(state, entries, windowOpen, windowSeenAt) {
   const seen = { ...((state && state.seen) || {}) };
   const announced = { ...((state && state.announced) || {}) };
@@ -3182,7 +3193,9 @@ function planRunOutcomeNotifications(state, entries, windowOpen, windowSeenAt) {
   const notify = [];
   for (const n of fresh) {
     if (n.session && coveredHere.has(n.session)) continue; // its workflow's notice says it
-    if ((n.covers || []).some((s) => announced[s])) continue; // its step's notice said it
+    const standsIn =
+      typeof n.endedBy === "string" ? (n.endedBy ? [n.endedBy] : []) : n.covers || [];
+    if (standsIn.some((s) => announced[s])) continue; // its step's notice said it
     if (n.session) announced[n.session] = true;
     const bellHadIt = windowOpen || (windowSeenAt > 0 && n.ts > 0 && n.ts <= windowSeenAt);
     if (!bellHadIt) notify.push({ id: n.id, title: n.title, body: n.body, href: n.href });
@@ -3253,7 +3266,11 @@ function showAskNotification(item) {
 
 function installAskWatcher() {
   const tick = () => {
-    const windowOpen = !!(mainWin && !mainWin.isDestroyed());
+    // v1.361.0 (lane 11A): a window whose bell speaks — the main window, or
+    // (closed to the tray) the pop-out that speaks in its place. Keyed on the
+    // main window alone, a popped-out module's bell and this watcher both
+    // went quiet (v1.360.1) and most notices raised no toast at all.
+    const windowOpen = speakingWindowOpen();
     daemonRequest("GET", "/chat/approvals/pending", null)
       .then((res) => {
         const list = res && Array.isArray(res.approvals) ? res.approvals : null;
@@ -3287,7 +3304,7 @@ function installAskWatcher() {
       .then((res) => {
         const entries = res && Array.isArray(res.entries) ? res.entries : null;
         if (!entries) return; // nothing readable — keep what we know
-        const open = !!(mainWin && !mainWin.isDestroyed());
+        const open = speakingWindowOpen(); // v1.361.0 (lane 11A): pop-outs too
         if (open) runOutcomeWindowSeenAt = Date.now();
         const plan = planRunOutcomeNotifications(
           runOutcomeState,
@@ -4910,6 +4927,43 @@ function livePopout(route) {
   return win;
 }
 
+// WHICH WINDOW SPEAKS FOR THE APP (v1.361.0, lane 11A). Every window holds
+// its own bell (and its own events socket), and one notice must be said
+// once: the main window speaks while it is open; closed to the tray, the
+// FIRST pop-out still open speaks in its place (pure — the route, or "").
+// v1.360.1 silenced every pop-out's bell while the tray watchers keyed on
+// the main window alone, so with the main window in the tray and a module
+// popped out most notices raised no toast at all.
+function popoutSpeakerRoute(mainOpen, routes) {
+  if (mainOpen) return "";
+  const list = Array.isArray(routes) ? routes : [];
+  return list.length ? String(list[0]) : "";
+}
+
+// Tell every pop-out whether it is the one that speaks (preload.js keeps it
+// for the bell). Called whenever the main window opens or closes and a
+// pop-out loads or closes.
+function announcePopoutSpeaker() {
+  const mainOpen = !!(mainWin && !mainWin.isDestroyed());
+  const routes = popoutPaths().filter((route) => !!livePopout(route));
+  const speaker = popoutSpeakerRoute(mainOpen, routes);
+  for (const route of routes) {
+    const win = livePopout(route);
+    try {
+      if (win) win.webContents.send("popout:speaker", route === speaker);
+    } catch {
+      /* mid-teardown */
+    }
+  }
+}
+
+// Is a window open whose bell speaks for the app? The tray watchers stay
+// quiet for exactly what that bell says, and speak when no window is left.
+function speakingWindowOpen() {
+  if (mainWin && !mainWin.isDestroyed()) return true;
+  return popoutPaths().some((route) => !!livePopout(route));
+}
+
 function focusPopout(rawPath) {
   const route = normalizePopoutPath(rawPath);
   const win = route ? livePopout(route) : null;
@@ -5041,7 +5095,10 @@ function openPopout(rawPath) {
   win.on("closed", () => {
     if (saveTimer) clearTimeout(saveTimer);
     if (popouts.get(route) === win) popouts.delete(route);
+    announcePopoutSpeaker(); // v1.361.0 (lane 11A): the next one may speak now
   });
+  // v1.361.0 (lane 11A): a (re)loaded page starts quiet; tell it who speaks.
+  win.webContents.on("did-finish-load", () => announcePopoutSpeaker());
   win.loadURL(popoutUrl(route));
   return { ok: true, path: route, reused: false, secondary: !!placed.secondary };
 }

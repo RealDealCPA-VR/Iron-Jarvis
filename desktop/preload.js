@@ -32,6 +32,18 @@ function readTokenArg() {
 // a `?popout=1` in the first URL would not survive.
 const POPOUT_PATH = readArg("--ij-popout=");
 
+// v1.361.0 (lane 11A): does THIS pop-out speak for the app? Each window holds
+// its own bell; main.js names the one that pings the desktop
+// ("popout:speaker", sent whenever the main window or the set of pop-outs
+// changes): the main window while it is open, else ONE pop-out. Starts quiet
+// until main.js says otherwise, so a notice is never said twice.
+let popoutSpeaks = false;
+if (POPOUT_PATH) {
+  ipcRenderer.on("popout:speaker", (_event, speaks) => {
+    popoutSpeaks = speaks === true;
+  });
+}
+
 (function injectToken() {
   const token = readTokenArg();
   if (!token) return; // no token configured => daemon runs auth-disabled
@@ -112,6 +124,9 @@ contextBridge.exposeInMainWorld("ironjarvis", {
     list: () => ipcRenderer.invoke("popout:list"),
     focus: (path) => ipcRenderer.invoke("popout:focus", String(path ?? "")),
     close: (path) => ipcRenderer.invoke("popout:close", String(path ?? "")),
+    // v1.361.0 (lane 11A): read at the moment a ping is decided (a function,
+    // so it is never a copy taken when the bridge was exposed).
+    speaks: () => popoutSpeaks,
   },
   // App auto-update control for the Updates page (the packaged-app updater).
   update: {

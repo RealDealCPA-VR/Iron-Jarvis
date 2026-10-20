@@ -176,6 +176,66 @@ def workflow_stopped_waiting(ref: object, *, by_emergency_stop: bool = False) ->
     return STATUS_CANCELLED, f"Your workflow “{name}” was stopped before you answered."
 
 
+def workflow_step_reason(summary: object) -> str:
+    """A workflow step's own words for why it could not finish (v1.361.0,
+    lane 11A): plain text, without a run's "The run failed: " lead, cut at a
+    word, ending on a full stop. "" when the step gave none."""
+    text = plain_text(summary)
+    if text.startswith(_FAILED_LEAD):
+        text = text[len(_FAILED_LEAD):].strip()
+    text = _cut(text, _REASON_LIMIT)
+    if text and not text.endswith((".", "!", "?", "…")):
+        text += "."
+    return text
+
+
+def _words(value: object) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _with_reason(head: str, summary: object) -> str:
+    """``head`` and then the step's own words after a colon, else a stop."""
+    why = workflow_step_reason(summary)
+    return f"{head}: {why}" if why else f"{head}."
+
+
+def workflow_failed_reason(ref: object, step: object = "", summary: object = "") -> str:
+    """The reason a SCHEDULED workflow run that failed gives its row and its
+    one line on every destination (the words ``failure_detail`` puts after
+    "The run failed: "), v1.361.0 lane 11A: WHICH step stopped it, in that
+    step's own words. Inside a schedule fire the schedule's line is the only
+    line the phone gets, so "see its run history" alone lost the reason the
+    step's own alert used to carry. With no step to name, where to look."""
+    name = _words(ref) or "inline"
+    step_name = _words(step)
+    if not step_name:
+        return (
+            f"your workflow “{name}” failed. Its run history on the Workflows page "
+            "says where."
+        )
+    return _with_reason(f"workflow “{name}” stopped at its step “{step_name}”", summary)
+
+
+def workflow_skipped_detail(ref: object, failures: list) -> str:
+    """The row detail (and the line every destination gets) for a SCHEDULED
+    workflow run that FINISHED past failed steps (``on_failure: skip``),
+    v1.361.0 lane 11A — the fire is ``partial`` and the first such step is
+    named with its own words; more are counted. ``failures`` is
+    ``[(step name, output dict), …]`` in step order (``step_outcome``)."""
+    name = _words(ref) or "inline"
+    if not failures:
+        return f"workflow “{name}” ran"
+    step, out = failures[0]
+    summary = out.get("summary") if isinstance(out, dict) else ""
+    line = _with_reason(
+        f"workflow “{name}” ran, but its step “{_words(step)}” could not finish", summary
+    )
+    more = len(failures) - 1
+    if more > 0:
+        line += f" {more} more step{'s' if more > 1 else ''} could not finish either."
+    return line
+
+
 def goal_skipped_detail(reason: object) -> str:
     """The row detail for a goal iteration the engine REFUSED (``skipped``,
     v1.358.0 lane 8A): nothing ran, and why, in the engine's own words."""

@@ -147,6 +147,10 @@ export interface PopoutBridge {
   list: () => Promise<string[] | null>;
   focus: (path: string) => Promise<{ ok: boolean; path: string } | null>;
   close: (path: string) => Promise<{ ok: boolean; path: string } | null>;
+  /** v1.361.0 (lane 11A): does THIS pop-out speak for the app — true for ONE
+   *  pop-out while the main window is closed to the tray (desktop/main.js
+   *  `announcePopoutSpeaker`). Absent on an older shell. */
+  speaks?: () => boolean;
 }
 
 /** The bridge, or null outside the desktop shell (or on an older shell). */
@@ -164,4 +168,32 @@ export function popoutBridge(): PopoutBridge | null {
 /** Is THIS window a popped-out module? False in the main window and in a browser. */
 export function isPopoutWindow(): boolean {
   return popoutBridge()?.isPopout === true;
+}
+
+/** v1.361.0 (lane 11A): does THIS popped-out window speak for the app? Each
+ *  window holds its own bell, and one notice must be said once: the main
+ *  window speaks while it is open; closed to the tray, the desktop app names
+ *  ONE pop-out that speaks in its place (and its tray watchers then stay
+ *  quiet), so a notice is neither lost nor said twice. False in the main
+ *  window, in a browser, on an older shell and while the main window is
+ *  open. Read at the moment a ping is decided, never cached. */
+export function popoutSpeaks(): boolean {
+  const b = popoutBridge();
+  if (!b || b.isPopout !== true || typeof b.speaks !== "function") return false;
+  try {
+    return b.speaks() === true;
+  } catch {
+    return false;
+  }
+}
+
+/** v1.361.0 (lane 11A): does THIS window leave the desktop pings to another?
+ *  Only a popped-out module's window that the desktop app did not name as
+ *  the one that speaks. Never throws. */
+export function quietWindow(): boolean {
+  try {
+    return isPopoutWindow() && !popoutSpeaks();
+  } catch {
+    return false;
+  }
 }

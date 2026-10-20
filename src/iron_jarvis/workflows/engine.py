@@ -46,6 +46,7 @@ from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.models import AgentType, Project, SessionStatus
 from .models import WorkflowRunRecord
+from .step_outcome import ended_by_session
 
 #: Context-chaining bounds: each earlier-step summary is clipped, and the whole
 #: injected block is capped so a long-running workflow can't blow up the prompt.
@@ -664,6 +665,16 @@ class WorkflowEngine:
                 "status": final_status,
                 "run_id": run_id,
                 "sessions": session_ids,
+                # v1.361.0 (lane 11A): the run of the step that ENDED a failed
+                # run ("" when that step had no run of its own, or the run did
+                # not fail). Only that step's notice stands in for this one:
+                # an earlier attempt that failed and was retried, or a step
+                # the run went on past, is another outcome (step_outcome).
+                "failed_session": (
+                    ended_by_session((s.name for s in steps), outputs)
+                    if final_status == "failed"
+                    else ""
+                ),
             },
         )
         return final if final is not None else record
@@ -802,6 +813,11 @@ class WorkflowEngine:
                     "status": "failed",
                     "run_id": record.id,
                     "sessions": session_ids,
+                    # v1.361.0 (lane 11A): the ask step that ended it has no
+                    # run of its own (see run_record's completion).
+                    "failed_session": ended_by_session(
+                        (s.name for s in wf.steps), outputs
+                    ),
                 },
             )
             return final if final is not None else record

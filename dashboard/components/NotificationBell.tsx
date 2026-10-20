@@ -31,7 +31,7 @@ import { ApiError, get, post, put } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
 import { usePolledApi } from "@/lib/useApi";
 import { useDesktopNotifications } from "@/lib/useDesktopNotifications";
-import { isPopoutWindow } from "@/lib/desktopShell";
+import { quietWindow } from "@/lib/desktopShell";
 import type { ComputerUseStatus, IJEvent, WorkflowRun } from "@/lib/types";
 import { clockTime, formatTokens } from "@/lib/format";
 import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
@@ -159,10 +159,21 @@ export interface ActivityItem {
   /** v1.360.0 (lane 10A): on a FAILED workflow's row, the step sessions its
    *  run held (`workflow.completed` `sessions`): their rows fold into it. */
   covers?: readonly string[];
-  /** v1.360.0 (lane 10A): the step rows this workflow row stands in for
-   *  (set by `oneRowPerWorkflow`): a step already pinged or already seen
-   *  means the workflow's row is neither pinged nor counted again. */
+  /** v1.360.0 (lane 10A): the step rows this workflow row folds in (set by
+   *  `oneRowPerWorkflow`): they leave the list, one row per failed workflow. */
   absorbs?: readonly string[];
+  /** v1.361.0 (lane 11A): on a FAILED workflow's row, the run of the step
+   *  that ENDED it (`workflow.completed` `failed_session`; "" = a step with
+   *  no run of its own — a tool, notify or ask step, or an expectation).
+   *  Absent on an event an older Iron Jarvis wrote. */
+  endedBy?: string;
+  /** v1.361.0 (lane 11A): the folded rows that say THIS outcome — only the
+   *  row of the step that ended the run (set by `oneRowPerWorkflow`). Only
+   *  they keep the workflow's row from being pinged or counted again: an
+   *  earlier attempt that failed and was retried, or a step the run went on
+   *  past, is another outcome, and the workflow's own failure is still said
+   *  (v1.360.0 skipped it when ANY folded row had been pinged or seen). */
+  standsInFor?: readonly string[];
 }
 
 /** v1.309.0 (contract 8): where an agent's row opens — THAT agent on Your
@@ -350,12 +361,16 @@ function unattendedCompletion(
   };
 }
 
-/** v1.360.0 (lane 10A): is this bell in a popped-out module's window? Never
- *  throws (a test's partial `lib/desktopShell` mock reads as the main
- *  window). */
-function inPopout(): boolean {
+/** v1.361.0 (lane 11A): does this bell leave the desktop pings to another
+ *  window? A popped-out module's bell is quiet while the main window is open
+ *  (the main window speaks for the app); with the main window closed to the
+ *  tray the desktop app names ONE pop-out that speaks, so its notices are
+ *  not lost (v1.360.1 silenced every pop-out, and with the main window in
+ *  the tray most notices reached no desktop toast at all). Never throws (a
+ *  test's partial `lib/desktopShell` mock reads as the main window). */
+function quietHere(): boolean {
   try {
-    return isPopoutWindow();
+    return quietWindow();
   } catch {
     return false;
   }
@@ -368,11 +383,15 @@ function inPopout(): boolean {
  * finish" — two rows (and two desktop pings) for one outcome. The FAILED
  * workflow's row (`covers` = its run's step sessions) stands in for the
  * step rows of that run: they leave the list and are recorded on it
- * (`absorbs`), so a step already pinged or already seen keeps the workflow
- * row from being pinged or counted a second time. A step row whose workflow
- * finished (a step its author let fail, a retry) stays: nothing else says
- * it. Rows from `alsoCovered` (the live list, for the replayed one) fold
- * the same way. Order is kept; nothing else changes.
+ * (`absorbs`). v1.361.0 (lane 11A): only the folded row of the step that
+ * ENDED the run (`endedBy`) says the same outcome (`standsInFor`), so only
+ * a step row already pinged or seen for THAT step keeps the workflow row
+ * from being pinged or counted again — an earlier attempt that failed and
+ * was retried is another outcome (an event an older Iron Jarvis wrote names
+ * no step: every folded row stands in, as in v1.360.0). A step row whose
+ * workflow finished (a step its author let fail, a retry) stays: nothing
+ * else says it. Rows from `alsoCovered` (the live list, for the replayed
+ * one) fold the same way. Order is kept; nothing else changes.
  */
 export function oneRowPerWorkflow(
   rows: readonly ActivityItem[],
@@ -386,6 +405,7 @@ export function oneRowPerWorkflow(
   for (const r of alsoCovered) for (const s of r.covers ?? []) coveredElsewhere.add(s);
   if (!coverOf.size && !coveredElsewhere.size) return [...rows];
   const absorbed = new Map<number, string[]>();
+  const standsIn = new Map<number, string[]>();
   const out: (ActivityItem | null)[] = rows.map((r) => r);
   rows.forEach((r, i) => {
     if (!r.session) return;
@@ -393,12 +413,20 @@ export function oneRowPerWorkflow(
     if (at !== undefined && at !== i) {
       out[i] = null;
       absorbed.set(at, [...(absorbed.get(at) ?? []), r.id]);
+      const ended = rows[at].endedBy;
+      if (ended === undefined || ended === r.session) {
+        standsIn.set(at, [...(standsIn.get(at) ?? []), r.id]);
+      }
     } else if (coveredElsewhere.has(r.session)) {
       out[i] = null;
     }
   });
   return out
-    .map((r, i) => (r && absorbed.has(i) ? { ...r, absorbs: absorbed.get(i) } : r))
+    .map((r, i) =>
+      r && absorbed.has(i)
+        ? { ...r, absorbs: absorbed.get(i), standsInFor: standsIn.get(i) ?? [] }
+        : r,
+    )
     .filter((r): r is ActivityItem => r !== null);
 }
 
@@ -496,6 +524,9 @@ export function toActivity(e: IJEvent): ActivityItem | null {
         body: "The Workflows page shows which step stopped.",
         attention: true,
         ...(covers.length ? { covers } : {}),
+        // v1.361.0 (lane 11A): which step's run ended it, so only THAT
+        // step's row stands in for this one.
+        ...(typeof p.failed_session === "string" ? { endedBy: p.failed_session } : {}),
       };
     }
     if (status === "completed") {
@@ -1243,6 +1274,98 @@ export function runLinkTitle(task: string, runId: string): string {
   return what ? `${what} · run ${runId}` : `Run ${runId}`;
 }
 
+/* ---- v1.361.0 (lane 11A): the ONE new ask, named in the desktop ping ----
+ * While a window is open the bell's "N pending" ping is the only desktop
+ * notice for an ask ("This PC" stays quiet for asks since v1.360.0), and a
+ * bare count lost what This PC's toast used to say: WHICH workflow asks
+ * what, which run wants to do what. When exactly one ask arrived since the
+ * last look, its count is followed by the bell row's own words. */
+
+/** A parked workflow question, in its row's words: “Nightly” asks “Send it?”. */
+export function waitingAskWords(ask: { workflow: string; question: string }): string {
+  const name = ask.workflow.trim() || "workflow";
+  const question = clip(ask.question);
+  return question ? `“${name}” asks “${question}”` : `“${name}” needs an answer`;
+}
+
+/** An agent ask, in its row's words: "Your nightly-brief run wants to save a
+ *  file for “Draft the Q3 letter”" (the task the row's "for:" line shows). */
+export function agentAskWords(ask: {
+  tool: string;
+  origin?: string;
+  task?: string;
+  count?: number;
+}): string {
+  const head =
+    ask.tool === PLAN_TOOL
+      ? `${runSubject(ask.origin)} wants you to approve its plan`
+      : !ask.tool || ask.tool === "unknown"
+        ? `${runSubject(ask.origin)} is waiting for your OK`
+        : askSentence(ask.origin, ask.tool);
+  const times = ask.count && ask.count > 1 ? ` × ${ask.count}` : "";
+  const task = clip(ask.task ?? "");
+  return `${head}${times}${task ? ` for “${task}”` : ""}`;
+}
+
+/** A chat parked on its card: what the call would do, when the listing
+ *  names the tool (names only, never arguments). "" when it names none. */
+export function chatAskWords(tool: string | undefined): string {
+  const id = (tool ?? "").trim();
+  return id && id !== "unknown" ? `it wants to ${askPhrase(id)}` : "";
+}
+
+/** The pending listing's chat rows: id → the tool it names. */
+function chatToolsById(raw: unknown): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  for (const r of Array.isArray(raw) ? raw : []) {
+    if (!r || typeof r !== "object") continue;
+    const row = r as Record<string, unknown>;
+    if (row.kind === "chat" && typeof row.id === "string" && typeof row.tool === "string") {
+      out.set(row.id, row.tool);
+    }
+  }
+  return out;
+}
+
+/** Every waiting ask's identity, by kind, at one look. */
+function askIdsOf(
+  waiting: readonly { key: string }[],
+  agentAsks: readonly { id: string }[],
+  chatAsks: readonly { id: string }[],
+): ReadonlySet<string> {
+  return new Set([
+    ...waiting.map((w) => `w:${w.key}`),
+    ...agentAsks.map((a) => `a:${a.id}`),
+    ...chatAsks.map((c) => `c:${c.id}`),
+  ]);
+}
+
+/** The words to put after ONE new ask's count, by kind — only when the ping
+ *  adds exactly one (`added`) and exactly one ask is new since the last look
+ *  (`seen`); several at once keep their counts alone. */
+export function newAskWords(
+  added: number,
+  asks: {
+    waiting: readonly WaitingAsk[];
+    agentAsks: readonly PendingAgentApproval[];
+    chatAsks: readonly ChatWaitingAsk[];
+  },
+  seen: ReadonlySet<string>,
+  chatTools: ReadonlyMap<string, string> = new Map(),
+): { waiting: string; agent: string; chat: string } {
+  const none = { waiting: "", agent: "", chat: "" };
+  if (added !== 1) return none;
+  const w = asks.waiting.filter((x) => !seen.has(`w:${x.key}`));
+  const a = asks.agentAsks.filter((x) => !seen.has(`a:${x.id}`));
+  const c = asks.chatAsks.filter((x) => !seen.has(`c:${x.id}`));
+  if (w.length + a.length + c.length !== 1) return none;
+  return {
+    waiting: w.length ? waitingAskWords(w[0]) : "",
+    agent: a.length ? agentAskWords(a[0]) : "",
+    chat: c.length ? chatAskWords(chatTools.get(c[0].id)) : "",
+  };
+}
+
 /** Where a run's ask opens: its mission screen, else its session page. */
 function agentAskHref(ask: PendingAgentApproval): string | null {
   if (ask.missionId) return missionPath(ask.missionId, ask.projectId ?? "");
@@ -1835,9 +1958,11 @@ export function NotificationBell() {
   );
   // v1.360.0 (lane 10A): a failed workflow's row that stands in for a step
   // row the user already saw is seen too — one outcome, counted once.
+  // v1.361.0 (lane 11A): only the row of the step that ENDED the run stands
+  // in (`standsInFor`) — a retried attempt the user saw is another outcome.
   const absorbedBy = useMemo(() => {
     const m = new Map<string, readonly string[]>();
-    for (const a of [...activity, ...awayShown]) if (a.absorbs?.length) m.set(a.id, a.absorbs);
+    for (const a of [...activity, ...awayShown]) if (a.standsInFor?.length) m.set(a.id, a.standsInFor);
     return m;
   }, [activity, awayShown]);
   const unseen = attentionKey
@@ -1896,12 +2021,18 @@ export function NotificationBell() {
   const { permission, requestPermission, notify } = useDesktopNotifications();
   const prevCount = useRef(count);
   const askedPermission = useRef(false);
+  // v1.361.0 (lane 11A): the asks there were at the last look, so a ping
+  // that adds exactly ONE can say which (see `newAskWords`).
+  const prevAskIds = useRef<ReadonlySet<string>>(new Set());
+  const chatAskTools = useMemo(() => chatToolsById(agentAsksApi.data?.approvals), [agentAsksApi.data]);
 
   // Reflect pending work in the tab title (so a backgrounded user notices) and
   // ping a desktop notification on each UPWARD transition of the count.
   useEffect(() => {
     const prev = prevCount.current;
     prevCount.current = count;
+    const seenAsks = prevAskIds.current;
+    prevAskIds.current = askIdsOf(waiting, agentAsks, chatAsks);
 
     // v1.283.0: a popped-out module titles its window by name (TitleBar
     // leaves the base title on <html data-ij-title>); the count rides in front.
@@ -1914,9 +2045,20 @@ export function NotificationBell() {
 
     // v1.360.0 integrate (lane 10A note g): the "N pending" ping is THE desktop
     // notice for an ask on this PC ("This PC" stays quiet for asks), so it is
-    // said once per app, by the main window — a popped-out module's bell keeps
-    // its title count but does not ping, like its activity ping below.
-    if (count > prev && !inPopout()) {
+    // said once per app, by the window that speaks for it — the main window,
+    // else (closed to the tray) the one pop-out the desktop app names
+    // (v1.361.0, lane 11A); any other pop-out keeps its title count only.
+    if (count > prev && !quietHere()) {
+      // v1.361.0 (lane 11A): ONE new ask is named after its count, in the
+      // bell row's own words — the only desktop notice for it while a window
+      // is open, so it says WHAT waits (This PC's toast did, until v1.360.0
+      // quieted it). Several at once keep the counts alone.
+      const named = newAskWords(
+        count - prev,
+        { waiting, agentAsks, chatAsks },
+        seenAsks,
+        chatAskTools,
+      );
       const parts: string[] = [];
       if (reviews.length)
         parts.push(`${reviews.length} review${reviews.length === 1 ? "" : "s"} awaiting approval`);
@@ -1929,15 +2071,18 @@ export function NotificationBell() {
         );
       if (waiting.length)
         parts.push(
-          `${waiting.length} workflow question${waiting.length === 1 ? "" : "s"} waiting`,
+          `${waiting.length} workflow question${waiting.length === 1 ? "" : "s"} waiting` +
+            (named.waiting ? `: ${named.waiting}` : ""),
         );
       if (agentAsks.length)
         parts.push(
-          `${agentAsks.length} agent${agentAsks.length === 1 ? "" : "s"} asking permission`,
+          `${agentAsks.length} agent${agentAsks.length === 1 ? "" : "s"} asking permission` +
+            (named.agent ? `: ${named.agent}` : ""),
         );
       if (chatAsks.length)
         parts.push(
-          `${chatAsks.length} chat${chatAsks.length === 1 ? "" : "s"} waiting for your OK`,
+          `${chatAsks.length} chat${chatAsks.length === 1 ? "" : "s"} waiting for your OK` +
+            (named.chat ? `: ${named.chat}` : ""),
         );
       // v1.353.0 (G52): each waiting pane by its CLI's name.
       for (const pane of paneAsks) parts.push(paneWaitingTitle(pane));
@@ -1957,9 +2102,10 @@ export function NotificationBell() {
     badge,
     reviews.length,
     pendingApprovals,
-    waiting.length,
-    agentAsks.length,
-    chatAsks.length,
+    waiting,
+    agentAsks,
+    chatAsks,
+    chatAskTools,
     paneAsks,
     failingLoopsPing,
     interrupted.jobs.length,
@@ -1977,11 +2123,15 @@ export function NotificationBell() {
   // outcome while a window is open — the daemon keeps "This PC" quiet for
   // exactly these rows (comm/notifier.bell_pings), and the desktop app says
   // the same rows itself while it sits in the tray. A failed workflow's row
-  // that stands in for a step row already pinged is not pinged again.
+  // that stands in for the row of the step that ENDED it, already pinged, is
+  // not pinged again (v1.361.0: only THAT step's row — `standsInFor`).
   // A popped-out module's window holds its own bell (and its own events
-  // socket): the MAIN window speaks for the app, as the "This PC" bridge
-  // does, so one outcome is never pinged once per window — and the desktop
-  // app's tray watcher keys on that same main window.
+  // socket): ONE window speaks for the app, so one outcome is never pinged
+  // once per window — the main window while it is open, else (v1.361.0,
+  // lane 11A) the one pop-out the desktop app names, whose tray watcher is
+  // then quiet. A quiet window still RECORDS the row as pinged (the speaking
+  // window pinged it), so if it becomes the one that speaks it never says a
+  // workflow whose step was already said.
   const prevActivityId = useRef<string | null>(null);
   const pingedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -1989,10 +2139,10 @@ export function NotificationBell() {
     if (!latest || prevActivityId.current === latest.id) return;
     prevActivityId.current = latest.id;
     if (latest.quiet) return; // v1.305.0: a dropdown row, never a desktop ping
-    if (inPopout()) return;
-    if (latest.absorbs?.some((id) => pingedRef.current.has(id))) return;
+    if (latest.standsInFor?.some((id) => pingedRef.current.has(id))) return;
     pingedRef.current.add(latest.id);
     if (pingedRef.current.size > 200) pingedRef.current = new Set([...pingedRef.current].slice(-100));
+    if (quietHere()) return;
     notify(latest.title, latest.body || "Open the dashboard for details.", () =>
       setOpen(true),
     );

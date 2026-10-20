@@ -673,9 +673,15 @@ def test_the_ask_watcher_is_actually_installed_and_reads_the_bell_s_listing():
     fn = _lift("function installAskWatcher", "function installAskWatcher")
     assert '"/chat/approvals/pending"' in fn, "it does not read the listing the bell reads"
     assert "setInterval(tick, ASK_WATCH_MS)" in fn
-    assert "mainWin && !mainWin.isDestroyed()" in fn, (
+    # v1.361.0 (lane 11A, moved on purpose): "a window is open" is the window
+    # whose bell SPEAKS — the main window, else (closed to the tray) the
+    # pop-out that speaks in its place; keyed on the main window alone, a
+    # popped-out module's bell and this watcher both stayed quiet.
+    assert "speakingWindowOpen()" in fn, (
         "it cannot tell whether a window is open, so it would toast over the bell"
     )
+    speaking = _lift("function speakingWindowOpen", "function speakingWindowOpen")
+    assert "mainWin && !mainWin.isDestroyed()" in speaking and "livePopout(route)" in speaking
     click = _lift("function showAskNotification", "function showAskNotification")
     assert "showMainWindow();" in click, "the toast click does not rebuild a destroyed window"
     assert "/sessions/" in click, "the click does not open the job"

@@ -2273,8 +2273,22 @@ def build_platform(
             # ``workflow.completed`` (the bell's failed row); one parked on the
             # user is the bell's waiting row.
             fired["run"] = status in ("failed", "waiting")
+            # v1.361.0 (lane 11A): inside this fire the schedule's line is the
+            # ONE line every destination gets (the notifier sends no generic
+            # run alert), so it carries what the steps' own alerts used to: the
+            # step that stopped a failed run, and a failed step the run went
+            # on past (``on_failure: skip``), each in its own words.
+            from .workflows.step_outcome import record_failures, record_sessions
+
+            halted, skipped = record_failures(result)
             if status == "failed":
-                raise RuntimeError(f"workflow “{ref}” run failed — see its run history")
+                raise RuntimeError(
+                    _run_outcome.workflow_failed_reason(
+                        ref,
+                        halted[0] if halted else "",
+                        halted[1].get("summary") if halted else "",
+                    )
+                )
             if status == "waiting":
                 # v1.358.0 (lane 8A): PARKED on the user is ``needs_you`` —
                 # the row reads "Needs you" and the notice "needs you", never
@@ -2288,7 +2302,29 @@ def build_platform(
                     str(ref),
                 )
                 return _run_outcome.workflow_waiting_detail(ref)
-            return f"workflow “{ref}” ran"
+            detail = f"workflow “{ref}” ran"
+            if status == "completed" and skipped:
+                # v1.361.0 (lane 11A): it finished, but part of it failed —
+                # the row reads "Part failed" and every destination hears
+                # which step and why (it read "ok … ran" before).
+                fired["outcome"] = "completed_with_failures"
+                detail = _run_outcome.workflow_skipped_detail(ref, skipped)
+            sessions = record_sessions(result)
+            if status == "completed" and sessions:
+                # v1.361.0 (lane 11A): a step's run that fell short published
+                # a ``session.completed`` the bell rings ("A step of your
+                # workflow … could not finish") — then the bell (window open)
+                # or the tray watcher is this outcome's one desktop notice, so
+                # "This PC" stays quiet; a tool step's failure has no bell row
+                # and "This PC" keeps the schedule's line. The bell's OWN rule
+                # (``_session_end`` → ``notifier.bell_pings``), never a second.
+                rings = await asyncio.to_thread(
+                    lambda: any(_session_end(sid)[0] for sid in sessions[-50:])
+                )
+                if rings:
+                    fired["run"] = True
+                    fired["rings"] = True
+            return detail
         if task.kind == "event":
             etype = payload.get("type", "schedule.fired")
             result = platform.event_bus.publish(etype, payload)

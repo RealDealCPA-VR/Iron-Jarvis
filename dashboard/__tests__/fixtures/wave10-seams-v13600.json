@@ -11,7 +11,8 @@
           "run_id": "wfrun_01",
           "sessions": [
             "session_02"
-          ]
+          ],
+          "failed_session": "session_02"
         }
       },
       {
@@ -50,7 +51,8 @@
           "run_id": "wfrun_01",
           "sessions": [
             "session_02"
-          ]
+          ],
+          "failed_session": "session_02"
         }
       },
       {
