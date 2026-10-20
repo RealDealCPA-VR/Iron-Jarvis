@@ -26,7 +26,12 @@ copied), widened two ways so a NEW sentence is read the day it lands:
   which routes hand back as a 4xx sentence) and any value under an answer key
   (``detail``, ``reason``, ``fix``, ``note``, ``error``, ``summary``, ``title``,
   ``message``, ``hint``, ``words``, ``held_reason``, ``blocked_reason``,
-  ``why``) in a dict or a call.
+  ``why``) in a dict or a call. (Review, v1.360.0: also the message of ANY
+  raised call whatever its class (``PaneAccountRefused("…")``), a value
+  written under an answer key (``out["why"] = "…"``), a variable named for
+  one (``detail = "…"``) and a module sentence named ``*_MESSAGE`` /
+  ``*_REASON`` / … (``PANE_TOKEN_EXPIRED_MESSAGE = "…"``): the first cut read
+  none of those forms and missed real answers in them.)
 
 ``ALLOW`` lists deliberate uses, each with a reason. ``PENDING`` lists lines in
 files lane 10C does not own this wave: the integrator rewords them from lane
@@ -177,6 +182,23 @@ PENDING: list[tuple[str, str, str]] = [
     ("src/iron_jarvis/tools/selfcare.py", "could not read the pack list", _P),
     ("src/iron_jarvis/tools/selfcare.py", "no pack named ", _P),
     ("src/iron_jarvis/tools/selfcare.py", "configured packs: ", _P),
+    # Review (v1.360.0): the answer forms the first reader skipped — module
+    # sentences, d["why"] = …, detail = …, and refusal classes outside
+    # ANSWER_EXCEPTIONS. All in files lane 10C does not own.
+    ("src/iron_jarvis/browser/panetokens.py", "the pane token expired when Iron Jarvis restarted", _P),
+    ("src/iron_jarvis/browser/panetokens.py", "no pane token: /mcp needs the token", _P),
+    ("src/iron_jarvis/browser/panetokens.py", "use the pane token from IRONJARVIS_MCP_TOKEN", _P),
+    ("src/iron_jarvis/daemon/chat_append.py", "the daemon's comm store writes it", _P),
+    ("src/iron_jarvis/mcp/client.py", "pack ", _P + " (MCPServerStopped's 'pack <name>:' prefix; DirectoryPage's Retry shows last_error first)"),
+    ("src/iron_jarvis/mcpserver/server.py", "this Build pane grants no capability", _P),
+    ("src/iron_jarvis/mcpserver/stdio_shim.py", "start this harness from a Build pane", _P),
+    ("src/iron_jarvis/memory/graph.py", "offline mock embedder", _P),
+    ("src/iron_jarvis/terminals/pane_accounts.py", "A Build pane has no account for", _P),
+    ("src/iron_jarvis/terminals/pane_accounts.py", "a Build pane runs a subscription (CLI) account", _P),
+    ("src/iron_jarvis/terminals/recipes.py", "only write inside the pane's folder", _P),
+    ("src/iron_jarvis/terminals/recipes.py", "a pane-scoped", _P),
+    ("src/iron_jarvis/tools/selfcare.py", "Model: demo replies (mock)", _P),
+    ("src/iron_jarvis/workflows/tools.py", "daemon is shutting down", _P),
 ]
 
 
@@ -202,13 +224,49 @@ def _call_name(node: ast.Call) -> str:
     return ""
 
 
+#: A name that holds a sentence handed back as an answer
+#: (``PANE_TOKEN_EXPIRED_MESSAGE``, ``held_reason``, ``out_note``).
+_ANSWER_SUFFIXES = ("_message", "_reason", "_detail", "_note", "_error", "_hint", "_fix")
+
+
+def _answer_target(target: ast.AST) -> bool:
+    """An assignment target that holds an answer: ``out["why"]`` (a dict
+    entry under an answer key), ``detail`` / ``self.reason`` (named for one),
+    or ``NO_TOKEN_MESSAGE`` (a module sentence)."""
+    if isinstance(target, ast.Subscript):
+        key = target.slice
+        return isinstance(key, ast.Constant) and key.value in ANSWER_KEYS
+    if isinstance(target, ast.Name):
+        name = target.id
+    elif isinstance(target, ast.Attribute):
+        name = target.attr
+    else:
+        return False
+    low = name.lower()
+    return low in ANSWER_KEYS or low.endswith(_ANSWER_SUFFIXES)
+
+
 def answer_strings(src: str) -> list[tuple[int, str]]:
-    """Every sentence in an ANSWER position: an answer exception's message
-    and any value under an answer key (a dict entry or a keyword argument).
-    Code-shaped tokens are not sentences."""
+    """Every sentence in an ANSWER position: an answer exception's message,
+    the message of ANY raised call, any value under an answer key (a dict
+    entry, a keyword argument or a ``d["key"] = …`` write) and any value
+    assigned to a name that holds an answer. Code-shaped tokens are not
+    sentences."""
     tree = ast.parse(src)
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
+        if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+            # Whatever its class: a refusal type the list does not name
+            # (PaneAccountRefused, ConfigWriteRefused) is still an answer.
+            for arg in node.exc.args:
+                found += _strings_under(arg)
+            for kw in node.exc.keywords:
+                if kw.arg in ("detail", "message"):
+                    found += _strings_under(kw.value)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if node.value is not None and any(_answer_target(t) for t in targets):
+                found += _strings_under(node.value)
         if isinstance(node, ast.Call):
             name = _call_name(node)
             if name in ANSWER_EXCEPTIONS:
@@ -318,6 +376,25 @@ def f(x):
     found = sorted({(line, word) for line, text in answer_strings(planted) for word in _hits(text)})
     # detail, an exception message, a dict answer key, an error= keyword.
     assert found == [(10, "pack"), (12, "job"), (13, "mission"), (14, "connector")], found
+
+
+def test_the_answer_reader_reads_written_answers_and_any_raised_refusal():
+    """Review (v1.360.0): an answer is also WRITTEN — a module sentence named
+    ``*_MESSAGE``, ``out["why"] = …``, ``detail = …`` — or RAISED through a
+    refusal class the exception list does not name. The first reader missed
+    all four (16 real lines across the daemon). Both directions: a prompt
+    constant and a non-answer key stay unread."""
+    planted = '''NO_TOKEN_MESSAGE = "start it from a Build pane"
+PROMPT_TEXT = "the daemon pane prompt"
+def g(out, x):
+    out["why"] = "the job is gone"
+    out["label"] = "the mission label"
+    detail = "the daemon is shutting down"
+    words = "Nothing" if x else "the brain"
+    raise PaneRefused("the connector refused")
+'''
+    found = sorted({(line, word) for line, text in answer_strings(planted) for word in _hits(text)})
+    assert found == [(1, "pane"), (4, "job"), (6, "daemon"), (7, "brain"), (8, "connector")], found
 
 
 def test_the_retired_list_is_the_one_the_dashboard_uses():

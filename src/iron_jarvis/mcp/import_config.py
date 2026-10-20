@@ -878,7 +878,7 @@ def _program_tail(command: str, args: list[str]) -> tuple[str, str]:
     itself (``C:/qb/QuickBooks-MCP.exe`` → ``QuickBooks-MCP``). Returns
     ``(tail, cmd)`` where ``cmd`` is the launcher, lowercased. The one reading
     of a command line behind both :func:`_name_from_command` (a pack name)
-    and :func:`program_words` (what a preview row says it runs, v1.360.0)."""
+    and :func:`program_of` (what a preview row says it runs, v1.360.0)."""
     base = str(command or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
     cmd = base.lower()
     for ext in (".cmd", ".exe"):

@@ -58,7 +58,7 @@ import {
   readScope,
   readsLevelLine,
 } from "@/lib/permissionLevels";
-import { __resetReadFacts, READ_FACTS_PATH } from "@/lib/readFacts";
+import { __resetReadFacts, READ_FACTS_PATH, READ_FACTS_TTL_MS, refreshReadFacts } from "@/lib/readFacts";
 import { __resetApiCache } from "@/lib/apiCache";
 
 const W = { timeout: 4000 };
@@ -139,10 +139,19 @@ describe("the chat's approval chip follows the setting", () => {
     await waitFor(() => expect(el.getAttribute("title")).toContain(CHOSEN_LINE), W);
     expect(el.getAttribute("title")).not.toMatch(/anywhere/);
     expect(H.calls).toEqual([READ_FACTS_PATH]);
-    // A second reach inside the freshness window asks nothing more.
+    // A second reach inside the freshness window asks nothing more. The read
+    // starts a microtask after the reach (lib/readFacts calls `get` inside a
+    // promise), so let it run before counting (review: the bare count passed
+    // with the freshness check deleted).
     fireEvent.focus(el);
     fireEvent.pointerEnter(el);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
     expect(H.calls).toEqual([READ_FACTS_PATH]);
+    // CONTROL: once the answer is older than the window, a reach asks again.
+    refreshReadFacts(Date.now() + READ_FACTS_TTL_MS + 1);
+    await waitFor(() => expect(H.calls).toEqual([READ_FACTS_PATH, READ_FACTS_PATH]), W);
   });
 
   it("opening the menu reads them too, and EVERY row then carries the setting's sentence", async () => {
