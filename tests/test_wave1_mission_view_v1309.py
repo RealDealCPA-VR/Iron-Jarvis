@@ -787,7 +787,9 @@ def test_a_refusal_nobody_was_asked_about_never_reads_as_an_ask(tmp_path):
     lines = [(a["text"], a["tone"]) for a in view["activity"]]
     texts = [t for t, _ in lines]
     asks = [t for t, tone in lines if "needed your OK" in t]
-    assert asks == ["Builder needed your OK to use read file"], lines
+    # v1.359.0 review (G19 remainder): the declined ask reads in the log's own
+    # words too, never "use read file" — moved on purpose.
+    assert asks == ["Builder needed your OK to read a file"], lines
     # v1.359.0 (wave 9, G19 remainder): the refusal says what the call set
     # out to do in the log's own words, never the built-in's spaced id
     # ("tried write file") — moved on purpose.

@@ -177,6 +177,56 @@ def test_no_refusal_line_names_a_builtin_by_its_id(kind):
             assert not mission.do_words(tool).startswith(f"use {spaced}"), (tool, line)
 
 
+@pytest.mark.parametrize("kind", ["permission denied", "paused"])
+def test_a_declined_ask_names_no_builtin_by_its_id_either(kind):
+    """v1.359.0 review (G19 remainder): the THIRD refusal line, an ask
+    nobody answered or the user declined, read "Builder needed your OK to
+    use read file" beside "kept failing to read a file" in the same log
+    (every built-in the approval card does not word: read_file, the browser
+    tools, delegate, ...). It now says what the call set out to do through
+    the same ``do_words``. MUTATION: put ``ask_words`` back -> "use read
+    file" / "use browser click" (red)."""
+    tools = [t for t in _builtins() if t not in mission._QUIET_TOOLS]
+    rows = [
+        (f"i{i}", "s1", tool, "{}", False, "ask", False, _BASE + timedelta(seconds=i))
+        for i, tool in enumerate(tools)
+    ]
+    lines, _last = mission.tool_activity(rows, {f"i{i}": kind for i in range(len(tools))}, {"s1": "Builder"})
+    assert len(lines) == len(tools)
+    for tool, line in zip(tools, lines):
+        assert line["tone"] == "ask", line
+        assert line["text"] == f"Builder needed your OK to {mission.do_words(tool)}", (tool, line)
+        assert "_" not in line["text"], line
+        assert not line["text"].endswith(f"use {tool.replace('_', ' ')}"), (tool, line)
+    by_tool = dict(zip(tools, (line["text"] for line in lines)))
+    assert by_tool["read_file"] == "Builder needed your OK to read a file"
+    assert by_tool["browser_click"] == "Builder needed your OK to use your browser"
+    # The card's own words win where it has them (byte-identical to before).
+    assert by_tool["write_file"] == "Builder needed your OK to save a file"
+
+
+def test_the_waiting_line_says_the_same_words_as_the_refusal(tmp_path):
+    """The live "is waiting for your OK to ..." line for the same call reads
+    the same words (it said "use browser click"). MUTATION: put
+    ``ask_words`` back in the APPROVAL_REQUESTED branch -> red."""
+    from iron_jarvis.core.events import EventType
+
+    p = build_platform(str(tmp_path / "home"))
+    root = asyncio.run(
+        Orchestrator(p).create_session("objective", AgentType.SUPERVISOR, provider="mock", origin="job:mission")
+    )
+    for i, tool in enumerate(("browser_click", "read_file", "write_file")):
+        asyncio.run(p.event_bus.publish(
+            EventType.APPROVAL_REQUESTED, {"approval_id": f"a{i}", "tool": tool, "args": {}}, session_id=root.id,
+        ))
+    texts = [line["text"] for line in mission.mission_view(p, root.id)["activity"]]
+    waiting = [t for t in texts if "is waiting for your OK to" in t]
+    assert any(t.endswith("is waiting for your OK to use your browser") for t in waiting), waiting
+    assert any(t.endswith("is waiting for your OK to read a file") for t in waiting), waiting
+    assert any(t.endswith("is waiting for your OK to save a file") for t in waiting), waiting
+    assert not any("browser click" in t or "read file" in t for t in waiting), waiting
+
+
 def test_do_words_reads_the_approval_card_first_then_the_logs_line():
     assert mission.do_words("write_file") == "save a file" == mission.ask_words("write_file")
     assert mission.do_words("shell") == "run a command"

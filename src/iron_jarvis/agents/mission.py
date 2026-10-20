@@ -1005,7 +1005,11 @@ def tool_activity(
             # user said no, or the pause timed out). "Builder could not write
             # report.md" read as the agent failing at the work; it was
             # waiting on a person.
-            text, tone = f"needed your OK to {ask_words(tool)}", "ask"
+            # v1.359.0 review (G19 remainder): the approval card's words for
+            # a tool it words, else the log's own (``do_words``) — this line
+            # read "needed your OK to use read file" beside "kept failing to
+            # read a file" in the same log.
+            text, tone = f"needed your OK to {do_words(tool)}", "ask"
         elif kind is not None:
             # …and a refusal NOBODY was asked about is never worded as one
             # (v1.309.0 review, honest copy): the breaker, the roster gate
@@ -1213,7 +1217,8 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
                 # v1.350.0: the plan approval is not a tool to "use".
                 text, tone = f"{who} is waiting for you to approve the plan", "ask"
             else:
-                text, tone = f"{who} is waiting for your OK to {ask_words(tool)}", "ask"
+                # v1.359.0 review: the same words as the refusal line above.
+                text, tone = f"{who} is waiting for your OK to {do_words(tool)}", "ask"
         elif ev.type == EventType.APPROVAL_RESOLVED:
             decision = str(data.get("decision") or "")
             if decision == "deny":
