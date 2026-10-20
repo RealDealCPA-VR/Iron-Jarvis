@@ -1895,6 +1895,56 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## No notice lost, the app you meant once more, and your machine named once (v1.361.0)
+
+Each thing that happens is still announced once, and now no notice goes
+missing. Chat again offers to connect the app you're asking about, and a
+reply names the machine that answered once. The look of the app is the
+same.
+
+- **Notices reach you from a popped-out window.** Close the main window to
+  the tray with a page popped out into its own window, and that window now
+  shows the desktop notices the main window would. That includes a workflow
+  waiting for your answer, a task that failed, a mission's outcome, finished
+  media and your schedules' "done" lines. When you open the main window
+  again, it takes over. Nothing is said twice.
+- **A scheduled workflow says which step failed.**
+  - When a step that is allowed to fail does fail, the schedule's row reads
+    **Part failed**. Your phone, and every other place the schedule
+    reports to, gets one line naming the step and why, for example "…ran,
+    but its step “Fetch” could not finish: The inbox could not be reached."
+  - A workflow that stopped names the step that stopped it.
+- **A failed workflow is always announced.** That holds even when one of
+  its steps failed at first, was announced, and then worked on a second try.
+- **A single new request names itself.** When one new thing is waiting for
+  your OK, the desktop notice says what it is, for example "1 workflow
+  question waiting: “Nightly” asks “Send it?”". When several arrive
+  together, you get the counts.
+- **Chat offers the app you mean again.**
+  - "did anyone message me on Slack?", "DM Bob on Slack", "gmail: anything
+    from the IRS?", "list my Stripe disputes", "generate an image with
+    Pixio" and "what's on my calendar in outlook" show the **Connect … in
+    Settings** button again when that app isn't connected.
+  - "check Slack and Gmail for anything urgent" offers one button that
+    names both.
+  - A sentence about an app rather than your own things in it still offers
+    nothing: "write an article on Stripe", "compare Slack and Teams for a
+    small team", "In my outlook, the market will recover".
+- **Ask how Iron Jarvis works in your own words.** Questions like "how do I
+  connect my phone", "how do I set up a backup", "how do I use the bell" and
+  "Hi Jarvis! How do I connect my phone?" are looked up in the Handbook
+  again. "How do I make a cake" isn't.
+- **Your machine, named once.**
+  - A reply from a stand-in names its machine once: "answered by Spark B
+    (you asked for Claude Code) · local".
+  - A run made through OpenCode keeps OpenCode's name on its page.
+  - Your Ollama server is never called by the name of one of its models.
+  - A run that never reached a model, for example on a cloud model that
+    isn't connected, no longer says it went to the cloud.
+- **The approval menu fits a short window.** If the reading rules arrive
+  just after you tap the approval chip, the menu fits itself to the window
+  again.
+
 ## One notice for each thing that happens, the app you meant, and your own machine by name (v1.360.0)
 
 Background work tells you once, chat offers the app you actually meant, and

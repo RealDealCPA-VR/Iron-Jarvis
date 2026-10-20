@@ -64,8 +64,26 @@ _MAX_TEXT = 4000
 #: by the view's own words ("my outlook on life", "my outlook is bright"),
 #: or before the app's own things ("outlook inbox"). "give me your outlook
 #: on the market" and "the outlook for 2027" stay the word.
+#: v1.361.0 integrate (lane 11B's review note): "In my outlook, the market
+#: will recover" / "From my outlook, this looks bad" — a SENTENCE that opens
+#: with "in/from my/our outlook," is the idiom for "in my view", never the
+#: app (the possessive reading put a Microsoft 365 door under it). Python's
+#: lookbehind is fixed-width, so each opening is its own lookbehind; a
+#: mid-sentence place ("find the invoice in my outlook, then forward it")
+#: keeps its reading, and a capitalised "Outlook" always names the app.
+_OUTLOOK_VIEW_IDIOM = (
+    r"(?!(?:"
+    + "|".join(
+        rf"(?<={lead}{prep}\s{poss}\s)"
+        for lead in (r"^", r"\n", r"[.!?]\s", r"[.!?]\s\s")
+        for prep in ("in", "from")
+        for poss in ("my", "our")
+    )
+    + r")outlook\s*,)"
+)
 _LOWER_OUTLOOK = (
-    r"(?:(?<=\bin\s)|(?<=\bon\s)|(?<=\bto\s)|(?<=\bvia\s)|(?<=\bfrom\s)|(?<=\binto\s)"
+    _OUTLOOK_VIEW_IDIOM
+    + r"(?:(?<=\bin\s)|(?<=\bon\s)|(?<=\bto\s)|(?<=\bvia\s)|(?<=\bfrom\s)|(?<=\binto\s)"
     r"|(?<=\bmy\s)|(?<=\bour\s)|(?<=\busing\s)|(?<=\bthrough\s))"
     r"outlook(?!\s+(?:on|for|of|about|is|was|has|had|remains|looks|seems|changed|will|would)\b)"
     r"|outlook(?=\s+(?:calendars?|inbox(?:es)?|mail|e-?mails?|accounts?|contacts?|folders?)\b)"

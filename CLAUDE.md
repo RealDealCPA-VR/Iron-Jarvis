@@ -3547,6 +3547,93 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **No notice lost: ONE window speaks, a workflow's notice stands in only for
+  the step that ENDED it, a schedule's line names its failed step; the
+  Connect door and the Guide are read from ONE table, both ways; a place is
+  named once** (v1.361.0, product-readiness Wave 11 "the final hunt's
+  regressions closed"; lanes 11A-11C + integrate). NOTICES (11A +
+  integrate): desktop/main.js `popoutSpeakerRoute(mainOpen, routes)` (pure:
+  "" while the main window is open, else the first live pop-out) +
+  `announcePopoutSpeaker()` (on the main window's create and `closed`, a
+  pop-out's `closed` and its `did-finish-load`) tell each pop-out over IPC
+  `popout:speaker`; preload.js keeps it (starts false) as
+  `popout.speaks()`; `lib/desktopShell.quietWindow()` (`isPopoutWindow() &&
+  !popoutSpeaks()`, read when a notice is decided, never cached) is the ONE
+  rule the bell (`quietHere`: activity AND "N pending") and (integrate)
+  `DesktopNotifyBridge` follow. A quiet window still RECORDS what it would
+  have said (bell `pingedRef`, bridge `seenRef`), so a switch never repeats
+  a notice. Both tray ticks key on `speakingWindowOpen()` (main window OR a
+  live pop-out). `workflow.completed` carries `failed_session`
+  (`workflows/step_outcome.ended_by_session`; "" = the ending step had no
+  run of its own) at both failing sites (finalize, the ask halt in
+  `resume_after_answer`); only THAT step's row stands in for the
+  workflow's (bell `toActivity.endedBy` → `oneRowPerWorkflow.standsInFor`,
+  read by the ping skip and the badge's `absorbedBy`; main.js
+  `runOutcomeNotice.endedBy` in `planRunOutcomeNotifications`); an event
+  without the key keeps v1.360.0's any-covered-step rule. A scheduled
+  workflow fire (`platform._dispatch_scheduled`) reads the run's outputs
+  (`step_outcome.step_failures`): a skipped failed step makes the fire
+  `completed_with_failures` (row partial, `run_outcome.
+  workflow_skipped_detail`); a halt names its step
+  (`run_outcome.workflow_failed_reason`); "This PC" is quiet ONLY in a
+  partial fire whose named failed steps EACH have a run the bell rings
+  (`_session_end`) — a clean fire (even after a retried attempt) keeps its
+  "done", a tool step keeps the line. `NotificationBell.newAskWords` names
+  ONE new ask after its count (the title stays "Iron Jarvis: N pending").
+  MATCHER (11B + integrate): `connectors/app_names._own_verdict` answers
+  True/False/None; `own_data_apps` reads joined apps as one place (each
+  with the words after the LAST app; a None member takes an own
+  neighbour's True; an explicit False never flips). The new own readings
+  sit AFTER the research/topic/explain/compare/web exits: chat place verbs
+  (`_PLACE_HEAD_RX`), "use <app> to", an API-key service as the instrument
+  (Pixio), the loose place rule (on/via/through/from/across/over/against/
+  according to <app>, only with a first-person or question signal, vetoed
+  by `_SWITCH_RX` / `_PRODUCT_SIDE_RX`), "<app>:" / "<prep> <app>," labels,
+  `_OWNED_NOUN_RX` after "my <app>", any non-modifier noun after an acting
+  verb + "my <app>"; an "I need / I want / I'd like" head that is not
+  itself an acting verb is vetoed by `_SWITCH_RX` (review: "I need to switch
+  from slack to teams"). Lower-case "outlook" after a place or possessive
+  is Microsoft 365 (`_LOWER_OUTLOOK`, in the alias and both brand regexes)
+  except (integrate) a SENTENCE opening "in/from my/our outlook," — the "in
+  my view" idiom (`_OUTLOOK_VIEW_IDIOM`, one fixed-width lookbehind per
+  opening). Guide (`tools/autoselect`): Jarvis or "this app" anywhere in
+  the message arms a how-to unless `_ELSEWHERE_RX`; each new Handbook word
+  carries an everyday-sense guard. THE TABLE IS THE RULE: every phrasing
+  lives in `tests/test_matcher_tables_v13610.py` with its verdict (it
+  imports the older tables and fails when a row drops or flips);
+  (integrate) `tests/test_integrate_wave11_v13610.py` runs EVERY door row
+  and EVERY Guide row through BOTH real chat lanes (one deliberate
+  narrowing: bare "my calendar" with no calendar app connected offers
+  nothing, v1.360.0). PLACES (11C + integrate): the "fleet" alias is named
+  by the machine alone only on `onboarding.isOwnServerSlot` (custom,
+  ollama, fleet-*) — a CLI harness keeps its name ("OpenCode · Your model
+  server"); `machineName` reads only rows that describe the pick;
+  `ranOnWords.endpointLabel` skips a row whose `name` is its own model id
+  (integrate: "qwen3 on llama3"); `TurnReceipt`'s `namedByPlace` governs
+  the amber line too; `PermissionChip` re-measures on `[open, readsLine]`
+  and focuses once per opening; a session receipt's `on_this_network` is
+  null unless `agents/outcome.reached_a_model` (steps, tokens, a
+  ToolInvocation, or a persisted provider.routed / provider.failover /
+  llm.completed of THAT session; the demo model is True), and the run page
+  reads `runPageWords.runReachedAModel`. THE RULE A FUTURE CHANGE MUST
+  KEEP: a new window-level notice decides with `quietWindow()` at the
+  moment it speaks and records while quiet; a new terminal workflow event
+  names the step that ended it; a new matcher phrasing is a table row both
+  ways; a new place word goes through `machineName` / `ranOnWords` /
+  `runModelWords`, never a row's own model id. Pins: `tests/test_{no_notice_lost,
+  matcher_tables,run_where_reached,integrate_wave11}_v13610.py`,
+  `dashboard/__tests__/{no-notice-lost,labels-say-it-once,run-page-reached,
+  wave11-seams}-v13610.test.tsx`, fixtures `no-notice-lost-v13610.json`
+  (`IJ_REGEN_NO_NOTICE_LOST=1`) and `wave11-seams-v13610.json`
+  (`IJ_REGEN_WAVE11_SEAMS=1`); moved on purpose:
+  `test_integrate_wave10_v13600::test_the_bells_count_ping_is_the_main_windows_only`,
+  `test_desktop_reliability_v1249` (installAskWatcher keys on
+  `speakingWindowOpen`), the `failed_workflow` key of
+  `wave10-seams-v13600.json` (every lane, review and integrator change
+  mutation-checked red). Known: never driven in the packaged app; a pop-out
+  stuck on a failed load counts as an open window; the matcher trade-offs
+  in docs/PRODUCT-READINESS-RESULTS.md 0f.3.
+
 - **ONE notice per outcome and per ask on this PC; the Connect door only for
   the user's own data; the user's model server by its name everywhere; every
   daemon answer in the canon's words** (v1.360.0, product-readiness Wave 10
@@ -3568,7 +3655,9 @@ does not need a bump, stop and bump it.
   the one line (`notify: false` now silences a fire completely). A failed
   workflow is one bell row (`oneRowPerWorkflow`, `covers`/`absorbs`); a
   popped-out window's bell pings neither activity nor "N pending"
-  (integrate) — the main window speaks for the app. In the TRAY,
+  (integrate) — the main window speaks for the app (SUPERSEDED v1.361.0:
+  ONE window speaks — the main window, else the first pop-out still open;
+  see the v1.361.0 bullet). In the TRAY,
   main.js's ask-watcher tick reads `GET /audit` (session.completed,
   workflow.completed) and says the bell's attention rows once
   (`planRunOutcomeNotifications`; `runOutcomeWindowSeenAt` set by

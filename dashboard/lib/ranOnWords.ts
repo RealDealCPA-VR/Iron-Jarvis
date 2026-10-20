@@ -55,9 +55,16 @@ export function endpointLabel(
   const p = (provider || "").trim();
   if (!p) return "";
   const rows = rowsOf(catalog);
+  // v1.361.0 integrate (lane 11C's note): a row that names its MODEL in
+  // `name` is not a place — a detected Ollama row reads {model "llama3",
+  // name "llama3"}, and every Ollama run read "qwen3 on llama3" under "Ran
+  // on". The run page's rule (runPageWords.runModelWords) and the pick's
+  // machine name (lib/onboarding.machineName) already skip such a row.
   const named = (id: string): string => {
     for (const row of rows) {
-      if (row.provider === id && typeof row.name === "string" && row.name.trim()) return row.name.trim();
+      if (row.provider !== id || typeof row.name !== "string") continue;
+      const v = row.name.trim();
+      if (v && v !== (row.model ?? "").trim()) return v;
     }
     return "";
   };

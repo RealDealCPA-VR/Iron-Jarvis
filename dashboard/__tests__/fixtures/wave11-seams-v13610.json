@@ -1,0 +1,347 @@
+{
+  "_about": "v1.361.0 integrate: what the REAL daemon sends for four scheduled workflow fires (tests/test_integrate_wave11_v13610.py writes it with IJ_REGEN_WAVE11_SEAMS=1; dashboard/__tests__/wave11-seams-v13610.test.tsx feeds it through the real bell and the real This PC bridge). `audit` is GET /audit's answer (newest first), ids and times made stable; `desktop` is what the This PC sink was handed, in order (it publishes each as a comm.desktop event {title, message}); `phone` is every other destination's line.",
+  "skipped_agent_step": {
+    "row": {
+      "last_status": "partial",
+      "last_detail": "workflow “Nightly” ran, but its step “Fetch” could not finish: The inbox could not be reached."
+    },
+    "phone": [
+      "Schedule “nightly”: finished, but part of it failed — workflow “Nightly” ran, but its step “Fetch” could not finish: The inbox could not be reached."
+    ],
+    "desktop": [],
+    "audit": [
+      {
+        "id": "evt_01",
+        "ts": "2026-10-20T03:00:03",
+        "type": "workflow.completed",
+        "kind": "action",
+        "actor": "workflow.completed",
+        "session_id": null,
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "workflow.completed",
+        "payload": {
+          "workflow": "Nightly",
+          "status": "completed",
+          "run_id": "wfrun_02",
+          "sessions": [
+            "session_03",
+            "session_04"
+          ],
+          "failed_session": ""
+        }
+      },
+      {
+        "id": "evt_05",
+        "ts": "2026-10-20T03:00:02",
+        "type": "session.completed",
+        "kind": "lifecycle",
+        "actor": "workflow:Nightly",
+        "session_id": "session_04",
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "session.completed",
+        "payload": {
+          "status": "completed",
+          "summary": "Wrote the summary.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": "completed"
+        }
+      },
+      {
+        "id": "evt_06",
+        "ts": "2026-10-20T03:00:01",
+        "type": "session.completed",
+        "kind": "lifecycle",
+        "actor": "workflow:Nightly",
+        "session_id": "session_03",
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "session.completed",
+        "payload": {
+          "status": "failed",
+          "summary": "The inbox could not be reached.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": null
+        }
+      }
+    ]
+  },
+  "skipped_tool_step": {
+    "row": {
+      "last_status": "partial",
+      "last_detail": "workflow “Nightly” ran, but its step “Check” could not finish: no such file: no-such-report.txt."
+    },
+    "phone": [
+      "Schedule “nightly”: finished, but part of it failed — workflow “Nightly” ran, but its step “Check” could not finish: no such file: no-such-report.txt."
+    ],
+    "desktop": [
+      {
+        "title": "Iron Jarvis",
+        "message": "Schedule “nightly”: finished, but part of it failed — workflow “Nightly” ran, but its step “Check” could not finish: no such file: no-such-report.txt."
+      }
+    ],
+    "audit": [
+      {
+        "id": "evt_01",
+        "ts": "2026-10-20T03:00:02",
+        "type": "workflow.completed",
+        "kind": "action",
+        "actor": "workflow.completed",
+        "session_id": null,
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "workflow.completed",
+        "payload": {
+          "workflow": "Nightly",
+          "status": "completed",
+          "run_id": "wfrun_02",
+          "sessions": [
+            "session_03"
+          ],
+          "failed_session": ""
+        }
+      },
+      {
+        "id": "evt_04",
+        "ts": "2026-10-20T03:00:01",
+        "type": "session.completed",
+        "kind": "lifecycle",
+        "actor": "workflow:Nightly",
+        "session_id": "session_03",
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "session.completed",
+        "payload": {
+          "status": "completed",
+          "summary": "Wrote the summary.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": "completed"
+        }
+      }
+    ]
+  },
+  "halted_by_agent_step": {
+    "row": {
+      "last_status": "error",
+      "last_detail": "The run failed: workflow “Nightly” stopped at its step “Fetch”: The inbox could not be reached."
+    },
+    "phone": [
+      "Schedule “nightly”: FAILED — The run failed: workflow “Nightly” stopped at its step “Fetch”: The inbox could not be reached."
+    ],
+    "desktop": [],
+    "audit": [
+      {
+        "id": "evt_01",
+        "ts": "2026-10-20T03:00:02",
+        "type": "workflow.completed",
+        "kind": "action",
+        "actor": "workflow.completed",
+        "session_id": null,
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "workflow.completed",
+        "payload": {
+          "workflow": "Nightly",
+          "status": "failed",
+          "run_id": "wfrun_02",
+          "sessions": [
+            "session_03"
+          ],
+          "failed_session": "session_03"
+        }
+      },
+      {
+        "id": "evt_04",
+        "ts": "2026-10-20T03:00:01",
+        "type": "session.completed",
+        "kind": "lifecycle",
+        "actor": "workflow:Nightly",
+        "session_id": "session_03",
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "session.completed",
+        "payload": {
+          "status": "failed",
+          "summary": "The inbox could not be reached.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": null
+        }
+      }
+    ]
+  },
+  "clean_after_a_retried_step": {
+    "row": {
+      "last_status": "ok",
+      "last_detail": "workflow “Nightly” ran"
+    },
+    "phone": [
+      "Schedule “nightly”: done — workflow “Nightly” ran"
+    ],
+    "desktop": [
+      {
+        "title": "Iron Jarvis",
+        "message": "Schedule “nightly”: done — workflow “Nightly” ran"
+      }
+    ],
+    "audit": [
+      {
+        "id": "evt_01",
+        "ts": "2026-10-20T03:00:04",
+        "type": "workflow.completed",
+        "kind": "action",
+        "actor": "workflow.completed",
+        "session_id": null,
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "workflow.completed",
+        "payload": {
+          "workflow": "Nightly",
+          "status": "completed",
+          "run_id": "wfrun_02",
+          "sessions": [
+            "session_03",
+            "session_04",
+            "session_05"
+          ],
+          "failed_session": ""
+        }
+      },
+      {
+        "id": "evt_06",
+        "ts": "2026-10-20T03:00:03",
+        "type": "session.completed",
+        "kind": "lifecycle",
+        "actor": "workflow:Nightly",
+        "session_id": "session_05",
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "session.completed",
+        "payload": {
+          "status": "completed",
+          "summary": "Wrote the summary.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": "completed"
+        }
+      },
+      {
+        "id": "evt_07",
+        "ts": "2026-10-20T03:00:02",
+        "type": "session.completed",
+        "kind": "lifecycle",
+        "actor": "workflow:Nightly",
+        "session_id": "session_04",
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "session.completed",
+        "payload": {
+          "status": "completed",
+          "summary": "Wrote the summary.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": "completed"
+        }
+      },
+      {
+        "id": "evt_08",
+        "ts": "2026-10-20T03:00:01",
+        "type": "session.completed",
+        "kind": "lifecycle",
+        "actor": "workflow:Nightly",
+        "session_id": "session_03",
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "session.completed",
+        "payload": {
+          "status": "failed",
+          "summary": "The inbox could not be reached.",
+          "origin": "workflow:Nightly",
+          "project_id": null,
+          "outcome": null
+        }
+      }
+    ]
+  }
+}

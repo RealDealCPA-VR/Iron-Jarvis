@@ -14,6 +14,70 @@ The checklist has **213 items: 41 PASS, 169 PARTIAL, 3 FAIL.**
 
 ---
 
+## 0f. After wave 11 (v1.361.0)
+
+**What was done.** A final regression hunt over v1.359.0..v1.360.1 confirmed 15 things that worked at v1.359.0 and broke in wave 10, and rejected 3 more. Wave 11 (lanes 11A, 11B and 11C, then the integrator) closed all 15. Each entry below was re-checked against the tree after the integrate changes in two ways:
+- **Pins.** The lanes' and the integrator's pins: the real app factory, both real chat lanes, the real dashboard components, and the real `desktop/main.js` / `preload.js` functions under node.
+- **Probes.** The hunters' own probes, re-run against the current tree (0f.2).
+
+Nothing here has run in the packaged app yet. Section 0d's scores and counts are left as they were. This section does not re-score.
+
+### 0f.1 The regressions (the final hunt, v1.360.1)
+
+| # | Regression | Now | Pinned by |
+|---|---|---|---|
+| 1 | A pop-out window's bell went silent. With the main window in the tray, most notices raised no desktop toast. | **Fixed.** ONE window speaks: the main window while it is open, else the first pop-out still open (`main.js announcePopoutSpeaker` → `preload popout.speaks()` → `lib/desktopShell.quietWindow`). The tray watchers count a speaking pop-out as an open window (`speakingWindowOpen`). (integrate) The "This PC" bridge follows the same rule. A clean schedule's "done" now reaches a toast from the speaking pop-out too. A quiet window still records each line, so nothing repeats when it becomes the speaker. | `dashboard/__tests__/no-notice-lost-v13610.test.tsx` (1), `wave11-seams-v13610.test.tsx` (a) (b), `tests/test_no_notice_lost_v13610.py` |
+| 2 | A scheduled workflow whose `on_failure: skip` step failed told the phone only "done". A halted one lost the failing step's reason. | **Fixed.** The Schedules row reads Part failed. Every destination gets one line naming the step and its own words, e.g. "…ran, but its step “Fetch” could not finish: The inbox could not be reached." A halted run's FAILED line names the step that stopped it. This PC stays quiet only when every named step has its own run that the bell rings. A tool step keeps This PC's line. A clean run, even after a retried step, keeps "done". | `tests/test_no_notice_lost_v13610.py`, `tests/test_integrate_wave11_v13610.py` (a) + fixture `wave11-seams-v13610.json`, `wave11-seams-v13610.test.tsx` (a) |
+| 3 | A failed workflow was not pinged, badged or toasted when an earlier attempt of one of its steps had been pinged. | **Fixed.** `workflow.completed` carries `failed_session`: the run of the step that ended it, or "" when that step has no run. Only that step's notice stands in for the workflow's (bell `standsInFor`, tray `endedBy`). An event an older build wrote keeps the v1.360.0 rule. | `no-notice-lost-v13610.test.tsx` (3), `tests/test_no_notice_lost_v13610.py` (the tray plan under node) |
+| 4 | With a window open, an ask's only desktop notice was a bare count. | **Fixed.** When exactly one ask is new, the "N pending" ping names it in the bell row's words: the workflow and its question; the run, its action and its task; or the chat's tool. Several at once keep the counts. | `no-notice-lost-v13610.test.tsx` (4) |
+| 5 | The Connect door was gone for everyday own-data requests ("on <app>", "<app>:", a chat verb). | **Fixed.** Covers place words with a first-person or question signal, chat verbs, "use <app> to", and labels. Research, topic and explain sentences are still read first. | `tests/test_matcher_tables_v13610.py` (one table, both directions), `tests/test_integrate_wave11_v13610.py` (b) (every row through both chat lanes) |
+| 6 | "my <app> <thing>" lost the door when the thing was outside a closed noun list. | **Fixed.** Covers owned nouns after a possessive, and any non-modifier noun after an acting verb plus "my <app>". | same |
+| 7 | The second app in "X and Y" lost its door. | **Fixed.** One door names both ("Connect Google Drive and Dropbox in Settings"). "compare Slack and Teams" offers none. | same |
+| 8 | Asking to use Pixio lost "Connect Pixio in Settings". | **Fixed.** An API-key service used as the instrument counts. "is pixio better than midjourney?" offers nothing. | same |
+| 9 | The Guide was not armed for Handbook how-tos outside its word lists, or when "Jarvis" was in an earlier sentence. | **Fixed.** All 15 of the hunt's sentences are armed. "how do I make a cake" and "how do I fix my bike chain" are not. | same |
+| 10 | Lower-case "my calendar … in outlook" lost the Microsoft 365 door, and the model was told never to guess. | **Fixed.** (integrate) "In my outlook, the market will recover" names no app. A sentence that opens with "in/from my/our outlook," is the idiom for "in my view". It was the one false door the lower-case reading created; a mid-sentence place keeps its door. | same + `test_the_view_idiom_is_not_the_app_on_either_lane` |
+| 11 | The approval chip's menu was not placed again when its rows grew after it opened. | **Fixed.** It is measured again whenever the reading sentence changes; focus is still given once. | `labels-say-it-once-v13610.test.tsx` (1) |
+| 12 | The substitute receipt said the machine twice. | **Fixed.** "answered by Spark B (you asked for Claude Code) · local". | `labels-say-it-once-v13610.test.tsx` (2), `wave11-seams-v13610.test.tsx` (c) |
+| 13 | OpenCode on "<server>/fleet" lost its name on the run page and under "Ran on". | **Fixed.** The run page reads "OpenCode · Your model server" (the model list's words); "Ran on" reads "your model server on OpenCode". | `labels-say-it-once-v13610.test.tsx` (3), `wave11-seams-v13610.test.tsx` (c) |
+| 14 | An Ollama "fleet" pick was named after a detected model ("llama3"). | **Fixed.** Every surface says "your model server" or the machine's own name. (integrate, lane 11C's note) "Ran on" no longer places any Ollama run on a detected model's row: "qwen3 on llama3" had read so since v1.359.0. | `labels-say-it-once-v13610.test.tsx` (4), `wave11-seams-v13610.test.tsx` (c) |
+| 15 | The run page said "· cloud" for a run the router refused before sending anything. | **Fixed.** The daemon's receipt gives `on_this_network: null` unless `agents/outcome.reached_a_model` (a step, tokens, a tool call, or a dispatch event). The run page reads `runPageWords.runReachedAModel`. | `tests/test_run_where_reached_v13610.py`, `run-page-reached-v13610.test.tsx` |
+
+### 0f.2 The hunt's own probes, re-run against the tree
+
+- **Notices** (`hunt/notices/vt/notices.probe.test.tsx`, given the payload the daemon now sends and a shell that names the speaker): the current tree matches v1.359.0.
+  - The retried-then-failed workflow gets two pings and a badge of 1.
+  - The pop-out in the tray pings the parked question and the failed mission.
+  - The pending ping now also names the ask: “Nightly” asks “Send it?”.
+- **Doors** (the skeptic's 31 own-data sentences): every one gets its door, except "Slack announced a new pricing plan today". That was a false door at v1.359.0, kept door-free on purpose. Over the hunters' wider lists (251 sentences), the doors not given back are deliberate verdicts:
+  - Bare "my calendar" with no calendar app connected (v1.360.0: the words do not say which app).
+  - "what's new in slack / on github" stays research, as v1.360.0 pinned "what's new in Notion…".
+  - "how much revenue did stripe show last month?": an app as the subject of a question is also how news is asked.
+- **Guide** (the skeptic's 17 sentences): all 15 how-tos are armed; the cake and bike controls are not. The hunters' wider lists hold 51 bare how-tos with no Jarvis signal ("how do I set a reminder", "how do I set it up"). These stay unarmed, as v1.360.0 decided (G38: the Guide is for questions about Iron Jarvis).
+- **Receipt and names** (`hunt/mr`): every substitute and failover line names the machine once. The only differences from v1.359.0 are v1.360.0's intended alias naming, plus one: with a detected llama3 row, "Ran on" for an `ollama/llama3` run read "llama3" and now reads "llama3 on Ollama", like every other catalog shape.
+- **Refused run** (`hunt/sk/probe_cloud_refused.py`): `on_this_network` is now `None`, and the run has no step, token or tool call.
+
+### 0f.3 What this wave leaves
+
+- **Untested on the real app.** The pop-out speaker (IPC from main.js to preload) and the tray watchers are proven through their real functions under node, never in the packaged Electron app.
+- **Edges of the speaker switch.**
+  - A pop-out that loads while the main window is already in the tray pings the whole pending count once, as the main window does on every reopen.
+  - Each window keeps its own events socket, so a switch relies on the quiet window having recorded the same events.
+  - A pop-out stuck on a failed page load still counts as an open window, so the tray watcher stays quiet for it.
+- **Two lines, on purpose.** When a skipped agent step and a skipped tool step are both named, This PC speaks as well as the bell. That is two notices naming different steps, chosen over losing the tool step's failure.
+- **Cancelled scheduled workflow.** One cancelled mid-run still reads "ok — workflow ran" (from before this wave).
+- **Matcher trade-offs** (lane 11B's review; each a quiet, wrong "Connect X in Settings"):
+  - News asked with "on <app>" ("what's the latest on Slack?").
+  - Research in label form ("Notion: what is it?").
+  - "I need a break from slack".
+  - Coordination spillover ("I love notion and my gmail is full").
+  - Statements such as "we built our startup on stripe".
+  - A capitalised "In my Outlook, …" still names the app.
+  - "Jarvis, how do I change a tire?" arms the Guide (the name in the same sentence, accepted since v1.360.0).
+- **Run page and receipt can differ.** For a cloud call that went out and then failed before any step, token or tool call, the run page says nothing while the receipt says cloud.
+- **Raw id as a group name.** A model list names a fleet node's group by its raw id ("fleet-spark · Spark B"). It did at v1.359.0 too (the hunt's names probe).
+
+---
+
 ## 0e. After wave 10 (v1.360.0)
 
 **What was done.** Wave 10 (lanes 10A, 10B and 10C, then the integrator) worked through the final re-audit's 8 regressions (section 0d.5) and its 7 open gaps (0d.4 and 0d.7). Every entry below was re-checked against the tree after the integrate commit. The checks used the real app factory, the real chat lanes, the real dashboard components and the real `desktop/main.js` functions under node. None of it has run in the packaged app yet: the user's install is still v1.354.0. Section 0d's scores and counts are left as they were. This section does not re-score.

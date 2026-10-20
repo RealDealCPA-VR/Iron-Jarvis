@@ -460,6 +460,16 @@ DOOR = [
     ("what's the outlook for the market in 2027", []),  # NAMES NO APP
     ('my outlook on life is pretty good', []),  # NAMES NO APP
     ('the outlook is grim', []),  # NAMES NO APP
+    # --- integrate (v1.361.0, lane 11B's review note): a sentence that opens
+    # "in/from my/our outlook," is the idiom for "in my view" — never the app;
+    # a mid-sentence place and the app's own things keep the door.
+    ('In my outlook, the market will recover', []),  # NAMES NO APP
+    ('From my outlook, this looks bad', []),  # NAMES NO APP
+    ('Thanks for the update. In my outlook, rates will fall next year', []),  # NAMES NO APP
+    ('in our outlook, the plan is sound', []),  # NAMES NO APP
+    ('find the invoice in my outlook, then forward it to Jim', ['microsoft_365']),
+    ("what's in my outlook inbox?", ['microsoft_365']),
+    ('In outlook, find the email from Dana', ['microsoft_365']),
     ('what can pixio do?', []),
     ('is pixio any good?', []),
     ('what is pixio?', []),

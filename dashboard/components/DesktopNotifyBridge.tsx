@@ -30,11 +30,27 @@
 // (comm/notifier.bell_pings, an agent ask, a parked workflow's question). What
 // still arrives here is everything else a destination is told: a clean
 // schedule's "done" line, a workflow's own notify step, goal news, a failover.
+//
+// ONE WINDOW SPEAKS (v1.361.0 integrate, after lane 11A): the main window
+// while it is open; closed to the tray, the ONE pop-out the desktop app names
+// (`lib/desktopShell.quietWindow`, the bell's own rule). Until v1.361.0 a
+// pop-out was always quiet here, so with the main window in the tray a "This
+// PC" line reached no toast at all.
 
 import { useEffect, useRef } from "react";
 
 import { useEvents } from "@/lib/useEvents";
-import { isPopoutWindow } from "@/lib/desktopShell";
+import { quietWindow } from "@/lib/desktopShell";
+
+/** Does this window leave the "This PC" toasts to another? Never throws (a
+ *  test's partial `lib/desktopShell` mock reads as the main window). */
+function quietHere(): boolean {
+  try {
+    return quietWindow();
+  } catch {
+    return false;
+  }
+}
 
 interface NotifyBridge {
   notify?: (title: string, body: string) => Promise<boolean>;
@@ -46,10 +62,6 @@ export const DESKTOP_NOTIFY_EVENT_TYPES: readonly string[] = ["comm.desktop"];
 
 export function DesktopNotifyBridge() {
   const { events } = useEvents(50, { types: DESKTOP_NOTIFY_EVENT_TYPES });
-  // v1.283.0: every window holds its own events socket, so with a module
-  // popped out the same comm.desktop event would toast once per window. The
-  // main window is the one that speaks for the app; a pop-out stays quiet.
-  const quiet = isPopoutWindow();
   // Events arrive newest-first and re-render as a rolling window — remember
   // what was already shown or a reconnect would replay toasts.
   const seenRef = useRef<Set<string>>(new Set());
@@ -57,10 +69,17 @@ export function DesktopNotifyBridge() {
   useEffect(() => {
     const bridge = (window as unknown as { ironjarvis?: NotifyBridge }).ironjarvis;
     if (!bridge?.notify) return;
+    // v1.283.0: every window holds its own events socket, so with a module
+    // popped out the same comm.desktop event would toast once per window: ONE
+    // window speaks. v1.361.0: decided when the events land, never cached —
+    // which window speaks changes while a pop-out is open.
+    const quiet = quietHere();
     for (const ev of events) {
-      if (quiet) break;
       if (ev.type !== "comm.desktop" || !ev.id || seenRef.current.has(ev.id)) continue;
+      // A quiet window still RECORDS the line (the window that speaks showed
+      // it), so if it becomes the one that speaks it never says it again.
       seenRef.current.add(ev.id);
+      if (quiet) continue;
       const payload = (ev.payload ?? {}) as { title?: string; message?: string };
       void bridge.notify(payload.title || "Iron Jarvis", payload.message || "");
     }
