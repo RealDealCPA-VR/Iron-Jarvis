@@ -2278,7 +2278,7 @@ def build_platform(
             # run alert), so it carries what the steps' own alerts used to: the
             # step that stopped a failed run, and a failed step the run went
             # on past (``on_failure: skip``), each in its own words.
-            from .workflows.step_outcome import record_failures, record_sessions
+            from .workflows.step_outcome import record_failures
 
             halted, skipped = record_failures(result)
             if status == "failed":
@@ -2309,21 +2309,27 @@ def build_platform(
                 # which step and why (it read "ok … ran" before).
                 fired["outcome"] = "completed_with_failures"
                 detail = _run_outcome.workflow_skipped_detail(ref, skipped)
-            sessions = record_sessions(result)
-            if status == "completed" and sessions:
-                # v1.361.0 (lane 11A): a step's run that fell short published
-                # a ``session.completed`` the bell rings ("A step of your
+                # v1.361.0 (lane 11A): a failed step's OWN run published a
+                # ``session.completed`` the bell rings ("A step of your
                 # workflow … could not finish") — then the bell (window open)
                 # or the tray watcher is this outcome's one desktop notice, so
-                # "This PC" stays quiet; a tool step's failure has no bell row
-                # and "This PC" keeps the schedule's line. The bell's OWN rule
-                # (``_session_end`` → ``notifier.bell_pings``), never a second.
-                rings = await asyncio.to_thread(
-                    lambda: any(_session_end(sid)[0] for sid in sessions[-50:])
-                )
-                if rings:
-                    fired["run"] = True
-                    fired["rings"] = True
+                # "This PC" stays quiet. Only when EVERY step this line names
+                # has a run the bell rings (the bell's OWN rule:
+                # ``_session_end`` → ``notifier.bell_pings``, never a second):
+                # a tool step's failure has no bell row, so "This PC" keeps
+                # the schedule's line. (lane 11A review) Never the run's other
+                # sessions: an earlier attempt that failed and was retried is
+                # another outcome, and keying on it silenced a clean run's
+                # "done" — the only desktop notice left said "could not
+                # finish" over a run that finished.
+                step_runs = [str(out.get("session_id") or "") for _, out in skipped]
+                if step_runs and all(step_runs):
+                    rings = await asyncio.to_thread(
+                        lambda: all(_session_end(sid)[0] for sid in step_runs[:50])
+                    )
+                    if rings:
+                        fired["run"] = True
+                        fired["rings"] = True
             return detail
         if task.kind == "event":
             etype = payload.get("type", "schedule.fired")

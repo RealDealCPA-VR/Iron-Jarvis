@@ -87,12 +87,3 @@ def record_failures(record: Any) -> tuple[StepFailure | None, list[StepFailure]]
         return step_failures(names, outputs)
     except Exception:  # noqa: BLE001
         return None, []
-
-
-def record_sessions(record: Any) -> list[str]:
-    """The runs (session ids) a ``WorkflowRunRecord`` started, in order."""
-    try:
-        ids = _loads(getattr(record, "session_ids_json", ""), list)
-        return [str(s) for s in ids if isinstance(s, str) and s]
-    except Exception:  # noqa: BLE001
-        return []

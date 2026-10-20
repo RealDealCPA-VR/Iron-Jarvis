@@ -198,6 +198,39 @@ def test_a_clean_scheduled_workflow_still_reads_done(tmp_path, monkeypatch, desk
     assert desktop_sink == ["Schedule “nightly”: done — workflow “Nightly” ran"], desktop_sink
 
 
+FETCH_FLAKY = {"name": "Fetch", "kind": "agent", "task": "FLAKY: fetch the inbox", "on_failure": "retry"}
+
+
+def test_a_clean_run_whose_step_was_retried_keeps_its_done_line_on_this_pc(
+    tmp_path, monkeypatch, desktop_sink
+):
+    """(lane 11A review) The bell rings the retried ATTEMPT ("A step of your
+    workflow Nightly could not finish") — another outcome than the run, which
+    finished. "This PC" keeps the schedule's "done" (v1.360.1 said it), or
+    the only desktop notice for a run that worked would say it failed."""
+    out = _fire(tmp_path, monkeypatch, [FETCH_FLAKY, WRITE])
+    assert out.body["last_status"] == ro.STATUS_OK, out.body
+    [attempt] = [
+        e for e in out.events if e["type"] == EventType.SESSION_COMPLETED and e["payload"].get("status") == "failed"
+    ]
+    assert bell_pings(attempt), attempt  # the bell did ring the attempt ...
+    assert out.phone == ["Schedule “nightly”: done — workflow “Nightly” ran"], out.phone
+    # ... and This PC still says the run's own outcome, once.
+    assert desktop_sink == ["Schedule “nightly”: done — workflow “Nightly” ran"], desktop_sink
+
+
+def test_a_skipped_tool_step_beside_a_retried_attempt_keeps_the_line_on_this_pc(
+    tmp_path, monkeypatch, desktop_sink
+):
+    """(lane 11A review) The line names the TOOL step, which has no bell row;
+    the bell rang only the retried attempt of another step. This PC keeps
+    the schedule's line (only the named steps' own runs make it quiet)."""
+    out = _fire(tmp_path, monkeypatch, [FETCH_FLAKY, dict(CHECK_TOOL, on_failure="skip"), WRITE])
+    assert out.body["last_status"] == ro.STATUS_PARTIAL, out.body
+    assert len(out.phone) == 1 and "“Check”" in out.phone[0], out.phone
+    assert len(desktop_sink) == 1 and "“Check”" in desktop_sink[0], desktop_sink
+
+
 def test_the_schedule_words_for_a_workflow_step():
     assert ro.workflow_failed_reason("Nightly", "Fetch", f"The run failed: {INBOX}") == (
         f"workflow “Nightly” stopped at its step “Fetch”: {INBOX}"
