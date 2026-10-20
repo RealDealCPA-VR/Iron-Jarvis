@@ -45,6 +45,11 @@ export interface SessionResult {
   documents?: string[];
   revertable?: number;
   reverted?: number;
+  /** v1.351.0 (G18): the provider the run's row recorded, and (this read
+   *  only, `receipt=True`) whether it stays on the user's network; null =
+   *  no provider to judge. The run page's Model line reads both (v1.360.1). */
+  provider?: string;
+  on_this_network?: boolean | null;
   [k: string]: unknown;
 }
 
@@ -156,6 +161,9 @@ export function fileDownloadHref(path: string): string {
  * Renders NOTHING when there are no files or the endpoint is unreachable (an
  * optional panel that can't load should be absent, not an error box — the
  * TeamTree rule).
+ * v1.360.1 (G21): `onResult` hands each result this panel reads to its page,
+ * so the run page's Model line says "local" / "cloud" from the run's own
+ * receipt without a second request for it.
  */
 export function SessionFiles({
   sessionId,
@@ -163,6 +171,7 @@ export function SessionFiles({
   active,
   onPreview,
   reloadNonce = 0,
+  onResult,
 }: {
   sessionId: string;
   workspacePath?: string;
@@ -170,8 +179,14 @@ export function SessionFiles({
   onPreview: (path: string) => void;
   /** Bump to force a refetch (page-side ledger events, e.g. an undo). */
   reloadNonce?: number;
+  /** Called with every result read (never on a failed read). */
+  onResult?: (result: SessionResult) => void;
 }) {
   const [result, setResult] = useState<SessionResult | null>(null);
+  // The latest callback, read at answer time: a new function from the page
+  // on each render must not restart the load below.
+  const onResultRef = useRef(onResult);
+  onResultRef.current = onResult;
 
   // The latest loader, so the visible-only repeat below can reach it.
   const loadRef = useRef<() => void>(() => {});
@@ -180,7 +195,10 @@ export function SessionFiles({
     const load = async () => {
       try {
         const r = await get<SessionResult>(`/sessions/${sessionId}/result`);
-        if (alive) setResult(r);
+        if (alive) {
+          setResult(r);
+          if (r) onResultRef.current?.(r);
+        }
       } catch {
         /* optional panel — absent beats wrong */
       }

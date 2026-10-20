@@ -12,11 +12,14 @@
  *                     Time-travel feed's words)
  *   a finished run    lib/statusWords (the one status table)
  *   a model's place   lib/ranOnWords.endpointLabel (the model menu's names)
+ *   local / cloud     components/chat/TurnReceipt.replyWhere (the chat
+ *                     receipt's own words and rule, v1.360.1)
  */
 
 import type { IJEvent } from "@/lib/types";
 import { plainText } from "@/components/Markdown";
 import { stepLabel } from "@/components/chat/stepLabel";
+import { replyWhere, type ReplyWhere } from "@/components/chat/TurnReceipt";
 import { humanSummary } from "@/lib/eventWords";
 import { stepPhrase, stepPhraseText } from "@/lib/stepWords";
 import { statusWords } from "@/lib/statusWords";
@@ -135,6 +138,64 @@ export function runModelWords(
   // A row that names its MODEL in `name` is not a place.
   if (!where || where === m) where = providerDisplay(p);
   return m ? `${where} · ${m}` : where;
+}
+
+/** A GET /models row as far as {@link runWhere} reads it. */
+export interface RunWhereRow extends RanOnRow {
+  /** `egress.stays_on_this_network` for the row's provider (v1.352.0). */
+  on_this_network?: boolean;
+}
+
+/** The slice of the run's own receipt (GET /sessions/{id}/result) that
+ *  {@link runWhere} reads: the provider the flag was judged for, and the
+ *  flag (null when the daemon had no provider to judge). */
+export interface RunWhereReceipt {
+  provider?: unknown;
+  on_this_network?: unknown;
+}
+
+/**
+ * v1.360.1 (G21, the last remainder): WHERE a run ran, in the chat receipt's
+ * own words and by its own rule (TurnReceipt.replyWhere: "local" or "cloud",
+ * nothing when it is not known, never for the demo model). There is one word
+ * table, replyWhere's; this only finds the flag to hand it:
+ *
+ *   1. the run's own receipt (`on_this_network`, egress.stays_on_this_network
+ *      for the run's provider), when it was judged for THIS provider (a
+ *      receipt read before the run's served pair was written names the old
+ *      one, and is not used);
+ *   2. else the GET /models row for the run's provider + model (the same
+ *      predicate, the daemon's one answer per provider).
+ *
+ * Never the row's `kind`: a routing class is not where the run went (a
+ * "local" endpoint the user pointed at a cloud server says false), so a row
+ * without the flag says nothing. No endpoint label is passed: the Model line
+ * already names the machine, and the word is said beside it.
+ */
+export function runWhere(
+  provider: string | null | undefined,
+  model: string | null | undefined,
+  catalog: readonly RunWhereRow[] | null | undefined,
+  receipt?: RunWhereReceipt | null,
+): ReplyWhere | null {
+  const p = (provider ?? "").trim();
+  const m = (model ?? "").trim();
+  if (!p) return null;
+  let here: boolean | undefined;
+  if (
+    receipt &&
+    typeof receipt.on_this_network === "boolean" &&
+    typeof receipt.provider === "string" &&
+    receipt.provider.trim() === p
+  ) {
+    here = receipt.on_this_network;
+  } else {
+    const row = (Array.isArray(catalog) ? catalog : []).find(
+      (r) => !!r && r.provider === p && r.model === m,
+    );
+    if (row && typeof row.on_this_network === "boolean") here = row.on_this_network;
+  }
+  return replyWhere({ provider: p, model: m, on_this_network: here });
 }
 
 /** One live event, in words: what happened (`label`) and a quiet detail

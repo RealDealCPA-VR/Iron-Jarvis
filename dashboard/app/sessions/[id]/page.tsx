@@ -49,7 +49,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { TeamTree } from "@/components/sessions/TeamTree";
-import { SessionFiles } from "@/components/sessions/SessionFiles";
+import { SessionFiles, type SessionResult } from "@/components/sessions/SessionFiles";
 import OriginChip from "@/components/sessions/OriginChip";
 import TrustChip from "@/components/TrustChip";
 import ConfinementChip from "@/components/sessions/ConfinementChip";
@@ -80,6 +80,7 @@ import {
   RESTART_WORDS,
   runModelWords,
   runTitle,
+  runWhere,
   RUN_TITLE_FALLBACK,
   shownSummary,
   type ContinuationRow,
@@ -179,6 +180,16 @@ export default function SessionDetailPage({
   // A custom or remote agent's name is shown as the user typed it; a
   // built-in id is cased by CSS (v1.315.0).
   const agentCustom = agentRaw.startsWith("custom:") || agentRaw.startsWith("remote:");
+  // v1.360.1 (G21): where a FINISHED run ran ("local" / "cloud"), said beside
+  // the model in the chat receipt's words (runPageWords.runWhere). The run's
+  // own receipt is the read SessionFiles already makes (no second request);
+  // until it lands, or when it cannot say, the /models row decides; unknown
+  // says nothing. A run still going has not written its served model yet.
+  const [receipt, setReceipt] = useState<SessionResult | null>(null);
+  const where =
+    session && !isActive
+      ? runWhere(session.provider, session.model, catalog, receipt?.session_id === id ? receipt : null)
+      : null;
   const recordId = useId();
   const [recordOpen, setRecordOpen] = useState(false);
 
@@ -637,13 +648,22 @@ export default function SessionDetailPage({
                     "OpenAI · gpt-x"); the raw provider / model is the record
                     of what ran, so it stays in the title. v1.354.0 (G20): a
                     model server the user set up reads by the name the model
-                    menu gives it, not "fleet-a1b2c3". */}
+                    menu gives it, not "fleet-a1b2c3". v1.360.1 (G21): a
+                    finished run adds where it ran, quietly ("· local" /
+                    "· cloud", the chat receipt's words; why on hover). */}
                 <Meta
                   label="Model"
                   value={
-                    <span title={`${session.provider} / ${session.model}`}>
-                      {runModelWords(session.provider, session.model, catalog)}
-                    </span>
+                    <>
+                      <span title={`${session.provider} / ${session.model}`}>
+                        {runModelWords(session.provider, session.model, catalog)}
+                      </span>
+                      {where?.tail && (
+                        <span data-testid="run-where" title={where.title} className="text-zinc-500">
+                          {` · ${where.tail}`}
+                        </span>
+                      )}
+                    </>
                   }
                 />
                 <Meta label="Created" value={clockTime(session.created_at)} />
@@ -749,6 +769,7 @@ export default function SessionDetailPage({
             active={isActive}
             onPreview={setPreviewPath}
             reloadNonce={filesNonce}
+            onResult={setReceipt}
           />
 
           {/* Embedded preview for a handed-over file — the chat's DocPreview,
