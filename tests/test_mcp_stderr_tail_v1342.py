@@ -206,7 +206,7 @@ def test_the_tail_reaches_the_model_through_the_client_and_the_tool():
         transport.close()
     assert res.ok is False
     err = res.error or ""
-    assert "pack 'brave': the MCP server closed the connection (exit code 2)" in err, err
+    assert "extension 'brave': the MCP server closed the connection (exit code 2)" in err, err
     assert "; its last output: " in err and FATAL_LINE in err, err
     assert err.rstrip().endswith(SETTINGS_FIX_SENTENCE), err
     _assert_masked(err)

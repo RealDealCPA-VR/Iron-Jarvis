@@ -247,7 +247,7 @@ def apply_update(
             "restart_required": True,
             "rolled_back": False,
             "reason": (
-                "updated — restart the daemon (and dashboard) to load the new code"
+                "updated — restart Iron Jarvis to load the new code"
                 if ok
                 else "update ran but a non-critical step failed — check the log"
             ),

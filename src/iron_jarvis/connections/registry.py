@@ -567,7 +567,7 @@ class ConnectionRegistry:
         if spec is None:
             return {"ok": False, "detail": f"unknown provider '{provider}'"}
         if provider == "mock":
-            return {"ok": True, "detail": "mock is always connectable (offline)"}
+            return {"ok": True, "detail": "The demo model is always ready (it runs on this PC)."}
         record = self._get_record(provider)
         # Pixio's env fallback counts as connected (see status()) — Test must
         # probe the key that's actually in use, not report "not connected".

@@ -499,13 +499,13 @@ export function ModelSwitcher() {
         <span className="min-w-0">
           <span className="flex min-w-0 items-center gap-1.5">
             <span
-              title={modelTitle(m)}
+              title={modelTitle(m, models)}
               className={`block truncate font-mono text-[11px] ${
                 ok ? "text-zinc-200" : "text-zinc-500 line-through"
               }`}
             >
               {/* v1.300.0: the picker's label ("Opus 5.5") over the raw id. */}
-              {modelText(m)}
+              {modelText(m, models)}
             </span>
             <ModelRowChips m={m} />
           </span>
@@ -608,7 +608,7 @@ export function ModelSwitcher() {
         ) : (
           <span className="hidden max-w-[150px] truncate font-mono text-[11px] lg:inline">
             {/* v1.359.0 (lane 9B): the row's own words, never "subscription". */}
-            {activeEntry ? modelText(activeEntry) : activeModel}
+            {activeEntry ? modelText(activeEntry, models) : activeModel}
           </span>
         )}
         {selectedOffline && (

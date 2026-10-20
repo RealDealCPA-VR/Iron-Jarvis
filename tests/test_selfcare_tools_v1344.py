@@ -314,7 +314,7 @@ async def test_pack_status_for_one_and_all_packs_never_a_value(tmp_path):
 
     none = await _run(platform, tmp_path, "pack_status", {"name": "nope"})
     assert none.ok is False
-    assert "no pack named 'nope'" in none.error and "brave, srv" in none.error
+    assert "no extension named 'nope'" in none.error and "brave, srv" in none.error
 
     platform.config.mcp_servers = []
     empty = await _run(platform, tmp_path, "pack_status")
@@ -366,9 +366,9 @@ async def test_pack_restart_reloads_through_reload_pack_with_a_real_stdio_server
     assert load_status("bad")["last_error"] == bad.data["last_error"]
 
     unknown = await _run(platform, tmp_path, "pack_restart", {"name": "nope"})
-    assert unknown.ok is False and "configured packs: bad, echo" in unknown.error
+    assert unknown.ok is False and "configured extensions: bad, echo" in unknown.error
     blank = await _run(platform, tmp_path, "pack_restart", {"name": ""})
-    assert blank.ok is False and "needs the pack's name" in blank.error
+    assert blank.ok is False and "needs the extension's name" in blank.error
 
 
 def test_reload_route_answers_byte_identically_through_reload_pack(tmp_path):

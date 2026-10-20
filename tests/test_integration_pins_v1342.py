@@ -157,7 +157,8 @@ def test_a_failing_pack_with_zero_tools_is_failed_even_without_last_error(clean_
     mcp_tools._LOAD_STATUS["f"] = _failed_record(state="failing", last_error="", stderr_tail="")
     st = _mcp_status(True, 0, "f")
     assert st["status"] == "failed"
-    assert st["detail"] == "the pack did not start"
+    # v1.360.0 integrate (moved on purpose): the canon's word, "extension".
+    assert st["detail"] == "the extension did not start"
 
 
 # --- no secret value leaves GET /mcp/servers ------------------------------------

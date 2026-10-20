@@ -150,7 +150,7 @@ class PaneReadTool(_PaneTool):
             return ToolResult(ok=False, error="the Build module is not available here")
         session = _resolve(mgr, str(args.get("pane") or ""))
         if session is None:
-            return ToolResult(ok=False, error=f"no Build pane named {args.get('pane')!r}")
+            return ToolResult(ok=False, error=f"no Build terminal named {args.get('pane')!r}")
         want = max(1, min(int(args.get("lines") or 80), 400))
         tail = await asyncio.to_thread(session.output_tail)
         rows = [r for r in tail.splitlines() if r.strip()][-want:]
@@ -192,7 +192,7 @@ class PaneSpawnTool(_PaneTool):
         if name and _resolve(mgr, name) is not None:
             return ToolResult(
                 ok=False,
-                error=f"a Build pane named {name!r} already exists — names must be unique",
+                error=f"a Build terminal named {name!r} already exists — names must be unique",
             )
         cwd = (args.get("cwd") or "").strip() or getattr(ctx, "workspace", None)
         try:
@@ -243,9 +243,9 @@ class PaneSendTool(_PaneTool):
             return ToolResult(ok=False, error="the Build module is not available here")
         session = _resolve(mgr, str(args.get("pane") or ""))
         if session is None:
-            return ToolResult(ok=False, error=f"no Build pane named {args.get('pane')!r}")
+            return ToolResult(ok=False, error=f"no Build terminal named {args.get('pane')!r}")
         if not session.alive:
-            return ToolResult(ok=False, error="that pane's shell has exited")
+            return ToolResult(ok=False, error="that terminal's shell has exited")
 
         before = session.activity()
         # THE REFUSAL. A blocked pane is showing a decision the USER has not
@@ -255,7 +255,7 @@ class PaneSendTool(_PaneTool):
             return ToolResult(
                 ok=False,
                 error=(
-                    "that pane is waiting on an approval or question — read it "
+                    "that terminal is waiting on an approval or question — read it "
                     "and ask the user, rather than answering for them"
                 ),
                 data={"pane": _view(session), "state": "blocked",
@@ -326,7 +326,7 @@ class PaneWaitTool(_PaneTool):
             return ToolResult(ok=False, error="the Build module is not available here")
         session = _resolve(mgr, str(args.get("pane") or ""))
         if session is None:
-            return ToolResult(ok=False, error=f"no Build pane named {args.get('pane')!r}")
+            return ToolResult(ok=False, error=f"no Build terminal named {args.get('pane')!r}")
         until = str(args.get("until") or "settled").lower()
         wanted = (
             {"idle", "done", "blocked"} if until == "settled" else {until}

@@ -54,6 +54,12 @@ export interface PreviewRow {
   /** v1.356.0 integrate: a KEY of this name is saved here (Pixio's media
    *  key) — it powers a built-in tool, not this server. Absent otherwise. */
   key_app?: string | null;
+  /** v1.360.0 (G49): the program a server that runs on this PC starts
+   *  (mcp/import_config.program_of, never a masked piece); "" / absent from
+   *  an older Iron Jarvis. */
+  program?: string | null;
+  /** v1.360.0 (G49): the host of a server reached at a web address. */
+  host?: string | null;
 }
 
 /** POST /mcp/import/preview's answer. */

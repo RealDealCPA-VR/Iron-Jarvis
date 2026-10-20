@@ -448,7 +448,7 @@ export default function TemplatesPage() {
                     )}
                     {models.map((m) => (
                       <option key={modelKey(m)} value={modelKey(m)} title={modelPickTitle(m)}>
-                        {modelPickWords(m)}
+                        {modelPickWords(m, models)}
                       </option>
                     ))}
                   </select>
@@ -572,7 +572,7 @@ export default function TemplatesPage() {
                                 title={modelPickTitle({ provider: t.provider, model: t.model })}
                                 className="inline-flex items-center gap-1 text-[11px] text-zinc-500"
                               >
-                                <Cpu size={11} /> {modelRowName({ provider: t.provider, model: t.model })}
+                                <Cpu size={11} /> {modelRowName({ provider: t.provider, model: t.model }, models)}
                               </span>
                             )}
                           </div>

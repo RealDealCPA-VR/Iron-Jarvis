@@ -51,6 +51,7 @@ import { statusWords } from "@/lib/statusWords";
 import { runActivity, RunActivityFold } from "@/components/chat/RunActivity";
 import { friendlyModelName } from "@/lib/friendlyModelName";
 import { answeredModelName } from "@/lib/answeredModel";
+import { useModels } from "@/lib/useModels";
 import { providerDisplay } from "@/lib/onboarding";
 import { replyWhere, secondsText } from "@/components/chat/TurnReceipt";
 
@@ -217,6 +218,10 @@ function Row({
  * with no provider says nothing about who, exactly as before.
  */
 export function RunMeta({ result }: { result: RunResult }) {
+  // v1.360.0 (lane 10B fix): the catalog the reply's receipt names the
+  // "fleet" pick from (its machine, "DGX Spark"), read through the one
+  // /models reader (cached, shared; an empty list until it answers).
+  const { models } = useModels();
   const parts: ReactNode[] = [];
   const provider = (result.provider ?? "").trim();
   const model = (result.model ?? "").trim();
@@ -227,7 +232,7 @@ export function RunMeta({ result }: { result: RunResult }) {
     provider === "mock"
       ? providerDisplay("mock")
       : model
-        ? answeredModelName({ provider, model }, []) ?? friendlyModelName(model)
+        ? answeredModelName({ provider, model }, models) ?? friendlyModelName(model)
         : providerDisplay(provider);
   if (who) {
     const title = [providerDisplay(provider), model].filter(Boolean).join(" · ");

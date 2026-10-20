@@ -240,7 +240,7 @@ class LTMAppendTool(Tool):
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         source = args.get("source") or self.manager.default_source()
         if source is None:
-            return ToolResult(ok=False, error="no LTM connector registered")
+            return ToolResult(ok=False, error="no memory base is set up")
         # LOCAL ONLY (v1.332.0): the note is the chat's own words, so in a
         # local-only chat it goes only to a base on this PC.
         from ..providers import egress as _egress

@@ -214,7 +214,7 @@ def build_memory_graph(
     }
     if embedder_name == "mock":
         payload["note"] = (
-            "similarity is scored by the offline mock embedder (lexical-ish); "
+            "similarity is scored by word overlap (no embedding model is connected); "
             "connect a local Ollama for true semantic edges"
         )
     return payload

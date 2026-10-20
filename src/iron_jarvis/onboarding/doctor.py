@@ -152,7 +152,7 @@ def check_node() -> dict:
         fix=""
         if ok
         else "Install Node.js LTS: https://nodejs.org "
-        "(the dashboard is optional; the CLI and daemon work without it).",
+        "(the dashboard is optional; the CLI and Iron Jarvis work without it).",
         level=RECOMMENDED,
     )
 
@@ -1097,7 +1097,7 @@ def check_mcp(platform) -> dict:
         else "; ".join(problems),
         fix=""
         if ok
-        else "Open Tools → Connected packs and press Retry on the pack; if npx is missing, install Node.js LTS (https://nodejs.org) and restart Iron Jarvis.",
+        else "Open Tools → Connected extensions and press Retry on the extension; if npx is missing, install Node.js LTS (https://nodejs.org) and restart Iron Jarvis.",
         level=RECOMMENDED,
     )
 

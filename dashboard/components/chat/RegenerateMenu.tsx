@@ -188,7 +188,7 @@ export function RegenerateMenu({
     const others = models.filter((m) => !current || choiceOf(m) !== current);
     const q = filter.trim();
     if (q) {
-      for (const m of matchModels(others, q, FILTER_MAX)) out.push(modelItem(m, "match"));
+      for (const m of matchModels(others, q, FILTER_MAX, models)) out.push(modelItem(m, "match"));
       return out;
     }
     const seen = new Set<string>();
@@ -309,7 +309,7 @@ export function RegenerateMenu({
     }
   }
 
-  const sameName = currentRow ? modelText(currentRow) : "default model";
+  const sameName = currentRow ? modelText(currentRow, models) : "default model";
   // Calm chat W1-4: 28px tall ghosts, like every control in the row under a
   // reply (the "with another model" chevron stays a narrow 16px).
   const btn =
@@ -355,9 +355,9 @@ export function RegenerateMenu({
               // v1.359.0 integrate (lane 9B review): an unlabelled row reads in
               // words ("Opus 4.8", "Your Claude plan"), so the raw id rides the
               // title whenever the words are not the id, like the composer menu.
-              title={modelTitle(item.row)}
+              title={modelTitle(item.row, models)}
             >
-              {modelText(item.row)}
+              {modelText(item.row, models)}
             </span>
             <ModelRowChips m={item.row} />
             <span className="ml-auto shrink-0 text-[10px] text-zinc-500">

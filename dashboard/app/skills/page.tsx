@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Sparkles, BookOpen, Plus, Save, RefreshCw, Play, Copy, Check, Cpu, Pin, Archive, Search } from "lucide-react";
 import { useApi } from "@/lib/useApi";
+import { useModels } from "@/lib/useModels";
 import { post, ApiError } from "@/lib/api";
 import type { Skill, SkillCuratorView, SkillDetail, SkillLearningOverview } from "@/lib/types";
 import { SuggestedSkills } from "@/components/skills/SuggestedSkills";
@@ -96,6 +97,9 @@ import { PageShell, Reveal } from "@/components/motion";
 import { PageGrid } from "@/components/PageGrid";
 
 export default function SkillsPage() {
+  // v1.360.0 (lane 10B fix): the catalog the answer's model line names the
+  // "fleet" pick from (the one /models reader, cached and shared).
+  const { models: modelCatalog } = useModels();
   const { data, error, loading, reload } = useApi<{
     skills: Skill[];
     counts?: Record<string, number>;
@@ -665,7 +669,7 @@ export default function SkillsPage() {
                             <Cpu size={11} className="shrink-0" />
                             {/* v1.359.0 re-review: the model in words, raw pair as title. */}
                             <span className="truncate" title={modelPickTitle(applyResult)}>
-                              {modelPickWords(applyResult)}
+                              {modelPickWords(applyResult, modelCatalog)}
                             </span>
                           </span>
                           <CopyButton text={applyResult.reply} />

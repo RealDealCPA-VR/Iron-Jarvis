@@ -1895,6 +1895,69 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## One notice for each thing that happens, the app you meant, and your own machine by name (v1.360.0)
+
+Background work tells you once, chat offers the app you actually meant, and
+your own model server is called by the name you gave it. The look of the app
+is the same.
+
+- **One notice for each outcome.**
+  - While Iron Jarvis is open, a scheduled task or workflow that fails or
+    needs you raises one desktop notice, the bell's. It used to raise two or
+    three, in different words.
+  - A failed workflow is one row in the bell, not one row for the workflow
+    and another for the step that stopped it.
+  - When Iron Jarvis sits in the tray with no window open, a background run
+    that failed or did not finish raises one Windows notice in the same
+    words. Clicking it opens the run, or the Workflows page for a workflow.
+    Nothing is said twice, and nothing you already saw in an open window is
+    said again.
+  - A request for your OK gets one notice too, whether it is an agent asking
+    to use a tool or a scheduled workflow waiting for your answer. The bell
+    announces it. Your phone still gets its own line.
+  - Your phone gets one line per scheduled run, the schedule's own. Turning a
+    schedule's notifications off now silences it completely.
+  - A goal schedule whose run ended needing you says **Needs you** on its
+    Schedules row, the same as the bell.
+- **A helper run's result keeps its colour.** The finished line under a
+  helper agent shows "failed" in red, and "needs you" or "part failed" in
+  amber. That word stays visible when a narrow window cuts the line short.
+  Hover over the line to read all of it.
+- **Sessions' "Clean up now?"** is red when it asks you to confirm, like the
+  button next to it.
+- **Chat offers the app you meant.**
+  - The **Connect … in Settings** button appears only when you ask about your
+    own things in an app, for example "check my Stripe payments from
+    yesterday" or "list my GitHub repos". Everyday and research sentences
+    such as "stripe the table rows" or "explain how Postgres indexes work"
+    offer nothing.
+  - Mail and calendar words mean the app you connected. With Microsoft 365
+    connected, "check my inbox" uses Outlook. With no mail app connected, one
+    button names both choices, Gmail and Microsoft 365. "My calendar" with no
+    calendar app offers nothing, because the words did not say which one.
+  - Chat looks things up in the Handbook only when you ask about Iron Jarvis
+    itself. "How do I install node" no longer sends it there.
+- **Your own model server, by name.** A reply from the model server you set
+  up says the name you gave it, for example "answered by DGX Spark". The model
+  menu, the chip, Settings' model lists, a helper agent's card and row, and
+  the run page all use the same name. A server you never named reads "your
+  model server" everywhere.
+- **The approvals say what Jarvis may read.** Once you limit reading to
+  chosen folders in Settings › Permissions & ledger, the chat's approval chip,
+  the Access summary and an agent's approval choices all say "Reads files only
+  in the folders you chose, without asking".
+- **Found extensions say what they are.** When you bring servers in from
+  Claude, VS Code or another app, one Iron Jarvis doesn't know says what it
+  is, for example "QuickBooks Desktop · runs a program on this PC
+  (quickbooks-desktop-mcp)" or "Linear · reached at a web address
+  (mcp.linear.app)". Once it is added and started, its row lists its tools
+  instead.
+- **The same words everywhere.** Error messages, the Status map and the
+  extension fixes now use the words the rest of the app uses: extensions,
+  Build terminals, tasks and memory bases. For example, the Status map says
+  "4 of 4 extensions running" and "0 open terminals", and a broken
+  extension's fix points at Tools › Connected extensions.
+
 ## The last raw words go, the Connect button always shows, and Emergency stop stops everything (v1.359.0)
 
 The last places the app spoke in its own internal words now speak plainly.

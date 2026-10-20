@@ -21,7 +21,7 @@ import { useMemo, useState } from "react";
 import { useDaemon } from "@/lib/daemon";
 import { useModels } from "@/lib/useModels";
 import type { ModelOption } from "@/lib/types";
-import { modelRowName } from "@/lib/onboarding";
+import { modelRowName, type NamedRow } from "@/lib/onboarding";
 
 /** The "Other…" option's value: never a real model id. */
 const OTHER_MODEL = "__other_model__";
@@ -31,8 +31,13 @@ const OTHER_MODEL = "__other_model__";
  *  (`modelRowName`: "Your Claude plan", "Your model server", "Opus 4.8") —
  *  this list printed "subscription" and "fleet". The list is ONE provider's,
  *  so no provider prefix; the raw id stays the option's title. */
-export function modelOptionText(m: Pick<ModelOption, "provider" | "model" | "label" | "name">): string {
-  return modelRowName(m);
+export function modelOptionText(
+  m: Pick<ModelOption, "provider" | "model" | "label" | "name">,
+  catalog?: readonly NamedRow[] | null,
+): string {
+  // v1.360.0 (lane 10B fix): the whole catalog, so the config slot's
+  // "fleet" row reads its machine ("DGX Spark") like the chat's menu.
+  return modelRowName(m, catalog);
 }
 
 export function DefaultModelPicker({
@@ -90,7 +95,7 @@ export function DefaultModelPicker({
         )}
         {scoped.map((m) => (
           <option key={m.model} value={m.model} title={m.model} className="bg-ink-900">
-            {modelOptionText(m)}
+            {modelOptionText(m, models)}
             {m.available === false ? " — not connected" : ""}
           </option>
         ))}

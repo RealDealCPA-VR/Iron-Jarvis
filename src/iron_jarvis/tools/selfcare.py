@@ -405,7 +405,7 @@ class AppHealthTool(Tool):
         if provider == "mock":
             out["reachable"] = True
             out["detail"] = "demo replies; no real model chosen"
-            out["words"] = "Model: demo replies (mock); no real model has been chosen."
+            out["words"] = "Model: demo replies; no real model has been chosen."
             return out
         if provider == "auto":
             live = [n for n, r in by_name.items() if r.get("available") and r.get("class") != "mock"]
@@ -514,7 +514,7 @@ class PackStatusTool(Tool):
         try:
             rows = await asyncio.to_thread(self._rows)
         except Exception as exc:  # noqa: BLE001
-            return ToolResult(ok=False, error=f"could not read the pack list: {_err(exc)}")
+            return ToolResult(ok=False, error=f"could not read the extension list: {_err(exc)}")
         packs = [pack_status_row(r) for r in rows]
         if name:
             packs = [p for p in packs if p["name"] == name]
@@ -522,7 +522,7 @@ class PackStatusTool(Tool):
                 known = ", ".join(sorted(p["name"] for p in (pack_status_row(r) for r in rows))) or "none"
                 return ToolResult(
                     ok=False,
-                    error=f"no pack named {name!r}; configured packs: {known}",
+                    error=f"no extension named {name!r}; configured extensions: {known}",
                     data={"packs": [], "known": known},
                 )
         if not packs:
@@ -566,7 +566,7 @@ class PackRestartTool(Tool):
 
         name = str(args.get("name") or "").strip()
         if not name:
-            return ToolResult(ok=False, error="pack_restart needs the pack's name")
+            return ToolResult(ok=False, error="pack_restart needs the extension's name")
         platform = self._platform
         try:
             r = await asyncio.to_thread(reload_pack, platform, name, home=platform.config.home)
@@ -574,7 +574,7 @@ class PackRestartTool(Tool):
             servers = [str(s.get("name")) for s in (getattr(platform.config, "mcp_servers", None) or []) if isinstance(s, dict) and s.get("name")]
             return ToolResult(
                 ok=False,
-                error=f"no pack named {name!r}; configured packs: {', '.join(sorted(servers)) or 'none'}",
+                error=f"no extension named {name!r}; configured extensions: {', '.join(sorted(servers)) or 'none'}",
             )
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, error=f"{name} could not be restarted: {_err(exc)}")

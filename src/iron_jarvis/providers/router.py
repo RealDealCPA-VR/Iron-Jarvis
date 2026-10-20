@@ -1859,7 +1859,7 @@ class ModelRouter:
                     "requested": "mock (default)",
                     "used": "mock",
                     "reason": (
-                        "your default provider is 'mock' but a real provider is "
+                        "your default is the demo model, but a real provider is "
                         "connected. Make it your default on the Connections page."
                     ),
                 },
@@ -2323,7 +2323,7 @@ class ModelRouter:
                     "requested": "mock (default)",
                     "used": "mock",
                     "reason": (
-                        "your default provider is 'mock' but a real provider is "
+                        "your default is the demo model, but a real provider is "
                         "connected. Make it your default on the Connections page."
                     ),
                 },

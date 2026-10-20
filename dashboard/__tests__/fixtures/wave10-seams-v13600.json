@@ -1,0 +1,203 @@
+{
+  "_about": "What the REAL daemon sends for the wave-10 seams (tests/test_integrate_wave10_v13600.py writes it with IJ_REGEN_WAVE10_SEAMS=1; dashboard/__tests__/wave10-seams-v13600.test.tsx feeds it through the real bell and the real model words). Ids and times are made stable.",
+  "failed_workflow": {
+    "events": [
+      {
+        "type": "workflow.completed",
+        "session_id": null,
+        "payload": {
+          "workflow": "Weekly report",
+          "status": "failed",
+          "run_id": "wfrun_01",
+          "sessions": [
+            "session_02"
+          ]
+        }
+      },
+      {
+        "type": "session.completed",
+        "session_id": "session_02",
+        "payload": {
+          "status": "failed",
+          "summary": "The report folder is missing.",
+          "origin": "workflow:Weekly report",
+          "project_id": null,
+          "outcome": null
+        }
+      }
+    ],
+    "audit": [
+      {
+        "id": "evt_03",
+        "ts": "2026-10-20T00:01:02",
+        "type": "workflow.completed",
+        "kind": "action",
+        "actor": "workflow.completed",
+        "session_id": null,
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "workflow.completed",
+        "payload": {
+          "workflow": "Weekly report",
+          "status": "failed",
+          "run_id": "wfrun_01",
+          "sessions": [
+            "session_02"
+          ]
+        }
+      },
+      {
+        "id": "evt_04",
+        "ts": "2026-10-20T00:01:01",
+        "type": "session.completed",
+        "kind": "lifecycle",
+        "actor": "workflow:Weekly report",
+        "session_id": "session_02",
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "session.completed",
+        "payload": {
+          "status": "failed",
+          "summary": "The report folder is missing.",
+          "origin": "workflow:Weekly report",
+          "project_id": null,
+          "outcome": null
+        }
+      }
+    ]
+  },
+  "failed_task": {
+    "events": [
+      {
+        "type": "session.completed",
+        "session_id": "session_01",
+        "payload": {
+          "status": "failed",
+          "summary": "Stopped at the inbox it could not open.",
+          "origin": "schedule:morning-brief",
+          "project_id": null,
+          "outcome": null
+        }
+      }
+    ],
+    "audit": [
+      {
+        "id": "evt_02",
+        "ts": "2026-10-20T00:01:01",
+        "type": "session.completed",
+        "kind": "lifecycle",
+        "actor": "schedule:morning-brief",
+        "session_id": "session_01",
+        "project_id": null,
+        "tool": "",
+        "verdict": null,
+        "ok": true,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "reversible": false,
+        "undoable": false,
+        "summary": "session.completed",
+        "payload": {
+          "status": "failed",
+          "summary": "Stopped at the inbox it could not open.",
+          "origin": "schedule:morning-brief",
+          "project_id": null,
+          "outcome": null
+        }
+      }
+    ]
+  },
+  "parked_workflow": {
+    "runs": [
+      {
+        "id": "wfrun_01",
+        "workflow_name": "gated",
+        "status": "waiting",
+        "waiting_json": "{\"index\": 0, \"step\": \"Approve\", \"question\": \"Send it?\"}"
+      }
+    ]
+  },
+  "machine": {
+    "named": {
+      "route": {
+        "provider": "custom",
+        "model": "fleet",
+        "label": "DGX Spark"
+      },
+      "models": [
+        {
+          "provider": "custom",
+          "model": "fleet",
+          "available": true,
+          "kind": "local",
+          "on_this_network": true,
+          "size_b": null,
+          "inherited_from": null,
+          "reasoning": [],
+          "reasoning_default": ""
+        },
+        {
+          "provider": "fleet-custom",
+          "model": "fleet",
+          "name": "DGX Spark",
+          "source": "endpoint",
+          "available": false,
+          "kind": "local",
+          "on_this_network": false,
+          "size_b": null,
+          "inherited_from": null,
+          "reasoning": [],
+          "reasoning_default": ""
+        }
+      ]
+    },
+    "unnamed": {
+      "route": {
+        "provider": "custom",
+        "model": "fleet",
+        "label": ""
+      },
+      "models": [
+        {
+          "provider": "custom",
+          "model": "fleet",
+          "available": true,
+          "kind": "local",
+          "on_this_network": true,
+          "size_b": null,
+          "inherited_from": null,
+          "reasoning": [],
+          "reasoning_default": ""
+        },
+        {
+          "provider": "fleet-custom",
+          "model": "fleet",
+          "name": "Custom endpoint",
+          "source": "endpoint",
+          "available": false,
+          "kind": "local",
+          "on_this_network": false,
+          "size_b": null,
+          "inherited_from": null,
+          "reasoning": [],
+          "reasoning_default": ""
+        }
+      ]
+    }
+  }
+}

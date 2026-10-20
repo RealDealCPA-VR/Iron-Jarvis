@@ -181,11 +181,12 @@ describe("the terminal assist's footer and the skill's answer name the model in 
   it("both print modelPickWords, the raw pair only in the title (source pin)", () => {
     const pane = read("components/terminal/TerminalPane.tsx");
     expect(pane).not.toContain("{aiResult.provider} · {aiResult.model}");
-    expect(pane).toContain("modelPickWords(aiResult)");
+    // v1.360.0 (lane 10B fix): the call now hands over the catalog.
+    expect(pane).toContain("modelPickWords(aiResult, models)");
     expect(pane).toContain("title={modelPickTitle(aiResult)}");
     const skills = read("app/skills/page.tsx");
     expect(skills).not.toContain("{applyResult.provider} · {applyResult.model}");
-    expect(skills).toContain("modelPickWords(applyResult)");
+    expect(skills).toContain("modelPickWords(applyResult, modelCatalog)");
     expect(skills).toContain("title={modelPickTitle(applyResult)}");
   });
 

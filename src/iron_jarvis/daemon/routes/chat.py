@@ -1952,7 +1952,7 @@ def register(app: FastAPI, d) -> None:
         ltm = d.platform.ltm
         src = (body.source or "").strip() or ltm.default_source()
         if not src or ltm.get(src) is None:
-            raise HTTPException(status_code=400, detail=f"no such memory source: {src}")
+            raise HTTPException(status_code=400, detail=f"no such memory base: {src}")
         title = (r.title or "Chat").strip() or "Chat"
         transcript = _share_transcript(title, r.persona or "", r.updated_at, msgs)
 

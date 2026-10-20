@@ -626,6 +626,15 @@ class Notifier:
                 and is_workflow_step(payload)
             ):
                 targets = self.without_desktop(targets)
+        elif etype == EventType.APPROVAL_REQUESTED:
+            # v1.360.0 integrate (lane 10A note g): ONE notice per ask on this
+            # PC too. Every agent ask is listed by GET /chat/approvals/pending,
+            # which the bell counts and pings ("N pending · an agent asking
+            # permission") while a window is open, and which the desktop app's
+            # ask watcher toasts while it sits in the tray. "This PC" (alive
+            # only while a window is) added a second toast beside the first.
+            # The phone and every other destination keep their one line.
+            targets = self.without_desktop(targets)
         if not targets:
             return {}
         return self.notify(self._formatter(event), targets)

@@ -156,7 +156,7 @@ def test_http_a_stream_without_our_answer_is_an_error_naming_the_pack():
     server = _HttpServer(only_notifications)
     with pytest.raises(MCPError) as info:
         server.transport().request("tools/call", {"name": "x", "arguments": {}})
-    assert "pack 'remote'" in str(info.value)
+    assert "extension 'remote'" in str(info.value)
     assert "without answering request" in str(info.value)
 
 
@@ -272,7 +272,7 @@ def test_http_a_read_timeout_is_an_error_naming_the_pack():
     server = _HttpServer(slow)
     with pytest.raises(MCPError) as info:
         server.transport().request("tools/call", {"name": "x", "arguments": {}}, timeout=42.0)
-    assert "pack 'remote'" in str(info.value)
+    assert "extension 'remote'" in str(info.value)
     assert "42 s" in str(info.value)
 
 

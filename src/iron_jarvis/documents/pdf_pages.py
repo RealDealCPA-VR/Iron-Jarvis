@@ -503,7 +503,7 @@ def arrange(
         if total > MAX_TOTAL_PAGES:
             raise ValueError(
                 f"refusing to build a {total}-page PDF — the limit is "
-                f"{MAX_TOTAL_PAGES} pages per job; split the work into batches"
+                f"{MAX_TOTAL_PAGES} pages per task; split the work into batches"
             )
 
         writer = PdfWriter()

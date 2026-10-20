@@ -42,7 +42,7 @@ class MockIntegration(Integration):
     """An integration that is always reachable (no external calls)."""
 
     def test_connection(self) -> dict:
-        return {"ok": True, "detail": "mock integration is always healthy"}
+        return {"ok": True, "detail": "the example integration is always healthy"}
 
     def capabilities(self) -> list[str]:
         return ["mock.ping", "mock.echo"]

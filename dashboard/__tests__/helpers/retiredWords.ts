@@ -46,6 +46,9 @@ export type Retired = { word: string; re: RegExp; use: string };
 /** VOCABULARY.md's retired words (case-insensitive, whole words). */
 export const RETIRED: readonly Retired[] = [
   { word: "pack", re: /\bpacks?\b/i, use: "extension (an MCP server); Pack is reserved for the staff bundle" },
+  // v1.360.0 integrate (lane 10C note C): VOCABULARY.md retired "plug-in"
+  // (v1.216.0) but no row held it, so none of the three scans could see it.
+  { word: "plug-in", re: /\bplug-ins?\b/i, use: "extension" },
   { word: "connector", re: /\bconnectors?\b/i, use: "connection" },
   { word: "memory source", re: /\bmemory[ -]sources?\b/i, use: "memory base" },
   { word: "brain", re: /\bbrains?\b/i, use: "memory base, or Iron Jarvis" },

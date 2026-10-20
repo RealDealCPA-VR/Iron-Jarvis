@@ -194,7 +194,7 @@ def _mcp_status(configured: bool, tools_loaded: int, name: str = "") -> dict[str
             return {
                 "connected": True,
                 "status": "failed",
-                "detail": last_error or "the pack did not start",
+                "detail": last_error or "the extension did not start",
                 "reason": str(record.get("reason") or ""),
                 "fix": str(record.get("fix") or ""),
                 "stderr_tail": str(record.get("stderr_tail") or ""),
@@ -716,11 +716,11 @@ def _user_mcp_connectors(
 #: Plain-English blurb per custom-LTM-source kind (memory connectors).
 _MEMORY_BLURB = {
     # v1.353.0 (G42): no card says MCP.
-    "mcp": "A memory brain served by a tool you added.",
+    "mcp": "A memory base served by an extension you added.",
     "notion": "A Notion database as memory.",
     "markdown": "A markdown folder as memory.",
-    "ssh": "A remote brain over SSH.",
-    "http_rag": "An external RAG service.",
+    "ssh": "A memory base on another computer, reached over SSH.",
+    "http_rag": "Your own search service, as memory.",
     "google_drive": "A Google Drive folder as memory.",
     "onedrive": "A OneDrive folder as memory.",
     "dropbox": "A Dropbox folder as memory.",
@@ -748,9 +748,9 @@ def _memory_connectors(platform) -> list[dict[str, Any]]:
         out.append({
             **_entry_base(
                 rec.name, rec.name, "Memory", "🧠",
-                _MEMORY_BLURB.get(rec.kind, "A custom memory source."),
+                _MEMORY_BLURB.get(rec.kind, "A memory base you added."),
                 "Grounds chat and agents with this memory; searchable from the"
-                " Memory page and the chat connector toggle.",
+                " Memory page and the chat's Tools › Connections switch.",
                 "memory",
             ),
             "kind": rec.kind,
@@ -1040,7 +1040,7 @@ def _probe_mcp(platform, cfg: dict[str, Any]) -> dict[str, Any]:
             "ok": False,
             "count": 0,
             "tools": [],
-            "error": failure.get("error") or "the pack did not start",
+            "error": failure.get("error") or "the extension did not start",
             "reason": failure.get("reason") or "",
             "fix": failure.get("fix") or "",
             "stderr_tail": failure.get("stderr_tail") or "",

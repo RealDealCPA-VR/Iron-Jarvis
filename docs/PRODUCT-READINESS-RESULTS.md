@@ -14,6 +14,51 @@ The checklist has **213 items: 41 PASS, 169 PARTIAL, 3 FAIL.**
 
 ---
 
+## 0e. After wave 10 (v1.360.0)
+
+**What was done.** Wave 10 (lanes 10A, 10B and 10C, then the integrator) worked through the final re-audit's 8 regressions (section 0d.5) and its 7 open gaps (0d.4 and 0d.7). Every entry below was re-checked against the tree after the integrate commit. The checks used the real app factory, the real chat lanes, the real dashboard components and the real `desktop/main.js` functions under node. None of it has run in the packaged app yet: the user's install is still v1.354.0. Section 0d's scores and counts are left as they were. This section does not re-score.
+
+### 0e.1 The regressions (0d.5)
+
+| # | Regression | Now | Pinned by |
+|---|---|---|---|
+| 1 | Two desktop notices for one failed or needs-you scheduled run while a window is open; two bell rows for one failed scheduled workflow (v1.351.0, G03) | **Fixed.** While a window is open, the bell's ping is the one desktop notice. `comm/notifier.bell_pings` is the bell's rule on the daemon side, and one fixture holds it equal to the dashboard's. "This PC" is quiet for those outcomes, for a workflow step, and (integrate) for an agent's ask and a parked workflow's question. A run a schedule started is announced by that schedule's own line on every destination. A failed workflow folds its step into one bell row. In the tray, main.js reads `GET /audit` and raises one OS notice per failed or unfinished run, in the bell's words. Its body falls back to the bell's own sentence. A goal schedule whose run ended needing the user reads "Needs you" on its row (integrate). | `tests/test_one_notice_v13600.py`, `tests/test_integrate_wave10_v13600.py`, `dashboard/__tests__/one-notice-v13600.test.tsx`, `wave10-seams-v13600.test.tsx` (the real daemon's events, audit and waiting runs fed through the real bell) |
+| 2 | The Connect door read everyday and research sentences as the user's own data (G41) | **Fixed.** `connect_offers` now needs an own-data signal. "stripe the table rows", "explain how postgres indexes work", the sentry story and the LinkedIn post offer nothing. "list my github repos" and "check my stripe payments" still offer the door. | `tests/test_chat_matches_meant_v13600.py` (probe tables in both directions, 20+ each way, and the re-audit's four probes through both chat lanes), `tests/test_integrate_wave10_v13600.py` (b) |
+| 3 | An Outlook user who says "check my inbox" was offered Gmail | **Fixed.** Mail and calendar words mean the connected app of that kind (`resolve_kinds` in `_gather_grounding`, both lanes). With Microsoft 365 connected, its tools are armed (stream lane) and no Gmail door appears. With no mail app, ONE door names both choices. "My calendar" with no calendar app offers nothing. The door opens where `/marketplace` (the Directory) lands. | `test_an_outlook_user_who_says_check_my_inbox_gets_microsoft_365` and `test_a_fresh_install_check_my_inbox_offers_both_mail_apps_once` (both lanes), `tests/test_integrate_wave10_v13600.py` (b) |
+| 4 | "Reads files anywhere on this PC without asking" after reading was limited (G81) | **Fixed.** `readScope` / `readsLevelLine` (`lib/permissionLevels`) is the one decision. The chat's approval chip (on chat and in the Build terminal), the Access summary's Approval level row and (integrate) an agent's approval choices follow it. The chip reads `GET /settings/access` only on pointer, focus or open. | `dashboard/__tests__/reads-follow-setting-v13600.test.tsx`, `setup-reads-v13600.test.tsx` |
+| 5 | A helper run's verdict lost its colour and could be cut off (v1.358.0) | **Fixed.** The verdict sits outside the truncating part of the settled row, in its tone token: "failed" and "could not finish" in danger; "needs you", "part failed" and "hit its step limit" in warn; "stopped" uncoloured. The full line is the row's title. | `one-notice-v13600.test.tsx` section (2) |
+| 6 | The Guide rule armed the app-help lookups for how-to questions not about Iron Jarvis (G38) | **Fixed.** The lookups arm only for a question about Iron Jarvis: its name, a feature or page word in its own sense, "here", "this app". "how do I connect my printer to wifi", "how do I install node" and similar arm nothing. | `tests/test_chat_matches_meant_v13600.py` (the ABOUT_JARVIS and NOT_ABOUT_JARVIS tables plus the page-sense tables) |
+| 7 | Sessions' armed "Clean up now?" was grey (G80) | **Fixed.** The armed press wears the danger cue, like "Clear finished" beside it. | `one-notice-v13600.test.tsx` section (3) |
+| 8 | One model, two names: "Your model server" in the menu, "fleet" on the reply, the helper row and card, and the run page | **Fixed.** The reply's `route.label` names the user's machine on both lanes (`chat_turn.route_label`). Every list and card hands the `/models` catalog to the one rule (`modelRowName` / `answeredModelName` / `ranOnWords`), via lane 10B's patch, which the integrator applied. The run page's Model field follows it too (integrate: it read "DGX Spark · fleet"). Everything reads "DGX Spark", or "your model server" for a machine nobody named. | `dashboard/__tests__/model-server-name-everywhere-v13600.test.tsx` (with a scan for any call that leaves the catalog out), `wave10-seams-v13600.test.tsx` (c) (the real route and `/models` rows), `tests/test_integrate_wave10_v13600.py` (c) |
+
+### 0e.2 The open gaps (0d.4, 0d.7)
+
+| Gap | Now | Why / what remains | Pinned by |
+|---|---|---|---|
+| G21 Replies say where they ran | **Partly met (the machine part is fixed)** | A reply from the user's own model server now says "on DGX Spark" / "answered by DGX Spark". So do the run page, the helper card and row, and the menu (regression 8). Still open: the run page says which machine but never "local" or "cloud". The page does not read the receipt's `on_this_network`, and this wave did not take that on. | `test_both_lanes_name_the_machine_that_answered`, `wave10-seams-v13600.test.tsx` (c) |
+| G49 Import explains itself | **Met in code** | A found server outside the catalog says what it is, from what the import knows: its name in words, plus the program it runs on this PC or its address's host, for example "QuickBooks Desktop · runs a program on this PC (quickbooks-desktop-mcp)". Once it is added and started, its tool count and names replace that line. Nothing is invented: the catalog's description still wins. Not yet re-run against the six servers found on the user's PC. | `tests/test_found_tools_words_v13600.py`, `dashboard/__tests__/found-tools-say-what-v13600.test.tsx` |
+| G61 Remote Jarvis node | **Unchanged: partly met (met in code, unproven)** | As in 0d.4: never run on two physical PCs, and a Windows Firewall block is neither detected nor explained. | (unchanged) |
+| G76 One vocabulary | **Met** | The daemon scan reads every route module in full, plus every ANSWER position across the whole daemon: raised messages, detail / reason / fix / note / error / summary / title / message / why values, and sentences named like `*_MESSAGE`. All 60 lines lane 10C parked were reworded by the integrator, and `PENDING` is empty. "plug-in" is now in the retired list that all three scans read. The re-audit's examples now say "4 of 4 extensions running", "0 open terminals", "the extension's server couldn't be reached … Tools → Connected extensions", "A memory base served by an extension you added." and "extension tools". | `tests/test_vocabulary_daemon_answers_v13600.py`, `tests/test_vocabulary_beyond_dashboard_v13580.py`, `dashboard/__tests__/vocabulary.test.ts`, `tests/test_integrate_wave10_v13600.py` (d) |
+| G83 Curated directory feed | **Not built** (owner's decision) | Unchanged. | — |
+| G85 Desktop-control pack | **Not built** (owner's decision) | Unchanged. | — |
+| G86 Bundled local model | **Not built** (owner's decision) | Unchanged. | — |
+
+### 0e.3 Remainders from 0d.4 that this wave touched
+
+- **G03 (the bell):** a failed unattended run now raises one OS notice while the app sits in the tray. The G05 half is unchanged: a chat waiting for an OK while the user is on another page of the same window is still listed only by the sidebar's dot.
+- **G41 and G81:** fixed (regressions 2, 3 and 4 above).
+- **Unchanged:** G15 (Continue follows only a token saved in the chat's own card), G22 / G24 (rarer built-ins' words), G28 (unrecognised failures outside chat), G33 (the Rescan note's terminal recipe) and G39 (apps by name on the chat page only).
+
+### 0e.4 Known limits this wave leaves
+
+- **Untested on the real app.** None of this has been seen in the packaged app or the Windows tray. The tray notice is proven through the real main.js functions under node, and the daemon side through the real app factory.
+- **Phone duplicates.** A scheduled workflow parked on a question sends the phone two lines: the answerable question and the schedule's "needs you" line.
+- **Tray timing.** A run that fails in the last 25 seconds or so before a window opens gets no OS notice. It does appear in the bell's "While you were away".
+- **Two notices from a browser tab.** A browser dashboard tab with notifications allowed, beside the desktop app in the tray, announces an outcome twice.
+- **Different wording by destination.** The phone line keeps "FAILED" (pinned since v1.119). The desktop notice says "could not finish".
+
+---
+
 ## 0d. Final re-audit (v1.359.0, 2026-10-19)
 
 **What was re-checked, and how.** Nine build waves (v1.351.0 to v1.359.0) have now shipped 83 of the 86 gaps in section 9. The owner chose not to build G83, G85 and G86. Waves 8 and 9 (sections 0b and 0c) worked through the 14 regressions and 8 partly met gaps that the v1.357.0 re-audit (section 0) found.

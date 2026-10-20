@@ -339,7 +339,7 @@ def getting_started(platform) -> list[dict]:
         "detail": (
             "You've given Iron Jarvis its first task — nice."
             if gave_task
-            else "Ask anything in Chat — that counts. Bigger jobs escalate to a "
+            else "Ask anything in Chat — that counts. Bigger tasks escalate to a "
             "full agent all by themselves."
         ),
         "done": gave_task,

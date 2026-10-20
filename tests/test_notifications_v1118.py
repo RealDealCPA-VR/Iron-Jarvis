@@ -55,7 +55,8 @@ def test_desktop_send_fails_honestly_without_the_daemon_sink():
     DesktopChannel.sink = None
     r = DesktopChannel({"type": "desktop"}).send("hello")
     assert r["ok"] is False
-    assert "daemon" in r["detail"]
+    # v1.360.0 integrate (moved on purpose): the canon's words, never "daemon".
+    assert "Iron Jarvis is not running" in r["detail"]
 
 
 def test_desktop_send_delivers_through_the_sink():

@@ -100,21 +100,22 @@ MCP_URL_ENV = "IRONJARVIS_MCP_URL"
 MCP_TOKEN_ENV = "IRONJARVIS_MCP_TOKEN"
 
 # --- The 401 sentences. One place, so the route and the tests cannot disagree. --
-#: Plan section 12.2, verbatim: what an unknown pane token means after a restart.
+#: Plan section 12.2: what an unknown pane token means after a restart (worded
+#: "terminal token" / "Build terminal" since v1.360.0, the canon's words).
 PANE_TOKEN_EXPIRED_MESSAGE = (
-    "the pane token expired when Iron Jarvis restarted; relaunch the harness "
-    "from the Build pane"
+    "the terminal token expired when Iron Jarvis restarted; relaunch the harness "
+    "from the Build terminal"
 )
 MISSING_TOKEN_MESSAGE = (
-    "no pane token: /mcp needs the token Iron Jarvis put in IRONJARVIS_MCP_TOKEN "
-    "when the Build pane launched this harness"
+    "no terminal token: /mcp needs the token Iron Jarvis put in IRONJARVIS_MCP_TOKEN "
+    "when the Build terminal launched this harness"
 )
 INSTALL_BEARER_MESSAGE = (
-    "the Iron Jarvis install token is not accepted at /mcp; use the pane token "
+    "the Iron Jarvis install token is not accepted at /mcp; use the terminal token "
     "from IRONJARVIS_MCP_TOKEN"
 )
 PAIRING_TOKEN_MESSAGE = (
-    "a browser pairing token is not accepted at /mcp; use the pane token from "
+    "a browser pairing token is not accepted at /mcp; use the terminal token from "
     "IRONJARVIS_MCP_TOKEN"
 )
 
@@ -287,7 +288,7 @@ class PaneTokenStore:
         """
         pane = str(pane_id or "").strip()
         if not pane:
-            raise ValueError("pane_id is required to mint a pane token")
+            raise ValueError("pane_id is required to mint a terminal token")
         # NEVER derived from the pane id: the id is public and is reused across
         # restarts, so anything derived from it is forgeable and outlives its shell.
         token = secrets.token_urlsafe(TOKEN_BYTES)
@@ -300,7 +301,7 @@ class PaneTokenStore:
         with self._lock:
             self._records = [r for r in self._records if r.pane_id != pane]
             if len(self._records) >= self.max_tokens:
-                raise RuntimeError(f"pane token cap reached ({self.max_tokens})")
+                raise RuntimeError(f"terminal token cap reached ({self.max_tokens})")
             self._records.append(record)
         # The TOKEN is not logged, at any level: a DEBUG line would put a live
         # credential in the user's diagnostics bundle forever (the pairing lesson).

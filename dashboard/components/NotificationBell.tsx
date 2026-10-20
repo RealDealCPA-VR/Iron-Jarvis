@@ -1912,7 +1912,11 @@ export function NotificationBell() {
       document.title = `(${badge}) ${base}`;
     }
 
-    if (count > prev) {
+    // v1.360.0 integrate (lane 10A note g): the "N pending" ping is THE desktop
+    // notice for an ask on this PC ("This PC" stays quiet for asks), so it is
+    // said once per app, by the main window — a popped-out module's bell keeps
+    // its title count but does not ping, like its activity ping below.
+    if (count > prev && !inPopout()) {
       const parts: string[] = [];
       if (reviews.length)
         parts.push(`${reviews.length} review${reviews.length === 1 ? "" : "s"} awaiting approval`);

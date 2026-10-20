@@ -20,7 +20,7 @@ import { stepLabel } from "@/components/chat/stepLabel";
 import { humanSummary } from "@/lib/eventWords";
 import { stepPhrase, stepPhraseText } from "@/lib/stepWords";
 import { statusWords } from "@/lib/statusWords";
-import { providerDisplay } from "@/lib/onboarding";
+import { isServerAlias, modelRowName, providerDisplay } from "@/lib/onboarding";
 import { endpointLabel, type RanOnRow } from "@/lib/ranOnWords";
 import { normalizeIso } from "@/lib/format";
 import { CONTINUE_AFTER_RESTART } from "@/components/InterruptedJobs";
@@ -125,6 +125,11 @@ export function runModelWords(
   const p = (provider ?? "").trim();
   const m = (model ?? "").trim();
   if (p === "mock") return providerDisplay(p);
+  // v1.360.0 integrate (the final re-audit's regression 8): the "fleet"
+  // alias IS its place — the machine's name ("DGX Spark") or "Your model
+  // server", the model menu's own words — said once, never "DGX Spark ·
+  // fleet" beside a reply that says "answered by DGX Spark".
+  if (isServerAlias(m)) return modelRowName({ provider: p, model: m }, catalog);
   const endpoint = p.startsWith("fleet-") || p === "custom";
   let where = endpoint ? endpointLabel(p, catalog) : providerDisplay(p);
   // A row that names its MODEL in `name` is not a place.

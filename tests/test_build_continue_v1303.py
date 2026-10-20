@@ -526,7 +526,7 @@ def test_no_conversation_starts_fresh_with_a_new_id(client, fake, repo):
     _print(c, old["id"], f"  ⎿  {REAL_SESSION}")
     out = c.post(f"/terminals/{old['id']}/continue-on-next").json()
     assert out["resumed"] is False and "session_id" not in out
-    assert out["note"].startswith("No conversation from this pane was found")
+    assert out["note"].startswith("No conversation from this terminal was found")
     sid = out["pane"]["claude_session_id"]
     assert continue_on.is_session_id(sid)
     assert _backend_of(out["pane"]["id"]).written == [f"claude --session-id {sid}\r"]

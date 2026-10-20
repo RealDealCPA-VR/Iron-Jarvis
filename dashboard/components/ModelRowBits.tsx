@@ -13,7 +13,7 @@
 
 import type { ModelOption } from "@/lib/types";
 import { LONG_DOCS_CHIP, LONG_DOCS_TITLE } from "@/lib/chatControlWords";
-import { modelRowName } from "@/lib/onboarding";
+import { modelRowName, type NamedRow } from "@/lib/onboarding";
 
 /** A window this size or larger gets the "long docs" chip (v1.356.0, G75:
  *  it read "1M", a number only an engineer could read). */
@@ -27,15 +27,26 @@ type RowFacts = Pick<ModelOption, "model" | "label" | "context_window" | "usage_
  *  "spark/fleet" for the user's own server. Those now read "Your Claude
  *  plan", "Your ChatGPT plan" and "Your model server", and an unlabelled
  *  Claude id reads the way the composer's chip already says it ("Opus 4.8").
- *  The raw id is the row's title (`modelTitle`). */
-export function modelText(m: Pick<ModelOption, "provider" | "model" | "label">): string {
-  return modelRowName(m);
+ *  The raw id is the row's title (`modelTitle`).
+ *
+ *  v1.360.0 (lane 10B fix): `catalog` is the /models rows the menu already
+ *  holds. With it, the config slot's "fleet" row reads the machine's name
+ *  ("DGX Spark", its fleet twin's label) exactly as the reply, the mission
+ *  screen and the run page say it; without it, "Your model server". */
+export function modelText(
+  m: Pick<ModelOption, "provider" | "model" | "label">,
+  catalog?: readonly NamedRow[] | null,
+): string {
+  return modelRowName(m, catalog);
 }
 
 /** The raw id behind a row's words, for its title: the record of what runs.
  *  Undefined when the words ARE the id (nothing to add on hover). */
-export function modelTitle(m: Pick<ModelOption, "provider" | "model" | "label">): string | undefined {
-  return modelText(m) !== m.model ? m.model : undefined;
+export function modelTitle(
+  m: Pick<ModelOption, "provider" | "model" | "label">,
+  catalog?: readonly NamedRow[] | null,
+): string | undefined {
+  return modelText(m, catalog) !== m.model ? m.model : undefined;
 }
 
 /** The chips after a row's name: "long docs" for a million-token window, and a

@@ -13,14 +13,23 @@
 // WHAT IT CANNOT DO, and used to claim it could (v1.249.0, R-03): closing the
 // window to the TRAY destroys the renderer (`hideToTray` in desktop/main.js),
 // so this bridge — and every other page-side toast — is gone until a window
-// exists again. The desktop app itself watches for asks waiting on the user
-// while no window is open (`installAskWatcher`: agent and chat approvals only).
+// exists again. The desktop app itself watches while no window is open
+// (`installAskWatcher` in desktop/main.js): agent and chat approvals waiting
+// on the user AND (v1.360.0, lane 10A) unattended runs that failed or fell
+// short, said once each in the bell's words (`planRunOutcomeNotifications`).
 // A `comm.desktop` message that arrives with no window raises NO toast and is
 // NOT in the bell either — it is only in the event log (corrected v1.351.0,
 // G03: this comment used to say it waited in the bell). What the bell DOES
 // remember: when a window opens again it replays the unattended runs that
 // finished, fell short or failed meanwhile (NotificationBell's "While you were
 // away", read from GET /audit).
+//
+// ONE NOTICE PER OUTCOME AND PER ASK (v1.360.0): while a window is open the
+// bell's own ping is the desktop notice for a run's outcome and for an ask, so
+// the daemon sends NO `comm.desktop` message for exactly those
+// (comm/notifier.bell_pings, an agent ask, a parked workflow's question). What
+// still arrives here is everything else a destination is told: a clean
+// schedule's "done" line, a workflow's own notify step, goal news, a failover.
 
 import { useEffect, useRef } from "react";
 

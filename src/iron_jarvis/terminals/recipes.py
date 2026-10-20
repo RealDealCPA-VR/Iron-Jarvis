@@ -378,7 +378,7 @@ def _confined(cwd: str, *parts: str) -> Path:
         target.relative_to(base)
     except ValueError as exc:
         raise ConfigWriteRefused(
-            f"a launch recipe may only write inside the pane's folder ({base})"
+            f"a launch recipe may only write inside the terminal's folder ({base})"
         ) from exc
     return target
 
@@ -521,7 +521,7 @@ def _no_folder(version: str, env: dict[str, str]) -> RecipeResult:
             "configuration that points this CLI at Jarvis. The pane launches as it "
             "does today, without Jarvis capabilities."
         ],
-        detail="no pane folder",
+        detail="no terminal folder",
     )
 
 
@@ -551,7 +551,7 @@ def _no_capabilities(cli_id: str, version: str) -> RecipeResult:
             "was configured for it. Tick a capability in the pane's Capabilities "
             "list and relaunch."
         ],
-        detail="no pane capabilities",
+        detail="no terminal capabilities",
     )
 
 
@@ -842,10 +842,10 @@ class CodexRecipe:
         if not _advertises(help_text, self.home_env):
             why = (
                 "Iron Jarvis could not read this Codex build's help output, so it "
-                "could not verify how to give it a pane-scoped configuration."
+                "could not verify how to give it a terminal-scoped configuration."
                 if not help_text
                 else f"This Codex build does not advertise {self.home_env}, so "
-                "Iron Jarvis could not verify how to give it a pane-scoped "
+                "Iron Jarvis could not verify how to give it a terminal-scoped "
                 "configuration."
             )
             return (

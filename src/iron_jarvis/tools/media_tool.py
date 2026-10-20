@@ -310,7 +310,7 @@ class GenerateMediaTool(Tool):
             if jobs is None:
                 return ToolResult(
                     ok=False,
-                    error=f"the {kind} is still being made on {provider.label} and nothing here can wait for it (job {handle.job_id})",
+                    error=f"the {kind} is still being made on {provider.label} and nothing here can wait for it (task {handle.job_id})",
                 )
         spec = MediaJobSpec(
             provider=provider.id,

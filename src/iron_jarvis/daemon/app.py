@@ -158,7 +158,7 @@ def _provider_error_http(exc: Exception) -> HTTPException:
             status_code=429,
             detail=(
                 "the model is rate-limited right now — wait a minute and try "
-                "again, or pick a different model for this pane"
+                "again, or pick a different model for this terminal"
             ),
         )
     return HTTPException(status_code=502, detail=str(exc))
@@ -1601,7 +1601,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
         def _desktop_sink(title: str, message: str) -> None:
             loop = _live_rearm.get("loop")
             if loop is None:
-                raise RuntimeError("daemon loop not running")
+                raise RuntimeError("Iron Jarvis is not running yet")
             asyncio.run_coroutine_threadsafe(
                 platform.event_bus.publish(
                     "comm.desktop", {"title": title, "message": message}

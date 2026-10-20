@@ -327,7 +327,7 @@ class InboundPoller:
                 "update_id": update_id,
                 "chat_id": chat_id,
                 "notified": notified,
-                "reason": "daemon restarted while handling the message",
+                "reason": "Iron Jarvis restarted while handling the message",
             },
         )
         return {"channel": name, "status": "dropped", "update_id": update_id, "notified": notified}

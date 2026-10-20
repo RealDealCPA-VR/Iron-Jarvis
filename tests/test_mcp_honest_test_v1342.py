@@ -145,7 +145,7 @@ def test_a_probe_of_a_dying_pack_reports_the_crash_with_its_masked_tail():
     assert mcp_tools([_dying_cfg()], record=False, errors=errors) == []
     assert load_status("dying") is None, "a probe must not write the load record"
     failure = errors["dying"]
-    assert failure["error"].startswith("MCPServerStopped: pack 'dying': "), failure["error"]
+    assert failure["error"].startswith("MCPServerStopped: extension 'dying': "), failure["error"]
     assert "the MCP server closed the connection (exit code 1)" in failure["error"]
     assert failure["reason"] == "the extension's server exited (exit code 1)"
     assert failure["fix"] == "read its last output below; a missing key or setting is the usual cause"
@@ -221,7 +221,7 @@ def test_test_route_answers_the_real_crash_not_advertised_no_tools(tmp_path):
     r = client.post("/mcp/servers/dying/test").json()
     assert r["ok"] is False and r["tools"] == []
     assert "advertised no tools" not in (r["error"] or "")
-    assert r["error"].startswith("MCPServerStopped: pack 'dying': "), r["error"]
+    assert r["error"].startswith("MCPServerStopped: extension 'dying': "), r["error"]
     assert "the MCP server closed the connection (exit code 1)" in r["error"]
     assert r["reason"] == "the extension's server exited (exit code 1)"
     assert r["fix"] == "read its last output below; a missing key or setting is the usual cause"
@@ -275,7 +275,7 @@ def test_directory_test_reports_the_real_error(tmp_path):
     r = connectors.test(platform, "dying")
     assert r["ok"] is False and r["tools"] == []
     assert "advertised no tools" not in (r["error"] or "")
-    assert r["error"].startswith("MCPServerStopped: pack 'dying': "), r["error"]
+    assert r["error"].startswith("MCPServerStopped: extension 'dying': "), r["error"]
     assert "closed the connection (exit code 1)" in r["error"]
     assert r["reason"] == "the extension's server exited (exit code 1)"
     assert "BRAVE_API_KEY=***" in r["stderr_tail"]

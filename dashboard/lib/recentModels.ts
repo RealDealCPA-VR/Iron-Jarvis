@@ -12,7 +12,7 @@
  * model) is never remembered, because the menu already opens on it.
  */
 
-import { modelRowName } from "@/lib/onboarding";
+import { modelRowName, type NamedRow } from "@/lib/onboarding";
 
 export const RECENT_MODELS_KEY = "ij_chat_model_recent";
 export const RECENT_MODELS_MAX = 3;
@@ -49,19 +49,23 @@ export function rememberRecentModel(choice: string): string[] {
 /** Rows whose provider, model id, display name, picker label (v1.300.0,
  *  "Opus 5.5") or the words the menu SHOWS for the row (v1.359.0,
  *  `modelRowName`: "Your Claude plan", "Your model server", "Opus 4.8")
- *  contain `query` (case-insensitive). A person types what they read. */
+ *  contain `query` (case-insensitive). A person types what they read.
+ *  v1.360.0 (lane 10B fix): the shown words are read with `catalog` (the
+ *  whole /models list; defaults to `rows`), so typing "DGX" finds the
+ *  config slot's "fleet" row the menu now names "DGX Spark". */
 export function matchModels<
   T extends { provider: string; model: string; name?: string; label?: string },
 >(
   rows: readonly T[],
   query: string,
   max: number,
+  catalog?: readonly NamedRow[] | null,
 ): T[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const out: T[] = [];
   for (const m of rows) {
-    const shown = modelRowName(m);
+    const shown = modelRowName(m, catalog ?? rows);
     if (`${m.label ?? ""} ${m.name ?? ""} ${shown} ${m.provider} ${m.model}`.toLowerCase().includes(q)) {
       out.push(m);
       if (out.length >= max) break;

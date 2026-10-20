@@ -309,17 +309,20 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
                 ? // v1.314.0: the provider in words; the model id only for a real one.
                   health.default_provider === "mock"
                   ? `Default · ${providerDisplay(health.default_provider)}`
-                  : `Default · ${modelPickWords({
-                      provider: health.default_provider,
-                      model: health.default_model ?? "",
-                    })}`
+                  : `Default · ${modelPickWords(
+                      {
+                        provider: health.default_provider,
+                        model: health.default_model ?? "",
+                      },
+                      modelsData?.models,
+                    )}`
                 : "Default"}
             </option>
             {models.map((m) => {
               const avail = isAvailable(m);
               return (
                 <option key={optKey(m)} value={optKey(m)} disabled={!avail} title={modelPickTitle(m)}>
-                  {modelPickWords(m)}
+                  {modelPickWords(m, modelsData?.models)}
                   {avail ? "" : " — not connected"}
                 </option>
               );

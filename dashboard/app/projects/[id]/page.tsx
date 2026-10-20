@@ -872,7 +872,7 @@ function ProjectWorkspaceInner({
                           value={`${m.provider}::${m.model}`}
                           title={modelPickTitle(m)}
                         >
-                          {modelPickWords(m)}
+                          {modelPickWords(m, models.models)}
                         </option>
                       ))}
                     </select>

@@ -172,9 +172,9 @@ SUPPORTED_METHODS: tuple[str, ...] = (
 #: pane is the remedy — the user ticks Browser in that pane's Capabilities — so
 #: the sentence names the surface rather than the setting.
 NO_CAPABILITY_MESSAGE = (
-    "this Build pane grants no capability Iron Jarvis serves over MCP — only "
+    "this Build terminal grants no capability Iron Jarvis serves over MCP — only "
     "Browser and Memory are served in this version; tick one of them in the "
-    "pane's Capabilities in Build, then relaunch the harness"
+    "terminal's Capabilities in Build, then relaunch the harness"
 )
 
 #: 400 wording when a call arrives with no live ``Mcp-Session-Id``. The

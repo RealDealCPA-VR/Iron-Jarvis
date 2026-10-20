@@ -35,20 +35,26 @@ import { post, ApiError } from "@/lib/api";
 import { WorkRow } from "@/components/chat/WorkLine";
 import { runActionLines } from "@/lib/runWords";
 import { friendlyModelName } from "@/lib/friendlyModelName";
-import { answeredModelName } from "@/lib/answeredModel";
+import { answeredModelName, type CatalogRow } from "@/lib/answeredModel";
+import { useModels } from "@/lib/useModels";
 import { providerDisplay } from "@/lib/onboarding";
 import { replyWhere } from "@/components/chat/TurnReceipt";
 import { runActivity, RunActivityFold } from "@/components/chat/RunActivity";
 import type { AgentRunStamp } from "@/lib/agentRun";
 
 /** The model the run was served by, in the words the reply's receipt uses
- *  (the name the id spells; the demo model by its own name), or "". */
-export function runModelName(run: Pick<AgentRunStamp, "provider" | "model">): string {
+ *  (the name the id spells; the demo model by its own name), or "".
+ *  v1.360.0 (lane 10B fix): `models` is the /models catalog (the component
+ *  passes `useModels().models`), so the "fleet" pick reads its machine. */
+export function runModelName(
+  run: Pick<AgentRunStamp, "provider" | "model">,
+  models: readonly CatalogRow[] = [],
+): string {
   if (run.provider === "mock") return providerDisplay("mock");
   const model = (run.model ?? "").trim();
   // v1.359.0 re-review: the reply receipt's rule, so a run on a CLI's
   // default model reads "Ran on Claude Code", never "Ran on subscription".
-  if (model) return answeredModelName({ provider: run.provider ?? "", model }, []) ?? friendlyModelName(model);
+  if (model) return answeredModelName({ provider: run.provider ?? "", model }, models) ?? friendlyModelName(model);
   return providerDisplay(run.provider ?? "");
 }
 
@@ -86,12 +92,13 @@ export function AgentRunReceipt({
 }) {
   const [openErr, setOpenErr] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
+  const { models: catalog } = useModels();
   const tools = run.tools ?? [];
   const lines = runActionLines(
     tools,
     tools.map((t) => ({ tool: t.tool, count: t.failed })),
   );
-  const model = runModelName(run);
+  const model = runModelName(run, catalog);
   const modelTitle = [providerDisplay(run.provider ?? ""), run.model].filter(Boolean).join(" · ");
   const folder = run.workspacePath ?? "";
   const folderWords = runFolderWords(folder);

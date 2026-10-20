@@ -1629,11 +1629,11 @@ class McpServerBody(BaseModel):
             self.command, self.args = build_launch(self.package, self.launcher)
         if kind == "stdio":
             if not (self.command or "").strip():
-                raise ValueError("a stdio pack needs a command")
+                raise ValueError("an extension that runs on this PC needs a command")
         else:
             url = (self.url or "").strip()
             if not url:
-                raise ValueError(f"an {kind} pack needs a url")
+                raise ValueError("an extension reached at a web address needs a url")
             if not url.lower().startswith(("http://", "https://")):
                 raise ValueError("the url must start with http:// or https://")
             self.url = url

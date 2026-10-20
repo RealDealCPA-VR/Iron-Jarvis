@@ -390,7 +390,7 @@ def carry_over(
         return Carried(
             False, None,
             why_none or (
-                f'No conversation from this pane was found, so Claude started a fresh one on "{to_title}".'
+                f'No conversation from this terminal was found, so Claude started a fresh one on "{to_title}".'
             ),
         )
     sid = source.stem

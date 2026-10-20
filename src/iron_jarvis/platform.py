@@ -1873,30 +1873,40 @@ def build_platform(
             status in _run_outcome.SHORT_STATUSES or bool(fired.get("rings"))
         )
 
-    def _session_rings(sid: str) -> bool:
-        """Does the bell ring the ``session.completed`` session ``sid``
-        published? ``notifier.bell_pings`` read off the stored row (status,
-        outcome, origin) — never a second copy of the rule. BLOCKING (one
-        SQLite read); called through ``asyncio.to_thread``. A fault reads as
-        "no": "This PC" then keeps its notice (two beats none)."""
+    def _session_end(sid: str) -> tuple[bool, str]:
+        """``(rings, outcome)`` for the session ``sid``: does the bell ring
+        the ``session.completed`` it published (``notifier.bell_pings`` read
+        off the stored row — status, outcome, origin — never a second copy
+        of the rule), and the ledger's verdict on it (``Session.outcome``,
+        "" when there is none). BLOCKING (one SQLite read); called through
+        ``asyncio.to_thread``. A fault reads as ``(False, "")``: "This PC"
+        then keeps its notice (two beats none) and the row keeps the
+        engine's word.
+
+        v1.360.0 integrate: the outcome feeds the goal fire's row, so a goal
+        iteration whose session ended needing the user reads "Needs you" on
+        the Schedules row and "needs you" on the phone — the bell's word —
+        never "ok"/"done" beside it (lane 10A review, note a)."""
         try:
             row = platform.orchestrator.get_session(sid)
             if row is None:
-                return False
+                return False, ""
             status = getattr(getattr(row, "status", None), "value", None)
-            return _bell_pings(
+            outcome = str(getattr(row, "outcome", None) or "")
+            rings = _bell_pings(
                 {
                     "type": EventType.SESSION_COMPLETED,
                     "session_id": sid,
                     "payload": {
                         "status": str(status or getattr(row, "status", "") or ""),
-                        "outcome": getattr(row, "outcome", None) or None,
+                        "outcome": outcome or None,
                         "origin": str(getattr(row, "origin", "") or ""),
                     },
                 }
             )
+            return rings, outcome
         except Exception:  # noqa: BLE001 — a wording rule never drops a notice
-            return False
+            return False, ""
 
     # -- the weekly memory review (v1.143.0) --------------------------------
     # The memory-review schedule is the ONE task schedule whose prompt must not
@@ -2015,7 +2025,7 @@ def build_platform(
                 raise ValueError("scheduled task has no 'task' text")
             if platform.orchestrator is None:
                 raise RuntimeError(
-                    "task schedules need the daemon's agent orchestrator"
+                    "task schedules need Iron Jarvis's agent orchestrator"
                 )
             # v1.171.0 (contract 3): a schedule may name WHO does the work.
             # Resolution mirrors POST /agents/{name}/spawn exactly — the
@@ -2300,7 +2310,7 @@ def build_platform(
                 raise ValueError("goal schedule has no 'goal_id' in its payload")
             goal_engine = platform.goal_engine
             if goal_engine is None:
-                raise RuntimeError("goal schedules need the daemon's goal engine")
+                raise RuntimeError("goal schedules need Iron Jarvis's goal engine")
             result = await goal_engine.run_iteration(goal_id)
             sid = str(result.get("session_id") or "")
             if sid:
@@ -2321,13 +2331,24 @@ def build_platform(
                 # (``skipped``), never "ok"/"Done".
                 fired["outcome"] = _run_outcome.STATUS_SKIPPED
                 return _run_outcome.goal_skipped_detail(reason)
+            iteration = int(result.get("iteration") or 0)
+            detail = f"goal iteration {iteration} completed"
             if sid:
                 # v1.360.0 (lane 10A review): an iteration the engine counts
                 # as done can still be a session the bell rings ("needs you",
                 # "part of it failed") — then the bell is this outcome's one
                 # desktop notice, not "This PC".
-                fired["rings"] = await asyncio.to_thread(_session_rings, sid)
-            detail = f"goal iteration {int(result.get('iteration') or 0)} completed"
+                rings, outcome = await asyncio.to_thread(_session_end, sid)
+                fired["rings"] = rings
+                # v1.360.0 integrate (lane 10A note a): ... and the ROW says
+                # the session's verdict, like a task fire's row does — never
+                # "ok"/"done" under a bell that says "needs you".
+                short = _run_outcome.fire_status(outcome)
+                if short in (_run_outcome.STATUS_NEEDS_YOU, _run_outcome.STATUS_PARTIAL):
+                    fired["outcome"] = outcome
+                    detail = _run_outcome.short_detail(
+                        short, f"Goal iteration {iteration} ran."
+                    )
             if result.get("satisfied"):
                 detail += " — goal satisfied"
             elif result.get("unmet"):

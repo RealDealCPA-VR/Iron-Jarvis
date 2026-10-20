@@ -125,10 +125,13 @@ def test_inside_a_schedule_fire_no_destination_gets_the_generic_run_alert(deskto
     with schedule_fire("morning-brief"):
         n.on_event(_case("schedule-done")["event"])
         n.on_event(_case("workflow-done")["event"])
-        # An ask is not an outcome: it still reaches every destination.
+        # An ask is not an outcome: it still reaches the phone inside a fire.
         n.on_event({"type": EventType.APPROVAL_REQUESTED, "payload": {"tool": "shell"}})
     assert len(phone.sent) == 1 and "asking to use shell" in phone.sent[0], phone.sent
-    assert len(desktop_sink) == 1 and "asking to use shell" in desktop_sink[0]
+    # v1.360.0 integrate (moved on purpose, lane 10A note g): on THIS PC the
+    # bell's "N pending" ping (window open) and the desktop app's ask watcher
+    # (tray) say every agent ask, so "This PC" no longer adds a second toast.
+    assert desktop_sink == [], desktop_sink
     # After the fire, the same alert is sent again as usual.
     n.on_event(_case("schedule-done")["event"])
     assert len(phone.sent) == 2
@@ -301,9 +304,10 @@ def test_notify_false_silences_the_runs_generic_alert_too(tmp_path, monkeypatch,
 
 
 # (lane 10A review) The row's status is not the bell's rule: a GOAL schedule
-# whose iteration the engine counts as done reads "ok" on the row, while its
+# whose iteration the engine counts as done read "ok" on the row, while its
 # session ended with an expired ask — the bell rings "Your goal's run needs
 # you", and "This PC" used to add "Schedule “g”: done — …" beside it.
+# (v1.360.0 integrate) The row now reads the session's verdict too.
 
 
 def _goal_fire(tmp_path, monkeypatch, *, ask_expired: bool):
@@ -366,14 +370,18 @@ def test_a_goal_schedule_whose_run_needs_you_is_the_bells_one_notice(
     tmp_path, monkeypatch, desktop_sink
 ):
     out = _goal_fire(tmp_path, monkeypatch, ask_expired=True)
-    assert out.body["last_status"] == "ok", out.body  # the engine counted the iteration
+    # v1.360.0 integrate (moved on purpose, lane 10A note a): the engine
+    # counted the iteration, but its session ended needing the user — the
+    # ROW now says so, in the bell's word ("ok" here before).
+    assert out.body["last_status"] == "needs_you", out.body
     assert bell_pings(out.ev), out.ev  # … and the bell rings "needs you"
     assert desktop_sink == [], desktop_sink  # so "This PC" says nothing beside it
-    assert len(out.phone) == 1 and out.phone[0].startswith("Schedule “g”: "), out.phone
+    assert len(out.phone) == 1 and out.phone[0].startswith("Schedule “g”: needs you — "), out.phone
 
 
 def test_a_clean_goal_schedule_keeps_its_one_this_pc_notice(tmp_path, monkeypatch, desktop_sink):
     out = _goal_fire(tmp_path, monkeypatch, ask_expired=False)
+    assert out.body["last_status"] == "ok", out.body  # (integrate) a clean iteration stays ok
     assert not bell_pings(out.ev), out.ev  # a clean run is a quiet bell row
     assert len(desktop_sink) == 1 and desktop_sink[0].startswith("Schedule “g”: done"), desktop_sink
 
@@ -447,7 +455,10 @@ def test_the_tray_notice_is_the_bells_attention_row_word_for_word(tmp_path):
         if case["attention"]:
             assert notice is not None, case["case"]
             assert notice["title"] == case["title"], case["case"]
-            assert notice["body"] == case["body"], case["case"]
+            # v1.360.0 integrate (moved on purpose, lane 10A note f): the
+            # tray says what the bell's PING says — the row's body, else the
+            # ping's own "Open the dashboard for details." (never a bare title).
+            assert notice["body"] == (case["body"] or "Open the dashboard for details."), case["case"]
             assert notice["href"] == case["href"], case["case"]
         else:
             assert notice is None, f"{case['case']}: the tray must not say what the bell does not ring"

@@ -622,6 +622,10 @@ class WorkflowEngine:
                     self._deliver,
                     f"Workflow “{workflow.name}” needs you: {ask.question} "
                     f"— answer it in chat or on the Workflows page.",
+                    # v1.360.0 integrate (lane 10A note g): on this PC the
+                    # bell counts and pings the parked question (its waiting
+                    # row), so "This PC" stays quiet — one notice per ask.
+                    skip_desktop=True,
                 )
                 refreshed = self._get_record(run_id)
                 return refreshed if refreshed is not None else record
@@ -1288,15 +1292,30 @@ class WorkflowEngine:
                 return f"step summary does not contain '{text}'"
         return None
 
-    def _deliver(self, message: str) -> tuple[bool, str]:
+    def _deliver(self, message: str, *, skip_desktop: bool = False) -> tuple[bool, str]:
         """Send to EVERY destination (schedule-delivery semantics — a workflow
         speaking to nobody is indistinguishable from a broken one). Returns
         (any_delivered, detail); never raises. Messages are capped below
-        Telegram's 4096-char limit so one verbose step can't kill delivery."""
+        Telegram's 4096-char limit so one verbose step can't kill delivery.
+
+        ``skip_desktop`` (v1.360.0 integrate): leave out "This PC" — for a
+        parked run's question, which the bell already counts and pings on
+        this PC. A notify STEP keeps every destination: it is the user's own
+        message, and nothing else says it."""
         try:
             notifier = self.platform.notifier
             msg = message if len(message) <= 3500 else message[:3500] + "…"
-            results = notifier.notify(msg, list(notifier.channels()))
+            targets = list(notifier.channels())
+            if skip_desktop:
+                without = getattr(notifier, "without_desktop", None)
+                if callable(without):
+                    targets = list(without(targets))
+                if not targets:
+                    # An EMPTY list would fall back to the default channel
+                    # (Notifier._targets) — "This PC" again. Nothing else to
+                    # send to: the bell is the notice.
+                    return False, "no destination besides This PC (the bell says it)"
+            results = notifier.notify(msg, targets)
             oks = [k for k, v in (results or {}).items() if v.get("ok")]
             if oks:
                 return True, f"delivered to {', '.join(sorted(oks))}"

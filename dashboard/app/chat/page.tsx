@@ -4678,7 +4678,7 @@ export default function ChatPage() {
       // v1.359.0 (lane 9B): the menu row's own words (modelText), so the
       // chip never says "subscription" for the row that read "Your Claude
       // plan"; a default the catalog does not list is named the same way.
-      return modelText(row ?? { provider: defaultProviderId, model: defaultModelName });
+      return modelText(row ?? { provider: defaultProviderId, model: defaultModelName }, models);
     }
     const { provider, model } = splitChoice(choice);
     const row = models.find((m) => m.provider === provider && m.model === model);
@@ -4687,8 +4687,8 @@ export default function ChatPage() {
     // v1.359.0 integrate (lane 9B review): a pick /models does not list (yet:
     // a restored thread while the catalog loads, or an endpoint since
     // removed) reads in the menu's words too, never "subscription".
-    if (row) return modelText(row);
-    return provider && model ? modelText({ provider, model }) : friendlyModelName(modelLabel);
+    if (row) return modelText(row, models);
+    return provider && model ? modelText({ provider, model }, models) : friendlyModelName(modelLabel);
   }, [choice, models, modelLabel, defaultModelName, defaultProviderId]);
   /** The record behind the trigger's words: provider · model id. */
   const modelTriggerRaw = useMemo(() => {
@@ -13912,8 +13912,8 @@ export default function ChatPage() {
                                           choice === v ? "text-accent-soft" : "text-zinc-300"
                                         }`}
                                       >
-                                        <span className="min-w-0 truncate" title={modelTitle(m)}>
-                                          {modelText(m)}
+                                        <span className="min-w-0 truncate" title={modelTitle(m, models)}>
+                                          {modelText(m, models)}
                                         </span>
                                         <ModelRowChips m={m} />
                                         <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
@@ -13942,8 +13942,8 @@ export default function ChatPage() {
                                           choice === v ? "text-accent-soft" : "text-zinc-300"
                                         }`}
                                       >
-                                        <span className="min-w-0 truncate" title={modelTitle(row)}>
-                                          {modelText(row)}
+                                        <span className="min-w-0 truncate" title={modelTitle(row, models)}>
+                                          {modelText(row, models)}
                                         </span>
                                         <ModelRowChips m={row} />
                                         <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
@@ -14035,9 +14035,9 @@ export default function ChatPage() {
                                             >
                                               <span
                                                 className="min-w-0 truncate"
-                                                title={modelTitle(m)}
+                                                title={modelTitle(m, models)}
                                               >
-                                                {modelText(m)}
+                                                {modelText(m, models)}
                                               </span>
                                               <span className="ml-1.5 inline-flex shrink-0 items-center gap-1">
                                                 <ModelRowChips m={m} />

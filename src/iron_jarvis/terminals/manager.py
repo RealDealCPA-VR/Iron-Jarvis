@@ -1075,7 +1075,7 @@ class TerminalManager:
                     out.use_default(
                         provider,
                         note=late_note(title) if late else (
-                            f'This pane came back on this PC\'s login instead of "{title}".'
+                            f'This terminal came back on this PC\'s login instead of "{title}".'
                         ),
                     )
         return out if out else None

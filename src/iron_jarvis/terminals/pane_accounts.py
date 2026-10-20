@@ -104,11 +104,11 @@ _CONNECTIONS = _acc._CONNECTIONS
 _OFF = "Iron-Proxy is off; turn it on in Connections first."
 #: The note on a pane that asked for no account while Iron-Proxy was on and
 #: not answering (the shared contract's words).
-NOT_ANSWERING_NOTE = "Iron-Proxy was not answering — this pane uses this PC's login."
+NOT_ANSWERING_NOTE = "Iron-Proxy was not answering — this terminal uses this PC's login."
 #: ...and while Iron-Proxy is on but its account snapshot is not read yet.
-STARTING_NOTE = "Iron-Proxy is not answering yet (starting or stopped) — this pane uses this PC's login."
+STARTING_NOTE = "Iron-Proxy is not answering yet (starting or stopped) — this terminal uses this PC's login."
 _TOO_OLD = (
-    "The Iron-Proxy running on this PC is too old to open a pane on a chosen account"
+    "The Iron-Proxy running on this PC is too old to open a terminal on a chosen account"
 )
 
 
@@ -230,8 +230,8 @@ def from_recorded(
 def late_note(title: str) -> str:
     """A legacy restore that Iron-Proxy could not answer within the budget."""
     return (
-        "Iron-Proxy did not answer in time when this pane came back, so it uses this "
-        f'PC\'s login instead of "{title}" — open a new pane on that account from Launch.'
+        "Iron-Proxy did not answer in time when this terminal came back, so it uses this "
+        f'PC\'s login instead of "{title}" — open a new terminal on that account from Launch.'
     )
 
 
@@ -247,7 +247,7 @@ def normalise_request(request: Mapping[str, Any] | None) -> dict[str, str]:
         provider = str(key or "").strip().lower()
         if provider not in SPECS:
             raise PaneAccountRefused(
-                f'A Build pane has no account for "{key}" — use anthropic, openai or xai.',
+                f'A Build terminal has no account for "{key}" — use anthropic, openai or xai.',
                 400,
             )
         text = str(value or "").strip()
@@ -294,7 +294,7 @@ def _refuse_disabled(spec: _acc.ProviderAccounts, title: str) -> PaneAccountRefu
 
 def _refuse_too_old() -> PaneAccountRefused:
     return PaneAccountRefused(
-        f"{_TOO_OLD} — update Iron-Proxy (a pane that does not choose an account still "
+        f"{_TOO_OLD} — update Iron-Proxy (a terminal that does not choose an account still "
         "gets its first free one).",
         what=_TOO_OLD,
     )
@@ -370,7 +370,7 @@ def _pick_explicit(
         raise PaneAccountRefused(f'"{title}" is a {kind} account, not a {spec.label} one.', 400)
     if (prof.get("lane") or "cli") != "cli":
         raise PaneAccountRefused(
-            f'"{title}" is an API-key account; a Build pane runs a subscription (CLI) account.',
+            f'"{title}" is an API-key account; a Build terminal runs a subscription (CLI) account.',
             400,
         )
     if prof.get("enabled") is False:
@@ -439,17 +439,17 @@ def _bare(err: BaseException) -> str:
 
 
 def _restore_note(what: str) -> str:
-    return f"{what}, so this pane came back on this PC's login."
+    return f"{what}, so this terminal came back on this PC's login."
 
 
 def _off_note(title: str) -> str:
-    return f"Iron-Proxy is off, so this pane came back on this PC's login instead of \"{title}\"."
+    return f"Iron-Proxy is off, so this terminal came back on this PC's login instead of \"{title}\"."
 
 
 def _unanswered_note(title: str) -> str:
     return (
-        f"Iron-Proxy was not answering, so this pane came back on this PC's login instead of "
-        f'"{title}" — open a new pane on that account from Launch.'
+        f"Iron-Proxy was not answering, so this terminal came back on this PC's login instead of "
+        f'"{title}" — open a new terminal on that account from Launch.'
     )
 
 
@@ -632,7 +632,7 @@ def _first_free_from_cache(svc: Any, absent: list[str], out: PaneAccounts) -> No
         exc = _Exhausted({"resetAt": until[0] if until else "",
                           "tried": [str(prof.get("id")) for prof in mine]})
         words = _bare(_acc._exhausted_error(spec, exc, _CachedAccounts(list(profiles), states)))
-        out.use_default(p, note=f"{words.rstrip('.')} — this pane uses this PC's login.")
+        out.use_default(p, note=f"{words.rstrip('.')} — this terminal uses this PC's login.")
 
 
 # --------------------------------------------------------------------------- #
@@ -674,7 +674,7 @@ def _still_runs_note(row: Mapping[str, Any], enabled: bool) -> str:
     if row.get("source") != "iron-proxy":
         return ""
     title = str(row.get("title") or row.get("id") or "")
-    folder = f"This pane still runs on \"{title}\"'s folder"
+    folder = f"This terminal still runs on \"{title}\"'s folder"
     if row.get("state") == "missing" and row.get("reason") == "disabled":
         return f"{folder}; it is turned off on the Iron-Proxy card."
     if row.get("state") == "missing":

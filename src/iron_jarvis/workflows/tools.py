@@ -346,7 +346,7 @@ class WorkflowRunTool(Tool):
             # never execute. Flip it honestly and tell the model the truth.
             from ..core.ids import utcnow
 
-            detail = "daemon is shutting down — run not started"
+            detail = "Iron Jarvis is shutting down — the run did not start"
             try:
                 outs = _json.loads(rec.outputs_json or "{}")
             except (ValueError, TypeError):

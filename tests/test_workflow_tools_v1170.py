@@ -479,7 +479,8 @@ async def test_workflow_run_refused_spawn_fails_the_record_honestly(tmp_path):
 
     assert res.ok is False
     assert "shutting down" in res.error
-    assert "not started" in res.error
+    # v1.360.0 integrate (moved on purpose): "the run did not start".
+    assert "did not start" in res.error
     rec = _run_record(
         platform,
         next(
@@ -492,7 +493,7 @@ async def test_workflow_run_refused_spawn_fails_the_record_honestly(tmp_path):
     assert rec.finished_at is not None  # settled, not a forever-spinning row
     outs = json.loads(rec.outputs_json)
     assert outs["__launch__"]["status"] == "failed"
-    assert "not started" in outs["__launch__"]["summary"]
+    assert "did not start" in outs["__launch__"]["summary"]  # v1.360.0 integrate (moved on purpose)
 
 
 def _all_runs(platform) -> list[WorkflowRunRecord]:

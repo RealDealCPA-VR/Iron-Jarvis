@@ -3076,6 +3076,12 @@ function runOutcomePlainText(md) {
     .trim();
 }
 
+// v1.360.0 integrate (lane 10A note f): what the bell's PING says when its row
+// has no body (NotificationBell: `latest.body || "Open the dashboard for
+// details."`), so the tray notice is never a bare title. Pinned equal to the
+// bell's literal (tests/test_integrate_wave10_v13600.py).
+const RUN_OUTCOME_NO_DETAIL = "Open the dashboard for details.";
+
 // The bell's `clip`: flattened first, then cut at 140.
 function runOutcomeClip(text) {
   const raw = typeof text === "string" ? text : "";
@@ -3138,7 +3144,7 @@ function runOutcomeNotice(entry) {
     id,
     ts: runOutcomeTsMs(entry.ts),
     title: `${RUN_OUTCOME_SUBJECT[kind](name)} ${words}`,
-    body: runOutcomeClip(p.summary),
+    body: runOutcomeClip(p.summary) || RUN_OUTCOME_NO_DETAIL,
     href: `/sessions/${encodeURIComponent(sid)}`,
     ...(kind === "workflow" ? { session: sid } : {}),
   };

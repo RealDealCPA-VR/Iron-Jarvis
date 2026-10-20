@@ -1886,7 +1886,7 @@ class AgentThreads:
         ltm = d.platform.ltm
         src = (source or "").strip() or ltm.default_source()
         if not src or ltm.get(src) is None:
-            raise ValueError(f"no such memory source: {src}")
+            raise ValueError(f"no such memory base: {src}")
 
         title = (getattr(rec, "title", "") or "").strip() or "Agent thread"
 

@@ -289,7 +289,7 @@ class DesktopChannel(Channel):
         if sink is None:
             return {
                 "ok": False,
-                "detail": "desktop notifications need the running app (daemon not up)",
+                "detail": "desktop notifications need the running app (Iron Jarvis is not running)",
             }
         try:
             sink(str(kw.get("title") or "Iron Jarvis"), message)

@@ -252,7 +252,7 @@ def test_no_key_with_every_account_parked_says_so_from_the_cache(client, fake):
     rec = row["accounts"]["anthropic"]
     assert rec["source"] == "default" and rec["id"] is None
     assert rec["note"].startswith("The only Claude account in Iron-Proxy is at its request limit")
-    assert rec["note"].endswith("— this pane uses this PC's login.")
+    assert rec["note"].endswith("— this terminal uses this PC's login.")
 
 
 def test_no_key_with_iron_proxy_off_is_byte_identical_to_v1301(client, monkeypatch):
@@ -390,7 +390,7 @@ def test_an_iron_proxy_without_pick_profile_refuses_a_chosen_account(client, fak
     before, shells = len(_panes(c)), len(_RecordingBackend.instances)
     r = c.post("/terminals", json={"accounts": {"anthropic": second["id"]}})
     assert r.status_code == 409, r.text
-    assert "too old to open a pane on a chosen account — update Iron-Proxy" in r.json()["detail"]
+    assert "too old to open a terminal on a chosen account — update Iron-Proxy" in r.json()["detail"]
     _assert_no_new_pane(c, before, shells)
     assert not any("profileId" in q for q in _picks(fake))
     _refresh(c)
@@ -654,7 +654,7 @@ def test_restore_reapplies_the_recorded_home_with_no_iron_proxy_call(
         }
         assert panes[on_c["id"]]["accounts"]["anthropic"] == {
             "id": old["id"], "title": "Old", "source": "iron-proxy", "state": "missing",
-            "note": 'This pane still runs on "Old"\'s folder; Iron-Proxy no longer lists it.',
+            "note": 'This terminal still runs on "Old"\'s folder; Iron-Proxy no longer lists it.',
         }
         assert panes[on_pc["id"]]["accounts"]["anthropic"]["state"] == "default"
         assert boot_calls == []
@@ -671,7 +671,7 @@ def test_restore_with_iron_proxy_off_keeps_the_folder_and_says_so(proj, fake, bo
         rec = _panes(c2)[pane["id"]]["accounts"]["anthropic"]
         assert rec == {
             "id": work["id"], "title": "Work Max", "source": "iron-proxy", "state": "unknown",
-            "note": 'Iron-Proxy is off; this pane still runs on "Work Max"\'s folder.',
+            "note": 'Iron-Proxy is off; this terminal still runs on "Work Max"\'s folder.',
         }
         assert _backend_of(pane["id"]).env["CLAUDE_CONFIG_DIR"] == work["cli"]["home"]
     assert boot_calls == []
@@ -709,7 +709,7 @@ def test_a_snapshot_without_homes_is_re_resolved_by_id(proj, fake):
         rec_b = panes[on_b["id"]]["accounts"]["anthropic"]
         assert rec_b["id"] is None and rec_b["source"] == "default"
         assert rec_b["note"].startswith('The Claude account "Personal" is at its usage limit')
-        assert rec_b["note"].endswith("so this pane came back on this PC's login.")
+        assert rec_b["note"].endswith("so this terminal came back on this PC's login.")
         assert _home_keys(_backend_of(on_b["id"]).env, "CLAUDE_CONFIG_DIR") == []
 
 
@@ -797,7 +797,7 @@ def test_a_legacy_snapshot_is_bounded_to_the_restore_budget(tmp_path):
     for i in range(3):
         acc = m.get(f"term_{i:04d}").accounts["anthropic"]
         assert acc["id"] is None and acc["source"] == "default"
-        assert acc["note"].startswith("Iron-Proxy did not answer in time when this pane came back")
+        assert acc["note"].startswith("Iron-Proxy did not answer in time when this terminal came back")
         assert '"Work Max"' in acc["note"]
 
 

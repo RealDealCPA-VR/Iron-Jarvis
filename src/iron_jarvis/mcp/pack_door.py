@@ -245,7 +245,7 @@ def add_pack(
         if not _NAME_RX.match(name):
             raise PackDoorError(
                 422,
-                "a pack name starts with a letter and uses letters, digits, "
+                "an extension's name starts with a letter and uses letters, digits, "
                 "- or _ (at most 40 characters)",
             )
     if not re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{0,39}$", name):
@@ -341,7 +341,7 @@ def add_pack(
         raise PackDoorError(
             503,
             f"the vault could not store {', '.join(refused)} "
-            f"({type(exc).__name__}); the pack was not added",
+            f"({type(exc).__name__}); the extension was not added",
         )
     if is_http:
         cfg = {
@@ -413,7 +413,7 @@ def add_pack(
         else:
             note = "saved — it connected but advertised no tools; see its row"
     elif body.auto_approve:
-        note = "loaded — restart the daemon so autonomous agents may use it without asking"
+        note = "loaded — restart Iron Jarvis so autonomous agents may use it without asking"
     return {
         "name": name,
         "added": True,

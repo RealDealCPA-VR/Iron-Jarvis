@@ -29,7 +29,8 @@ import {
 } from "lucide-react";
 import { API_BASE, ApiError, del, get, ijToken, patch, post, put } from "@/lib/api";
 import type { AgentApprovalMode, DynamicAgent, ModelOption } from "@/lib/types";
-import { PERMISSION_LEVELS } from "@/lib/permissionLevels";
+import { PERMISSION_LEVELS, permissionLevel, readsLevelLine } from "@/lib/permissionLevels";
+import { refreshReadFacts, useReadFacts } from "@/lib/readFacts";
 import { AllowanceMeter } from "./RosterStrip";
 import {
   Badge,
@@ -653,6 +654,15 @@ const APPROVAL_OPTIONS: {
   },
 ];
 
+/** An option's title: the chip's own sentence for a real level, read with
+ *  what Jarvis may read (v1.360.0 integrate, lane 10C note B). */
+function approvalTitle(o: (typeof APPROVAL_OPTIONS)[number], readsLine: string): string {
+  if (o.value === "always_ask" || o.value === "approve_for_me") {
+    return permissionLevel(o.value, readsLine).description;
+  }
+  return o.title;
+}
+
 /**
  * The employee fields, shared by the create form and the row editor so the
  * two cannot drift. `scope` suffixes every accessible name ("Base type for
@@ -677,6 +687,10 @@ function EmployeeFields({
   scope?: string;
   unknownBase?: boolean;
 }) {
+  // v1.360.0 integrate (lane 10C note B): a level's title says what the
+  // chat chip's says — "only in the folders you chose" once reading is
+  // limited (lib/permissionLevels.readsLevelLine, one decision).
+  const readsLine = readsLevelLine(useReadFacts());
   const label = (text: string) => (scope ? `${text} for ${scope}` : text);
   const set = (patchDraft: Partial<EmployeeDraft>) => onChange({ ...draft, ...patchDraft });
   return (
@@ -710,11 +724,19 @@ function EmployeeFields({
           <select
             value={draft.approval}
             onChange={(e) => set({ approval: e.target.value as AgentApprovalMode })}
+            // v1.360.0 integrate (lane 10C note B): the chip's own read of
+            // GET /settings/access, only when the user reaches for the list.
+            onFocus={() => refreshReadFacts()}
             aria-label={label("Approval posture")}
             className="field text-xs"
           >
             {APPROVAL_OPTIONS.map((o) => (
-              <option key={o.value || "usual"} value={o.value} title={o.title} disabled={o.disabled}>
+              <option
+                key={o.value || "usual"}
+                value={o.value}
+                title={approvalTitle(o, readsLine)}
+                disabled={o.disabled}
+              >
                 {o.label}
               </option>
             ))}
@@ -1176,7 +1198,7 @@ function DynamicRow({
           >
             <Cpu size={10} />
             {agent.provider
-              ? modelPickWords({ provider: agent.provider, model: agent.model })
+              ? modelPickWords({ provider: agent.provider, model: agent.model }, models)
               : agent.model}
           </span>
         )}
@@ -1390,13 +1412,13 @@ function DynamicRow({
                 {storedModelPick && !models.some((m) => modelKey(m) === storedModelPick) && (
                   <option value={storedModelPick}>
                     {agent.provider
-                      ? modelPickWords({ provider: agent.provider, model: agent.model ?? "" })
+                      ? modelPickWords({ provider: agent.provider, model: agent.model ?? "" }, models)
                       : agent.model}
                   </option>
                 )}
                 {models.map((m) => (
                   <option key={modelKey(m)} value={modelKey(m)} title={modelPickTitle(m)}>
-                    {modelPickWords(m)}
+                    {modelPickWords(m, models)}
                   </option>
                 ))}
               </select>
@@ -1719,7 +1741,7 @@ export function YourAgentsSection({
             <option value="">Default model</option>
             {models.map((m) => (
               <option key={modelKey(m)} value={modelKey(m)} title={modelPickTitle(m)}>
-                {modelPickWords(m)}
+                {modelPickWords(m, models)}
               </option>
             ))}
           </select>

@@ -1544,7 +1544,7 @@ export function TerminalPane({
               value={`${m.provider}::${m.model}`}
               title={modelPickTitle(m)}
             >
-              {modelPickWords(m)}
+              {modelPickWords(m, models)}
             </option>
           ))}
         </select>
@@ -2015,7 +2015,7 @@ export function TerminalPane({
                 )}
                 {/* v1.359.0 re-review: the model in words, raw pair as title. */}
                 <span className="text-[10px] text-zinc-600" title={modelPickTitle(aiResult)}>
-                  {modelPickWords(aiResult)}
+                  {modelPickWords(aiResult, models)}
                 </span>
                 {(aiResult.skills ?? []).map((s) => (
                   <span

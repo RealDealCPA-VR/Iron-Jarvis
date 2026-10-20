@@ -304,7 +304,7 @@ class LongTermMemory:
 
     def register(self, connector: LTMConnector) -> LTMConnector:
         if not getattr(connector, "name", ""):
-            raise ValueError("LTM connector must have a name")
+            raise ValueError("a memory base must have a name")
         self._connectors[connector.name] = connector
         return connector
 

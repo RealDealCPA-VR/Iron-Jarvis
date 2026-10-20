@@ -3547,6 +3547,85 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **ONE notice per outcome and per ask on this PC; the Connect door only for
+  the user's own data; the user's model server by its name everywhere; every
+  daemon answer in the canon's words** (v1.360.0, product-readiness Wave 10
+  "the final re-audit's regressions closed"; lanes 10A-10C + integrate).
+  NOTICES (10A + integrate): while a window is open the bell's ping is THE
+  desktop notice for a run's outcome; `comm/notifier.bell_pings` is its
+  daemon twin, held with `NotificationBell.toActivity` and
+  desktop/main.js `runOutcomeNotice` to ONE fixture
+  (`dashboard/__tests__/fixtures/one-notice-v13600.json`). "This PC" (alive
+  only while a window is) stays quiet for exactly those outcomes and for a
+  workflow STEP (`Notifier.on_event` → `without_desktop`;
+  `platform._deliver_outcome(bell_says=)` via `_bell_says`), and (integrate)
+  for an agent's `approval.requested` and a parked workflow's question
+  (`WorkflowEngine._deliver(skip_desktop=True)` at park ONLY — a notify step
+  keeps every destination; an EMPTY target list must never reach
+  `notifier.notify`, it falls back to the default channel). Inside
+  `notifier.schedule_fire(name)` (set by `platform._run_scheduled`) the
+  generic run alert goes to NO destination: the schedule's own delivery is
+  the one line (`notify: false` now silences a fire completely). A failed
+  workflow is one bell row (`oneRowPerWorkflow`, `covers`/`absorbs`); a
+  popped-out window's bell pings neither activity nor "N pending"
+  (integrate) — the main window speaks for the app. In the TRAY,
+  main.js's ask-watcher tick reads `GET /audit` (session.completed,
+  workflow.completed) and says the bell's attention rows once
+  (`planRunOutcomeNotifications`; `runOutcomeWindowSeenAt` set by
+  `hideToTray` and every tick with a window), body falling back to the
+  bell's own "Open the dashboard for details." (`RUN_OUTCOME_NO_DETAIL`,
+  pinned equal). A goal fire's row reads the session's verdict
+  (`platform._session_end` → `fired["outcome"]`, so needs_you / partial,
+  never "ok" under a bell saying "needs you"). The helper row's verdict sits
+  OUTSIDE its truncating span in a tone token (`AgentRunRow.settledRunParts`).
+  CHAT (10B, MIRROR NOTE): `connectors/app_names` defaults to NOT own data —
+  `connect_offers` needs an own-data signal; mail/calendar words resolve to
+  the CONNECTED app of that kind (`resolve_kinds`, wired into
+  `_gather_grounding` for both lanes), else ONE door naming both mail
+  choices; "my calendar" with none offers nothing; the door's href is
+  `doors._APPS_FIX_HREF`, where /marketplace (the Directory) lands; the
+  Guide rule arms only for a question about Iron Jarvis
+  (`autoselect._ABOUT_JARVIS_FEATURE_RX` + `_PAGE_OBJECT_RX`).
+  `chat_turn.route_label` names a custom/ollama endpoint by its fleet node's
+  label (the registry's "Custom endpoint" is not a name), both lanes; the
+  "fleet" alias is ONE name on the dashboard — `lib/onboarding.modelRowName`
+  / `machineName`, `lib/answeredModel`, `lib/ranOnWords`,
+  `runPageWords.runModelWords` (integrate: the run page said "DGX Spark ·
+  fleet") — and EVERY call of modelText / modelTitle / modelRowName /
+  modelPickWords / modelOptionText passes the /models catalog
+  (`model-server-name-everywhere-v13600` scans app/ and components/ for a
+  call without it; RunMeta and AgentRunReceipt read `useModels()`). WORDS
+  (10C + integrate): `lib/permissionLevels.readScope` / `readsLevelLine` is
+  the one reading sentence (chip via `lib/readFacts`, read on pointer/focus/
+  open only; Access summary; SetupCard's titles); a found server outside the
+  catalog says what it is from `preview_row`'s `program` / `host`
+  (`lib/addPackWords.rowAbout`); `tests/test_vocabulary_daemon_answers_v13600.py`
+  reads every route module fully and every ANSWER position (raised
+  messages, detail/reason/fix/note/error/summary/title/message/why values,
+  `*_MESSAGE`-style sentences) across the whole daemon with the dashboard's
+  retired list (which now holds "plug-in"); the integrator reworded all 60
+  parked lines (pack → extension, pane → terminal, daemon → Iron Jarvis,
+  job → task, brain/source → memory base, mock → demo) and `PENDING` is
+  empty. THE RULE A FUTURE CHANGE MUST KEEP: a new desktop-visible notice
+  for an outcome or an ask is said by the bell (window) or main.js (tray),
+  never ALSO by "This PC" — read `bell_pings`, never a second rule; a new
+  daemon sentence a person reads passes the answer scan or earns an ALLOW
+  entry (or a PENDING entry with `_P`, reworded before ship); a new model
+  list or name passes the catalog. Pins: `tests/test_{one_notice,
+  chat_matches_meant,found_tools_words,vocabulary_daemon_answers,
+  integrate_wave10}_v13600.py`, `dashboard/__tests__/{one-notice,
+  chat-matches-meant,model-server-name-everywhere,reads-follow-setting,
+  found-tools-say-what,wave10-seams}-v13600.test.tsx` and fixtures
+  `one-notice-v13600.json`, `wave10-seams-v13600.json` (the REAL daemon's
+  answers; regenerate with `IJ_REGEN_WAVE10_SEAMS=1`) (every lane, review and
+  integrator change mutation-checked red). Known: never driven in the
+  packaged app (the tray toast is proven through the real main.js functions
+  under node); the phone gets the parked question AND the schedule's "needs
+  you" line; a run that fails in the last ≤ 25 s before a window opens gets
+  no OS toast (it is in the bell's "While you were away"); a browser
+  dashboard tab with notifications allowed beside the tray app says an
+  outcome twice; the run page names the machine but not local / cloud.
+
 - **A run speaks in the log's words, the Connect door never waits for the
   model, a model is named the menu's way in every list, and Emergency stop
   leaves nothing unattended running OR parked** (v1.359.0, product-readiness

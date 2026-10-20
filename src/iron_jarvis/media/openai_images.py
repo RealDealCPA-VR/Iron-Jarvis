@@ -222,7 +222,7 @@ class OpenAIImagesProvider(MediaProvider):
     async def poll(self, job_id: str) -> JobState:
         state = self._done.get(job_id)
         if state is None:
-            return JobState("failed", error="OpenAI image jobs do not survive a restart (lost at restart)")
+            return JobState("failed", error="OpenAI image tasks do not survive a restart (lost at restart)")
         return state
 
     async def fetch(self, state: JobState) -> bytes:

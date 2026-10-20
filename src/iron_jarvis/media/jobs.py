@@ -247,7 +247,7 @@ class MediaJobs:
         is the chat turn that asked — how a job started in a NEW chat finds
         the chat once the page has saved it."""
         if not spec.provider_job_id:
-            raise ValueError("a background media job needs the service's job id")
+            raise ValueError("a background media task needs the service's id for it")
         row = MediaJobRecord(
             id=new_id("mj"),
             provider=spec.provider,

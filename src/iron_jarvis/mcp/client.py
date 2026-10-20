@@ -342,8 +342,9 @@ class MCPClient:
                     self.transport.request, method, params, cancel=cancel
                 )
             except MCPServerStopped as exc:
-                # Name the pack: the transport only knows its command line.
-                raise MCPServerStopped(f"pack {self.name!r}: {exc}") from exc
+                # Name the extension: the transport only knows its command line
+                # (v1.360.0: the canon's word, never "pack").
+                raise MCPServerStopped(f"extension {self.name!r}: {exc}") from exc
             except asyncio.CancelledError:
                 cancel.set()
                 # Off the loop (a tree kill may spawn taskkill) and shielded so
@@ -1198,9 +1199,11 @@ class HttpTransport:
 
     @property
     def label(self) -> str:
-        """How errors name this server: the pack name, else the URL's host."""
+        """How errors name this server: the extension's name, else the URL's
+        host (v1.360.0: "extension", the canon's word, as MCPServerStopped
+        says it on the stdio path)."""
         if self.name:
-            return f"pack {self.name!r}"
+            return f"extension {self.name!r}"
         try:
             from urllib.parse import urlparse
 
