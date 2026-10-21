@@ -313,3 +313,42 @@ def test_the_connections_page_lists_seeded_endpoints():
     text = page.read_text(encoding="utf-8")
     assert 'n.source === "user" || n.source === "config"' in text
     assert "click to rename" in text
+
+
+
+# --- v1.365.3: a renamed slot is still the slot -------------------------------
+
+
+def test_clearing_the_slot_removes_a_renamed_seed_too(client):
+    """THE USER'S BUG (2026-10-21): their custom slot had been renamed "DGX
+    Spark" (promoted to a stored row). Remove on Connections cleared the
+    setting — and the stored row kept the old endpoint alive, with its old
+    address, as `custom` / `fleet-custom`. It could not be removed."""
+    cfg = _cfg(client)
+    cfg.custom_base_url = "http://100.66.161.52:4000/v1"
+    assert client.patch("/fleet/nodes/custom", json={"label": "DGX Spark"}).status_code == 200
+    assert "custom" in _ids(client)
+
+    cfg.custom_base_url = ""  # what Remove on Connections does
+    assert "custom" not in _ids(client), "the renamed slot outlived its setting"
+    fleet = client.app.state.platform.fleet  # type: ignore[attr-defined]
+    assert all(n.id != "custom" for n in fleet.routable_nodes())
+    assert fleet.reachable("fleet-custom") is False
+
+    # Re-entering the address brings it back WITH the user's name.
+    cfg.custom_base_url = "http://100.66.161.52:4000/v1"
+    again = fleet.get("custom")
+    assert again is not None and again.label == "DGX Spark"
+
+
+def test_the_slots_address_wins_over_a_stale_renamed_row(client):
+    """A renamed slot kept the address it had at the rename; a new address
+    typed in Settings was silently ignored."""
+    cfg = _cfg(client)
+    cfg.custom_base_url = "http://10.0.0.5:4000/v1"
+    client.patch("/fleet/nodes/custom", json={"label": "Spark"})
+    cfg.custom_base_url = "http://10.0.0.6:4000/v1"
+    node = client.app.state.platform.fleet.get("custom")  # type: ignore[attr-defined]
+    assert node is not None
+    assert node.base_url == "http://10.0.0.6:4000/v1" and node.label == "Spark"
+    assert node.api_key_name == "custom_api_key"

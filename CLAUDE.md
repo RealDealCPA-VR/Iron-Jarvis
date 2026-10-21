@@ -3553,6 +3553,20 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A renamed endpoint slot is still the slot** (v1.365.3, a USER BUG). The
+  ollama/custom slots are config-derived seeds; renaming one PROMOTES it to a
+  stored `fleet_nodes` row (`source="config"`). That row used to override the
+  seed WHOLE, so clearing the slot (Remove on Connections = `PUT /settings`
+  custom_base_url "" + `DELETE /connections/custom`, which only drops the
+  key) left the old endpoint alive as `custom`/`fleet-custom` with its old
+  address — the user could not remove their "DGX Spark" after its proxy
+  started needing a key, and each Remove also deleted `custom_api_key`.
+  `FleetRegistry._top_level` now treats a promoted row as the seed plus the
+  user's label/flags: it exists only while its config slot is set, and the
+  slot's `base_url`, `default_model` and `api_key_name` win (a changed
+  address in Settings was silently ignored too). Pins:
+  `tests/test_fleet_manage.py` (`…renamed_seed_too`, `…stale_renamed_row`).
+
 - **codex-cli speaks Codex's own app-server protocol, and Jarvis runs every
   tool** (v1.365.0, Phase 2 of `docs/IJ-HARNESS-PLAN.md`; the Codex twin of
   v1.300.0). `providers/adapters/codex_native/` (`protocol.py` pure,

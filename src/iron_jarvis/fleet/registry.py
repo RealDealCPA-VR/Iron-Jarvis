@@ -153,8 +153,27 @@ class FleetRegistry:
         by_id: dict[str, FleetNode] = {n.id: n for n in self.seeded()}
         stored = self._stored()
         for node in stored:
-            if not node.parent_id:
-                by_id[node.id] = node
+            if node.parent_id:
+                continue
+            if node.id in self._SEED_KEYS and node.source == "config":
+                # v1.365.3: a PROMOTED seed (the custom/ollama slot after a
+                # rename) is the seed plus the user's label and flags. It
+                # exists only while its config slot is set, and the slot's
+                # address, model and key name win. The stored row used to
+                # override the seed whole, so clearing the slot (Remove on
+                # Connections) left the old endpoint in place with its old
+                # address — the user could not remove their DGX Spark, and a
+                # changed address in Settings was silently ignored.
+                seed = by_id.get(node.id)
+                if seed is None:
+                    continue
+                by_id[node.id] = node.model_copy(update={
+                    "base_url": seed.base_url,
+                    "default_model": seed.default_model or node.default_model,
+                    "api_key_name": seed.api_key_name or node.api_key_name,
+                })
+                continue
+            by_id[node.id] = node
         # A stored row with a parent is a proxy's model that an older build
         # saved on an edit (v1.330.0 refuses that edit). While its proxy is a
         # node, the proxy's own report is the truth: listing the saved copy as

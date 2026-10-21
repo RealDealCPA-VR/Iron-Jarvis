@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.365.2 (2026-10-21).*
+holds itself to. Current as of v1.365.3 (2026-10-21).*
 
 ---
 
@@ -1894,6 +1894,15 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Removing your own model server really removes it (v1.365.3)
+
+If you had renamed your own model server (for example to "DGX Spark"),
+Remove on the Connections page cleared its address but left a stored copy
+behind. The old server stayed in the app with its old address, and you could
+not remove it. Now a renamed server lives only while its address is set:
+Remove takes it away, and a new address you type always replaces the old
+one. If you set the address again later, your name for it comes back.
 
 ## Codex can use Jarvis's tools (v1.365.0)
 
