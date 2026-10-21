@@ -1,0 +1,1 @@
+Carts share their contents: after `a = Cart()` and `b = Cart()`, adding an item to `a` makes it show up in `b` too. Fix `cart.py` so that every new cart starts empty and two carts never share their items, even when they were made from the same starting list.

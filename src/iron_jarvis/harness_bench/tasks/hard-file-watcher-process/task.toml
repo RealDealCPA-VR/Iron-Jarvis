@@ -1,0 +1,6 @@
+category = "process"
+tier = "hard"
+title = "Fix a file watcher, run it, feed it, stop it"
+timeout_s = 1800
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_hidden_*.py"]
+check_timeout_s = 120

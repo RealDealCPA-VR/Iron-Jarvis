@@ -1,0 +1,10 @@
+category = "explain"
+title = "Trace a default through layered settings"
+timeout_s = 900
+
+[rubric]
+answer_file = "answer.json"
+
+[rubric.json_equals]
+retries = 5
+file = "site_config.py"

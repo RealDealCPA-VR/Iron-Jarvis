@@ -1,0 +1,6 @@
+category = "bugfix"
+tier = "hard"
+title = "Make a quadratic count fast without changing a result"
+timeout_s = 1500
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 240

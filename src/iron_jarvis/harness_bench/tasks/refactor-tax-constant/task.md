@@ -1,0 +1,1 @@
+The sales-tax rate (8.25%) is written out by hand in several files. Define it once, as `TAX_RATE = 0.0825` in a new file `config.py`, and make every calculation in the project use that constant instead of its own copy of the number. Every result must stay exactly the same.

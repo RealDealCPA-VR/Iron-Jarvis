@@ -1,0 +1,5 @@
+category = "feature"
+title = "Add a word-count option"
+timeout_s = 900
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120

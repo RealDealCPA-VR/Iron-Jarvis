@@ -1,0 +1,13 @@
+category = "explain"
+tier = "hard"
+title = "Trace a rule pipeline to the final price"
+timeout_s = 1200
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_hidden_*.py"]
+check_timeout_s = 60
+
+[rubric]
+answer_file = "answer.json"
+
+[rubric.json_equals]
+rules = ["member_discount", "bulk_discount", "shipping", "tax"]
+total = 38.44

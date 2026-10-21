@@ -1,0 +1,1 @@
+Implement `evaluate(expression, variables=None)` and `CalcError` in `calc.py` exactly as that file's docstring describes. Do not use `eval`, `exec`, `compile` or the `ast` module — write the parser yourself. `test_calc.py` shows a few cases; the docstring is the full specification, including where every error is reported.

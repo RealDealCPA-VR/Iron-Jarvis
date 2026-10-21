@@ -1,0 +1,10 @@
+{
+  "title": "Quarterly sales",
+  "columns": ["Region", "Units", "Revenue", "On target", "Note"],
+  "rows": [
+    ["North", 1200, 15000.5, true, "best | ever"],
+    ["South", 30, 99.0, false, "line one\nline two"],
+    ["East", null, 7.25, null, null]
+  ],
+  "notes": ["Figures are provisional.", "Ask finance before sharing."]
+}

@@ -1,0 +1,6 @@
+category = "refactor"
+tier = "hard"
+title = "Split a module into a package and remove its global settings"
+timeout_s = 1800
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120

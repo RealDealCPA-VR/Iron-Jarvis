@@ -3547,6 +3547,60 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **The IJ harness is MEASURED: `ironjarvis bench-harness`** (v1.363.0, Phase
+  0 of `docs/IJ-HARNESS-PLAN.md`; Harness² principles 4–6, 10 — ideas only).
+  `src/iron_jarvis/harness_bench/`: 20 tasks (`tasks/<id>/` = `task.md`, the
+  `repo/` the agent gets, a HIDDEN `check/` marked `IJ-BENCH-HIDDEN-CHECK`,
+  `task.toml` with category/check/timeout or a deterministic `[rubric]` over
+  an `answer.json` — never a model call), reference solutions in
+  `tests/fixtures/harness_bench_solutions/` (pinned: every untouched repo FAILS
+  its check, every solution PASSES). Runners `jarvis` (the STREAM chat lane
+  with an explicit `round_budget` + `stay_in_chat` — keyword-only on
+  `run_chat_turn`/`stream_chat_turn`/`chat_stream`, never on `ChatBody`,
+  validated by `turn_round_budget()` (1..`MAX_TURN_ROUNDS`=200); omitted =
+  every existing lane byte-identical, pinned), `claude` (`claude -p
+  --safe-mode --output-format stream-json … --permission-mode
+  bypassPermissions` in the disposable copy, env = `claude_models.child_env` +
+  the session-marker strip, so cost is always list-price-equivalent) and
+  `codex` (`codex exec --json … --dangerously-bypass-approvals-and-sandbox
+  --ignore-user-config` — on Windows `--sandbox workspace-write` rejected
+  EVERY Codex command "blocked by policy" and the first baseline scored Codex
+  0/3 for it; a refusal like that is now "did not run", via
+  `runners.codex_sandbox_refusals` over Codex's own ERROR lines minus the
+  prompt echo; billing from `OPENAI_API_KEY`/`CODEX_API_KEY` or `codex login
+  status` words, never the status text). Every child through `core/procs`.
+  TIERS: `core` (20; a task.toml with no tier is core — their hashes stay
+  stable) and `hard` (10, each with a pinned DECOY in
+  `tests/fixtures/harness_bench_decoys/` that passes the visible tests and
+  fails the hidden check); `--tier core|hard|all`; reports give pass rate per
+  tier. THE RULES: the hidden check
+  runs in a separate grading copy AFTER the run and a tripwire refuses a
+  workspace or prompt that carries it; a check that cannot run is UNSCORED
+  (exit 0 pass, 1 fail, else unscored) and leaves the denominator — but a
+  check that runs past its own time limit is a FAIL ("the code it tests did
+  not finish"): unscoring it let an agent's hang raise the pass rate;
+  `failures.classify_failure` marks a run "did not run" (unscored, no marker,
+  rerun next time) ONLY on positive evidence — a runner fact (CLI missing,
+  start failed, demo model, failover, tripwire) or infrastructure words in the
+  runner's own error — while the agent's own time limit, round/turn cap or a
+  stop after it `acted` is GRADED (the first cut defaulted the other way and
+  inflated pass rates; the reviewer caught it); a completion marker carries a
+  fingerprint (runner, model, task hash, prompt/tool/profile identity,
+  version) and a run is reused only with a matching marker and an unchanged
+  workspace; a budget ledger must equal each record; `--seed`/`--dry-run`,
+  one folder per configuration under `<home>/harness-bench/`, a mismatched
+  resume refused in words; the app's own home, `IRONJARVIS_HOME` and any
+  folder inside the source checkout are refused as `--root`. Every runner's
+  prompt carries `runners.GUARDRAIL` (work only in this folder; never stop a
+  program you did not start; never end processes by name) — a review run's
+  model finished a task with `taskkill /f /im python.exe` and killed every
+  Python program on the PC. The Jarvis runner ends the lane's "chat" process
+  session after every turn (`procs.end_session`). Reports split "did not run"
+  from "check could not run", list killed runs as interrupted, and say the
+  "outside" column watches only the bench's folder. NOT in CI (it spends
+  model usage); the suite drives it with a scripted model and fake CLIs. Pins:
+  `tests/test_harness_bench_v1363.py`, `tests/test_chat_round_budget_v1363.py`.
+
 - **"Stays on this network" is judged per MODEL: a name a proxy sends to the
   cloud is the cloud** (v1.362.0; live finding: the DGX Spark's LiteLLM proxy
   serves `glm-5.3-flash` from a tailnet vLLM box and `frontier` from

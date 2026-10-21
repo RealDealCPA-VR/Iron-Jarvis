@@ -1,0 +1,6 @@
+category = "trap"
+tier = "hard"
+title = "The obvious fix reintroduces old regressions"
+timeout_s = 1500
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120

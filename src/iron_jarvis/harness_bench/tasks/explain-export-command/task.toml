@@ -1,0 +1,10 @@
+category = "explain"
+title = "Find the export command's handler"
+timeout_s = 900
+
+[rubric]
+answer_file = "answer.json"
+
+[rubric.json_equals]
+file = "exporter.py"
+function = "handle_export"

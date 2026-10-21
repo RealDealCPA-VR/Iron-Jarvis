@@ -2568,6 +2568,8 @@ async def stream_chat_turn(
     trust: str = "full",
     trust_reason: str = "",
     suggest_preferences: bool = False,
+    round_budget: "int | None" = None,
+    stay_in_chat: bool = False,
 ):
     """Streaming twin of :func:`chat_complete` (FX-01) — the turn itself.
 
@@ -2681,8 +2683,19 @@ async def stream_chat_turn(
     side panel's button) also abandons the slow stage it lands in — grounding,
     the attachments' OCR, the automatic summary — instead of waiting it out;
     a dropped connection cancels the stream wherever it is, as it always did.
+
+    ``round_budget`` / ``stay_in_chat`` (v1.363.0) — a CODING turn's caller
+    (the harness benchmark; Build's IJ harness in plan Phase 4) sets how many
+    tool rounds this one turn gets (1 to ``chat_turn.MAX_TURN_ROUNDS``) and
+    that it ENDS IN CHAT at its last round — one tool-less answer, the way an
+    office turn ends — instead of escalating to an agent run. Checked EAGERLY
+    (a ``ValueError`` before any frame, like the 400/404). Keyword arguments
+    only: no ``ChatBody`` field carries them, so no HTTP client can widen a
+    turn. Omitted (``None`` / ``False``), every byte is what it was. MIRROR
+    NOTE (lock-step): ``chat_turn.run_chat_turn`` takes the same two.
     """
     _eager_checks(platform, body)
+    round_budget = _chat_turn.turn_round_budget(round_budget)
     # LOCAL ONLY (v1.332.0): the scope is decided HERE (one row read when the
     # body names a saved chat) and set around the WHOLE stream by
     # `egress.scoped_frames`, in the task that iterates it — so the model pump
@@ -2716,7 +2729,7 @@ async def stream_chat_turn(
         steer_source=steer_source, handle=handle, tool_ceiling=tool_ceiling,
         arm_family=arm_family, trust=trust, trust_reason=trust_reason,
         suggest_preferences=suggest_preferences, thread_turn=thread_turn,
-        prep=_prep,
+        prep=_prep, round_budget=round_budget, stay_in_chat=stay_in_chat,
     ), _prep), _lo_scope))
     if thread_turn is not None:
         # v1.328.0: the named turn's handle rides with the per-chat entry so
@@ -2873,6 +2886,8 @@ async def chat_stream(
     suggest_preferences: bool = False,
     thread_turn=None,
     prep=None,
+    round_budget: "int | None" = None,
+    stay_in_chat: bool = False,
 ):
     """THE STREAMING CHAT LANE — the lifted route body itself.
 
@@ -3961,12 +3976,16 @@ async def chat_stream(
         # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office
         # turn that uses every round ends HERE with an answer instead of
         # escalating. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
-        _rounds = _round_budget({*armed, *ask_armed})
+        # v1.363.0: a caller-set budget (`round_budget`, checked by
+        # `stream_chat_turn`) replaces the armed-set answer for this one turn,
+        # and `stay_in_chat` keeps the turn in chat at its last round. Both
+        # omitted = the old answers. MIRROR NOTE (lock-step): chat_turn.
+        _rounds = _round_budget({*armed, *ask_armed}, override=round_budget)
         # v1.262.0: office turns AND browser-agent turns end in chat when the
         # rounds run out — the sidebar cannot follow an escalation, and the
         # hand-off discarded the work either way. `_stays_in_chat` is the one
         # answer; the final-answer wording is chosen by the same helper.
-        _office = _stays_in_chat({*armed, *ask_armed})
+        _office = _stays_in_chat({*armed, *ask_armed}, force=stay_in_chat)
         _cut_office = False
         # IN-TURN BUDGET (v1.287.0): everything before round 0 is the planned
         # history; each completion sends `msgs` FITTED to the window (the

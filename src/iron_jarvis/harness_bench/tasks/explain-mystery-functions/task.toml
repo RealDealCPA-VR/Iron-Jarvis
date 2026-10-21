@@ -1,0 +1,11 @@
+category = "explain"
+title = "Name what three functions compute"
+timeout_s = 900
+
+[rubric]
+answer_file = "answer.json"
+
+[rubric.json_equals]
+mystery = "gcd"
+riddle = "lcm"
+enigma = "fibonacci"

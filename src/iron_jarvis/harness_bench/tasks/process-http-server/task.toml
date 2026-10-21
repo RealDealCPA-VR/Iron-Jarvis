@@ -1,0 +1,5 @@
+category = "process"
+title = "Start a server, use it, stop it"
+timeout_s = 1200
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120

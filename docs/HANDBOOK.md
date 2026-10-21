@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.362.0 (2026-10-21).*
+holds itself to. Current as of v1.363.0 (2026-10-21).*
 
 ---
 
@@ -1894,6 +1894,40 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Measuring the coding harness (v1.363.0)
+
+The coding screen planned for Build (the "IJ harness": Jarvis itself running
+a coding session on any model you have) is being built in steps, and each
+step is held to a measured number rather than a claim. This release adds the
+measuring tool. Nothing on the screens changes yet.
+
+- **What it is.** `ironjarvis bench-harness run` gives a set of 30 small
+  coding tasks to one runner — Iron Jarvis with any model, Claude Code, or
+  Codex — each in a fresh throwaway copy. The tasks are bug fixes, small
+  features, refactors, explain-the-code questions, shell work, traps, and
+  programs that keep running. They come in two tiers: 20 core tasks and 10
+  harder ones. Afterwards `ironjarvis bench-harness report` writes one table
+  comparing every runner and model that has been measured.
+- **How it grades.** Each task's grader stays hidden from the agent and runs
+  in a separate copy after the agent finishes, so the agent never sees the
+  answer. A grader that could not run, or a run stopped by something outside
+  the agent (a usage limit, an unreachable server, the demo model answering),
+  is left out of the pass rate and listed on its own. A run that hung, hit
+  its time or round limit, or stopped part-way counts as a fail.
+- **It never touches your real data.** The runs need a scratch folder of
+  their own (`--root`). Iron Jarvis refuses its own data folder and the
+  source code folder. Every task is told to work only in its folder and
+  never to stop a program it did not start.
+- **First numbers (2026-10-21, this PC).**
+  - Iron Jarvis on your DGX Spark's `glm-5.3-flash`: 20 of 20 core tasks and
+    8 of 10 hard ones, at no cost.
+  - The same model with thinking on (`glm-5.3-flash-think`): also 20 of 20
+    and 8 of 10, but it failed different hard tasks.
+  - Claude Code and Codex each passed all 6 tasks they were given (3 core
+    and 3 hard). The rest of their runs wait for the weekly usage reset.
+- It is a developer tool. It is not in the installed app's menus, and the
+  packaged app refuses to run it.
 
 ## A model server that sends some names to the cloud (v1.362.0)
 

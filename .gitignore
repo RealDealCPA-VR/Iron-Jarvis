@@ -33,3 +33,6 @@ desktop/resources/vosk-model.zip
 # Browser add-on signing key (D27A): public material ships, this never does.
 *.pem
 ironjarvis-extension.pem
+
+# Isolated worktrees made by Claude Code agents (never committed)
+.claude/worktrees/

@@ -1,0 +1,6 @@
+category = "bugfix"
+tier = "hard"
+title = "Ordering bugs in a cooperative scheduler"
+timeout_s = 1500
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120

@@ -1,0 +1,1 @@
+Add a `--words` option (short form `-w`) to `wc.py`. With it, the tool counts words — runs of non-whitespace characters — instead of lines, and prints the same `<count> <file>` lines and the same `<total> total` line as it does for lines. Without the option it must behave exactly as it does now. Also add a function `count_words(text)` that returns the number of words in `text`.

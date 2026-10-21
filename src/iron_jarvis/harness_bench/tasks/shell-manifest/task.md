@@ -1,0 +1,1 @@
+The file `data/c.txt` was added to this project, so `MANIFEST.txt` is now out of date. Bring it up to date by running the project's own generator, `tools/make_manifest.py`, from this folder. Do not edit `MANIFEST.txt` by hand and do not change the generator.

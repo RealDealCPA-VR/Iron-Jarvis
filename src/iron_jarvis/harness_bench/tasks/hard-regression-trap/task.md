@@ -1,0 +1,1 @@
+A user reports that `versions.compare("1.10", "1.9")` says 1.10 is OLDER than 1.9 (see the failing test in `test_versions.py`). Fix it. This module has a history of regressions — read `HISTORY.md` before you change anything: every case listed there must still work after your fix, and a version that is not a valid version must raise `ValueError`.

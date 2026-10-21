@@ -26,6 +26,12 @@ from .client import DaemonClient
 app = typer.Typer(help="Iron Jarvis — local-first AI operating system (slice).")
 console = Console()
 
+# v1.363.0: the harness benchmark (`ironjarvis bench-harness run|report`). Its
+# module is light at import; the benchmark itself loads inside the commands.
+from ..harness_bench.cli import bench_app  # noqa: E402
+
+app.add_typer(bench_app, name="bench-harness")
+
 
 def _agent_type(name: str) -> AgentType:
     try:
@@ -1072,7 +1078,7 @@ def repair(
 
     dead = quarantine_db(db, f"corrupt: {integ}")
     console.print(
-        f"  [yellow]no backup to restore[/yellow] — quarantined the corrupt DB"
+        "  [yellow]no backup to restore[/yellow] — quarantined the corrupt DB"
         + (f" as {dead.name}" if dead else "")
         + "; the next `ironjarvis serve` will start with a fresh (empty) DB."
     )

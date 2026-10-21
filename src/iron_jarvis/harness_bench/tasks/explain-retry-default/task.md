@@ -1,0 +1,1 @@
+When a `Client()` from `client.py` is created with no arguments, how many times does it retry a failed request? Find out from the code (do not change it). Write a file `answer.json` in this folder with two keys: `"retries"` — the number — and `"file"` — the name of the file whose value decides it (for example `"something.py"`).

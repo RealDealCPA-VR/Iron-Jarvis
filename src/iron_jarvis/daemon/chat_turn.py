@@ -4654,10 +4654,18 @@ def _is_browser_agent_turn(armed_names) -> bool:
     return bool(_BROWSER_ACTING_TOOLS & set(armed_names or ()))
 
 
-def _stays_in_chat(armed_names) -> bool:
+def _stays_in_chat(armed_names, *, force: bool = False) -> bool:
     """A turn that must end in chat when it runs out of rounds, never by
     escalating to an agent that discards its work (v1.247.0 office turns,
-    v1.262.0 browser-agent turns — the sidebar cannot follow an escalation)."""
+    v1.262.0 browser-agent turns — the sidebar cannot follow an escalation).
+
+    ``force`` (v1.363.0): the CALLER says this turn stays in chat at its last
+    round whatever is armed (``run_chat_turn`` / ``stream_chat_turn``'s
+    ``stay_in_chat`` — the harness benchmark today, Build's coding turns in
+    the IJ harness plan's Phase 4). False — every existing caller — is the
+    old answer exactly."""
+    if force:
+        return True
     return _is_office_turn(armed_names) or _is_browser_agent_turn(armed_names)
 
 
@@ -4671,14 +4679,55 @@ def _out_of_rounds_instruction(armed_names) -> str:
     return OUT_OF_ROUNDS_INSTRUCTION
 
 
-def _round_budget(armed_names) -> int:
+def _round_budget(armed_names, *, override: "int | None" = None) -> int:
     """How many tool rounds this turn gets: _BROWSER_TOOL_ROUNDS for a
     browser-agent turn (v1.262.0), _DOC_TOOL_ROUNDS for an office turn
     (v1.247.0), _MAX_TOOL_ROUNDS otherwise. MIRROR NOTE (lock-step): both
-    chat lanes size their loop with this — never a bare range() again."""
+    chat lanes size their loop with this — never a bare range() again.
+
+    ``override`` (v1.363.0): a budget the CALLER set for this one turn
+    (``round_budget`` on ``run_chat_turn`` / ``stream_chat_turn``, already
+    validated by :func:`turn_round_budget`). ``None`` — every existing
+    caller — is the old answer exactly."""
+    if override is not None:
+        return override
     if _is_browser_agent_turn(armed_names):
         return _BROWSER_TOOL_ROUNDS
     return _DOC_TOOL_ROUNDS if _is_office_turn(armed_names) else _MAX_TOOL_ROUNDS
+
+
+#: The most tool rounds a caller may give ONE turn (v1.363.0). Not a user
+#: setting: the knob is a keyword argument of the two lanes, reachable from
+#: Python callers only (no HTTP field carries it), and the bound only keeps a
+#: mistaken caller from sizing a loop it never meant to run.
+MAX_TURN_ROUNDS = 200
+
+
+def turn_round_budget(value: Any) -> "int | None":
+    """Check a caller's per-turn round budget (v1.363.0): ``None`` (the lane
+    decides by what is armed, as before) or a whole number from 1 to
+    :data:`MAX_TURN_ROUNDS`. Anything else raises ``ValueError`` BEFORE the
+    turn starts — ``True`` too, because a bool is an int in Python and
+    ``round_budget=True`` is a caller's mistake, not one round.
+
+    WHY IT EXISTS: a coding turn (the harness benchmark now, Build's IJ harness
+    in Phase 4) needs far more rounds than a chat answer, and must END IN CHAT
+    when they run out rather than hand the work to an agent run. Both lanes
+    take ``round_budget`` + ``stay_in_chat`` as keyword arguments, validated
+    here once; omitted, nothing changes for any existing caller."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            f"round_budget must be a whole number from 1 to {MAX_TURN_ROUNDS}, "
+            f"not {value!r}"
+        )
+    if not 1 <= value <= MAX_TURN_ROUNDS:
+        raise ValueError(
+            f"round_budget must be a whole number from 1 to {MAX_TURN_ROUNDS}, "
+            f"not {value}"
+        )
+    return value
 
 #: File-creation intent in the user's message ("create an excel of…"), used
 #: for the no-file-was-written honesty note below.
@@ -6615,8 +6664,19 @@ def _local_only_turn(turn):
 async def run_chat_turn(
     platform, personas: dict, body, *, trust: str = "full", trust_reason: str = "",
     suggest_preferences: bool = False,
+    round_budget: "int | None" = None,
+    stay_in_chat: bool = False,
 ) -> dict[str, Any]:
     """One conversational turn: full history in → one reply out.
+
+    ``round_budget`` / ``stay_in_chat`` (v1.363.0): a caller that runs a
+    CODING turn (the harness benchmark; Build's IJ harness, plan Phase 4) sets
+    how many tool rounds this one turn gets (1 to :data:`MAX_TURN_ROUNDS`,
+    checked before anything runs) and that it ends in chat at the last round
+    instead of escalating. Keyword arguments only — no HTTP field carries
+    them. Omitted (``None`` / ``False``), the turn is byte-identical to
+    before. MIRROR NOTE (lock-step): ``routes/chat.stream_chat_turn`` takes
+    the same two arguments.
 
     ``trust`` (v1.298.0): ``"low"`` for a turn started from an unattended
     door (the comm poller passes it) — the lane then drops the kept-away
@@ -6649,6 +6709,9 @@ async def run_chat_turn(
 
     if not body.messages:
         raise HTTPException(status_code=400, detail="messages is required")
+    # v1.363.0: the caller's round budget is checked before anything runs.
+    # MIRROR NOTE (lock-step): routes/chat.stream_chat_turn checks it eagerly.
+    round_budget = turn_round_budget(round_budget)
 
     # ONE retrieval query for the whole turn (v1.141.0): project knowledge,
     # the memory fabric, and toggled connector memory all key off this —
@@ -7327,10 +7390,14 @@ async def run_chat_turn(
     workflow_run_info = None   # v1.170.0: a workflow this turn STARTED (contract 2)
     # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office turn
     # that uses every round ends HERE with an answer instead of escalating.
-    _rounds = _round_budget(armed)
+    # v1.363.0: a caller-set budget (`round_budget`) replaces the armed-set
+    # answer for this one turn; `stay_in_chat` keeps the turn in chat at its
+    # last round. Both omitted = the old answers. MIRROR NOTE (lock-step):
+    # routes/chat.py's stream loop passes the same two values.
+    _rounds = _round_budget(armed, override=round_budget)
     # v1.262.0: office AND browser-agent turns end in chat at the last round
     # (lock-step with the stream lane's `_stays_in_chat`).
-    _office = _stays_in_chat(armed)
+    _office = _stays_in_chat(armed, force=stay_in_chat)
     _cut_office = False
     # IN-TURN BUDGET (v1.287.0): everything before round 0 is the planned
     # history; each completion sends `msgs` FITTED to the window (the rounds

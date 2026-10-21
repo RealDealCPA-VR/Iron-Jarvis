@@ -1,0 +1,1 @@
+Rename the function `calc_ttl` to `order_total` everywhere in this project: its definition, every place that uses it, and the tests. Its behaviour must not change, and nothing in the project may still be called `calc_ttl`.

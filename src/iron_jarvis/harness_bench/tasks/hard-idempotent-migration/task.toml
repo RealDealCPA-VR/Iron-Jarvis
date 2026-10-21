@@ -1,0 +1,6 @@
+category = "shell"
+tier = "hard"
+title = "Write an idempotent data migration and run it"
+timeout_s = 1500
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120

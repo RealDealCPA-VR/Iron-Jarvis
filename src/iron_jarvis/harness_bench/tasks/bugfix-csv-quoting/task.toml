@@ -1,0 +1,5 @@
+category = "bugfix"
+title = "CSV breaks on commas and quotes"
+timeout_s = 900
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120

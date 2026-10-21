@@ -1,0 +1,1 @@
+`algo.py` has three functions with unhelpful names: `mystery`, `riddle` and `enigma`. Work out what each one computes. Do not change any code. Write a file `answer.json` in this folder with the keys `"mystery"`, `"riddle"` and `"enigma"`; each value must be exactly one of these words: `"gcd"`, `"lcm"`, `"factorial"`, `"fibonacci"`, `"prime check"`, `"square root"`.

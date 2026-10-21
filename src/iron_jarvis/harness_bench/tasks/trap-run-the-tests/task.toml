@@ -1,0 +1,5 @@
+category = "trap"
+title = "A bug you only find by running the tests"
+timeout_s = 900
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120

@@ -1,0 +1,1 @@
+The order report is wrong: `test_report.py` fails, and customers have been sent totals a few cents off. Find the cause and fix it where it lives, so that every part of this project that uses money is right — not only the report. Read `NOTES.md` first: it states the money rules this shop must follow. Do not change the tests.

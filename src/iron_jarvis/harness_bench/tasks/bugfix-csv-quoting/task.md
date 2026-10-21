@@ -1,0 +1,1 @@
+`report.to_csv` writes broken CSV when a value contains a comma, a double quote or a line break — for example the name `Smith, Jane` or `O"Neil`. Fix it so that Python's `csv` module reads the text back to exactly the same values. Keep the header line, the column order, and `\n` (not `\r\n`) at the end of every line.
