@@ -413,8 +413,9 @@ class ProviderManager:
         # the CLI stack into every manager construction.
         self.register("grok-cli", lambda model=None: self._make_grok_cli(model))
         # Subscription CLIs (§arbitrage): a logged-in `claude` / `codex` binary
-        # is a FLAT-RATE provider — headless print-mode, no API key, the CLI
-        # owns auth + model churn. Text-only (no tool calls) by design.
+        # is a FLAT-RATE provider — no API key, the CLI owns auth + model
+        # churn. Both call tools natively: claude over stream-json (v1.300.0),
+        # codex over its own app-server (IJ harness phase 2).
         self.register("claude-cli", lambda model=None: self._make_subprocess_cli("claude-cli", model))
         self.register("codex-cli", lambda model=None: self._make_subprocess_cli("codex-cli", model))
         # OpenCode CLI — LOCAL MODELS ONLY. Unlike the two above (whose whole
@@ -435,11 +436,14 @@ class ProviderManager:
     _INHERIT_ALIAS = {"anthropic": "claude-cli", "openai": "codex-cli"}
 
     def _make_subprocess_cli(self, which: str, model: str | None = None) -> LLMAdapter:
-        from .adapters.subprocess_cli import make_claude_cli, make_codex_cli
+        from .adapters.subprocess_cli import make_claude_cli, make_codex_native
 
         if which == "claude-cli":
             return make_claude_cli(model=model or "subscription")
-        return make_codex_cli(model=model or "subscription")
+        # IJ harness phase 2: Codex speaks its own app-server protocol (real
+        # tool calls); it falls back to the text-only `codex exec` adapter
+        # (make_codex_cli) by itself when this Codex lacks the shapes.
+        return make_codex_native(model=model or "subscription")
 
     def claude_catalog(self) -> dict:
         """The Claude subscription's model catalog for the pickers (v1.300.0):
