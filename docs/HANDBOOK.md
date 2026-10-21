@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.363.0 (2026-10-21).*
+holds itself to. Current as of v1.364.0 (2026-10-21).*
 
 ---
 
@@ -1894,6 +1894,40 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The coding tools Claude Code and Codex have (v1.364.0)
+
+Step two of the coding harness: Jarvis now has the tools that Claude Code and
+Codex give their models. A table records every tool those two programs offer,
+next to the Jarvis tool that does the same job or a plain reason it is not
+needed. Nothing new appears in Chat yet. The coding screen will switch these
+tools on when it arrives.
+
+- **Read part of a file.** Reading can start at a given line, stop after a
+  number of lines, and show line numbers. It always says when it showed only
+  part of the file.
+- **Exact edits.** An edit now changes text only where it appears exactly
+  once. If the text is missing or appears more than once, nothing changes,
+  and the reply says why (or "replace all" changes every match). Edits keep
+  a file's line endings as they were.
+- **Several changes at once.** One request can make several edits to a file,
+  or apply a patch (Codex's patch format) across several files. Either every
+  change lands or none does, and Undo puts every file back.
+- **Find files and search.** Files can be found by pattern, newest first.
+  Search can show lines around each match, count matches, or list the files
+  that match.
+- **Programs that keep running.** A dev server or file watcher can be
+  started, read, sent input and stopped. It runs only in its session and is
+  stopped when that session ends.
+- **A plan list, notebooks, and app resources.** The model can keep a step
+  list up to date, edit Jupyter notebook cells, and read resources from your
+  connected apps.
+- **A quick check after each code edit.** After it writes a Python, JSON,
+  TOML or JavaScript file, Jarvis checks that the file still parses and says
+  so in one line. The check never blocks the edit.
+- **Your settings still apply.** "Ask before file edits" covers the new
+  editing tools, and Undo, the activity log and low-trust limits treat them
+  like every other tool.
 
 ## Measuring the coding harness (v1.363.0)
 

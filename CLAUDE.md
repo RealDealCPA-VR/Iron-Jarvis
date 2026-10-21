@@ -3547,6 +3547,44 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **The coding tools Claude Code and Codex give their models, on Jarvis's
+  own registry** (v1.364.0, Phase 1 of `docs/IJ-HARNESS-PLAN.md`). The parity
+  table `src/iron_jarvis/harness/parity.py` maps EVERY tool of Claude Code
+  2.1.306 (46) and Codex 0.157.0 (43) — inventory fixture
+  `tests/fixtures/harness_tool_inventory_v1364.json` — to the Jarvis tool that
+  serves it, "later (Phase 4)" or "not needed: <reason>"; a pin fails on an
+  unmapped inventory name. Tools (package `src/iron_jarvis/harness/`:
+  textedit, patch, verify, globmatch, search, tools, process): `read_file`
+  `offset`/`limit`/`numbered` (cat -n; with NONE of them the output is
+  byte-identical to before); STRICT `edit_file` (0 matches refused with the
+  nearest line, >1 refused with the count, `replace_all`; LF/CRLF/BOM kept,
+  raw undo — it used to turn LF into CRLF on Windows); `multi_edit` (one
+  file, all or nothing); `apply_patch` (Codex V4A, Codex's matching ladder,
+  multi-file, validated before any write, a failed write rolls back EVERY
+  file incl. the one that failed; undo kind `files_patch` read by outcome,
+  mission team docs, world, chat_changes and prune_events); `glob`; `grep`
+  (with only pattern/path the ORIGINAL code runs byte for byte; any new arg
+  switches to the new engine); `shell` `timeout_s` (1..600) + `cwd` on the
+  REGISTERED `SandboxedShellTool`; `process_start/read/write/stop`
+  (`procs.spawn` in a kill-on-close Job, per-session table, cap 4 reserved
+  ATOMICALLY (`ProcessTable.reserve` — a parallel step started 7 under a cap
+  of 4), 1 MB ring, stopped by a `procs.add_end_hook` that `end_session` and
+  `end_all` run); `plan_update`; `notebook_edit`;
+  `mcp_list_resources/mcp_read_resource`; a one-line "Check:" after a code
+  write (py/json/ipynb/toml, js via `node --check` when present; never fails
+  the write). Registrations: permission rows (process_start/write ask, on
+  the deny floor, LOW_TRUST_DENY, RUNS_COMMANDS_TOOLS; process_read/stop
+  allow — they reach only the session's own programs), egress
+  `READS_APP_RESOURCES_TOOLS`, `_MUTATING_TOOLS`, detections, run words +
+  dashboard twins, card words, `STRICT_ASK_TOOLS` (Ask before file edits cards
+  the new editors) and the chat lanes' documents list / honesty note
+  (`chat_turn.reported_document_paths`, `_FILE_CHANGING_TOOLS`, lock-step).
+  OFF every roster (`_OFF_ROSTER_BY_DESIGN`) and never auto-armed: the IJ
+  harness arms them (Phase 3/4). OPEN for Phase 4: the process tools key on
+  `ctx.session_id` and every chat turn is session "chat" — a build turn must
+  run under its own session id and end it. Pins: `tests/test_harness_tools_*_v1364.py`,
+  `tests/test_harness_phase1_review_v1364.py`.
+
 - **The IJ harness is MEASURED: `ironjarvis bench-harness`** (v1.363.0, Phase
   0 of `docs/IJ-HARNESS-PLAN.md`; Harness² principles 4–6, 10 — ideas only).
   `src/iron_jarvis/harness_bench/`: 20 tasks (`tasks/<id>/` = `task.md`, the
