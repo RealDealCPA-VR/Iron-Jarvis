@@ -273,6 +273,8 @@ def test_apply_patch_update_plan_and_view_image():
 def test_qwen_reads_from_a_zero_based_line_and_greps_case_insensitively():
     assert _t(D.QWEN, "read_file", {"file_path": "a.py", "offset": 0, "limit": 10}) == (
         "read_file", {"path": "a.py", "offset": 1, "limit": 10})
+    # Qwen's line 40 (0-based) is Jarvis's line 41 (1-based).
+    assert _t(D.QWEN, "read_file", {"file_path": "a.py", "offset": 40}) == ("read_file", {"path": "a.py", "offset": 41})
     assert _t(D.QWEN, "grep_search", {"pattern": "x", "glob": "*.py", "limit": 5}) == (
         "grep", {"output_mode": "content", "case_insensitive": True, "pattern": "x", "glob": "*.py", "head_limit": 5})
     assert _t(D.QWEN, "edit", {"file_path": "a", "old_string": "o", "new_string": "n"}) == (

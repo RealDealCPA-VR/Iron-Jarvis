@@ -331,6 +331,24 @@ async def test_a_hidden_real_name_is_not_armed_either(env):
     assert [(r.tool, r.ok) for r in _ledger(platform)] == [("shell", False)]
 
 
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_a_repeated_failing_call_is_answered_under_the_name_the_model_used(env, lane):
+    """The third identical failing call is answered, not run (v1.274.0) — and
+    that answer, too, goes back under the dialect's name."""
+    platform, ws, wire = env
+    missing = [ToolCall(id=f"m{i}", name="Read", arguments={"file_path": "missing.py"}) for i in range(3)]
+    model = wire([[missing[0]], [missing[1]], [missing[2]]])
+    body = _body(ws)
+    if lane == "stream":
+        await _stream(platform, body, harness=True)
+    else:
+        await _post(platform, body, harness=True)
+    last = _tool_messages(model.calls[3])
+    assert [m.name for m in last] == ["Read", "Read", "Read"]
+    assert chat_turn.REPEATED_CALL_LIMIT == 2
+    assert "failed" in last[-1].content.lower() and len(_ledger(platform)) == 2  # the third never ran
+
+
 async def test_a_missing_argument_is_explained_in_the_dialects_words(env):
     platform, ws, wire = env
     model = wire([[ToolCall(id="r1", name="Read", arguments={})]])

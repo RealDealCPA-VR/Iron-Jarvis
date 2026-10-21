@@ -479,6 +479,12 @@ def _scan_layer(layer: ProjectLayer, *, event_bus: Any, session_id: str | None) 
     still loads."""
     from ..core.promptguard import publish_blocked, scan_context
 
+    # A check's command is RUN as well as shown, so a flagged one cannot be
+    # replaced by a placeholder: the layer is not used at all.
+    for check in layer.plugins.checks:
+        if scan_context(check.command, source=f"project harness {PLUGINS_FILE}", cap=None).blocked:
+            raise LayerInvalid(f"a check command in {PLUGINS_FILE} reads as an instruction to the model")
+
     def guard(text: str, source: str) -> str:
         result = scan_context(text, source=source, cap=None)
         if result.blocked:
@@ -526,10 +532,9 @@ def read_project_layer(
             return ProjectLayer(present=True, note=_ignored_note(f"{HARNESS_REL} is not a folder"))
         known = set(known_tools) if known_tools is not None else None
         try:
-            layer = _validate(base, known)
+            return _scan_layer(_validate(base, known), event_bus=event_bus, session_id=session_id)
         except LayerInvalid as exc:
             return ProjectLayer(present=True, note=_ignored_note(str(exc)))
-        return _scan_layer(layer, event_bus=event_bus, session_id=session_id)
     except Exception:  # noqa: BLE001 — a project file must never break a turn
         log.warning("harness layer could not be read; using the defaults", exc_info=True)
         return ProjectLayer(present=True, note=_ignored_note("it could not be read"))
