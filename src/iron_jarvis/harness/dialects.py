@@ -1,0 +1,1075 @@
+"""The dialect table (v1.366.0, IJ harness Phase 3): each model family meets the
+tools it was trained on, translated onto Jarvis's REAL tools.
+
+A model works best with the tool names and argument shapes its maker trained
+it on. Claude was trained in Claude Code (``Read`` / ``Edit`` / ``Bash``…),
+GPT in Codex (``exec_command`` / ``apply_patch`` / ``update_plan``), Qwen in
+Qwen Code (``read_file`` with ``file_path`` / ``edit`` / ``run_shell_command``).
+This module is the ONE table that says, for each family:
+
+* the tool names and argument shapes the model is SHOWN
+  (:class:`DialectTool`: ``name`` + ``input_schema`` + a description in that
+  vendor's style);
+* how each call maps onto a real Jarvis tool and its arguments
+  (:attr:`DialectTool.translate`, a pure function of the model's arguments
+  and the turn's armed set);
+* the short system-prompt section for that dialect (:attr:`Dialect.prompt`);
+* native vs prompted tool calls (:attr:`Dialect.native_calls`: every dialect
+  here sends NATIVE tool schemas; whether a provider then needs the prompted
+  form is the router's decision, exactly as for any other turn).
+
+TRANSLATION HAPPENS AT THE BOUNDARY. A model's call is mapped to the real tool
+and its real arguments BEFORE ``registry.invoke`` — so the armed-set gate
+(``allowed_names``), approvals, the ledger, undo, trust and Local only all see
+the REAL tool. Nothing here runs a tool or decides a permission. A name the
+dialect does not know passes through unchanged, so a hallucinated tool still
+meets the registry's own refusal ("not armed" / "unknown tool").
+
+FAMILIES (:data:`FAMILIES`), read off the SERVING provider + model the way
+``providers/reasoning.py`` decides reasoning levels:
+
+* ``claude`` — anthropic, claude-cli, an ``anthropic/…`` route, a ``claude-…``
+  id → Claude Code's shapes (inventory of Claude Code 2.1.306,
+  ``tests/fixtures/harness_tool_inventory_v1364.json``);
+* ``gpt`` — openai, codex-cli, an ``openai/…`` route, a gpt/o-series/codex id
+  → Codex 0.157.0's shapes (same inventory);
+* ``glm`` and ``deepseek`` → the CLAUDE dialect: both makers tell their users
+  to run their models in Claude Code (read 2026-10-21: docs.z.ai
+  "Use GLM models like GLM-5.3 & GLM-5.3-FLASH for AI coding in Claude Code";
+  api-docs.deepseek.com/guides/anthropic_api "Use DeepSeek in Claude Code");
+* ``qwen`` → Qwen Code's shapes, read from QwenLM/qwen-code at commit
+  13a4fea5 (2026-10-21; ``packages/core/src/tools/tool-names.ts`` and each
+  tool's parameter schema — names and shapes only, no code taken). Two names
+  differ from older Qwen Code: the editor is ``edit`` (not ``replace``) and
+  the content search is ``grep_search`` (not ``search_file_content``);
+* ``generic`` — anything else: Jarvis's own tool names, exactly as registered.
+
+DECISION (Codex ``exec_command``): it maps to ``process_start`` with
+``until_exit`` — Codex's own semantics: a command that ends within
+``yield_time_ms`` returns its output and exit code, one still running returns
+a session id the model polls or types into with ``write_stdin``. So a dev
+server keeps running and a long build is polled, as Codex's model expects.
+When ``process_start`` is not armed (low trust keeps it away; the POST lane
+never arms an ask-tier tool) the command runs through ``shell`` instead, with
+the sandbox and timeout that tool has.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from pathlib import PurePath
+from typing import Any, Callable, Iterable
+
+#: Images ``Read`` / qwen ``read_file`` hand to ``view_image`` instead of
+#: ``read_file`` (Claude Code's Read shows images; Jarvis's reader is text).
+IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+#: Every family the table knows, and the dialect it speaks.
+FAMILY_DIALECT: dict[str, str] = {
+    "claude": "claude",
+    "gpt": "gpt",
+    "glm": "claude",
+    "deepseek": "claude",
+    "qwen": "qwen",
+    "generic": "generic",
+}
+
+#: Why each family speaks its dialect (the report and the Handbook read it).
+FAMILY_EVIDENCE: dict[str, str] = {
+    "claude": "Claude was trained in Claude Code (inventory: Claude Code 2.1.306).",
+    "gpt": "GPT's coding models were trained in Codex (inventory: Codex 0.157.0).",
+    "glm": (
+        "Z.ai tells GLM users to code in Claude Code (docs.z.ai devpack, read 2026-10-21)."
+    ),
+    "deepseek": (
+        "DeepSeek documents running its models in Claude Code "
+        "(api-docs.deepseek.com/guides/anthropic_api, read 2026-10-21)."
+    ),
+    "qwen": "Qwen Code's own tools (QwenLM/qwen-code @ 13a4fea5, read 2026-10-21).",
+    "generic": "No dialect known: Jarvis's own tool names.",
+}
+
+
+def family_for(provider: str, model: str) -> str:
+    """The model FAMILY of a (provider, model) pair: ``claude``, ``gpt``,
+    ``glm``, ``qwen``, ``deepseek`` or ``generic``. Never raises."""
+    prov = str(provider or "").strip().lower()
+    mid = str(model or "").strip().lower()
+    vendor, _, rest = mid.partition("/")
+    # A routed id ("anthropic/claude-…", "openai/gpt-…") names its vendor.
+    if prov in ("anthropic", "claude-cli") or vendor == "anthropic" or mid.startswith("claude"):
+        return "claude"
+    if rest.startswith("claude"):
+        return "claude"
+    for family in ("glm", "qwen", "deepseek"):
+        if family in mid:
+            return family
+    if prov in ("openai", "codex-cli") or vendor == "openai":
+        return "gpt"
+    name = rest if vendor and rest else mid
+    if name.startswith(("gpt-", "gpt5", "gpt6", "codex")) or (
+        len(name) > 1 and name[0] == "o" and name[1].isdigit()
+    ):
+        return "gpt"
+    return "generic"
+
+
+# --------------------------------------------------------------------------- #
+# the table's shapes
+# --------------------------------------------------------------------------- #
+
+Translate = Callable[[dict[str, Any], frozenset], "tuple[str, dict[str, Any]]"]
+
+
+@dataclass(frozen=True)
+class DialectTool:
+    """One tool as a dialect shows it.
+
+    ``targets`` are the real Jarvis tools the call may run, the PRIMARY first:
+    the tool is offered when its primary — or, for a tool that falls back,
+    any — target is armed (:attr:`offered_when`). ``translate(args, armed)``
+    returns ``(real_tool, real_args)``; it is pure and never raises.
+    ``aliases`` are names the model may use for it (older names the vendor
+    retired) that are translated the same way but never shown."""
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    targets: tuple[str, ...]
+    translate: Translate
+    aliases: tuple[str, ...] = ()
+    #: "primary" — offered only when targets[0] is armed; "any" — offered when
+    #: any target is armed (a tool with a fallback, like exec_command).
+    offered_when: str = "primary"
+    #: The targets this tool can REALLY route to for an armed set, when that
+    #: is narrower than all of ``targets`` (exec_command reaches the shell
+    #: only when process_start is not armed). ``None`` = every target.
+    reaches: "Callable[[frozenset], frozenset] | None" = None
+    #: A real tool whose own description is appended as "How commands run
+    #: here" — the shell's runtime facts (cmd.exe on Windows, no POSIX
+    #: tools…) belong to every dialect's command tool, not only to Jarvis's.
+    runtime_from: str = ""
+
+    def reach(self, armed: Iterable[str]) -> set[str]:
+        if self.reaches is None:
+            return set(self.targets)
+        try:
+            return set(self.reaches(frozenset(armed)))
+        except Exception:  # noqa: BLE001
+            return set(self.targets)
+
+    def spec(self) -> dict[str, Any]:
+        return {"name": self.name, "description": self.description, "input_schema": self.input_schema}
+
+    def is_offered(self, armed: Iterable[str]) -> bool:
+        have = set(armed)
+        if self.offered_when == "any":
+            return any(t in have for t in self.targets)
+        return bool(self.targets) and self.targets[0] in have
+
+
+@dataclass(frozen=True)
+class Dialect:
+    id: str
+    label: str
+    #: The vendor's description style the tools are written in.
+    description_style: str
+    tools: tuple[DialectTool, ...]
+    #: Real tool names NEVER offered under their own name in this dialect: a
+    #: dialect tool covers them (and a call by the real name still passes
+    #: through to the registry, which decides).
+    hides: frozenset[str]
+    #: The short system-prompt section ({tools} is the offered names).
+    prompt: str
+    native_calls: bool = True
+    source: str = ""
+    by_name: dict[str, DialectTool] = field(default_factory=dict, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        index: dict[str, DialectTool] = {}
+        for tool in self.tools:
+            index[tool.name] = tool
+            for alias in tool.aliases:
+                index.setdefault(alias, tool)
+        object.__setattr__(self, "by_name", index)
+
+    def lookup(self, name: str) -> DialectTool | None:
+        """The dialect tool a model's call names: exact name or alias, then the
+        same ignoring case (a weak model writing ``bash`` for ``Bash``)."""
+        tool = self.by_name.get(name)
+        if tool is not None:
+            return tool
+        low = str(name or "").lower()
+        for key, candidate in self.by_name.items():
+            if key.lower() == low:
+                return candidate
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# argument helpers (pure, never raise)
+# --------------------------------------------------------------------------- #
+
+
+def _first(args: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in args and args[key] is not None:
+            return args[key]
+    return None
+
+
+def _int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    return None
+
+
+def _bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    return None
+
+
+def _put(out: dict[str, Any], key: str, value: Any) -> None:
+    if value is not None:
+        out[key] = value
+
+
+def _path_of(args: dict[str, Any], *keys: str) -> Any:
+    return _first(args, *keys, "path")
+
+
+def _is_image(path: Any) -> bool:
+    try:
+        return PurePath(str(path)).suffix.lower() in IMAGE_SUFFIXES
+    except (TypeError, ValueError):
+        return False
+
+
+def _ms_to_s(value: Any, *, cap_s: int = 600) -> int | None:
+    ms = _int(value)
+    if ms is None or ms <= 0:
+        return None
+    return max(1, min(cap_s, math.ceil(ms / 1000)))
+
+
+def _clamp_ms(value: Any, default: int, low: int, high: int) -> int:
+    ms = _int(value)
+    if ms is None:
+        ms = default
+    return max(low, min(high, ms))
+
+
+def _process_id(value: Any) -> Any:
+    """A process handle from a model: ``p3`` stays ``p3``; a bare number (Codex
+    session ids are numbers) becomes ``p<n>``."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"p{int(value)}"
+    text = str(value or "").strip()
+    return f"p{text}" if text.isdigit() else (text or value)
+
+
+def _plan_items(items: Any, text_key: str) -> Any:
+    if not isinstance(items, list):
+        return items
+    out = []
+    for item in items:
+        if isinstance(item, dict):
+            step = _first(item, text_key, "step", "content", "subject")
+            out.append({"step": step if step is not None else "", "status": item.get("status", "pending")})
+        else:
+            out.append(item)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# translations — each returns (real tool, real args)
+# --------------------------------------------------------------------------- #
+
+
+def _read(numbered: bool, zero_based: bool) -> Translate:
+    def go(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+        path = _path_of(args, "file_path", "absolute_path")
+        if _is_image(path) and "view_image" in armed:
+            return "view_image", {"path": path}
+        out: dict[str, Any] = {}
+        _put(out, "path", path)
+        offset = _int(args.get("offset"))
+        if offset is not None:
+            out["offset"] = max(1, offset + 1 if zero_based else offset)
+        _put(out, "limit", _int(args.get("limit")))
+        if numbered:
+            out["numbered"] = True
+        return "read_file", out
+
+    return go
+
+
+def _write(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "path", _path_of(args, "file_path", "absolute_path"))
+    _put(out, "content", args.get("content"))
+    return "write_file", out
+
+
+def _edit(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "path", _path_of(args, "file_path"))
+    _put(out, "old", _first(args, "old_string", "old"))
+    _put(out, "new", _first(args, "new_string", "new"))
+    _put(out, "replace_all", _bool(args.get("replace_all")))
+    return "edit_file", out
+
+
+def _multi_edit(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "path", _path_of(args, "file_path"))
+    edits = args.get("edits")
+    if isinstance(edits, list):
+        mapped = []
+        for e in edits:
+            if isinstance(e, dict):
+                item: dict[str, Any] = {}
+                _put(item, "old", _first(e, "old_string", "old"))
+                _put(item, "new", _first(e, "new_string", "new"))
+                _put(item, "replace_all", _bool(e.get("replace_all")))
+                mapped.append(item)
+            else:
+                mapped.append(e)
+        edits = mapped
+    _put(out, "edits", edits)
+    return "multi_edit", out
+
+
+def _glob(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "pattern", args.get("pattern"))
+    _put(out, "path", _first(args, "path", "dir_path"))
+    return "glob", out
+
+
+def _claude_grep(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    for key in ("pattern", "path", "glob", "type"):
+        _put(out, key, args.get(key))
+    # Claude Code's default mode is files_with_matches (Jarvis's is content).
+    mode = args.get("output_mode")
+    out["output_mode"] = mode if mode in ("content", "files_with_matches", "count") else "files_with_matches"
+    _put(out, "after_context", _int(args.get("-A")))
+    _put(out, "before_context", _int(args.get("-B")))
+    _put(out, "context", _int(_first(args, "-C", "context")))
+    _put(out, "line_numbers", _bool(args.get("-n")))
+    _put(out, "case_insensitive", _bool(args.get("-i")))
+    _put(out, "head_limit", _int(args.get("head_limit")))
+    _put(out, "offset", _int(args.get("offset")))
+    _put(out, "multiline", _bool(args.get("multiline")))
+    return "grep", out
+
+
+def _qwen_grep(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {"output_mode": "content", "case_insensitive": True}
+    for key in ("pattern", "path", "glob"):
+        _put(out, key, args.get(key))
+    _put(out, "head_limit", _int(_first(args, "limit", "head_limit")))
+    return "grep", out
+
+
+def _list(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "path", _first(args, "path", "dir_path"))
+    return "list_files", out
+
+
+def _shell_or_background(background_key: str, cwd_key: str) -> Translate:
+    def go(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+        command = _first(args, "command", "cmd")
+        cwd = args.get(cwd_key)
+        if _bool(args.get(background_key)):
+            out: dict[str, Any] = {}
+            _put(out, "command", command)
+            _put(out, "cwd", cwd)
+            return "process_start", out
+        out = {}
+        _put(out, "command", command)
+        _put(out, "timeout_s", _ms_to_s(args.get("timeout")))
+        _put(out, "cwd", cwd)
+        return "shell", out
+
+    return go
+
+
+def _process_read(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "id", _process_id(_first(args, "bash_id", "shell_id", "task_id", "id")))
+    return "process_read", out
+
+
+def _process_stop(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "id", _process_id(_first(args, "task_id", "shell_id", "bash_id", "id")))
+    return "process_stop", out
+
+
+def _todo(text_key: str) -> Translate:
+    def go(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+        out: dict[str, Any] = {}
+        _put(out, "plan", _plan_items(_first(args, "todos", "plan"), text_key))
+        _put(out, "explanation", args.get("explanation"))
+        return "plan_update", out
+
+    return go
+
+
+def _notebook(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "path", _first(args, "notebook_path", "path"))
+    for key in ("cell_id", "new_source", "cell_type", "edit_mode", "cell_index"):
+        _put(out, key, args.get(key))
+    return "notebook_edit", out
+
+
+def _web_fetch(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    # Claude Code / Qwen Code run `prompt` over the page with a small model;
+    # Jarvis returns the page's text and the model reads it itself.
+    out: dict[str, Any] = {}
+    _put(out, "url", args.get("url"))
+    return "web_fetch", out
+
+
+def _web_search(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    query = str(args.get("query") or "").strip()
+    allowed = [str(d).strip() for d in (args.get("allowed_domains") or []) if str(d).strip()]
+    blocked = [str(d).strip() for d in (args.get("blocked_domains") or []) if str(d).strip()]
+    if allowed:
+        query += " (" + " OR ".join(f"site:{d}" for d in allowed) + ")"
+    if blocked:
+        query += "".join(f" -site:{d}" for d in blocked)
+    return "web_search", {"query": query} if query else {}
+
+
+def _mcp_list(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "server", _first(args, "server", "server_name"))
+    return "mcp_list_resources", out
+
+
+def _mcp_read(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "server", _first(args, "server", "server_name"))
+    _put(out, "uri", args.get("uri"))
+    return "mcp_read_resource", out
+
+
+def _exec_command(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    command = _first(args, "cmd", "command")
+    workdir = _first(args, "workdir", "cwd")
+    if "process_start" in armed or "shell" not in armed:
+        out: dict[str, Any] = {}
+        _put(out, "command", command)
+        _put(out, "cwd", workdir)
+        out["wait_ms"] = _clamp_ms(args.get("yield_time_ms"), 10_000, 250, 30_000)
+        out["until_exit"] = True
+        return "process_start", out
+    out = {}
+    _put(out, "command", command)
+    _put(out, "cwd", workdir)
+    return "shell", out
+
+
+def _write_stdin(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    handle = _process_id(_first(args, "session_id", "id"))
+    chars = args.get("chars")
+    if chars == "\u0003":  # Ctrl+C: Codex models interrupt a session this way
+        return "process_stop", {"id": handle}
+    if isinstance(chars, str) and chars:
+        return "process_write", {
+            "id": handle, "input": chars,
+            "wait_ms": _clamp_ms(args.get("yield_time_ms"), 250, 0, 30_000),
+        }
+    return "process_read", {"id": handle, "wait_ms": _clamp_ms(args.get("yield_time_ms"), 5_000, 0, 30_000)}
+
+
+def _apply_patch(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "patch", _first(args, "input", "patch"))
+    return "apply_patch", out
+
+
+def _update_plan(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "plan", _plan_items(args.get("plan"), "step"))
+    _put(out, "explanation", args.get("explanation"))
+    return "plan_update", out
+
+
+def _view_image(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "path", args.get("path"))
+    return "view_image", out
+
+
+# --------------------------------------------------------------------------- #
+# schemas
+# --------------------------------------------------------------------------- #
+
+
+def _obj(props: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    return {"type": "object", "properties": props, "required": required}
+
+
+_S = {"type": "string"}
+_I = {"type": "integer"}
+_B = {"type": "boolean"}
+_N = {"type": "number"}
+
+
+def _d(text: str, base: dict[str, Any]) -> dict[str, Any]:
+    return {**base, "description": text}
+
+
+_STATUS = {"type": "string", "enum": ["pending", "in_progress", "completed"]}
+
+# --------------------------------------------------------------------------- #
+# CLAUDE — Claude Code 2.1.306's shapes
+# --------------------------------------------------------------------------- #
+
+_CLAUDE_TOOLS: tuple[DialectTool, ...] = (
+    DialectTool(
+        "Read",
+        "Reads a file from the session folder. file_path may be absolute or relative to the "
+        "folder. By default it reads up to 2000 lines from the start; pass offset (the line to "
+        "start at, 1 = first) and limit for a range of a long file. Lines come back cat -n style, "
+        "numbered from 1. PDFs and office documents come back as their text; an image (PNG, JPG, "
+        "GIF, WebP) is described by a vision model. Read a file before you Edit it.",
+        _obj({
+            "file_path": _d("The path to the file to read", _S),
+            "offset": _d("The line number to start reading from (1 = the first line)", _I),
+            "limit": _d("The number of lines to read", _I),
+        }, ["file_path"]),
+        ("read_file", "view_image"), _read(numbered=True, zero_based=False),
+    ),
+    DialectTool(
+        "Write",
+        "Writes a file in the session folder, creating it or replacing all of its content. "
+        "Prefer Edit to change part of an existing file.",
+        _obj({
+            "file_path": _d("The path to the file to write", _S),
+            "content": _d("The content to write to the file", _S),
+        }, ["file_path", "content"]),
+        ("write_file",), _write,
+    ),
+    DialectTool(
+        "Edit",
+        "Performs an exact string replacement in a file. old_string must match the file exactly "
+        "once, indentation included: the edit is refused when the text is missing or appears more "
+        "than once (add surrounding lines to make it unique, or set replace_all). Line endings "
+        "are kept.",
+        _obj({
+            "file_path": _d("The path to the file to modify", _S),
+            "old_string": _d("The text to replace", _S),
+            "new_string": _d("The text to replace it with (must be different from old_string)", _S),
+            "replace_all": _d("Replace all occurrences of old_string (default false)", _B),
+        }, ["file_path", "old_string", "new_string"]),
+        ("edit_file",), _edit,
+    ),
+    DialectTool(
+        "MultiEdit",
+        "Makes several exact edits to ONE file in a single call. Each edit is applied to the "
+        "result of the ones before it, with Edit's rule (old_string must match exactly once unless "
+        "replace_all). All or nothing: if any edit fails, the file is not changed.",
+        _obj({
+            "file_path": _d("The path to the file to modify", _S),
+            "edits": {
+                "type": "array",
+                "description": "Edits to apply in order",
+                "items": _obj({
+                    "old_string": _S, "new_string": _S, "replace_all": _B,
+                }, ["old_string", "new_string"]),
+            },
+        }, ["file_path", "edits"]),
+        ("multi_edit",), _multi_edit,
+    ),
+    DialectTool(
+        "Glob",
+        "Fast file pattern matching ('**/*.py', 'src/**/*.ts'). Returns matching paths, newest "
+        "first, at most 100. Use it to find files by name instead of a shell command.",
+        _obj({
+            "pattern": _d("The glob pattern to match files against", _S),
+            "path": _d("The folder to search in (default: the session folder)", _S),
+        }, ["pattern"]),
+        ("glob",), _glob,
+    ),
+    DialectTool(
+        "Grep",
+        "Searches file contents with a regular expression. output_mode: files_with_matches "
+        "(default, paths), content (matching lines; -A/-B/-C context, -n line numbers) or count. "
+        "Filter files with glob ('*.js') or type ('py'). -i ignores case; head_limit and offset "
+        "page the results; multiline lets a pattern span lines. Use Grep, not grep or rg in Bash.",
+        _obj({
+            "pattern": _d("The regular expression pattern to search for in file contents", _S),
+            "path": _d("File or folder to search in (default: the session folder)", _S),
+            "glob": _d('Glob pattern to filter files (e.g. "*.js", "*.{ts,tsx}")', _S),
+            "type": _d("File type to search (e.g. js, py, rust, go, java)", _S),
+            "output_mode": {
+                "type": "string", "enum": ["content", "files_with_matches", "count"],
+                "description": 'Defaults to "files_with_matches".',
+            },
+            "-A": _d("Lines after each match (content mode)", _N),
+            "-B": _d("Lines before each match (content mode)", _N),
+            "-C": _d("Lines before and after each match (content mode)", _N),
+            "-n": _d("Show line numbers (content mode). Defaults to true.", _B),
+            "-i": _d("Case insensitive search", _B),
+            "head_limit": _d("Show at most this many lines/entries (default 250)", _N),
+            "offset": _d("Skip this many lines/entries first", _N),
+            "multiline": _d("Let the pattern span lines", _B),
+        }, ["pattern"]),
+        ("grep",), _claude_grep,
+    ),
+    DialectTool(
+        "LS",
+        "Lists the files in a folder of the session (default: the session folder itself).",
+        _obj({"path": _d("The folder to list", _S)}, []),
+        ("list_files",), _list,
+    ),
+    DialectTool(
+        "Bash",
+        "Runs a command in the session folder and returns its output. timeout is in "
+        "milliseconds (max 600000). For a program that keeps running (a dev server, a watcher) "
+        "set run_in_background: true; read its output with BashOutput and stop it with TaskStop.",
+        _obj({
+            "command": _d("The command to execute", _S),
+            "timeout": _d("Optional timeout in milliseconds (max 600000)", _N),
+            "description": _d("What this command does, in a few words", _S),
+            "run_in_background": _d("Run as a background task", _B),
+        }, ["command"]),
+        ("shell", "process_start"), _shell_or_background("run_in_background", "cwd"),
+        runtime_from="shell",
+    ),
+    DialectTool(
+        "BashOutput",
+        "Reads the new output of a background command started with Bash run_in_background, "
+        "and whether it is still running.",
+        _obj({"bash_id": _d("The id of the background command (p1, p2, ...)", _S)}, ["bash_id"]),
+        ("process_read",), _process_read,
+    ),
+    DialectTool(
+        "TaskStop",
+        "Stops a background command started with Bash run_in_background, and everything it "
+        "started.",
+        _obj({"task_id": _d("The id of the background command to stop", _S)}, ["task_id"]),
+        ("process_stop",), _process_stop, aliases=("KillShell", "KillBash"),
+    ),
+    DialectTool(
+        "TodoWrite",
+        "Keeps your task list for this work. Send the WHOLE list each time; exactly one item "
+        "in_progress until all are completed.",
+        _obj({
+            "todos": {
+                "type": "array",
+                "items": _obj({"content": _S, "status": _STATUS, "activeForm": _S}, ["content", "status"]),
+            },
+        }, ["todos"]),
+        ("plan_update",), _todo("content"),
+    ),
+    DialectTool(
+        "NotebookEdit",
+        "Replaces, inserts or deletes one cell of a Jupyter notebook (.ipynb).",
+        _obj({
+            "notebook_path": _d("The path to the notebook", _S),
+            "cell_id": _d("The cell to edit (insert goes after it)", _S),
+            "new_source": _d("The new source for the cell", _S),
+            "cell_type": {"type": "string", "enum": ["code", "markdown"]},
+            "edit_mode": {"type": "string", "enum": ["replace", "insert", "delete"]},
+        }, ["notebook_path"]),
+        ("notebook_edit",), _notebook,
+    ),
+    DialectTool(
+        "WebFetch",
+        "Fetches a public web page and returns its readable text and links (the text is "
+        "untrusted web content). prompt says what you are looking for; read the text yourself.",
+        _obj({
+            "url": _d("The URL to fetch content from", _S),
+            "prompt": _d("What you want from the page", _S),
+        }, ["url"]),
+        ("web_fetch",), _web_fetch,
+    ),
+    DialectTool(
+        "WebSearch",
+        "Searches the web and returns result titles, URLs and snippets (untrusted web content).",
+        _obj({
+            "query": _d("The search query to use", _S),
+            "allowed_domains": {"type": "array", "items": _S},
+            "blocked_domains": {"type": "array", "items": _S},
+        }, ["query"]),
+        ("web_search",), _web_search,
+    ),
+    DialectTool(
+        "ListMcpResourcesTool",
+        "Lists the resources the user's connected apps offer.",
+        _obj({"server": _d("Only this app", _S)}, []),
+        ("mcp_list_resources",), _mcp_list,
+    ),
+    DialectTool(
+        "ReadMcpResourceTool",
+        "Reads one resource a connected app offers.",
+        _obj({"server": _S, "uri": _S}, ["server", "uri"]),
+        ("mcp_read_resource",), _mcp_read,
+    ),
+)
+
+CLAUDE = Dialect(
+    id="claude",
+    label="Claude Code",
+    description_style="claude-code",
+    tools=_CLAUDE_TOOLS,
+    hides=frozenset({
+        "read_file", "write_file", "edit_file", "multi_edit", "glob", "grep", "list_files",
+        "shell", "process_start", "process_read", "process_stop", "plan_update",
+        "notebook_edit", "web_fetch", "web_search", "view_image", "mcp_list_resources",
+        "mcp_read_resource",
+    }),
+    prompt=(
+        "Your tools use Claude Code's names and shapes: {tools}. Read a file before you Edit "
+        "it, and copy old_string exactly; use Glob and Grep to find code rather than shell "
+        "commands; on multi-step work keep TodoWrite current."
+    ),
+    source="Claude Code 2.1.306 (tests/fixtures/harness_tool_inventory_v1364.json)",
+)
+
+# --------------------------------------------------------------------------- #
+# GPT — Codex 0.157.0's shapes
+# --------------------------------------------------------------------------- #
+
+_APPLY_PATCH_TEXT = (
+    "Edits files with a patch. input is the whole patch:\n"
+    "*** Begin Patch\n"
+    "*** Update File: path/to/file.py\n"
+    "@@ a line near the change\n"
+    " unchanged context line\n"
+    "-removed line\n"
+    "+added line\n"
+    "*** End Patch\n"
+    "Other hunks: '*** Add File: <path>' followed by '+' lines; '*** Delete File: <path>'; "
+    "'*** Move to: <new path>' after an Update header. Paths are relative to the session "
+    "folder. All or nothing: if one hunk does not fit, nothing is written."
+)
+
+_GPT_TOOLS: tuple[DialectTool, ...] = (
+    DialectTool(
+        "exec_command",
+        "Runs a command in the session folder. It returns the output and exit code when the "
+        "command ends within yield_time_ms (default 10000, at most 30000); a command still "
+        "running then returns a session id (p1, p2, ...) — poll it or type into it with "
+        "write_stdin.",
+        _obj({
+            "cmd": _d("Shell command to execute.", _S),
+            "workdir": _d("Working directory, inside the session folder (default: the folder).", _S),
+            "yield_time_ms": _d("How long to wait before returning (default 10000).", _N),
+            "max_output_tokens": _d("Output token budget (advisory).", _N),
+        }, ["cmd"]),
+        ("process_start", "shell"), _exec_command, offered_when="any", runtime_from="shell",
+        reaches=lambda armed: (
+            frozenset({"process_start"}) if ("process_start" in armed or "shell" not in armed)
+            else frozenset({"shell"})
+        ),
+    ),
+    DialectTool(
+        "write_stdin",
+        "Writes characters to a running exec_command session and returns its recent output; "
+        "empty chars just polls; chars \"\\u0003\" (Ctrl+C) stops it.",
+        _obj({
+            "session_id": _d("The session id exec_command returned (p1, or 1).", _S),
+            "chars": _d("Characters to write; empty polls without writing.", _S),
+            "yield_time_ms": _d("How long to wait for output.", _N),
+        }, ["session_id"]),
+        ("process_read", "process_write", "process_stop"), _write_stdin,
+    ),
+    DialectTool(
+        "apply_patch", _APPLY_PATCH_TEXT,
+        _obj({"input": _d("The entire patch, from *** Begin Patch to *** End Patch.", _S)}, ["input"]),
+        ("apply_patch",), _apply_patch,
+    ),
+    DialectTool(
+        "update_plan",
+        "Updates the task plan: a list of steps, each with a status (pending, in_progress, "
+        "completed); at most one in_progress at a time.",
+        _obj({
+            "explanation": _S,
+            "plan": {"type": "array", "items": _obj({"step": _S, "status": _STATUS}, ["step", "status"])},
+        }, ["plan"]),
+        ("plan_update",), _update_plan,
+    ),
+    DialectTool(
+        "view_image",
+        "Looks at a local image file with a vision model and describes it.",
+        _obj({"path": _d("Local filesystem path to an image file.", _S)}, ["path"]),
+        ("view_image",), _view_image,
+    ),
+    DialectTool(
+        "list_mcp_resources",
+        "Lists resources provided by the user's connected apps (MCP servers).",
+        _obj({"server": _d("Only this server.", _S)}, []),
+        ("mcp_list_resources",), _mcp_list,
+    ),
+    DialectTool(
+        "read_mcp_resource",
+        "Reads a specific resource from a connected app given the server name and URI.",
+        _obj({"server": _S, "uri": _S}, ["server", "uri"]),
+        ("mcp_read_resource",), _mcp_read,
+    ),
+)
+
+GPT = Dialect(
+    id="gpt",
+    label="Codex",
+    description_style="codex",
+    tools=_GPT_TOOLS,
+    hides=frozenset({
+        "shell", "process_start", "process_read", "process_write", "process_stop",
+        "write_file", "edit_file", "multi_edit", "apply_patch", "plan_update", "view_image",
+        "mcp_list_resources", "mcp_read_resource",
+    }),
+    prompt=(
+        "Your tools use Codex's names and shapes: {tools}. Edit files with apply_patch. Read and "
+        "search the folder with read_file, glob and grep rather than shell commands. "
+        "exec_command returns a session id for a command that is still running; poll it, type "
+        "into it or stop it with write_stdin."
+    ),
+    source="Codex 0.157.0 (tests/fixtures/harness_tool_inventory_v1364.json)",
+)
+
+# --------------------------------------------------------------------------- #
+# QWEN — Qwen Code's shapes (QwenLM/qwen-code @ 13a4fea5, 2026-10-21)
+# --------------------------------------------------------------------------- #
+
+_QWEN_TOOLS: tuple[DialectTool, ...] = (
+    DialectTool(
+        "read_file",
+        "Reads a file from the session folder. file_path may be absolute or relative to the "
+        "folder. For a long text file pass offset (the 0-based line to start at) and limit. "
+        "PDFs and office documents come back as their text; an image is described by a vision "
+        "model.",
+        _obj({
+            "file_path": _d("The path to the file to read.", _S),
+            "offset": _d("Optional: the 0-based line number to start reading from.", _I),
+            "limit": _d("Optional: maximum number of lines to read.", _I),
+        }, ["file_path"]),
+        ("read_file", "view_image"), _read(numbered=False, zero_based=True),
+    ),
+    DialectTool(
+        "write_file",
+        "Writes content to a file in the session folder, creating it or replacing it.",
+        _obj({"file_path": _S, "content": _S}, ["file_path", "content"]),
+        ("write_file",), _write,
+    ),
+    DialectTool(
+        "edit",
+        "Replaces text within a file. old_string must match exactly once (whitespace and "
+        "indentation included) unless replace_all is true.",
+        _obj({
+            "file_path": _S, "old_string": _S, "new_string": _S,
+            "replace_all": _d("Replace every occurrence of old_string.", _B),
+        }, ["file_path", "old_string", "new_string"]),
+        ("edit_file",), _edit,
+    ),
+    DialectTool(
+        "glob",
+        "Finds files matching a glob pattern ('**/*.py'), newest first.",
+        _obj({"pattern": _S, "path": _d("The folder to search in (optional).", _S)}, ["pattern"]),
+        ("glob",), _glob,
+    ),
+    DialectTool(
+        "grep_search",
+        "Searches file contents for a regular expression (case-insensitive). Filter files with "
+        "glob ('*.js'); limit caps the matching lines returned.",
+        _obj({
+            "pattern": _S,
+            "glob": _d('Glob pattern to filter files (e.g. "*.js").', _S),
+            "path": _d("File or folder to search in (default: the session folder).", _S),
+            "limit": _d("Limit output to the first N matching lines.", _I),
+        }, ["pattern"]),
+        ("grep",), _qwen_grep,
+    ),
+    DialectTool(
+        "list_directory",
+        "Lists the files in a folder of the session.",
+        _obj({"path": _S}, ["path"]),
+        ("list_files",), _list,
+    ),
+    DialectTool(
+        "run_shell_command",
+        "Runs a shell command in the session folder (or `directory` inside it). timeout is in "
+        "milliseconds (max 600000). Set is_background: true for a program that keeps running (a "
+        "dev server, a watcher); read its output with process_read and stop it with task_stop.",
+        _obj({
+            "command": _S,
+            "is_background": _d("Run in the background (a server, a watcher).", _B),
+            "timeout": _d("Optional timeout in milliseconds (max 600000).", _I),
+            "description": _d("Brief description of the command.", _S),
+            "directory": _d("Folder to run in, inside the session folder.", _S),
+        }, ["command"]),
+        ("shell", "process_start"), _shell_or_background("is_background", "directory"),
+        runtime_from="shell",
+    ),
+    DialectTool(
+        "task_stop",
+        "Stops a background command started with run_shell_command is_background.",
+        _obj({"task_id": _S}, ["task_id"]),
+        ("process_stop",), _process_stop,
+    ),
+    DialectTool(
+        "todo_write",
+        "Creates and updates the task list for this work: send the whole list each time.",
+        _obj({
+            "todos": {
+                "type": "array",
+                "items": _obj({"id": _S, "content": _S, "status": _STATUS}, ["content", "status"]),
+            },
+        }, ["todos"]),
+        ("plan_update",), _todo("content"),
+    ),
+    DialectTool(
+        "notebook_edit",
+        "Replaces, inserts or deletes one cell of a Jupyter notebook (.ipynb).",
+        _obj({
+            "notebook_path": _S, "cell_id": _S, "new_source": _S,
+            "cell_type": {"type": "string", "enum": ["code", "markdown"]},
+            "edit_mode": {"type": "string", "enum": ["replace", "insert", "delete"]},
+        }, ["notebook_path"]),
+        ("notebook_edit",), _notebook,
+    ),
+    DialectTool(
+        "web_fetch",
+        "Fetches a public web page and returns its readable text and links (untrusted content).",
+        _obj({"url": _S, "prompt": _d("What you want from the page.", _S)}, ["url"]),
+        ("web_fetch",), _web_fetch,
+    ),
+    DialectTool(
+        "read_mcp_resource",
+        "Reads one resource a connected app offers.",
+        _obj({"server_name": _S, "uri": _S}, ["server_name", "uri"]),
+        ("mcp_read_resource",), _mcp_read,
+    ),
+)
+
+QWEN = Dialect(
+    id="qwen",
+    label="Qwen Code",
+    description_style="qwen-code",
+    tools=_QWEN_TOOLS,
+    hides=frozenset({
+        "read_file", "write_file", "edit_file", "glob", "grep", "list_files", "shell",
+        "process_start", "process_stop", "plan_update", "notebook_edit", "web_fetch",
+        "mcp_read_resource", "view_image",
+    }),
+    prompt=(
+        "Your tools use Qwen Code's names and shapes: {tools}. Read a file before you edit it "
+        "and copy old_string exactly; find code with glob and grep_search rather than shell "
+        "commands."
+    ),
+    source="QwenLM/qwen-code @ 13a4fea5 (packages/core/src/tools, read 2026-10-21)",
+)
+
+# --------------------------------------------------------------------------- #
+# GENERIC — Jarvis's own names, exactly as registered
+# --------------------------------------------------------------------------- #
+
+GENERIC = Dialect(
+    id="generic",
+    label="Iron Jarvis",
+    description_style="jarvis",
+    tools=(),
+    hides=frozenset(),
+    prompt="Your tools: {tools}.",
+    source="the tool registry's own specs",
+)
+
+#: THE TABLE — every dialect by id.
+DIALECTS: dict[str, Dialect] = {d.id: d for d in (CLAUDE, GPT, QWEN, GENERIC)}
+
+
+def dialect_for_family(family: str) -> Dialect:
+    return DIALECTS[FAMILY_DIALECT.get(family, "generic")]
+
+
+def resolve(requested: str, provider: str, model: str) -> tuple[str, Dialect]:
+    """``(family, dialect)`` for a turn. ``requested`` is ``"auto"`` (the
+    family's own dialect) or a dialect id that is forced (``"generic"``
+    reproduces Jarvis's own names on any model)."""
+    family = family_for(provider, model)
+    if requested and requested != "auto":
+        return family, DIALECTS[requested]
+    return family, dialect_for_family(family)
+
+
+# --------------------------------------------------------------------------- #
+# what the model is shown, and what its call becomes
+# --------------------------------------------------------------------------- #
+
+
+def offered_tools(dialect: Dialect, armed: Iterable[str]) -> tuple[list[DialectTool], list[str]]:
+    """``(dialect tools offered, real tools offered under their own name)`` for
+    an armed set. A dialect tool is offered when its target is armed; a real
+    armed tool keeps its own name unless the dialect hides it or a dialect tool
+    already uses that name."""
+    have = list(dict.fromkeys(armed))
+    dialect_tools = [t for t in dialect.tools if t.is_offered(have)]
+    taken = {t.name for t in dialect_tools}
+    passthrough = [n for n in have if n not in dialect.hides and n not in taken]
+    return dialect_tools, passthrough
+
+
+def reachable(
+    dialect_tools: Iterable[DialectTool], passthrough: Iterable[str], armed: Iterable[str] = (),
+) -> set[str]:
+    """Every real tool what the model was shown can reach — the turn's armed
+    set (the registry's ``allowed_names`` gate is exactly this). A real tool
+    no shown tool reaches is not armed at all: the roster is the contract
+    (v1.227.0), so a model calling a hidden name it was never shown meets the
+    registry's "not armed" refusal."""
+    have = list(armed)
+    out = set(passthrough)
+    for tool in dialect_tools:
+        out.update(tool.reach(have))
+    return out
+
+
+@dataclass(frozen=True)
+class Translated:
+    """A model's call after the boundary: the REAL tool and arguments, and the
+    name the model used (``called_as`` == ``real`` when nothing translated)."""
+
+    real: str
+    args: dict[str, Any]
+    called_as: str
+
+    @property
+    def translated(self) -> bool:
+        return self.real != self.called_as
+
+
+def translate(dialect: Dialect, name: str, args: Any, armed: Iterable[str]) -> Translated:
+    """Map one call. A name the dialect does not know passes through
+    unchanged (the registry then decides — an unknown or unarmed name is
+    refused there, ledgered). Never raises: a translation that fails passes
+    the call through as written."""
+    tool = dialect.lookup(name)
+    raw = args if isinstance(args, dict) else {}
+    if tool is None:
+        return Translated(real=name, args=raw, called_as=name)
+    try:
+        real, real_args = tool.translate(dict(raw), frozenset(armed))
+    except Exception:  # noqa: BLE001 — a bad argument must never crash the lane
+        return Translated(real=name, args=raw, called_as=name)
+    return Translated(real=real, args=real_args, called_as=name)

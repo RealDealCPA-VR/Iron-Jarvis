@@ -321,15 +321,25 @@ def _wait_ms(args: dict[str, Any], default: int) -> int:
     return min(_int_arg(raw, "wait_ms", minimum=0), MAX_WAIT_MS)
 
 
-async def _wait_for_output(mp: ManagedProcess, wait_ms: int, since: int) -> None:
+async def _wait_for_output(
+    mp: ManagedProcess, wait_ms: int, since: int, *, until_exit: bool = False
+) -> None:
     """Wait up to ``wait_ms`` for new output past ``since``: return early
     when the program ends, or once output has arrived and gone quiet for
-    :data:`QUIET_S`. Polls with ``asyncio.sleep`` (never blocks the loop)."""
+    :data:`QUIET_S`. ``until_exit`` (v1.366.0) drops the quiet rule: the wait
+    ends only when the program ends or the time is up — Codex's
+    ``exec_command`` semantics, which the IJ harness's gpt dialect maps here
+    (a test run that pauses between lines is not "still running" yet). Polls
+    with ``asyncio.sleep`` (never blocks the loop)."""
     deadline = time.monotonic() + wait_ms / 1000.0
     while time.monotonic() < deadline:
         if not mp.running() and mp.eof:
             return
-        if mp.total > since and time.monotonic() - mp.last_output_at >= QUIET_S:
+        if (
+            not until_exit
+            and mp.total > since
+            and time.monotonic() - mp.last_output_at >= QUIET_S
+        ):
             return
         await asyncio.sleep(POLL_S)
 
@@ -384,6 +394,13 @@ class ProcessStartTool(Tool):
             "command": {"type": "string"},
             "cwd": {"type": "string", "description": "Folder inside the workspace (default: the workspace)."},
             "wait_ms": {"type": "integer", "description": "How long to wait for its first output (default 1000, max 30000)."},
+            "until_exit": {
+                "type": "boolean",
+                "description": (
+                    "Wait the whole wait_ms for the program to END (returning at once when it "
+                    "does) instead of returning when its output pauses."
+                ),
+            },
         },
         "required": ["command"],
     }
@@ -479,7 +496,13 @@ class ProcessStartTool(Tool):
         mp.reader.start()
         TABLE.add(mp)
         release()
-        await _wait_for_output(mp, wait_ms, 0)
+        from ..tools.builtins import _bool_arg
+
+        try:
+            until_exit = _bool_arg(args.get("until_exit"), "until_exit")
+        except ValueError:
+            until_exit = False
+        await _wait_for_output(mp, wait_ms, 0, until_exit=until_exit)
         text, dropped, more = mp.take()
         lead = f"Started {mp.handle} (pid {getattr(proc, 'pid', '?')}): {command}"
         data = _data(mp, text, dropped, more)

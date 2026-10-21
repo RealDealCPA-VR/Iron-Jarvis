@@ -217,6 +217,15 @@ def config_report(config: Mapping[str, Any], records: list[Mapping[str, Any]]) -
     return "\n".join(lines)
 
 
+def _setup(config: Mapping[str, Any]) -> str:
+    """The Setup cell: the configuration's fingerprint, and the tool dialect
+    a Jarvis setup spoke (v1.366.0) so two dialect rows read apart."""
+    key = str(config.get("key", ""))[:12]
+    harness = config.get("harness")
+    dialect = harness.get("dialect") if isinstance(harness, Mapping) else None
+    return f"{key} ({dialect} dialect)" if dialect else key
+
+
 def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any]]]]) -> str:
     lines = [
         "# Harness benchmark: every configuration",
@@ -243,7 +252,7 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
             config.get("model") or "default")
         lines.append(
             f"| {config.get('runner')} | {model} | {config.get('version', '?')} | "
-            f"{str(config.get('key', ''))[:12]} | {s['tasks']} | "
+            f"{_setup(config)} | {s['tasks']} | "
             f"{s['passed']} / {s['scored']} | {_pct(s['pass_rate'])} | {s['unscored_infrastructure']} | "
             f"{s['unscored_grader']} | {s['interrupted']} | "
             f"{_num(s['mean_tool_calls'])} | {_num(s['mean_model_rounds'])} | "
@@ -263,7 +272,7 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
                 f", {t['unscored']} unscored" if t["unscored"] else ""))
         lines.append(
             f"| {config.get('runner')} | {config.get('model') or 'default'} | "
-            f"{str(config.get('key', ''))[:12]} | " + " | ".join(cells) + " |"
+            f"{_setup(config)} | " + " | ".join(cells) + " |"
         )
     lines += ["", "## Pass rate by category (passed / scored)", ""]
     header = "| Runner | Model | Setup | " + " | ".join(CATEGORIES) + " |"
@@ -277,7 +286,7 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
                 f" ({c['unscored']} unscored)" if c["unscored"] else ""))
         lines.append(
             f"| {config.get('runner')} | {config.get('model') or 'default'} | "
-            f"{str(config.get('key', ''))[:12]} | " + " | ".join(cells) + " |"
+            f"{_setup(config)} | " + " | ".join(cells) + " |"
         )
     if not configs:
         lines += ["", "No benchmark runs were found yet."]

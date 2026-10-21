@@ -1660,6 +1660,8 @@ class ToolRegistry:
             reversibility=reversibility,
             confinement=confinement,
             grant_id=str(grant_id or ""),
+            # v1.366.0: the model's own name for a dialect-translated call.
+            called_as=str(getattr(ctx, "called_as", "") or ""),
         )
         with session_scope(ctx.engine) as db:
             db.add(record)

@@ -2571,6 +2571,7 @@ async def stream_chat_turn(
     suggest_preferences: bool = False,
     round_budget: "int | None" = None,
     stay_in_chat: bool = False,
+    harness: "bool | str | None" = None,
 ):
     """Streaming twin of :func:`chat_complete` (FX-01) — the turn itself.
 
@@ -2694,9 +2695,25 @@ async def stream_chat_turn(
     only: no ``ChatBody`` field carries them, so no HTTP client can widen a
     turn. Omitted (``None`` / ``False``), every byte is what it was. MIRROR
     NOTE (lock-step): ``chat_turn.run_chat_turn`` takes the same two.
+
+    ``harness`` (v1.366.0, IJ harness Phase 3) — ``True`` / ``"auto"`` runs
+    the turn in HARNESS MODE (``harness/mode.py``): the coding tool set past
+    the six-tool cap (ask-tier tools ask-armed — they card unless the user
+    chose auto-approve), the model family's DIALECT translated at the
+    boundary before ``registry.invoke``, the component tree rendered before
+    the planner, no escalation (ends in chat; 60 rounds unless
+    ``round_budget`` says otherwise), one nudge for a tool call written as
+    text, and ``route.harness`` on the done frame. A dialect id
+    (``"generic"`` …) forces that dialect. Checked EAGERLY; keyword only.
+    Omitted, every byte is what it was. MIRROR NOTE (lock-step):
+    ``chat_turn.run_chat_turn`` takes the same knob.
     """
     _eager_checks(platform, body)
     round_budget = _chat_turn.turn_round_budget(round_budget)
+    # v1.366.0 (IJ harness): checked eagerly, like the budget. MIRROR NOTE
+    # (lock-step): chat_turn.run_chat_turn does the same.
+    harness = _chat_turn.turn_harness(harness)
+    round_budget, stay_in_chat = _chat_turn.harness_turn_knobs(harness, round_budget, stay_in_chat)
     # LOCAL ONLY (v1.332.0): the scope is decided HERE (one row read when the
     # body names a saved chat) and set around the WHOLE stream by
     # `egress.scoped_frames`, in the task that iterates it — so the model pump
@@ -2731,6 +2748,7 @@ async def stream_chat_turn(
         arm_family=arm_family, trust=trust, trust_reason=trust_reason,
         suggest_preferences=suggest_preferences, thread_turn=thread_turn,
         prep=_prep, round_budget=round_budget, stay_in_chat=stay_in_chat,
+        harness=harness,
     ), _prep), _lo_scope))
     if thread_turn is not None:
         # v1.328.0: the named turn's handle rides with the per-chat entry so
@@ -2889,6 +2907,7 @@ async def chat_stream(
     prep=None,
     round_budget: "int | None" = None,
     stay_in_chat: bool = False,
+    harness: "str | None" = None,
 ):
     """THE STREAMING CHAT LANE — the lifted route body itself.
 
@@ -2921,6 +2940,9 @@ async def chat_stream(
     # v1.246.0: the ledger row's real start (prep included — reading the
     # attachments is part of what the user waited for).
     turn_started = _utcnow()
+    # v1.366.0: `stream_chat_turn` already checked it; idempotent here so a
+    # direct caller of the lane gets the same validation.
+    harness = _chat_turn.turn_harness(harness)
 
     # (The 400 for empty messages is `_eager_checks`, run by
     # `stream_chat_turn` before this generator exists — v1.312.0.)
@@ -3138,6 +3160,23 @@ async def chat_stream(
     if text_only_pick:
         system = _chat_turn.text_only_system(system, _browser_block)
         _grounding.text_only = True
+    # IJ HARNESS MODE (v1.366.0) — the lock-step copy of chat_turn's: the
+    # dialect, the coding tools (the ask tier ask-armed: this lane cards) and
+    # the component tree, decided once here, before the roster and exit lines
+    # are final and before the planner. None on every other turn.
+    _harness = None
+    _harness_rules = ""
+    if harness is not None:
+        _harness, _harness_rules = await _chat_turn._build_harness(
+            d, body, harness, provider=provider_choice, model=model_choice,
+            resolved_proj=resolved_proj, grounding=_grounding, stream=True,
+            low_trust=normalize_trust(trust) == TRUST_LOW,
+            tool_ceiling=tool_ceiling,
+            approval_mode=normalize_approval_mode(getattr(body, "approval_mode", "")),
+            text_only=text_only_pick,
+        )
+        system = _harness.system_without_exits(system, _chat_turn._ENV_EXIT_LINES)
+        _grounding.harness = True
     _inline_budget, _rag_budget, _rag_k = _attachment_budgets(
         d,
         provider_choice or d.platform.config.default_provider,
@@ -3193,7 +3232,8 @@ async def chat_stream(
             body.workspace_dir or "",
             (resolved_proj.root or "") if resolved_proj is not None else "",
         )))
-    if not text_only_pick:
+    # A harness turn arms its own set (v1.366.0) — the sentence pass is not run.
+    if not text_only_pick and _harness is None:
         # ENVELOPE TOOL CAP (v1.202.0) — the lock-step twin of the consult
         # in `chat_turn.run_chat_turn`; see the reasoning there. The cap is
         # about a weak model facing a wide menu; explicit user tool picks
@@ -3333,6 +3373,13 @@ async def chat_stream(
         _ws_resolved = await _prep.take("workspace")
         system += _workspace_grounding_block(body.workspace_dir, _ws_resolved)
 
+    # IJ HARNESS (v1.366.0): the folder's own instruction files (when the
+    # grounding did not already carry them) and the component tree, at the
+    # Tools seam and BEFORE the planner so their cost is priced. MIRROR NOTE
+    # (lock-step): chat_turn.run_chat_turn appends the same two here.
+    if _harness is not None:
+        system += _harness_rules + _harness.block()
+
     # CONTEXT PROTECTION (v1.146.0) + COMPACTION (v1.153.0) — the lock-step
     # copy of chat_turn's. MIRROR NOTE: edit both or neither.
     # v1.312.0: Stop is checked BEFORE the compaction — its automatic summary
@@ -3435,6 +3482,24 @@ async def chat_stream(
     if text_only_pick:
         armed, auto_armed, ask_armed = [], [], []
         tool_specs = []
+    elif _harness is not None:
+        # IJ HARNESS (v1.366.0) — the lock-step copy of chat_turn's branch:
+        # the plan's coding set past the six-named-tool cap ONLY here. Its
+        # allow tier is armed (granted), its ask tier (shell, process_start,
+        # process_write) ask-armed — VISIBLE, never granted, so a call cards
+        # unless the user chose auto-approve. The ceiling, low trust and Local
+        # only were applied by the plan; the model sees the DIALECT's specs
+        # and no exit tools (a harness turn never escalates).
+        yield _sse("phase", {"phase": "choosing_tools"})
+        armed, auto_armed = list(_harness.plan.armed), []
+        ask_armed = list(_harness.plan.ask)
+        if _trust_state["low"]:
+            from ...harness.mode import CODING_TOOLS as _CODING
+
+            _trust_state["kept"] = kept_away(
+                [n for n in _CODING if d.platform.registry.get(n) is not None]
+            )
+        tool_specs = _harness.specs(d.platform.registry)
     else:
         # v1.312.0: the last preparation stage — said, then done. A text-only
         # pick arms nothing and so says nothing.
@@ -3707,7 +3772,11 @@ async def chat_stream(
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]
-        system += (
+        # v1.366.0: a harness turn's tool guidance is its component tree
+        # (rendered before the planner, in the dialect's own names), so
+        # this chat block - which names the REAL tools - is left out.
+        # MIRROR NOTE (lock-step): the other lane skips it the same way.
+        _tools_block = (
             "\n\n# Tools\n"
             + (
                 "The user armed these tools for this chat: "
@@ -3831,12 +3900,19 @@ async def chat_stream(
             # fixed the report without fixing the user's experience of it.
             + _write_directive(body, armed)
         )
+        if _harness is None:
+            system += _tools_block
     overrides: dict[str, str] = {}
     for _name in armed:
         overrides[_name] = "allow"
         _tool = d.platform.registry.get(_name)
         if _tool is not None:
             overrides[_tool.perm_key()] = "allow"
+    # IJ HARNESS (v1.366.0): a folder's rules (ask / deny) narrow the
+    # overrides (nothing widens) — an "ask" rule is what makes the card
+    # appear for an allow-tier tool. MIRROR NOTE (lock-step): chat_turn.
+    if _harness is not None:
+        _harness.narrow(overrides, d.platform.registry, d.platform.permissions)
     # LOW TRUST (v1.298.0): overrides NARROWED in place (deny wins) and the
     # one prompt sentence — lock-step with chat_turn. In place, because the
     # loop in ``gen()`` closes over this dict and a taint narrows it later.
@@ -4120,17 +4196,26 @@ async def chat_stream(
                 _tally.add(route_provider, route_model, _u)
                 completions += 1
                 calls = final_resp.tool_calls or []
+                # IJ HARNESS (v1.366.0) — TRANSLATION AT THE BOUNDARY, the
+                # lock-step copy of chat_turn's: from here on `calls` are the
+                # REAL tools (cards, the gate, the ledger, undo and trust all
+                # read them); `_model_calls` is what the model said.
+                _model_calls = calls
+                if _harness is not None:
+                    calls = _harness.translate_calls(calls)
                 # THE DRAFT, THREE WAYS (v1.225.0) — lock-step copy of
                 # chat_turn: the exit tool, an unarmed workflow_create,
-                # or JSON written in a text-only reply.
-                workflow_draft = _draft_from_calls(calls, armed)
-                if workflow_draft is None and not calls:
+                # or JSON written in a text-only reply. (Never on a harness
+                # turn: it offers no workflow card.)
+                workflow_draft = _draft_from_calls(calls, armed) if _harness is None else None
+                if workflow_draft is None and not calls and _harness is None:
                     workflow_draft = _draft_from_text(reply_text)
                 if workflow_draft is not None:
                     break
+                # A harness turn never escalates (v1.366.0, lock-step).
                 esc_call = next(
                     (c for c in calls if c.name == _ESCALATE_TOOL), None
-                )
+                ) if _harness is None else None
                 if esc_call is not None:
                     escalate = True
                     _esc_args = esc_call.arguments or {}
@@ -4143,6 +4228,20 @@ async def chat_stream(
                         d.platform, _esc_args.get("agent")
                     )
                     break
+                # A TOOL CALL WRITTEN AS TEXT (v1.366.0, harness only) — the
+                # lock-step copy of chat_turn's: never executed; the model is
+                # told ONCE to call the tool itself, the streamed text is
+                # discarded (`reset`, the frame a language rewrite uses) and
+                # the loop goes on.
+                if _harness is not None and _harness.wants_nudge(
+                    reply_text, bool(calls), _round, _rounds
+                ):
+                    from ...harness.mode import TEXT_TOOL_CALL_NUDGE
+
+                    msgs.append(LLMMessage(role="assistant", content=reply_text))
+                    msgs.append(LLMMessage(role="user", content=TEXT_TOOL_CALL_NUDGE))
+                    yield _sse("reset", {"reason": "text_tool_call"})
+                    continue
                 # ask_armed counts (v1.187.0): a turn whose ONLY armed
                 # verbs are approval-gated still has real calls to run.
                 if not calls or not (armed or ask_armed):
@@ -4167,7 +4266,9 @@ async def chat_stream(
                     break
                 msgs.append(LLMMessage(role="assistant",
                                        content=final_resp.text,
-                                       tool_calls=calls,
+                                       # v1.366.0: what the MODEL called (its
+                                       # dialect's names) — lock-step.
+                                       tool_calls=_model_calls,
                                        # v1.263.0: provider-native blocks, replayed
                                        # verbatim by the adapter that wrote them
                                        # (Anthropic thinking + tools). [] otherwise.
@@ -4726,7 +4827,10 @@ async def chat_stream(
                                 # ``shell`` isolates under low trust (v1.298.0)
                                 # — lock-step with chat_turn.
                                 _low_trust_args(_trust_state, tc.name, tc.arguments),
-                                ctx, d.platform.permissions,
+                                # v1.366.0: a translated call's ctx carries the
+                                # model's name for the ledger (lock-step).
+                                _harness.ctx_for(ctx, tc) if _harness is not None else ctx,
+                                d.platform.permissions,
                                 overrides,
                                 session_allow=(armed_grant | _p["grant_extra"]),
                                 allowed_names=_turn_tools,
@@ -4830,7 +4934,9 @@ async def chat_stream(
                                 tc.name, _plans[_i]["safe_args"], False, content,
                             ))
                             msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
-                                                   name=tc.name, content=str(content)[:12000]))
+                                                   # v1.366.0: the name the model called.
+                                                   name=(_harness.called_as(tc) if _harness is not None else tc.name),
+                                                   content=str(content)[:12000]))
                             continue
                         if ran:
                             last_tool_output = str(result.output or "")
@@ -4952,6 +5058,27 @@ async def chat_stream(
                             _call_key = _plans[_i]["key"]
                             _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
                             _tool_content = with_second_failure_note(content, _failed_calls[_call_key])
+                        if _harness is not None:
+                            # IJ HARNESS (v1.366.0) — lock-step with chat_turn:
+                            # a folder's plugin checks after a successful edit
+                            # (a `shell` call through the registry, shown on the
+                            # card too), and the model reads the result in its
+                            # dialect's words.
+                            if ran:
+                                _check = await _harness.after_edit(
+                                    tc.name,
+                                    _chat_turn.reported_document_paths(
+                                        tc.name, getattr(result, "data", None)
+                                    ),
+                                    _chat_turn.harness_check_runner(
+                                        d, ctx, overrides, lambda: armed_grant,
+                                        _turn_tools, _trust_state,
+                                    ),
+                                    **_chat_turn.harness_check_gate(_trust_state),
+                                )
+                                content = str(content) + _check
+                                _tool_content = str(_tool_content) + _check
+                            _tool_content = _harness.model_text(tc, _tool_content)
                         # v1.344.0 (P1): what this call was and answered, for
                         # the escalation's `prior_tool_results` — the frame's
                         # redacted args, the bare content (masked by the
@@ -4976,7 +5103,9 @@ async def chat_stream(
                             ),
                         })
                         msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
-                                               name=tc.name, content=str(_tool_content)[:12000]))
+                                               # v1.366.0: the name the model called.
+                                               name=(_harness.called_as(tc) if _harness is not None else tc.name),
+                                               content=str(_tool_content)[:12000]))
         except Exception as exc:  # noqa: BLE001 — honest error, never fabricate
             # Completed rounds were still billed — persist BEFORE the error
             # frame (mirrors chat_complete's failure path); the client sees
@@ -5299,6 +5428,10 @@ async def chat_stream(
                 **_egress.route_flags(
                     route_provider, getattr(d.platform, "providers", None), str(route_model or "")
                 ),
+                # v1.366.0 (additive, LAST, harness turns only): the family,
+                # the dialect and the FINGERPRINT of the rendered component
+                # tree. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+                **({"harness": _harness.route_info()} if _harness is not None else {}),
             },
             "tools_used": tools_used,
             # RESOURCES (v1.324.0): [{pack, uri, ok, note}] — ALWAYS present

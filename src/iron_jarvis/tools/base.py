@@ -48,6 +48,11 @@ class ToolContext:
     #: finishes in the background comes home to THIS chat; "" = no chat is
     #: waiting (an unsaved chat, a schedule), so nothing is appended anywhere.
     thread_id: str = ""
+    #: The name the MODEL used for this call when an IJ harness dialect
+    #: translated it (v1.366.0, ``harness/dialects.py``) — ``Read`` for a call
+    #: that ran ``read_file``. The registry records it on the ledger row
+    #: (``ToolInvocation.called_as``); "" when the model used the real name.
+    called_as: str = ""
 
 
 @dataclass

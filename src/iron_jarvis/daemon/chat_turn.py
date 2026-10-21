@@ -4764,6 +4764,172 @@ def turn_round_budget(value: Any) -> "int | None":
         )
     return value
 
+
+# --------------------------------------------------------------------------- #
+# IJ HARNESS MODE (v1.366.0, plan Phase 3) — the lanes' shared seams
+# --------------------------------------------------------------------------- #
+#
+# `harness=` is a KEYWORD argument of `run_chat_turn` / `stream_chat_turn` /
+# `chat_stream` (never a ChatBody field). The rules live in `harness/mode.py`;
+# these helpers are what BOTH lanes call at the same seams. MIRROR NOTE
+# (lock-step): routes/chat.py calls every helper below at the same place.
+
+
+def turn_harness(value: Any) -> "str | None":
+    """The validated ``harness=`` value (``None`` = off — every lane
+    byte-identical). ``ValueError`` before the turn starts for a bad value."""
+    from ..harness.mode import turn_harness as _check
+
+    return _check(value)
+
+
+def harness_turn_knobs(
+    harness: "str | None", round_budget: "int | None", stay_in_chat: bool,
+) -> "tuple[int | None, bool]":
+    """``(round_budget, stay_in_chat)`` for a harness turn: it NEVER escalates
+    (it ends in chat at its last round) and gets the plan's 60 rounds unless
+    the caller set a budget. Off: the caller's values unchanged."""
+    if harness is None:
+        return round_budget, stay_in_chat
+    from ..harness.mode import HARNESS_DEFAULT_ROUNDS
+
+    return (round_budget if round_budget is not None else HARNESS_DEFAULT_ROUNDS), True
+
+
+def _harness_model(platform, provider: str, model: str) -> tuple[str, str]:
+    """The (provider, model) a harness turn's FAMILY is read off: the turn's
+    choice, else the configured default; a provider picked without a model
+    answers with its own configured model (``custom_model``,
+    ``ollama_model``)."""
+    cfg = getattr(platform, "config", None)
+    prov = (provider or "").strip() or str(getattr(cfg, "default_provider", "") or "")
+    mod = (model or "").strip()
+    if not mod:
+        if (provider or "").strip():
+            mod = str(getattr(cfg, f"{prov.replace('-', '_')}_model", "") or "")
+        else:
+            mod = str(getattr(cfg, "default_model", "") or "")
+    return prov, mod
+
+
+async def _build_harness(
+    d, body, requested: str, *, provider: str, model: str, resolved_proj, grounding,
+    stream: bool, low_trust: bool, tool_ceiling=None, approval_mode: str = "",
+    text_only: bool = False,
+):
+    """``(HarnessTurn, rule_files_section)`` for a harness turn — built ONCE,
+    before the planner, from the turn's choice of model and its folder.
+
+    The folder is the turn's bound ``workspace_dir``, else the grounded
+    project's root. Its ``.ironjarvis/harness/`` layer is read OFF THE LOOP
+    and validated (an invalid one is ignored with one note on the receipt).
+    MEMORY: when the lane's grounding already injected the folder's
+    AGENTS.md / CLAUDE.md (a project turn) the tree only refers to them; when
+    it did not (a turn bound only to a folder — the benchmark, a Build
+    session) the harness reads them here through the ONE reader
+    (``projects/folder_rules``), so they ride the prompt exactly once, and
+    adds their names to the turn's ``folder_rules`` receipt. The
+    ``chat_folder_rules`` setting is honoured either way."""
+    from ..harness import components as _components
+    from ..harness import mode as _mode
+    from ..projects.folder_rules import chat_folder_rules_block, chat_folder_rules_enabled
+
+    folder = (getattr(body, "workspace_dir", "") or "").strip() or (
+        str(getattr(resolved_proj, "root", "") or "").strip() if resolved_proj is not None else ""
+    )
+    bus = getattr(d.platform, "event_bus", None)
+    rules_section = ""
+    rule_files = list(getattr(grounding, "folder_rules_used", None) or [])
+    if (
+        folder and not rule_files
+        and chat_folder_rules_enabled(getattr(d.platform, "config", None))
+    ):
+        rules_section, rule_files = await asyncio.to_thread(
+            chat_folder_rules_block, folder, event_bus=bus, session_id="chat",
+        )
+        if rule_files and grounding is not None:
+            grounding.folder_rules_used = list(grounding.folder_rules_used) + [
+                f for f in rule_files if f not in grounding.folder_rules_used
+            ]
+    layer = _components.EMPTY_LAYER
+    if folder:
+        try:
+            known = set(d.platform.registry.names())
+        except Exception:  # noqa: BLE001
+            known = None
+        layer = await asyncio.to_thread(
+            _components.read_project_layer, folder,
+            known_tools=known, event_bus=bus, session_id="chat",
+        )
+    prov, mod = _harness_model(d.platform, provider, model)
+    turn = _mode.build(
+        registry=d.platform.registry,
+        permissions=d.platform.permissions,
+        requested=requested,
+        provider=prov,
+        model=mod,
+        stream=stream,
+        layer=layer,
+        rule_files=rule_files,
+        low_trust=low_trust,
+        local_only=_egress.current_scope().on,
+        # A text-only model arms nothing (`frozenset()` keeps the plan empty).
+        tool_ceiling=frozenset() if text_only else tool_ceiling,
+        extra=list(getattr(grounding, "conn_tools", None) or []),
+        approval_mode=approval_mode,
+    )
+    return turn, rules_section
+
+
+def harness_check_runner(d, ctx, overrides: dict[str, str], grants, gate, trust_state):
+    """The lane's ``run_check(command, timeout_s)`` for a folder's plugin
+    checks: an ordinary ``shell`` call THROUGH THE REGISTRY — the armed-set
+    gate (``gate``), the permission engine with the turn's CURRENT grants
+    (``grants()``; never the per-call auto-approve grant, so a check from a
+    project file runs on its own only where the user has already allowed the
+    shell beyond one call), the ledger (``called_as`` "plugin check") and the
+    tool deadline. Its output is fenced and scanned like any shell result.
+    Answers ``(status, text)``: ``ran`` / ``failed`` / ``refused``."""
+    import dataclasses as _dc
+
+    async def run(command: str, timeout_s: int) -> tuple[str, str]:
+        try:
+            check_ctx = _dc.replace(ctx, called_as="plugin check")
+        except Exception:  # noqa: BLE001
+            check_ctx = ctx
+        try:
+            res = await d.platform.registry.invoke(
+                "shell", {"command": command, "timeout_s": int(timeout_s)},
+                check_ctx, d.platform.permissions, overrides,
+                session_allow=set(grants()), allowed_names=set(gate),
+                deadline_s=chat_tool_deadline(d.platform),
+            )
+        except Exception as exc:  # noqa: BLE001 — a check never breaks the turn
+            return "failed", f"{type(exc).__name__}: {exc}"
+        if not res.ok and refusal_label(res.error or ""):
+            return "refused", str(res.error)[:2000]
+        # A command that ran and failed still printed the project's text:
+        # fenced and scanned exactly like a successful one.
+        text = await _fence_tool_output(
+            d, trust_state, overrides, "shell", d.platform.registry.get("shell"),
+            str((res.output if res.ok else (res.error or "error")) or "")[:4000],
+        )
+        return ("ran" if res.ok else "failed"), str(text)
+
+    return run
+
+
+def harness_check_gate(trust_state: dict[str, Any]) -> dict[str, Any]:
+    """``{may_run, why_not}`` for a folder's plugin checks this turn: never
+    in low trust (a check is the folder's own command, and the folder is
+    untrusted content) and never in a local-only chat (a command there asks
+    before every run). MIRROR NOTE (lock-step): both lanes pass this."""
+    if trust_state.get("low") or trust_state.get("tainted"):
+        return {"may_run": False, "why_not": "this turn is in low trust"}
+    if _egress.current_scope().on:
+        return {"may_run": False, "why_not": "this chat is local only, so commands ask first"}
+    return {"may_run": True}
+
 #: File-creation intent in the user's message ("create an excel of…"), used
 #: for the no-file-was-written honesty note below.
 _CREATE_INTENT_RX = _re.compile(
@@ -6114,6 +6280,7 @@ class _Grounding:
         "project", "folder_rules", "folder_rules_used", "lessons", "index",
         "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
         "text_only", "apps", "apps_named", "apps_live", "apps_on", "apps_offer",
+        "harness",
     )
 
     def __init__(self) -> None:
@@ -6124,6 +6291,9 @@ class _Grounding:
         #: this work") is then left out, because the turn has no exit to
         #: hand work to anyone. False keeps the join byte for byte.
         self.text_only = False
+        #: Set by the lane for an IJ harness turn (v1.366.0): it never hands
+        #: work to anyone either, so the roster is left out the same way.
+        self.harness = False
         #: The project folder's AGENTS.md / CLAUDE.md (+ .local) sections
         #: (v1.326.0, ``projects/folder_rules``) and the file names injected —
         #: the turn's ``folder_rules`` receipt on BOTH lanes ([] = none).
@@ -6168,7 +6338,7 @@ class _Grounding:
         # lanes carry it on EVERY turn — not only one that armed tools — and
         # it is "" (byte-identical prompt) whenever nothing is starting.
         note = packs_starting_note(self.packs_starting)
-        roster = "" if self.text_only else self.roster
+        roster = "" if (self.text_only or self.harness) else self.roster
         return roster + self.workflows + (("\n\n" + note) if note else "")
 
 
@@ -6710,8 +6880,17 @@ async def run_chat_turn(
     suggest_preferences: bool = False,
     round_budget: "int | None" = None,
     stay_in_chat: bool = False,
+    harness: "bool | str | None" = None,
 ) -> dict[str, Any]:
     """One conversational turn: full history in → one reply out.
+
+    ``harness`` (v1.366.0, IJ harness Phase 3): ``True`` / ``"auto"`` runs
+    the turn in HARNESS MODE (``harness/mode.py``) — the coding tool set past
+    the six-tool cap, the model family's dialect translated at the boundary,
+    the component tree rendered before the planner, no escalation, and
+    ``route.harness`` on the response; a dialect id forces that dialect.
+    Keyword only — no HTTP field carries it. Omitted, byte-identical. MIRROR
+    NOTE (lock-step): ``routes/chat.stream_chat_turn`` takes the same knob.
 
     ``round_budget`` / ``stay_in_chat`` (v1.363.0): a caller that runs a
     CODING turn (the harness benchmark; Build's IJ harness, plan Phase 4) sets
@@ -6756,6 +6935,11 @@ async def run_chat_turn(
     # v1.363.0: the caller's round budget is checked before anything runs.
     # MIRROR NOTE (lock-step): routes/chat.stream_chat_turn checks it eagerly.
     round_budget = turn_round_budget(round_budget)
+    # v1.366.0 (IJ harness): the switch is checked here too; a harness turn
+    # never escalates and gets the plan's rounds unless the caller set some.
+    # MIRROR NOTE (lock-step): routes/chat.stream_chat_turn does the same.
+    harness = turn_harness(harness)
+    round_budget, stay_in_chat = harness_turn_knobs(harness, round_budget, stay_in_chat)
 
     # ONE retrieval query for the whole turn (v1.141.0): project knowledge,
     # the memory fabric, and toggled connector memory all key off this —
@@ -6869,6 +7053,21 @@ async def run_chat_turn(
     if text_only_pick:
         system = text_only_system(system, _browser_block)
         _grounding.text_only = True
+    # IJ HARNESS MODE (v1.366.0): the dialect, the coding tools and the
+    # component tree, decided ONCE here — before the roster and the exit lines
+    # are final (a harness turn hands work to nobody) and before the planner
+    # (the tree is priced). None on every other turn: byte-identical. MIRROR
+    # NOTE (lock-step): routes/chat.py's stream lane builds it at the same seam.
+    _harness = None
+    _harness_rules = ""
+    if harness is not None:
+        _harness, _harness_rules = await _build_harness(
+            d, body, harness, provider=provider_choice, model=model_choice,
+            resolved_proj=resolved_proj, grounding=_grounding, stream=False,
+            low_trust=normalize_trust(trust) == TRUST_LOW, text_only=text_only_pick,
+        )
+        system = _harness.system_without_exits(system, _ENV_EXIT_LINES)
+        _grounding.harness = True
     _inline_budget, _rag_budget, _rag_k = _attachment_budgets(
         d,
         provider_choice or d.platform.config.default_provider,
@@ -6934,7 +7133,8 @@ async def run_chat_turn(
             body.workspace_dir or "",
             (resolved_proj.root or "") if resolved_proj is not None else "",
         )))
-    if not text_only_pick:
+    # A harness turn arms its own set (v1.366.0) — the sentence pass is not run.
+    if not text_only_pick and _harness is None:
         # ENVELOPE TOOL CAP (v1.202.0): consult the answering model's measured
         # capability profile BEFORE arming. The cap is about a weak model
         # facing a wide menu — a small local model measured below the native
@@ -7070,6 +7270,13 @@ async def run_chat_turn(
         _ws_resolved = await _prep.take("workspace")
         system += _workspace_grounding_block(body.workspace_dir, _ws_resolved)
 
+    # IJ HARNESS (v1.366.0): the folder's own instruction files (when the
+    # grounding above did not already carry them) and the component tree, at
+    # the Tools seam and BEFORE the planner so their cost is priced. MIRROR
+    # NOTE (lock-step): routes/chat.py appends the same two at the same seam.
+    if _harness is not None:
+        system += _harness_rules + _harness.block()
+
     # CONTEXT PROTECTION (v1.146.0): the history is budgeted against the WINDOW
     # of the model that will answer, not sliced at a fixed 30 messages. The
     # system prompt is finished by this point — profile, project, awareness,
@@ -7138,6 +7345,21 @@ async def run_chat_turn(
     if text_only_pick:
         armed, auto_armed = [], []
         tool_specs = []
+    elif _harness is not None:
+        # IJ HARNESS (v1.366.0): the coding set the plan chose — past the
+        # six-named-tool cap ONLY here; the ceiling, low trust and Local only
+        # were applied by the plan, and this lane (which can ask nobody) arms
+        # no ask-tier tool. The model sees the DIALECT's specs and no exit
+        # tools (a harness turn never escalates). MIRROR NOTE (lock-step):
+        # routes/chat.py's stream lane takes the same plan.
+        armed, auto_armed = list(_harness.plan.armed), []
+        if _trust_state["low"]:
+            from ..harness.mode import CODING_TOOLS as _CODING
+
+            _trust_state["kept"] = kept_away(
+                [n for n in _CODING if d.platform.registry.get(n) is not None]
+            )
+        tool_specs = _harness.specs(d.platform.registry)
     else:
         # The envelope's tool cap and the arming pass (off the event loop,
         # v1.196.0) were started with the other prep steps above (v1.332.0);
@@ -7276,7 +7498,11 @@ async def run_chat_turn(
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]
-        system += (
+        # v1.366.0: a harness turn's tool guidance is its component tree
+        # (rendered before the planner, in the dialect's own names), so
+        # this chat block - which names the REAL tools - is left out.
+        # MIRROR NOTE (lock-step): the other lane skips it the same way.
+        _tools_block = (
             "\n\n# Tools\n"
             + (
                 "The user armed these tools for this chat: "
@@ -7362,6 +7588,8 @@ async def run_chat_turn(
             # STREAMS — went a whole wave without it.
             + _write_directive(body, armed)
         )
+        if _harness is None:
+            system += _tools_block
     # Auto-allow keyed by BOTH the tool NAME and its perm_key(): the
     # permission engine authorizes on perm_key(), so for GROUPED tools
     # (pixio_*, view_image / image_*, mcp_*) whose perm_key differs from the
@@ -7373,6 +7601,10 @@ async def run_chat_turn(
         _tool = d.platform.registry.get(_name)
         if _tool is not None:
             overrides[_tool.perm_key()] = "allow"
+    # IJ HARNESS (v1.366.0): a folder's rules (ask / deny) narrow the
+    # overrides the same way (nothing widens). MIRROR NOTE (lock-step).
+    if _harness is not None:
+        _harness.narrow(overrides, d.platform.registry, d.platform.permissions)
     # LOW TRUST (v1.298.0): the overrides are NARROWED in place (deny wins,
     # nothing widens) and the prompt gets its one sentence. In place, so the
     # taint path below can narrow the same dict mid-turn without rebinding.
@@ -7483,19 +7715,31 @@ async def run_chat_turn(
             _thinking_parts.append(_thinking_of(route.response))
             _truncated = _truncated_by(route.response)
             calls = route.response.tool_calls or []
+            # IJ HARNESS (v1.366.0) — TRANSLATION AT THE BOUNDARY: the model's
+            # calls (in its dialect) become the REAL tools before anything
+            # reads them, so the gate, approvals, ledger, undo and trust below
+            # all see the real tool; `_model_calls` keeps what the model said
+            # for the assistant turn it is shown again. MIRROR NOTE
+            # (lock-step): routes/chat.py's stream loop does the same.
+            _model_calls = calls
+            if _harness is not None:
+                calls = _harness.translate_calls(calls)
             # THE DRAFT, THREE WAYS (v1.225.0): the workflow_draft exit; an
             # unarmed workflow_create call (same shape, same intent); or the
             # workflow WRITTEN as JSON in a text-only reply — local models do
             # all three, and only the first used to become the card.
             # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
-            workflow_draft = _draft_from_calls(calls, armed)
-            if workflow_draft is None and not calls:
+            # (Never on a harness turn: it offers no workflow card.)
+            workflow_draft = _draft_from_calls(calls, armed) if _harness is None else None
+            if workflow_draft is None and not calls and _harness is None:
                 workflow_draft = _draft_from_text(route.response.text or "")
             if workflow_draft is not None:
                 break
+            # A harness turn never escalates (v1.366.0): a hallucinated
+            # escalate_to_agent is an unarmed name the registry refuses.
             esc_call = next(
                 (c for c in calls if c.name == _ESCALATE_TOOL), None
-            )
+            ) if _harness is None else None
             if esc_call is not None:
                 escalate = True
                 _esc_args = esc_call.arguments or {}
@@ -7509,6 +7753,19 @@ async def run_chat_turn(
                     platform, _esc_args.get("agent")
                 )
                 break
+            # A TOOL CALL WRITTEN AS TEXT (v1.366.0, harness only): the reply
+            # called nothing but wrote a call (GLM's <tool_call>…, a JSON
+            # blob, a Claude-style <invoke>). The text is never executed; the
+            # model is told ONCE per turn to call the tool itself and the loop
+            # goes on. MIRROR NOTE (lock-step): routes/chat.py's stream loop.
+            if _harness is not None and _harness.wants_nudge(
+                route.response.text or "", bool(calls), _round, _rounds
+            ):
+                from ..harness.mode import TEXT_TOOL_CALL_NUDGE
+
+                msgs.append(LLMMessage(role="assistant", content=route.response.text or ""))
+                msgs.append(LLMMessage(role="user", content=TEXT_TOOL_CALL_NUDGE))
+                continue
             if not calls or not armed:
                 break
             if _round == _rounds - 1:
@@ -7533,7 +7790,9 @@ async def run_chat_turn(
                 break
             msgs.append(LLMMessage(role="assistant",
                                    content=route.response.text,
-                                   tool_calls=calls,
+                                   # v1.366.0: what the MODEL called (its dialect's
+                                   # names) — `calls` itself on every other turn.
+                                   tool_calls=_model_calls,
                                    # v1.263.0 — lock-step with the stream lane.
                                    raw_blocks=list(getattr(route.response, "raw_blocks", None) or [])))
             # v1.311.0 (chat-tools-run-serially): the round's allow-listed
@@ -7614,7 +7873,10 @@ async def run_chat_turn(
                         tc.name,
                         # ``shell`` isolates under low trust (v1.298.0).
                         _low_trust_args(_trust_state, tc.name, tc.arguments),
-                        ctx, d.platform.permissions,
+                        # v1.366.0: a translated call's ctx carries the name
+                        # the model used, for the ledger row (lock-step).
+                        _harness.ctx_for(ctx, tc) if _harness is not None else ctx,
+                        d.platform.permissions,
                         overrides, session_allow=armed_grant,
                         allowed_names=set(armed),
                         # v1.246.0: the agent run's tool deadline, so a hung
@@ -7808,8 +8070,23 @@ async def run_chat_turn(
                                 continue
                             if _cp not in made_docs:
                                 made_docs.append(_cp)
+                    if _harness is not None:
+                        # IJ HARNESS (v1.366.0): a folder's plugin checks after a
+                        # successful edit (a `shell` call through the registry),
+                        # and the result goes back under the name the model
+                        # called. MIRROR NOTE (lock-step): routes/chat.py.
+                        if ran:
+                            content = str(content) + await _harness.after_edit(
+                                tc.name, reported_document_paths(tc.name, getattr(result, "data", None)),
+                                harness_check_runner(
+                                    d, ctx, overrides, lambda: armed_grant, set(armed), _trust_state,
+                                ),
+                                **harness_check_gate(_trust_state),
+                            )
+                        content = _harness.model_text(tc, content)
                     msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
-                                           name=tc.name, content=str(content)[:12000]))
+                                           name=(_harness.called_as(tc) if _harness is not None else tc.name),
+                                           content=str(content)[:12000]))
     except Exception as exc:  # noqa: BLE001 — honest, human error
         # The rounds that DID complete were still billed — persist their
         # usage before surfacing the failure, or a round-2 error silently
@@ -8037,6 +8314,10 @@ async def run_chat_turn(
             **_egress.route_flags(
                 route.provider, getattr(d.platform, "providers", None), str(route.model or "")
             ),
+            # v1.366.0 (additive, LAST, harness turns only): the family, the
+            # dialect and the FINGERPRINT of the rendered component tree.
+            # MIRROR NOTE (lock-step): routes/chat.py's done frame.
+            **({"harness": _harness.route_info()} if _harness is not None else {}),
         },
         "attached": len(body.attachments or []),
         # RESOURCES (v1.324.0): [{pack, uri, ok, note}] for what the user

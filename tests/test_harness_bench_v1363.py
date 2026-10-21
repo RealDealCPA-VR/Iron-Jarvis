@@ -60,8 +60,8 @@ from iron_jarvis.harness_bench.catalog import (
 from iron_jarvis.harness_bench.grading import grade
 from iron_jarvis.harness_bench.ledger import BudgetLedger, BudgetMismatch, CallEntry
 from iron_jarvis.harness_bench.report import combined_report, summarize
+from iron_jarvis.harness.mode import CODING_TOOLS
 from iron_jarvis.harness_bench.runners import (
-    JARVIS_TOOLS,
     ClaudeRunner,
     CodexRunner,
     JarvisRunner,
@@ -871,8 +871,11 @@ async def test_smoke_two_tasks_through_the_jarvis_lane_are_scored_end_to_end(tmp
     assert sum(r["tokens_out"] for r in res.records) == scripted.usage_out
     # An unpriced provider off this network: cost unknown, never a made-up 0.
     assert by["bugfix-pagination"]["cost_metered_usd"] is None
-    # The turn saw exactly the coding tools — no hand-off exits.
-    assert set(scripted.tools_seen[0]) == set(JARVIS_TOOLS)
+    # The turn saw exactly the harness's coding tools (v1.366.0: harness
+    # mode; a "scripted" model is the generic family, so Jarvis's own names)
+    # — no hand-off exits, and no app-resource readers with no app connected.
+    assert set(scripted.tools_seen[0]) == set(CODING_TOOLS) - {"mcp_list_resources", "mcp_read_resource"}
+    assert "escalate_to_agent" not in scripted.tools_seen[0]
     # The grader never reached the agent's copy.
     work = res.config_dir / "runs" / "bugfix-pagination" / "work"
     assert not (work / "test_hidden_pagination.py").exists()
@@ -954,10 +957,85 @@ def test_the_jarvis_identity_names_its_harness(tmp_path):
     a = JarvisRunner(platform, provider="p", model="m", round_budget=60).identity()
     b = JarvisRunner(platform, provider="p", model="m", round_budget=30).identity()
     assert a["round_budget"] == 60 and a["approval_mode"] == "yolo"
-    assert a["tools"] == list(JARVIS_TOOLS) and len(a["lane_sha256"]) == 64
+    assert a["dialect"] == "generic" and a["family"] == "generic" and a["dialect_requested"] == "auto"
+    assert "read_file" in a["tools"] and "escalate_to_agent" not in a["tools"]
+    assert len(a["lane_sha256"]) == 64 and len(a["harness_sha256"]) == 64
+    assert len(a["harness_fingerprint"]) == 64
     assert Configuration("jarvis", "p", "m", a).key != Configuration("jarvis", "p", "m", b).key
     with pytest.raises(ValueError, match="round_budget"):
         JarvisRunner(platform, round_budget=0)
+    with pytest.raises(ValueError, match="harness must be"):
+        JarvisRunner(platform, dialect="bogus")
+
+
+def test_the_dialect_and_the_tree_join_the_configuration_fingerprint(tmp_path):
+    """v1.366.0: ``--dialect auto`` (glm → Claude Code's dialect) and
+    ``--dialect generic`` are two setups, never a reused result."""
+    platform = build_platform(str(tmp_path / "root"))
+    auto = JarvisRunner(platform, provider="custom", model="glm-5.3-flash").identity()
+    generic = JarvisRunner(platform, provider="custom", model="glm-5.3-flash", dialect="generic").identity()
+    assert auto["family"] == generic["family"] == "glm"
+    assert auto["dialect"] == "claude" and generic["dialect"] == "generic"
+    assert auto["tools"][:3] == ["Read", "Write", "Edit"] and "read_file" in generic["tools"]
+    assert auto["harness_fingerprint"] != generic["harness_fingerprint"]
+    assert auto["tools_sha256"] != generic["tools_sha256"]
+    keys = {Configuration("jarvis", "custom", "glm-5.3-flash", h).key for h in (auto, generic)}
+    assert len(keys) == 2
+    # The fingerprint is the tree's, not the day's.
+    assert JarvisRunner(platform, provider="custom", model="glm-5.3-flash").identity() == auto
+
+
+async def test_the_jarvis_runner_runs_its_turn_in_harness_mode(tmp_path, monkeypatch):
+    """A glm model is shown Claude Code's tools; its ``Read`` / ``Write`` calls
+    run the real tools; the record keeps the harness the turn reported."""
+    platform = build_platform(str(tmp_path / "root"))
+    task = TASKS["bugfix-pagination"]
+    seen: list[list[str]] = []
+
+    async def stream(*, provider=None, model=None, system, messages, tools, task_class=None, **kw):
+        seen.append([t["name"] for t in tools or []])
+        n = len(seen)
+        if n == 1:
+            resp = LLMResponse(text="", tool_calls=[ToolCall(id="r", name="Read", arguments={"file_path": "pagination.py"})])
+        elif n == 2:
+            resp = LLMResponse(text="", tool_calls=[ToolCall(id="w", name="Write", arguments={
+                "file_path": "pagination.py", "content": _PAGINATION_FIX})])
+        else:
+            resp = LLMResponse(text="Fixed it.")
+        resp.usage = {"input_tokens": 5, "output_tokens": 1}
+        yield {"type": "final", "response": resp, "provider": "custom", "model": "glm-5.3-flash"}
+
+    monkeypatch.setattr(platform.router, "stream", stream)
+    runner = JarvisRunner(platform, provider="custom", model="glm-5.3-flash", round_budget=8)
+    res = await run_bench(runner=runner, home=platform.config.home, tasks=[task])
+    rec = res.records[0]
+    assert rec["passed"] is True, (rec["error"], rec["grade_reason"])
+    assert seen[0][:3] == ["Read", "Write", "Edit"] and "escalate_to_agent" not in seen[0]
+    harness = rec["extra"]["harness"]
+    assert harness["family"] == "glm" and harness["dialect"] == "claude"
+    assert harness["fingerprint"] == runner.identity()["harness_fingerprint"]
+    assert rec["extra"]["tools_used"] == ["read_file", "write_file"]
+
+
+def test_the_command_line_takes_the_dialect(tmp_path):
+    from typer.testing import CliRunner
+
+    from iron_jarvis.harness_bench.cli import bench_app
+
+    root = tmp_path / "bench-root"
+    base = ["run", "--runner", "jarvis", "--provider", "custom", "--model", "glm-5.3-flash",
+            "--root", str(root), "--dry-run", "--tasks", "bugfix-leap-year"]
+    auto = CliRunner().invoke(bench_app, base)
+    generic = CliRunner().invoke(bench_app, [*base, "--dialect", "generic"])
+    assert auto.exit_code == 0 and generic.exit_code == 0, (auto.output, generic.output)
+    folder = lambda out: next(line for line in out.output.splitlines() if line.startswith("jarvis-"))  # noqa: E731
+    assert folder(auto) != folder(generic)
+    bad = CliRunner().invoke(bench_app, [*base, "--dialect", "klingon"])
+    assert bad.exit_code == 2 and "--dialect" in bad.output
+    claude = _shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py")
+    other = CliRunner().invoke(bench_app, ["run", "--runner", "claude", "--binary", str(claude), "--root",
+                                           str(root), "--dry-run", "--dialect", "generic"])
+    assert other.exit_code == 2 and "jarvis runner only" in other.output
 
 
 async def test_a_card_that_still_shows_is_answered_once(tmp_path, monkeypatch):

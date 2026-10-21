@@ -36,6 +36,11 @@ def run_command(
     dry_run: bool = typer.Option(False, "--dry-run", help="List what would run; no model is called."),
     root: str = typer.Option(".", "--root", help="Where the benchmark keeps its state (a scratch folder)."),
     binary: str = typer.Option("", "--binary", help="claude/codex only: the executable to run."),
+    dialect: str = typer.Option(
+        "auto", "--dialect",
+        help="Jarvis only: auto (the model family's own tool dialect, the default), generic "
+        "(Iron Jarvis's own tool names), or a dialect to force: claude, gpt, qwen.",
+    ),
 ) -> None:
     """Run one configuration over the tasks and write JSON + report.md."""
     from .bench import BenchRefused, make_runner, resolve_bench_home, run_bench
@@ -59,6 +64,7 @@ def run_command(
         bench_runner = make_runner(
             runner, root=root, provider=provider, model=model,
             rounds=rounds if rounds is not None else DEFAULT_ROUNDS, binary=binary or None,
+            dialect=dialect,
         )
         result = asyncio.run(run_bench(
             runner=bench_runner, home=home, names=_split(tasks), seed=seed,
