@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.364.0 (2026-10-21).*
+holds itself to. Current as of v1.365.0 (2026-10-21).*
 
 ---
 
@@ -1894,6 +1894,30 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Codex can use Jarvis's tools (v1.365.0)
+
+When a chat or a task runs on Codex (your ChatGPT plan), Iron Jarvis used to
+send the conversation as one block of text, so Codex could only answer in
+words and never use a tool. Jarvis now talks to Codex the way the Codex app
+does, through Codex's own app server.
+
+- **Codex asks, Jarvis does.** Codex asks Jarvis to run a tool, and Jarvis
+  runs it through the same approvals, Undo, activity log and limits as every
+  other model. Codex's own shell, file editing, web search and add-ons are
+  switched off, so nothing runs behind Jarvis's back.
+- **One conversation, one Codex process.** A chat with several tool steps
+  stays in one Codex session. The session is closed when the chat finishes,
+  after 10 idle minutes, or when Iron Jarvis quits. At most six run at once.
+- **Usage is shown as plan value.** The reply's details show what Codex used,
+  at its list-price value. Goal summaries say "ChatGPT plan" for this work.
+- **If your Codex is too old or different.** Jarvis checks first, without
+  sending a message. If Codex can't work this way, Jarvis falls back to the
+  old text-only way and says so once.
+- **A model can now take over for Codex, and Codex for others.** Because
+  Codex can use tools now, it can step in when another cloud model is briefly
+  unavailable, and the reply says so ("instead of …"). A chat kept on this PC
+  (Local only) never moves to Codex.
 
 ## The coding tools Claude Code and Codex have (v1.364.0)
 

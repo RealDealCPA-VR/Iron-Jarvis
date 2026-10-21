@@ -52,6 +52,12 @@ def _clean(monkeypatch):
     own sign-in probe; every session a test leaves behind is killed."""
     S.reset_verdict()
     _kill_all_sessions()
+    # v1.365.0: the fake app-server is Python behind a .cmd shim; on a loaded
+    # machine (a full -n auto suite beside other work, or CI's release runner)
+    # starting it took longer than the real 30 s start limit, and three tests
+    # failed in start-up rather than in what they test. The limit itself is not
+    # under test here (the slow-start pins shorten their own target clock).
+    monkeypatch.setattr(S, "START_TIMEOUT_S", 120.0)
     monkeypatch.setattr(A, "_ENV_NOTED", False)
     monkeypatch.setattr(A, "_NOTED_REASONS", set())
     probe = CliAuthProbe(which=lambda b: None)
@@ -376,7 +382,7 @@ async def test_stop_kills_the_app_server_tree(tmp_path, monkeypatch, how):
                     break
 
     task = asyncio.create_task(consume())
-    await asyncio.wait_for(first.wait(), 30)
+    await asyncio.wait_for(first.wait(), 120)  # includes a loaded start-up
     for _ in range(200):
         if fake.pids_path.exists() and fake.pids_path.read_text().strip():
             break
@@ -1370,3 +1376,16 @@ async def test_review_end_to_end_the_post_chat_lane_resumes_one_codex_turn_throu
     answered = [a["response"]["contentItems"][0]["text"] for a in fake.answers()]
     assert "LOOKED-UP-42" in answered[0] and "NOTE-SAVED" in answered[1]
     assert S.POOL.live() == []
+
+
+def test_the_app_servers_last_output_is_masked_before_it_reaches_the_log():
+    """v1.365.0 (Phase 2 review finding 8): `_gone` logged the raw tail of
+    Codex's stderr; a refused login or a crash can print a token there."""
+    from iron_jarvis.providers.adapters.codex_native.adapter import stderr_for_log
+
+    key = "sk-proj-" + "A1b2C3d4E5f6G7h8J9k0" * 3
+    said = "error: request failed\nAuthorization: Bearer " + key + "\n" + "x" * 50
+    shown = stderr_for_log(said)
+    assert key not in shown
+    assert "request failed" in shown or len(shown) <= 400
+    assert len(stderr_for_log("y" * 10_000)) <= 400

@@ -3547,6 +3547,46 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **codex-cli speaks Codex's own app-server protocol, and Jarvis runs every
+  tool** (v1.365.0, Phase 2 of `docs/IJ-HARNESS-PLAN.md`; the Codex twin of
+  v1.300.0). `providers/adapters/codex_native/` (`protocol.py` pure,
+  `session.py` process/pool/reaper/verdict, `adapter.py`
+  `CodexNativeAdapter`, wired by `subprocess_cli.make_codex_native`): the
+  user's own `codex app-server` (stdio JSON-RPC, through `core/procs`, leased
+  `CODEX_HOME` via Iron-Proxy `Lease.apply`) gets Jarvis's ARMED tools as
+  plain function dynamic tools (names mapped both ways, Codex's own names like
+  `exec`/`wait` renamed `ij_*`); 26 config switches (`protocol.BUILTINS_OFF`,
+  each read from the 0.157.0 source) plus `environments: []` mean Codex
+  builds no shell / apply_patch / web / MCP tool of its own; any built-in
+  approval request is DENIED (the 0.157.0 deny shape is a struct, not the
+  string "denied"); code-mode `exec`/`wait` (gpt-5.6*/gpt-6*, catalog-forced)
+  cannot act and `direct_only_tool_namespaces=["functions"]` keeps Jarvis's
+  tools out of it. THE BRIDGE: Codex's `callId` IS `ToolCall.id`; a
+  `DynamicToolCall` request returns `LLMResponse(tool_calls, tool_use)` and
+  PARKS the session; the next call resumes it only when the conversation ends
+  with results for EXACTLY that call set (reordered is fine), else it is a
+  miss → a new thread with the history replayed as labelled text. Bounds:
+  idle reaper 600 s, cap 6 live (eviction inside the try that releases the
+  slot), 300 s read idle, 1 h per call, tree kill on cancel/timeout/error,
+  `Pool.stop_all` from the lifespan at shutdown (off the loop, 30 s). A
+  FEATURE CHECK before any model call (initialize, config/read, thread/start,
+  mcpServerStatus/list, ephemeral/read-only/untrusted confirmed) falls back
+  to the text-only `codex exec` path, said ONCE and cached 10 min per binary
+  (a late answer under load falls back for that call only, never cached).
+  Typed errors (429 with reset → retry_after + Iron-Proxy signal; sign-in;
+  interrupted transient/partial; context overflow; max_output_tokens →
+  finish_reason). Usage incl. cache; cost list-price-equivalent
+  (`eval/pricing` aliases codex-cli to OpenAI rows; the goal digest and
+  receipts name "ChatGPT plan" or "subscription", never "Claude subscription"
+  for Codex work); the account rate-limit snapshot rides
+  `LLMResponse.extra["rate_limits"]` (for Phase 5). The app-server's stderr
+  is MASKED before it is logged (`adapter.stderr_for_log`). ROUTING CHANGE,
+  reviewed: codex-cli now reports `tool_use: True`, so a cloud primary's
+  transient failure can fail over sideways to it and an Auto fallback can pick
+  it — always disclosed (`reason=failover`, `from`, `why`), blocked by Local
+  only, and the v1.162.0/v1.228.0 local-primary refusals are unchanged. Pins:
+  `tests/test_codex_native_v1365.py` (+ fake `tests/fixtures/fake_codex_app_server_v1365.py`).
+
 - **The coding tools Claude Code and Codex give their models, on Jarvis's
   own registry** (v1.364.0, Phase 1 of `docs/IJ-HARNESS-PLAN.md`). The parity
   table `src/iron_jarvis/harness/parity.py` maps EVERY tool of Claude Code

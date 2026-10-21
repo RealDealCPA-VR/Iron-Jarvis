@@ -195,6 +195,19 @@ def _which_cli(binary: str) -> str | None:
     return resolve(binary)
 
 
+
+def stderr_for_log(text: str) -> str:
+    """The app-server's last output as the log may carry it (v1.365.0): the
+    tail, MASKED before it is cut (the v1.342.0 rule — a cut can split a key
+    the mask would have caught). A login refusal or a crash can print a token,
+    and the daemon log is read in bug reports. Never raises."""
+    try:
+        from ....detections.redact import mask
+
+        return mask(str(text or "")[-4000:])[-400:]
+    except Exception:  # noqa: BLE001 — never a key: say nothing rather than leak
+        return "(not shown)"
+
 class CodexNativeAdapter(LLMAdapter):
     """codex-cli over the user's own ``codex app-server``: native tool calls,
     streaming text and reasoning, token usage and the account's rate limits.
@@ -553,7 +566,7 @@ class CodexNativeAdapter(LLMAdapter):
         await asyncio.to_thread(s.drain_stderr, 1.0)
         said = s.stderr_text().strip()
         if said:
-            log.info("codex-cli: the app-server stopped; its last output: %s", said[-400:])
+            log.info("codex-cli: the app-server stopped; its last output: %s", stderr_for_log(said))
         from ...cli_auth import is_sign_in_refusal, note_cli_failure
 
         if is_sign_in_refusal(said):
