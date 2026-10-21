@@ -358,6 +358,27 @@ def test_digest_says_a_subscription_goal_spent_a_list_price_value(platform):
     assert "spent" not in spent["words"]
 
 
+def test_digest_names_the_chatgpt_plan_for_codex_cli_spend(platform):
+    # IJ harness phase 2 review: codex-cli (the user's ChatGPT plan) is a
+    # list-price equivalent too; its value must not be called "Claude".
+    gid = _digest_goal(platform)
+    _goal_session(platform, gid, provider="codex-cli", model="gpt-5.6-terra",
+                  in_tok=1000, cost_usd=0.42)
+    spent = _spent(platform, gid)
+    assert spent["list_price_equivalent"] is True
+    assert spent["words"] == "≈$0.42 at list price (ChatGPT plan)"
+
+
+def test_digest_names_no_one_plan_when_two_plans_covered_the_work(platform):
+    gid = _digest_goal(platform)
+    _goal_session(platform, gid, provider="claude-cli", model="claude-opus-4-8",
+                  in_tok=1000, cost_usd=0.42)
+    _goal_session(platform, gid, provider="codex-cli", model="gpt-5.6-terra",
+                  in_tok=1000, cost_usd=0.10)
+    spent = _spent(platform, gid)
+    assert spent["words"] == "≈$0.52 at list price (subscription)"
+
+
 def test_digest_words_for_a_metered_goal_are_unchanged(platform):
     gid = _digest_goal(platform)
     _goal_session(platform, gid, provider="anthropic", model="claude-opus-4-8",

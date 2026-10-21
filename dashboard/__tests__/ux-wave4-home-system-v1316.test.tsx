@@ -900,7 +900,7 @@ describe("Activity — 'Cost in this view' reads $0.00 at zero", () => {
     render(<ActivityPage />);
     expect(await screen.findByText("$0.0200")).toBeInTheDocument();
     expect(
-      screen.getByText("+ ~$0.4200 list-price value (Claude subscription, not billed)"),
+      screen.getByText("+ ~$0.4200 list-price value (subscription, not billed)"),
     ).toBeInTheDocument();
   });
 });

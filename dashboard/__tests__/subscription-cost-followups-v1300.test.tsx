@@ -152,7 +152,7 @@ describe("Activity page — the list-price value is said apart from cost", () =>
     await renderWith({ ...BASE, costUsd: 0.02, listPriceUsd: 0.42 });
     expect(await screen.findByText("$0.0200")).toBeInTheDocument();
     expect(
-      screen.getByText("+ ~$0.4200 list-price value (Claude subscription, not billed)"),
+      screen.getByText("+ ~$0.4200 list-price value (subscription, not billed)"),
     ).toBeInTheDocument();
   });
 

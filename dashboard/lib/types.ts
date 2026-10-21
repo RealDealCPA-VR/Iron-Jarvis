@@ -678,9 +678,11 @@ export interface TurnUsage {
 }
 
 /** The one explanation of a subscription cost figure (v1.300.0) — the turn
- *  receipt's "~$x list" and the Usage page's claude-cli row both carry it. */
+ *  receipt's "~$x list" and the Usage page's subscription rows carry it.
+ *  IJ harness phase 2: a codex-cli (ChatGPT plan) figure is one too, so the
+ *  words name no vendor. */
 export const LIST_PRICE_TITLE =
-  "list-price equivalent — included in your Claude subscription";
+  "list-price equivalent — included in your subscription, not billed";
 
 const TURN_USAGE_KEYS = [
   "input_tokens",

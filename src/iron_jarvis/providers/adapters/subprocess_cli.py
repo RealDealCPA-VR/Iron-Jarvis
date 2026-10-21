@@ -15,7 +15,11 @@ still executes every tool — Iron Jarvis's own perceive→act loop, tool regist
 and permission engine stay in charge), text streams as it is written, images
 ride the user turn, and usage carries the cache buckets and the CLI's own
 list-price cost. One fresh process per step, cancellable as a tree. The
-``codex`` adapter stays text-only.
+``codex`` adapter here (:func:`make_codex_cli`) stays text-only; since IJ
+harness phase 2 the ``codex-cli`` provider is :func:`make_codex_native`
+(``codex_native/``: the user's own ``codex app-server``, real tool calls),
+which falls back to this text-only path when the installed Codex lacks the
+shapes it relies on.
 
 IRON-PROXY ACCOUNTS (v1.301.0, ``iron_proxy/accounts.py``): when Iron-Proxy is
 on and has a CLI account for the provider, each call runs AS the account it
@@ -463,6 +467,16 @@ def make_codex_cli(**kw: Any) -> SubprocessCliAdapter:
     return SubprocessCliAdapter(
         "codex-cli", "codex", _codex_argv, _codex_parse, **kw
     )
+
+
+def make_codex_native(**kw: Any) -> LLMAdapter:
+    """codex-cli over the user's own ``codex app-server`` (IJ harness phase 2,
+    ``codex_native/``): real tool calls, streaming, usage and rate limits. It
+    falls back to :func:`make_codex_cli`'s text-only path, said once, when the
+    installed Codex lacks the shapes it relies on."""
+    from .codex_native.adapter import CodexNativeAdapter
+
+    return CodexNativeAdapter(**kw)
 
 
 # --- Claude Code (`claude -p`) — the NATIVE stream-json client (v1.300.0) ----

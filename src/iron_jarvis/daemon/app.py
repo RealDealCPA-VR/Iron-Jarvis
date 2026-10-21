@@ -1908,6 +1908,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 await asyncio.to_thread(_procs.end_all)
             except Exception:  # noqa: BLE001 — shutdown never raises
                 log.debug("kept process jobs at shutdown failed", exc_info=True)
+            # IJ harness phase 2: every live `codex app-server` (a parked one
+            # waits up to 10 minutes for tool results) goes with the daemon.
+            # Only when codex-cli was ever used: the module is not imported
+            # for a shutdown. Off the loop, bounded.
+            _codex = sys.modules.get("iron_jarvis.providers.adapters.codex_native.session")
+            if _codex is not None:
+                try:
+                    await asyncio.wait_for(asyncio.to_thread(_codex.POOL.stop_all), timeout=30.0)
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    log.debug("codex sessions at shutdown failed", exc_info=True)
             # v1.333.0 (D3): every REPL child goes with the daemon. The kills
             # run off the loop; bounded so a stuck kill cannot hold exit.
             _repl = getattr(platform, "repl", None)
