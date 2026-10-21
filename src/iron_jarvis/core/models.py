@@ -291,6 +291,11 @@ class ToolInvocation(SQLModel, table=True):
     #: standing grant" and link the row. "" for every other verdict. The
     #: ``verdict`` stays ALLOW; this names WHY. Additive.
     grant_id: str = ""
+    #: v1.366.0 (IJ harness Phase 3): the name the MODEL used when a dialect
+    #: translated its call (``Bash`` for a row whose ``tool`` is ``shell``).
+    #: ``tool`` is always the REAL tool — the gate, approvals and undo all
+    #: judged that one. "" when the model used the real name. Additive.
+    called_as: str = ""
     created_at: datetime = Field(default_factory=utcnow)
 
 

@@ -246,8 +246,18 @@ def test_both_chat_loops_fence_on_the_same_attribute(site, module_name):
     # each loop calls it exactly once, and the helper checks the attribute.
     from iron_jarvis.daemon import chat_turn
 
-    src = inspect.getsource(importlib.import_module(module_name))
-    assert src.count("await _fence_tool_output(") == 1
+    module = importlib.import_module(module_name)
+    src = inspect.getsource(module)
+    loop = chat_turn.run_chat_turn if site == "chat_complete" else module.chat_stream
+    assert inspect.getsource(loop).count("await _fence_tool_output(") == 1
+    # v1.366.0: chat_turn holds ONE more call, outside both loops — an IJ
+    # harness folder's plugin check is a `shell` result and is fenced by the
+    # same helper (`harness_check_runner`).
+    extra = (
+        inspect.getsource(chat_turn.harness_check_runner).count("await _fence_tool_output(")
+        if module is chat_turn else 0
+    )
+    assert src.count("await _fence_tool_output(") == 1 + extra
     helper = inspect.getsource(chat_turn._fence_tool_output)
     assert helper.count('"returns_untrusted_content", False)') == 1
     assert helper.count("wrap_untrusted(") == 1
@@ -268,7 +278,15 @@ def test_the_two_chat_fence_sites_total_exactly_two():
         inspect.getsource(m).count("await _fence_tool_output(")
         for m in (chat_turn, chat)
     )
-    assert total == 2
+    loops = sum(
+        inspect.getsource(f).count("await _fence_tool_output(")
+        for f in (chat_turn.run_chat_turn, chat.chat_stream)
+    )
+    # v1.366.0: the IJ harness's plugin-check runner fences its `shell`
+    # output with the same helper — one call, outside both loops.
+    harness = inspect.getsource(chat_turn.harness_check_runner).count("await _fence_tool_output(")
+    assert loops == 2 and harness == 1
+    assert total == loops + harness
     assert sum(
         inspect.getsource(m).count('"returns_untrusted_content", False)')
         for m in (chat_turn, chat)
