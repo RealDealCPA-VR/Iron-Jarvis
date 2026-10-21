@@ -149,9 +149,17 @@ export function cloudAskFor(
 ): CloudAsk | null {
   const p = (provider || "").trim();
   if (!p || p === "auto") return null;
-  const row =
-    models.find((m) => m.provider === p && m.model === model) ?? models.find((m) => m.provider === p);
-  if (staysOnThisNetwork(row)) return null;
+  const exact = models.find((m) => m.provider === p && m.model === model);
+  if (exact) {
+    if (staysOnThisNetwork(exact)) return null;
+    return { provider: p, model, name: cloudModelName(p, model, models) };
+  }
+  // v1.362.0: a model the catalog does not list (a provider's default, a
+  // name a model proxy hides) stays only when EVERY row of its provider
+  // does — the daemon's own rule, because a proxy that sends any name to the
+  // cloud may send this one there too.
+  const rows = models.filter((m) => m.provider === p);
+  if (rows.length > 0 && rows.every((m) => staysOnThisNetwork(m))) return null;
   return { provider: p, model, name: cloudModelName(p, model, models) };
 }
 

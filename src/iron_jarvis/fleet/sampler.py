@@ -51,6 +51,7 @@ from typing import Any, Callable, Deque, Iterable
 from ..core.logging import get_logger
 from .models import FleetNode, NodeMetrics, NodeRates, NodeSnapshot
 from .probes import probe_node
+from .upstreams import NOT_A_PROXY, NOT_A_PROXY_TTL_S, ROUTES_TTL_S, RouteTable
 
 log = get_logger("fleet.sampler")
 
@@ -224,8 +225,17 @@ class FleetSampler:
         probe: Callable[..., tuple[NodeSnapshot, list[FleetNode]]] = probe_node,
         node_timeout: float = _NODE_TIMEOUT,
         on_tick: Callable[[bool, BaseException | None], None] | None = None,
+        route_reader: Callable[[FleetNode], Any] | None = None,
     ) -> None:
         self.registry = registry
+        #: v1.362.0: reads a model proxy's routing table (``upstreams.
+        #: read_routes``) so the local-only lock can tell a name the proxy
+        #: sends to the cloud from one it serves on the user's network.
+        #: Injected, and None by default, so a sampler built in a test with a
+        #: fake probe never makes a real request.
+        self._route_reader = route_reader
+        #: node id -> logical time its routing table is next read.
+        self._routes_due: dict[str, float] = {}
         #: v1.229.0: loop-health seam. Called ``(True, None)`` after a cycle
         #: that ran to completion and ``(False, exc)`` after one that raised —
         #: the daemon used to mark ``fleet`` healthy when it ARMED the loop,
@@ -369,6 +379,7 @@ class FleetSampler:
         dropped = 0
         with self._lock:
             for node_id in node_ids:
+                self._routes_due.pop(node_id, None)  # a re-added proxy is read at once
                 if self._state.pop(node_id, None) is not None:
                     dropped += 1
         return dropped
@@ -419,6 +430,13 @@ class FleetSampler:
                     self._record_failure(node, str(exc))
                 else:
                     self._record_result(node, snapshot, children)
+            # v1.362.0: then each proxy's routing table, under the same deadline.
+            reads = [pool.submit(self._read_routes_one, n) for n in self._route_nodes(due)]
+            for fut in reads:
+                try:
+                    fut.result(timeout=max(0.0, deadline - time.monotonic()))
+                except Exception:  # noqa: BLE001 — a table read is best-effort
+                    log.debug("fleet sampler: routing table read failed", exc_info=True)
         finally:
             # Never join: a wedged probe thread must not hold up the caller. It
             # dies on its own (probes carry their own request timeouts).
@@ -443,6 +461,62 @@ class FleetSampler:
                 continue
             snapshot, children = result
             self._record_result(node, snapshot, children)
+        await self._read_routes_async(due)
+
+    async def _read_routes_async(self, probed: list[FleetNode]) -> None:
+        """v1.362.0: read the routing table of each proxy this cycle reached,
+        off the loop, each under the per-node deadline. A failed read changes
+        nothing (the registry keeps the last table)."""
+        nodes = self._route_nodes(probed)
+        if not nodes:
+            return
+        results = await asyncio.gather(
+            *(
+                asyncio.wait_for(asyncio.to_thread(self._read_routes_one, n), timeout=self.node_timeout)
+                for n in nodes
+            ),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+
+    def _route_nodes(self, probed: list[FleetNode]) -> list[FleetNode]:
+        """The probed nodes whose routing table is due: top-level (a proxy's
+        own backends are never asked), with an address, ONLINE this cycle (a
+        dead node is not asked twice), and past their next-read time."""
+        if self._route_reader is None:
+            return []
+        now = self._clock()
+        out: list[FleetNode] = []
+        for node in probed:
+            if getattr(node, "parent_id", None) or not getattr(node, "base_url", ""):
+                continue
+            with self._lock:
+                st = self._state.get(node.id)
+                online = st is not None and st.snapshot is not None and st.snapshot.status == "online"
+                due_at = self._routes_due.get(node.id, 0.0)
+                if not online or now < due_at:
+                    continue
+                # Claimed before the read, so an overlapping pass (a Refresh
+                # while the loop runs) does not read the same table twice.
+                self._routes_due[node.id] = now + ROUTES_TTL_S
+            out.append(node)
+        return out
+
+    def _read_routes_one(self, node: FleetNode) -> None:
+        """Read one node's routing table and hand it to the registry. Runs in
+        a worker thread — never on the loop."""
+        reader = self._route_reader
+        if reader is None:
+            return
+        result = reader(node)
+        if result == NOT_A_PROXY:
+            with self._lock:
+                self._routes_due[node.id] = self._clock() + NOT_A_PROXY_TTL_S
+        setter = getattr(self.registry, "set_routes", None)
+        if callable(setter) and (isinstance(result, RouteTable) or isinstance(result, str)):
+            setter(node.id, result)
 
     async def _probe_async(
         self, node: FleetNode

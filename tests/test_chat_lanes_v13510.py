@@ -1027,8 +1027,10 @@ def test_both_lanes_build_the_environment_line_from_the_shared_helper():
     both call the one helper (a line that lands in one lane only is half a
     fix — the stream lane is the one users watch)."""
     root = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis" / "daemon"
-    for rel, call in (("chat_turn.py", "model_where_line(platform, _where_provider)"),
-                      ("routes/chat.py", "_chat_turn.model_where_line(d.platform, _where_provider)")):
+    # v1.362.0: both lanes also pass the model (a name a model proxy sends to
+    # the cloud is the cloud), built by the one ladder `where_model`.
+    for rel, call in (("chat_turn.py", "model_where_line(platform, _where_provider, _where_model)"),
+                      ("routes/chat.py", "_chat_turn.model_where_line(d.platform, _where_provider, _where_model)")):
         src = (root / rel).read_text(encoding="utf-8").replace("\r\n", "\n")
         assert "You run locally on the user's machine" not in src, rel
         assert call in src, rel

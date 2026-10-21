@@ -246,12 +246,15 @@ def _turn_leaves_network(d: Any, body: Any, provider: str) -> bool:
         return bool(scope.allowed_once)
     platform = getattr(d, "platform", None)
     prov = (provider or getattr(body, "provider", "") or "").strip()
+    model = str(getattr(body, "model", "") or "").strip() if prov else ""
     if not prov:
-        prov = str(getattr(getattr(platform, "config", None), "default_provider", "") or "")
+        cfg = getattr(platform, "config", None)
+        prov = str(getattr(cfg, "default_provider", "") or "")
+        model = str(getattr(cfg, "default_model", "") or "")
     if prov.strip().lower() == "auto":
         return True
     return not _egress.stays_on_this_network(
-        prov, getattr(platform, "providers", None), getattr(platform, "config", None)
+        prov, getattr(platform, "providers", None), getattr(platform, "config", None), model
     )
 
 

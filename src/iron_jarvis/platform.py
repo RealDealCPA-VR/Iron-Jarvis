@@ -804,6 +804,9 @@ def build_platform(
         # comes from the sampler's CACHED last-known reachability (never a live
         # probe — this is called per provider per request).
         dynamic_available=lambda name: fleet_registry.reachable(name),
+        # v1.362.0: where a model PROXY sends each name, from its own routing
+        # table (read in the background by the fleet sampler; a cached read).
+        upstream_place=lambda name, model: fleet_registry.route_place(name, model),
         # OpenCode is offered LOCAL-ONLY: it can also reach hosted/paid models,
         # and the user asked for their own hardware only. See providers/opencode.
         opencode_allowed=lambda: _opencode_allowed(),
@@ -921,7 +924,9 @@ def build_platform(
         if _local_only:
             connected = [
                 e for e in connected
-                if _egress.stays_on_this_network(str(e.get("provider") or ""), providers, config)
+                if _egress.stays_on_this_network(
+                    str(e.get("provider") or ""), providers, config, str(e.get("model") or "")
+                )
             ]
         if not connected:
             return None
@@ -951,7 +956,9 @@ def build_platform(
                 and providers.available(classifier[0])
                 and (
                     not _local_only
-                    or _egress.stays_on_this_network(classifier[0], providers, config)
+                    or _egress.stays_on_this_network(
+                        classifier[0], providers, config, str(classifier[1] or "")
+                    )
                 )
             ):
                 try:

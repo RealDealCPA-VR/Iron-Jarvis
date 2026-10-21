@@ -1085,8 +1085,14 @@ class Orchestrator:
         if options.get("local_only") is True or _egress.current_scope().on:
             options["local_only"] = True
             _lo_provider = provider or self.p.config.default_provider
+            # v1.362.0: the model too — a name a model proxy sends to the
+            # cloud is refused like a cloud provider. The configured default
+            # model belongs to the configured default provider only.
+            _lo_model = str(model or (
+                self.p.config.default_model if _lo_provider == self.p.config.default_provider else ""
+            ) or "")
             if not _egress.stays_on_this_network(
-                _lo_provider, getattr(self.p, "providers", None), self.p.config
+                _lo_provider, getattr(self.p, "providers", None), self.p.config, _lo_model
             ):
                 raise _egress.LocalOnlyRefused(
                     _lo_provider,

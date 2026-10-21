@@ -122,9 +122,9 @@ def _batch_egress_check(platform: Any) -> None:
         prov = (llm.provider if getattr(llm, "applied", False) and llm.provider else default) or ""
         if prov.strip().lower() == "auto":
             continue
-        if not _egress.stays_on_this_network(prov, mgr, cfg):
-            model = str((llm.model if getattr(llm, "applied", False) else None)
-                        or getattr(cfg, "default_model", "") or "")
+        model = str((llm.model if getattr(llm, "applied", False) else None)
+                    or getattr(cfg, "default_model", "") or "")
+        if not _egress.stays_on_this_network(prov, mgr, cfg, model):
             raise _egress.LocalOnlyRefused(prov, model, manager=mgr)
 
 

@@ -17,12 +17,26 @@ exist in the registry for observability only.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import threading
+from pathlib import Path
 from typing import Any, Callable
 
 from ..core.config import persist_config_values
+from ..core.logging import get_logger
 from .adapter import FleetAdapter, adapter_for  # noqa: F401 — FleetAdapter re-exported
 from .models import NODE_PROTOCOLS, FleetNode
+from .probes import normalize_root
+from .upstreams import PLACE_CLOUD, UNREAD, RouteTable
+
+log = get_logger("fleet.registry")
+
+#: The file under the home that keeps each proxy's last routing table
+#: (v1.362.0), so a restart answers "where does this name go" from the last
+#: read instead of from the address alone until the sampler's first pass.
+ROUTES_FILE = "fleet-routes.json"
 
 #: Node ids become provider names (``fleet-<id>``), and provider names cannot
 #: contain a colon — ``providers/routing.py::parse_pm`` partitions on the first
@@ -73,7 +87,16 @@ class FleetRegistry:
         #: The model catalog reads it as part of its fingerprint, so a cached
         #: picker list is rebuilt after a fleet change and NOT after a sampler
         #: pass that changed nothing (it calls ``absorb_children`` every pass).
+        #: v1.362.0: also when a proxy's routing table changes a verdict.
         self._revision = 0
+        #: v1.362.0: node id -> (the node's address root when it was read, its
+        #: routing table). Written by the sampler from a worker thread, read on
+        #: the routing path (``route_place``), so writes swap whole entries
+        #: under ``_routes_lock`` and a read is one dict lookup.
+        self._routes: dict[str, tuple[str, RouteTable]] = {}
+        self._routes_lock = threading.Lock()
+        self._routes_path = self._routes_file()
+        self._load_routes()
 
     @property
     def revision(self) -> int:
@@ -297,6 +320,12 @@ class FleetRegistry:
         for kid in kids:
             self._reachable.pop(kid.id, None)
         self._reachable.pop(node_id, None)
+        # v1.362.0: and its routing table (a re-added node is read again).
+        with self._routes_lock:
+            dropped = self._routes.pop(node_id, None)
+        if dropped is not None:
+            self._revision += 1
+            self._save_routes()
 
         if node.source != "config":
             return []
@@ -328,6 +357,122 @@ class FleetRegistry:
         if old is None or [k.model_dump() for k in old] != [k.model_dump() for k in new]:
             self._revision += 1
         self._children[parent_id] = new
+
+    # -- routing tables (v1.362.0) -------------------------------------------
+
+    def _routes_file(self) -> Path | None:
+        home = getattr(self.config, "home", None)
+        if not home:
+            return None
+        try:
+            return Path(home) / ROUTES_FILE
+        except TypeError:
+            return None
+
+    def _load_routes(self) -> None:
+        """The tables saved by the last run. A file we cannot read is no
+        tables at all: the sampler reads them again within its first pass."""
+        path = self._routes_path
+        if path is None:
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except Exception:  # noqa: BLE001 — a damaged file is re-read from the proxies
+            log.debug("fleet routes: saved tables unreadable", exc_info=True)
+            return
+        if not isinstance(raw, dict):
+            return
+        for node_id, saved in raw.items():
+            if not isinstance(saved, dict):
+                continue
+            table = RouteTable.from_json(saved.get("table"))
+            root = str(saved.get("root") or "")
+            if table is not None and root:
+                self._routes[str(node_id)] = (root, table)
+
+    def _save_routes(self) -> None:
+        path = self._routes_path
+        if path is None:
+            return
+        with self._routes_lock:
+            payload = {
+                nid: {"root": root, "table": table.to_json()}
+                for nid, (root, table) in self._routes.items()
+            }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            tmp.write_text(json.dumps(payload, indent=1, sort_keys=True), encoding="utf-8")
+            os.replace(tmp, path)
+        except Exception:  # noqa: BLE001 — the table in memory still answers
+            log.debug("fleet routes: could not save", exc_info=True)
+
+    def set_routes(self, node_id: str, result: "RouteTable | str") -> None:
+        """Record what the sampler read for one node (``upstreams.read_routes``).
+
+        A table replaces the last one; :data:`~.upstreams.NOT_A_PROXY` removes
+        it (the address decides again); :data:`~.upstreams.UNREAD` keeps what we
+        had — a proxy that did not answer this once has not changed its
+        routing. A change to any verdict moves :attr:`revision`, so the model
+        list is rebuilt with the new places."""
+        if result == UNREAD:
+            return
+        node = self._top_level().get(node_id)
+        changed = False
+        with self._routes_lock:
+            old = self._routes.get(node_id)
+            if node is None or not isinstance(result, RouteTable):
+                if old is not None:
+                    self._routes.pop(node_id, None)
+                    changed = True
+            else:
+                root = normalize_root(node.base_url)
+                if old is None or old[0] != root or old[1].signature() != result.signature():
+                    changed = True
+                self._routes[node_id] = (root, result)
+        if changed:
+            self._revision += 1
+            self._save_routes()
+
+    def routes_for(self, node_id: str) -> RouteTable | None:
+        """The routing table held for one node, while it still describes the
+        node's CURRENT address (a node re-pointed elsewhere has none until the
+        sampler reads the new one)."""
+        node = self._top_level().get(node_id)
+        if node is None or not node.enabled:
+            return None
+        held = self._routes.get(node_id)
+        if held is None:
+            return None
+        root, table = held
+        return table if root == normalize_root(node.base_url) else None
+
+    @staticmethod
+    def _node_id_for(provider: str) -> str:
+        p = (provider or "").strip().lower()
+        if p.startswith(_PROVIDER_PREFIX):
+            return p[len(_PROVIDER_PREFIX):]
+        return p if p in ("custom", "ollama") else ""
+
+    def route_place(self, provider: str, model: str) -> str | None:
+        """``ProviderManager`` upstream oracle: where a request for *model* on
+        *provider* goes, by the proxy's own routing table — ``"local"``,
+        ``"cloud"``, or ``None`` when no table describes it (not a proxy, not
+        read yet, or not a fleet provider at all; the address then decides).
+        NEVER a network call: this runs on every model call. Never raises; a
+        fault reads as cloud."""
+        try:
+            node_id = self._node_id_for(provider)
+            if not node_id:
+                return None
+            table = self.routes_for(node_id)
+            if table is None:
+                return None
+            return table.place(model)
+        except Exception:  # noqa: BLE001 — fail closed
+            return PLACE_CLOUD
 
     # -- reachability (routing hot path) -------------------------------------
 

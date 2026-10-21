@@ -291,8 +291,9 @@ def register(app: FastAPI, d) -> None:
         )
         if local_only:
             serving = provider or str(getattr(cfg, "default_provider", "") or "").strip()
+            serving_model = model if provider else str(getattr(cfg, "default_model", "") or "")
             if serving.lower() == "auto" or not _egress.stays_on_this_network(
-                serving, getattr(platform, "providers", None), cfg
+                serving, getattr(platform, "providers", None), cfg, serving_model
             ):
                 return {"suggestions": [], "reason": LOCAL_ONLY_REASON}
 

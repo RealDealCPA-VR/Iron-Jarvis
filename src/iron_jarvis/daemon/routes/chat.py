@@ -883,10 +883,10 @@ def _local_one_shot_pick(
     mgr = getattr(platform, "providers", None)
     cfg = getattr(platform, "config", None)
 
-    def _ok(p: str) -> bool:
-        return bool(p) and p != "mock" and _egress.stays_on_this_network(p, mgr, cfg)
+    def _ok(p: str, m: str = "") -> bool:
+        return bool(p) and p != "mock" and _egress.stays_on_this_network(p, mgr, cfg, m)
 
-    if _ok((provider or "").strip()):
+    if _ok((provider or "").strip(), (model or "").strip()):
         return provider.strip(), (model or "").strip()
     try:
         setup = json.loads(setup_json or "{}")
@@ -894,14 +894,14 @@ def _local_one_shot_pick(
         setup = {}
     if isinstance(setup, dict):
         sp = str(setup.get("provider") or "").strip()
-        if _ok(sp):
+        if _ok(sp, str(setup.get("model") or "").strip()):
             return sp, str(setup.get("model") or "").strip()
     try:
         from ...providers.local import local_ladder
 
         for rung in local_ladder(mgr, cfg):
             rp = str(rung.get("provider") or "")
-            if _ok(rp):
+            if _ok(rp, str(rung.get("model") or "")):
                 return rp, str(rung.get("model") or "")
     except Exception:  # noqa: BLE001 — no ladder = nothing local to pick
         pass
@@ -917,7 +917,7 @@ def _local_pick_or_refuse(platform, provider: str, model: str, setup_json: str) 
     if pick is not None:
         return pick
     if _egress.stays_on_this_network(
-        provider, getattr(platform, "providers", None), getattr(platform, "config", None)
+        provider, getattr(platform, "providers", None), getattr(platform, "config", None), model
     ):
         return provider, model
     raise _egress.LocalOnlyRefused(provider, model, manager=getattr(platform, "providers", None))
@@ -3049,9 +3049,11 @@ async def chat_stream(
     _where_provider = (body.provider or "").strip() or (
         (resolved_proj.default_provider or "").strip() if resolved_proj else ""
     ) or str(getattr(getattr(d.platform, "config", None), "default_provider", "") or "")
+    # v1.362.0: and its model (MIRROR NOTE, lock-step: chat_turn's lane).
+    _where_model = _chat_turn.where_model(body, resolved_proj, getattr(d.platform, "config", None))
     system = persona + (
         "\n\n# Environment\n"
-        + _chat_turn.model_where_line(d.platform, _where_provider)
+        + _chat_turn.model_where_line(d.platform, _where_provider, _where_model)
         # The two exit lines (escalate / workflow card): the ONE constant both
         # lanes send, so a TEXT-ONLY turn can swap exactly these bytes below
         # (`text_only_system`, v1.330.0). MIRROR NOTE (lock-step): chat_turn.
@@ -5275,7 +5277,7 @@ async def chat_stream(
                 # answered off this network with the user's one-message OK.
                 # MIRROR NOTE (lock-step): chat_turn.run_chat_turn's route.
                 **_egress.route_flags(
-                    route_provider, getattr(d.platform, "providers", None)
+                    route_provider, getattr(d.platform, "providers", None), str(route_model or "")
                 ),
             },
             "tools_used": tools_used,

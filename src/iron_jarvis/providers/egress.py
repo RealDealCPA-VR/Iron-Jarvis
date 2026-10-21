@@ -10,7 +10,11 @@ place that answers the two questions the toggle needs:
   providers that CAN be local; a ``custom`` endpoint pointed at
   ``https://ollama.com`` or OpenRouter is "local-kind" by name and a cloud by
   address, so the address decides. FAIL CLOSED: no address, an address we
-  cannot read, any fault at all — the model is treated as cloud.
+  cannot read, any fault at all — the model is treated as cloud. Since
+  v1.362.0 the answer is per MODEL as well: a model PROXY on the user's
+  network (LiteLLM) routes each name to its own upstream, and a name it sends
+  to a cloud service is cloud (:func:`proxy_routes_to_cloud`, read from the
+  proxy's own routing table — ``fleet/upstreams.py``).
 * **Is this chat local only right now?** :data:`LOCAL_ONLY`, a ContextVar
   holding a small frozen :class:`LocalOnlyScope` ``{on, allowed_once}``, set
   around the whole turn by the chat lanes (and around a session's model calls
@@ -232,15 +236,53 @@ def endpoint_url(provider: str, manager: Any = None, config: Any = None) -> str:
     return ""
 
 
-def stays_on_this_network(provider: str, manager: Any = None, config: Any = None) -> bool:
-    """True when a call to *provider* never leaves the user's own network.
+def default_model_of(provider: str, manager: Any = None) -> str:
+    """The model *provider*'s adapter sends when the caller names none (a
+    custom endpoint's saved model, a fleet node's default). ``""`` when
+    unknown. Never raises."""
+    if manager is None:
+        return ""
+    try:
+        return str(getattr(_innermost(manager.get((provider or "").strip().lower())), "model", "") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def proxy_routes_to_cloud(provider: str, model: str = "", manager: Any = None) -> bool:
+    """True when *provider* is a model PROXY whose own routing table sends
+    *model* (``""`` = the provider's default model) to a cloud service
+    (v1.362.0). False when no table describes it — the address then decides,
+    as it did before. The table is the fleet registry's cached read
+    (``ProviderManager.upstream_place``): never a network call. Never raises;
+    a fault reads as cloud."""
+    if manager is None:
+        return False
+    try:
+        oracle = getattr(manager, "upstream_place", None)
+        if not callable(oracle):
+            return False
+        p = (provider or "").strip().lower()
+        name = (model or "").strip() or default_model_of(p, manager)
+        return oracle(p, name) == "cloud"
+    except Exception:  # noqa: BLE001 — fail closed
+        return True
+
+
+def stays_on_this_network(
+    provider: str, manager: Any = None, config: Any = None, model: str = ""
+) -> bool:
+    """True when a call to *provider* (for *model*) never leaves the user's
+    own network.
 
     * a provider ``is_local_provider`` does not name → False (every cloud API
       and every subscription CLI: their inference is someone else's);
     * ``opencode-cli`` → True (this daemon offers it local-only by
       construction — ``config.opencode_local_models``);
     * ``ollama`` / ``custom`` / ``fleet-*`` → True only when the endpoint's
-      host passes :func:`private_host`; no URL → False;
+      host passes :func:`private_host`; no URL → False; and (v1.362.0) only
+      when the endpoint, if it is a model proxy whose routing table we have
+      read, does not send *model* on to a cloud service
+      (:func:`proxy_routes_to_cloud`; ``""`` = the provider's default model);
     * ``mock`` → True. A deliberate reading, not a loophole: the offline demo
       model runs inside this process and sends nothing anywhere, so refusing
       it would refuse the one model a fresh install has.
@@ -255,7 +297,9 @@ def stays_on_this_network(provider: str, manager: Any = None, config: Any = None
         if p == "opencode-cli":
             return True
         url = endpoint_url(p, manager, config)
-        return bool(url) and private_host(url)
+        if not (url and private_host(url)):
+            return False
+        return not proxy_routes_to_cloud(p, model, manager)
     except Exception:  # noqa: BLE001 — fail closed
         return False
 
@@ -288,7 +332,7 @@ def _loopback_host(url: str) -> bool:
         return False
 
 
-def model_place(provider: str, manager: Any = None, config: Any = None) -> str:
+def model_place(provider: str, manager: Any = None, config: Any = None, model: str = "") -> str:
     """WHERE the model behind *provider* runs, in one of three words
     (v1.351.0, G14): :data:`PLACE_THIS_PC`, :data:`PLACE_NETWORK` or
     :data:`PLACE_CLOUD`.
@@ -300,9 +344,11 @@ def model_place(provider: str, manager: Any = None, config: Any = None) -> str:
     offline demo model, which runs inside this process) is THIS PC; a fleet
     node, a LAN box or a tailnet machine is the user's NETWORK, and so is a
     local-by-construction provider whose address we cannot read (the honest
-    wider word — never "this PC" on a guess). Pure, cheap, never raises."""
+    wider word — never "this PC" on a guess). *model* (v1.362.0): a name a
+    model proxy sends to a cloud service is cloud. Pure, cheap, never
+    raises."""
     try:
-        if not stays_on_this_network(provider, manager, config):
+        if not stays_on_this_network(provider, manager, config, model):
             return PLACE_CLOUD
         p = (provider or "").strip().lower()
         if p == "mock":
@@ -421,11 +467,36 @@ class LocalOnlyRefused(ProviderError):
         self.provider = str(provider or "")
         self.model = str(model or "")
         name = friendly_name(self.provider, manager)
+        if self._proxied(manager):
+            # v1.362.0: the server is on the user's network and the NAME is
+            # what leaves it — saying "nothing was sent to DGX Spark" would
+            # read as a broken local box.
+            shown = " ".join(self.model.split())[:80] or "this model"
+            who = name[:1].upper() + name[1:]  # it opens a sentence
+            super().__init__(
+                f"This chat is local only, so nothing was sent. {who} passes"
+                f" {shown} on to a cloud service. Pick a local model, or allow"
+                f" it for this one message.",
+                transient=False,
+            )
+            return
         super().__init__(
             f"This chat is local only, so nothing was sent to {name}. Pick a"
             f" local model, or allow {name} for this one message.",
             transient=False,
         )
+
+    def _proxied(self, manager: Any) -> bool:
+        """True when the provider's address is on this network and only its
+        proxy's routing sends the model off it. Wording only; never raises."""
+        try:
+            p = self.provider.strip().lower()
+            if not is_local_provider(p) or p in ("opencode-cli", "mock"):
+                return False
+            url = endpoint_url(p, manager)
+            return bool(url) and private_host(url) and proxy_routes_to_cloud(p, self.model, manager)
+        except Exception:  # noqa: BLE001
+            return False
 
     def payload(self) -> dict[str, Any]:
         """The refusal as the routes and the stream's error frame carry it."""
@@ -457,14 +528,16 @@ def is_allowed_once(scope: LocalOnlyScope, *names: str) -> bool:
 def egress_ok(
     provider: str, *, manager: Any = None, config: Any = None,
     also: Iterable[str] = (), scope: "LocalOnlyScope | None" = None,
+    model: str = "",
 ) -> bool:
-    """True when a call to *provider* is allowed under the current scope:
-    the scope is off, the provider stays on this network, or the user allowed
-    it (or one of the *also* names it was asked for by) for this message."""
+    """True when a call to *provider* (for *model*, ``""`` = its default) is
+    allowed under the current scope: the scope is off, it stays on this
+    network, or the user allowed it (or one of the *also* names it was asked
+    for by) for this message."""
     sc = scope if scope is not None else current_scope()
     if not sc.on:
         return True
-    if stays_on_this_network(provider, manager, config):
+    if stays_on_this_network(provider, manager, config, model):
         return True
     return is_allowed_once(sc, provider, *also)
 
@@ -476,7 +549,7 @@ def check_egress(
     """Raise :class:`LocalOnlyRefused` when the current scope is on, *provider*
     does not stay on this network, and the user has not allowed it (or one of
     the *also* names) for this message. Silent otherwise."""
-    if not egress_ok(provider, manager=manager, config=config, also=also):
+    if not egress_ok(provider, manager=manager, config=config, also=also, model=model):
         raise LocalOnlyRefused(provider, model, manager=manager)
 
 
@@ -577,16 +650,18 @@ def asks_first(registry: Any, name: str, scope: "LocalOnlyScope | None" = None) 
     return reaches_outside(tool, registry)
 
 
-def route_flags(provider: str, manager: Any = None) -> dict[str, bool]:
+def route_flags(provider: str, manager: Any = None, model: str = "") -> dict[str, bool]:
     """The receipt keys every chat lane puts on its route object:
     ``local_only`` (this turn ran under the toggle), ``allowed_once``
     (it was answered off this network with the user's one-message OK) and,
     since v1.351.0 (G14, additive, LAST), ``on_this_network`` — whether the
     model that ANSWERED runs on the user's own network (this PC included),
     from :func:`stays_on_this_network`, the one predicate the local-only lock
-    and the system prompt's "where you run" line also read."""
+    and the system prompt's "where you run" line also read. *model*
+    (v1.362.0): the model that answered, so a name a proxy sends to the cloud
+    reads as cloud."""
     sc = current_scope()
-    here = stays_on_this_network(provider, manager)
+    here = stays_on_this_network(provider, manager, None, model)
     return {
         "local_only": bool(sc.on),
         "allowed_once": bool(sc.on and sc.allowed_once and not here),

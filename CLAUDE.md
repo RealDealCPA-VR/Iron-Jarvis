@@ -3547,6 +3547,46 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **"Stays on this network" is judged per MODEL: a name a proxy sends to the
+  cloud is the cloud** (v1.362.0; live finding: the DGX Spark's LiteLLM proxy
+  serves `glm-5.3-flash` from a tailnet vLLM box and `frontier` from
+  OpenRouter, and `/models`, the Local only lock and the receipt all called
+  `frontier` local). `fleet/upstreams.py` reads a node's `GET <root>/model/info`
+  (LiteLLM: `model_name` + `litellm_params.model/api_base`): a private
+  `api_base` is local, no `api_base` is local only for LiteLLM providers that
+  default to the proxy's own machine (`LOCAL_DEFAULT_PROVIDERS`), anything
+  else is cloud; one name on several deployments is cloud if ANY is; a
+  wildcard entry decides the names it matches; an UNLISTED name (the daily
+  driver's hidden `fleet` alias) is local only when EVERY listed upstream is.
+  `read_routes` answers a `RouteTable`, `NOT_A_PROXY` (404/405/not LiteLLM's
+  shape: the address decides, re-asked after 10 min) or `UNREAD` (401/5xx/no
+  answer: KEEP the last table). The table is read by the FLEET SAMPLER only
+  (`route_reader=read_routes`, injected in `daemon/app.py` — None by default
+  so a test sampler never makes a request), for top-level ONLINE nodes, at
+  most once per `ROUTES_TTL_S` (60 s), off the loop, under the per-node
+  deadline, never inside `_probe_one` (a slow table read must not fail a
+  probe). `FleetRegistry.set_routes/routes_for/route_place` hold it (keyed by
+  node id + the address ROOT it was read at — a re-pointed node has no table
+  until re-read), move `revision` only when a verdict changes (the model
+  catalog's fingerprint), drop it on `remove`, and save verdicts ONLY (alias,
+  model, place — never an `api_base`) to `<home>/fleet-routes.json` so a
+  restart opens no window. `ProviderManager(upstream_place=)` is the oracle
+  (`platform.py`; a raising oracle reads cloud); `egress.proxy_routes_to_cloud`
+  and `stays_on_this_network(provider, manager, config, model="")` consult it
+  AFTER the address check (`""` = `default_model_of` the adapter). EVERY
+  caller passes the model it is asking about: the router's gate (the
+  adapter's model) and `_egress_ok` (each candidate's), both chat lanes'
+  `route_flags` and the Environment line (`chat_turn.where_model`, lock-step),
+  `/models` rows (per (provider, model)), session create, the run receipt,
+  one-shots, follow-ups, documents, thread refs, the @-panel seat, memory
+  commit, Auto's pool and classifier. `LocalOnlyRefused` names the NAME when
+  the address was fine ("DGX Spark passes frontier on to a cloud service").
+  Dashboard: `lib/localOnly.cloudAskFor` asks for an unlisted model unless
+  EVERY row of its provider stays. Known: a keyed proxy's list is not read
+  (no key is sent); a table can be up to a minute stale after the proxy's
+  config changes. Pins: `tests/test_fleet_cloud_routed_v1362.py` (33
+  mutations, all red), `dashboard/__tests__/local-only-proxy-v1362.test.ts`.
+
 - **No notice lost: ONE window speaks, a workflow's notice stands in only for
   the step that ENDED it, a schedule's line names its failed step; the
   Connect door and the Guide are read from ONE table, both ways; a place is

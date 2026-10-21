@@ -1047,15 +1047,17 @@ class ModelRouter:
         return err
 
     # -- local only (v1.332.0) ----------------------------------------------
-    def _stays(self, provider: str) -> bool:
-        """``egress.stays_on_this_network`` against this router's manager."""
-        return _egress.stays_on_this_network(provider, self.manager)
+    def _stays(self, provider: str, model: str = "") -> bool:
+        """``egress.stays_on_this_network`` against this router's manager, for
+        the model the call will send (``""`` = the provider's default; a name
+        a model proxy sends to the cloud is cloud — v1.362.0)."""
+        return _egress.stays_on_this_network(provider, self.manager, None, model)
 
-    def _egress_ok(self, provider: str) -> bool:
+    def _egress_ok(self, provider: str, model: str = "") -> bool:
         """A failover/swap candidate is allowed under the current scope only
         when it stays on this network. The one-message OK never reaches a
         candidate: it covers the provider the user named, nothing else."""
-        return (not _egress.current_scope().on) or self._stays(provider)
+        return (not _egress.current_scope().on) or self._stays(provider, model)
 
     def _local_only_gate(
         self, adapter: LLMAdapter, wanted: str, downgraded: bool,
@@ -1083,7 +1085,7 @@ class ModelRouter:
                 return True
             raise _egress.LocalOnlyRefused(wanted, manager=self.manager)
         served = adapter.provider
-        if self._stays(served):
+        if self._stays(served, str(getattr(adapter, "model", "") or "")):
             return False
         # An AUTO turn the user allowed as "Auto" for this message: Auto
         # chose (``_resolve_auto`` and the classifier already widened to the
@@ -2003,7 +2005,7 @@ class ModelRouter:
                     and (not need_tools or _supports_tools(alt))
                     # LOCAL ONLY (v1.332.0): the default never stands in from
                     # off this network. MIRROR NOTE (lock-step): stream() (A).
-                    and self._egress_ok(alt.provider)
+                    and self._egress_ok(alt.provider, str(getattr(alt, "model", "") or ""))
                 ):
                     try:
                         response = await self._timed_complete(
@@ -2060,7 +2062,7 @@ class ModelRouter:
                         continue
                     # LOCAL ONLY (v1.332.0): never sideways off this network.
                     # MIRROR NOTE (lock-step): stream() (B).
-                    if not self._egress_ok(alt.provider):
+                    if not self._egress_ok(alt.provider, str(getattr(alt, "model", "") or "")):
                         continue
                     try:
                         response = await self._timed_complete(
@@ -2465,7 +2467,7 @@ class ModelRouter:
                 and alt.provider not in tried_providers
                 and (not need_tools or _supports_tools(alt))
                 # LOCAL ONLY (v1.332.0) — MIRROR NOTE (lock-step): complete() (A).
-                and self._egress_ok(alt.provider)
+                and self._egress_ok(alt.provider, str(getattr(alt, "model", "") or ""))
             ):
                 t0 = self._clock()
                 moved = False  # v1.323.0: announced ≠ committed (thinking)
@@ -2524,7 +2526,7 @@ class ModelRouter:
                 if need_tools and not _supports_tools(alt):
                     continue
                 # LOCAL ONLY (v1.332.0) — MIRROR NOTE (lock-step): complete() (B).
-                if not self._egress_ok(alt.provider):
+                if not self._egress_ok(alt.provider, str(getattr(alt, "model", "") or "")):
                     continue
                 t0 = self._clock()
                 moved = False  # v1.323.0: announced ≠ committed (thinking)

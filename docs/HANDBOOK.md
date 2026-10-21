@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.361.0 (2026-10-04).*
+holds itself to. Current as of v1.362.0 (2026-10-21).*
 
 ---
 
@@ -1895,6 +1895,35 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## A model server that sends some names to the cloud (v1.362.0)
+
+A model server on your own network can pass some of its models on to a cloud
+service. A LiteLLM proxy on your DGX Spark, for example, can serve
+`glm-5.3-flash` from a box on your network and `frontier` from OpenRouter.
+Until now Iron Jarvis judged the whole server by its address, so a cloud name
+like `frontier` read as local everywhere, and a Local only chat would send to
+it.
+
+- **Each name is judged by where it really goes.** Iron Jarvis reads the
+  server's own routing list in the background (about once a minute) and marks
+  every name that leaves your network as cloud. The model menu shows it as
+  cloud, the reply's "answered by" line says cloud, and the model is told it
+  runs in the cloud.
+- **Local only refuses it.** In a Local only chat a name the server sends to
+  the cloud gets the usual card ("Send once" / "Keep it local"). If it is
+  refused, the message says which name and why: "DGX Spark passes frontier on
+  to a cloud service." Its local names on the same server send as before.
+- **Hidden names count as cloud on a mixed server.** A server can answer to a
+  name it does not list (a shortcut such as `fleet`). Iron Jarvis cannot see
+  where a hidden name goes without sending a message. On a server that sends
+  any name to the cloud, a hidden name is treated as cloud in Local only chats.
+  On a server whose every name stays home, it stays local. To keep a Local only
+  chat on such a server, pick one of its listed local names.
+- **What it can read.** This works for LiteLLM proxies. Iron Jarvis keeps the
+  last list it read, including across a restart. A server that is not a proxy
+  (Ollama, vLLM, LM Studio) is judged by its address as before. So is a proxy
+  that only shows its list with a key, which Iron Jarvis does not send.
+
 ## No notice lost, the app you meant once more, and your machine named once (v1.361.0)
 
 Each thing that happens is still announced once, and now no notice goes
@@ -3218,7 +3247,9 @@ unless you say yes for that one message.
   network address, a Tailscale address or a plain machine name. A custom
   endpoint pointed at an internet address (for example Ollama's cloud) counts
   as cloud. A machine on your network that itself forwards to a cloud service
-  still counts as local; the app can only judge the address.
+  still counts as local; the app can only judge the address. (Since v1.362.0 a
+  LiteLLM proxy's names are judged one by one: see "A model server that sends
+  some names to the cloud".)
 - **What else stays home.** Web search and web fetch are switched off in a
   local-only chat. Memory sources outside this PC are skipped. Follow-up
   suggestions, summaries, Share, Commit to memory, Turn into workflow, the

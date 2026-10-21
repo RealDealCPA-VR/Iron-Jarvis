@@ -499,13 +499,16 @@ def build_selectable_models(d, *, providers: Any = None) -> list[dict[str, Any]]
     # "local" there even when the user pointed it at a cloud server (an
     # Anthropic-compatible API, a hosted Ollama), and the model menu used to
     # call that row "local · no charge per message" while the reply's receipt
-    # said "cloud". Pure (no DNS, no probe); one answer per provider.
-    _where: dict[str, bool] = {}
+    # said "cloud". Pure (no DNS, no probe). v1.362.0: one answer per
+    # (provider, MODEL) — a model proxy on the user's network can send one
+    # name to a cloud service (fleet/upstreams.py), and that row is cloud.
+    _where: dict[tuple[str, str], bool] = {}
 
-    def _on_this_network(prov: str) -> bool:
-        if prov not in _where:
-            _where[prov] = bool(stays_on_this_network(prov, providers, cfg))
-        return _where[prov]
+    def _on_this_network(prov: str, model: str) -> bool:
+        key = (prov, model)
+        if key not in _where:
+            _where[key] = bool(stays_on_this_network(prov, providers, cfg, model))
+        return _where[key]
 
     for m in models:
         prov = str(m.get("provider") or "")
@@ -516,7 +519,7 @@ def build_selectable_models(d, *, providers: Any = None) -> list[dict[str, Any]]
             if prov in ("claude-cli", "codex-cli", "grok-cli")
             else "api"
         )
-        m["on_this_network"] = _on_this_network(prov)
+        m["on_this_network"] = _on_this_network(prov, str(m.get("model") or ""))
         m["size_b"] = model_size_b(str(m.get("model") or ""))
         # v1.230.0 (U5): a keyless API provider served through the logged-in
         # CLI is flat-rate — the picker says "included", not "metered". Same

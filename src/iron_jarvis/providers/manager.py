@@ -257,6 +257,7 @@ class ProviderManager:
         dynamic_available: Callable[[str], bool | None] | None = None,
         opencode_allowed: Callable[[], list[str]] | None = None,
         envelope_home: "Path | str | None" = None,
+        upstream_place: Callable[[str, str], str | None] | None = None,
     ) -> None:
         # Capability-envelope store home (profiles live at
         # ``<home>/envelopes/<provider>__<model>.json``). None on a bare
@@ -285,6 +286,12 @@ class ProviderManager:
         #: so a bare ProviderManager() stays hermetic — and it MUST be a cached
         #: read: available() runs per provider per request in the router.
         self._dynamic_available = dynamic_available
+        #: v1.362.0: where a model PROXY sends one name — ``"local"``,
+        #: ``"cloud"`` or ``None`` (no table; the address decides). The fleet
+        #: registry's ``route_place``, read by ``egress.stays_on_this_network``
+        #: on every model call, so it MUST be a cached read. Injected like the
+        #: availability oracle: a bare ProviderManager() never consults one.
+        self._upstream_place = upstream_place
         self.vault = vault
         # Keyless subscription inheritance (anthropic->claude-cli, openai->
         # codex-cli). OPT-IN so a bare unit-test ProviderManager stays hermetic:
@@ -775,6 +782,21 @@ class ProviderManager:
             if verdict is not None:
                 return bool(verdict)
         return None
+
+    def upstream_place(self, name: str, model: str) -> str | None:
+        """Where a request for *model* on provider *name* really goes, by the
+        model proxy's own routing table (v1.362.0): ``"local"``, ``"cloud"``,
+        or ``None`` when nothing describes it (no oracle wired, not a proxy,
+        not read yet). A fault in the oracle reads as ``"cloud"`` — this
+        answers a privacy question, so it fails closed. Never raises."""
+        oracle = self._upstream_place
+        if oracle is None:
+            return None
+        try:
+            place = oracle(name, model)
+        except Exception:  # noqa: BLE001 — fail closed
+            return "cloud"
+        return place if place in ("local", "cloud") else None
 
     def _inherit_alias_for(self, name: str) -> str | None:
         """The logged-in CLI a KEYLESS ``name`` would be served through (no

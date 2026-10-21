@@ -161,3 +161,22 @@ def test_put_settings_reports_what_changed_with_its_undo_handle(app):
     assert body["updated"] == ["max_agent_steps"]
     assert body["changed"][0]["label"] == "Max steps per run" and body["changed"][0]["new"] == 33
     assert body["action_id"] == _journal(d)[-1].action_id
+
+
+def test_saving_an_endpoint_address_rearms_the_fleet_sampler(app):
+    """v1.362.0: the ollama/custom slots ARE fleet nodes, and the sampler
+    starts only when a node exists — so the first endpoint saved in Settings
+    left it off until a restart, and with it the routing table that tells a
+    model proxy's cloud-routed names from its local ones."""
+    client, d, rearmed = app
+    r = client.put("/settings", json={"values": {"custom_base_url": "http://10.9.8.7:4000/v1"}})
+    assert r.status_code == 200, r.text
+    assert rearmed.count("fleet") == 1
+    address_change = _journal(d)[-1].action_id
+    # The model name alone is not a new node: nothing to re-arm.
+    client.put("/settings", json={"values": {"custom_model": "glm-5.3-flash"}})
+    assert rearmed.count("fleet") == 1
+    # Undoing the address re-arms too (the node goes away).
+    assert client.post(f"/undo/{address_change}").status_code == 200
+    assert d.platform.config.custom_base_url in ("", None)
+    assert rearmed.count("fleet") == 2

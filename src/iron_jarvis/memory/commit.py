@@ -158,6 +158,7 @@ async def distill_or_excerpt(
         manager=getattr(d.platform, "providers", None),
         config=getattr(d.platform, "config", None),
         also=(want_provider,),
+        model=str(getattr(adapter, "model", "") or ""),
     ):
         return Distillation(
             body=verbatim,

@@ -1062,7 +1062,9 @@ class AgentThreads:
             else:
                 provider, _model = cls._provider_model_for(seat, d)
                 mgr = getattr(d.platform, "providers", None)
-                if _egress.stays_on_this_network(provider, mgr, getattr(d.platform, "config", None)):
+                if _egress.stays_on_this_network(
+                    provider, mgr, getattr(d.platform, "config", None), str(_model or "")
+                ):
                     return ""
                 where = _egress.friendly_name(provider, mgr)
         except Exception:  # noqa: BLE001 — cannot judge: it sits out

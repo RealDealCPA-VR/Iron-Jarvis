@@ -344,14 +344,21 @@ class ConfigWriter:
         rearm = getattr(d, "_live_rearm", None) or {}
         loop = rearm.get("loop")
         if loop is not None:
-            for group in _REARM_GROUPS:
-                if any(k.startswith(group) for k in updated):
-                    fn = rearm.get(group)
-                    if fn is not None:
-                        try:
-                            loop.call_soon_threadsafe(fn)
-                        except Exception:  # noqa: BLE001 — a closed loop (shutdown)
-                            pass
+            groups = [g for g in _REARM_GROUPS if any(k.startswith(g) for k in updated)]
+            # v1.362.0: an endpoint URL is a fleet node too (the registry
+            # seeds the ollama/custom slots). The sampler starts only when a
+            # node exists, so the FIRST endpoint saved here used to leave it
+            # off until a restart — and with it the proxy's routing table that
+            # tells a cloud-routed name from a local one.
+            if "fleet" not in groups and any(k in ("ollama_base_url", "custom_base_url") for k in updated):
+                groups.append("fleet")
+            for group in groups:
+                fn = rearm.get(group)
+                if fn is not None:
+                    try:
+                        loop.call_soon_threadsafe(fn)
+                    except Exception:  # noqa: BLE001 — a closed loop (shutdown)
+                        pass
         if any(k in _LOCAL_ENDPOINT_KEYS for k in updated):
             try:
                 self.platform.providers.configure_local(

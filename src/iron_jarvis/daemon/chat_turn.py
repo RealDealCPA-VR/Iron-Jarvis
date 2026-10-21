@@ -1518,7 +1518,7 @@ _MODEL_PLACE_WORDS = {
 }
 
 
-def model_where_line(platform: Any, provider: str) -> str:
+def model_where_line(platform: Any, provider: str, model: str = "") -> str:
     """The Environment section's FIRST line: the app runs on the user's
     machine, and WHERE the model answering runs (v1.351.0, G14).
 
@@ -1543,6 +1543,7 @@ def model_where_line(platform: Any, provider: str) -> str:
                 p,
                 getattr(platform, "providers", None),
                 getattr(platform, "config", None),
+                model,
             )
         except Exception:  # noqa: BLE001 — the prompt must never break a turn
             place = _egress.PLACE_CLOUD
@@ -1551,6 +1552,22 @@ def model_where_line(platform: Any, provider: str) -> str:
         f"{Path.home()}. The model answering (you) "
         f"{_MODEL_PLACE_WORDS.get(place, _MODEL_PLACE_WORDS[_egress.PLACE_CLOUD])}.\n"
     )
+
+
+def where_model(body: Any, project: Any, config: Any) -> str:
+    """The model the Environment line judges (v1.362.0), by the ladder that
+    picks its provider: the explicit pick's model, else the project's
+    default model (only with its default provider), else the configured
+    default. ``""`` = the provider's own default. Never raises.
+    MIRROR NOTE (lock-step): BOTH chat lanes call this."""
+    try:
+        if str(getattr(body, "provider", "") or "").strip():
+            return str(getattr(body, "model", "") or "").strip()
+        if project is not None and str(getattr(project, "default_provider", "") or "").strip():
+            return str(getattr(project, "default_model", "") or "").strip()
+        return str(getattr(config, "default_model", "") or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 #: The Environment section's two EXIT lines (v1.108.0 / v1.120.0), shared by
@@ -6669,9 +6686,12 @@ async def run_chat_turn(
     _where_provider = (body.provider or "").strip() or (
         (resolved_proj.default_provider or "").strip() if resolved_proj else ""
     ) or str(getattr(getattr(platform, "config", None), "default_provider", "") or "")
+    # v1.362.0: and its model, by the same ladder (a name a model proxy sends
+    # to the cloud is the cloud). MIRROR NOTE (lock-step): routes/chat.py.
+    _where_model = where_model(body, resolved_proj, getattr(platform, "config", None))
     system = persona + (
         "\n\n# Environment\n"
-        + model_where_line(platform, _where_provider)
+        + model_where_line(platform, _where_provider, _where_model)
         # The two exit lines (escalate / workflow card) — one constant both
         # lanes send, so a TEXT-ONLY turn can swap exactly these bytes below
         # (`text_only_system`, v1.330.0). MIRROR NOTE (lock-step).
@@ -7902,7 +7922,9 @@ async def run_chat_turn(
             # the chat's toggle; ``allowed_once`` = it was answered off this
             # network with the user's one-message OK (the receipt's "sent
             # with your OK"). MIRROR NOTE (lock-step): routes/chat.py.
-            **_egress.route_flags(route.provider, getattr(d.platform, "providers", None)),
+            **_egress.route_flags(
+                route.provider, getattr(d.platform, "providers", None), str(route.model or "")
+            ),
         },
         "attached": len(body.attachments or []),
         # RESOURCES (v1.324.0): [{pack, uri, ok, note}] for what the user

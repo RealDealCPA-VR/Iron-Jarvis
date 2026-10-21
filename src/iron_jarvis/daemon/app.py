@@ -798,6 +798,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # actually watching (GET /fleet touches the lease). Constructed here but NOT
     # started until lifespan — a bare create_app() in tests must never poll.
     from ..fleet.sampler import FleetSampler
+    from ..fleet.upstreams import read_routes
 
     fleet_sampler = FleetSampler(
         platform.fleet,
@@ -805,6 +806,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # v1.229.0: the loop reports its OWN cycles — ok after one that ran,
         # failed with the exception after one that raised. Arming is not health.
         on_tick=lambda ok, exc: _tick("fleet", ok, exc),
+        # v1.362.0: each model proxy's routing table, so a name it sends to
+        # the cloud is not called local (fleet/upstreams.py).
+        route_reader=read_routes,
     )
 
     # LIVE re-arm bridge: lifespan drops its event loop + the autonomy/sentinel
@@ -2477,7 +2481,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
             ):
                 continue
             if _local_only and not _egress.stays_on_this_network(
-                adapter.provider, platform.providers, platform.config
+                adapter.provider, platform.providers, platform.config,
+                str(getattr(adapter, "model", "") or ""),
             ):
                 continue
             seen_ids.add(id(adapter))

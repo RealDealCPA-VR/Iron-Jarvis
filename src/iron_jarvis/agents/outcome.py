@@ -255,7 +255,9 @@ def _fill_receipt(out: dict[str, Any], db, session: Session, manager: Any, confi
         if provider and reached_a_model(db, session.id, provider):
             from ..providers.egress import stays_on_this_network
 
-            out["on_this_network"] = bool(stays_on_this_network(provider, manager, config))
+            out["on_this_network"] = bool(
+                stays_on_this_network(provider, manager, config, str(out.get("model") or ""))
+            )
     except Exception:  # noqa: BLE001
         out["on_this_network"] = None
     try:
