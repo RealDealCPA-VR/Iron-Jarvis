@@ -1006,6 +1006,15 @@ def build_platform(
 
     # Phase 4: route the shell tool through the Sandbox Manager (same "shell" name).
     registry.register(SandboxedShellTool())
+    # v1.364.0 (IJ harness Phase 1): the coding tools Claude Code and Codex
+    # give their models (harness/parity.py records every one). Registered so
+    # a caller can arm them BY NAME; no roster carries them and no chat rule
+    # arms them by itself (tests/test_roster_coverage_v1178._OFF_ROSTER_BY_DESIGN).
+    from .harness.process import process_tools
+    from .harness.tools import harness_tools
+
+    for tool in (*harness_tools(), *process_tools()):
+        registry.register(tool)
     # v1.90.0: disposable code execution — the agent's escape hatch when no
     # tool reliably fits (same "ask" trust tier as shell).
     # v1.95.0: every run is ALSO recorded in the Code Lab store. Execution is

@@ -165,6 +165,15 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   workflow_update: { did: "Changed a workflow", noun: "workflow change" },
   app_connect: { did: "Connected an app", noun: "app connection" },
   generate_media: { did: "Made an image, video or sound", noun: "media generation" },
+  // v1.364.0 (IJ harness Phase 1): the new coding tools lib/workTarget does
+  // not word by kind (agents/mission.py _RUN_TOOL_WORDS is the twin).
+  apply_patch: { did: "Applied a patch", noun: "patch", nouns: "patches" },
+  plan_update: { did: "Updated its plan", noun: "plan update" },
+  process_read: { did: "Read a running program's output", noun: "program output read" },
+  process_write: { did: "Typed into a running program", noun: "program input" },
+  process_stop: { did: "Stopped a running program", noun: "program stop" },
+  mcp_list_resources: { did: "Listed an app's resources", noun: "resource listing" },
+  mcp_read_resource: { did: "Read an app's resource", noun: "resource read" },
 };
 
 /** One failed call of a KNOWN step kind (lib/stepWords), as a noun. A kind

@@ -91,6 +91,17 @@ INTERNET_TOOLS: frozenset[str] = frozenset({
 #: command tools (``tools/dynamic.CommandTool``) join them by class.
 RUNS_COMMANDS_TOOLS: frozenset[str] = frozenset({
     "shell", "run_code", "repl", "code_run", "pane_send", "pane_spawn",
+    # v1.364.0 (IJ harness): a long-running program, and typing into it.
+    "process_start", "process_write",
+})
+
+#: Tools that ask a connected app (an MCP pack, which can be a remote
+#: service) for one of its resources BY A URI THE MODEL WROTE (v1.364.0, IJ
+#: harness). The URI is words that leave this PC when the pack is remote, so
+#: a local-only turn cards the call. Listing an app's resources sends no
+#: words of the chat and is not here.
+READS_APP_RESOURCES_TOOLS: frozenset[str] = frozenset({
+    "mcp_read_resource",
 })
 
 #: Tools that set an address outside this PC which later events are posted to
@@ -594,6 +605,7 @@ def reaches_outside(tool: Any, registry: Any = None) -> bool:
             or name in SETS_OUTSIDE_ADDRESS_TOOLS
             or name in GENERATES_MEDIA_TOOLS
             or name in CALLS_YOUR_SERVICES_TOOLS
+            or name in READS_APP_RESOURCES_TOOLS
         ):
             return True
         if _browser_reaches_out(tool):

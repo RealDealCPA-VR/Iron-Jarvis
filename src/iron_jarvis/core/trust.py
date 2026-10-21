@@ -111,6 +111,13 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         # with the user's saved key — flagged content must never read their
         # records out of it, or write to it.
         "rest_call",
+        # v1.364.0 (IJ harness): a program that keeps running cannot be put
+        # in the low-trust sandbox (the shell's `_isolate` is a one-shot
+        # Docker run), so starting one, or typing into one, is kept away.
+        # Reading its output and stopping it stay allowed: a run tainted
+        # mid-way must still be able to stop what it started.
+        "process_start",
+        "process_write",
     }
 )
 

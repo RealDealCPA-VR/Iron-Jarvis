@@ -59,7 +59,14 @@ from ...core.db import session_scope
 from ...core.fs_policy import fs_read_ok
 from ...core.models import ToolInvocation, UndoJournal
 from ...tools.base import safe_path
-from ...tools.undo import read_envelope, resolve_prior_bytes, sha256_bytes
+from ...tools.undo import (
+    PATCH_UNDO_KIND,
+    patch_entries,
+    patch_entry_before,
+    read_envelope,
+    resolve_prior_bytes,
+    sha256_bytes,
+)
 
 #: Both chat lanes ledger (and journal) every tool call under this session id.
 CHAT_SESSION = "chat"
@@ -81,7 +88,10 @@ DIFF_CAP = 200_000
 
 #: Journal kinds whose first row means "the turn created this file".
 _CREATED_KINDS = frozenset({"file_delete", "files_delete"})
-_FILE_KINDS = _CREATED_KINDS | {"file_restore"}
+#: v1.364.0 (IJ harness): an ``apply_patch`` row names several files, each
+#: with its own before-image and after-hash (tools/undo.PATCH_UNDO_KIND).
+_PATCH_KIND = PATCH_UNDO_KIND
+_FILE_KINDS = _CREATED_KINDS | {"file_restore", _PATCH_KIND}
 
 _ROWID = literal_column("toolinvocation.rowid")
 
@@ -116,8 +126,22 @@ def _targets(meta: dict[str, Any], kind: str) -> list[str]:
     if kind == "files_delete":
         paths = meta.get("paths")
         return [str(p) for p in paths if isinstance(p, str) and p] if isinstance(paths, list) else []
+    if kind == _PATCH_KIND:
+        return [str(e["path"]) for e in patch_entries(meta)]
     rel = meta.get("path")
     return [str(rel)] if isinstance(rel, str) and rel else []
+
+
+def _patch_entry(row: dict[str, Any], meta: dict[str, Any], rel: str) -> dict[str, Any] | None:
+    """The ``files_patch`` entry for ``rel`` in this row, or ``None`` when the
+    row is another kind (v1.364.0)."""
+    if row.get("kind") != _PATCH_KIND:
+        return None
+    want = str(rel).replace("\\", "/")
+    for item in patch_entries(meta):
+        if str(item.get("path", "")).replace("\\", "/") == want:
+            return item
+    return {}
 
 
 def _text_of(data: bytes) -> str | None:
@@ -291,13 +315,22 @@ def _one_change(home: str | Path, entry: dict[str, Any]) -> dict[str, Any]:
         out["note"] = f"Not shown: {reason}."
         return out
 
-    created = first["kind"] in _CREATED_KINDS
+    first_patch = _patch_entry(first, first_meta, entry["rel"])
+    if first_patch is not None:
+        # An apply_patch row (v1.364.0): this file's own entry says whether
+        # it existed and holds its before-image.
+        created = not bool(first_patch.get("existed"))
+    else:
+        created = first["kind"] in _CREATED_KINDS
     prior: bytes | None = b"" if created else None
     prior_known = created
     prior_large = False
     if not created:
         try:
-            prior = resolve_prior_bytes(home, first, first_meta)
+            if first_patch is not None:
+                prior = patch_entry_before(home, first_patch)
+            else:
+                prior = resolve_prior_bytes(home, first, first_meta)
         except OSError:
             prior = None
         prior_known = prior is not None
@@ -312,11 +345,16 @@ def _one_change(home: str | Path, entry: dict[str, Any]) -> dict[str, Any]:
     elif not exists:
         out["status"] = "deleted"
 
-    post = last.get("post_sha256")
-    if not exists:
+    last_patch = _patch_entry(last, last_meta, entry["rel"])
+    post = last_patch.get("post_sha256") if last_patch is not None else last.get("post_sha256")
+    if last_patch is not None and post is None:
+        # The patch deleted this file: still absent is no change since.
+        out["changed_since"] = exists
+    elif not exists:
         out["changed_since"] = True
     elif post is not None and now is not None:
-        out["changed_since"] = _hash_now(now, str(last_meta.get("mode") or "raw")) != post
+        mode = "raw" if last_patch is not None else str(last_meta.get("mode") or "raw")
+        out["changed_since"] = _hash_now(now, mode) != post
 
     if not exists and created:
         out["note"] = "The file is no longer there."

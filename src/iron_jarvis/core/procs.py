@@ -561,6 +561,36 @@ def kept_jobs(session_id: str | None = None) -> int:
         return sum(1 for owner, _ in _KEPT if session_id is None or owner == session_id)
 
 
+#: Callbacks run by :func:`end_session` (with the session id) and
+#: :func:`end_all` (with ``None`` = every session), v1.364.0. A module that
+#: keeps its OWN long-lived children per session (the IJ harness's
+#: ``process_start``, ``harness/process.py``) registers one, so the run's end
+#: stops them through the one door the runtime already calls — never a second
+#: "run ended" hook in the runtime. Each returns the pids it stopped.
+_END_HOOKS: list[Callable[[str | None], list[int]]] = []
+_END_HOOKS_LOCK = threading.Lock()
+
+
+def add_end_hook(hook: Callable[[str | None], list[int]]) -> None:
+    """Run ``hook(session_id)`` from :func:`end_session` and ``hook(None)``
+    from :func:`end_all`. Registering the same callable twice is a no-op."""
+    with _END_HOOKS_LOCK:
+        if hook not in _END_HOOKS:
+            _END_HOOKS.append(hook)
+
+
+def _run_end_hooks(session_id: str | None) -> list[int]:
+    with _END_HOOKS_LOCK:
+        hooks = list(_END_HOOKS)
+    stopped: list[int] = []
+    for hook in hooks:
+        try:
+            stopped += list(hook(session_id) or [])
+        except Exception:  # noqa: BLE001 — one hook never stops the rest
+            pass
+    return stopped
+
+
 def end_session(session_id: str) -> list[int]:
     """The session's run is over: stop the windowless members of every job
     its keep-windows calls left running (a window the user now has is
@@ -575,6 +605,7 @@ def end_session(session_id: str) -> list[int]:
             stopped += _end_kept(job)
         except Exception:  # noqa: BLE001 — one job never stops the rest
             pass
+    stopped += _run_end_hooks(session_id)
     return stopped
 
 
@@ -589,6 +620,7 @@ def end_all() -> list[int]:
             stopped += _end_kept(job)
         except Exception:  # noqa: BLE001
             pass
+    stopped += _run_end_hooks(None)
     return stopped
 
 

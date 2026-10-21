@@ -1071,7 +1071,14 @@ def _created_names(db, session_ids: list[str]) -> dict[str, list[str]]:
     ``files_delete`` journal is a creation), in two queries for the whole
     page instead of one ``session_result`` per row. NAMES only: the world
     lists what was made, never where on the user's disk it sits."""
-    from ..agents.outcome import _CREATED_KIND, _CREATED_MANY_KIND, _envelope_path, _envelope_paths
+    from ..agents.outcome import (
+        _CREATED_KIND,
+        _CREATED_MANY_KIND,
+        _PATCH_KIND,
+        _envelope_path,
+        _envelope_paths,
+        _patch_paths,
+    )
 
     out: dict[str, list[str]] = {sid: [] for sid in session_ids}
     if not session_ids:
@@ -1102,6 +1109,8 @@ def _created_names(db, session_ids: list[str]) -> dict[str, list[str]]:
             paths = _envelope_paths(journal)
         elif journal.kind == _CREATED_KIND:
             paths = [_envelope_path(journal)]
+        elif journal.kind == _PATCH_KIND:  # v1.364.0: apply_patch's new files
+            paths = _patch_paths(journal)[0]
         else:
             continue
         names = out.setdefault(inv.session_id, [])

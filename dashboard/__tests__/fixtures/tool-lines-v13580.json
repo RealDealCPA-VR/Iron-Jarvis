@@ -16,6 +16,10 @@
       "ok": "checked your Iron Jarvis setup",
       "failed": "tried a setup check and it failed"
     },
+    "apply_patch": {
+      "ok": "applied a patch",
+      "failed": "tried a patch and it failed"
+    },
     "assign_work": {
       "ok": "queued a task for a teammate",
       "failed": "tried a queued task and it failed"
@@ -184,6 +188,10 @@
       "ok": "made an image, video or sound",
       "failed": "tried a media generation and it failed"
     },
+    "glob": {
+      "ok": "searched files",
+      "failed": "tried a file search and it failed"
+    },
     "goal_add": {
       "ok": "added a goal",
       "failed": "tried a goal addition and it failed"
@@ -248,6 +256,14 @@
       "ok": "used mcp bad",
       "failed": "tried mcp bad and it failed"
     },
+    "mcp_list_resources": {
+      "ok": "listed an app's resources",
+      "failed": "tried a resource listing and it failed"
+    },
+    "mcp_read_resource": {
+      "ok": "read an app's resource",
+      "failed": "tried a resource read and it failed"
+    },
     "memory_propose": {
       "ok": "suggested something to remember",
       "failed": "tried a memory suggestion and it failed"
@@ -259,6 +275,14 @@
     "memory_write": {
       "ok": "saved to its memory",
       "failed": "tried a memory save and it failed"
+    },
+    "multi_edit": {
+      "ok": "changed 1 file",
+      "failed": "tried a file change and it failed"
+    },
+    "notebook_edit": {
+      "ok": "changed 1 file",
+      "failed": "tried a file change and it failed"
     },
     "notify": {
       "ok": "sent a notification",
@@ -327,6 +351,26 @@
     "pixio_upload": {
       "ok": "published a file for a media generation",
       "failed": "tried a media upload and it failed"
+    },
+    "plan_update": {
+      "ok": "updated its plan",
+      "failed": "tried a plan update and it failed"
+    },
+    "process_read": {
+      "ok": "read a running program's output",
+      "failed": "tried a program output read and it failed"
+    },
+    "process_start": {
+      "ok": "ran 1 command",
+      "failed": "tried a command and it failed"
+    },
+    "process_stop": {
+      "ok": "stopped a running program",
+      "failed": "tried a program stop and it failed"
+    },
+    "process_write": {
+      "ok": "typed into a running program",
+      "failed": "tried a program input and it failed"
     },
     "provider_rescan": {
       "ok": "looked again for your models",

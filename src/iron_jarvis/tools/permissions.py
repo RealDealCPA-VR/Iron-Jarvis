@@ -100,6 +100,10 @@ DENY_FLOOR_TOOLS: frozenset[str] = frozenset(
         "repl",
         "pane_send",
         "pane_spawn",
+        # IJ harness (v1.364.0): a program that keeps running, and typing
+        # into it — shell's power, so shell's floor.
+        "process_start",
+        "process_write",
         "browser_click",
         "browser_type",
         "browser_press_key",

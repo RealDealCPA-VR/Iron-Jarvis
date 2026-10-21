@@ -86,6 +86,13 @@ const KIND_OF: Record<string, WorkKind> = {
   repl: "command",
   // v1.358.0 (lane 8C): one call to a saved web service.
   [REST_CALL_TOOL]: "service",
+  // v1.364.0 (IJ harness Phase 1): the new editors change a file, glob
+  // searches by name, process_start runs a command (agents/mission.py
+  // _STEP_KIND is the twin).
+  multi_edit: "change",
+  notebook_edit: "change",
+  glob: "search",
+  process_start: "command",
 };
 
 /** The built-ins KIND_OF words (v1.358.0, integrate): read by

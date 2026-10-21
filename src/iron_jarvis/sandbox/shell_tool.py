@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shlex
 from collections import OrderedDict
 from typing import Any
 
@@ -111,6 +112,53 @@ def _is_isolating(policy: SandboxPolicy) -> bool:
     )
 
 
+#: The longest a single ``shell`` call may ask for (v1.364.0): Claude Code's
+#: Bash maximum. The registry's own per-call deadline still applies on top.
+MAX_TIMEOUT_S = 600.0
+
+
+def _call_limits(args: dict[str, Any], ctx: ToolContext, policy: SandboxPolicy):
+    """``(timeout, working folder, folder relative to the workspace)`` for one
+    call, or ``ValueError`` in words (v1.364.0, IJ harness Phase 1).
+
+    ``timeout_s`` absent = the policy's timeout, exactly as before; given, it
+    is clamped to 1..600 s. ``cwd`` absent = the workspace; given, it must be
+    a folder INSIDE the workspace (the same ``safe_path`` rule every file
+    tool obeys) — a ``cwd`` is never a way out of the session's folder."""
+    from ..tools.base import safe_path
+
+    timeout = policy.timeout_s
+    raw_t = args.get("timeout_s")
+    if raw_t is not None:
+        if isinstance(raw_t, bool):
+            raise ValueError("`timeout_s` must be a number of seconds")
+        try:
+            timeout = float(raw_t)
+        except (TypeError, ValueError):
+            raise ValueError(f"`timeout_s` must be a number of seconds, got {raw_t!r}") from None
+        if timeout != timeout or timeout <= 0:  # NaN or not positive
+            raise ValueError("`timeout_s` must be more than 0 seconds")
+        timeout = min(max(timeout, 1.0), MAX_TIMEOUT_S)
+    cwd = ctx.workspace
+    rel = ""
+    raw_cwd = args.get("cwd")
+    if raw_cwd is not None and str(raw_cwd).strip() not in ("", "."):
+        try:
+            cwd = safe_path(ctx.workspace, str(raw_cwd))
+        except PermissionError:
+            raise ValueError(
+                f"`cwd` '{raw_cwd}' is outside the session's folder — commands run "
+                "inside it only"
+            ) from None
+        if not cwd.is_dir():
+            raise ValueError(f"`cwd` '{raw_cwd}' is not a folder in the session's workspace")
+        try:
+            rel = str(cwd.relative_to(ctx.workspace.resolve())).replace("\\", "/")
+        except ValueError:
+            rel = ""
+    return timeout, cwd, rel
+
+
 class SandboxedShellTool(Tool):
     """Run a shell command inside the sandboxed session workspace (§16)."""
 
@@ -119,7 +167,17 @@ class SandboxedShellTool(Tool):
     permission_key = "shell"  # defaults to 'ask' — fail-closed in headless mode
     input_schema = {
         "type": "object",
-        "properties": {"command": {"type": "string"}},
+        "properties": {
+            "command": {"type": "string"},
+            "timeout_s": {
+                "type": "number",
+                "description": "Stop the command after this many seconds (default: the sandbox setting, at most 600).",
+            },
+            "cwd": {
+                "type": "string",
+                "description": "Folder to run in, relative to the workspace (default: the workspace).",
+            },
+        },
         "required": ["command"],
     }
 
@@ -163,6 +221,12 @@ class SandboxedShellTool(Tool):
         if (isolating or must_isolate) and prefer != "docker":
             prefer = "docker"
         manager = SandboxManager(policy, prefer=prefer)
+        # v1.364.0: a per-call timeout and working folder. Checked (and the
+        # folder resolved) off the loop, before anything runs.
+        try:
+            timeout, run_cwd, rel_cwd = await asyncio.to_thread(_call_limits, args, ctx, policy)
+        except ValueError as exc:
+            return ToolResult(ok=False, error=str(exc))
 
         # BOTH steps below block, and this coroutine runs on the daemon's single
         # event loop, so they are offloaded together in ONE thread hop (v1.175.0):
@@ -185,8 +249,14 @@ class SandboxedShellTool(Tool):
             # the same hop, before any process exists (v1.298.0).
             if must_isolate and isinstance(sandbox, NativeSandbox):
                 return sandbox, None
+            if isinstance(sandbox, NativeSandbox) or not rel_cwd:
+                return sandbox, sandbox.run(args["command"], cwd=run_cwd, timeout=timeout)
+            # An isolating runtime mounts the WORKSPACE (so ".." still reaches
+            # the session's other files) and changes into the subfolder first.
             return sandbox, sandbox.run(
-                args["command"], cwd=ctx.workspace, timeout=policy.timeout_s
+                f"cd {shlex.quote(rel_cwd)} && {args['command']}",
+                cwd=ctx.workspace,
+                timeout=timeout,
             )
 
         # v1.333.0: what a FINISHED command left running hidden (a dev server

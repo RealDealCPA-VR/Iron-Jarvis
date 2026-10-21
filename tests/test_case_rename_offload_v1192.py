@@ -317,11 +317,15 @@ def _slow(record: dict[str, str], key: str, real):
 
 
 async def test_edit_file_reads_and_writes_off_the_event_loop(tmp_path, monkeypatch):
+    # v1.364.0 (IJ harness Phase 1, moved on purpose): edit_file reads and
+    # writes BYTES now (harness/textedit keeps the file's own line endings
+    # and BOM; ``write_text`` turned an LF file into CRLF on Windows), so the
+    # spies sit on read_bytes/write_bytes — the same rule, the real calls.
     ctx = _ctx(tmp_path)
     (ctx.workspace / "doc.txt").write_text("hello world", encoding="utf-8")
     seen: dict[str, str] = {}
-    monkeypatch.setattr(Path, "read_text", _slow(seen, "read", Path.read_text))
-    monkeypatch.setattr(Path, "write_text", _slow(seen, "write", Path.write_text))
+    monkeypatch.setattr(Path, "read_bytes", _slow(seen, "read", Path.read_bytes))
+    monkeypatch.setattr(Path, "write_bytes", _slow(seen, "write", Path.write_bytes))
 
     result, ticks = await _ticks_during(
         EditFileTool().execute(
@@ -398,10 +402,11 @@ async def test_write_file_capture_undo_runs_off_the_event_loop(tmp_path, monkeyp
 
 
 async def test_edit_file_capture_undo_runs_off_the_event_loop(tmp_path, monkeypatch):
+    # v1.364.0: the capture reads BYTES (the raw before-image) — see above.
     ctx = _ctx(tmp_path)
     (ctx.workspace / "doc.txt").write_text("hello world", encoding="utf-8")
     seen: dict[str, str] = {}
-    monkeypatch.setattr(Path, "read_text", _slow(seen, "read", Path.read_text))
+    monkeypatch.setattr(Path, "read_bytes", _slow(seen, "read", Path.read_bytes))
 
     undo, ticks = await _ticks_during(
         EditFileTool().capture_undo(
