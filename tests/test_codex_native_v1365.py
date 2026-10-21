@@ -471,7 +471,11 @@ async def test_a_builtin_approval_request_is_denied_and_reported(tmp_path, monke
     with caplog.at_level(logging.WARNING, logger="ironjarvis.codex_native"):
         resp = await fake.adapter().complete(system="", messages=[_user()], tools=[])
     decisions = {r["method"]: r["response"] for r in fake.rows("approval")}
-    assert decisions["execCommandApproval"] == {"decision": "denied"}
+    # Review: ReviewDecision's deny is a STRUCT variant in 0.157.0
+    # (protocol.rs `Denied { rejection: String }`); the bare string "denied"
+    # this pin first asserted does not deserialize as one.
+    assert decisions["execCommandApproval"] == {
+        "decision": {"denied": {"rejection": "Iron Jarvis runs every tool itself"}}}
     assert decisions["item/commandExecution/requestApproval"] == {"decision": "decline"}
     assert decisions["item/fileChange/requestApproval"] == {"decision": "decline"}
     assert resp.text == "ok"
@@ -1028,3 +1032,341 @@ def test_the_manager_serves_codex_cli_natively():
     adapter = ProviderManager._make_subprocess_cli(object.__new__(ProviderManager), "codex-cli", None)
     assert isinstance(adapter, A.CodexNativeAdapter)
     assert adapter.capabilities()["tool_use"] is True and adapter.model == "subscription"
+
+
+# =========================================================================== #
+# REVIEW (IJ harness phase 2) — each pin is red without its fix
+# =========================================================================== #
+import threading  # noqa: E402 — the review section's own needs
+
+from iron_jarvis.core.events import EventBus  # noqa: E402
+from iron_jarvis.providers import egress  # noqa: E402
+from iron_jarvis.providers import router as R  # noqa: E402
+from iron_jarvis.providers.adapters.base import LLMAdapter, LLMResponse  # noqa: E402
+
+
+def _kill_pids(pids: list[int]) -> None:
+    for pid in pids:
+        try:
+            psutil.Process(pid).kill()
+        except psutil.Error:
+            pass
+
+
+async def test_review_stop_all_stops_every_live_session_and_its_tree(tmp_path, monkeypatch):
+    fake = Fake(tmp_path, monkeypatch, [{"steps": [{"call": {"tool_index": 0, "args": {"q": "x"}}}]}],
+                pids=True)
+    await fake.adapter().complete(system="", messages=[_user()], tools=TOOLS)
+    assert [s.state for s in S.POOL.live()] == ["paused"]
+    pids = [int(p) for p in fake.pids_path.read_text().split()] + _session_pids()
+    try:
+        assert await asyncio.to_thread(S.POOL.stop_all) == 1
+        assert S.POOL.live() == []
+        assert await _gone(pids) == [], "a parked app-server outlived the shutdown"
+    finally:
+        _kill_pids(pids)
+
+
+def test_review_the_daemon_stops_live_codex_sessions_at_shutdown(tmp_path, monkeypatch):
+    """A parked app-server waits up to 10 minutes for tool results; the
+    lifespan's shutdown must stop it like the REPL children and kept jobs."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.app import create_app
+
+    calls: list[int] = []
+    real = S.Pool.stop_all
+
+    def spy(self):
+        n = real(self)
+        calls.append(n)
+        return n
+
+    monkeypatch.setattr(S.Pool, "stop_all", spy)
+    with TestClient(create_app(str(tmp_path / "home"))) as client:
+        assert client.get("/health").status_code == 200
+        assert calls == []
+    assert calls == [0], "the lifespan shutdown must stop the live Codex sessions"
+
+
+async def test_review_a_stop_while_evicting_a_parked_session_leaks_no_pool_slot(tmp_path, monkeypatch):
+    monkeypatch.setattr(S, "MAX_LIVE_SESSIONS", 1)
+    fake = Fake(tmp_path, monkeypatch, [{"steps": [{"call": {"tool_index": 0, "args": {}}}]},
+                                        {"steps": [{"text": "B"}]}])
+    adapter = fake.adapter()
+    await adapter.complete(system="", messages=[_user("A")], tools=TOOLS)
+    (victim,) = S.POOL.live()
+    killing = threading.Event()
+    real_kill = S.CodexSession.kill
+
+    def slow_kill(self, *, graceful=False):
+        if self is victim:
+            killing.set()
+            time.sleep(1.0)
+        return real_kill(self, graceful=graceful)
+
+    monkeypatch.setattr(S.CodexSession, "kill", slow_kill)
+    task = asyncio.create_task(adapter.complete(system="", messages=[_user("B")], tools=TOOLS))
+    assert await asyncio.to_thread(killing.wait, 15)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # The new session was admitted before the eviction: a Stop there must not
+    # leave it holding the only slot ("streaming", never parked, never reaped).
+    assert S.POOL.live() == []
+
+
+@pytest.mark.parametrize("method", ["config/read", "thread/start", "mcpServerStatus/list"])
+async def test_review_a_slow_start_falls_back_for_that_call_and_caches_nothing(tmp_path, monkeypatch, method):
+    # Only THIS request is given a short clock (initialize keeps its 30 s: a
+    # loaded runner can take seconds to start the fake's interpreter).
+    real_request = S.CodexSession.request
+
+    async def short_for_target(self, m, params, timeout):
+        return await real_request(self, m, params, 0.5 if m == method else timeout)
+
+    monkeypatch.setattr(S.CodexSession, "request", short_for_target)
+    fake = Fake(tmp_path, monkeypatch, [{"hang_before": {method: 30}, "steps": [{"text": "never"}]},
+                                        {"steps": [{"text": "native"}]}])
+    adapter = fake.adapter(runner=_text_runner([]))
+    r1 = await adapter.complete(system="", messages=[_user()], tools=TOOLS)
+    assert r1.text == "answer from the text path"
+    # A busy PC is not a fact about this Codex: a cached negative verdict would
+    # make every explicit codex-cli chat a TEXT-ONLY turn for 10 minutes.
+    assert S.verdict() is None
+    assert adapter.capabilities()["tool_use"] is True
+    r2 = await adapter.complete(system="", messages=[_user()], tools=[])
+    assert r2.text == "native"
+
+
+async def test_review_the_working_directory_is_made_off_the_event_loop(tmp_path, monkeypatch):
+    fake = Fake(tmp_path, monkeypatch, [{"steps": [{"text": "hi"}]}])
+    seen: list[int] = []
+    real = S.stable_workdir
+
+    def spy() -> str:
+        seen.append(threading.get_ident())
+        return real()
+
+    monkeypatch.setattr(S, "stable_workdir", spy)
+    loop_thread = threading.get_ident()
+    assert (await fake.adapter().complete(system="", messages=[_user()], tools=[])).text == "hi"
+    assert seen and loop_thread not in seen, "a mkdir ran on the event loop"
+
+
+def test_review_every_builtin_approval_is_a_deny_in_codex_0157_shapes():
+    """The deny each request's 0.157.0 response type takes: v2 decisions are
+    strings ("decline"), the legacy ``ReviewDecision`` deny is the STRUCT
+    variant ``Denied { rejection }`` (protocol/src/protocol.rs), a permissions
+    request is answered with an empty grant."""
+    d = P.APPROVAL_DENIALS
+    assert d["item/commandExecution/requestApproval"] == {"decision": "decline"}
+    assert d["item/fileChange/requestApproval"] == {"decision": "decline"}
+    for legacy in ("execCommandApproval", "applyPatchApproval"):
+        decision = d[legacy]["decision"]
+        assert isinstance(decision, dict) and list(decision) == ["denied"], legacy
+        assert isinstance(decision["denied"].get("rejection"), str) and decision["denied"]["rejection"]
+    assert d["item/permissions/requestApproval"] == {"permissions": {}, "scope": "turn"}
+
+
+# --------------------------------------------------------------------------- #
+# Review: what the router does now that codex-cli calls tools natively
+# --------------------------------------------------------------------------- #
+class _CannedCodex(A.CodexNativeAdapter):
+    """The REAL codex-cli adapter's capabilities; a canned answer."""
+
+    def __init__(self) -> None:
+        super().__init__(model="subscription", which=lambda _b: None)
+        self.calls = 0
+
+    async def complete(self, *, system, messages, tools, **kw):
+        self.calls += 1
+        return LLMResponse(text="from codex", tool_calls=[], usage={})
+
+    async def stream(self, *, system, messages, tools, **kw):
+        self.calls += 1
+        yield {"type": "final", "response": LLMResponse(text="from codex", tool_calls=[], usage={})}
+
+
+class _Plain(LLMAdapter):
+    def __init__(self, provider, *, fail=None, endpoint="", tools=True):
+        self.provider, self.model = provider, f"{provider}-m"
+        self._endpoint, self.fail, self.tools_ok = endpoint, fail, tools
+        self.calls = 0
+
+    def capabilities(self):
+        return {"provider": self.provider, "model": self.model, "tool_use": self.tools_ok, "vision": True}
+
+    async def complete(self, *, system, messages, tools, **kw):
+        self.calls += 1
+        if self.fail is not None:
+            raise self.fail
+        return LLMResponse(text=f"from {self.provider}", tool_calls=[], usage={})
+
+    async def stream(self, *, system, messages, tools, **kw):
+        self.calls += 1
+        if self.fail is not None:
+            raise self.fail
+        yield {"type": "final", "response": LLMResponse(text=f"from {self.provider}", tool_calls=[], usage={})}
+
+
+class _Mgr:
+    def __init__(self, adapters):
+        self.adapters = adapters
+
+    def available(self, p):
+        return p in self.adapters
+
+    def has_available_api_provider(self):
+        return True
+
+    def runtime_provider_names(self):
+        return []
+
+    def get(self, p, m=None):
+        return self.adapters[p]
+
+
+async def _route(router, lane: str, provider: str) -> tuple[str, str, str]:
+    """``(provider, reason, from)`` of one tool-carrying request."""
+    kw = dict(provider=provider, system="s", messages=[_user()], tools=TOOLS)
+    if lane == "complete":
+        res = await router.complete(**kw)
+        return res.provider, res.reason, res.from_provider
+    final = [f async for f in router.stream(**kw) if f.get("type") == "final"][-1]
+    return final["provider"], final["reason"], final["from"]
+
+
+@pytest.fixture()
+def _no_backoff(monkeypatch):
+    async def _sleep(_s):
+        return None
+
+    monkeypatch.setattr(R.asyncio, "sleep", _sleep)
+
+
+@pytest.mark.parametrize("lane", ["complete", "stream"])
+async def test_review_a_cloud_primarys_rate_limit_on_a_tool_request_fails_over_to_codex_and_says_so(
+    lane, _no_backoff
+):
+    """NEW in phase 2 (codex-cli was skipped as text-only): sideways failover
+    of a CLOUD primary's transient failure may land on codex-cli. Cloud->cloud
+    arbitrage is the documented design (v1.162.0 protects LOCAL primaries
+    only); the route says failover and from whom."""
+    anth = _Plain("anthropic", fail=ProviderError("overloaded", status_code=429))
+    codex = _CannedCodex()
+    grok = _Plain("grok-cli", tools=False)
+    r = R.ModelRouter(_Mgr({"anthropic": anth, "codex-cli": codex, "grok-cli": grok}), "anthropic",
+                      EventBus(), local_policy=lambda: "refuse")
+    assert await _route(r, lane, "anthropic") == ("codex-cli", "failover", "anthropic")
+    assert codex.calls == 1 and grok.calls == 0
+
+
+@pytest.mark.parametrize("lane", ["complete", "stream"])
+async def test_review_local_only_and_a_local_primary_never_reach_codex(lane, _no_backoff):
+    local = "http://127.0.0.1:11434/v1"
+    # (1) A local primary that never answered refuses (v1.162.0) — codex, now
+    # tool-capable and the default, does not stand in.
+    dead = _Plain("ollama", endpoint=local, fail=ConnectionError("refused"))
+    codex = _CannedCodex()
+    r = R.ModelRouter(_Mgr({"ollama": dead, "codex-cli": codex}), "codex-cli", EventBus(),
+                      local_policy=lambda: "refuse", deadline_s=0.01)
+    with pytest.raises(Exception):  # noqa: B017 — the refusal's own class
+        await _route(r, lane, "ollama")
+    assert codex.calls == 0
+    # (2) Under LOCAL ONLY, a local primary that answered an error with the
+    # failover policy on still never moves to codex (the default or sideways)…
+    busy = _Plain("ollama", endpoint=local, fail=ProviderError("busy", status_code=503))
+    r = R.ModelRouter(_Mgr({"ollama": busy, "codex-cli": codex}), "codex-cli", EventBus(),
+                      local_policy=lambda: "failover", deadline_s=0.01)
+    with egress.local_only_scope(True):
+        with pytest.raises(Exception):  # noqa: B017
+            await _route(r, lane, "ollama")
+    assert codex.calls == 0
+    # …anti-vacuity: outside the scope codex (tool-capable now) stands in.
+    assert (await _route(r, lane, "ollama"))[:2] == ("codex-cli", "failover")
+    assert codex.calls == 1
+
+
+@pytest.mark.parametrize("where", ["new-session", "resume"])
+async def test_review_a_limit_after_text_reached_the_caller_is_not_retried_on_another_account(
+    tmp_path, monkeypatch, where
+):
+    """v1.301.0: a retry on the next account happens only while NOTHING of
+    this call reached the caller. Text then a usage limit: the limit is still
+    reported, the error leaves marked no_failover, and no second account runs."""
+    from tests.test_iron_proxy_accounts_v1301 import FakeIronProxy, _homes
+
+    homes = _homes(tmp_path, "A", "B")
+    client = FakeIronProxy("openai", homes)
+    accounts.set_client_source(lambda: client)
+    tail = [{"text": "half an answer"}, _err("usageLimitExceeded", "You've hit your usage limit.")]
+    first = tail if where == "new-session" else [{"call": {"tool_index": 0, "args": {"q": "z"}}}, *tail]
+    fake = Fake(tmp_path, monkeypatch, [{"steps": first}, {"steps": [{"text": "from B"}]}])
+    adapter = fake.adapter()
+    messages = [_user()]
+    if where == "resume":
+        r1 = await adapter.complete(system="", messages=messages, tools=TOOLS)
+        messages = _after(messages, r1, {"lookup_fake": "R"})
+    got: list[str] = []
+    with pytest.raises(ProviderError) as info:
+        async for frame in adapter.stream(system="", messages=messages, tools=TOOLS):
+            if frame["type"] == "text":
+                got.append(frame["text"])
+    assert "".join(got) == "half an answer"
+    assert len(fake.starts()) == 1, "text had reached the caller: no second account may run"
+    assert getattr(info.value, "no_failover", False) is True
+    assert client.signals and client.signals[0]["status"] == 429, "the limit is still reported"
+    assert S.POOL.live() == []
+
+
+async def test_review_end_to_end_the_post_chat_lane_resumes_one_codex_turn_through_the_registry(
+    tmp_path, monkeypatch
+):
+    """POST /chat (``chat_turn.run_chat_turn``) — the lane the stream test
+    above does not drive: two rounds of tool calls, each run by the registry,
+    each answer RESUMES the same paused Codex turn (one app-server)."""
+    from sqlmodel import select
+
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import ToolInvocation
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.daemon.chat_turn import run_chat_turn
+    from iron_jarvis.daemon.schemas import ChatBody
+    from iron_jarvis.providers.manager import ProviderManager
+    from iron_jarvis.tools.permissions import PermissionEngine
+
+    look = _LaneTool("lookup_v1365_fake", "LOOKED-UP-42")
+    note = _LaneTool("custom:note_v1365_fake", "NOTE-SAVED")
+    fake = Fake(tmp_path, monkeypatch, [{"steps": [
+        {"call": {"tool": "lookup_v1365_fake", "args": {"q": "answer"}}},
+        {"call": {"tool": "custom_note_v1365_fake", "args": {"q": "42"}}},
+        {"text": "The answer is 42, noted."},
+    ]}])
+    app = create_app(str(tmp_path / "home"))
+    platform = app.state.platform
+    for tool in (look, note):
+        platform.registry.register(tool)
+    platform.permissions = PermissionEngine(
+        {**platform.config.permissions, **{t.name: "allow" for t in (look, note)}}
+    )
+    platform.providers.register(
+        "codex-cli", lambda model=None: A.CodexNativeAdapter(model=model or "subscription",
+                                                             which=lambda _b: fake.shim)
+    )
+    monkeypatch.setattr(ProviderManager, "_cli_binary_present", staticmethod(lambda b: True))
+    monkeypatch.setattr(ProviderManager, "_cli_signed_in", staticmethod(lambda b: True))
+
+    body = ChatBody(messages=[{"role": "user", "content": "look up the answer and note it"}],
+                    tools=[look.name, note.name], approval_mode="yolo", provider="codex-cli")
+    out = await run_chat_turn(platform, {}, body)
+    assert "The answer is 42, noted." in out["reply"]
+    assert look.calls == [{"q": "answer"}] and note.calls == [{"q": "42"}]
+    with session_scope(platform.engine) as db:
+        rows = [(r.tool, r.ok) for r in db.exec(select(ToolInvocation))
+                if r.tool in (look.name, note.name)]
+    assert rows == [(look.name, True), (note.name, True)]
+    assert len(fake.starts()) == 1, "each round resumed the same Codex turn"
+    answered = [a["response"]["contentItems"][0]["text"] for a in fake.answers()]
+    assert "LOOKED-UP-42" in answered[0] and "NOTE-SAVED" in answered[1]
+    assert S.POOL.live() == []

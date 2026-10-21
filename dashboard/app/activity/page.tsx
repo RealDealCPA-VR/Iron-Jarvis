@@ -80,7 +80,7 @@ export default function ActivityPage() {
             value={usdPrecise(stats?.costUsd)}
             sub={
               (stats?.listPriceUsd ?? 0) > 0
-                ? `+ ~$${(stats?.listPriceUsd ?? 0).toFixed((stats?.listPriceUsd ?? 0) < 1 ? 4 : 2)} list-price value (Claude subscription, not billed)`
+                ? `+ ~$${(stats?.listPriceUsd ?? 0).toFixed((stats?.listPriceUsd ?? 0) < 1 ? 4 : 2)} list-price value (subscription, not billed)`
                 : undefined
             }
             icon={<CircleDollarSign size={15} />}

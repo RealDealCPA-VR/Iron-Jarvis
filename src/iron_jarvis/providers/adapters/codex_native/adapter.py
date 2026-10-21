@@ -402,9 +402,12 @@ class CodexNativeAdapter(LLMAdapter):
             full = ProviderError(f"{P.PROVIDER}: {exc}", transient=False)
             full.no_failover = True  # type: ignore[attr-defined]
             raise full from None
-        await _teardown_all(victims)
         seg = _Segment()
         try:
+            # Inside the try: a Stop that lands while the evicted sessions are
+            # being killed must still forget THIS one, or it holds a pool
+            # slot (state "streaming", never parked, never reaped) for good.
+            await _teardown_all(victims)
             await self._start(s, base, specs, items, reasoning, key)
             async for frame in self._segment(s, attempt, seg):
                 yield frame
@@ -463,16 +466,23 @@ class CodexNativeAdapter(LLMAdapter):
                 mcp_servers = [str(n) for n in servers]
             # The account's limits, answered whenever they arrive (no model call).
             await s.side_request("account/rateLimits/read", None, "rate_limits")
-        except (S.SessionGone, TimeoutError):
+        except S.SessionGone:
             raise _Unsupported("config/read did not answer") from None
+        except TimeoutError:
+            # A slow start (a busy PC) is not a fact about this Codex: this
+            # call falls back, nothing is cached (a cached verdict would make
+            # every explicit codex-cli chat a TEXT-ONLY turn for 10 minutes).
+            raise _Unsupported("config/read did not answer in time", cache=False) from None
         model = None if str(self.model or "").strip().lower() in PLACEHOLDER_MODELS else self.model
         params = P.thread_start_params(
             base_instructions=base, specs=specs, cwd=s.cwd, model=model, mcp_servers=mcp_servers
         )
         try:
             started = await s.request("thread/start", params, timeout)
-        except (S.SessionGone, TimeoutError):
+        except S.SessionGone:
             raise _Unsupported("thread/start did not answer") from None
+        except TimeoutError:
+            raise _Unsupported("thread/start did not answer in time", cache=False) from None
         if "error" in started:
             words = _rpc_words(started)
             if _SHAPE_WORDS.search(words):
@@ -488,8 +498,10 @@ class CodexNativeAdapter(LLMAdapter):
             listed = await s.request(
                 "mcpServerStatus/list", {"threadId": s.thread_id, "detail": "toolsAndAuthOnly"}, timeout
             )
-        except (S.SessionGone, TimeoutError):
+        except S.SessionGone:
             raise _Unsupported("mcpServerStatus/list did not answer") from None
+        except TimeoutError:
+            raise _Unsupported("mcpServerStatus/list did not answer in time", cache=False) from None
         if "error" in listed:
             raise _Unsupported(f"could not confirm the MCP servers are off: {_rpc_words(listed)}")
         problem = P.mcp_problem(listed.get("result"))

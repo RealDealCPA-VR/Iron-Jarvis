@@ -21,7 +21,8 @@ Environment:
                      "result" (fields merged into thread/start's result),
                      "mcp_servers" (names config/read lists), "mcp_tools"
                      ({server: {tool: {}}} listed by mcpServerStatus/list),
-                     "model"}.
+                     "model", "hang_before" ({method: seconds} slept
+                     before answering that start request)}.
   FAKE_CODEX_STATE   a directory: the process counter lives there.
   FAKE_CODEX_RECORD  path: JSON lines appended per event (start, recv,
                      answer, approval).
@@ -217,6 +218,9 @@ def main() -> int:
         params = msg.get("params") or {}
         if rid is None:
             continue  # a notification (initialized)
+        # Review: a start request answered late (a busy PC), {method: seconds}.
+        if method in (proc.get("hang_before") or {}):
+            time.sleep(float(proc["hang_before"][method]))
         if method == "initialize":
             if proc.get("initialize_error"):
                 emit({"id": rid, "error": {"code": -32600, "message": proc["initialize_error"]}})

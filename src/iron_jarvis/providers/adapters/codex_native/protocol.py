@@ -138,12 +138,16 @@ BUILTIN_ITEM_TYPES = frozenset({
 })
 
 #: Server requests that ask the client to approve a Codex built-in. Each is
-#: DENIED (the decision each request's schema takes).
+#: DENIED (the decision each request's schema takes). The two legacy v1
+#: requests answer with ``ReviewDecision``, whose deny is a STRUCT variant in
+#: 0.157.0 (``Denied { rejection }``, protocol/src/protocol.rs) — the bare
+#: string ``"denied"`` does not deserialize as one.
+_REJECTION = "Iron Jarvis runs every tool itself"
 APPROVAL_DENIALS: dict[str, dict[str, Any]] = {
     "item/commandExecution/requestApproval": {"decision": "decline"},
     "item/fileChange/requestApproval": {"decision": "decline"},
-    "execCommandApproval": {"decision": "denied"},
-    "applyPatchApproval": {"decision": "denied"},
+    "execCommandApproval": {"decision": {"denied": {"rejection": _REJECTION}}},
+    "applyPatchApproval": {"decision": {"denied": {"rejection": _REJECTION}}},
     "item/permissions/requestApproval": {"permissions": {}, "scope": "turn"},
 }
 

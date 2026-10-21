@@ -117,7 +117,10 @@ _TRANSIENT_PHRASE_RE = re.compile(
 #: metered APIs, so rate-limit spillover lands on plans you already pay for. This
 #: mirrors ``ProviderManager._AUTO_DEFAULT_ORDER`` exactly so the auto-default
 #: pick and the failover order can never disagree. (The capability filter still
-#: excludes text-only codex-cli / grok when a request carries tools.)
+#: excludes a text-only CLI (grok-cli; codex-cli when its native app-server
+#: check failed) when a request carries tools. Since IJ harness phase 2
+#: codex-cli calls tools natively, so a tool request's failover may land on
+#: it — disclosed as reason=failover, never under local only.)
 _FAILOVER_ORDER = (
     "claude-cli", "codex-cli", "grok-cli",
     "anthropic", "openai", "google", "xai", "openrouter", "ollama", "custom",
@@ -2045,7 +2048,7 @@ class ModelRouter:
             # exhausted because Claude Code shares it), try the OTHER connected
             # real providers before giving up. Filtered by the availability
             # snapshot, the circuit breaker, capability (tools ⇒ skip text-only
-            # codex-cli/grok), and resolved-adapter identity dedup.
+            # CLIs), and resolved-adapter identity dedup.
             if transient:
                 for p in self._candidate_order():
                     if p in tried_providers or p == "mock" or p not in avail:

@@ -164,7 +164,9 @@ class CodexSession:
         self.exe = exe
         self.env = env
         self.lease = lease
-        self.cwd = stable_workdir()
+        #: Set by :meth:`spawn` (a worker thread): :func:`stable_workdir` makes
+        #: a directory, and a constructor runs on the event loop.
+        self.cwd = ""
         self.proc: subprocess.Popen | None = None
         self.channel = Channel()
         self.deferred: deque = deque()
@@ -202,6 +204,8 @@ class CodexSession:
     # -- process (blocking; worker thread only) ------------------------------
     def spawn(self) -> None:
         argv = [self.exe, "app-server", "--listen", "stdio://"]
+        if not self.cwd:
+            self.cwd = stable_workdir()
         kw: dict[str, Any] = {}
         if self.env is not None:
             kw["env"] = self.env
@@ -501,6 +505,24 @@ class Pool:
     def live(self) -> list[CodexSession]:
         with self.lock:
             return list(self.sessions.values())
+
+    def stop_all(self) -> int:
+        """BLOCKING (worker thread): stop EVERY live session — parked or
+        streaming — and its process tree; returns how many. The daemon's
+        lifespan calls this at shutdown, like the REPL children and the kept
+        process jobs: a parked app-server must not wait for the reaper (or for
+        the Job handle to close at process exit) when the daemon is stopping."""
+        with self.lock:
+            every = list(self.sessions.values())
+            for s in every:
+                self._forget(s)
+            self.cond.notify_all()
+        for s in every:
+            try:
+                s.kill()
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                log.debug("codex-cli: stopping a session at shutdown failed", exc_info=True)
+        return len(every)
 
     # the reaper -------------------------------------------------------------
     def _ensure_reaper(self) -> None:

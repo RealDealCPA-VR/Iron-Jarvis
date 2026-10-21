@@ -122,18 +122,28 @@ def _iso(value: Any) -> str:
 
 #: The words a subscription's list-price value is said in (v1.300.0 review).
 LIST_PRICE_WORDS = "at list price (Claude subscription)"
+#: Which plan covered it, per list-price-equivalent provider (IJ harness
+#: phase 2 made ``codex-cli`` one: the user's ChatGPT plan). Spend that more
+#: than one plan covered names neither.
+_PLAN_WORDS = {"claude-cli": "Claude subscription", "codex-cli": "ChatGPT plan"}
 
 
-def _spent_words(metered: float, listed: float) -> str:
+def _list_price_words(plans: set[str] | None) -> str:
+    named = {_PLAN_WORDS.get(p, "subscription") for p in (plans or {"claude-cli"})}
+    return f"at list price ({named.pop() if len(named) == 1 else 'subscription'})"
+
+
+def _spent_words(metered: float, listed: float, plans: set[str] | None = None) -> str:
     """``spent``'s line, composed here so the page adds nothing: metered money
     is "$1.50 spent"; a subscription's share is "≈$0.42 at list price (Claude
-    subscription)" — a value of work the plan covered, never "spent"; both
-    together are joined with " · "."""
+    subscription)" — a value of work the plan covered, never "spent" — naming
+    the plan that covered it (``plans``: the providers of the listed spend);
+    both together are joined with " · "."""
     parts: list[str] = []
     if metered > 0 or listed <= 0:
         parts.append(f"${metered:.2f} spent")
     if listed > 0:
-        parts.append(f"≈${listed:.2f} {LIST_PRICE_WORDS}")
+        parts.append(f"≈${listed:.2f} {_list_price_words(plans)}")
     return " · ".join(parts)
 
 
@@ -290,6 +300,7 @@ def compose_digest(
         # v1.300.0: the recorded cost first, the table for old metered rows;
         # a subscription's share is a list-price VALUE, kept apart in words.
         metered = listed = 0.0
+        plans: set[str] = set()
         for s in sess:
             usd = pricing.recorded_cost(
                 s["provider"], s["model"], s["input_tokens"], s["output_tokens"],
@@ -297,6 +308,8 @@ def compose_digest(
             )
             if pricing.is_list_price_equivalent(s["provider"], s["model"]):
                 listed += usd
+                if usd > 0:
+                    plans.add(str(s["provider"] or "").lower().strip())
             else:
                 metered += usd
         dollars = round(metered + listed, 6)
@@ -304,7 +317,7 @@ def compose_digest(
         if listed > 0:
             spent["list_price_equivalent"] = True
             spent["list_price_dollars"] = round(listed, 6)
-        spent["words"] = _spent_words(metered, listed)
+        spent["words"] = _spent_words(metered, listed, plans)
 
         results: list[dict[str, Any]] = []
         for s in sess[:_MAX_RESULTS_PER_GOAL]:
