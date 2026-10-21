@@ -256,6 +256,11 @@ ASK_WORDS: dict[str, str] = {
     "process_start": "start a program that keeps running",
     "process_write": "type into a running program",
     "mcp_read_resource": "read something from one of your apps",
+    # v1.364.0 review: the IJ harness editors card under "Ask before file
+    # edits" (chat_turn.STRICT_ASK_TOOLS).
+    "multi_edit": "change a file",
+    "apply_patch": "change files with a patch",
+    "notebook_edit": "change a notebook",
 }
 
 

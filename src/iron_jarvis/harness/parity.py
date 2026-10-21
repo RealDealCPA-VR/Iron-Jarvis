@@ -81,7 +81,12 @@ CLAUDE_CODE: dict[str, Parity] = {
     "Glob": _served("glob"),
     "Grep": _served("grep", reason="output_mode, context lines, case_insensitive, glob/type, head_limit + offset, multiline"),
     "Bash": _served("shell", "process_start", reason="shell takes timeout_s (max 600) and cwd; a background program is process_start"),
-    "PowerShell": _served("shell", reason="the shell tool runs the platform's own shell; a PowerShell command runs through it"),
+    "PowerShell": _served(
+        "shell",
+        reason="the shell tool runs cmd.exe on Windows (sh elsewhere), not PowerShell; a PowerShell "
+        "command runs through it as `powershell -NoProfile -Command ...` (v1.364.0 review: the "
+        "row used to say the shell WAS PowerShell)",
+    ),
     "Monitor": _served("process_start", "process_read", reason="a background program's output is read as it arrives (process_read wait_ms)"),
     "TaskStop": _served("process_stop"),
     "NotebookEdit": _served("notebook_edit"),
@@ -162,7 +167,11 @@ CODEX: dict[str, Parity] = {
     "collaboration.wait_agent (v2)": _served("delegate", reason="delegate waits for the helper's result"),
     "collaboration.interrupt_agent (v2)": _no("a helper's run is stopped with the user's Cancel, which reaches it through the parent"),
     "collaboration.list_agents (v2)": _served("list_agents"),
-    "clock.curr_time": _no("the date rides the system prompt; shell can print the time"),
+    "clock.curr_time": _later(
+        "Phase 3: the build session's system prompt carries the date and time (the chat and agent "
+        "prompts do not today — v1.364.0 review: this row used to say they did); until then shell "
+        "prints them"
+    ),
     "clock.sleep": _no("a model waits on a program with process_read's wait_ms; there is no bare sleep"),
     "send_message_to_user_async": _no("the reply streams to the user as it is written"),
     "request_user_input_async": _later(_ASK_USER),

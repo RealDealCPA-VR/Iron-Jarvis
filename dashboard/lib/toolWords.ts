@@ -81,6 +81,11 @@ const WORDS: Record<string, string> = {
   process_start: "start a program that keeps running",
   process_write: "type into a running program",
   mcp_read_resource: "read something from one of your apps",
+  // v1.364.0 review: the IJ harness editors card under "Ask before file
+  // edits" (chat_turn.STRICT_ASK_TOOLS), so the card says what they do.
+  multi_edit: "change a file",
+  apply_patch: "change files with a patch",
+  notebook_edit: "change a notebook",
 };
 
 // The 14 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

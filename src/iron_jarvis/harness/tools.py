@@ -425,17 +425,23 @@ def _undo_envelope(home: Any, plan: PatchPlan) -> dict[str, Any]:
 
 def _write_plan(plan: PatchPlan) -> None:
     """Write every changed path: contents first, deletions last. A failure
-    part way puts back what was already written, then re-raises."""
+    part way puts back what was already written, then re-raises.
+
+    The file IN FLIGHT is put back too (v1.364.0 review): ``write_bytes``
+    truncates when it opens, so a write that fails part way (a full disk, a
+    scanner grabbing the file) left that file cut short while the reply said
+    "what it had written was put back". It joins ``done`` BEFORE its write;
+    putting back a file whose write never started rewrites the same bytes."""
     done: list[_FileState] = []
     changes = plan.changes()
     try:
         for st in [s for s in changes if s.exists]:
             st.target.parent.mkdir(parents=True, exist_ok=True)
+            done.append(st)
             st.target.write_bytes(st.after_bytes() or b"")
-            done.append(st)
         for st in [s for s in changes if not s.exists]:
-            st.target.unlink()
             done.append(st)
+            st.target.unlink()
     except BaseException:
         for st in reversed(done):
             try:
@@ -510,7 +516,7 @@ class ApplyPatchTool(Tool):
             files = patch_entries(read_envelope(undo))
             if not files:
                 return ToolResult(ok=False, error="undo: no files recorded for this patch")
-            targets: list[tuple[dict[str, Any], Path]] = []
+            targets: list[tuple[dict[str, Any], Path, bytes | None]] = []
             # 1) EVERY file must still be as the patch left it — checked for
             #    all of them before any is touched (all or nothing, like the
             #    patch itself).
@@ -530,11 +536,28 @@ class ApplyPatchTool(Tool):
                         f"{rel} changed since the patch — refusing to undo it "
                         "(it would overwrite a newer change); nothing was undone"
                     )
-                targets.append((entry, target))
+                # Every before-image is loaded BEFORE any file is touched
+                # (v1.364.0 review): a missing blob used to raise half way,
+                # after earlier files were already put back.
+                try:
+                    before = patch_entry_before(home, entry)
+                except (OSError, ValueError) as exc:
+                    return ToolResult(
+                        ok=False,
+                        error=(
+                            f"undo: the saved copy of {rel} could not be read ({exc}); "
+                            "nothing was undone"
+                        ),
+                    )
+                if before is None and entry.get("existed"):
+                    return ToolResult(
+                        ok=False,
+                        error=f"undo: no saved copy of {rel} was kept; nothing was undone",
+                    )
+                targets.append((entry, target, before))
             # 2) Put every file back.
             restored = 0
-            for entry, target in targets:
-                before = patch_entry_before(home, entry)
+            for entry, target, before in targets:
                 try:
                     if before is None:
                         if target.exists():
@@ -548,7 +571,7 @@ class ApplyPatchTool(Tool):
                         ok=False,
                         error=f"undo: could not restore {entry.get('path')}: {exc} ({restored} restored before it)",
                     )
-            for entry, _t in targets:
+            for entry, _t, _b in targets:
                 delete_preimage(home, entry.get("ref"))
             return ToolResult(ok=True, output=f"undo: put back {restored} file(s) the patch changed")
 

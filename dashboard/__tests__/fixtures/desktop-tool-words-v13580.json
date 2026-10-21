@@ -348,6 +348,24 @@
       "kind": "table",
       "card": "read something from one of your apps",
       "desktop": "read something from one of your apps"
+    },
+    {
+      "tool": "multi_edit",
+      "kind": "table",
+      "card": "change a file",
+      "desktop": "change a file"
+    },
+    {
+      "tool": "apply_patch",
+      "kind": "table",
+      "card": "change files with a patch",
+      "desktop": "change files with a patch"
+    },
+    {
+      "tool": "notebook_edit",
+      "kind": "table",
+      "card": "change a notebook",
+      "desktop": "change a notebook"
     }
   ]
 }

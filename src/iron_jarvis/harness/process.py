@@ -164,11 +164,40 @@ class ProcessTable:
         self._lock = threading.Lock()
         self._by_session: dict[str, dict[str, ManagedProcess]] = {}
         self._ids = itertools.count(1)
+        #: Starts in flight per session (a slot taken, the program not yet
+        #: in the table) — see :meth:`reserve`.
+        self._starting: dict[str, int] = {}
 
     def running(self, session_id: str) -> list[ManagedProcess]:
         with self._lock:
             rows = list(self._by_session.get(session_id, {}).values())
         return [r for r in rows if r.running()]
+
+    def reserve(self, session_id: str) -> "tuple[list[ManagedProcess], int] | None":
+        """Take one of the session's :data:`MAX_RUNNING_PER_SESSION` slots
+        ATOMICALLY, or return ``(running, starting)`` when they are all taken
+        (v1.364.0 review). An agent step runs its tool calls together
+        (``asyncio.gather``), and a check-then-spawn let five starts in one
+        step all see an empty table and all run; the slot is now taken under
+        the table's lock before anything is spawned, and handed back with
+        :meth:`release_slot` once the program is in the table (or the start
+        failed)."""
+        with self._lock:
+            rows = list(self._by_session.get(session_id, {}).values())
+            running = [r for r in rows if r.running()]
+            starting = self._starting.get(session_id, 0)
+            if len(running) + starting >= MAX_RUNNING_PER_SESSION:
+                return running, starting
+            self._starting[session_id] = starting + 1
+        return None
+
+    def release_slot(self, session_id: str) -> None:
+        with self._lock:
+            left = self._starting.get(session_id, 0) - 1
+            if left > 0:
+                self._starting[session_id] = left
+            else:
+                self._starting.pop(session_id, None)
 
     def get(self, session_id: str, handle: str) -> ManagedProcess | None:
         with self._lock:
@@ -360,9 +389,6 @@ class ProcessStartTool(Tool):
     }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        from ..sandbox.native import scrubbed_env
-        from ..sandbox.policy import SandboxPolicy
-
         command = str(args.get("command") or "").strip()
         if not command:
             return ToolResult(ok=False, error="`command` is empty")
@@ -371,16 +397,46 @@ class ProcessStartTool(Tool):
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
         session = _session_of(ctx)
-        running = TABLE.running(session)
-        if len(running) >= MAX_RUNNING_PER_SESSION:
+        taken = TABLE.reserve(session)
+        if taken is not None:
+            running, starting = taken
             ids = ", ".join(mp.handle for mp in running)
+            more = f", {starting} more starting" if starting else ""
             return ToolResult(
                 ok=False,
                 error=(
-                    f"this session already has {len(running)} programs running ({ids}) — "
+                    f"this session already has {len(running)} programs running ({ids}{more}) — "
                     "stop one with process_stop first"
                 ),
             )
+        released = False
+
+        def _release() -> None:
+            nonlocal released
+            if not released:
+                released = True
+                TABLE.release_slot(session)
+
+        try:
+            return await self._start(command, wait_ms, session, args, ctx, _release)
+        finally:
+            _release()  # a start that failed (or was cancelled) hands its slot back
+
+    async def _start(
+        self,
+        command: str,
+        wait_ms: int,
+        session: str,
+        args: dict[str, Any],
+        ctx: ToolContext,
+        release: Any,
+    ) -> ToolResult:
+        """The start itself, run while :meth:`ProcessTable.reserve` holds a
+        slot; ``release`` hands it back the moment the program is in the
+        table (it is counted as running from then on)."""
+        from ..sandbox.native import scrubbed_env
+        from ..sandbox.policy import SandboxPolicy
+
         raw_cwd = args.get("cwd")
 
         def _resolve() -> Path:
@@ -422,6 +478,7 @@ class ProcessStartTool(Tool):
         mp.reader = threading.Thread(target=_reader, args=(mp,), name=f"ij-proc-{mp.handle}", daemon=True)
         mp.reader.start()
         TABLE.add(mp)
+        release()
         await _wait_for_output(mp, wait_ms, 0)
         text, dropped, more = mp.take()
         lead = f"Started {mp.handle} (pid {getattr(proc, 'pid', '?')}): {command}"
