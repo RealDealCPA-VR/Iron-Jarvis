@@ -106,12 +106,14 @@ _PER_TOKENS = 1_000_000
 #: A provider that serves ANOTHER vendor's models prices on that vendor's rows
 #: (v1.300.0). ``claude-cli`` is the logged-in Claude subscription: its figure
 #: is a list-price EQUIVALENT (:data:`LIST_PRICE_EQUIVALENT_PROVIDERS`).
-PRICE_ALIASES: dict[str, str] = {"claude-cli": "anthropic"}
+PRICE_ALIASES: dict[str, str] = {"claude-cli": "anthropic", "codex-cli": "openai"}
 
 #: Providers whose priced figure is a list-price EQUIVALENT of work a flat
 #: subscription covers — never a charge. Surfaces say "included in your
-#: subscription" beside it.
-LIST_PRICE_EQUIVALENT_PROVIDERS = frozenset({"claude-cli"})
+#: subscription" beside it. IJ harness phase 2: ``codex-cli`` (the user's
+#: ChatGPT plan, now reporting real token usage through the app-server) is
+#: priced on OpenAI's rows and is an equivalent too.
+LIST_PRICE_EQUIVALENT_PROVIDERS = frozenset({"claude-cli", "codex-cli"})
 
 #: Bare CLI model aliases (``claude --model opus``) -> the family row.
 _MODEL_ALIASES: dict[str, str] = {
@@ -339,10 +341,15 @@ def is_list_price_equivalent(provider: str, model: str = "") -> bool:
     it lands in billed totals and fleet cloud spend, and the receipt does not
     say "list". ``model`` omitted means the CLI's own default. Never raises."""
     try:
-        if str(provider or "").lower().strip() not in LIST_PRICE_EQUIVALENT_PROVIDERS:
+        name = str(provider or "").lower().strip()
+        if name not in LIST_PRICE_EQUIVALENT_PROVIDERS:
             return False
     except Exception:  # noqa: BLE001
         return False
+    if name != "claude-cli":
+        # The usage-credits mark is the CLAUDE picker's; a Codex model is
+        # never looked up in it.
+        return True
     return not draws_usage_credits(model)
 
 

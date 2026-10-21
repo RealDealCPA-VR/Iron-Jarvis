@@ -158,6 +158,13 @@ class LLMResponse:
     #: when the provider sent none. ``finish_reason == "max_tokens"`` means the
     #: provider stopped the answer because it ran out of output tokens.
     thinking: str = ""
+    #: IJ harness phase 2: what an adapter knows about the call beyond the
+    #: answer, for later phases to read — never sent to a model, never saved
+    #: into a conversation. ``codex-cli`` (native) puts the account's rate-limit
+    #: snapshot under ``"rate_limits"`` (Codex's own field names: ``planType``,
+    #: ``primary``/``secondary`` ``{usedPercent, windowDurationMins,
+    #: resetsAt}``). Empty for every other adapter. Readers use ``.get``.
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @property
     def wants_tools(self) -> bool:

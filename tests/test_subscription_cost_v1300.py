@@ -450,8 +450,12 @@ def test_usage_rollup_uses_the_stored_cost_and_flags_subscription_rows(platform)
 
 def test_pricing_module_names_the_equivalent_providers():
     # One definition: the rollup, the tally and the receipt all read this set.
-    assert pricing.LIST_PRICE_EQUIVALENT_PROVIDERS == frozenset({"claude-cli"})
+    # IJ harness phase 2 moved this pin: codex-cli (the ChatGPT plan, now
+    # reporting real token usage through its app-server) is an equivalent too,
+    # priced on OpenAI's rows.
+    assert pricing.LIST_PRICE_EQUIVALENT_PROVIDERS == frozenset({"claude-cli", "codex-cli"})
     assert pricing.PRICE_ALIASES["claude-cli"] == "anthropic"
+    assert pricing.PRICE_ALIASES["codex-cli"] == "openai"
 
 
 # --------------------------------------------------------------------------- #

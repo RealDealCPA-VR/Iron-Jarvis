@@ -724,7 +724,7 @@ function TimelineRow({
           {listPrice > 0 && (
             <span
               data-testid="list-price-chip"
-              title="List-price value — included in your Claude subscription, not billed"
+              title="List-price value — included in your subscription, not billed"
               className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-zinc-500"
             >
               ~{dollars(listPrice)} list
