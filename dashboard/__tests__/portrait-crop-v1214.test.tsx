@@ -476,6 +476,17 @@ describe("PortraitCropper — the user sees the square before it is stored", () 
     render(<AgentPortrait name="builder" onChanged={vi.fn()} />);
     pick("builder", pngFile());
     await waitFor(() => expect(screen.getByTestId("portrait-cropper")).toBeTruthy());
+    // v1.365.1: the cropper ignores a drag until the picture has DECODED (and
+    // re-centres when it does), so dragging as soon as the dialog shows is a
+    // race a loaded runner loses ("expected 350 to be greater than 350", the
+    // v1.365.0 release gate). "Use this" is enabled exactly when the decode
+    // has landed — wait for THAT before dragging (CLAUDE.md: a dialog on
+    // screen is not its content being ready).
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Use this" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
     const canvas = screen.getByTestId("cropper-canvas");
     // jsdom has no pointer capture.
     (canvas as HTMLCanvasElement).setPointerCapture = () => {};

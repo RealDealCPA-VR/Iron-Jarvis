@@ -939,6 +939,12 @@ does not need a bump, stop and bump it.
   out in 5000ms") — one swallowed click, two symptoms. Three corollaries:
     - A dialog being on screen is not its CONTENT being ready. Wait for the
       control to be ENABLED — that is the precondition the click needs.
+      (A fourth instance, v1.365.1: the same file's DRAG test dragged as
+      soon as the cropper showed; `onPointerDown` ignores a drag until the
+      picture decodes and the decode then re-centres, so the release runner
+      read "expected 350 to be greater than 350". It now waits for "Use
+      this" to be enabled first; a 300 ms decode stub reproduces CI's error
+      on the old shape.)
     - Never give a `waitFor` a bound equal to vitest's per-test budget
       (5000ms default). It can then never report its own failure: the test
       times out first and prints nothing about what it waited for. v1.236.2
