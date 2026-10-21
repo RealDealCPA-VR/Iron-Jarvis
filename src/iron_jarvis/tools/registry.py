@@ -464,6 +464,9 @@ _MUTATING_TOOLS: frozenset[str] = frozenset({
     "docx_edit", "pdf_form_fill",
     "image_convert", "image_resize",
     "pixio_generate",
+    # the IJ harness (v1.364.0): its editors, and a long-running program
+    # (which can write while it runs) and what is typed into it
+    "multi_edit", "apply_patch", "notebook_edit", "process_start", "process_write",
     # anything that hands the work to something else that can write
     "delegate", "delegate_remote", "spawn_agent", "workflow_run",
 })

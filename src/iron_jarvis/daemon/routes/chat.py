@@ -104,7 +104,8 @@ from ..chat_turn import (
     _run_tool_round,
     _trust_receipt,
     _DOC_WRITING_TOOLS,
-    _reports_document,
+    _reports_document,  # noqa: F401 — re-exported (the lane reads reported_document_paths)
+    reported_document_paths,
     _ESCALATE_SPEC,
     _ESCALATE_TOOL,
     _MAX_ARMED_TOOLS,
@@ -4906,20 +4907,20 @@ async def chat_stream(
                             # Track created/edited documents for the preview
                             # (mirrors chat_complete). v1.329.0: edit_file's
                             # file too (`_reports_document`), so an edit-only
-                            # turn shows "N files changed". MIRROR NOTE
+                            # turn shows "N files changed". v1.364.0 review:
+                            # the IJ harness editors too, and EVERY file an
+                            # apply_patch created or changed
+                            # (`reported_document_paths`). MIRROR NOTE
                             # (lock-step): chat_turn.py's tool loop.
-                            if _reports_document(tc.name):
-                                _rel = str(
-                                    (getattr(result, "data", None) or {}).get("path")
-                                    or ""
-                                )
-                                if _rel:
-                                    try:
-                                        _abs = str((tool_ws / _rel).resolve())
-                                        if _abs not in made_docs:
-                                            made_docs.append(_abs)
-                                    except Exception:  # noqa: BLE001
-                                        pass
+                            for _rel in reported_document_paths(
+                                tc.name, getattr(result, "data", None)
+                            ):
+                                try:
+                                    _abs = str((tool_ws / _rel).resolve())
+                                    if _abs not in made_docs:
+                                        made_docs.append(_abs)
+                                except Exception:  # noqa: BLE001
+                                    pass
                             # EVERY file a turn creates is disclosed, not just
                             # the document tools' (v1.165.0): merge the
                             # ABSOLUTE ToolResult.created_paths (repl's

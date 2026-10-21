@@ -16,6 +16,9 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from ..harness.textedit import EditError, TextFileError, apply_exact_edit, load_text
+from ..harness.verify import check_line as _code_check
+from ..harness.verify import with_check as _with_check
 from .base import (
     Reversibility,
     Tool,
@@ -324,18 +327,198 @@ def unreadable_reason(target: Path, raw: str) -> "str | None":
     return f"no such file: {raw}"
 
 
+# --------------------------------------------------------------------------- #
+# read_file's line window (v1.364.0, IJ harness Phase 1)
+#
+# Claude Code's Read returns a numbered window of a file (2000 lines by
+# default, `offset`/`limit` for the rest) and says when it cut. read_file
+# returned the whole file or nothing. The window is opt-in: a call with NONE
+# of offset/limit/numbered returns exactly what it always did (chat, office
+# work and their pins read the plain text), and any one of them turns it on.
+# --------------------------------------------------------------------------- #
+
+#: Lines shown when the window is on and no `limit` was given.
+READ_DEFAULT_LIMIT = 2000
+#: The most lines one call shows (a bigger `limit` is clamped; the cut note
+#: says exactly which lines came back).
+READ_MAX_LIMIT = 10_000
+#: A longer line is cut, with a marker saying how long it was.
+READ_LINE_MAX = 2000
+#: The window's total size; past it the window stops early and says so.
+READ_WINDOW_MAX_CHARS = 100_000
+#: Counting a huge file's lines stops after this long (the note then says
+#: "at least").
+_READ_COUNT_DEADLINE_S = 10.0
+
+_WINDOW_KEYS = ("offset", "limit", "numbered")
+
+
+def _int_arg(value: Any, name: str, *, minimum: int) -> int:
+    """An integer argument (a model may send "10"); ValueError in words."""
+    if isinstance(value, bool):
+        raise ValueError(f"`{name}` must be a whole number, not true/false")
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float) and value.is_integer():
+        number = int(value)
+    elif isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        number = int(value.strip())
+    else:
+        raise ValueError(f"`{name}` must be a whole number, got {value!r}")
+    if number < minimum:
+        raise ValueError(f"`{name}` must be at least {minimum}, got {number}")
+    return number
+
+
+def _bool_arg(value: Any, name: str) -> bool:
+    """A boolean argument (a model may send "true"); ValueError in words."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false", "1", "0", "yes", "no"):
+        return value.strip().lower() in ("true", "1", "yes")
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    raise ValueError(f"`{name}` must be true or false, got {value!r}")
+
+
+def _window_spec(args: dict[str, Any]) -> "tuple[int, int, bool] | None":
+    """``(first line, limit, numbered)`` when any window argument was given,
+    else ``None`` (the plain read). Raises ValueError for a bad value."""
+    if not any(args.get(k) is not None for k in _WINDOW_KEYS):
+        return None
+    offset = args.get("offset")
+    first = 1 if offset is None else max(1, _int_arg(offset, "offset", minimum=0))
+    limit_raw = args.get("limit")
+    limit = READ_DEFAULT_LIMIT if limit_raw is None else _int_arg(limit_raw, "limit", minimum=1)
+    numbered = False if args.get("numbered") is None else _bool_arg(args["numbered"], "numbered")
+    return first, min(limit, READ_MAX_LIMIT), numbered
+
+
+def _window_line(body: str) -> str:
+    if len(body) > READ_LINE_MAX:
+        return body[:READ_LINE_MAX] + f"… [line cut: {len(body):,} characters]"
+    return body
+
+
+def _render_window(
+    picked: "list[tuple[int, str]]",
+    total: int,
+    first: int,
+    numbered: bool,
+    *,
+    counted_all: bool,
+    cut_by_chars: bool,
+) -> "tuple[str, dict[str, Any]]":
+    """The window's text and its ``data``: the lines (cat -n style when
+    numbered: number right-aligned in 6, then a tab) and ONE note whenever
+    the window is not the whole file."""
+    if total == 0:
+        return "[the file is empty]", {"first_line": 0, "last_line": 0, "total_lines": 0, "truncated": False}
+    if not picked:
+        of = f"{total:,}" if counted_all else f"at least {total:,}"
+        return (
+            f"[the file has {of} lines; offset {first:,} is past the end]",
+            {"first_line": 0, "last_line": 0, "total_lines": total, "truncated": True},
+        )
+    lines = [f"{no:>6}\t{body}" if numbered else body for no, body in picked]
+    a, b = picked[0][0], picked[-1][0]
+    whole = a == 1 and b == total and counted_all and not cut_by_chars
+    out = "\n".join(lines)
+    if not whole:
+        of = f"{total:,}" if counted_all else f"at least {total:,} (counting stopped)"
+        cut = f" — cut at {READ_WINDOW_MAX_CHARS:,} characters" if cut_by_chars else ""
+        out += f"\n\n[showing lines {a:,}–{b:,} of {of}{cut}; use offset to read more]"
+    return out, {"first_line": a, "last_line": b, "total_lines": total, "truncated": not whole}
+
+
+def _window_of_file(path: Path, first: int, limit: int) -> "tuple[list[tuple[int, str]], int, bool, bool]":
+    """Stream a UTF-8 text file and keep lines ``first``..``first+limit-1``.
+
+    BLOCKING (a worker thread runs it) and BOUNDED: memory holds only the
+    window, and counting the rest of a huge file stops after
+    :data:`_READ_COUNT_DEADLINE_S`. Raises ``UnicodeDecodeError`` for a file
+    that is not UTF-8 (the caller then extracts it like the plain read)."""
+    import time as _time
+
+    started = _time.monotonic()
+    picked: list[tuple[int, str]] = []
+    chars = 0
+    cut_by_chars = False
+    counted_all = True
+    total = 0
+    stop = first + limit
+    with open(path, "r", encoding="utf-8", newline=None) as fh:
+        for total, line in enumerate(fh, 1):
+            if first <= total < stop and not cut_by_chars:
+                body = _window_line(line.rstrip("\n"))
+                if picked and chars + len(body) > READ_WINDOW_MAX_CHARS:
+                    cut_by_chars = True
+                else:
+                    picked.append((total, body))
+                    chars += len(body) + 1
+            elif total >= stop and _time.monotonic() - started >= _READ_COUNT_DEADLINE_S:
+                counted_all = False
+                break
+    return picked, total, counted_all, cut_by_chars
+
+
+def _window_of_text(text: str, first: int, limit: int) -> "tuple[list[tuple[int, str]], int, bool, bool]":
+    """The same window over text already in memory (an extracted document)."""
+    lines = text.splitlines()
+    picked: list[tuple[int, str]] = []
+    chars = 0
+    cut_by_chars = False
+    for no in range(first, min(first + limit, len(lines) + 1)):
+        body = _window_line(lines[no - 1])
+        if picked and chars + len(body) > READ_WINDOW_MAX_CHARS:
+            cut_by_chars = True
+            break
+        picked.append((no, body))
+        chars += len(body) + 1
+    return picked, len(lines), True, cut_by_chars
+
+
+def _windowed(result: ToolResult, first: int, limit: int, numbered: bool) -> ToolResult:
+    """An extracted document's result, windowed like a text file."""
+    if not result.ok:
+        return result
+    picked, total, counted_all, cut = _window_of_text(result.output or "", first, limit)
+    out, extra = _render_window(picked, total, first, numbered, counted_all=counted_all, cut_by_chars=cut)
+    data = dict(result.data or {})
+    data.update(extra)
+    data["bytes"] = len(out)
+    return ToolResult(ok=True, output=out, data=data)
+
+
 class ReadFileTool(Tool):
     name = "read_file"
     description = (
         "Read a file from the session workspace: UTF-8 text (code, .md, .txt, "
         ".json) directly, and Word/PDF/Excel/PowerPoint/RTF by extracting their "
         "text automatically. read_document does the same with page/sheet "
-        "selection for large documents."
+        "selection for large documents. For a long file pass `offset` (the "
+        "1-based line to start at) and/or `limit` (lines, default 2000), and "
+        "`numbered: true` for line numbers; the reply says which lines it "
+        "showed and how many the file has."
     )
     reversibility = Reversibility.READONLY  # a read has no side effect to undo
     input_schema = {
         "type": "object",
-        "properties": {"path": {"type": "string"}},
+        "properties": {
+            "path": {"type": "string"},
+            "offset": {
+                "type": "integer",
+                "description": "1-based line number to start reading at.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "How many lines to read (default 2000 when offset, limit or numbered is given).",
+            },
+            "numbered": {
+                "type": "boolean",
+                "description": "Prefix each line with its line number and a tab (cat -n style).",
+            },
+        },
         "required": ["path"],
     }
 
@@ -354,11 +537,18 @@ class ReadFileTool(Tool):
         reason = await asyncio.to_thread(unreadable_reason, path, str(args["path"]))
         if reason is not None:
             return ToolResult(ok=False, error=reason)
+        try:
+            window = _window_spec(args)
+        except ValueError as exc:
+            return ToolResult(ok=False, error=str(exc))
         # A known office format goes straight to the extractor — the extension
         # is certain knowledge, so there is nothing to try and fail at first.
         kind = _DOC_EXTENSIONS.get(path.suffix.lower())
         if kind:
-            return await _extract_document(path, kind, ctx, self._router_resolver)
+            result = await _extract_document(path, kind, ctx, self._router_resolver)
+            return result if window is None else _windowed(result, *window)
+        if window is not None:
+            return await self._read_window(path, ctx, *window)
         try:
             # Offloaded for the same reason the walk below is: a large file on a
             # slow or unhydrated path blocks every other request in the daemon.
@@ -371,6 +561,27 @@ class ReadFileTool(Tool):
         except OSError as exc:  # permissions, a vanished file, a locked handle
             return ToolResult(ok=False, error=f"could not read {path.name}: {exc}")
         return ToolResult(ok=True, output=text, data={"bytes": len(text)})
+
+    async def _read_window(
+        self, path: Path, ctx: ToolContext, first: int, limit: int, numbered: bool
+    ) -> ToolResult:
+        """The windowed read (v1.364.0): streamed off the loop, only the
+        window kept in memory. A file that is not UTF-8 is extracted exactly
+        as the plain read does, then windowed."""
+        try:
+            picked, total, counted_all, cut = await asyncio.to_thread(
+                _window_of_file, path, first, limit
+            )
+        except UnicodeDecodeError:
+            result = await _extract_document(path, "binary", ctx, self._router_resolver)
+            return _windowed(result, first, limit, numbered)
+        except OSError as exc:
+            return ToolResult(ok=False, error=f"could not read {path.name}: {exc}")
+        out, data = _render_window(
+            picked, total, first, numbered, counted_all=counted_all, cut_by_chars=cut
+        )
+        data["bytes"] = len(out)
+        return ToolResult(ok=True, output=out, data=data)
 
 
 class WriteFileTool(Tool):
@@ -453,10 +664,16 @@ class WriteFileTool(Tool):
             return ToolResult(
                 ok=False, error=unwritable_workspace_error(exc, ctx.workspace)
             )
+        data: dict[str, Any] = {"path": args["path"], "bytes": len(content)}
+        # v1.364.0 (IJ harness): a CODE file gets one syntax-check line; any
+        # other file's output and data are exactly what they were.
+        check = await _code_check(path)
+        if check:
+            data["check"] = check
         return ToolResult(
             ok=True,
-            output=f"wrote {len(content)} bytes to {args['path']}",
-            data={"path": args["path"], "bytes": len(content)},
+            output=_with_check(f"wrote {len(content)} bytes to {args['path']}", check),
+            data=data,
             # v1.166.0: safe again — registry._record skips post-hoc journaling
             # when capture_undo already owns this invocation's UndoJournal slot,
             # so created_paths only feeds chat's documents/ArtifactsRail merge.
@@ -464,16 +681,47 @@ class WriteFileTool(Tool):
         )
 
 
+def _strict_edit(args: dict[str, Any]) -> "tuple[str, str, bool]":
+    """``(old, new, replace_all)`` from an edit_file call; ValueError in words
+    for a bad ``replace_all``."""
+    replace_all = False
+    if args.get("replace_all") is not None:
+        replace_all = _bool_arg(args["replace_all"], "replace_all")
+    return str(args.get("old", "")), str(args.get("new", "")), replace_all
+
+
 class EditFileTool(Tool):
+    """Replace text in one workspace file — STRICTLY (v1.364.0).
+
+    It used to replace the FIRST occurrence of ``old``, so an edit whose text
+    appeared twice landed in whichever came first and said "edited". Claude
+    Code's ``Edit`` refuses that, and so does this tool now: ``old`` must
+    occur EXACTLY ONCE, or the call says how many times it occurs and asks
+    for more context or ``replace_all: true``; text that is not there is
+    refused with the file's nearest line. The engine is
+    :mod:`iron_jarvis.harness.textedit` (shared with ``multi_edit`` and
+    ``apply_patch``), which also keeps the file's line endings and BOM.
+    """
+
     name = "edit_file"
-    description = "Replace the first occurrence of `old` with `new` in a workspace file."
+    description = (
+        "Replace `old` with `new` in a workspace text file. `old` must match "
+        "the file EXACTLY ONCE (copy it with its indentation): the edit is "
+        "refused when the text is not there or appears more than once — add "
+        "surrounding lines to make it unique, or pass replace_all: true to "
+        "change every occurrence. Line endings are kept. Reversible."
+    )
     reversibility = Reversibility.REVERSIBLE  # TX-01: prior bytes are captured
     input_schema = {
         "type": "object",
         "properties": {
             "path": {"type": "string"},
-            "old": {"type": "string"},
-            "new": {"type": "string"},
+            "old": {"type": "string", "description": "The exact text to replace."},
+            "new": {"type": "string", "description": "The text to put in its place."},
+            "replace_all": {
+                "type": "boolean",
+                "description": "Replace every occurrence of `old` (default false: it must occur exactly once).",
+            },
         },
         "required": ["path", "old", "new"],
     }
@@ -481,12 +729,16 @@ class EditFileTool(Tool):
     async def capture_undo(
         self, args: dict[str, Any], ctx: ToolContext
     ) -> "dict[str, Any] | None":
-        """Snapshot the pre-edit text. ``post_sha256`` is the hash of the exact
-        text ``execute`` will produce (first-occurrence replace), so a concurrent
-        edit is caught on undo. No-op when the edit won't apply (file missing / old
-        text absent) — nothing will change, so there is nothing to undo."""
+        """Snapshot the pre-edit BYTES. ``post_sha256`` is the hash of the exact
+        bytes ``execute`` will write (the same strict engine), so a concurrent
+        edit is caught on undo. No-op when the edit won't apply (file missing,
+        ``old`` absent or ambiguous) — nothing will change, so there is
+        nothing to undo. RAW mode: the bytes go back exactly as they were,
+        line endings included (``write_text`` in text mode turned an LF file
+        into CRLF on Windows)."""
         try:
             target = safe_path(ctx.workspace, args["path"])
+            old, new, replace_all = _strict_edit(args)
         except Exception:
             return None
 
@@ -497,20 +749,18 @@ class EditFileTool(Tool):
             if not target.is_file():
                 return None
             try:
-                text = target.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
+                tf = load_text(target, str(args["path"]))
+                new_text, _n = apply_exact_edit(tf.text, old, new, replace_all=replace_all)
+            except (TextFileError, EditError):
                 return None
-            if args["old"] not in text:
-                return None
-            new_text = text.replace(args["old"], args["new"], 1)
             return make_file_descriptor(
                 ctx.config.home,
                 kind="file_restore",
                 path=args["path"],
-                mode="text",
-                prior_bytes=text.encode("utf-8"),
-                pre_sha256=_text_sha(text),
-                post_sha256=_text_sha(new_text),
+                mode="raw",
+                prior_bytes=tf.raw,
+                pre_sha256=sha256_bytes(tf.raw),
+                post_sha256=sha256_bytes(tf.encode(new_text)),
             )
 
         return await asyncio.to_thread(_capture)
@@ -526,13 +776,22 @@ class EditFileTool(Tool):
         reason = await asyncio.to_thread(unreadable_reason, path, str(args["path"]))
         if reason is not None:
             return ToolResult(ok=False, error=reason)
-        text = await asyncio.to_thread(path.read_text, encoding="utf-8")
-        if args["old"] not in text:
-            return ToolResult(ok=False, error="`old` text not found")
         try:
-            await asyncio.to_thread(
-                path.write_text, text.replace(args["old"], args["new"], 1), encoding="utf-8"
-            )
+            old, new, replace_all = _strict_edit(args)
+        except ValueError as exc:
+            return ToolResult(ok=False, error=str(exc))
+        where = str(args["path"])
+
+        def _edit() -> int:
+            tf = load_text(path, where)
+            new_text, count = apply_exact_edit(tf.text, old, new, replace_all=replace_all, where=where)
+            path.write_bytes(tf.encode(new_text))
+            return count
+
+        try:
+            count = await asyncio.to_thread(_edit)
+        except (TextFileError, EditError) as exc:
+            return ToolResult(ok=False, error=str(exc))
         except PermissionError as exc:  # v1.228.0: name the folder (audit T3)
             return ToolResult(
                 ok=False, error=unwritable_workspace_error(exc, ctx.workspace)
@@ -544,11 +803,17 @@ class EditFileTool(Tool):
         # text is unchanged. Deliberately NOT `created_paths`: that field
         # means CREATED (the registry, the workflow engine and the run card
         # all read it that way), and this file existed before the call.
-        return ToolResult(
-            ok=True,
-            output=f"edited {args['path']}",
-            data={"path": str(args["path"]), "abs_path": str(path)},
-        )
+        data: dict[str, Any] = {"path": where, "abs_path": str(path)}
+        output = f"edited {where}"
+        if replace_all:
+            # Said only for replace_all: a strict single edit keeps the exact
+            # output and data it always had.
+            data["replacements"] = count
+            output += f" ({count} replacement{'s' if count != 1 else ''})"
+        check = await _code_check(path)
+        if check:
+            data["check"] = check
+        return ToolResult(ok=True, output=_with_check(output, check), data=data)
 
 
 def _case_only_rename(src: Path, dst: Path) -> bool:
@@ -889,16 +1154,76 @@ class ListFilesTool(Tool):
 
 class GrepTool(Tool):
     name = "grep"
-    description = "Regex-search workspace files; returns matching path:line entries."
+    description = (
+        "Regex-search workspace files; returns matching path:line entries. "
+        "Optional: output_mode (content | files_with_matches | count), "
+        "context / before_context / after_context lines, case_insensitive, a "
+        "`glob` file filter ('*.py', 'src/**/*.ts') or a `type` ('py', 'ts'), "
+        "head_limit (default 250) with offset to page, multiline, and "
+        "line_numbers. Skips .git, node_modules, hidden folders and build output; "
+        "the reply says when it could not cover everything."
+    )
     reversibility = Reversibility.READONLY  # a search has no side effect
     input_schema = {
         "type": "object",
-        "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}},
+        "properties": {
+            "pattern": {"type": "string"},
+            "path": {"type": "string"},
+            "output_mode": {
+                "type": "string",
+                "enum": ["content", "files_with_matches", "count"],
+                "description": "content (matching lines, the default), files_with_matches (paths, newest first) or count (matches per file).",
+            },
+            "context": {"type": "integer", "description": "Lines of context before and after each match."},
+            "before_context": {"type": "integer", "description": "Lines of context before each match."},
+            "after_context": {"type": "integer", "description": "Lines of context after each match."},
+            "case_insensitive": {"type": "boolean"},
+            "glob": {"type": "string", "description": "Only files matching this glob ('*.py' matches by name at any depth)."},
+            "type": {"type": "string", "description": "Only files of this type: py, js, ts, md, json, go, rust, java, …"},
+            "head_limit": {"type": "integer", "description": "Show at most this many lines/entries (default 250; 0 = up to 5000)."},
+            "offset": {"type": "integer", "description": "Skip this many lines/entries first (to page)."},
+            "multiline": {"type": "boolean", "description": "Let the pattern span lines ('.' matches newlines)."},
+            "line_numbers": {"type": "boolean", "description": "Show line numbers in content mode (default true)."},
+        },
         "required": ["pattern"],
     }
 
+    async def _search_v2(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """The full form (v1.364.0): any argument beyond pattern/path."""
+        from ..harness.search import SearchError, grep, parse_grep_options, render_grep
+
+        base = safe_path(ctx.workspace, args.get("path", "."))
+        if not await asyncio.to_thread(base.exists):
+            return ToolResult(ok=False, error=f"no such file or folder: {args.get('path', '.')}")
+        try:
+            opts = parse_grep_options(args)
+            report = await asyncio.to_thread(lambda: grep(base, ctx.workspace.resolve(), opts))
+        except SearchError as exc:
+            return ToolResult(ok=False, error=str(exc))
+        return ToolResult(
+            ok=True,
+            output=render_grep(report, opts),
+            data={
+                "mode": opts.output_mode,
+                "matches": report.matches,
+                "files": report.files_matched,
+                "entries": report.total_entries,
+                "shown": sum(1 for e in report.entries if e != "--"),
+                "truncated": bool(report.walk_truncated),
+                "skipped_unreadable": report.unreadable,
+                "skipped_oversize": report.oversize,
+            },
+        )
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         import asyncio
+
+        from ..harness.search import wants_new_grep
+
+        # v1.364.0: any new argument takes the full form; pattern + path
+        # alone run the original search below, byte for byte.
+        if wants_new_grep(args):
+            return await self._search_v2(args, ctx)
 
         base = safe_path(ctx.workspace, args.get("path", "."))
         try:

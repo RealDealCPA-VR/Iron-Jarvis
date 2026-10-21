@@ -44,6 +44,30 @@ def default_permissions() -> dict[str, str]:
         "rename_file": "allow",
         "list_files": "allow",
         "grep": "allow",
+        # IJ HARNESS (v1.364.0, Phase 1). The editors sit at edit_file's tier:
+        # workspace-confined (`safe_path`), all or nothing, and TX-01
+        # undoable — `apply_patch` included, whose delete keeps the deleted
+        # file's bytes for its Undo. `glob` and `plan_update` only read (the
+        # plan writes nothing). An app's resources are READ from a pack the
+        # user installed (fenced as untrusted content; a local-only turn cards
+        # the read, providers/egress.READS_APP_RESOURCES_TOOLS).
+        "multi_edit": "allow",
+        "apply_patch": "allow",
+        "notebook_edit": "allow",
+        "glob": "allow",
+        "plan_update": "allow",
+        "mcp_list_resources": "allow",
+        "mcp_read_resource": "allow",
+        # A long-running program is `shell`'s power that keeps going: start
+        # and write ASK and sit on the deny floor (tools/permissions), like
+        # shell and pane_spawn/pane_send. Reading the session's OWN program's
+        # output and stopping it only observe or narrow what runs — `allow`,
+        # so a dev server's log is not a card per read (process_read and
+        # process_stop can only reach a program this session started).
+        "process_start": "ask",
+        "process_write": "ask",
+        "process_read": "allow",
+        "process_stop": "allow",
         "search_codebase": "deny",  # no tool yet — fail-closed (use grep/file_search)
         "shell": "ask",
         # The session namespace (v1.159.0). Same gate as shell and for a

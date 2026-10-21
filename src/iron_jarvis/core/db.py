@@ -589,6 +589,22 @@ def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> 
             ).all()
             if r
         ]
+        # v1.364.0 (IJ harness): an ``apply_patch`` row keeps one before-image
+        # PER FILE inside its envelope (``pre_ref`` is None), and those blobs
+        # hold prior file content exactly like the column's — reclaimed with
+        # the row, never stranded.
+        from ..tools.undo import PATCH_UNDO_KIND, patch_entries
+
+        for inline in db.exec(
+            select(UndoJournal.pre_inline).where(
+                UndoJournal.created_at < cutoff, UndoJournal.kind == PATCH_UNDO_KIND
+            )
+        ).all():
+            try:
+                meta = json.loads(inline or "{}")
+            except (TypeError, ValueError):
+                continue
+            stale_refs += [str(e["ref"]) for e in patch_entries(meta) if e.get("ref")]
         # Drop the history-search docs for the expiring runs BEFORE the bulk
         # delete removes the rows we read them from — the index keys its docs by
         # ``ref``, and a deleted run whose docs survive is an orphan no later

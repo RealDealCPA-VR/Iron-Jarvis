@@ -251,6 +251,16 @@ ASK_WORDS: dict[str, str] = {
     "write_document": "create a document",
     "excel_edit": "edit a workbook",
     "generate_media": "make an image, video or sound",
+    # v1.364.0 (IJ harness Phase 1): the two that ask (a program that keeps
+    # running, typing into it) and the resource read a local-only turn cards.
+    "process_start": "start a program that keeps running",
+    "process_write": "type into a running program",
+    "mcp_read_resource": "read something from one of your apps",
+    # v1.364.0 review: the IJ harness editors card under "Ask before file
+    # edits" (chat_turn.STRICT_ASK_TOOLS).
+    "multi_edit": "change a file",
+    "apply_patch": "change files with a patch",
+    "notebook_edit": "change a notebook",
 }
 
 
@@ -409,6 +419,16 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "workflow_update": ("changed a workflow", "workflow change"),
     "app_connect": ("connected an app", "app connection"),
     "generate_media": ("made an image, video or sound", "media generation"),
+    # v1.364.0 (IJ harness Phase 1): the new coding tools the work line does
+    # not word by kind (multi_edit / notebook_edit are "change", glob is
+    # "search", process_start is "command" — _STEP_KIND below).
+    "apply_patch": ("applied a patch", "patch"),
+    "plan_update": ("updated its plan", "plan update"),
+    "process_read": ("read a running program's output", "program output read"),
+    "process_write": ("typed into a running program", "program input"),
+    "process_stop": ("stopped a running program", "program stop"),
+    "mcp_list_resources": ("listed an app's resources", "resource listing"),
+    "mcp_read_resource": ("read an app's resource", "resource read"),
 }
 
 #: browser/tools.py's 14 built-in browser tools, by EXACT name (the
@@ -431,12 +451,12 @@ _STEP_KIND: dict[str, str] = {
          "image_resize", "pdf_split", "redact_pii"), "make"),
     **dict.fromkeys(
         ("edit_file", "docx_edit", "excel_edit", "excel_apply_spec", "rename_file",
-         "pdf_arrange", "pdf_form_fill"), "change"),
+         "pdf_arrange", "pdf_form_fill", "multi_edit", "notebook_edit"), "change"),
     **dict.fromkeys(("list_files", "list_folder"), "folder"),
-    "grep": "search",
+    **dict.fromkeys(("grep", "glob"), "search"),
     "web_search": "web",
     "web_fetch": "page",
-    **dict.fromkeys(("shell", "run_code", "repl"), "command"),
+    **dict.fromkeys(("shell", "run_code", "repl", "process_start"), "command"),
     "rest_call": "service",
 }
 
@@ -607,6 +627,9 @@ _PRESENT: dict[str, str] = {
     "undid": "undo",
     "waited": "wait",
     "worked": "work",
+    # v1.364.0 (IJ harness Phase 1).
+    "applied": "apply",
+    "stopped": "stop",
 }
 
 
@@ -895,8 +918,10 @@ def _team_documents(db, sessions: dict[str, Session]) -> dict[str, list[str]]:
         _CREATED_KIND,
         _CREATED_MANY_KIND,
         _LIST_CAP,
+        _PATCH_KIND,
         _envelope_path,
         _envelope_paths,
+        _patch_paths,
         _rel,
     )
 
@@ -909,7 +934,7 @@ def _team_documents(db, sessions: dict[str, Session]) -> dict[str, list[str]]:
         .where(
             ToolInvocation.session_id.in_(list(sessions)),  # type: ignore[attr-defined]
             ToolInvocation.undo_of.is_(None),  # type: ignore[union-attr]
-            UndoJournal.kind.in_((_CREATED_KIND, _CHANGED_KIND, _CREATED_MANY_KIND)),  # type: ignore[attr-defined]
+            UndoJournal.kind.in_((_CREATED_KIND, _CHANGED_KIND, _CREATED_MANY_KIND, _PATCH_KIND)),  # type: ignore[attr-defined]
         )
         .order_by(
             ToolInvocation.created_at,  # type: ignore[arg-type]
@@ -927,6 +952,17 @@ def _team_documents(db, sessions: dict[str, Session]) -> dict[str, list[str]]:
                 rp = _rel(p, workspace)
                 if rp and rp not in made:
                     made.append(rp)
+            continue
+        if kind == _PATCH_KIND:
+            patch_made, patch_edited = _patch_paths(journal)
+            for p in patch_made:
+                rp = _rel(p, workspace)
+                if rp and rp not in made:
+                    made.append(rp)
+            for p in patch_edited:
+                rp = _rel(p, workspace)
+                if rp and rp not in edited:
+                    edited.append(rp)
             continue
         path = _rel(_envelope_path(journal), workspace)
         if not path:

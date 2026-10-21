@@ -114,6 +114,9 @@ _CREATED_KIND = "file_delete"
 #: Multi-file creation envelope (v1.166.0): one row, pre_inline {"paths": [...]}.
 _CREATED_MANY_KIND = "files_delete"
 _CHANGED_KIND = "file_restore"
+#: An ``apply_patch`` call (v1.364.0, IJ harness): one row whose envelope
+#: lists the files it created and changed (a deleted file is not a document).
+_PATCH_KIND = "files_patch"
 
 #: Cap on each list in the payload. A migration touching 4,000 files must not
 #: produce a 4,000-row card (or response); the count stays honest via ``*_total``.
@@ -163,6 +166,18 @@ def _envelope_paths(journal: UndoJournal) -> list[str]:
     if not isinstance(paths, list):
         return []
     return [str(p) for p in paths if p]
+
+
+def _patch_paths(journal: UndoJournal) -> tuple[list[str], list[str]]:
+    """``(created, changed)`` of an ``apply_patch`` (``files_patch``) row."""
+    from ..tools.undo import patch_lists
+
+    try:
+        meta = json.loads(journal.pre_inline or "{}")
+    except (TypeError, ValueError):
+        return [], []
+    created, changed, _deleted = patch_lists(meta if isinstance(meta, dict) else {})
+    return created, changed
 
 
 def _rel(path: str, workspace: str) -> str:
@@ -434,6 +449,17 @@ def session_result(
                         rp = _rel(p, workspace)
                         if rp and rp not in created:
                             created.append(rp)
+                    continue
+                if journal.kind == _PATCH_KIND:
+                    made, edited = _patch_paths(journal)
+                    for p in made:
+                        rp = _rel(p, workspace)
+                        if rp and rp not in created:
+                            created.append(rp)
+                    for p in edited:
+                        rp = _rel(p, workspace)
+                        if rp and rp not in changed:
+                            changed.append(rp)
                     continue
                 path = _rel(_envelope_path(journal), workspace)
                 if not path:

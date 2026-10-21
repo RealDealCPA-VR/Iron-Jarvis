@@ -4343,14 +4343,49 @@ _DOC_WRITING_TOOLS = {
 #: ``created_paths``. ``rename_file`` is not here either: a rename changes no
 #: content, and ``POST /chat/changes`` skips renames, so listing one would add
 #: a file to the rail and nothing to the line.
-_FILE_EDIT_TOOLS: frozenset[str] = frozenset({"edit_file"})
+_FILE_EDIT_TOOLS: frozenset[str] = frozenset(
+    # v1.364.0 (IJ harness Phase 1 review): the new single-file editors name
+    # their file in ``data.path`` exactly like edit_file.
+    {"edit_file", "multi_edit", "notebook_edit"}
+)
+
+#: Editors that change SEVERAL files in one call and list them in ``data``
+#: (v1.364.0 review): ``apply_patch`` names what it created and what it
+#: changed (``data.created`` / ``data.changed``, workspace-relative). A file
+#: it DELETED is not listed: a document that is gone cannot be previewed, and
+#: ``POST /chat/changes`` still answers for it from the journal.
+_MULTI_FILE_EDIT_TOOLS: frozenset[str] = frozenset({"apply_patch"})
 
 
 def _reports_document(name: str) -> bool:
-    """Does this tool's ``data.path`` name a file the turn's ``documents``
-    should list? The ONE answer both chat lanes use. MIRROR NOTE (lock-step):
-    chat_complete's tool loop and routes/chat.py's stream loop both call it."""
-    return name in _DOC_WRITING_TOOLS or name in _FILE_EDIT_TOOLS
+    """Does this tool name a file the turn's ``documents`` should list? The
+    ONE answer both chat lanes use. MIRROR NOTE (lock-step): chat_complete's
+    tool loop and routes/chat.py's stream loop both call it (through
+    :func:`reported_document_paths`)."""
+    return (
+        name in _DOC_WRITING_TOOLS
+        or name in _FILE_EDIT_TOOLS
+        or name in _MULTI_FILE_EDIT_TOOLS
+    )
+
+
+def reported_document_paths(name: str, data: Any) -> list[str]:
+    """The workspace-relative paths a SUCCESSFUL call of ``name`` puts in the
+    turn's ``documents`` (v1.364.0 review): ``data.path`` for a document tool
+    or a single-file editor, every created and changed file for
+    ``apply_patch``; ``[]`` for any other tool. MIRROR NOTE (lock-step): both
+    chat lanes resolve these against their tool workspace."""
+    if not _reports_document(name) or not isinstance(data, dict):
+        return []
+    if name in _MULTI_FILE_EDIT_TOOLS:
+        out: list[str] = []
+        for key in ("created", "changed"):
+            for rel in data.get(key) or ():
+                if isinstance(rel, str) and rel and rel not in out:
+                    out.append(rel)
+        return out
+    rel = str(data.get("path") or "")
+    return [rel] if rel else []
 
 
 #: A chat turn that can WRITE a document gets this many tool rounds instead
@@ -4807,6 +4842,10 @@ _FILE_WRITING_TOOLS = frozenset(
 STRICT_ASK_TOOLS = (
     _FILE_WRITING_TOOLS
     | {"pdf_arrange", "pdf_split", "rename_file", "edit_file"}
+    # v1.364.0 (IJ harness Phase 1 review): the new editors are edit_file's
+    # tier (allow), so without them here the "ask before file edits" posture
+    # let a patch, a multi-edit or a notebook edit change files uncarded.
+    | {"multi_edit", "apply_patch", "notebook_edit"}
     | {"web_search", "web_fetch"}
 )
 
@@ -4834,6 +4873,11 @@ _FILE_CHANGING_TOOLS = _FILE_WRITING_TOOLS | frozenset(
         "pixio_generate",
         "pixio_status",
         "repl",
+        # v1.364.0 (IJ harness Phase 1 review): the new editors change files
+        # they NAME, so a reply about the file they wrote is never accused.
+        "multi_edit",
+        "apply_patch",
+        "notebook_edit",
     }
 )
 
@@ -7730,18 +7774,19 @@ async def run_chat_turn(
                         # in the tool result) as ABSOLUTE paths for the preview.
                         # v1.329.0: edit_file's file too (`_reports_document`),
                         # so an edit-only turn shows "N files changed".
+                        # v1.364.0 review: the IJ harness editors too, and
+                        # EVERY file an apply_patch created or changed
+                        # (`reported_document_paths`).
                         # MIRROR NOTE (lock-step): routes/chat.py's stream loop.
-                        if _reports_document(tc.name):
-                            _rel = str(
-                                (getattr(result, "data", None) or {}).get("path") or ""
-                            )
-                            if _rel:
-                                try:
-                                    _abs = str((tool_ws / _rel).resolve())
-                                    if _abs not in made_docs:
-                                        made_docs.append(_abs)
-                                except Exception:  # noqa: BLE001
-                                    pass
+                        for _rel in reported_document_paths(
+                            tc.name, getattr(result, "data", None)
+                        ):
+                            try:
+                                _abs = str((tool_ws / _rel).resolve())
+                                if _abs not in made_docs:
+                                    made_docs.append(_abs)
+                            except Exception:  # noqa: BLE001
+                                pass
                         # EVERY file a turn creates is disclosed, not just the
                         # document tools' (v1.165.0): ToolResult.created_paths
                         # carries ABSOLUTE paths for files a tool could not
