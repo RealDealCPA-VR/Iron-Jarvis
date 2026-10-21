@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.365.1 (2026-10-21).*
+holds itself to. Current as of v1.365.2 (2026-10-21).*
 
 ---
 
@@ -2013,8 +2013,9 @@ it.
   chat on such a server, pick one of its listed local names.
 - **What it can read.** This works for LiteLLM proxies. Iron Jarvis keeps the
   last list it read, including across a restart. A server that is not a proxy
-  (Ollama, vLLM, LM Studio) is judged by its address as before. So is a proxy
-  that only shows its list with a key, which Iron Jarvis does not send.
+  (Ollama, vLLM, LM Studio) is judged by its address as before. A proxy that
+  shows its list only with a key is read with the key you saved for that
+  server (since v1.365.2).
 
 ## No notice lost, the app you meant once more, and your machine named once (v1.361.0)
 

@@ -3720,9 +3720,11 @@ does not need a bump, stop and bump it.
   commit, Auto's pool and classifier. `LocalOnlyRefused` names the NAME when
   the address was fine ("DGX Spark passes frontier on to a cloud service").
   Dashboard: `lib/localOnly.cloudAskFor` asks for an unlisted model unless
-  EVERY row of its provider stays. Known: a keyed proxy's list is not read
-  (no key is sent); a table can be up to a minute stale after the proxy's
-  config changes. Pins: `tests/test_fleet_cloud_routed_v1362.py` (33
+  EVERY row of its provider stays. A keyed proxy's list is read WITH the
+  node's own saved key (v1.365.2: `daemon/app._route_reader_for` → the
+  vault's `api_key_name`, sent as Bearer, never logged — the user's proxy
+  started requiring a master key and /model/info answered 401). Known: a
+  table can be up to a minute stale after the proxy's config changes. Pins: `tests/test_fleet_cloud_routed_v1362.py` (33
   mutations, all red), `dashboard/__tests__/local-only-proxy-v1362.test.ts`.
 
 - **No notice lost: ONE window speaks, a workflow's notice stands in only for

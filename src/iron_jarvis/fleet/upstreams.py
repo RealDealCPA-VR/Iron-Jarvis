@@ -207,17 +207,25 @@ def parse_model_info(payload: Any) -> RouteTable | None:
     return RouteTable(entries=tuple(out), read_at=time.time())
 
 
-def read_routes(node: FleetNode, *, get: probes.Getter = probes._get) -> "RouteTable | str":
+def read_routes(
+    node: FleetNode, *, get: probes.Getter = probes._get, key: str = ""
+) -> "RouteTable | str":
     """Read one node's routing table: a :class:`RouteTable`,
     :data:`NOT_A_PROXY`, or :data:`UNREAD`. BLOCKING (one HTTP GET with the
     probes' short timeout): the sampler calls it from a worker thread, never
-    the loop. Never raises."""
+    the loop. Never raises.
+
+    *key* (v1.365.2): the node's own saved API key, sent as a Bearer token —
+    a proxy with a master key answers ``/model/info`` 401 without it, and the
+    table (and with it the cloud verdict) would then never be read. The key
+    goes in the request header only; it is never logged or stored here."""
     try:
         root = probes.normalize_root(getattr(node, "base_url", "") or "")
         if not root:
             return NOT_A_PROXY
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
         try:
-            resp = get(f"{root}/model/info", headers={})
+            resp = get(f"{root}/model/info", headers=headers)
         except Exception:  # noqa: BLE001 — no answer: keep what we had
             return UNREAD
         code = int(getattr(resp, "status_code", 0) or 0)

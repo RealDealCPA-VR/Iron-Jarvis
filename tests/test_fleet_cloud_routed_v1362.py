@@ -602,7 +602,7 @@ def test_the_daemon_wires_the_real_reader_into_its_sampler():
     src = (Path(__file__).resolve().parents[1] / "src" / "iron_jarvis" / "daemon" / "app.py").read_text(
         encoding="utf-8"
     )
-    assert "route_reader=read_routes" in src
+    assert "route_reader=_route_reader_for(platform)" in src
     platform_src = (Path(__file__).resolve().parents[1] / "src" / "iron_jarvis" / "platform.py").read_text(
         encoding="utf-8"
     )
@@ -735,3 +735,39 @@ def test_the_where_line_ladder_names_the_model_the_turn_will_send():
     assert where_model(SimpleNamespace(provider="", model=""), proj, cfg) == "glm-5.3-flash"
     assert where_model(SimpleNamespace(provider="", model=""), SimpleNamespace(default_provider=""), cfg) == "fleet"
     assert where_model(SimpleNamespace(provider="", model=""), None, cfg) == "fleet"
+
+
+
+def test_a_keyed_proxy_is_read_with_the_nodes_own_key():
+    """v1.365.2: the user's proxy started requiring a master key; without it
+    /model/info answers 401, the table is never read and a cloud-routed name
+    is judged by the address again (local)."""
+    seen = []
+
+    def get(url, headers=None):
+        seen.append(dict(headers or {}))
+        if (headers or {}).get("Authorization") != "Bearer sk-test-key":
+            return _Resp(401)
+        return _Resp(200, DGX_MODEL_INFO)
+
+    node = FleetNode(id="custom", base_url=PROXY, api_key_name="custom_api_key")
+    assert read_routes(node, get=get) == UNREAD  # no key: unread, as before
+    table = read_routes(node, get=get, key="sk-test-key")
+    assert isinstance(table, RouteTable) and table.place("frontier") == PLACE_CLOUD
+    assert seen[0] == {} and seen[1] == {"Authorization": "Bearer sk-test-key"}
+
+
+def test_the_daemons_reader_takes_the_key_from_the_vault(monkeypatch):
+    from iron_jarvis.daemon import app as appmod
+    from iron_jarvis.fleet import upstreams as up
+
+    calls = []
+    monkeypatch.setattr(up, "read_routes", lambda node, key="": calls.append((node.id, key)) or UNREAD)
+    vault = {"custom_api_key": "sk-from-vault"}
+    platform = SimpleNamespace(secrets=SimpleNamespace(get=lambda n: vault.get(n)))
+    reader = appmod._route_reader_for(platform)
+    reader(FleetNode(id="custom", base_url=PROXY, api_key_name="custom_api_key"))
+    reader(FleetNode(id="box", base_url="http://192.168.1.9:8000"))
+    broken = appmod._route_reader_for(SimpleNamespace(secrets=SimpleNamespace(get=lambda n: 1 / 0)))
+    broken(FleetNode(id="custom", base_url=PROXY, api_key_name="custom_api_key"))
+    assert calls == [("custom", "sk-from-vault"), ("box", ""), ("custom", "")]

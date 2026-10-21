@@ -639,6 +639,26 @@ async def _fts_backfill_loop(
             await asyncio.sleep(idle_delay)
 
 
+
+def _route_reader_for(platform):
+    """The fleet sampler's routing-table reader (v1.365.2): ``read_routes``
+    with the node's own API key from the vault (``FleetNode.api_key_name`` —
+    the custom slot's is ``custom_api_key``). Runs in the sampler's worker
+    thread. A vault that cannot answer means no key, never a crash."""
+    from ..fleet.upstreams import read_routes
+
+    def reader(node):
+        key = ""
+        name = getattr(node, "api_key_name", "") or ""
+        if name:
+            try:
+                key = platform.secrets.get(name) or ""
+            except Exception:  # noqa: BLE001 — read without a key
+                key = ""
+        return read_routes(node, key=key)
+
+    return reader
+
 def create_app(project_root: str | None = None) -> FastAPI:
     # BOOT BREAKDOWN (v1.250.0, S-01 — see _boot_line). `_boot` spans THIS
     # function as well as the lifespan, because the gap the review blamed
@@ -798,7 +818,6 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # actually watching (GET /fleet touches the lease). Constructed here but NOT
     # started until lifespan — a bare create_app() in tests must never poll.
     from ..fleet.sampler import FleetSampler
-    from ..fleet.upstreams import read_routes
 
     fleet_sampler = FleetSampler(
         platform.fleet,
@@ -807,8 +826,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # failed with the exception after one that raised. Arming is not health.
         on_tick=lambda ok, exc: _tick("fleet", ok, exc),
         # v1.362.0: each model proxy's routing table, so a name it sends to
-        # the cloud is not called local (fleet/upstreams.py).
-        route_reader=read_routes,
+        # the cloud is not called local (fleet/upstreams.py). v1.365.2: with
+        # the node's own saved key, so a proxy behind a master key is read too.
+        route_reader=_route_reader_for(platform),
     )
 
     # LIVE re-arm bridge: lifespan drops its event loop + the autonomy/sentinel
