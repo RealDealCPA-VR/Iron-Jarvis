@@ -83,6 +83,13 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
     words: "terminals",
     tools: ["pane_send", "pane_spawn"],
   },
+  // v1.364.0 (IJ harness Phase 1): a program that keeps running cannot be
+  // put in the low-trust sandbox, so starting one, or typing into one, is
+  // kept away (reading its output and stopping it are not).
+  {
+    words: "programs",
+    tools: ["process_start", "process_write"],
+  },
   {
     words: "your web services",
     tools: ["rest_call"],
@@ -96,7 +103,8 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
 /** What a low-trust run cannot do, one sentence (the chip's hover). */
 export const LOW_TRUST_CANNOT =
   "This run can't change settings, schedules, rules, connections, memory, agents or skills, " +
-  "can't type into your terminals, can't call your web services and can't spend credits. " +
+  "can't type into your terminals, can't start programs that keep running, " +
+  "can't call your web services and can't spend credits. " +
   "It can still read, search and answer.";
 
 /** The chip's whole hover: the daemon's reason (and since when), then what

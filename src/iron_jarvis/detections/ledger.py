@@ -44,6 +44,7 @@ SYNC and blocking (SQLite): route callers hop through ``asyncio.to_thread``.
 from __future__ import annotations
 
 import json
+import re
 from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -83,6 +84,10 @@ COMMAND_TOOLS: dict[str, tuple[str, ...]] = {
     "run_code": ("code",),
     "repl": ("code", "source", "expression"),
     "pane_send": ("text",),
+    # v1.364.0 (IJ harness): a long-running program is a command, and what
+    # is typed into it is too (the same reason pane_send is here).
+    "process_start": ("command",),
+    "process_write": ("input",),
 }
 
 FILE_READ_TOOLS = frozenset(
@@ -123,8 +128,18 @@ FILE_WRITE_TOOLS = frozenset(
         "image_convert",
         "image_resize",
         "redact_pii",
+        # v1.364.0 (IJ harness): the new editors. apply_patch names its files
+        # inside the patch text: one file.write event per path (below).
+        "multi_edit",
+        "notebook_edit",
+        "apply_patch",
     }
 )
+
+#: The file headers of an ``apply_patch`` patch (harness/patch.py), read for
+#: the paths it writes; at most :data:`_PATCH_PATHS_MAX` events per call.
+_PATCH_PATH = re.compile(r"^\s*\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$", re.M)
+_PATCH_PATHS_MAX = 50
 NETWORK_TOOLS = frozenset(
     {
         "web_fetch",
@@ -274,6 +289,17 @@ def to_events(
         action = "approval.denied"
     event["action"] = action
     events = [event]
+    if name == "apply_patch" and not denied:
+        patch = args.get("patch") if isinstance(args.get("patch"), str) else args.get("input")
+        paths: list[str] = []
+        for p in _PATCH_PATH.findall(patch if isinstance(patch, str) else ""):
+            if p not in paths:
+                paths.append(p)
+            if len(paths) >= _PATCH_PATHS_MAX:
+                break
+        if paths:
+            event["path"] = paths[0]
+            events += [{**event, "path": p} for p in paths[1:]]
     second = SECOND_PATH.get(name)
     if second:
         other = _first(args, (second,))

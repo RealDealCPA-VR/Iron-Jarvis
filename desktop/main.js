@@ -2800,6 +2800,9 @@ const TOOL_WORDS = {
   write_document: "create a document",
   excel_edit: "edit a workbook",
   generate_media: "make an image, video or sound",
+  process_start: "start a program that keeps running",
+  process_write: "type into a running program",
+  mcp_read_resource: "read something from one of your apps",
 };
 
 //: The batch forms ("rename or move 4 files") for the asks that come in

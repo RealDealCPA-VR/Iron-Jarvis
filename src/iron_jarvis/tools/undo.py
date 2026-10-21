@@ -157,6 +157,44 @@ def resolve_prior_bytes(
     return None
 
 
+# --- the multi-file patch envelope (v1.364.0, IJ harness apply_patch) ------
+
+#: ONE journal row (its key is the invocation id) for an ``apply_patch`` call,
+#: holding one entry PER FILE the patch touched: ``{"path": <workspace-
+#: relative>, "existed": bool, "data": <base64 before-image> | None, "ref":
+#: <blob ref> | None, "post_sha256": <hash of what the patch left> | None}``
+#: (``post_sha256`` None = the patch left no file there). The envelope also
+#: lists ``created`` / ``changed`` / ``deleted`` for the readers
+#: (``agents/outcome``, the chat's changes view).
+PATCH_UNDO_KIND = "files_patch"
+
+
+def patch_entries(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """The per-file entries of a ``files_patch`` envelope (``[]`` when none)."""
+    files = meta.get("files") if isinstance(meta, dict) else None
+    return [e for e in files if isinstance(e, dict) and e.get("path")] if isinstance(files, list) else []
+
+
+def patch_lists(meta: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+    """``(created, changed, deleted)`` workspace-relative paths of a
+    ``files_patch`` envelope."""
+
+    def _strs(key: str) -> list[str]:
+        value = meta.get(key) if isinstance(meta, dict) else None
+        return [str(p) for p in value if isinstance(p, str) and p] if isinstance(value, list) else []
+
+    return _strs("created"), _strs("changed"), _strs("deleted")
+
+
+def patch_entry_before(home: str | Path, entry: dict[str, Any]) -> bytes | None:
+    """One ``files_patch`` entry's before-image (``None`` = it did not exist)."""
+    if entry.get("data") is not None:
+        return base64.b64decode(entry["data"])
+    if entry.get("ref"):
+        return load_preimage(home, entry["ref"])
+    return None
+
+
 # --- revert-safety + shared file revert ------------------------------------
 
 def guard_unchanged(current_sha: str | None, post_sha: str | None) -> str | None:

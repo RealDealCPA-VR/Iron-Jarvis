@@ -1,0 +1,3257 @@
+{
+  "generated": "2026-10-21",
+  "claude_code": {
+    "version": "2.1.306 (Claude Code) (`claude --version`; the task statement said 2.1.29x - the installed build is newer)",
+    "source": [
+      "https://code.claude.com/docs/en/tools-reference  (tool list, permission column, per-tool behaviour; fetched 2026-10-21)",
+      "https://code.claude.com/docs/en/agent-sdk/typescript  (Agent SDK TypeScript: Tool Input/Output Types; fetched 2026-10-21)",
+      "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)",
+      "Corroboration: the schemas this research agent itself received from its Claude Code host for Read/Grep/Glob/Bash/Edit/Write/PowerShell/Agent/Skill/ToolSearch/TaskStop/SubagentHandback match the binary (the exact CLI build of that host was not verified).",
+      "Note: docs.anthropic.com / docs.claude.com Claude Code pages now live at code.claude.com/docs."
+    ],
+    "tools": [
+      {
+        "name": "Read",
+        "category": "file_read",
+        "params": {
+          "type": "object",
+          "properties": {
+            "file_path": {
+              "type": "string",
+              "description": "The absolute path to the file to read"
+            },
+            "offset": {
+              "type": "integer",
+              "description": "The line number to start reading from. Only provide if the file is too large to read at once",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "description": "The number of lines to read. Only provide if the file is too large to read at once.",
+              "exclusiveMinimum": 0
+            },
+            "pages": {
+              "type": "string",
+              "description": "Page range for PDF files (e.g., \"1-5\", \"3\", \"10-20\"). Only applicable to PDF files. Maximum 20 pages per request."
+            },
+            "allow_large": {
+              "type": "boolean",
+              "description": "Set to true to read a text file, or a line range of one, that is over the usual size limits, up to what still fits in your context..."
+            }
+          },
+          "required": [
+            "file_path"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "file_path must be absolute.",
+          "Reads up to 2000 lines by default (binary constant Z$t=2000; prompt 'Reads up to ${Z$t} lines by default').",
+          "Output in cat -n format, line numbers start at 1: 'Each line is the line number, a single separator (a tab or `:`), then the verbatim file content (including any leading whitespace).' Observed in this session: number right-aligned (6 wide) then a tab.",
+          "One call returns at most 25,000 tokens (CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS); a whole file over the token cap returns the first page with a 'PARTIAL view' notice; a whole file over 256 KB, or an offset/limit read over the cap, returns an error telling it to page or Grep. allow_large (v2.1.296+) sizes the read to remaining context.",
+          "Images (PNG/JPEG/GIF/WebP) returned as visual content (resized; refuses > 128 MB); PDFs read whole when short, `pages` required for > 10 pages, max 20 pages/call, page rendering needs pdftoppm; .ipynb returns all cells with outputs (error over 256 KB of cells; refuses > 100 MB).",
+          "Empty file -> notice; offset past end -> notice with line count; directories are not readable (use ls); binary extensions (.xlsx, .zip, ...) refused.",
+          "Per-line truncation: older Claude Code prompts said lines over 2000 chars are truncated; that sentence is NOT in the 2.1.306 binary or docs - NOT CONFIRMED for this version.",
+          "Read results are deduplicated: a repeat read of an unchanged file can return type 'file_unchanged' (SDK output type)."
+        ],
+        "permission": "No (prompts outside working dirs)",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#read-tool-behavior",
+          "https://code.claude.com/docs/en/agent-sdk/typescript",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "Write",
+        "category": "file_write",
+        "params": {
+          "type": "object",
+          "properties": {
+            "file_path": {
+              "type": "string",
+              "description": "The absolute path to the file to write (must be absolute, not relative)"
+            },
+            "content": {
+              "type": "string",
+              "description": "The content to write to the file"
+            }
+          },
+          "required": [
+            "file_path",
+            "content"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Creates or overwrites the whole file; no append/merge.",
+          "Existing file: must have been Read this conversation first on Opus 4.6/Haiku 4.5 and older; newer models may overwrite unread files when reading would not prompt (v2.1.228+). Notebooks and PARTIAL-view files always need a read.",
+          "Saves as UTF-8; refuses content containing U+FFFD when overwriting a non-UTF-8 file.",
+          "Prompt: prefer Edit for modifications; never create *.md/README unless asked."
+        ],
+        "permission": "Yes",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#write-tool-behavior",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "Edit",
+        "category": "file_edit",
+        "params": {
+          "type": "object",
+          "properties": {
+            "file_path": {
+              "type": "string",
+              "description": "The absolute path to the file to modify"
+            },
+            "old_string": {
+              "type": "string",
+              "description": "The text to replace"
+            },
+            "new_string": {
+              "type": "string",
+              "description": "The text to replace it with (must be different from old_string)"
+            },
+            "replace_all": {
+              "type": "boolean",
+              "description": "Replace all occurrences of old_string (default false)",
+              "default": false
+            }
+          },
+          "required": [
+            "file_path",
+            "old_string",
+            "new_string"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Exact string replacement, no regex/fuzzy matching; whitespace/indentation must match.",
+          "old_string must occur exactly once unless replace_all: true.",
+          "Read-before-edit (model-dependent, as Write); a Bash view with cat/nl/head/tail/sed -n/grep/rg on one file also counts as a read.",
+          "If the file changed on disk since the read, the edit still applies when old_string matches current content exactly and unambiguously.",
+          "Refuses non-UTF-8 files (except UTF-16LE with BOM).",
+          "MultiEdit no longer exists as a tool (name survives only in permission-rule mapping)."
+        ],
+        "permission": "Yes",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#edit-tool-behavior",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "Glob",
+        "category": "file_search",
+        "params": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "The glob pattern to match files against"
+            },
+            "path": {
+              "type": "string",
+              "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter \"undefined\" or \"null\" - simply omit it for the default behavior. Must be a valid directory path if provided."
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Standard glob incl. ** and {a,b}.",
+          "Results sorted by modification time, capped at 100 files (output has truncated flag, totalMatches, countIsComplete).",
+          "Does NOT respect .gitignore by default (CLAUDE_CODE_GLOB_NO_IGNORE=false to respect).",
+          "Present by default on Windows; absent by default on macOS/Linux/WSL (search goes through Bash's embedded bfs/ugrep) unless named in --tools/--allowedTools or Bash is removed."
+        ],
+        "permission": "No",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#glob-tool-behavior",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "Grep",
+        "category": "content_search",
+        "params": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "The regular expression pattern to search for in file contents"
+            },
+            "path": {
+              "type": "string",
+              "description": "File or directory to search in (rg PATH). Defaults to current working directory."
+            },
+            "glob": {
+              "type": "string",
+              "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\") - maps to rg --glob"
+            },
+            "output_mode": {
+              "type": "string",
+              "enum": [
+                "content",
+                "files_with_matches",
+                "count"
+              ],
+              "description": "Defaults to \"files_with_matches\"."
+            },
+            "-B": {
+              "type": "number",
+              "description": "Lines before each match (rg -B). content mode only."
+            },
+            "-A": {
+              "type": "number",
+              "description": "Lines after each match (rg -A). content mode only."
+            },
+            "-C": {
+              "type": "number",
+              "description": "Alias for context."
+            },
+            "context": {
+              "type": "number",
+              "description": "Lines before and after each match (rg -C). content mode only."
+            },
+            "-n": {
+              "type": "boolean",
+              "description": "Show line numbers (rg -n). content mode only. Defaults to true."
+            },
+            "-i": {
+              "type": "boolean",
+              "description": "Case insensitive search (rg -i)"
+            },
+            "-o": {
+              "type": "boolean",
+              "description": "Print only the matched parts (rg -o). content mode only. Defaults to false."
+            },
+            "type": {
+              "type": "string",
+              "description": "File type to search (rg --type), e.g. js, py, rust, go, java."
+            },
+            "head_limit": {
+              "type": "number",
+              "description": "Limit output to first N lines/entries (\"| head -N\"), all modes. Defaults to 250 when unspecified. Pass 0 for unlimited."
+            },
+            "offset": {
+              "type": "number",
+              "description": "Skip first N lines/entries before applying head_limit (\"| tail -n +N | head -N\"). Defaults to 0."
+            },
+            "multiline": {
+              "type": "boolean",
+              "description": "Enable multiline mode where . matches newlines (rg -U --multiline-dotall). Default: false."
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Built on ripgrep; ripgrep regex syntax (escape braces like interface\\{\\}).",
+          "Respects .gitignore; skips VCS dirs (.git, .svn, .hg, .bzr, .jj, .sl).",
+          "count mode: per-file counts plus a total over all matches even when paginated.",
+          "Offset past last match -> 'No entries at this offset'.",
+          "Rejected regex/glob/type returns ripgrep's diagnostic as an error (v2.1.208+).",
+          "Same platform default as Glob."
+        ],
+        "permission": "No",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#grep-tool-behavior",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "Bash",
+        "category": "shell",
+        "params": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "The command to execute"
+            },
+            "timeout": {
+              "type": "number",
+              "description": "Optional timeout in milliseconds (max 600000 for a foreground command)"
+            },
+            "description": {
+              "type": "string",
+              "description": "Clear, concise description of what this command does in active voice ... (5-10 words for simple commands)"
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "description": "Run as a background task"
+            },
+            "dangerouslyDisableSandbox": {
+              "type": "boolean",
+              "description": "Set this to true to dangerously override sandbox mode and run commands without sandboxing."
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Each command in a separate process; `cd` carries over while inside project/additional dirs (else reset with 'Shell cwd was reset to <dir>'); env vars do not persist; shell rc aliases/functions are applied.",
+          "Default timeout 120000 ms (BASH_DEFAULT_TIMEOUT_MS), ceiling 600000 ms (BASH_MAX_TIMEOUT_MS).",
+          "A foreground command that hits its timeout is moved to the background (not killed) unless it starts with `sleep`: 'Command did not complete within its 120s timeout and was moved to the background' + task id + output file path.",
+          "run_in_background: true -> background task; output is written to a file the model reads with Read (BashOutput/TaskOutput tools were removed in v2.1.277); stop with TaskStop. Unattended sessions limit background commands to 30 min default / 2 h max.",
+          "Output: valid result inline up to ~30,000 chars, beyond that a saved-file path + 2,000-char preview; failure inline up to ~10,000 chars head+tail. Exit 1 counts as success for grep/rg/find/diff/test/[ /git diff/git grep.",
+          "stdout and stderr are merged into one stream (SDK BashOutput.stdout); BashOutput.stderr carries tool notices."
+        ],
+        "permission": "Yes (built-in read-only command set runs without prompt)",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#bash-tool-behavior",
+          "https://code.claude.com/docs/en/agent-sdk/typescript",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "PowerShell",
+        "category": "shell",
+        "params": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "The PowerShell command to execute"
+            },
+            "timeout": {
+              "type": "number",
+              "description": "Optional timeout in milliseconds (max for a foreground command)"
+            },
+            "description": {
+              "type": "string",
+              "description": "Clear, concise description of what this command does in active voice."
+            },
+            "run_in_background": {
+              "type": "boolean"
+            },
+            "dangerouslyDisableSandbox": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Windows: on automatically without Git Bash; with Git Bash on by default for claude.ai/Console accounts (CLAUDE_CODE_USE_POWERSHELL_TOOL); opt-in on Linux/macOS (pwsh 7+).",
+          "pwsh.exe preferred, falls back to powershell.exe 5.1; -ExecutionPolicy Bypass at process scope; profiles not loaded; same timeout rules/variables as Bash.",
+          "Denying Bash also turns PowerShell off unless explicitly enabled."
+        ],
+        "permission": "Yes",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#powershell-tool",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "Monitor",
+        "category": "shell",
+        "params": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "timeout_ms": {
+              "type": "number"
+            },
+            "command": {
+              "type": "string"
+            },
+            "ws": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "description": "ws:// or wss:// URL"
+                },
+                "protocols": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "description",
+            "timeout_ms"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Runs a command in the background and feeds each output line back as an event, or opens a WebSocket (each text message = one event). command and ws are mutually exclusive.",
+          "Deadline 5 min default, 30 min max (10 min in -p runs).",
+          "Uses Bash permission rules; on Windows only when Git Bash is installed."
+        ],
+        "permission": "Yes",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#monitor-tool",
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "TaskStop",
+        "category": "shell",
+        "params": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string",
+              "description": "The ID of the background task to stop."
+            },
+            "shell_id": {
+              "type": "string",
+              "description": "Deprecated: use task_id"
+            }
+          },
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Stops a background task (Bash/Monitor/background agent/teammate). Old names KillShell and KillBash alias to it."
+        ],
+        "permission": "No",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "https://code.claude.com/docs/en/agent-sdk/typescript",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "NotebookEdit",
+        "category": "file_edit",
+        "params": {
+          "type": "object",
+          "properties": {
+            "notebook_path": {
+              "type": "string",
+              "description": "The absolute path to the Jupyter notebook file to edit (must be absolute, not relative)"
+            },
+            "cell_id": {
+              "type": "string",
+              "description": "The ID of the cell to edit. When inserting, the new cell goes after this cell, or at the beginning if not specified."
+            },
+            "new_source": {
+              "type": "string",
+              "description": "The new source for the cell"
+            },
+            "cell_type": {
+              "type": "string",
+              "enum": [
+                "code",
+                "markdown"
+              ],
+              "description": "Defaults to current cell type; required for insert."
+            },
+            "edit_mode": {
+              "type": "string",
+              "enum": [
+                "replace",
+                "insert",
+                "delete"
+              ],
+              "description": "Defaults to replace."
+            }
+          },
+          "required": [
+            "notebook_path",
+            "new_source"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "One cell at a time by cell_id; refuses non-UTF-8 notebooks."
+        ],
+        "permission": "Yes",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#notebookedit-tool-behavior",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "LSP",
+        "category": "code_intelligence",
+        "params": {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "enum": [
+                "goToDefinition",
+                "findReferences",
+                "hover",
+                "documentSymbol",
+                "workspaceSymbol",
+                "goToImplementation",
+                "prepareCallHierarchy",
+                "incomingCalls",
+                "outgoingCalls"
+              ]
+            },
+            "filePath": {
+              "type": "string",
+              "description": "The absolute or relative path to the file"
+            },
+            "line": {
+              "type": "integer",
+              "description": "1-based",
+              "minimum": 1
+            },
+            "character": {
+              "type": "integer",
+              "description": "1-based",
+              "minimum": 1
+            },
+            "query": {
+              "type": "string",
+              "description": "Symbol name for workspaceSymbol only"
+            }
+          },
+          "required": [
+            "operation",
+            "filePath",
+            "line",
+            "character"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Inactive until a code-intelligence plugin + language server is installed; also auto-reports type errors after edits."
+        ],
+        "permission": "No",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#lsp-tool-behavior",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "WebFetch",
+        "category": "web",
+        "params": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The URL to fetch content from",
+              "format": "uri"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The prompt to run on the fetched content"
+            },
+            "offset": {
+              "type": "integer",
+              "description": "Character position in the page text to start reading from...",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "url",
+            "prompt"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Fetches, converts HTML to Markdown, then runs `prompt` against it with a separate small model (lossy by design).",
+          "Refuses localhost / dotless hosts; HTTP upgraded to HTTPS; cross-host redirects returned, not followed; 100,000 chars per call; 15-min cache; 5-min deadline."
+        ],
+        "permission": "Yes (domain rules)",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#webfetch-tool-behavior",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "WebSearch",
+        "category": "web",
+        "params": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The search query to use",
+              "minLength": 2
+            },
+            "allowed_domains": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "blocked_domains": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "standard",
+                "extended"
+              ],
+              "description": "present only in some sessions (server-configured); binary shows a schema variant adding it"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Anthropic server-side search; returns titles + URLs only; up to 8 backend searches per call; allowed_domains and blocked_domains cannot be combined; session cap 200 calls (refills ~100/hour)."
+        ],
+        "permission": "Yes",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#websearch-tool-behavior",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "TodoWrite",
+        "category": "planning",
+        "params": {
+          "type": "object",
+          "properties": {
+            "todos": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "content": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "completed"
+                    ]
+                  },
+                  "activeForm": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "content",
+                  "status",
+                  "activeForm"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "todos"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Disabled by default in favour of TaskCreate/TaskGet/TaskList/TaskUpdate; CLAUDE_CODE_ENABLE_TASKS=0 brings it back.",
+          "Task tools are on by default only on Opus 4.7, Sonnet 4.6, Haiku 4.5 and earlier (v2.1.268+); newer models get neither unless CLAUDE_CODE_ENABLE_TODO_TOOLS=1 / --allowedTools / --tools."
+        ],
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#task-tool-availability",
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "TaskCreate",
+        "category": "planning",
+        "params": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": "string",
+              "description": "A brief title for the task"
+            },
+            "description": {
+              "type": "string",
+              "description": "What needs to be done"
+            },
+            "activeForm": {
+              "type": "string",
+              "description": "Present continuous form shown in spinner when in_progress (e.g., \"Running tests\")"
+            },
+            "metadata": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "subject",
+            "description"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "TaskUpdate",
+        "category": "planning",
+        "params": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "description": "The ID of the task to update"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "in_progress",
+                "completed",
+                "deleted"
+              ]
+            },
+            "subject": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "activeForm": {
+              "type": "string"
+            },
+            "addBlocks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "addBlockedBy": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "owner": {
+              "type": "string"
+            },
+            "metadata": {
+              "type": "object",
+              "description": "keys merged; null deletes"
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "TaskGet",
+        "category": "planning",
+        "params": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "TaskList",
+        "category": "planning",
+        "params": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "AskUserQuestion",
+        "category": "ask_user",
+        "params": {
+          "type": "object",
+          "properties": {
+            "questions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "question": {
+                    "type": "string"
+                  },
+                  "header": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "preview": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "label",
+                        "description"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "multiSelect": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "question",
+                  "header",
+                  "options",
+                  "multiSelect"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "answers": {
+              "type": "object"
+            },
+            "annotations": {
+              "type": "object"
+            },
+            "metadata": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "questions"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Multiple-choice questions; user can always pick 'Other' and type; recommended option first with '(Recommended)'; open until answered unless askUserQuestionTimeout is set."
+        ],
+        "permission": "No",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#askuserquestion-tool-behavior",
+          "https://code.claude.com/docs/en/agent-sdk/typescript",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "EnterPlanMode",
+        "category": "planning",
+        "params": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Switches to plan mode (read-only exploration) before coding."
+        ],
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "ExitPlanMode",
+        "category": "planning",
+        "params": {
+          "type": "object",
+          "properties": {
+            "allowedPrompts": {
+              "description": "Deprecated: no longer used."
+            }
+          },
+          "additionalProperties": true
+        },
+        "behaviours": [
+          "Presents the plan for user approval and exits plan mode."
+        ],
+        "permission": "Yes",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "Agent",
+        "aliases": [
+          "Task (legacy name, still accepted)"
+        ],
+        "category": "subagents",
+        "params": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the task"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The task for the agent to perform"
+            },
+            "subagent_type": {
+              "type": "string",
+              "description": "The type of specialized agent to use for this task"
+            },
+            "model": {
+              "type": "string",
+              "enum": [
+                "sonnet",
+                "opus",
+                "haiku",
+                "fable"
+              ]
+            },
+            "effort": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "description": "Agents run in the background by default"
+            },
+            "name": {
+              "type": "string",
+              "description": "Name for the spawned agent (addressable via SendMessage)"
+            },
+            "team_name": {
+              "type": "string",
+              "description": "Deprecated; ignored"
+            },
+            "mode": {
+              "type": "string",
+              "description": "Deprecated; ignored"
+            },
+            "isolation": {
+              "type": "string",
+              "enum": [
+                "worktree",
+                "remote"
+              ]
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Separate context window; parent sees only the final result.",
+          "Tool set from the subagent definition's tools/disallowedTools.",
+          "Background by default; result arrives as a notification.",
+          "Output variants: completed (content, usage, toolStats...), async_launched (outputFile), remote_launched."
+        ],
+        "permission": "No",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference#agent-tool-behavior",
+          "https://code.claude.com/docs/en/agent-sdk/typescript",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "SendMessage",
+        "category": "subagents",
+        "params": {
+          "type": "object",
+          "properties": {
+            "to": {
+              "type": "string",
+              "description": "Recipient: agent name/agentId, teammate name, 'main', or another session's address"
+            },
+            "message": {
+              "type": "string",
+              "description": "message body (may also be structured)"
+            },
+            "summary": {
+              "type": "string",
+              "description": "5-10 word one-line preview; truncated past 200 chars"
+            }
+          },
+          "required": [
+            "to",
+            "message"
+          ]
+        },
+        "behaviours": [
+          "Messages teammates, resumed subagents, or other local/remote Claude Code sessions."
+        ],
+        "permission": "No",
+        "confidence": "doc+binary-partial (exact schema not extracted; `notify_when_idle` appears in binary messages but was not confirmed as a parameter)",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "ListAgents",
+        "category": "subagents",
+        "params": "not extracted",
+        "behaviours": [
+          "Lists agents reachable with SendMessage; only with cross-session messaging (v2.1.224+). Legacy name ListPeers."
+        ],
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference"
+        ]
+      },
+      {
+        "name": "SubagentHandback",
+        "category": "subagents",
+        "params": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "Your full report for your caller"
+            }
+          },
+          "required": [
+            "message"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Auto mode only, local non-fork subagents; v2.1.271+."
+        ],
+        "permission": "No",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "Workflow",
+        "category": "orchestration",
+        "params": {
+          "type": "object",
+          "properties": {
+            "script": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "scriptPath": {
+              "type": "string"
+            },
+            "args": {},
+            "resumeFromRunId": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string",
+              "description": "ignored"
+            },
+            "description": {
+              "type": "string",
+              "description": "ignored"
+            }
+          },
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Runs a dynamic workflow script orchestrating many subagents in the background; returns immediately (async_launched) with runId."
+        ],
+        "permission": "Yes",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "Skill",
+        "category": "skills",
+        "params": {
+          "type": "object",
+          "properties": {
+            "skill": {
+              "type": "string",
+              "description": "The name of a skill from the available-skills list. Do not guess names."
+            },
+            "args": {
+              "type": "string",
+              "description": "Optional arguments for the skill"
+            }
+          },
+          "required": [
+            "skill"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Loads/executes a skill inline or forked (output status inline|forked)."
+        ],
+        "permission": "Yes",
+        "confidence": "binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "ToolSearch",
+        "category": "tool_discovery",
+        "params": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Query to find deferred tools. Use \"select:<tool_name>\" for direct selection, or keywords to search."
+            },
+            "max_results": {
+              "type": "number",
+              "description": "Maximum number of results to return (default: 5)",
+              "default": 5
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Loads deferred tools (MCP tools and tools flagged shouldDefer, e.g. TaskCreate/TaskUpdate/CronCreate) when tool search is enabled."
+        ],
+        "permission": "No",
+        "confidence": "binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "WaitForMcpServers",
+        "category": "mcp",
+        "params": "not extracted",
+        "behaviours": [
+          "Waits for MCP servers still connecting; only when tool search is disabled."
+        ],
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference"
+        ]
+      },
+      {
+        "name": "ListMcpResourcesTool",
+        "category": "mcp",
+        "params": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "ReadMcpResourceTool",
+        "category": "mcp",
+        "params": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string"
+            },
+            "uri": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "server",
+            "uri"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "ReadMcpResourceDirTool",
+        "category": "mcp",
+        "params": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string"
+            },
+            "uri": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "server",
+            "uri"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Lists direct children of a directory resource; not enabled in every session."
+        ],
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "RefreshMcpTools",
+        "category": "mcp",
+        "params": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Only with CLAUDE_CODE_ENABLE_REFRESH_MCP_TOOLS=1."
+        ],
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "mcp__<server>__<tool>",
+        "category": "mcp",
+        "params": "server-defined",
+        "permission": "per rules",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "EnterWorktree",
+        "category": "worktree",
+        "params": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Creates an isolated git worktree under .claude/worktrees/ and switches into it, or enters an existing one by path."
+        ],
+        "permission": "Yes",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "ExitWorktree",
+        "category": "worktree",
+        "params": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "keep",
+                "remove"
+              ]
+            },
+            "discard_changes": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "CronCreate",
+        "category": "scheduling",
+        "params": {
+          "type": "object",
+          "properties": {
+            "cron": {
+              "type": "string",
+              "description": "5-field cron in local time, e.g. \"*/5 * * * *\""
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The prompt to enqueue at each fire time."
+            },
+            "recurring": {
+              "type": "boolean",
+              "description": "default true"
+            },
+            "durable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cron",
+            "prompt"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "https://code.claude.com/docs/en/agent-sdk/typescript",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "CronDelete",
+        "category": "scheduling",
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "CronList",
+        "category": "scheduling",
+        "params": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "ScheduleWakeup",
+        "category": "scheduling",
+        "params": {
+          "type": "object",
+          "properties": {
+            "delaySeconds": {
+              "type": "number",
+              "description": "Clamped to [60, 3600]"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "noop": {
+              "type": "boolean"
+            },
+            "stop": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc+binary",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "https://code.claude.com/docs/en/agent-sdk/typescript",
+          "C:/Users/VR/.local/bin/claude.exe (2.1.306, Bun-compiled; minified JS zod schemas found by string search)"
+        ]
+      },
+      {
+        "name": "RemoteTrigger",
+        "category": "scheduling",
+        "params": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "list",
+                "get",
+                "create",
+                "update",
+                "run",
+                "create_webhook_trigger",
+                "list_runs",
+                "get_run_log"
+              ]
+            },
+            "trigger_id": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "cursor": {
+              "type": "string"
+            },
+            "body": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "Artifact",
+        "category": "publish",
+        "params": "see SDK ArtifactInput (action publish|list, file_path, icon, title, url, ...)",
+        "permission": "Yes",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "PushNotification",
+        "category": "notify",
+        "params": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "proactive"
+              ]
+            }
+          },
+          "required": [
+            "message",
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "SendUserFile",
+        "category": "notify",
+        "params": "not extracted (files + optional caption + optional display render|attach)",
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference"
+        ]
+      },
+      {
+        "name": "ReportFindings",
+        "category": "review",
+        "params": "see SDK ReportFindingsInput (level?, findings[{file, line?, summary, failure_scenario, short_summary?, category?, verdict?, outcome?}])",
+        "permission": "No",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      },
+      {
+        "name": "SendFeedback / ShareOnboardingGuide / EndConversation / Projects / ShowOnboardingRolePicker",
+        "category": "product",
+        "params": "not extracted (Projects documented in SDK)",
+        "permission": "varies",
+        "confidence": "doc",
+        "source": [
+          "https://code.claude.com/docs/en/tools-reference",
+          "https://code.claude.com/docs/en/agent-sdk/typescript"
+        ]
+      }
+    ],
+    "removed_or_renamed": {
+      "aliases (binary map g)": {
+        "Task": "Agent",
+        "KillShell": "TaskStop",
+        "KillBash": "TaskStop",
+        "ListPeers": "ListAgents",
+        "Brief": "SendUserMessage",
+        "ListMcpResources": "ListMcpResourcesTool",
+        "ReadMcpResource": "ReadMcpResourceTool",
+        "ReadMcpResourceDir": "ReadMcpResourceDirTool"
+      },
+      "retired names (binary set CPe)": [
+        "Frame",
+        "FrameRead",
+        "TeamCreate",
+        "TeamDelete",
+        "SuggestBackgroundPR",
+        "AutofixPr",
+        "TaskOutput",
+        "AgentOutputTool",
+        "BashOutputTool",
+        "AgentOutput",
+        "BashOutput"
+      ],
+      "MultiEdit": "not a registered tool; only appears in permission-rule mapping (MultiEdit -> Edit rules)",
+      "TaskOutput": "removed v2.1.277 (read the background task's output file with Read)",
+      "REPL": "removed v2.1.275",
+      "LS / NotebookRead": "legacy names appear only in permission/compat lists"
+    },
+    "hidden_conditional_param": "Every file/shell tool schema spreads v4(): adds optional `_host` (run on an attached machine) only when CLAUDE_CODE_REMOTE_TOOLS_FORWARD is set (binary)."
+  },
+  "codex": {
+    "version": "codex-cli 0.157.0 (`codex --version`)",
+    "tag": "rust-v0.157.0",
+    "commit": "00c972ed5d6ff6499317fd41b7f23605b8e6850d",
+    "repo": "https://github.com/openai/codex (Apache-2.0)",
+    "source": [
+      "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/spec_plan.rs  (which tools are registered, and when)",
+      "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/  (*_spec.rs = schemas)",
+      "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/assets/tools/apply_patch.lark",
+      "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/apply-patch/src/",
+      "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/features/src/lib.rs  (feature flags: key, stage, default)",
+      "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/models-manager/models.json  (bundled model catalog: shell_type, apply_patch_tool_type, tool_mode, ...)",
+      "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/  (extension tools: goal, memories, skills, web-search, image-generation, history-notes, agent-message-board)",
+      "Local: C:/Users/VR/.codex/config.toml and models_cache.json (read-only) for what THIS PC enables"
+    ],
+    "key_findings": [
+      "There is no classic `shell` function tool, no `local_shell`, and no JSON/function form of apply_patch in 0.157.0. Shell = exec_command (+ write_stdin); edit = freeform apply_patch only.",
+      "There are no built-in read_file / list_dir / grep_files tools at this tag (grep of codex-rs finds those names only in tests, MCP fixtures, and the notes.* extension). Reading/searching files is done via exec_command (rg, cat, sed...).",
+      "update_plan is OFF by default at this tag (needs [tools.update_plan] enabled = true).",
+      "The newest catalog models (gpt-6-*, gpt-5.6-*) have tool_mode = code_mode_only and use_responses_lite = true: the model's top-level tools are `exec` (freeform JavaScript) + `wait`; exec_command, apply_patch, view_image, MCP tools etc. become nested JS functions inside exec. gpt-5.5 / gpt-5.4 use the classic direct tool list."
+    ],
+    "this_pc": {
+      "configured_model": "gpt-5.6-terra (~/.codex/config.toml); models_cache.json: shell_type unified_exec, apply_patch freeform, tool_mode code_mode_only, use_responses_lite true, multi_agent_version v2",
+      "features_set": {
+        "js_repl": false,
+        "memories": true
+      },
+      "INFERRED_top_level_tools_for_that_model": "exec, wait, request_user_input (Plan mode), collaboration.* multi-agent v2 tools (DirectModelOnly). Everything else (exec_command, write_stdin, apply_patch, view_image, MCP resource tools, goals, memories.*, web.run, image_gen.imagegen) is nested inside exec; deferred MCP tools are reachable inside exec via the `tools` object / ALL_TOOLS, and tool_search (default Direct exposure, nested-by-name, but skipped as a nested spec) appears to be hidden in code_mode_only. This is an inference from reading spec_plan.rs + tools/src/tool_executor.rs, NOT observed in a live request."
+    },
+    "tools": [
+      {
+        "name": "exec_command",
+        "kind": "function",
+        "category": "shell",
+        "description": "Runs a command in a PTY, returning output or a session ID for ongoing interaction. (On Windows hosts the description appends 'Windows safety rules': do not compose destructive filesystem commands across shells; verify resolved absolute targets before recursive delete/move; use `Start-Process -WindowStyle Hidden` for background helpers.)",
+        "params": {
+          "type": "object",
+          "properties": {
+            "cmd": {
+              "type": "string",
+              "description": "Shell command to execute."
+            },
+            "workdir": {
+              "type": "string",
+              "description": "Working directory for the command. Defaults to the turn cwd."
+            },
+            "tty": {
+              "type": "boolean",
+              "description": "True allocates a PTY for the command; false or omitted uses plain pipes."
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "description": "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms. (Windows text: 'Maximum time to wait before returning a session ID for a still-running command... Effective range on Windows is 10000-30000 ms.')"
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy."
+            },
+            "shell": {
+              "type": "string",
+              "description": "Shell binary to launch. Defaults to the user's default shell."
+            },
+            "login": {
+              "type": "boolean",
+              "description": "True runs the shell with -l/-i semantics; false disables them. Defaults to true."
+            },
+            "environment_id": {
+              "type": "string",
+              "description": "Environment id from <environment_context>. Omit to use the primary environment."
+            },
+            "sandbox_permissions": {
+              "type": "string",
+              "enum": [
+                "use_default",
+                "with_additional_permissions",
+                "require_escalated"
+              ],
+              "description": "Per-command sandbox override. Defaults to `use_default`; use `require_escalated` for unsandboxed execution. ('with_additional_permissions' only listed when exec_permission_approvals is enabled.)"
+            },
+            "justification": {
+              "type": "string",
+              "description": "User-facing approval question for `require_escalated`; omit otherwise."
+            },
+            "prefix_rule": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Reusable approval prefix for `cmd`, only with `sandbox_permissions: \"require_escalated\"`; for example [\"git\", \"pull\"]."
+            },
+            "additional_permissions": {
+              "type": "object",
+              "properties": {
+                "network": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "True requests network access; false or omitted requests none."
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "file_system": {
+                  "type": "object",
+                  "properties": {
+                    "read": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Absolute paths to grant read access; omit when none are needed."
+                    },
+                    "write": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Absolute paths to grant write access; omit when none are needed."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false,
+              "description": "Sandboxed filesystem or network access for this command; only with `sandbox_permissions: \"with_additional_permissions\"`."
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "additionalProperties": false
+        },
+        "conditional_params": {
+          "tty": "removed when feature unified_exec_tty is off (it is Stable, default on)",
+          "shell": "omitted only for local zsh-fork exec mode",
+          "login": "present only when an environment allows login shells",
+          "environment_id": "present only when the turn has multiple environments",
+          "additional_permissions": "present only with feature exec_permission_approvals (UnderDevelopment, default off) and tool policy expose_additional_permissions",
+          "timeout_ms": "accepted by the argument parser but not advertised in the interactive schema; advertised only in the one-shot variant"
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "chunk_id": {
+              "type": "string",
+              "description": "Chunk identifier included when the response reports one."
+            },
+            "wall_time_seconds": {
+              "type": "number",
+              "description": "Elapsed wall time spent waiting for output in seconds."
+            },
+            "exit_code": {
+              "type": "number",
+              "description": "Process exit code when the command finished during this call."
+            },
+            "session_id": {
+              "type": "number",
+              "description": "Session identifier to pass to write_stdin when the process is still running."
+            },
+            "original_token_count": {
+              "type": "number",
+              "description": "Approximate token count before output truncation."
+            },
+            "output": {
+              "type": "string",
+              "description": "Command output text, possibly truncated."
+            }
+          },
+          "required": [
+            "wall_time_seconds",
+            "output"
+          ],
+          "additionalProperties": false
+        },
+        "model_facing_text_output": "Header lines then output: 'Chunk ID: <id>' (if any), 'Wall time: <s.ssss> seconds', 'Process exited with code <n>' (if finished), 'Process running with session ID <id>' (if still running), 'Original token count: <n>' (if truncated), 'Output:' then the (possibly truncated) text (core/src/tools/context.rs response_header).",
+        "behaviours": [
+          "Arg defaults (unified_exec.rs): tty=false, yield_time_ms=10000, write_stdin yield 250 ms; MIN_YIELD_TIME_MS=250, MAX_YIELD_TIME_MS=30000, empty polls min 5000 ms, background terminal max 300000 ms (unified_exec/mod.rs).",
+          "Returns immediately when the command finishes; otherwise returns a session_id to continue with write_stdin.",
+          "One-shot variant (ExecCommandHandler::one_shot, used only when managed requirements keep unified_exec disabled): description becomes 'Runs a command to completion and returns its output. The process is terminated on timeout or cancellation and cannot be resumed.'; tty and yield_time_ms removed; timeout_ms added ('Maximum command runtime. Defaults to 10000 ms.'); session_id removed from output schema; write_stdin not registered.",
+          "Hooks see it as tool name 'Bash' with tool_input {command} (HookToolName::bash()).",
+          "Supports parallel tool calls."
+        ],
+        "enabled_by": "Feature shell_tool (Stable, default on) AND model shell_type != disabled AND an environment exists; with feature unified_exec (Stable, default on) the interactive variant + write_stdin are registered. Model catalog shell_type values 'default'/'local'/'shell_command' are serde aliases of 'unified_exec' (protocol/src/openai_models.rs).",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/shell_spec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/unified_exec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/spec_plan.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "write_stdin",
+        "kind": "function",
+        "category": "shell",
+        "description": "Writes characters to an existing unified exec session and returns recent output.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "number",
+              "description": "Identifier of the running unified exec session."
+            },
+            "chars": {
+              "type": "string",
+              "description": "Bytes to write to stdin. Defaults to empty, which polls without writing."
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "description": "Wait before yielding output. Non-empty writes default to 250 ms and cap at 30000 ms; empty polls wait 5000-300000 ms by default."
+            },
+            "max_output_tokens": {
+              "type": "number",
+              "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy."
+            }
+          },
+          "required": [
+            "session_id"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": "same as exec_command",
+        "behaviours": [
+          "Empty `chars` = poll for new output.",
+          "Only registered with the interactive exec_command (feature unified_exec)."
+        ],
+        "enabled_by": "Feature unified_exec (Stable, default on) + shell tool enabled.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/shell_spec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/spec_plan.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "apply_patch",
+        "kind": "freeform",
+        "category": "file_edit",
+        "description": "The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.",
+        "params": {
+          "freeform": true,
+          "format": {
+            "type": "grammar",
+            "syntax": "lark",
+            "definition": "see apply_patch_grammar"
+          }
+        },
+        "behaviours": [
+          "Grammar above is codex-rs/core/assets/tools/apply_patch.lark at rust-v0.157.0, sent verbatim as the freeform tool's `format.definition` (type 'grammar', syntax 'lark').",
+          "Multi-environment sessions: the grammar's start rule is rewritten to `start: begin_patch environment_id? hunk+ end_patch` with `environment_id: \"*** Environment ID: \" filename LF` (apply_patch_spec.rs).",
+          "Envelope: first line must be exactly '*** Begin Patch', last line '*** End Patch' (after trim). Errors: \"The first line of the patch must be '*** Begin Patch'\" / \"The last line of the patch must be '*** End Patch'\" (parser.rs).",
+          "Lenient mode is always on (PARSE_IN_STRICT_MODE=false): leading/trailing whitespace around markers is tolerated, and a patch wrapped in a heredoc (`<<EOF`, `<<'EOF'`, `<<\"EOF\"` first line, last line ending in `EOF`, >= 4 lines) is unwrapped.",
+          "Hunks: '*** Add File: <path>' followed by one or more '+' lines (file contents = those lines, each newline-terminated); '*** Delete File: <path>'; '*** Update File: <path>' optionally followed by '*** Move to: <new path>' then change chunks.",
+          "Update chunk: optional '@@' or '@@ <context line>' header, then lines starting with ' ' (context, kept), '-' (removed), '+' (added); optional '*** End of File' marks a chunk that must match at the end of the file. The first chunk of an update hunk may omit the '@@' header. A bare empty line inside an update hunk is treated as an empty context line.",
+          "Errors: an Update hunk with no chunks -> \"Update file hunk for path '<p>' is empty\"; unknown header -> \"'<line>' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'\"; bad chunk line -> \"Unexpected line found in update hunk: '<line>'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)\".",
+          "Paths: relative paths resolve against the turn cwd; absolute paths are also accepted (test_parse_patch_accepts_relative_and_absolute_hunk_paths).",
+          "Applying an update (file_update.rs compute_replacements): chunks are applied in order with a moving cursor. If a chunk has an '@@ <ctx>' header, the single ctx line is located first (seek_sequence) and the cursor moves past it; failure -> \"Failed to find context '<ctx>' in <path>\". Then the chunk's old lines (context + '-' lines) are located at or after the cursor; failure -> \"Failed to find expected lines in <path>:\\n<old lines>\". A chunk with no old lines (pure insertion) appends at end of file. If old lines end with an empty line and are not found, the search retries without that trailing empty line.",
+          "Line matching (seek_sequence.rs) tries, in order: exact; ignoring trailing whitespace; ignoring leading+trailing whitespace; then after normalizing Unicode dashes/quotes/odd spaces to ASCII. With '*** End of File' the search starts at the end of the file.",
+          "Line endings: default mode NormalizeToLf (updated file rewritten with LF and a trailing newline). Feature apply_patch_preserve_line_endings (under development) / env CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS=1 keeps original endings and context lines byte-for-byte.",
+          "Success output (lib.rs print_summary): 'Success. Updated the following files:' then one line per path: 'A <path>' (added), 'M <path>' (modified), 'D <path>' (deleted). Parse/verify failures are returned to the model as 'apply_patch verification failed: <error>'.",
+          "Shell interception: an exec_command whose command is an apply_patch invocation (e.g. `apply_patch <<'EOF' ... EOF`) is intercepted and applied through the same verified path (handlers/apply_patch.rs intercept_apply_patch).",
+          "The base system prompt tells the model: use the `apply_patch` tool (never `applypatch`/`apply-patch`), and do not re-read files after apply_patch because the call fails if it did not work (protocol/src/prompts/base_instructions/default.md)."
+        ],
+        "enabled_by": "Model catalog apply_patch_tool_type is set (every model in the bundled models.json says 'freeform') AND an environment exists. ApplyPatchToolType has only the variant Freeform in 0.157.0; feature apply_patch_freeform is Stage::Removed - there is NO JSON/function form of apply_patch in this version.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/apply_patch_spec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/assets/tools/apply_patch.lark",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/apply-patch/src/parser.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/apply-patch/src/seek_sequence.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/apply-patch/src/file_update.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/apply-patch/src/lib.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/apply_patch.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "update_plan",
+        "kind": "function",
+        "category": "planning",
+        "description": "Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "explanation": {
+              "type": "string",
+              "description": "Optional explanation for this plan update."
+            },
+            "plan": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "step": {
+                    "type": "string",
+                    "description": "Task step text."
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "completed"
+                    ],
+                    "description": "Step status."
+                  }
+                },
+                "required": [
+                  "step",
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              "description": "The list of steps"
+            }
+          },
+          "required": [
+            "plan"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "No output schema."
+        ],
+        "enabled_by": "config.toml `[tools.update_plan] enabled = true`. OFF by default in 0.157.0: resolve_update_plan_enabled uses is_some_and(enabled), so an absent table means disabled (core/src/config/mod.rs).",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/plan_spec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/config/mod.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "view_image",
+        "kind": "function",
+        "category": "vision",
+        "description": "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Local filesystem path to an image file."
+            },
+            "detail": {
+              "type": "string",
+              "enum": [
+                "high",
+                "original"
+              ],
+              "description": "Image detail level. Defaults to `high`; use `original` to preserve exact resolution."
+            },
+            "environment_id": {
+              "type": "string",
+              "description": "Environment id from <environment_context>. Omit to use the primary environment."
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        "conditional_params": {
+          "detail": "only when the model supports original image detail and feature unified_image_budget is off",
+          "environment_id": "multi-environment turns only"
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "image_url": {
+              "type": "string",
+              "description": "Data URL for the loaded image."
+            },
+            "detail": {
+              "type": "string",
+              "enum": [
+                "high",
+                "original"
+              ]
+            }
+          },
+          "required": [
+            "image_url",
+            "detail"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Feature view_image (Stable, default on) + an environment.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/view_image_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "web_search",
+        "kind": "hosted (Responses API built-in tool, not a function)",
+        "category": "web",
+        "description": "OpenAI-hosted web search; executed by the API, not by Codex.",
+        "params": {
+          "tool_object_fields": {
+            "type": "web_search",
+            "external_web_access": "bool (false for cached mode)",
+            "indexed_web_access": "true only in indexed mode",
+            "filters": "from [tools.web_search] config",
+            "user_location": "from config",
+            "search_context_size": "from config",
+            "search_content_types": "['text','image'] when model web_search_tool_type = text_and_image"
+          }
+        },
+        "enabled_by": "Provider capability web_search, model NOT use_responses_lite, standalone web.run not registered, and web search mode != disabled. Mode default is 'cached' (config `web_search` / features web_search_cached|web_search_request are deprecated switches); 'live' and 'indexed' need provider external_web_access.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/hosted_spec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/spec_plan.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/config/mod.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "web.run",
+        "kind": "function (namespace 'web', tool 'run')",
+        "category": "web",
+        "description": "'Tool for accessing the internet.' Long description lists commands with examples: search_query, image_query, open, click, find, screenshot, finance, weather, sports, time; usage hints (batch commands, response_length, search_query length <= 4), a decision boundary for when to browse, and citation rules (cite with Markdown links; do not expose internal ref ids like turn2search5).",
+        "params": "JSON schema generated by schemars from codex_api::SearchCommands (crate not inspected); example shape: {\"search_query\": [{\"q\": \"...\"}], \"open\": [{\"ref_id\": \"turn0search0\", \"lineno\": 120}], \"click\": [{\"ref_id\": \"...\", \"id\": 17}], \"find\": [{\"ref_id\": \"...\", \"pattern\": \"...\"}], \"response_length\": \"short|medium|long\"}",
+        "enabled_by": "Namespace tools + provider web_search capability + (model use_responses_lite OR feature standalone_web_search [UnderDevelopment]) + web search mode != disabled. When registered it replaces the hosted web_search.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/web-search/web_run_description.md",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/web-search/src/schema.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/spec_plan.rs"
+        ],
+        "confidence": "source (exact JSON schema not extracted)"
+      },
+      {
+        "name": "list_mcp_resources",
+        "kind": "function",
+        "category": "mcp",
+        "description": "Lists resources provided by MCP servers. Resources allow servers to share data that provides context to language models, such as files, database schemas, or application-specific information. Prefer resources over web search when possible.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string",
+              "description": "MCP server name. Omit to list resources from every configured server."
+            },
+            "cursor": {
+              "type": "string",
+              "description": "Opaque cursor from a previous list_mcp_resources call; omit for the first page."
+            }
+          },
+          "additionalProperties": false
+        },
+        "enabled_by": "Any MCP server configured.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/mcp_resource_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "list_mcp_resource_templates",
+        "kind": "function",
+        "category": "mcp",
+        "description": "Lists resource templates provided by MCP servers. Parameterized resource templates allow servers to share data that takes parameters ... Prefer resource templates over web search when possible.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string",
+              "description": "MCP server name. Omit to list resource templates from every configured server."
+            },
+            "cursor": {
+              "type": "string",
+              "description": "Opaque cursor from a previous list_mcp_resource_templates call; omit for the first page."
+            }
+          },
+          "additionalProperties": false
+        },
+        "enabled_by": "Any MCP server configured.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/mcp_resource_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "read_mcp_resource",
+        "kind": "function",
+        "category": "mcp",
+        "description": "Read a specific resource from an MCP server given the server name and resource URI.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "server": {
+              "type": "string",
+              "description": "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."
+            },
+            "uri": {
+              "type": "string",
+              "description": "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."
+            }
+          },
+          "required": [
+            "server",
+            "uri"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Any MCP server configured.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/mcp_resource_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "mcp__<server>__<tool>",
+        "kind": "function (per MCP tool; Responses namespace 'mcp__<server>__')",
+        "category": "mcp",
+        "description": "Each configured MCP server's tools, schema passed through. Namespace prefix 'mcp__' (feature non_prefixed_mcp_tool_names, UnderDevelopment, drops it).",
+        "params": "server-defined",
+        "behaviours": [
+          "When the model supports the search tool and the provider supports namespaces, MCP tools are DEFERRED (hidden until found with tool_search)."
+        ],
+        "enabled_by": "[mcp_servers.*] in config.toml / plugins.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/codex-mcp/src/tools.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/codex-mcp/src/mcp/mod.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/spec_plan.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "tool_search",
+        "kind": "tool_search (Responses ToolSearch spec, execution: 'client')",
+        "category": "tool_discovery",
+        "description": "# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call. [optional list of sources] ... For MCP tool discovery, always use `tool_search` instead of `list_mcp_resources` or `list_mcp_resource_templates`.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query for deferred tools."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Maximum number of tools to return. Defaults to 8."
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Model supports_search_tool AND provider namespace_tools AND at least one deferred tool exists.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/tool_search_spec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/tools/src/tool_discovery.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "request_user_input",
+        "kind": "function",
+        "category": "ask_user",
+        "description": "Request user input for one to three short questions and wait for the response. This tool is only available in Plan mode.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "questions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "Stable identifier for mapping answers (snake_case)."
+                  },
+                  "header": {
+                    "type": "string",
+                    "description": "Short header label shown in the UI (12 or fewer chars)."
+                  },
+                  "question": {
+                    "type": "string",
+                    "description": "Single-sentence prompt shown to the user."
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string",
+                          "description": "User-facing label (1-5 words)."
+                        },
+                        "description": {
+                          "type": "string",
+                          "description": "One short sentence explaining impact/tradeoff if selected."
+                        }
+                      },
+                      "required": [
+                        "label",
+                        "description"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "Provide 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Do not include an \"Other\" option in this list; the client will add a free-form \"Other\" option automatically."
+                  }
+                },
+                "required": [
+                  "id",
+                  "header",
+                  "question",
+                  "options"
+                ],
+                "additionalProperties": false
+              },
+              "description": "Questions to show the user. Prefer 1 and do not exceed 3"
+            }
+          },
+          "required": [
+            "questions"
+          ],
+          "additionalProperties": false
+        },
+        "behaviours": [
+          "Every question must have non-empty options; the client always adds an 'Other' free-form choice.",
+          "Exposure DirectModelOnly (never nested in code mode)."
+        ],
+        "enabled_by": "Registered by default ([tools.experimental_request_user_input] enabled defaults true), but only usable in collaboration mode Plan; Default mode too with feature default_mode_request_user_input (UnderDevelopment).",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/request_user_input_spec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/tools/src/tool_config.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/protocol/src/config_types.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "request_permissions",
+        "kind": "function",
+        "category": "permissions",
+        "description": "Request additional filesystem or network permissions from the user and wait for the client to grant a subset of the requested permission profile. ... Granted permissions apply automatically to later shell-like commands in the current turn, or for the rest of the session if the client approves them at session scope.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "description": "Optional short explanation for why additional permissions are needed."
+            },
+            "environment_id": {
+              "type": "string"
+            },
+            "permissions": {
+              "$ref": "exec_command.additional_permissions shape {network:{enabled}, file_system:{read[],write[]}}"
+            }
+          },
+          "required": [
+            "permissions"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Feature request_permissions_tool (UnderDevelopment, default off) + an environment.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/shell_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "exec (code mode)",
+        "kind": "freeform",
+        "category": "orchestration",
+        "description": "Run JavaScript code to orchestrate/compose tool calls. Evaluated in a fresh V8 isolate as an async module; all nested tools are on the global `tools` object (e.g. `await tools.exec_command(...)`); nested tool methods take a string or object; no Node, no filesystem, no network, no console; optional first-line pragma `// @exec: {\"yield_time_ms\": 10000, \"max_output_tokens\": 1000}`; helpers exit(), text(), image(), audio(), generatedImage(), store()/load() (persist across exec calls in the session), notify(), setTimeout/clearTimeout, ALL_TOOLS, yield_control(). Description also embeds TypeScript signatures for every nested tool.",
+        "params": {
+          "freeform": true,
+          "format": {
+            "type": "grammar",
+            "syntax": "lark",
+            "definition": "start: pragma_source | plain_source\npragma_source: PRAGMA_LINE NEWLINE SOURCE\nplain_source: SOURCE\n\nPRAGMA_LINE: /[ \\t]*\\/\\/ @exec:[^\\r\\n]*/\nNEWLINE: /\\r?\\n/\nSOURCE: /[\\s\\S]+/"
+          }
+        },
+        "behaviours": [
+          "Pragma accepts only yield_time_ms and max_output_tokens. Default yield: config code_mode.default_exec_yield_time_ms = 30000 ms (protocol default 10000). max_output_tokens default 10000.",
+          "Nested tool JS names: plain name, or '<namespace>__<name>' (concatenated without '__' when the namespace already ends in '_'), normalized to a JS identifier.",
+          "When exec yields: 'Script running with cell ID ...' -> use wait."
+        ],
+        "enabled_by": "Model catalog tool_mode code_mode | code_mode_only, else features code_mode / code_mode_only (UnderDevelopment). In code_mode_only, every tool whose exposure allows code mode is REMOVED from the top-level list and reachable only through exec.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/code_mode/execute_spec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/code-mode-protocol/src/description.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/mod.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/tools/src/code_mode.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "wait (code mode)",
+        "kind": "function",
+        "category": "orchestration",
+        "description": "Waits on a yielded `exec` cell and returns new output or completion. (Use only after exec returns 'Script running with cell ID ...'; returns only new output since last yield; may yield again.)",
+        "params": {
+          "type": "object",
+          "properties": {
+            "cell_id": {
+              "type": "string",
+              "description": "Identifier of the running exec cell."
+            },
+            "yield_time_ms": {
+              "type": "number",
+              "description": "Wait before yielding more output. Defaults to 10000 ms."
+            },
+            "max_tokens": {
+              "type": "number",
+              "description": "Output token budget for this wait call. Defaults to 10000 tokens."
+            },
+            "terminate": {
+              "type": "boolean",
+              "description": "True stops the running exec cell; false or omitted waits for output."
+            }
+          },
+          "required": [
+            "cell_id"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Same as exec.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/code_mode/wait_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "multi_agent_v1.spawn_agent",
+        "kind": "function (namespace multi_agent_v1)",
+        "category": "subagents",
+        "description": "Spawn a sub-agent for a well-scoped task. Returns the spawned agent id plus the user-facing nickname when available. Long guidance: do not spawn unless the user/AGENTS.md/skill explicitly asks for sub-agents; delegate bounded sidecar tasks with disjoint write sets; call wait_agent sparingly.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "Initial plain-text task for the new agent. Use either message or items."
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "description": "Input item type: text, image, local_image, audio, local_audio, skill, or mention."
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "image_url": {
+                    "type": "string"
+                  },
+                  "audio_url": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "description": "Structured input items. Use this to pass explicit mentions (for example app:// connector paths)."
+            },
+            "agent_type": {
+              "type": "string",
+              "description": "Agent type override for the new agent. Omit to inherit the parent agent type with a full-history fork; otherwise, `default` is used. + role list"
+            },
+            "fork_context": {
+              "type": "boolean",
+              "description": "True forks the current thread history into the new agent; false or omitted starts with only the initial prompt."
+            },
+            "model": {
+              "type": "string",
+              "description": "Model override for the new agent. Omit unless an explicit override is needed."
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "description": "Reasoning effort override for the new agent. Omit to inherit the parent effort."
+            }
+          },
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "type": "string"
+            },
+            "nickname": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "agent_id",
+            "nickname"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Feature multi_agent (Stable, default on) -> MultiAgentVersion V1 unless the model catalog says v2; not offered to a thread whose next spawn depth would exceed agent_max_depth (DEFAULT_AGENT_MAX_DEPTH = 1). Exposure Deferred when the search tool is enabled, else Direct.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/config/mod.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "multi_agent_v1.send_input",
+        "kind": "function",
+        "category": "subagents",
+        "description": "Send a message to an existing agent. Use interrupt=true to redirect work immediately.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "Agent id to message (from spawn_agent)."
+            },
+            "message": {
+              "type": "string",
+              "description": "Legacy plain-text message to send to the agent. Use either message or items."
+            },
+            "items": {
+              "type": "array",
+              "description": "same as spawn_agent.items"
+            },
+            "interrupt": {
+              "type": "boolean",
+              "description": "True interrupts the current task and handles this message immediately; false or omitted queues it."
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "submission_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "submission_id"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "multi-agent V1",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/multi_agents_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "multi_agent_v1.resume_agent",
+        "kind": "function",
+        "category": "subagents",
+        "description": "Resume a previously closed agent by id so it can receive send_input and wait_agent calls.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Agent id to resume."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "multi-agent V1",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/multi_agents_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "multi_agent_v1.wait_agent",
+        "kind": "function",
+        "category": "subagents",
+        "description": "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
+            },
+            "timeout_ms": {
+              "type": "number",
+              "description": "Timeout in milliseconds. Defaults to 30000, min 10000, max 3600000. Prefer longer waits (minutes) to avoid busy polling."
+            }
+          },
+          "required": [
+            "targets"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "object",
+              "description": "Final statuses keyed by agent id."
+            },
+            "timed_out": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "status",
+            "timed_out"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "multi-agent V1",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/multi_agents_common.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "multi_agent_v1.close_agent",
+        "kind": "function",
+        "category": "subagents",
+        "description": "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "Agent id to close (from spawn_agent)."
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "multi-agent V1",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/multi_agents_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "collaboration.spawn_agent (v2)",
+        "kind": "function (namespace from config multi_agent_v2.tool_namespace, default 'collaboration')",
+        "category": "subagents",
+        "description": "Spawns an agent to work on the specified task (canonical task names like /root/task1/task_3; spawned agent has the same tools and can spawn its own subagents; fork_turns none|all|N).",
+        "params": {
+          "type": "object",
+          "properties": {
+            "task_name": {
+              "type": "string",
+              "description": "Task name for the new agent. Use lowercase letters, digits, and underscores."
+            },
+            "message": {
+              "type": "string",
+              "description": "Initial plain-text task for the new agent."
+            },
+            "agent_type": {
+              "type": "string",
+              "description": "Agent type override ... Omit unless explicitly asked."
+            },
+            "fork_turns": {
+              "type": "string",
+              "description": "Optional number of turns to fork. Defaults to `all`. Use `none`, `all`, or a positive integer string such as `3`."
+            },
+            "model": {
+              "type": "string"
+            },
+            "reasoning_effort": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_name",
+            "message"
+          ],
+          "additionalProperties": false
+        },
+        "conditional_params": {
+          "agent_type": "only when agent roles are configured",
+          "model/reasoning_effort": "only when multi_agent_v2.expose_spawn_agent_model_overrides (default true)"
+        },
+        "enabled_by": "MultiAgentVersion V2: model catalog multi_agent_version 'v2' (gpt-6-*, gpt-5.6-sol/terra) or config override. Exposure DirectModelOnly by default (multi_agent_v2.non_code_mode_only = true).",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/config/mod.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "collaboration.send_message (v2)",
+        "kind": "function",
+        "category": "subagents",
+        "description": "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "Relative or canonical task name to message (from spawn_agent)."
+            },
+            "message": {
+              "type": "string",
+              "description": "Message text to queue on the target agent."
+            }
+          },
+          "required": [
+            "target",
+            "message"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "multi-agent V2",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/multi_agents_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "collaboration.followup_task (v2)",
+        "kind": "function",
+        "category": "subagents",
+        "description": "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "Agent id or canonical task name ..."
+            },
+            "message": {
+              "type": "string",
+              "description": "Message text to send to the target agent."
+            }
+          },
+          "required": [
+            "target",
+            "message"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "multi-agent V2",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/multi_agents_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "collaboration.wait_agent (v2)",
+        "kind": "function",
+        "category": "subagents",
+        "description": "Wait for a mailbox update from any live agent ... Does not return the content; returns a summary of which agents have updates, an interruption summary, or a timeout summary.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "timeout_ms": {
+              "type": "number",
+              "description": "Timeout in milliseconds. Defaults to 30000, min 10000, max 3600000."
+            }
+          },
+          "additionalProperties": false
+        },
+        "enabled_by": "multi-agent V2 with multi_agent_v2.wait_agent_enabled (default true)",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/multi_agents_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "collaboration.interrupt_agent (v2)",
+        "kind": "function",
+        "category": "subagents",
+        "description": "Interrupt an agent's current turn, if any, and return its previous status.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "Agent id or canonical task name to interrupt (from spawn_agent)."
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "multi-agent V2",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/multi_agents_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "collaboration.list_agents (v2)",
+        "kind": "function",
+        "category": "subagents",
+        "description": "List live agents in the current root thread tree. Optionally filter by task-path prefix.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "path_prefix": {
+              "type": "string",
+              "description": "Task-path prefix filter without a trailing slash. Omit to list all live agents."
+            }
+          },
+          "additionalProperties": false
+        },
+        "enabled_by": "multi-agent V2",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/multi_agents_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "clock.curr_time",
+        "kind": "function (namespace clock)",
+        "category": "time",
+        "description": "Return the current time in UTC.",
+        "params": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "enabled_by": "Feature current_time_reminder (UnderDevelopment) OR model experimental_supported_tools contains 'clock' (gpt-6-* in the bundled catalog).",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/current_time.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "clock.sleep",
+        "kind": "function (namespace clock)",
+        "category": "time",
+        "description": "Pause execution for a specified duration. The sleep ends early when new input arrives for the active turn. Returns the elapsed wall-clock time.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "duration_ms": {
+              "type": "number",
+              "description": "How long to sleep in milliseconds. Must be between 1 and 43200000."
+            }
+          },
+          "required": [
+            "duration_ms"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Feature sleep_tool (Stable, on) AND (sleep_tool_mode always_on OR [model_driven default] model has 'clock' / current_time_reminder.sleep_tool). DirectModelOnly.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/sleep.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/features/src/feature_configs.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "send_message_to_user_async",
+        "kind": "function",
+        "category": "ask_user",
+        "description": "Send a concise message that needs the user's attention during ongoing work. Returns immediately without ending the turn; any reply arrives asynchronously as a new user message.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "message"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Root agent AND (feature send_message_to_user_async [UnderDevelopment] OR model experimental tools include it).",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/send_message_to_user_async.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "request_user_input_async",
+        "kind": "function",
+        "category": "ask_user",
+        "description": "Model-catalog supplied description.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "questions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "description": "The complete question shown to the user, including any context needed to answer it."
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "title"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "questions"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Root agent AND model experimental_supported_tools contains 'request_user_input_async' or 'send_user_message_async' (gpt-6-* in bundled catalog).",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/request_user_input_async.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "get_context_remaining",
+        "kind": "function",
+        "category": "context",
+        "description": "Get the remaining tokens in the current context window.",
+        "params": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "tokens_left": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "tokens_left"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Feature token_budget (UnderDevelopment).",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/get_context_remaining_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "new_context",
+        "kind": "function",
+        "category": "context",
+        "description": "Start a new context window. Does not clear, reset, or otherwise affect environment state.",
+        "params": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "enabled_by": "Feature token_budget (UnderDevelopment). DirectModelOnly.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/new_context_window_spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "wait_for_environment",
+        "kind": "function",
+        "category": "environment",
+        "description": "Wait for a selected execution environment marked as `starting` to become available...",
+        "params": {
+          "type": "object",
+          "properties": {
+            "environment_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "environment_id"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Feature deferred_executor (UnderDevelopment).",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/wait_for_environment.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "list_available_plugins_to_install / request_plugin_install",
+        "kind": "function",
+        "category": "plugins",
+        "description": "Suggest installing a plugin/connector (request_plugin_install params: tool_type, action_type, tool_id, suggest_reason; or plugin_id, suggest_reason).",
+        "params": "see request_plugin_install_spec.rs",
+        "enabled_by": "Features tool_suggest + apps + plugins (all Stable, default on) and non-empty suggestion candidates.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/request_plugin_install_spec.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/handlers/list_available_plugins_to_install_spec.rs"
+        ],
+        "confidence": "source (schema skimmed)"
+      },
+      {
+        "name": "get_goal",
+        "kind": "function",
+        "category": "goals",
+        "description": "Get the current goal for this thread, including status, budgets, token and elapsed-time usage, and remaining token budget.",
+        "params": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "enabled_by": "Feature goals (Stable, default on) via the goal extension.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/goal/src/spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "create_goal",
+        "kind": "function",
+        "category": "goals",
+        "description": "Create a goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks. Fails if an unfinished goal exists.",
+        "params": {
+          "type": "object",
+          "properties": {
+            "objective": {
+              "type": "string",
+              "description": "Required. The concrete objective to start pursuing..."
+            },
+            "token_budget": {
+              "type": "integer",
+              "description": "Positive token budget for the new goal. Omit unless explicitly requested."
+            }
+          },
+          "required": [
+            "objective"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Feature goals.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/goal/src/spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "update_goal",
+        "kind": "function",
+        "category": "goals",
+        "description": "Update the existing goal (paused only at explicit user request; complete only when achieved; blocked only after the same blocker recurs 3 consecutive goal turns).",
+        "params": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "complete",
+                "blocked",
+                "paused"
+              ]
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Feature goals.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/goal/src/spec.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "memories.list / memories.read / memories.search / memories.add_ad_hoc_note",
+        "kind": "function (namespace memories)",
+        "category": "memory",
+        "description": "Codex memory store: list immediate entries under a path; read a memory file (1-indexed line_offset, max_lines); substring search (queries[], match_mode, path, cursor, context_lines, case_sensitive, normalized, max_results); create one append-only ad-hoc note when the user explicitly asks to remember/forget/update something.",
+        "params": {
+          "list": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "cursor": {
+                "type": "string"
+              },
+              "max_results": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "read": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "line_offset": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_lines": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "search": {
+            "type": "object",
+            "properties": {
+              "queries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              },
+              "match_mode": {
+                "description": "SearchMatchMode enum: any | all_on_same_line | all_within_lines {line_count>=1} (serde shape not rendered)"
+              },
+              "path": {
+                "type": "string"
+              },
+              "cursor": {
+                "type": "string"
+              },
+              "context_lines": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "case_sensitive": {
+                "type": "boolean"
+              },
+              "normalized": {
+                "type": "boolean"
+              },
+              "max_results": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "queries"
+            ],
+            "additionalProperties": false
+          },
+          "add_ad_hoc_note": {
+            "type": "object",
+            "properties": {
+              "filename": {
+                "type": "string",
+                "description": "YYYY-MM-DDTHH-MM-SS-<slug>.md",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-[a-z0-9][a-z0-9-]{0,79}\\.md$"
+              },
+              "note": {
+                "type": "string",
+                "description": "Verbatim Markdown note",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "filename",
+              "note"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "enabled_by": "Feature memories (Stable, default OFF) AND [memories] use_memories. ON in this PC's ~/.codex/config.toml.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/memories/src/tools/list.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/memories/src/tools/read.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/memories/src/tools/search.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/memories/src/tools/ad_hoc_note.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/memories/src/extension.rs"
+        ],
+        "confidence": "source (arg structs; schemars output not rendered)"
+      },
+      {
+        "name": "skills.list / skills.read",
+        "kind": "function (namespace skills)",
+        "category": "skills",
+        "description": "list: 'List skills owned by the requested authority...'; read: 'Read one page from a skill... Omit resource to read SKILL.md; ... pass the file's complete skill:// identifier as resource...'",
+        "params": {
+          "list": {
+            "type": "object",
+            "properties": {
+              "authority": {
+                "type": "string",
+                "description": "selector (cloud | executor)"
+              },
+              "cursor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "authority"
+            ],
+            "additionalProperties": false
+          },
+          "read": {
+            "type": "object",
+            "properties": {
+              "package": {
+                "type": "string"
+              },
+              "resource": {
+                "type": "string"
+              },
+              "cursor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "package"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "enabled_by": "Only when cloud skills are available or executor (remote-environment) skill roots are selected (ext/skills/src/tools/mod.rs skill_tools returns [] otherwise).",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/skills/src/tools/list.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/skills/src/tools/read.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/skills/src/tools/mod.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "image_gen.imagegen",
+        "kind": "function (namespace image_gen)",
+        "category": "media",
+        "description": "Image generation and editing (ext/image-generation/imagegen_description.md).",
+        "params": {
+          "type": "object",
+          "properties": {
+            "prompt": {
+              "type": "string"
+            },
+            "referenced_image_paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "absolute paths",
+              "maxItems": 5
+            },
+            "num_last_images_to_include": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            }
+          },
+          "required": [
+            "prompt"
+          ],
+          "additionalProperties": false
+        },
+        "enabled_by": "Feature image_generation (Stable, on) AND not a Free plan AND provider image_generation + namespace_tools AND model accepts image input AND OpenAI auth.",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/image-generation/src/tool.rs",
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/core/src/tools/spec_plan.rs"
+        ],
+        "confidence": "source"
+      },
+      {
+        "name": "history.* (list_windows, list_items, read_item, search_contents) / notes.* (list_files_by_prefix, read_file, search_contents, append_to_file, write_file)",
+        "kind": "function (namespaces history, notes)",
+        "category": "memory",
+        "description": "History/notes extension tools, DirectModelOnly.",
+        "params": "not extracted",
+        "enabled_by": "NOT CONFIRMED (history-notes extension gating not read).",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/history-notes/src/tools.rs"
+        ],
+        "confidence": "source (names only)"
+      },
+      {
+        "name": "agent message board (create_channel, get_channels, list_threads, search_posts, read_thread, read_post, subscribe, unsubscribe, post)",
+        "kind": "function",
+        "category": "subagents",
+        "description": "Inter-agent message board.",
+        "params": "not extracted",
+        "enabled_by": "Feature agent_message_board (UnderDevelopment).",
+        "source": [
+          "https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/ext/agent-message-board/src/tools/spec.rs"
+        ],
+        "confidence": "source (names only)"
+      }
+    ],
+    "removed_or_absent_at_this_tag": [
+      "shell / local_shell / shell_command function tools (ConfigShellToolType has only UnifiedExec and Disabled; 'shell_command' is a serde alias of unified_exec)",
+      "apply_patch as JSON function (feature apply_patch_freeform: Stage::Removed; ApplyPatchToolType has only Freeform)",
+      "js_repl (feature js_repl: Removed)",
+      "read_file / list_dir / grep_files experimental tools (not present)",
+      "search_tool / tool_search features (Removed - tool_search is now model-catalog driven)"
+    ],
+    "apply_patch_grammar": "start: begin_patch hunk+ end_patch\nbegin_patch: \"*** Begin Patch\" LF\nend_patch: \"*** End Patch\" LF?\n\nhunk: add_hunk | delete_hunk | update_hunk\nadd_hunk: \"*** Add File: \" filename LF add_line+\ndelete_hunk: \"*** Delete File: \" filename LF\nupdate_hunk: \"*** Update File: \" filename LF change_move? change?\n\nfilename: /(.+)/\nadd_line: \"+\" /(.*)/ LF -> line\n\nchange_move: \"*** Move to: \" filename LF\nchange: (change_context | change_line)+ eof_line?\nchange_context: (\"@@\" | \"@@ \" /(.+)/) LF\nchange_line: (\"+\" | \"-\" | \" \") /(.*)/ LF\neof_line: \"*** End of File\" LF\n\n%import common.LF\n",
+    "apply_patch_rules": [
+      "Grammar above is codex-rs/core/assets/tools/apply_patch.lark at rust-v0.157.0, sent verbatim as the freeform tool's `format.definition` (type 'grammar', syntax 'lark').",
+      "Multi-environment sessions: the grammar's start rule is rewritten to `start: begin_patch environment_id? hunk+ end_patch` with `environment_id: \"*** Environment ID: \" filename LF` (apply_patch_spec.rs).",
+      "Envelope: first line must be exactly '*** Begin Patch', last line '*** End Patch' (after trim). Errors: \"The first line of the patch must be '*** Begin Patch'\" / \"The last line of the patch must be '*** End Patch'\" (parser.rs).",
+      "Lenient mode is always on (PARSE_IN_STRICT_MODE=false): leading/trailing whitespace around markers is tolerated, and a patch wrapped in a heredoc (`<<EOF`, `<<'EOF'`, `<<\"EOF\"` first line, last line ending in `EOF`, >= 4 lines) is unwrapped.",
+      "Hunks: '*** Add File: <path>' followed by one or more '+' lines (file contents = those lines, each newline-terminated); '*** Delete File: <path>'; '*** Update File: <path>' optionally followed by '*** Move to: <new path>' then change chunks.",
+      "Update chunk: optional '@@' or '@@ <context line>' header, then lines starting with ' ' (context, kept), '-' (removed), '+' (added); optional '*** End of File' marks a chunk that must match at the end of the file. The first chunk of an update hunk may omit the '@@' header. A bare empty line inside an update hunk is treated as an empty context line.",
+      "Errors: an Update hunk with no chunks -> \"Update file hunk for path '<p>' is empty\"; unknown header -> \"'<line>' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'\"; bad chunk line -> \"Unexpected line found in update hunk: '<line>'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)\".",
+      "Paths: relative paths resolve against the turn cwd; absolute paths are also accepted (test_parse_patch_accepts_relative_and_absolute_hunk_paths).",
+      "Applying an update (file_update.rs compute_replacements): chunks are applied in order with a moving cursor. If a chunk has an '@@ <ctx>' header, the single ctx line is located first (seek_sequence) and the cursor moves past it; failure -> \"Failed to find context '<ctx>' in <path>\". Then the chunk's old lines (context + '-' lines) are located at or after the cursor; failure -> \"Failed to find expected lines in <path>:\\n<old lines>\". A chunk with no old lines (pure insertion) appends at end of file. If old lines end with an empty line and are not found, the search retries without that trailing empty line.",
+      "Line matching (seek_sequence.rs) tries, in order: exact; ignoring trailing whitespace; ignoring leading+trailing whitespace; then after normalizing Unicode dashes/quotes/odd spaces to ASCII. With '*** End of File' the search starts at the end of the file.",
+      "Line endings: default mode NormalizeToLf (updated file rewritten with LF and a trailing newline). Feature apply_patch_preserve_line_endings (under development) / env CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS=1 keeps original endings and context lines byte-for-byte.",
+      "Success output (lib.rs print_summary): 'Success. Updated the following files:' then one line per path: 'A <path>' (added), 'M <path>' (modified), 'D <path>' (deleted). Parse/verify failures are returned to the model as 'apply_patch verification failed: <error>'.",
+      "Shell interception: an exec_command whose command is an apply_patch invocation (e.g. `apply_patch <<'EOF' ... EOF`) is intercepted and applied through the same verified path (handlers/apply_patch.rs intercept_apply_patch).",
+      "The base system prompt tells the model: use the `apply_patch` tool (never `applypatch`/`apply-patch`), and do not re-read files after apply_patch because the call fails if it did not work (protocol/src/prompts/base_instructions/default.md)."
+    ],
+    "apply_patch_example": "*** Begin Patch\n*** Add File: path/add.py\n+abc\n+def\n*** Delete File: path/delete.py\n*** Update File: path/update.py\n*** Move to: path/update2.py\n@@ def f():\n-    pass\n+    return 123\n*** End Patch"
+  }
+}

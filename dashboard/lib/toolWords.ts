@@ -74,6 +74,13 @@ const WORDS: Record<string, string> = {
   write_document: "create a document",
   excel_edit: "edit a workbook",
   generate_media: "make an image, video or sound",
+  // v1.364.0 (IJ harness Phase 1): the two that ask (a long-running program
+  // and typing into it), and an app's resource read, which a local-only turn
+  // cards. desktop/main.js TOOL_WORDS and agents/mission.ASK_WORDS say the
+  // same (pinned equal).
+  process_start: "start a program that keeps running",
+  process_write: "type into a running program",
+  mcp_read_resource: "read something from one of your apps",
 };
 
 // The 14 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

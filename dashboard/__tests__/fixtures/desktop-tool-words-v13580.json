@@ -330,6 +330,24 @@
       "kind": "table",
       "card": "make an image, video or sound",
       "desktop": "make an image, video or sound"
+    },
+    {
+      "tool": "process_start",
+      "kind": "table",
+      "card": "start a program that keeps running",
+      "desktop": "start a program that keeps running"
+    },
+    {
+      "tool": "process_write",
+      "kind": "table",
+      "card": "type into a running program",
+      "desktop": "type into a running program"
+    },
+    {
+      "tool": "mcp_read_resource",
+      "kind": "table",
+      "card": "read something from one of your apps",
+      "desktop": "read something from one of your apps"
     }
   ]
 }

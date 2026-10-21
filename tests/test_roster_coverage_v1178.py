@@ -222,6 +222,15 @@ _OFF_ROSTER_BY_DESIGN = {
     # (integrations/hookups.named_hookup_ask_tools); pinned by
     # tests/test_rest_call_v13570.py.
     "rest_call",
+    # THE IJ HARNESS TOOLS (v1.364.0, Phase 1): armed by the IJ harness
+    # (Phase 3/4) — the build session arms them by name for the model family
+    # it serves (the dialect table). Deliberately on NO roster and in no
+    # autoselect rule yet, so the agent rosters' tool counts and every chat
+    # turn are exactly what they were; they are REGISTERED so a caller can
+    # arm them by name (tests/test_harness_tools_parity_v1364.py pins that).
+    "multi_edit", "apply_patch", "glob", "plan_update", "notebook_edit",
+    "mcp_list_resources", "mcp_read_resource",
+    "process_start", "process_read", "process_write", "process_stop",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the
