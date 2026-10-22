@@ -353,8 +353,13 @@ def test_each_lane_still_has_exactly_one_fence_call_and_gates_it_on_a_pack_failu
     from iron_jarvis.daemon import chat_turn
     from iron_jarvis.daemon.routes import chat as chat_routes
 
-    for module in (chat_turn, chat_routes):
+    for module, loop in ((chat_turn, chat_turn.run_chat_turn), (chat_routes, chat_routes.chat_stream)):
         src = inspect.getsource(module).replace("\r\n", "\n")
-        assert src.count("await _fence_tool_output(") == 1
+        assert inspect.getsource(loop).count("await _fence_tool_output(") == 1, module.__name__
+        # v1.366.0: chat_turn holds one more call, outside both loops — the
+        # IJ harness's plugin-check runner fences its `shell` output too.
+        extra = 1 if module is chat_turn else 0
+        assert inspect.getsource(chat_turn.harness_check_runner).count("await _fence_tool_output(") == 1
+        assert src.count("await _fence_tool_output(") == 1 + extra
         assert src.count('tc.name.startswith("mcp__")') == 1, module.__name__
         assert src.count("if ran or _pack_failure:") == 1, module.__name__

@@ -8,13 +8,17 @@ Every model call it observes is entered in the run's ledger rollout
 * ``jarvis`` — the streaming chat lane (``routes/chat.stream_chat_turn``), the
   lane a chat THREAD turn runs on and the one the IJ harness reuses in Phase 4
   (durable turns, rejoin, steering, approvals and the done receipt all live
-  there). Coding tools are armed (:data:`JARVIS_TOOLS`), the turn's folder is
-  the copy, approvals are granted (``approval_mode="yolo"`` — the copy is
-  disposable — and any card that still appears is answered "once"), and the
-  turn gets :data:`DEFAULT_ROUNDS` tool rounds and ENDS IN CHAT at the last
-  one (``round_budget`` + ``stay_in_chat``, v1.363.0) — the benchmark never
-  escalates to an agent run. ``tool_ceiling`` keeps the turn's tools to
-  exactly that set (it also takes away the hand-off exits).
+  there), run in HARNESS MODE (``harness=``, v1.366.0, plan Phase 3): the
+  coding tool set the harness arms (``harness/mode.CODING_TOOLS``) in the
+  model family's DIALECT (``--dialect auto``, the default) or under Jarvis's
+  own names (``--dialect generic``), the component tree in the prompt, no
+  hand-off exits. The turn's folder is the copy, approvals are granted
+  (``approval_mode="yolo"`` — the copy is disposable — and any card that
+  still appears is answered "once"), and the turn gets
+  :data:`DEFAULT_ROUNDS` tool rounds and ENDS IN CHAT at the last one
+  (``round_budget`` + ``stay_in_chat``, v1.363.0) — the benchmark never
+  escalates to an agent run. The dialect and the component tree's
+  FINGERPRINT join the configuration fingerprint.
 * ``claude`` — ``claude -p`` headless in the copy, in safe mode (no CLAUDE.md,
   skills, plugins, hooks or MCP servers: stock Claude Code, the same on every
   machine), permissions bypassed inside the disposable copy, with
@@ -58,15 +62,15 @@ from .ledger import CallEntry, Rollout
 #: decision (60, measured by this benchmark).
 DEFAULT_ROUNDS = 60
 
-#: The coding tools a Jarvis benchmark turn may use — and nothing else.
-JARVIS_TOOLS: tuple[str, ...] = (
-    "read_file", "write_file", "edit_file", "list_files", "grep", "run_code", "shell",
-)
-#: The ones armed explicitly (the lane arms at most six by name). ``shell``
-#: joins through the lane's own folder rule: a turn bound to a folder (the
-#: Build pane's chat) ask-arms it, and ``yolo`` grants it.
-JARVIS_ARMED: tuple[str, ...] = JARVIS_TOOLS[:6]
+#: (Before v1.366.0 the runner armed seven tools by hand: six by name — the
+#: chat lane's cap — and ``shell`` through the folder rule. Harness mode arms
+#: the coding set itself now.)
 JARVIS_APPROVAL_MODE = "yolo"
+#: ``--dialect``: "auto" — the model family's own row of the dialect table
+#: (glm → generic, by measurement: ``harness/dialects.FAMILY_MEASURED``);
+#: "generic" — Jarvis's own tool names on any model; or a dialect id to force
+#: one ("claude" reproduces the glm row that lost on cost).
+DEFAULT_DIALECT = "auto"
 #: The session id the chat lanes give their tools (``ToolContext(session_id=
 #: "chat")`` in routes/chat.py): what a turn's shell leaves running is kept
 #: under it until :func:`procs.end_session` is called for it.
@@ -319,32 +323,60 @@ class JarvisRunner:
     name = "jarvis"
 
     def __init__(self, platform: Any, *, provider: str = "", model: str = "",
-                 round_budget: int = DEFAULT_ROUNDS) -> None:
-        from ..daemon.chat_turn import turn_round_budget
+                 round_budget: int = DEFAULT_ROUNDS, dialect: str = DEFAULT_DIALECT) -> None:
+        from ..daemon.chat_turn import turn_harness, turn_round_budget
 
         self.platform = platform
         self.provider = provider or ""
         self.model = model or ""
         self.round_budget = turn_round_budget(int(round_budget))
+        # "auto" or a dialect id; anything else is refused before any run.
+        self.dialect = turn_harness(dialect or DEFAULT_DIALECT) or DEFAULT_DIALECT
+
+    def harness(self) -> Any:
+        """The harness turn this runner's turns will build (no folder: a
+        task's copy carries no harness layer), for the identity."""
+        from ..daemon.chat_turn import _harness_model
+        from ..harness.mode import build
+
+        provider, model = _harness_model(self.platform, self.provider, self.model)
+        return build(
+            registry=self.platform.registry, permissions=self.platform.permissions,
+            requested=self.dialect, provider=provider, model=model, stream=True,
+            approval_mode=JARVIS_APPROVAL_MODE, today="",
+        )
 
     def identity(self) -> dict[str, Any]:
         """What makes this harness THIS harness, computable before any run:
-        the two chat lanes' source, the tools' specs (names, descriptions,
-        argument shapes), the persona, the prompt, the round budget, the
-        approval mode and the tool set."""
+        the two chat lanes' source, the harness modules, the dialect and the
+        FINGERPRINT of the rendered component tree, the specs the model is
+        shown (names, descriptions, argument shapes), the persona, the
+        prompt, the round budget and the approval mode."""
         from ..daemon import chat_turn
         from ..daemon.routes import chat as chat_routes
+        from ..harness import components as harness_components
+        from ..harness import dialects as harness_dialects
+        from ..harness import mode as harness_mode
         from ..personas.builtins import BUILTIN_PERSONAS
 
-        specs = self.platform.registry.specs(list(JARVIS_TOOLS))
+        turn = self.harness()
+        specs = turn.specs(self.platform.registry)
         persona = str(getattr(self.platform.config, "default_persona", "") or "")
         # The state home's user profile rides every prompt (v1.144.0); a
         # scratch home has none, but a home that has one is another harness.
         profile = chat_turn._profile_section(self.platform)
         return {
             "lane_sha256": _sha(_module_bytes(chat_turn) + b"\0" + _module_bytes(chat_routes)),
+            "harness_sha256": _sha(
+                _module_bytes(harness_mode) + b"\0" + _module_bytes(harness_dialects)
+                + b"\0" + _module_bytes(harness_components)
+            ),
+            "dialect": turn.plan.dialect.id,
+            "dialect_requested": self.dialect,
+            "family": turn.plan.family,
+            "harness_fingerprint": turn.fingerprint,
             "tools_sha256": _sha(json.dumps(specs, sort_keys=True, default=str)),
-            "tools": list(JARVIS_TOOLS),
+            "tools": [s["name"] for s in specs],
             "persona": persona,
             "persona_sha256": _sha(json.dumps(BUILTIN_PERSONAS.get(persona, persona), sort_keys=True, default=str)),
             "prompt_sha256": _sha(PROMPT_TEMPLATE),
@@ -365,11 +397,11 @@ class JarvisRunner:
             # The lane would quietly run the tools in its scratch folder instead.
             out.error = f"Iron Jarvis would not work in {workspace} (the folder was refused)"
             return out
+        # HARNESS MODE (v1.366.0) arms the coding set itself — no "+" picks.
         body = ChatBody(
             messages=[ChatMessageBody(role="user", content=render_prompt(task, workspace))],
             provider=self.provider, model=self.model,
-            tools=list(JARVIS_ARMED), workspace_dir=str(workspace),
-            auto_tools=True, approval_mode=JARVIS_APPROVAL_MODE,
+            workspace_dir=str(workspace), approval_mode=JARVIS_APPROVAL_MODE,
         )
         deadline = time.monotonic() + float(timeout_s)
         approvals = _approvals(SimpleNamespace(platform=self.platform))
@@ -384,8 +416,8 @@ class JarvisRunner:
                 gen = await stream_chat_turn(
                     self.platform, BUILTIN_PERSONAS, body,
                     should_stop=lambda: time.monotonic() > deadline,
-                    tool_ceiling=frozenset(JARVIS_TOOLS),
                     round_budget=self.round_budget, stay_in_chat=True,
+                    harness=self.dialect,
                 )
                 async with asyncio.timeout(float(timeout_s) + _GRACE_S):
                     async with contextlib.aclosing(gen) as frames:
@@ -458,6 +490,9 @@ class JarvisRunner:
             "on_this_network": route.get("on_this_network"),
             "documents": list(done.get("documents") or []),
             "tools_used": list(done.get("tools_used") or []),
+            # v1.366.0: the harness the turn really ran (family, dialect, the
+            # component tree's fingerprint, whether it was nudged).
+            "harness": route.get("harness"),
         })
         out.ok_run = True
         out.facts["finished"] = True

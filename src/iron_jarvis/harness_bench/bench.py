@@ -359,14 +359,24 @@ async def run_task(
 
 
 def make_runner(runner: str, *, root: str, provider: str = "", model: str = "",
-                rounds: int = DEFAULT_ROUNDS, binary: str | None = None) -> Any:
+                rounds: int = DEFAULT_ROUNDS, binary: str | None = None,
+                dialect: str = "auto") -> Any:
     if runner not in RUNNERS:
         raise BenchRefused(f"--runner must be one of: {', '.join(RUNNERS)}")
     if runner == "jarvis":
+        from ..daemon.chat_turn import turn_harness
         from ..platform import build_platform
 
+        try:
+            turn_harness(dialect or "auto")
+        except ValueError as exc:
+            raise BenchRefused(f"--dialect: {exc}") from exc
         platform = build_platform(root)
-        return RUNNERS["jarvis"](platform, provider=provider, model=model, round_budget=rounds)
+        return RUNNERS["jarvis"](
+            platform, provider=provider, model=model, round_budget=rounds, dialect=dialect or "auto",
+        )
+    if dialect and dialect != "auto":
+        raise BenchRefused("--dialect applies to the jarvis runner only (Claude Code and Codex speak their own)")
     if provider and provider != runner:
         raise BenchRefused(f"--provider does not apply to the {runner} runner (it is always {runner})")
     return RUNNERS[runner](model=model, binary=binary)

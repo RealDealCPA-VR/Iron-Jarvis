@@ -17,4 +17,16 @@ by themselves — the IJ harness session (Phase 3/4) arms them by name.
 * :mod:`.process` — ``process_start`` / ``process_read`` / ``process_write`` /
   ``process_stop`` over ``core.procs``.
 * :mod:`.parity` — the capability table, checked against the inventory fixture.
+
+Phase 3 (v1.366.0) makes the harness an explicit, per-family system:
+
+* :mod:`.dialects` — the dialect table: the tool names and argument shapes
+  each model family was trained on (Claude Code's, Codex's, Qwen Code's,
+  Jarvis's own), translated onto the real tools at the boundary.
+* :mod:`.components` — the eight components (Harness²) as one tree, layered
+  default → family → the project folder's ``.ironjarvis/harness/``,
+  validated, rendered and fingerprinted.
+* :mod:`.mode` — HARNESS MODE for a chat turn (``harness=`` on the two chat
+  lanes): the coding tool set, the dialect, the tree, no escalation, one
+  nudge for a tool call written as text.
 """

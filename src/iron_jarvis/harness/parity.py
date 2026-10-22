@@ -167,10 +167,10 @@ CODEX: dict[str, Parity] = {
     "collaboration.wait_agent (v2)": _served("delegate", reason="delegate waits for the helper's result"),
     "collaboration.interrupt_agent (v2)": _no("a helper's run is stopped with the user's Cancel, which reaches it through the parent"),
     "collaboration.list_agents (v2)": _served("list_agents"),
-    "clock.curr_time": _later(
-        "Phase 3: the build session's system prompt carries the date and time (the chat and agent "
-        "prompts do not today — v1.364.0 review: this row used to say they did); until then shell "
-        "prints them"
+    "clock.curr_time": _no(
+        "v1.366.0 (Phase 3): a harness turn's system prompt carries today's date "
+        "(harness/mode.HarnessTurn.block); a task that needs the time of day prints it with the "
+        "shell"
     ),
     "clock.sleep": _no("a model waits on a program with process_read's wait_ms; there is no bare sleep"),
     "send_message_to_user_async": _no("the reply streams to the user as it is written"),
