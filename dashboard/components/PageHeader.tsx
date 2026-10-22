@@ -167,12 +167,21 @@ export function PageHeader({
   title,
   subtitle,
   actions,
+  center,
 }: {
   title: string;
   /** Kept as a prop on all 38 callers — it is not gone, it is behind the
    *  title. Absent and the title is simply a title. */
   subtitle?: string;
   actions?: ReactNode;
+  /** v1.370.2: a control that stays in the EXACT middle of the header and
+   *  never moves when `actions` change (Build's Terminals | IJ harness
+   *  switch: "centered and fixed in both modes"). From lg the header is
+   *  three columns — title | center | actions — with two EQUAL side columns,
+   *  so the middle one is centred whatever the sides hold; the actions slot
+   *  keeps its height when it is empty, so nothing below jumps either.
+   *  Below lg they stack: title, the centre on its own row, the actions. */
+  center?: ReactNode;
 }) {
   return (
     <>
@@ -180,10 +189,29 @@ export function PageHeader({
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-        className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"
+        data-testid={center ? "page-header-centred" : undefined}
+        className={
+          center
+            ? "flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-end lg:gap-4"
+            : "flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"
+        }
       >
         <ModuleTitle title={title} hint={subtitle} />
-        {actions && <div className="flex items-center gap-2">{actions}</div>}
+        {center ? (
+          <>
+            <div data-testid="page-header-center" className="flex justify-center lg:justify-self-center">
+              {center}
+            </div>
+            <div
+              data-testid="page-header-actions"
+              className="flex min-h-8 flex-wrap items-center justify-end gap-2 lg:justify-self-end"
+            >
+              {actions}
+            </div>
+          </>
+        ) : (
+          actions && <div className="flex items-center gap-2">{actions}</div>
+        )}
       </m.div>
     </>
   );

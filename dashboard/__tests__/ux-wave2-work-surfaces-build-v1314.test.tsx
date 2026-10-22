@@ -87,10 +87,11 @@ vi.mock("@/components/motion", () => ({
 }));
 // Unlike the older Build harnesses, this one renders the SUBTITLE too.
 vi.mock("@/components/PageHeader", () => ({
-  PageHeader: ({ title, subtitle, actions }: { title: string; subtitle?: React.ReactNode; actions?: React.ReactNode }) => (
+  PageHeader: ({ title, subtitle, actions, center }: { title: string; subtitle?: React.ReactNode; actions?: React.ReactNode; center?: React.ReactNode }) => (
     <div>
       <h1>{title}</h1>
       <p data-testid="page-subtitle">{subtitle}</p>
+      <div data-testid="page-header-center">{center}</div>
       {actions}
     </div>
   ),

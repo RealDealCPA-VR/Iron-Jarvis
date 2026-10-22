@@ -341,3 +341,47 @@ test.describe("390 px — Build never pans sideways", () => {
     expect(pan).toBeLessThanOrEqual(0);
   });
 });
+
+// v1.370.2 — the user: "this thing at the top should be centered and fixed
+// in both modes". The Terminals | IJ harness switch sits in the header's
+// exact middle, and it does not move when the view changes (it used to sit
+// in the right-hand actions: Shell and New terminal pushed it left in
+// Terminals, and it slid to the right edge in the IJ harness).
+for (const size of [
+  { width: 1280, height: 800 },
+  { width: 1024, height: 768 },
+]) {
+  test.describe(`${size.width} px — the Build switch is centred and fixed`, () => {
+    test.use({ viewport: size });
+    test("the switch's centre is the header's centre, in both views", async ({ page }) => {
+      await page.goto("/terminals");
+      await expect(page.getByTestId("build-view-terminals")).toBeVisible({ timeout: 90_000 });
+      const where = () =>
+        page.evaluate(() => {
+          const r = (id: string) => document.querySelector(`[data-testid="${id}"]`)!.getBoundingClientRect();
+          const sw = r("build-view-switch");
+          const head = r("page-header-centred");
+          const actions = r("page-header-actions");
+          return { sw: sw.left + sw.width / 2, head: head.left + head.width / 2, top: sw.top, actionsH: actions.height };
+        });
+      await page.getByTestId("build-view-terminals").click();
+      await expect(page.getByTestId("header-new-terminal")).toBeVisible();
+      await page.waitForTimeout(500);
+      const rail = await where();
+      await page.getByTestId("build-view-harness").click();
+      await expect(page.getByTestId("ij-harness-view")).toBeVisible({ timeout: 60_000 });
+      await expect(page.getByTestId("header-new-terminal")).toHaveCount(0);
+      await page.waitForTimeout(500);
+      const harness = await where();
+      expect(Math.abs(rail.sw - rail.head)).toBeLessThanOrEqual(1.5);
+      expect(Math.abs(harness.sw - harness.head)).toBeLessThanOrEqual(1.5);
+      // Fixed: the same place in both views, across and down.
+      expect(Math.abs(rail.sw - harness.sw)).toBeLessThanOrEqual(1);
+      expect(Math.abs(rail.top - harness.top)).toBeLessThanOrEqual(1);
+      // The Terminals controls fit beside it on ONE line (a wrap would make
+      // the header taller in one view than the other).
+      expect(rail.actionsH).toBeLessThanOrEqual(40);
+      expect(Math.abs(rail.actionsH - harness.actionsH)).toBeLessThanOrEqual(1);
+    });
+  });
+}

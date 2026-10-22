@@ -80,10 +80,11 @@ vi.mock("@/components/motion", () => ({
   Reveal: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("@/components/PageHeader", () => ({
-  PageHeader: ({ title, actions }: { title: string; actions?: React.ReactNode }) => (
+  PageHeader: ({ title, actions, center }: { title: string; actions?: React.ReactNode; center?: React.ReactNode }) => (
     <div>
       <h1>{title}</h1>
-      {actions}
+      <div data-testid="page-header-center">{center}</div>
+      <div data-testid="page-header-actions">{actions}</div>
     </div>
   ),
 }));
@@ -193,6 +194,24 @@ describe("the switch", () => {
     render(<TerminalsPage />);
     expect(await screen.findByTestId("ij-harness-view")).toBeInTheDocument();
     expect(screen.queryByTestId("shape-canvas")).toBeNull();
+  });
+
+  it("the switch sits in the header's centre slot in BOTH views (v1.370.2: centred and fixed)", async () => {
+    render(<TerminalsPage />);
+    await screen.findByTestId("terminal-pane-t1");
+    const centre = () => screen.getByTestId("page-header-center");
+    expect(centre()).toContainElement(screen.getByTestId("build-view-switch"));
+    // The Terminals view's controls take the RIGHT column, never the centre.
+    expect(screen.getByTestId("page-header-actions")).toContainElement(screen.getByTestId("header-new-terminal"));
+    expect(centre()).not.toContainElement(screen.getByTestId("header-new-terminal"));
+    fireEvent.click(screen.getByTestId("build-view-harness"));
+    await screen.findByTestId("ij-harness-view");
+    expect(centre()).toContainElement(screen.getByTestId("build-view-switch"));
+    // The right column stays (empty) so the header keeps its shape: the
+    // switch does not slide right when the controls go.
+    expect(screen.getByTestId("page-header-actions")).toBeInTheDocument();
+    // The real header's grid (equal side columns) is pinned in
+    // page-header-centre-v1370-2; the true pixel check is in the e2e.
   });
 
   it("the Shell picker and New terminal belong to the Terminals view only", async () => {

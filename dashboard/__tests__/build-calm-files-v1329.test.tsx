@@ -82,9 +82,10 @@ vi.mock("@/components/motion", () => ({
   Reveal: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("@/components/PageHeader", () => ({
-  PageHeader: ({ title, actions }: { title: string; actions?: React.ReactNode }) => (
+  PageHeader: ({ title, actions, center }: { title: string; actions?: React.ReactNode; center?: React.ReactNode }) => (
     <div>
       <h1>{title}</h1>
+      <div data-testid="page-header-center">{center}</div>
       <div data-testid="header-actions">{actions}</div>
     </div>
   ),

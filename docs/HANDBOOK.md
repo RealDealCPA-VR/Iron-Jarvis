@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.370.1 (2026-10-21).*
+holds itself to. Current as of v1.370.2 (2026-10-21).*
 
 ---
 
@@ -1896,6 +1896,14 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Build's view switch stays put (v1.370.2)
+
+The **Terminals | IJ harness** switch at the top of Build now sits in the
+middle of the header and stays in the same place in both views. Before, it
+moved: the Terminals view's Shell and New terminal controls pushed it left,
+and in the IJ harness view it slid to the right edge. On a narrow window the
+switch gets its own row, centred under the title.
 
 ## Picking a folder for a coding session works again (v1.370.1)
 

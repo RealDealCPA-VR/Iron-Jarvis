@@ -3680,6 +3680,18 @@ does not need a bump, stop and bump it.
   strips Rich's colour codes before reading `--help` (v1.370.0's Tests gate
   read `\x1b[1m` between the words; `FORCE_COLOR=1 COLUMNS=80` reproduced
   it).
+  v1.370.2 (the user: Build's switch "should be centered and fixed in both
+  modes"): `PageHeader` takes a `center` slot. From lg it is a three-column
+  grid `minmax(0,1fr) | auto | minmax(0,1fr)` (EQUAL side columns, so the
+  middle is centred whatever the sides hold) whose actions column keeps
+  `min-h-8` when empty; below lg title / centre / actions stack. Only Build
+  passes it; every other page renders exactly as before. 41 test files MOCK
+  PageHeader with `{title, actions}` only, and the 18 that render Build now
+  render `center` too: a NEW slot on a widely mocked component needs its
+  mocks taught, or the tests silently drop it. Pixel pin in the e2e
+  (`centred and fixed`, 1280 + 1024 px: switch centre = header centre and
+  unmoved between views; an un-centred grid goes red);
+  `page-header-centre-v1370-2` pins the structure.
 
 - **The IJ harness is a VIEW of Build built from the chat's own pieces; the
   daemon writes the transcript, and a turn's end is on the record BEFORE its

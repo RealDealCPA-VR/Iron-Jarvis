@@ -890,59 +890,65 @@ export default function TerminalsPage() {
               ? "Coding sessions that work in a folder and keep going when you leave. Start one, or open a terminal from the list."
               : "Live terminals on this PC. Press New terminal to open one, or pick a project folder and open a terminal in it."
           }
+          // v1.370.2: the switch sits in the header's exact MIDDLE and does not
+          // move between the two views ("centered and fixed in both modes");
+          // the Terminals view's own controls take the right column.
+          center={
+            // THE SWITCH (v1.369.0): Terminals | IJ harness. Plain text tabs
+            // like the side panel's, the open one in ink.
+            <div
+              role="tablist"
+              aria-label="Build view"
+              data-testid="build-view-switch"
+              className="flex items-center gap-1 rounded-lg bg-white/[0.04] p-0.5"
+            >
+              {(
+                [
+                  { value: "rail", label: "Terminals", icon: <SquareTerminal size={13} aria-hidden /> },
+                  { value: "harness", label: "IJ harness", icon: <Bot size={13} aria-hidden /> },
+                ] as const
+              ).map((v) => {
+                const selected = shape === v.value;
+                return (
+                  <button
+                    key={v.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    tabIndex={selected ? 0 : -1}
+                    data-testid={v.value === "rail" ? "build-view-terminals" : "build-view-harness"}
+                    onClick={() => chooseShape(v.value)}
+                    onKeyDown={(e) => {
+                      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+                      e.preventDefault();
+                      const next = v.value === "rail" ? "harness" : "rail";
+                      chooseShape(next);
+                      const sel = next === "rail" ? "build-view-terminals" : "build-view-harness";
+                      document.querySelector<HTMLButtonElement>(`[data-testid="${sel}"]`)?.focus();
+                    }}
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
+                      selected ? "bg-white/[0.08] font-medium text-zinc-100" : "text-zinc-500 hover:text-zinc-200"
+                    }`}
+                  >
+                    {v.icon}
+                    {v.label}
+                  </button>
+                );
+              })}
+            </div>
+          }
           actions={
-            <div className="flex flex-wrap items-center gap-2">
-              {/* THE SWITCH (v1.369.0): Terminals | IJ harness. Plain text
-                  tabs like the side panel's, the open one in ink. */}
-              <div
-                role="tablist"
-                aria-label="Build view"
-                data-testid="build-view-switch"
-                className="flex items-center gap-1 rounded-lg bg-white/[0.04] p-0.5"
-              >
-                {(
-                  [
-                    { value: "rail", label: "Terminals", icon: <SquareTerminal size={13} aria-hidden /> },
-                    { value: "harness", label: "IJ harness", icon: <Bot size={13} aria-hidden /> },
-                  ] as const
-                ).map((v) => {
-                  const selected = shape === v.value;
-                  return (
-                    <button
-                      key={v.value}
-                      type="button"
-                      role="tab"
-                      aria-selected={selected}
-                      tabIndex={selected ? 0 : -1}
-                      data-testid={v.value === "rail" ? "build-view-terminals" : "build-view-harness"}
-                      onClick={() => chooseShape(v.value)}
-                      onKeyDown={(e) => {
-                        if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
-                        e.preventDefault();
-                        const next = v.value === "rail" ? "harness" : "rail";
-                        chooseShape(next);
-                        const sel = next === "rail" ? "build-view-terminals" : "build-view-harness";
-                        document.querySelector<HTMLButtonElement>(`[data-testid="${sel}"]`)?.focus();
-                      }}
-                      className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
-                        selected ? "bg-white/[0.08] font-medium text-zinc-100" : "text-zinc-500 hover:text-zinc-200"
-                      }`}
-                    >
-                      {v.icon}
-                      {v.label}
-                    </button>
-                  );
-                })}
-              </div>
-              {shape === "rail" && (
+            shape === "rail" ? (
                 <>
-                  <span className="mx-1 h-5 w-px bg-white/10" />
                   {/* v1.329.0 (calm chat wave 8): a quiet sentence-case label and a
                       borderless select that fills on hover, like the rail's own
-                      footer, not a boxed field under an uppercase caption. */}
+                      footer, not a boxed field under an uppercase caption.
+                      v1.370.2: below xl the WORD hides (a screen reader still
+                      reads it) so the controls fit beside the centred switch
+                      at 1024 px instead of wrapping onto a second line. */}
                   <label className="flex items-center gap-1.5 text-[13px] text-zinc-500">
                     <SquareTerminal size={14} className="text-zinc-500" />
-                    Shell
+                    <span className="sr-only xl:not-sr-only">Shell</span>
                   </label>
                   <select
                     aria-label="Shell"
@@ -977,8 +983,7 @@ export default function TerminalsPage() {
                     New terminal
                   </button>
                 </>
-              )}
-            </div>
+              ) : null
           }
         />
       </Reveal>
