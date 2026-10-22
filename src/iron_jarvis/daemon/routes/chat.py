@@ -4519,7 +4519,11 @@ async def chat_stream(
                         return ""
                     if _c.name in _ONCE_ONLY:
                         # v1.367.0: the plan door cards in EVERY posture, by
-                        # itself (never batched with another call).
+                        # itself (never batched with another call). The
+                        # per-call branch below is what DECIDES (pinned); this
+                        # mirror keeps the two predicates agreeing (the
+                        # v1.247.0 rule) — its per-call key joins no batch, so
+                        # it changes no grouping by itself.
                         _ct = d.platform.registry.get(_c.name)
                         _cp = _ct.perm_key() if _ct is not None else _c.name
                         if d.platform.permissions.mode_for(_cp, overrides) is PermissionMode.DENY:

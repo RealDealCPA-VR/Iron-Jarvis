@@ -502,6 +502,11 @@ def test_patch_is_partial_and_never_moves_the_folder(home, work, tmp_path):
     assert "model" not in view["setup"] and view["mode"] == "act" and view["setup"]["local_only"] is True
     assert setup_of(client.app, sid).get("mode") is None
     assert client.patch(f"/build/sessions/{sid}", json={"mode": "sideways"}).status_code == 400
+    # The store itself never moves a session's folder, whoever asks.
+    S.update(client.app.state.platform.engine, sid, setup={"workspace_dir": str(other), "reasoning": "low"})
+    assert setup_of(client.app, sid)["workspace_dir"] == str(work)
+    assert setup_of(client.app, sid)["reasoning"] == "low"
+    assert client.patch(f"/build/sessions/{sid}", json={"folder": str(other)}).json()["folder"] == str(work)
 
 
 def test_delete_removes_the_session(home, work):

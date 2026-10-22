@@ -204,6 +204,29 @@ async def test_no_grant_covers_the_plan_door(app, work):
     await _finish(app, "bp-grant", drop, task)
 
 
+async def test_the_door_stays_once_only_even_when_the_user_set_it_to_allow(app, work, monkeypatch):
+    """A permission override to "allow" (Settings) never turns the plan door
+    into a call that runs unasked: the stream lane still cards it once-only,
+    and the POST lane — which can ask nobody — still never arms it."""
+    monkeypatch.setitem(app.state.platform.permissions._base, "exit_plan_mode", "allow")
+    sid = new_session(app, work, mode="plan")["id"]
+    wire(app, Script([("Plan.", [ToolCall(id="x1", name="ExitPlanMode", arguments={})]), "ok"]))
+    drop, task = await _start(app, sid, "plan", "bp-allow")
+    card = (await until(lambda: [d for e, d in turn_frames(app, "bp-allow") if e == "approval"]))[0]
+    assert card["tool"] == "exit_plan_mode" and card["once_only"] is True
+    await _asgi_post(app, f"/chat/approvals/{card['id']}", {"decision": "deny"})
+    await _finish(app, "bp-allow", drop, task)
+    assert setup_of(app, sid)["mode"] == "plan"
+    # The POST lane.
+    platform = app.state.platform
+    script = Script([])
+    monkeypatch.setattr(platform.router, "complete", script.complete)
+    body = ChatBody(messages=[ChatMessageBody(role="user", content="plan")], provider=CLAUDE[0],
+                    model=CLAUDE[1], workspace_dir=str(work))
+    await run_chat_turn(platform, BUILTIN_PERSONAS, body, harness=True, plan_mode=True)
+    assert "ExitPlanMode" not in script.calls[0]["tools"]
+
+
 async def test_exit_plan_mode_refuses_outside_a_build_session(tmp_path):
     platform = build_platform(str(tmp_path / "home"))
     ctx = ToolContext(workspace=tmp_path, session_id="chat", agent_run_id="chat",
