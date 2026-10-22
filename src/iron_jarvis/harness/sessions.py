@@ -448,16 +448,26 @@ def list_grouped(engine: Any, *, include_archived: bool = False,
     — every build session grouped by its folder, sessions newest first,
     folders by their newest session. Archived sessions are left out unless
     ``include_archived``."""
+    from types import SimpleNamespace
+
     from sqlmodel import select
 
+    T = ChatThreadRecord
     with session_scope(engine) as db:
-        stmt = select(ChatThreadRecord).where(ChatThreadRecord.surface == BUILD_SURFACE)
+        # ONLY the columns a list row shows (Phase 4 review): the whole row
+        # would read every session's transcript — up to 200 replies with
+        # their steps and thinking each — to print titles (the v1.311.0
+        # GET /chat/threads lesson).
+        stmt = select(T.id, T.title, T.updated_at, T.archived_at, T.setup_json).where(
+            T.surface == BUILD_SURFACE
+        )
         if not include_archived:
-            stmt = stmt.where(ChatThreadRecord.archived_at.is_(None))  # type: ignore[union-attr]
-        stmt = stmt.order_by(ChatThreadRecord.updated_at.desc())  # type: ignore[attr-defined]
-        rows = list(db.exec(stmt))
-        for r in rows:
-            db.expunge(r)
+            stmt = stmt.where(T.archived_at.is_(None))  # type: ignore[union-attr]
+        stmt = stmt.order_by(T.updated_at.desc())  # type: ignore[attr-defined]
+        rows = [
+            SimpleNamespace(id=i, title=t, updated_at=u, archived_at=a, setup_json=s)
+            for i, t, u, a, s in db.exec(stmt)
+        ]
     groups: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     paths: dict[str, str] = {}

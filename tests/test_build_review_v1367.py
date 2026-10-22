@@ -345,3 +345,38 @@ def test_running_reads_a_snapshot_so_an_insert_from_another_thread_cannot_break_
     got = logs.running()
     assert [lg.turn_id for lg in got] == ["a", "b"]
 
+
+
+# --------------------------------------------------------------------------- #
+# 9. the session list never reads the transcripts
+# --------------------------------------------------------------------------- #
+
+
+def test_the_session_list_reads_no_transcript(tmp_path, work):
+    """``GET /build/sessions`` selected WHOLE rows — every session's
+    transcript (up to 200 replies with steps and thinking) — to print titles
+    grouped by folder. It now selects the five columns a row shows."""
+    from sqlalchemy import event
+    from fastapi.testclient import TestClient
+
+    app = create_app(str(tmp_path / "home"))
+    client = TestClient(app)
+    sid = client.post("/build/sessions", json={"folder": str(work), "title": "one"}).json()["id"]
+    S.append_lines(app.state.platform.engine, sid, [{"role": "user", "content": "x" * 5000}])
+    seen: list[str] = []
+    engine = app.state.platform.engine
+
+    def capture(conn, cursor, statement, params, context, executemany):
+        seen.append(statement.lower())
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        r = client.get("/build/sessions")
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert r.status_code == 200
+    sessions = r.json()["folders"][0]["sessions"]
+    assert [s["id"] for s in sessions] == [sid] and sessions[0]["title"] == "one"
+    thread_reads = [s for s in seen if "from chatthreadrecord" in s]
+    assert thread_reads, seen
+    assert not any("messages_json" in s for s in thread_reads), thread_reads
