@@ -33,6 +33,7 @@ not running, or no account: exactly as before. The claude model catalog
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import shutil
@@ -47,6 +48,8 @@ from ...core import procs
 from .base import LLMAdapter, LLMMessage, LLMResponse, ProviderError
 from ..budget import run_budget
 from ..cli_auth import cli_failure_message, note_cli_failure
+
+log = logging.getLogger("ironjarvis.claude_native")
 
 
 def _which_cli(binary: str) -> str | None:
@@ -542,6 +545,82 @@ def _claude_model_arg(model: str | None) -> str | None:
     return mapped.strip() if isinstance(mapped, str) and mapped.strip() else None
 
 
+# --------------------------------------------------------------------------- #
+# v1.368.0: another account's signed thinking, refused
+# --------------------------------------------------------------------------- #
+#: Anthropic's words for a thinking block it will not accept (another
+#: account's signature, a block it did not sign).
+_THINKING_REFUSAL = re.compile(r"\b(signature|thinking|redacted_thinking)\b", re.IGNORECASE)
+
+
+def refused_thinking(attempt: Any) -> bool:
+    """Did the upstream refuse the request over a THINKING block (a 400 whose
+    words name ``signature`` / ``thinking``)? Read off the relay's record of
+    the one attempt (``transport.Attempt``)."""
+    try:
+        return bool(
+            getattr(attempt, "relay_used", False)
+            and getattr(attempt, "status", None) == 400
+            and _THINKING_REFUSAL.search(str(getattr(attempt, "error_text", "") or ""))
+        )
+    except Exception:  # noqa: BLE001 — unknown is "no"
+        return False
+
+
+def _carrier_has_thinking(block: Any) -> bool:
+    from .claude_native import CARRIER
+
+    if not isinstance(block, dict) or block.get("type") != CARRIER:
+        return False
+    for native in block.get("messages") or []:
+        for part in (native.get("content") if isinstance(native, dict) else None) or []:
+            if isinstance(part, dict) and part.get("type") in ("thinking", "redacted_thinking"):
+                return True
+    return False
+
+
+def carries_thinking(messages: list[LLMMessage]) -> bool:
+    """Does any earlier assistant turn ride a native carrier WITH thinking?"""
+    return any(
+        _carrier_has_thinking(b)
+        for m in messages or []
+        if getattr(m, "role", "") == "assistant"
+        for b in (getattr(m, "raw_blocks", None) or [])
+    )
+
+
+def without_native_blocks(messages: list[LLMMessage]) -> list[LLMMessage]:
+    """The conversation with every native carrier dropped: each assistant turn
+    is rebuilt from its text + tool calls (``frames`` does that for a turn
+    with no carrier), so no other account's signed thinking is sent."""
+    from dataclasses import replace
+
+    from .claude_native import CARRIER
+
+    out: list[LLMMessage] = []
+    for m in messages or []:
+        blocks = getattr(m, "raw_blocks", None) or []
+        if m.role == "assistant" and blocks:
+            kept = [b for b in blocks if not (isinstance(b, dict) and b.get("type") == CARRIER)]
+            out.append(replace(m, raw_blocks=kept))
+        else:
+            out.append(m)
+    return out
+
+
+def note_thinking_dropped() -> None:
+    """Tell the Build turn's account pin (when one is armed) that this call
+    was sent again without the earlier thinking — its receipt says so."""
+    try:
+        from ...iron_proxy.pin import current
+
+        pin = current()
+        if pin is not None:
+            pin.thinking_dropped = True
+    except Exception:  # noqa: BLE001 — a note never breaks a call
+        pass
+
+
 class ClaudeCliAdapter(LLMAdapter):
     """Claude via the inherited `claude` CLI, spoken natively over stream-json:
     replayed history, native tool calls, streaming, images, token + cost
@@ -625,6 +704,7 @@ class ClaudeCliAdapter(LLMAdapter):
         # exactly as before). Blocking HTTP: off the loop.
         lease = await asyncio.to_thread(accounts.lease, self.provider)
         tried: list[str] = []
+        dropped = False
         while True:
             # Off the loop: frames copy every image's base64, and the model
             # catalog may read its disk cache on first use.
@@ -637,15 +717,34 @@ class ClaudeCliAdapter(LLMAdapter):
             try:
                 try:
                     async for frame in agen:
-                        if frame.get("type") == "final" and lease is not None:
+                        if frame.get("type") == "final":
                             response = frame["response"]
-                            await accounts.report_success_async(
-                                lease, response.usage, int((time.monotonic() - started) * 1000),
-                                call.model_arg or self.model,
-                            )
+                            if dropped:
+                                response.extra["thinking_dropped"] = True
+                            if lease is not None:
+                                # v1.368.0: with what Anthropic said about the
+                                # account (the relay's ratelimit headers).
+                                await accounts.report_success_async(
+                                    lease, response.usage,
+                                    int((time.monotonic() - started) * 1000),
+                                    call.model_arg or self.model,
+                                    headers=response.extra.get("ratelimit_headers"),
+                                )
                         yield frame
                     return
                 except Exception as exc:
+                    if not dropped and not attempt.emitted and refused_thinking(attempt) \
+                            and carries_thinking(messages):
+                        # v1.368.0: ANOTHER account's signed thinking (a
+                        # conversation that moved between Claude accounts) is
+                        # refused by this one. Sent again ONCE without the
+                        # earlier replies' native blocks (rebuilt as plain
+                        # text + tool calls), and the receipt says so.
+                        dropped = True
+                        messages = without_native_blocks(messages)
+                        note_thinking_dropped()
+                        log.info("claude-cli: the account refused earlier thinking; sent again without it")
+                        continue
                     if lease is None:
                         raise
                     # A limit before any text: report it and run as the next

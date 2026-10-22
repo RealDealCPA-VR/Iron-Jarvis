@@ -153,9 +153,21 @@ REQUIRED_FEATURE = "executor-v1"
 #: Build pane asked to start on a chosen account checks this first.
 PICK_PROFILE_FEATURE = "pick-profile"
 
+#: v1.368.0 (IJ harness Phase 5): ``GET /iron/pick?profileId=&pinned=1``
+#: answers THAT account or its park — never the next ready one, and a pinned
+#: pick that names no account is refused. A Build session runs on ONE account
+#: and checks this before it leases; an Iron-Proxy without it is "needs an
+#: update" (an older one IGNORES ``pinned``), never a guess.
+PINNED_PICK_FEATURE = "pick-pinned"
+
+#: v1.368.0: account states carry ``plan`` / ``windows`` and the reports take
+#: ``rateLimits`` (and ``/finished`` takes ``headers``). Sent only when the
+#: running Iron-Proxy advertises it (docs/ADOPTING.md).
+PLAN_USAGE_FEATURE = "plan-usage"
+
 #: Every health ``feature`` Iron Jarvis knows; the BUNDLED Iron-Proxy's own set
 #: is read from the bundle text (``_bundle_features``).
-KNOWN_FEATURES = (REQUIRED_FEATURE, PICK_PROFILE_FEATURE)
+KNOWN_FEATURES = (REQUIRED_FEATURE, PICK_PROFILE_FEATURE, PINNED_PICK_FEATURE, PLAN_USAGE_FEATURE)
 
 #: v1.303.3: an account that needs sign-in (or whose state is unknown) is
 #: re-checked (``POST /iron/refresh {id}``) at most this often, per account.
