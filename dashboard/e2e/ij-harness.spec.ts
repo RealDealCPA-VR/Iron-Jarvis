@@ -201,10 +201,13 @@ test("a faked account limit shows the card; Resume when ready waits, survives a 
     ]
       .map(([e, d]) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`)
       .join("");
-    if (await stub(route, () => ({ contentType: "text/event-stream", body: frames }))) {
+    // The daemon keeps the card on the session BEFORE its last frame goes
+    // out (v1.369.0 review), so the page's re-read after `error` has it.
+    if (route.request().method() !== "OPTIONS") {
       calls.push("turn");
       limited = true;
     }
+    await stub(route, () => ({ contentType: "text/event-stream", body: frames }));
   });
   await page.route(`${DAEMON}/build/sessions/${sessionId}/resume-when-ready`, async (route) => {
     const method = route.request().method();
@@ -272,6 +275,22 @@ test.describe("390 px — Build never pans sideways", () => {
     await page.waitForTimeout(800);
     const pan = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(pan).toBeLessThanOrEqual(0);
+    // v1.369.0 review: the conversation is ONE screen-sized unit — header,
+    // transcript and composer — and the panes come after it. It used to flex
+    // to its content's height, squeezing the transcript to a sliver.
+    const box = await page.evaluate(() => {
+      const r = (id: string) => document.querySelector(`[data-testid="${id}"]`)?.getBoundingClientRect() ?? null;
+      const conv = r("harness-conversation");
+      const composer = r("harness-composer");
+      const tabs = r("harness-pane-tabs");
+      return conv && composer && tabs
+        ? { vh: window.innerHeight, top: conv.top, h: conv.height, composerBottom: composer.bottom, tabsTop: tabs.top }
+        : null;
+    });
+    expect(box).not.toBeNull();
+    expect(Math.abs(box!.h - box!.vh * 0.78)).toBeLessThanOrEqual(2);
+    expect(box!.composerBottom).toBeLessThanOrEqual(box!.top + box!.h + 1);
+    expect(box!.tabsTop).toBeGreaterThanOrEqual(box!.top + box!.h);
     const shots = process.env.IJ_E2E_SHOTS;
     if (shots) await page.screenshot({ path: join(shots, "ij-harness-phone.png"), fullPage: true });
   });

@@ -803,8 +803,16 @@ export function HarnessSession({
       {/* ------------------------------------------------- the conversation */}
       {/* Below lg the conversation and the panes stack, each a screen-sized
           box of its own (the transcript scrolls inside); from lg they sit
-          side by side at the view's height. */}
-      <section className="flex h-[78vh] min-w-0 flex-1 flex-col lg:h-auto lg:min-h-0">
+          side by side at the view's height. The conversation box must NOT
+          flex below lg: `flex-1` there made its height its content's, so a
+          short session squeezed the transcript to a sliver over the panes
+          and a long one grew the page instead of scrolling (v1.369.0
+          review). Header, transcript and composer read as one unit, and
+          the panes come after it, never inside it. */}
+      <section
+        data-testid="harness-conversation"
+        className="flex h-[78vh] min-w-0 flex-none flex-col lg:h-auto lg:min-h-0 lg:flex-1"
+      >
         <header className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-white/[0.06] px-1 pb-2">
           <div className="min-w-0 flex-1">
             {renaming !== null ? (
