@@ -26,6 +26,7 @@ imports), anything else unscored (``unittest`` exits 5 when no test ran).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import sys
@@ -100,6 +101,28 @@ def prepare_grading_copy(task: Task, workspace: Path, grade_dir: Path) -> Path:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
     return grade_dir
+
+
+def remove_hidden_check(task: Task, grade_dir: Path) -> None:
+    """Take the hidden check files back OUT of a grading copy once it has
+    been graded (v1.370.0 review). The copy stays for inspection (the
+    agent's final work), but the answer key must not sit on disk under the
+    bench root, where a LATER run's agent with a shell could read it. Never
+    raises: a file that cannot be removed is logged."""
+    if not task.check_dir.is_dir():
+        return
+    for path in task.check_dir.rglob("*"):
+        if not path.is_file() or "__pycache__" in path.parts:
+            continue
+        target = Path(grade_dir) / path.relative_to(task.check_dir)
+        try:
+            if target.is_file() and not target.is_symlink():
+                os.chmod(target, 0o700)
+                target.unlink()
+        except OSError:
+            logging.getLogger(__name__).warning(
+                "could not remove a hidden check file from %s", grade_dir, exc_info=True
+            )
 
 
 def _tail(data: bytes) -> str:
@@ -249,4 +272,5 @@ def grade(task: Task, workspace: Path, grade_dir: Path, *, python: str | None = 
         parts.append(run_rubric(task, grade_dir))
     passed, reason = combine(parts)
     output = "\n".join(p["output"] for p in parts if p.get("output"))[-OUTPUT_TAIL_CHARS:]
+    remove_hidden_check(task, grade_dir)
     return Grade(passed, reason, output, parts)

@@ -879,7 +879,12 @@ async def test_smoke_two_tasks_through_the_jarvis_lane_are_scored_end_to_end(tmp
     # The grader never reached the agent's copy.
     work = res.config_dir / "runs" / "bugfix-pagination" / "work"
     assert not (work / "test_hidden_pagination.py").exists()
-    assert (res.config_dir / "runs" / "bugfix-pagination" / "grade" / "test_hidden_pagination.py").exists()
+    # v1.370.0 review: the graded copy stays (the agent's work, for
+    # inspection) but the answer key is taken back out of it, so a LATER
+    # run's agent with a shell cannot read it under the bench root.
+    graded = res.config_dir / "runs" / "bugfix-pagination" / "grade"
+    assert graded.is_dir() and any(graded.iterdir())
+    assert not (graded / "test_hidden_pagination.py").exists()
     report = (res.config_dir / "report.md").read_text(encoding="utf-8")
     assert "Pass rate 100%" in report and "0 unscored" in report
     combined = (platform.config.home / "harness-bench" / "report.md").read_text(encoding="utf-8")

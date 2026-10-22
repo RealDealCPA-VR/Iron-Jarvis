@@ -10,6 +10,24 @@ Google Research's Harness² (github.com/google-research/harness2, Apache-2.0;
 ideas only, no code taken) folded into Phases 0, 3 and 7, and the four open
 questions decided so the work can run start to finish.
 
+**Status (2026-10-22): every phase shipped**, each built by a doer agent and
+checked by a separate reviewer agent before release:
+
+| Phase | Release |
+|---|---|
+| 0 the benchmark | v1.363.0 |
+| 1 every coding tool | v1.364.0 |
+| 2 Codex's own protocol | v1.365.0 |
+| 3 dialects + component tree | v1.366.0 |
+| 4 Build sessions | v1.367.0 |
+| 5 one account per session | v1.368.0 |
+| 6 the IJ harness screen | v1.369.0 (+ v1.369.1, test-only) |
+| 7 rewind, refine loop, library | v1.370.0 |
+
+Benchmark on the final harness (glm-5.3-flash, generic dialect, `--tier
+all`): 28/30 (core 19/20, hard 9/10), 0 unscored. The CLAUDE.md bullets for
+each version record what was built and what each review found.
+
 ## What we are building
 
 Build keeps two views:

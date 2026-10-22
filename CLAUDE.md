@@ -3657,7 +3657,13 @@ does not need a bump, stop and bump it.
   (`HiddenCheckLeak`); a probe's budget mismatch writes the ledger first;
   reports say one run is a small sample and that "parallel" runs one at a
   time; `adopt` refuses links and missing folders. Pins:
-  `tests/test_harness_{library,rewind,refine}_review_v1370.py`.
+  `tests/test_harness_{library,rewind,refine}_review_v1370.py`. SHIP STEP:
+  `grading.grade` takes the hidden check files back OUT of the graded copy
+  (`remove_hidden_check`) — the copy under `runs/<task>/grade/` kept the
+  answer key on disk, where a later run's agent with a shell could read it;
+  the agent's own work stays for inspection (`tests/test_ship_v1370.py`).
+  `build_reflect` stays ON by default (one bounded call per idle stretch,
+  skipped near a limit); flip it if the user wants to opt in instead.
 
 - **The IJ harness is a VIEW of Build built from the chat's own pieces; the
   daemon writes the transcript, and a turn's end is on the record BEFORE its
