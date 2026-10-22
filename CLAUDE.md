@@ -3553,6 +3553,48 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **Harness mode: one switch, a dialect per model family, a component tree
+  per folder** (v1.366.0, Phase 3 of `docs/IJ-HARNESS-PLAN.md`; Harness²
+  principles 1–3). `harness=` is KEYWORD-ONLY on `run_chat_turn` /
+  `stream_chat_turn` / `chat_stream` (True/"auto"/a dialect id; else
+  ValueError before work; never on ChatBody); OFF IS BYTE-IDENTICAL, pinned
+  by a golden fixture captured from the pre-change code
+  (`tests/fixtures/harness_off_golden_v1366.json`, `IJ_REGEN_HARNESS_OFF=1`)
+  and a pin that makes every harness entry point raise with harness off.
+  ON: arms `harness/mode.CODING_TOOLS` past the 6-named-tool cap (allow tier
+  armed+granted; ask tier visible+carded in the stream lane; the POST lane
+  arms no ask-tier tool), renders the component tree BEFORE the history
+  planner, never escalates (exit lines swapped, roster dropped, invented exits
+  refused, `stay_in_chat`, 60 rounds), and puts `route.harness = {family,
+  dialect, fingerprint, layers, nudged[, note]}` LAST on both lanes.
+  DIALECTS (`harness/dialects.py`): claude = Claude Code's shapes, gpt =
+  Codex's (`exec_command` → `process_start(until_exit)`, else shell), qwen =
+  Qwen Code @13a4fea5, generic = Jarvis's names; the family is read off the
+  serving provider + model id; `FAMILY_MEASURED` records the evidence — glm
+  maps to GENERIC because the bench measured it (claude dialect: equal pass
+  rate, ~40% more tool calls, ~73% more input tokens); deepseek/qwen "not yet
+  measured". TRANSLATION at the boundary (`HarnessTurn.translate_calls`,
+  right after the router answers): every gate (cards, repeat guard, spend
+  check, low trust, `registry.invoke(allowed_names=)`) sees the REAL tool;
+  `ToolInvocation.called_as` (additive; the reconciler adds it) records the
+  model's name; the model gets its own names back; what is armed is exactly
+  what the model is shown. COMPONENTS (`harness/components.py`): the eight
+  Harness² components, layers default → family → `<folder>/.ironjarvis/harness/`
+  (omitted-is-inherited); `DEFAULT_GUARDRAILS` is a FLOOR (folder, never
+  stop what you did not start, never end processes by name, destructive git
+  only when asked) and `FLOOR_CLOSING` ends the list whenever the folder's
+  own files speak; the validator voids a whole invalid layer with one note
+  (unknown files, size caps, junction/symlink escapes, untriggered skills,
+  missing scripts, plugins.toml schema — rules only ask/deny, a tool named
+  twice voids it); every folder text through promptguard, a flagged check
+  voids the layer; checks run as GATED `shell` calls ledgered `called_as
+  "plugin check"`. TEXT TOOL CALLS (GLM `<tool_call>`, `<invoke name=…>`,
+  a JSON blob naming an offered tool) are never executed: ONE nudge per turn
+  (not when no tools were offered), the stream lane sends `reset`. Bench:
+  `--dialect auto|generic|claude|gpt|qwen`, identity includes dialect, family
+  and fingerprint. Pins: `tests/test_harness_{components,dialects,mode_lanes,
+  off_golden,phase3_review}_v1366.py`.
+
 - **A renamed endpoint slot is still the slot** (v1.365.3, a USER BUG). The
   ollama/custom slots are config-derived seeds; renaming one PROMOTES it to a
   stored `fleet_nodes` row (`source="config"`). That row used to override the

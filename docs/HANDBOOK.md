@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.365.3 (2026-10-21).*
+holds itself to. Current as of v1.366.0 (2026-10-21).*
 
 ---
 
@@ -1894,6 +1894,41 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The coding harness speaks each model's language (v1.366.0)
+
+Step three of the coding screen: the engine it will run on. Nothing new
+appears in Chat yet. The screen arrives in a later release.
+
+- **One harness, many models.** For a coding session Jarvis gives the model
+  its coding tools (reading, exact edits, patches, search, programs that keep
+  running, a step list) and a short set of working rules. A model sees the
+  tools in the shape it knows best:
+  - Claude sees Claude Code's tools;
+  - GPT sees Codex's tools;
+  - Qwen sees Qwen Code's tools;
+  - others see Jarvis's own.
+
+  Every call is translated to the real Jarvis tool before it runs. Approvals,
+  Undo, the activity log and your limits always apply. The log shows both
+  the real tool and the name the model used.
+- **Measured, not assumed.** GLM's maker recommends Claude Code's tools. On
+  the benchmark, GLM passed the same tasks with Jarvis's own tools while
+  using about 40% fewer steps and about 73% less input, so GLM uses Jarvis's
+  own tools. The choice and its numbers are written into the code.
+- **Rules a model can't argue away.** Every coding session starts with four
+  rules:
+  - work inside the session's folder;
+  - never stop a program the session didn't start;
+  - never end programs by name;
+  - only rewrite git history when asked.
+
+  A project folder can add its own rules and tools in `.ironjarvis/harness/`,
+  but it can't remove these four. An invalid or suspicious folder setup is
+  ignored as a whole, with a note.
+- **A call written as text is not run.** If a model writes a tool call as
+  plain text instead of making it, Jarvis asks it once to make the real call
+  and never runs the text.
 
 ## Removing your own model server really removes it (v1.365.3)
 
