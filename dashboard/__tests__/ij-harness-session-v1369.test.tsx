@@ -75,6 +75,7 @@ vi.mock("@/components/terminal/FilesPanel", () => ({
 
 import { HarnessSession } from "@/components/harness/HarnessSession";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
+import { resetWords } from "@/lib/buildAccounts";
 
 /* ------------------------------------------------------------- fixtures */
 
@@ -513,6 +514,100 @@ describe("an account limit", () => {
     expect(screen.getAllByTestId("harness-user-bubble")).toHaveLength(1);
     expect(screen.getByTestId("harness-reply-limit")).toHaveTextContent("Work: This account reached its limit.");
   });
+
+  // ---- v1.369.0 review ---------------------------------------------------
+
+  it("while it waits the reset time is said ONCE: on the account's line, not again in the sentence", async () => {
+    api.gets["/build/sessions/s1"] = view({ account_limit: LIMIT, account_wait: WAIT });
+    renderSession();
+    const card = await screen.findByTestId("account-limit-card");
+    const line = screen.getByTestId("account-limit-line").textContent ?? "";
+    expect(line).toMatch(/^Work · resets /);
+    expect(screen.getByTestId("account-limit-waiting").textContent).toBe("Waiting for the reset, then it continues.");
+    expect((card.textContent ?? "").match(/resets /g)).toHaveLength(1);
+  });
+
+  it("the wait's own reset time wins on the line (the daemon's re-check moved it)", async () => {
+    api.gets["/build/sessions/s1"] = view({
+      account_limit: LIMIT,
+      account_wait: { ...WAIT, resets_at: "2030-01-02T09:30:00Z" },
+    });
+    renderSession();
+    await screen.findByTestId("account-limit-card");
+    expect(screen.getByTestId("account-limit-line").textContent).toBe(`Work · ${resetWords("2030-01-02T09:30:00Z")}`);
+    expect(resetWords("2030-01-02T09:30:00Z")).not.toBe(resetWords("2030-01-01T16:12:00Z"));
+  });
+
+  it("with no reset time known, the waiting sentence says it waits for the account to be ready", async () => {
+    api.gets["/build/sessions/s1"] = view({
+      account_limit: { ...LIMIT, resets_at: null },
+      account_wait: { ...WAIT, resets_at: null },
+    });
+    renderSession();
+    await screen.findByTestId("account-limit-card");
+    expect(screen.getByTestId("account-limit-line").textContent).toBe("Work");
+    expect(screen.getByTestId("account-limit-waiting").textContent).toBe("Waiting for it to be ready, then it continues.");
+  });
+
+  it("after the turn the SESSION VIEW is the truth for the card: the daemon wrote it before its last frame", async () => {
+    // routes/build `recorded_turn` writes the card on the session BEFORE the
+    // terminal frame (tests/test_build_turn_end_order_v1369.py), so the
+    // screen's one re-read carries it — and a re-read that carries none
+    // (the user chose another account in another window) takes it away.
+    serverState({ account_limit: null, account_wait: null });
+    fetchMock.mockImplementation(async () => {
+      serverState({ account_limit: LIMIT, account_wait: null });
+      return sse([
+        ["account_limit", LIMIT],
+        ["error", { detail: "parked", title: "Work is out of usage.", fix: "Kept." }],
+      ]);
+    });
+    renderSession();
+    await screen.findByTestId("harness-empty");
+    await send("Keep going");
+    expect(await screen.findByTestId("account-limit-card")).toBeInTheDocument();
+    await waitFor(() => expect(api.calls.filter((c) => c.path === "/build/sessions/s1").length).toBeGreaterThan(1));
+    expect(screen.getByTestId("account-limit-card")).toBeInTheDocument();
+    cleanup();
+    serverState({ account_limit: null, account_wait: null });
+    fetchMock.mockImplementation(async () =>
+      sse([
+        ["account_limit", LIMIT],
+        ["error", { detail: "parked", title: "Work is out of usage.", fix: "Kept." }],
+      ]),
+    );
+    api.calls = [];
+    renderSession();
+    await screen.findByTestId("harness-empty");
+    await send("Keep going");
+    await waitFor(() => expect(api.calls.filter((c) => c.path === "/build/sessions/s1").length).toBeGreaterThan(1));
+    await waitFor(() => expect(screen.queryByTestId("account-limit-card")).toBeNull());
+  });
+
+  it("a turn that ended on a limit reads the account list again, so the chip says so without opening it", async () => {
+    const ready = { ...ACCOUNTS, claude: [{ ...ACCOUNTS.claude[0], status: "ready", resets_at: null, limit_kind: "" }, ACCOUNTS.claude[1]] };
+    api.gets["/build/accounts"] = ready;
+    serverState({
+      setup: { provider: "claude-cli", account: "work", account_name: "Work" },
+      account: ACCOUNTS.claude[0],
+      account_vendor: "claude",
+      account_limit: null,
+      account_wait: null,
+    });
+    fetchMock.mockImplementation(async () => {
+      // The daemon refreshes its snapshot as the turn ends on the limit.
+      api.gets["/build/accounts"] = ACCOUNTS;
+      return sse([
+        ["account_limit", LIMIT],
+        ["error", { detail: "parked", title: "Work is out of usage.", fix: "Kept." }],
+      ]);
+    });
+    renderSession();
+    expect(await screen.findByTestId("account-chip-name")).toHaveTextContent("Work");
+    expect(screen.queryByTestId("account-chip-status")).toBeNull();
+    await send("Keep going");
+    await waitFor(() => expect(screen.getByTestId("account-chip-status").textContent).toBe("Limit reached"));
+  });
 });
 
 describe("a steer note the turn never read goes back in the box", () => {
@@ -716,13 +811,23 @@ describe("a new session on a Default account that is at its limit (v1.368.0 ship
       account_wait: null,
     });
     api.gets["/build/accounts"] = { claude: [WORK, PERSONAL], codex: [], iron_proxy: { enabled: true, running: true, needs_update: false, note: "" } };
-    fetchMock.mockImplementation(async () =>
-      sse([
+    const kept = { account: "work", account_name: "Work", provider: "claude-cli", vendor: "claude", kind: "usage", resets_at: "2030-01-01T16:12:00Z", resumable: true, turn_id: "x" };
+    fetchMock.mockImplementation(async () => {
+      // The daemon keeps the card on the session before its last frame
+      // (v1.369.0 review): the screen's re-read carries it.
+      api.gets["/build/sessions/s1"] = view({
+        setup: { provider: "claude-cli", account: "work", account_name: "Work" },
+        account: WORK,
+        account_vendor: "claude",
+        account_limit: kept,
+        account_wait: null,
+      });
+      return sse([
         ["round", { round: 0 }],
-        ["account_limit", { account: "work", account_name: "Work", provider: "claude-cli", vendor: "claude", kind: "usage", resets_at: "2030-01-01T16:12:00Z", resumable: true, turn_id: "x" }],
+        ["account_limit", kept],
         ["error", { detail: "parked", title: "Work is out of usage.", fix: "Your conversation and the work so far are kept." }],
-      ]),
-    );
+      ]);
+    });
     renderSession();
     expect(await screen.findByTestId("account-chip-name")).toHaveTextContent("Work");
     const status = await screen.findByTestId("account-chip-status");

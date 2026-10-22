@@ -348,7 +348,12 @@ export function AccountLimitCard({
   chooser?: ReactNode;
 }) {
   const words = limitCardWords(limit);
-  const when = resetWords(waitingResetsAt ?? limit.resetsAt);
+  // THE RESET TIME IS SAID ONCE (v1.369.0 review): on the account's line.
+  // While "Resume when ready" waits, that line carries the WAIT's own reset
+  // time (the daemon's re-check can move it) and the waiting sentence says
+  // only what happens; with no time known, the sentence says so instead.
+  const when = waiting ? resetWords(waitingResetsAt ?? limit.resetsAt) : "";
+  const line = waiting ? (when ? `${limit.accountName} · ${when}` : limit.accountName) : limitCardLine(limit);
   return (
     <div
       role="status"
@@ -360,13 +365,13 @@ export function AccountLimitCard({
         <span className="font-medium">{words.title}</span> {words.body}
       </p>
       <p data-testid="account-limit-line" className="text-[12px] italic text-zinc-400">
-        {limitCardLine(limit)}
+        {line}
       </p>
       {waiting ? (
         <div className="flex flex-wrap items-center gap-2">
           <span data-testid="account-limit-waiting" className="inline-flex items-center gap-1.5 text-[12px] text-zinc-300">
             <Loader2 size={12} className="animate-spin" aria-hidden />
-            {when ? `Waiting for the reset (${when}), then it continues.` : "Waiting for it to be ready, then it continues."}
+            {when ? "Waiting for the reset, then it continues." : "Waiting for it to be ready, then it continues."}
           </span>
           <button
             type="button"

@@ -682,12 +682,14 @@ def _with_limit_words(chunk: str, limit: "dict[str, Any]") -> str:
     return _durable.sse("error", data)
 
 
-async def _note_account_limit(platform: Any, thread_id: str, turn_id: str,
+async def _keep_account_limit(engine: Any, thread_id: str, turn_id: str,
                               limit: "dict[str, Any] | None", *, done: bool) -> None:
-    """Keep the session's limit card across a reload (``setup.account_limit``)
-    — or clear it when a turn on the account finished — and tell the bell.
+    """The RECORD half of a turn's account outcome: keep the session's limit
+    card across a reload (``setup.account_limit``) — or clear it (and a
+    "Resume when ready" wait) when a turn on the account was served. Written
+    BEFORE the turn's terminal frame reaches anyone (v1.369.0 review), so a
+    client that reads the session the moment the turn ends sees the card.
     Off the loop; never raises."""
-    engine = platform.engine
     try:
         if limit:
             record = {
@@ -695,25 +697,6 @@ async def _note_account_limit(platform: Any, thread_id: str, turn_id: str,
                 "at": utcnow().isoformat(), "turn_id": turn_id,
             }
             await asyncio.to_thread(S.update, engine, thread_id, setup={"account_limit": record})
-            # The account list reads the CACHED snapshot: refresh it now (one
-            # profiles + states read, off the loop), so the chip and the list
-            # say "Limit reached" at once instead of at the next watch cycle.
-            svc = _svc_of(platform)
-            if svc is not None and hasattr(svc, "refresh_accounts"):
-                await asyncio.to_thread(svc.refresh_accounts)
-            row = await asyncio.to_thread(S.get_row, engine, thread_id)
-            bus = getattr(platform, "event_bus", None)
-            if bus is not None:
-                from ...core.events import EventType
-
-                await bus.publish(EventType.BUILD_ACCOUNT_LIMIT, {
-                    "thread_id": thread_id,
-                    "title": getattr(row, "title", "") or "",
-                    "account_name": limit.get("account_name") or "",
-                    "vendor": limit.get("vendor") or "",
-                    "kind": limit.get("kind") or "",
-                    "resets_at": limit.get("resets_at"),
-                }, session_id=S.session_id_for(thread_id))
         elif done:
             # The account served the turn (it finished, or the user's own turn
             # ran on it and then failed for another reason or was stopped):
@@ -730,6 +713,66 @@ async def _note_account_limit(platform: Any, thread_id: str, turn_id: str,
         log.warning("recording build session %s's account limit failed", thread_id, exc_info=True)
 
 
+async def _announce_account_limit(platform: Any, thread_id: str, limit: "dict[str, Any]") -> None:
+    """The NEWS half of a limit: refresh the cached account snapshot (so the
+    chip and the list say "Limit reached" at once instead of at the next watch
+    cycle) and tell the bell. Runs AFTER the terminal frame — Iron-Proxy is
+    never waited on before the user sees the turn end. Off the loop; never
+    raises."""
+    engine = platform.engine
+    try:
+        svc = _svc_of(platform)
+        if svc is not None and hasattr(svc, "refresh_accounts"):
+            await asyncio.to_thread(svc.refresh_accounts)
+        row = await asyncio.to_thread(S.get_row, engine, thread_id)
+        bus = getattr(platform, "event_bus", None)
+        if bus is not None:
+            from ...core.events import EventType
+
+            await bus.publish(EventType.BUILD_ACCOUNT_LIMIT, {
+                "thread_id": thread_id,
+                "title": getattr(row, "title", "") or "",
+                "account_name": limit.get("account_name") or "",
+                "vendor": limit.get("vendor") or "",
+                "kind": limit.get("kind") or "",
+                "resets_at": limit.get("resets_at"),
+            }, session_id=S.session_id_for(thread_id))
+    except Exception:  # noqa: BLE001 — the turn never fails on its session record
+        log.warning("announcing build session %s's account limit failed", thread_id, exc_info=True)
+
+
+async def _note_account_limit(platform: Any, thread_id: str, turn_id: str,
+                              limit: "dict[str, Any] | None", *, done: bool) -> None:
+    """Both halves at once (:func:`_keep_account_limit` then
+    :func:`_announce_account_limit`). Off the loop; never raises."""
+    await _keep_account_limit(platform.engine, thread_id, turn_id, limit, done=done)
+    if limit:
+        await _announce_account_limit(platform, thread_id, limit)
+
+
+def _turn_served(pin: Any, status: str) -> bool:
+    """Did the session's account SERVE this turn (a pinned lease succeeded)?
+    Then the card and any "Resume when ready" wait are over — whether the turn
+    finished, failed for another reason, or the user stopped it. A turn cut
+    off by a shutdown ("interrupted") keeps the wait (v1.368.0 review)."""
+    return status == "done" or (
+        pin is not None and status in ("error", "stopped") and bool(getattr(pin, "leased", None))
+    )
+
+
+async def _record_turn_end(engine: Any, thread_id: str, turn_id: str, watch: "_ReplyWatch",
+                           status: str, pin: Any, platform: Any) -> None:
+    """What a turn's END writes on the session: the reply line (plus any steer
+    notes), then the account outcome's record. Never raises."""
+    lines = watch.lines(turn_id, status)
+    if lines:
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(S.append_lines, engine, thread_id, lines)
+    served = _turn_served(pin, status)
+    if pin is not None and platform is not None and (watch.account_limit or served):
+        await _keep_account_limit(engine, thread_id, turn_id, watch.account_limit, done=served)
+
+
 async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, *,
                         pin: Any = None, platform: Any = None):
     """``frames`` (the lane's SSE iterator), passed through unchanged, with
@@ -744,11 +787,30 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
     watch = _ReplyWatch()
     status = "stopped"
     limit_sent = False
+    # THE END IS WRITTEN BEFORE IT IS SAID (v1.369.0 review). The reply line
+    # and the account's limit card land on the session BEFORE the terminal
+    # frame is passed on: the screen re-reads the session the moment it sees
+    # `done` / `error`, and a write that ran after that frame (it used to sit
+    # in the finally) was a race the screen lost — the card the stream had
+    # just shown vanished on the re-read. ONE write per turn: the finally
+    # awaits the same task when the frame was seen (a cancel during the
+    # shielded write keeps it running), and starts it otherwise.
+    ending: "asyncio.Future[None] | None" = None
+
+    def end(st: str) -> "asyncio.Future[None]":
+        nonlocal ending
+        if ending is None:
+            ending = asyncio.ensure_future(
+                _record_turn_end(engine, thread_id, turn_id, watch, st, pin, platform),
+            )
+        return ending
+
     try:
         async with contextlib.aclosing(frames):
             async for chunk in frames:
                 parsed = _durable.parse_chunk(chunk)
-                if pin is not None and any(ev in _TERMINAL_EVENTS for ev, _ in parsed):
+                terminal = any(ev in _TERMINAL_EVENTS for ev, _ in parsed)
+                if pin is not None and terminal:
                     if pin.limit and not limit_sent:
                         limit_sent = True
                         card = {**pin.limit, "turn_id": turn_id}
@@ -762,6 +824,8 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                     watch.see(event, data)
                 if watch.approved_plans or watch.granted:
                     await _apply_session_changes(engine, thread_id, watch)
+                if terminal and (watch.done is not None or watch.error is not None):
+                    await asyncio.shield(end("done" if watch.done is not None else "error"))
                 yield chunk
         status = "done" if watch.done is not None else "error" if watch.error is not None else "stopped"
     except asyncio.CancelledError:
@@ -777,25 +841,19 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
         status = "error"
         raise
     finally:
-        lines = watch.lines(turn_id, status)
-        if lines:
+        # The reply line and the account outcome's record: already written
+        # when the terminal frame went out; else (stopped, cut off, broken)
+        # written now. A turn the account SERVED (a pinned lease succeeded)
+        # clears the card and any "Resume when ready" wait; a turn the
+        # account parked keeps its own card; a turn cut off by a shutdown
+        # ("interrupted") keeps the wait (v1.368.0 review, `_turn_served`).
+        with contextlib.suppress(BaseException):
+            await asyncio.shield(end(status))
+        # The news (snapshot refresh + the bell) after the frame: Iron-Proxy
+        # is never waited on before the user sees the turn end.
+        if pin is not None and platform is not None and watch.account_limit:
             with contextlib.suppress(BaseException):
-                await asyncio.shield(asyncio.to_thread(S.append_lines, engine, thread_id, lines))
-        # The account SERVED this turn (a pinned lease succeeded): the card
-        # and any "Resume when ready" wait are over — whether the turn
-        # finished, failed for another reason, or the user stopped it. A later
-        # continuation would answer a question nobody asked (the user is
-        # driving the session). A turn the account parked ends on its own
-        # card instead (``watch.account_limit`` wins below), and a turn cut
-        # off by a shutdown ("interrupted") keeps the wait (v1.368.0 review).
-        served = status == "done" or (
-            pin is not None and status in ("error", "stopped") and bool(getattr(pin, "leased", None))
-        )
-        if pin is not None and platform is not None and (watch.account_limit or served):
-            with contextlib.suppress(BaseException):
-                await asyncio.shield(_note_account_limit(
-                    platform, thread_id, turn_id, watch.account_limit, done=served,
-                ))
+                await asyncio.shield(_announce_account_limit(platform, thread_id, watch.account_limit))
 
 
 # --------------------------------------------------------------------------- #

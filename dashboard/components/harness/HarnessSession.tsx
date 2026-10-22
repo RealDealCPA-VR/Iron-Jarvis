@@ -226,8 +226,6 @@ export function HarnessSession({
   // The turn running now reported an account limit: its error frame is the
   // same news in other words, so the card says it once.
   const limitSeenRef = useRef(false);
-  /** The card the turn's own `account_limit` frame carried (see settle). */
-  const limitFrameRef = useRef<AccountLimit | null>(null);
   const [accountNote, setAccountNote] = useState<string | null>(null);
   const [accountBusy, setAccountBusy] = useState(false);
   const [limit, setLimit] = useState<AccountLimit | null>(null);
@@ -325,7 +323,6 @@ export function HarnessSession({
       const lim = decodeAccountLimit(data);
       if (lim) {
         limitSeenRef.current = true;
-        limitFrameRef.current = lim;
         setLimit(lim);
         setWaiting(false);
         setChoosing(false);
@@ -337,25 +334,22 @@ export function HarnessSession({
    *  in the box, and send what was waiting. */
   const settle = useCallback(
     async (finished: string, unread: readonly string[], clean: boolean) => {
-      // The daemon writes the reply line as the turn ends, before it reports
-      // the session as no longer running; look again only while it still
-      // says the turn runs (a turn stopped before its first word writes none).
-      // v1.368.0: the daemon keeps a limit card on the session AFTER it
-      // writes the reply line (both in the turn's last step, after its last
-      // frame), so a turn that ended on a limit waits for the card too — an
-      // early read would clear the card the stream just showed.
-      const limitHere = limitSeenRef.current;
-      const cardMissing = (x: BuildSessionView) => limitHere && x.knowsAccounts && !decodeAccountLimit(x.accountLimit);
+      // THE SESSION VIEW IS THE TRUTH. The daemon writes the reply line —
+      // and the limit card a turn ended on — BEFORE it passes the turn's
+      // last frame on (v1.369.0 review, routes/build `recorded_turn`), so the
+      // first read has both. It reads again only while the session still
+      // says the turn runs and holds no reply for it (a turn stopped before
+      // its first word writes none).
       let v: BuildSessionView | null = null;
       for (let i = 0; i < REREAD_TRIES; i += 1) {
         v = await load();
         if (!v || !v.running) break;
-        if (v.messages.some((m) => m.role === "assistant" && m.turnId === finished) && !cardMissing(v)) break;
+        if (v.messages.some((m) => m.role === "assistant" && m.turnId === finished)) break;
         if (i < REREAD_TRIES - 1) await sleep(REREAD_GAP_MS);
       }
-      // The stream said this turn's account could not serve; a session read
-      // that does not show the card yet never takes it off the screen.
-      if (v && cardMissing(v) && limitFrameRef.current) setLimit(limitFrameRef.current);
+      // A turn that ended on a limit changed what the account list says:
+      // read it again, so the chip says so without opening the list.
+      if (limitSeenRef.current) void refreshAccounts();
       setPending(null);
       setSteerNotes([]);
       setQuestions((prev) => prev.map((q) => (q.outcome ? q : { ...q, outcome: "stopped" })));
@@ -370,7 +364,7 @@ export function HarnessSession({
       onChanged();
       return clean;
     },
-    [load, onChanged, threadId],
+    [load, onChanged, threadId, refreshAccounts],
   );
 
   const runTurn = useCallback(
