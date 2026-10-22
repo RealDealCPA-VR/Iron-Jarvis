@@ -3590,6 +3590,13 @@ does not need a bump, stop and bump it.
   `changed-files-undone-v1369`, `directory-tree-no-render-load-v1369`,
   `tests/test_{ij_harness_desktop,mock_harness_write,chat_changes_undone,
   build_turn_end_order}_v1369.py`, e2e `dashboard/e2e/ij-harness.spec.ts`.
+  v1.369.1 (test-only): v1.369.0's Tests gate went red on
+  `ij-harness-sidebar-v1369` ("expected null to be 'b1'"): the view writes
+  the remembered session and the `?session=` address in an EFFECT after the
+  commit that shows the session, and three tests waited for the screen and
+  then read the address. Each now waits for the address itself; delaying the
+  writes 200 ms reproduced CI's exact error on the old shape (3 red) and
+  passes the new one (13/13).
 
 - **A Build session is PINNED to one account; a lost pin is a rotation, so
   the pin rides a ContextVar that every lease path copies** (v1.368.0, Phase 5

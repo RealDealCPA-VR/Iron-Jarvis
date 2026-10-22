@@ -197,11 +197,17 @@ describe("the view", () => {
 
   it("opens the session the address names, and puts the open session in the address", async () => {
     render(<IjHarnessView initialSession="b1" terminals={[]} onOpenTerminal={() => {}} defaultFolder={null} terminal={terminal} />);
-    await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "b1"));
-    expect(new URL(window.location.href).searchParams.get("session")).toBe("b1");
+    // The address is written by an effect after the commit that shows the
+    // session: wait for the address itself (v1.369.1).
+    await waitFor(() => {
+      expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "b1");
+      expect(new URL(window.location.href).searchParams.get("session")).toBe("b1");
+    });
     fireEvent.click(screen.getByTestId("harness-session-row-a2"));
-    await waitFor(() => expect(new URL(window.location.href).searchParams.get("session")).toBe("a2"));
-    expect(localStorage.getItem("ij.build.session")).toBe("a2");
+    await waitFor(() => {
+      expect(new URL(window.location.href).searchParams.get("session")).toBe("a2");
+      expect(localStorage.getItem("ij.build.session")).toBe("a2");
+    });
   });
 
   it("with no address, opens the session this window had open (while it is listed), and tells the session its turn runs", async () => {
@@ -217,9 +223,14 @@ describe("the view", () => {
     // the newest session instead of the one it had open.
     localStorage.setItem("ij.build.session", "b1");
     render(<IjHarnessView initialSession={null} terminals={[]} onOpenTerminal={() => {}} defaultFolder={null} terminal={terminal} />);
-    await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "b1"));
-    expect(localStorage.getItem("ij.build.session")).toBe("b1");
-    expect(new URL(window.location.href).searchParams.get("session")).toBe("b1");
+    // The remembered key and the address are written by an EFFECT after the
+    // commit that shows the session: wait for THEM, not for the screen (the
+    // v1.369.0 Tests gate read the address before the effect ran: null).
+    await waitFor(() => {
+      expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "b1");
+      expect(localStorage.getItem("ij.build.session")).toBe("b1");
+      expect(new URL(window.location.href).searchParams.get("session")).toBe("b1");
+    });
   });
 
   it("a session link pressed while the view shows another session opens it (v1.369.0 review)", async () => {
@@ -228,8 +239,10 @@ describe("the view", () => {
     act(() => {
       window.dispatchEvent(new CustomEvent("ij:open-build-session", { detail: { id: "b1" } }));
     });
-    await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "b1"));
-    expect(new URL(window.location.href).searchParams.get("session")).toBe("b1");
+    await waitFor(() => {
+      expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "b1");
+      expect(new URL(window.location.href).searchParams.get("session")).toBe("b1");
+    });
   });
 
   it("a new session from the left pane is created and opened", async () => {
