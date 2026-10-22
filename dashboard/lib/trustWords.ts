@@ -94,6 +94,12 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
     words: "your web services",
     tools: ["rest_call"],
   },
+  // v1.371.0: a screenshot of a page on this PC or network goes to the
+  // model, so flagged content must not point it at another app's page.
+  {
+    words: "screenshots of pages",
+    tools: ["page_screenshot"],
+  },
   {
     words: "spending",
     tools: ["generate_media"],
@@ -104,7 +110,7 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
 export const LOW_TRUST_CANNOT =
   "This run can't change settings, schedules, rules, connections, memory, agents or skills, " +
   "can't type into your terminals, can't start programs that keep running, " +
-  "can't call your web services and can't spend credits. " +
+  "can't call your web services, can't take screenshots of pages and can't spend credits. " +
   "It can still read, search and answer.";
 
 /** The chip's whole hover: the daemon's reason (and since when), then what

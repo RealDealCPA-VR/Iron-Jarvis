@@ -60,6 +60,8 @@ CODING_TOOLS: tuple[str, ...] = (
     "plan_update", "notebook_edit", "view_image",
     "web_fetch", "web_search",
     "mcp_list_resources", "mcp_read_resource",
+    # v1.371.0: look at the user's dev server (harness/page_shot).
+    "page_screenshot",
 )
 _MCP_RESOURCE_TOOLS = frozenset({"mcp_list_resources", "mcp_read_resource"})
 
@@ -75,6 +77,8 @@ PLAN_MODE_TOOLS: tuple[str, ...] = (
     "process_read", "plan_update", "view_image",
     "web_fetch", "web_search",
     "mcp_list_resources", "mcp_read_resource",
+    # v1.371.0: looking at a page changes nothing on this PC.
+    "page_screenshot",
 )
 #: The plan-mode door and the question tool (harness/session_tools).
 EXIT_PLAN_TOOL = "exit_plan_mode"
@@ -400,7 +404,12 @@ class HarnessTurn:
         """The system-prompt section (with today's date, which is NOT part of
         the fingerprint)."""
         date = f"\n\nToday's date is {self.today}." if self.today else ""
-        return "\n\n" + self.rendered + date
+        # v1.371.0: the page the user's Browser pane shows (harness/preview),
+        # named only when page_screenshot is in this turn's gate. Like the
+        # date, it changes per turn and is NOT part of the fingerprint.
+        from .preview import prompt_line
+
+        return "\n\n" + self.rendered + date + prompt_line(self.plan.gate)
 
     @staticmethod
     def system_without_exits(system: str, exit_lines: str) -> str:

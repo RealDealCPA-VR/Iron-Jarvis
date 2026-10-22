@@ -5355,7 +5355,13 @@ async def chat_stream(
                         msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                                # v1.366.0: the name the model called.
                                                name=(_harness.called_as(tc) if _harness is not None else tc.name),
-                                               content=str(_tool_content)[:12000]))
+                                               content=str(_tool_content)[:12000],
+                                               # v1.371.0: a picture the tool handed
+                                               # back (page_screenshot). MIRROR NOTE
+                                               # (lock-step): chat_turn.run_chat_turn.
+                                               images=_chat_turn.tool_result_images(result, ran)))
+                        if msgs[-1].images:
+                            _chat_turn.trim_tool_images(msgs)
         except Exception as exc:  # noqa: BLE001 — honest error, never fabricate
             # Completed rounds were still billed — persist BEFORE the error
             # frame (mirrors chat_complete's failure path); the client sees

@@ -409,7 +409,15 @@ def _supports_vision(adapter: Any) -> bool:
 
 
 def _wants_images(messages: list[LLMMessage]) -> bool:
-    return any(getattr(m, "images", None) for m in messages)
+    """Does the conversation carry a picture the USER sent? A tool result's
+    picture (``page_screenshot``, v1.371.0) is an extra whose text says how to
+    do without it, so it never asks for vision: counting it moved the rest of
+    a turn — the user's code and files with it — off a model without vision
+    to one the user never picked (or, in a local-only turn, refused the turn).
+    An adapter that cannot carry a tool's picture drops it."""
+    return any(
+        getattr(m, "images", None) for m in messages if getattr(m, "role", "") != "tool"
+    )
 
 
 def wrap_prompted_tools(adapter: LLMAdapter) -> LLMAdapter:

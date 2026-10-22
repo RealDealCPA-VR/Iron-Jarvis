@@ -304,6 +304,10 @@
       "ok": "checked your extensions",
       "failed": "tried an extension check and it failed"
     },
+    "page_screenshot": {
+      "ok": "took a screenshot of a page",
+      "failed": "tried a page screenshot and it failed"
+    },
     "pane_list": {
       "ok": "listed your terminals",
       "failed": "tried a terminal listing and it failed"

@@ -177,6 +177,8 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   // v1.367.0 (IJ harness Phase 4): a Build session's question and plan door.
   ask_user: { did: "Asked you a question", noun: "question" },
   exit_plan_mode: { did: "Presented its plan for approval", noun: "plan for approval" },
+  // v1.371.0: looking at the user's dev server (harness/page_shot).
+  page_screenshot: { did: "Took a screenshot of a page", noun: "page screenshot" },
 };
 
 /** One failed call of a KNOWN step kind (lib/stepWords), as a noun. A kind

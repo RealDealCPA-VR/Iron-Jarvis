@@ -3569,6 +3569,102 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **The IJ harness SEES: a picture rides the message and the tool result;
+  the Browser pane's page is looked at without asking, any other local page
+  asks** (v1.371.0; the user: "attach and paste images in the IJ harness
+  composer, and let the agent see the browser preview of my dev server").
+  SCREEN: `components/harness/HarnessAttachments.tsx` — the chat page's
+  upload contract (`POST /documents/upload`, ≤ 20 files / 20 MB, 3 at a
+  time, one failure never costs the others), paste (`clipboardData.files`;
+  a pasted picture is uploaded as `pasted-<stamp>-<n>-<rand>.<ext>` because
+  every clipboard image is "image.png" and the upload folder keeps one file
+  per name, and its chip says "Pasted picture"), drop, thumbnails through
+  `/creative/file-by-path`. `HarnessSession.send`: a send pressed while a
+  file is going up WAITS for it (`whenSettled`, then reads the box as it is
+  then — the v1.275.0 rule); a picture alone is a message (the route allows
+  empty text WITH attachments, 400 without); a note while it works is words
+  only (files wait in the box); the body carries `attachments` and
+  `preview_url` = `BrowserPreview.previewAddressFor(threadId)` (re-checked
+  local, else omitted); a sent message shows `attachmentPaths` as
+  thumbnails (`SentAttachments`; no empty bubble for a picture alone).
+  SERVER: `ToolResult.images` (`[{media_type, data_b64}]`, never persisted);
+  BOTH lanes put `chat_turn.tool_result_images(result, ran)` (successful
+  results only, ≤ 4) on the `role="tool"` LLMMessage and then
+  `trim_tool_images(msgs)` keeps pictures on the newest 2 results only
+  (every round re-sends the transcript and the planner counts text) — MIRROR
+  NOTE, lock-step. Adapters carry them INSIDE the tool result: claude-cli
+  (`frames._tool_result_images`, content = [text, image…]) and the
+  Anthropic API (same shape); Codex `protocol.tool_response(text, images)`
+  → `inputImage` items (Codex 0.157.0 `DynamicToolCallOutputContentItem`,
+  read from `codex app-server generate-json-schema`), `answered_images`
+  feeds the resume, a replayed history says "[N picture(s) … not
+  replayed]"; every other adapter sends the text, which names the saved
+  file for `view_image`. CODEX VISION: `CodexNativeAdapter.capabilities()`
+  said `vision: False`, so the router's vision reroute
+  (`_enforce_capabilities`) silently MOVED any Codex turn holding a picture
+  — an attachment or a screenshot — to Claude (live run: "requested
+  codex-cli, provider claude-cli, reason failover"); it is `vision: native`
+  now. `harness/preview.py`: `PREVIEW_ADDRESS` ContextVar set by
+  `start_build_turn` around the lane build AND the driver task (reset in
+  reverse order with the pin), `local_address` (http(s), no userinfo,
+  `egress.private_host`, 0.0.0.0 read as localhost), `origin`,
+  `prompt_line(gate)` (one sentence in `HarnessTurn.block()` ONLY when
+  `page_screenshot` is in the plan's gate — like the date, not in the
+  fingerprint). `harness/page_shot.py` `page_screenshot`: ASK tier, its
+  `spend_check` returns ask False for the pane's dev server (same origin) and
+  ask True for any other local address (so it cards in every posture, past
+  grants), None for a public one (execute refuses in words); headless Edge or
+  Chrome (`onboarding.doctor._browser_candidates` via importlib —
+  the `doctor` re-export shadows the module) with `--headless=new
+  --disable-extensions --user-data-dir=<fresh temp>`, `--virtual-time-budget`,
+  through `core/procs.run` (45 s bound, tree kill), off the loop; the
+  profile folder is removed; pictures live in `<home>/page-screenshots`
+  (newest 50; never the project); a PNG over 3.5 MB is re-encoded as JPEG.
+  Armed only by a harness turn (CODING_TOOLS + PLAN_MODE_TOOLS;
+  `_OFF_ROSTER_BY_DESIGN`); `LOW_TRUST_DENY`; words in `mission`
+  (`_RUN_TOOL_WORDS`, `ASK_WORDS`), `lib/runWords`, `lib/toolWords`,
+  `desktop/main.js` TOOL_WORDS and both word fixtures. LIVE-PROVEN on a
+  scratch daemon: Claude and Codex each read a word that existed only as
+  canvas pixels, from a page_screenshot (no card) and from an attached
+  picture, route reason "explicit". A port the user's own tools use (8765 is
+  their QuickBooks MCP control) is never a test port — the first capture
+  photographed that page. REVIEW (v1.371.0, every fix pinned red-first):
+  `egress.private_host` cut EVERY host at "%" (meant for IPv6 zone ids), so
+  `http://evil%2ecom` read as the LAN name "evil" — a browser decodes it to
+  evil.com; it cuts only when the host holds ":" (one definition, so Local
+  only's endpoint check had the same hole). `router._wants_images` counts
+  pictures on NON-tool messages only: a tool's picture (whose text says how
+  to do without it) must never move a turn to a provider the user did not
+  pick, nor refuse a Local only turn; a user's picture still reroutes as
+  before. `egress.OPENS_PAGES_TOOLS` (page_screenshot) reaches outside — a
+  page loads what it names — so a Local only turn cards EVERY screenshot
+  (Allow once), the pane's page included, and `prompt_line` drops "without
+  asking" there. The browser's profile AND the picture being written live
+  in a throwaway folder under the SYSTEM temp (a live Edge profile holds ~60
+  unreadable files and `create_backup` stops on the first — the v1.337.1
+  lesson), its download folder is seeded into that throwaway folder (a
+  redirect-to-download page saved into the user's Downloads), and the run is
+  `procs.run_async` (Stop and the deadline kill the tree; `to_thread` left it
+  up to 45 s). Screen: one held send at a time, an in-flight COUNT (a second
+  paste during the first upload), a guard + unmount clear (leaving the
+  session drops the held send), only pasted PICTURES are renamed/labelled,
+  `role="alert"`/`role="status"`. `harness/sessions.sent_files_line`: a
+  picture sent with no words is "[sent without words: cart.png]" in later
+  turns' history (it vanished). Anthropic API: no empty text block beside a
+  tool's picture. Codex `protocol.unseen_pictures_note` says so when the
+  `codex exec` fallback cannot carry a picture (byte-identical without one).
+  `trustWords` family "screenshots of pages". A picture past
+  `HARD_IMAGE_BYTES` (4.9 MB, Claude's limit is 5) is named, not attached; an
+  over-long `preview_url` is dropped, never a 422. KNOWN: a page shown
+  without a card can itself frame or redirect to another local page; the
+  picture is not scanned for prompt injection (its text is fenced);
+  continuation turns carry no pane address (their screenshots ask); rewind
+  does not restore attachments; past 20 files the extras are dropped
+  quietly. Pins: `tests/test_harness_pictures_v1371.py`,
+  `dashboard/__tests__/ij-harness-pictures-v1371.test.tsx`; moved on
+  purpose: `test_build_plan_ask_v1367` (plan mode arms page_screenshot),
+  `trust-posture-v1298` (the low-trust sentence).
+
 - **Rewind is ALL OR NOTHING through the undo journal; the library PROPOSES
   and the user accepts; the refine loop ADOPTS only into its own folder**
   (v1.370.0, Phase 7 of `docs/IJ-HARNESS-PLAN.md`; Harness² principles 6–9).

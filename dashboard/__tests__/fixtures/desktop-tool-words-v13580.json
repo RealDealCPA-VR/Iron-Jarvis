@@ -372,6 +372,12 @@
       "kind": "table",
       "card": "start working on this plan",
       "desktop": "start working on this plan"
+    },
+    {
+      "tool": "page_screenshot",
+      "kind": "table",
+      "card": "take a screenshot of a page on your computer or network",
+      "desktop": "take a screenshot of a page on your computer or network"
     }
   ]
 }

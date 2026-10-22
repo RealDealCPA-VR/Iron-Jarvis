@@ -452,10 +452,29 @@ def history(row: Any) -> list[dict[str, str]]:
     for m in _messages(row):
         role = m.get("role")
         content = str(m.get("content") or "")
+        if role == "user" and not content.strip():
+            # v1.371.0 review: a picture (or file) sent ALONE has no words.
+            # Dropping its line left the reply to it with no question — the
+            # next turn's history could then START with the assistant, and
+            # the model never learned a picture had been sent.
+            content = sent_files_line(m.get("attachmentPaths"))
         if role not in ("user", "assistant") or not content.strip():
             continue
         out.append({"role": role, "content": content})
     return out
+
+
+def sent_files_line(paths: Any) -> str:
+    """The words a later turn reads for a message that carried files and no
+    words (v1.371.0): their names, never their paths. "" for none."""
+    if not isinstance(paths, list):
+        return ""
+    names = [str(p).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] for p in paths if str(p or "").strip()]
+    names = [n for n in names if n]
+    if not names:
+        return ""
+    shown = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+    return f"[sent without words: {shown}]"
 
 
 def has_turn_reply(row: Any, turn_id: str) -> bool:

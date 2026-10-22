@@ -236,6 +236,9 @@ _OFF_ROSTER_BY_DESIGN = {
     # (harness/mode.plan_tools arms them only there); an agent run at 3am has
     # nobody to answer. Pinned by tests/test_build_sessions_v1367.py.
     "ask_user", "exit_plan_mode",
+    # v1.371.0: looking at the user's dev server — armed by an IJ harness
+    # turn only (harness/mode.CODING_TOOLS), like the coding tools above.
+    "page_screenshot",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

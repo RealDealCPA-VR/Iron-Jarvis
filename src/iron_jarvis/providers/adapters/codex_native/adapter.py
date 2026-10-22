@@ -254,7 +254,14 @@ class CodexNativeAdapter(LLMAdapter):
             "provider": self.provider,
             "model": self.model,
             "tool_use": native,
-            "vision": False,
+            # v1.371.0: the app-server takes pictures — on the user's message
+            # (protocol._user_items, an ``image`` item) and in a tool result
+            # (``inputImage``, protocol.tool_response). "False" here made the
+            # router MOVE any turn holding a picture to another provider
+            # (_enforce_capabilities' vision reroute): a Codex Build session
+            # that took a page_screenshot was answered by Claude (live run,
+            # 2026-10-22). The text-only fallback (`codex exec`) still has none.
+            "vision": native,
         }
         if native:
             caps["tool_use_mode"] = "native"
@@ -342,7 +349,9 @@ class CodexNativeAdapter(LLMAdapter):
             if claimed is not None:
                 attempt = _Attempt()
                 try:
-                    async for frame in self._run_resume(claimed, results, attempt):
+                    async for frame in self._run_resume(
+                        claimed, results, attempt, P.answered_images(messages),
+                    ):
                         yield frame
                     return
                 except _Missed:
@@ -397,6 +406,10 @@ class CodexNativeAdapter(LLMAdapter):
         adapter: LLMAdapter = make_codex_cli(**kw)
         if tools:
             adapter = PromptedToolsAdapter(adapter)
+        # v1.371.0 review: this path cannot carry a picture — say so to the
+        # model rather than let the pictures vanish (vision is claimed for
+        # the native path, which this call could not use).
+        system = (system or "") + P.unseen_pictures_note(messages)
         extra = {"reasoning": reasoning} if reasoning else {}
         agen = adapter.stream(system=system, messages=messages, tools=tools, **extra)
         try:
@@ -561,13 +574,14 @@ class CodexNativeAdapter(LLMAdapter):
     # a resumed session
     # ------------------------------------------------------------------ #
     async def _run_resume(
-        self, s: S.CodexSession, results: dict[str, str], attempt: _Attempt
+        self, s: S.CodexSession, results: dict[str, str], attempt: _Attempt,
+        images: "dict[str, list[dict[str, Any]]] | None" = None,
     ) -> AsyncIterator[dict[str, Any]]:
         seg = _Segment()
         try:
             try:
                 for cid, rid in list(s.pending.items()):
-                    await s.respond(rid, P.tool_response(results[cid]))
+                    await s.respond(rid, P.tool_response(results[cid], (images or {}).get(cid)))
             except S.SessionGone:
                 raise _Missed() from None
             s.pending.clear()

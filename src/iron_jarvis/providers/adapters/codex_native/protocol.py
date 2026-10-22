@@ -362,7 +362,9 @@ def _render(messages: list[Any], names: ToolNames) -> str:
             parts.append("\n".join(lines))
         elif role == "tool":
             label = names.codex(getattr(m, "name", "") or "") if getattr(m, "name", None) else "a tool"
-            parts.append(f"Tool result from `{label}`:\n{content}")
+            note = (f"\n[{len(m.images)} picture(s) were attached to this result; not replayed]"
+                    if getattr(m, "images", None) else "")
+            parts.append(f"Tool result from `{label}`:\n{content}{note}")
     return "\n\n".join(parts)
 
 
@@ -455,13 +457,58 @@ def last_call_ids(messages: list[Any]) -> list[str]:
     return []
 
 
-def tool_response(text: str) -> dict[str, Any]:
+def tool_response(text: str, images: "list[dict[str, Any]] | None" = None) -> dict[str, Any]:
     """The ``DynamicToolCallResponse`` for one result. ``success`` stays True:
-    the lane's words (a refusal, an error) are the result the model reads."""
-    return {
-        "contentItems": [{"type": "inputText", "text": text if text else "(the tool returned nothing)"}],
-        "success": True,
-    }
+    the lane's words (a refusal, an error) are the result the model reads.
+
+    v1.371.0: a picture the tool handed back (``page_screenshot``) rides the
+    same response as an ``inputImage`` item — Codex 0.157.0's
+    ``DynamicToolCallOutputContentItem`` (``codex app-server
+    generate-json-schema``) takes ``{"type": "inputImage", "imageUrl": <data
+    URL>}`` — so the model sees the picture, not a description of it."""
+    items: list[dict[str, Any]] = [
+        {"type": "inputText", "text": text if text else "(the tool returned nothing)"}
+    ]
+    for image in images or []:
+        data = image.get("data_b64") if isinstance(image, dict) else None
+        media = image.get("media_type") if isinstance(image, dict) else None
+        if isinstance(data, str) and data and isinstance(media, str) and media.startswith("image/"):
+            items.append({"type": "inputImage", "imageUrl": f"data:{media};base64,{data}"})
+    return {"contentItems": items, "success": True}
+
+
+def unseen_pictures_note(messages: list[Any]) -> str:
+    """The system line for the TEXT-ONLY fallback (``codex exec``) when the
+    user's messages carry pictures (v1.371.0 review). ``capabilities()`` now
+    says vision for the native path, so the router keeps a picture on Codex —
+    and when the app-server's feature check then fails, the fallback flattens
+    the transcript to text and the pictures vanish without a word (a picture
+    sent alone leaves NO user line at all). "" when there is none."""
+    n = sum(
+        len(getattr(m, "images", None) or [])
+        for m in messages or []
+        if getattr(m, "role", "") == "user"
+    )
+    if not n:
+        return ""
+    return (
+        f"\n\n[The user attached {n} picture(s) to this conversation, but this Codex "
+        "connection is text-only and cannot show them to you. Say so plainly; do not "
+        "describe or guess what they show.]"
+    )
+
+
+def answered_images(messages: list[Any]) -> dict[str, list[dict[str, Any]]]:
+    """``{call id: pictures}`` for the trailing tool results (v1.371.0) —
+    the pictures :func:`answered_calls` leaves out of its text map."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    for m in reversed(list(messages or [])):
+        if getattr(m, "role", "") != "tool":
+            break
+        images = list(getattr(m, "images", None) or [])
+        if images:
+            out[str(getattr(m, "tool_call_id", "") or "")] = images
+    return out
 
 
 # --------------------------------------------------------------------------- #

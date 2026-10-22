@@ -179,6 +179,8 @@ async def test_the_stream_lane_arms_the_coding_set_in_claudes_dialect_past_the_c
     assert tools == [
         "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS", "Bash", "BashOutput", "TaskStop",
         "TodoWrite", "NotebookEdit", "WebFetch", "WebSearch", "apply_patch", "process_write",
+        # v1.371.0: no Claude Code tool looks at a page, so it passes through.
+        "page_screenshot",
     ]
     assert len(tools) > chat_turn._MAX_ARMED_TOOLS
     assert "escalate_to_agent" not in tools and "workflow_draft" not in tools

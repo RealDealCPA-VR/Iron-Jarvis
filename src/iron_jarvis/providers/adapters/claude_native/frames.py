@@ -356,6 +356,19 @@ def _user_blocks(message: Any) -> list[dict]:
     return blocks
 
 
+def _tool_result_images(message: Any) -> list[dict]:
+    """The image blocks of a tool result's pictures (v1.371.0); a malformed
+    one is left out rather than failing the whole turn (the text says where
+    the file is)."""
+    out: list[dict] = []
+    for image in getattr(message, "images", None) or []:
+        data = image.get("data_b64") if isinstance(image, dict) else None
+        media = image.get("media_type") if isinstance(image, dict) else None
+        if isinstance(data, str) and data and isinstance(media, str) and media.startswith("image/"):
+            out.append({"type": "image", "source": {"type": "base64", "media_type": media, "data": data}})
+    return out
+
+
 def history_frames(system: str, messages: list[Any], names: ToolNames) -> tuple[str, list[dict]]:
     """``(system_prompt, frames)`` for the CLI.
 
@@ -395,10 +408,16 @@ def history_frames(system: str, messages: list[Any], names: ToolNames) -> tuple[
             frames.append({"type": "assistant", "message": {"role": "assistant", "content": blocks}})
             continue
         if role == "tool":
+            text = m.content if isinstance(m.content, str) else str(m.content or "")
+            pictures = _tool_result_images(m)
             blocks = [{
                 "type": "tool_result",
                 "tool_use_id": ids.result_for(m.tool_call_id),
-                "content": m.content if isinstance(m.content, str) else str(m.content or ""),
+                # v1.371.0: a picture the tool handed back (page_screenshot)
+                # goes INSIDE the tool result, beside its text — the shape
+                # the Messages API takes for a tool result with an image.
+                "content": ([{"type": "text", "text": text or "(no output)"}, *pictures]
+                            if pictures else text),
             }]
         elif role == "user":
             blocks = _user_blocks(m)

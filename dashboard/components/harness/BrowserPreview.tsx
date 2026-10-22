@@ -38,6 +38,15 @@ function readAddress(threadId: string): string {
   }
 }
 
+/** v1.371.0: the address this window's Browser pane shows for a session —
+ *  sent with every message (`preview_url`) so the agent knows which page the
+ *  user is looking at, and may screenshot that dev server without asking
+ *  (harness/page_shot). Re-checked like every read: only a page on this PC
+ *  or the user's network ever leaves. */
+export function previewAddressFor(threadId: string): string {
+  return readAddress(threadId);
+}
+
 function writeAddress(threadId: string, url: string): void {
   try {
     if (url) window.localStorage.setItem(PREVIEW_PREFIX + threadId, url);

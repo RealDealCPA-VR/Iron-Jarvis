@@ -1010,13 +1010,14 @@ def build_platform(
     # give their models (harness/parity.py records every one). Registered so
     # a caller can arm them BY NAME; no roster carries them and no chat rule
     # arms them by itself (tests/test_roster_coverage_v1178._OFF_ROSTER_BY_DESIGN).
+    from .harness.page_shot import page_tools
     from .harness.process import process_tools
     from .harness.session_tools import session_tools
     from .harness.tools import harness_tools
 
     # v1.367.0 (Phase 4): ask_user and exit_plan_mode, armed only by a Build
     # session's turn (harness/mode.plan_tools) — same rule, no roster.
-    for tool in (*harness_tools(), *process_tools(), *session_tools()):
+    for tool in (*harness_tools(), *process_tools(), *session_tools(), *page_tools()):
         registry.register(tool)
     # v1.90.0: disposable code execution — the agent's escape hatch when no
     # tool reliably fits (same "ask" trust tier as shell).

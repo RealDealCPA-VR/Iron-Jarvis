@@ -4369,6 +4369,57 @@ def _reports_document(name: str) -> bool:
     )
 
 
+#: Pictures one tool result may hand the model (v1.371.0, ToolResult.images).
+MAX_TOOL_IMAGES = 4
+
+
+def tool_result_images(result: Any, ran: bool) -> list[dict[str, str]]:
+    """The pictures a SUCCESSFUL tool result hands the model, as the
+    ``LLMMessage.images`` shape (``{"media_type", "data_b64"}``), at most
+    :data:`MAX_TOOL_IMAGES`; [] for a failure, a refusal or a tool that
+    returned none. Both chat lanes put them on the ``role="tool"`` message
+    (MIRROR NOTE, lock-step); an adapter that cannot carry a picture in a
+    tool result ignores them, so the tool's TEXT must still say what the
+    picture is and where its file is."""
+    if not ran or result is None:
+        return []
+    out: list[dict[str, str]] = []
+    for image in getattr(result, "images", None) or []:
+        if not isinstance(image, dict):
+            continue
+        media = str(image.get("media_type") or "")
+        data = str(image.get("data_b64") or "")
+        if media.startswith("image/") and data:
+            out.append({"media_type": media, "data_b64": data})
+        if len(out) >= MAX_TOOL_IMAGES:
+            break
+    return out
+
+
+#: Tool results that keep their pictures within one turn (the newest).
+KEEP_TOOL_IMAGE_RESULTS = 2
+DROPPED_PICTURE_NOTE = (
+    "\n[The picture from this result was dropped to save room; take a new "
+    "screenshot to see the page again.]"
+)
+
+
+def trim_tool_images(msgs: list[Any], keep: int = KEEP_TOOL_IMAGE_RESULTS) -> None:
+    """Keep pictures only on the newest ``keep`` tool results of the turn
+    (v1.371.0): every round re-sends the whole transcript, and the history
+    planner counts text, not pictures, so screenshots must not pile up. An
+    older result says its picture went. Both lanes call it right after a
+    tool message with pictures is appended (MIRROR NOTE, lock-step)."""
+    seen = 0
+    for m in reversed(msgs):
+        if getattr(m, "role", "") != "tool" or not getattr(m, "images", None):
+            continue
+        seen += 1
+        if seen > keep:
+            m.images = []
+            m.content = str(m.content or "") + DROPPED_PICTURE_NOTE
+
+
 def reported_document_paths(name: str, data: Any) -> list[str]:
     """The workspace-relative paths a SUCCESSFUL call of ``name`` puts in the
     turn's ``documents`` (v1.364.0 review): ``data.path`` for a document tool
@@ -8229,7 +8280,13 @@ async def run_chat_turn(
                         content = _harness.model_text(tc, content)
                     msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                            name=(_harness.called_as(tc) if _harness is not None else tc.name),
-                                           content=str(content)[:12000]))
+                                           content=str(content)[:12000],
+                                           # v1.371.0: a picture the tool handed
+                                           # back (page_screenshot). MIRROR NOTE
+                                           # (lock-step): routes/chat.py.
+                                           images=tool_result_images(result, ran)))
+                    if msgs[-1].images:
+                        trim_tool_images(msgs)
     except Exception as exc:  # noqa: BLE001 — honest, human error
         # The rounds that DID complete were still billed — persist their
         # usage before surfacing the failure, or a round-2 error silently

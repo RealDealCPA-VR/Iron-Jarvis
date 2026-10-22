@@ -81,6 +81,14 @@ import { AccountChip, AccountLimitCard, AccountList } from "@/components/harness
 import { RewindControl } from "@/components/harness/RewindControl";
 import { LibraryCards } from "@/components/harness/LibraryCards";
 import {
+  AttachButton,
+  AttachmentChips,
+  SentAttachments,
+  pastedFiles,
+  useHarnessAttachments,
+} from "@/components/harness/HarnessAttachments";
+import { previewAddressFor } from "@/components/harness/BrowserPreview";
+import {
   armResumeWhenReady,
   cancelResumeWhenReady,
   chooseAccountAndContinue,
@@ -220,6 +228,8 @@ export function HarnessSession({
   // again after one, like after a reply.
   const [rewinds, setRewinds] = useState(0);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
+  // v1.371.0: pictures and files for the next message (HarnessAttachments).
+  const att = useHarnessAttachments();
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -394,7 +404,7 @@ export function HarnessSession({
   );
 
   const runTurn = useCallback(
-    async (text: string | null, rejoinId?: string) => {
+    async (text: string | null, rejoinId?: string, files?: readonly string[]) => {
       const id = rejoinId ?? mintTurnId();
       turnRef.current = id;
       setTurnId(id);
@@ -408,8 +418,18 @@ export function HarnessSession({
       let unread: string[] = [];
       let clean = false;
       try {
+        // v1.371.0: the message's files, and the page the Browser pane
+        // shows (the agent may screenshot that dev server without asking).
+        const preview = previewAddressFor(threadId);
         const res = await stream.run(
-          rejoinId ? undefined : { text, turn_id: id },
+          rejoinId
+            ? undefined
+            : {
+                text,
+                turn_id: id,
+                ...(files && files.length ? { attachments: [...files] } : {}),
+                ...(preview ? { preview_url: preview } : {}),
+              },
           undefined,
           undefined,
           rejoinId
@@ -528,19 +548,39 @@ export function HarnessSession({
   }, [turnsEnded]);
 
   async function send(textIn?: string) {
-    const text = (textIn ?? input).trim();
-    if (!text || !view) return;
+    const fromBox = textIn === undefined;
+    if (!view) return;
+    // v1.371.0: a send never goes without its files — one pressed while a
+    // picture is still going up waits for it, then reads the box as it is
+    // THEN (the chat page's v1.275.0 rule).
+    if (fromBox && att.busyRef.current) {
+      att.whenSettled(() => void send());
+      return;
+    }
+    const text = (textIn ?? boxRef.current?.value ?? input).trim();
+    const files = fromBox ? att.filesRef.current : [];
+    if (!text && files.length === 0) return;
     if (busy) {
-      await steer(text);
+      // A note while it works is words only; the files wait in the box.
+      if (text) await steer(text);
       return;
     }
     if (view.archived) {
       setError("This session is archived. Bring it back before you continue it.");
       return;
     }
-    if (!textIn) setInput("");
-    setPending({ role: "user", content: text, at: new Date().toISOString() });
-    await runTurn(text);
+    const paths = files.map((f) => f.path);
+    if (fromBox) {
+      setInput("");
+      att.clear();
+    }
+    setPending({
+      role: "user",
+      content: text,
+      at: new Date().toISOString(),
+      ...(paths.length ? { attachmentPaths: paths } : {}),
+    });
+    await runTurn(text, undefined, paths);
   }
 
   async function steer(text: string) {
@@ -802,7 +842,8 @@ export function HarnessSession({
   const trigger = modelTriggerOf(choice, catalog.models, defaultProvider, defaultModel);
   const offline = !daemon.checking && !daemon.online;
   const place = !vendor && !currentAccount ? placeWords(provider, model, catalog.models) : "";
-  const sendReady = !!input.trim() && !!view && !offline;
+  // v1.371.0: a picture alone is a message; one still going up is waited for.
+  const sendReady = (!!input.trim() || att.files.length > 0 || att.uploading) && !!view && !offline;
 
   if (loadError && !view) {
     return (
@@ -970,9 +1011,13 @@ export function HarnessSession({
                 </div>
               ) : (
                 <div key={i} className="group flex flex-col items-end gap-1">
-                  <div data-testid="harness-user-bubble" className={PANE_USER_BUBBLE}>
-                    {m.content}
-                  </div>
+                  {m.content ? (
+                    <div data-testid="harness-user-bubble" className={PANE_USER_BUBBLE}>
+                      {m.content}
+                    </div>
+                  ) : null}
+                  {/* v1.371.0: the pictures and files the message carried. */}
+                  <SentAttachments paths={m.attachmentPaths ?? []} />
                   {/* v1.370.0: rewind to before this message (two presses;
                       a refusal is listed in words). Only a message the
                       daemon wrote has a turn to rewind to. */}
@@ -1158,7 +1203,22 @@ export function HarnessSession({
             inert={asking}
             aria-hidden={asking || undefined}
             className={`${asking ? "hidden" : "flex"} ${PANE_COMPOSER_CARD}`}
+            onDragOver={(e) => {
+              if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              const dropped = Array.from(e.dataTransfer?.files ?? []);
+              if (!dropped.length) return;
+              e.preventDefault();
+              void att.add(dropped);
+            }}
           >
+            <AttachmentChips files={att.files} uploading={att.uploading} onRemove={att.remove} />
+            {att.problem ? (
+              <p data-testid="harness-attach-problem" role="alert" className="px-3 pt-1 text-[12px] text-tone-warn">
+                {att.problem}
+              </p>
+            ) : null}
             <textarea
               ref={boxRef}
               aria-label="Message"
@@ -1170,6 +1230,13 @@ export function HarnessSession({
               rows={2}
               disabled={offline}
               onChange={(e) => setInput(e.target.value)}
+              onPaste={(e) => {
+                // v1.371.0: a pasted picture is attached; pasted text is typed.
+                const pasted = pastedFiles(e.clipboardData);
+                if (!pasted.length) return;
+                e.preventDefault();
+                void att.add(pasted, { pasted: true });
+              }}
               onKeyDown={(e) => {
                 if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                 if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && busy) {
@@ -1185,6 +1252,7 @@ export function HarnessSession({
               className={PANE_COMPOSER_BOX}
             />
             <div className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-2">
+              <AttachButton onPick={(picked) => void att.add(picked)} disabled={offline} />
               <PermissionChip
                 value={view.setup.approvalMode || "approve_for_me"}
                 onChange={(mode) => void patchSetup({ approval_mode: asPermissionMode(mode) })}

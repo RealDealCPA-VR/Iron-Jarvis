@@ -125,9 +125,16 @@ class BuildFolderRename(BaseModel):
 
 
 class BuildTurnBody(BaseModel):
-    text: str
+    text: str = ""
     turn_id: str = ""
     attachments: list[str] = Field(default_factory=list, max_length=20)
+    #: v1.371.0: the address the session's Browser pane shows. Only a page on
+    #: this PC or the user's network is kept (harness/preview); the agent may
+    #: look at that dev server without asking (page_screenshot).
+    #: Not length-checked here: an address too long to be a page is simply
+    #: dropped by ``harness.preview.local_address`` (a 422 would have failed
+    #: the whole message over the pane's address).
+    preview_url: str = ""
 
 
 class BuildRewindBody(BaseModel):
@@ -890,6 +897,7 @@ class WaitEnded(Exception):
 
 async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            attachments: "list[str] | None" = None,
+                           preview_url: str = "",
                            continuation: bool = False,
                            resume_of: "dict[str, Any] | None" = None) -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
@@ -967,6 +975,13 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         )
         holder: dict[str, Any] = {}
         token = set_pin(pin) if pin is not None else None
+        # v1.371.0: the Browser pane's address for this turn — armed while the
+        # lane is built and the driver task created (the task copies the
+        # context, like the pin): the harness prompt names it and
+        # page_screenshot looks at it without asking.
+        from ...harness.preview import reset_preview, set_preview
+
+        preview_token = set_preview(preview_url)
         try:
             try:
                 gen = await stream_chat_turn(
@@ -1006,6 +1021,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
             ))
         finally:
+            reset_preview(preview_token)
             if token is not None:
                 reset_pin(token)
         lg.surface = "build"  # the waiting row says it is not a chat
@@ -1564,7 +1580,9 @@ def register(app: FastAPI, d: Any) -> None:
 
         platform = d.platform
         text = (body.text or "").strip()
-        if not text:
+        if not text and not body.attachments:
+            # v1.371.0: a picture alone is a message (the chat page's rule,
+            # v1.275.0); nothing at all is not.
             raise HTTPException(status_code=400, detail="Write a message first.")
         if len(text) > MAX_TURN_CHARS:
             raise HTTPException(status_code=413, detail="That message is too long.")
@@ -1598,7 +1616,8 @@ def register(app: FastAPI, d: Any) -> None:
             turn_id = "bt_" + secrets.token_hex(8)
         try:
             lg = await start_build_turn(d, thread_id, text, turn_id,
-                                        attachments=list(body.attachments or []))
+                                        attachments=list(body.attachments or []),
+                                        preview_url=body.preview_url)
         except SessionBusy:
             return JSONResponse(
                 status_code=409,

@@ -228,6 +228,15 @@ class AnthropicAdapter(LLMAdapter):
         out: list[dict[str, Any]] = []
         for m in messages:
             if m.role == "tool":
+                # v1.371.0: a picture the tool handed back (page_screenshot)
+                # rides inside the tool result, beside its text.
+                pictures = [
+                    {"type": "image", "source": {"type": "base64", "media_type": img["media_type"],
+                                                 "data": img["data_b64"]}}
+                    for img in (m.images or [])
+                    if isinstance(img, dict) and str(img.get("media_type") or "").startswith("image/")
+                    and img.get("data_b64")
+                ]
                 out.append(
                     {
                         "role": "user",
@@ -235,7 +244,8 @@ class AnthropicAdapter(LLMAdapter):
                             {
                                 "type": "tool_result",
                                 "tool_use_id": m.tool_call_id,
-                                "content": m.content,
+                                "content": ([{"type": "text", "text": m.content or "(no output)"}, *pictures]
+                                            if pictures else m.content),
                             }
                         ],
                     }
@@ -265,9 +275,13 @@ class AnthropicAdapter(LLMAdapter):
             elif m.role == "user" and m.images:
                 # Multimodal user turn: a text block followed by one image block
                 # per attached image (base64 source).
-                img_blocks: list[dict[str, Any]] = [
-                    {"type": "text", "text": m.content}
-                ]
+                # v1.371.0 review: a picture sent ALONE (the chat page and the
+                # IJ harness both allow it) has no words, and the Messages API
+                # refuses an empty text block ("text content blocks must be
+                # non-empty") — the picture goes by itself.
+                img_blocks: list[dict[str, Any]] = (
+                    [{"type": "text", "text": m.content}] if (m.content or "").strip() else []
+                )
                 for img in m.images:
                     img_blocks.append(
                         {

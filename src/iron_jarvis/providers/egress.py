@@ -134,6 +134,17 @@ CALLS_YOUR_SERVICES_TOOLS: frozenset[str] = frozenset({
     "rest_call",
 })
 
+#: Tools that open a page in a browser of their own (v1.371.0 review:
+#: ``page_screenshot``, the IJ harness's look at a dev server). Only a page on
+#: this PC or the user's network is OPENED, but the page then loads what it
+#: names — a font, a script, an image from anywhere — and a page the model
+#: wrote can name an outside address carrying anything. The same reason
+#: computer use's isolated browser is here: a local-only turn CARDS every
+#: call ("Allow once"), the Browser pane's own page included.
+OPENS_PAGES_TOOLS: frozenset[str] = frozenset({
+    "page_screenshot",
+})
+
 #: The words a person knows each cloud provider by. Anything not here reads as
 #: its id (a fleet node reads as the label the user gave it).
 _FRIENDLY: dict[str, str] = {
@@ -167,7 +178,13 @@ def private_host(url: str) -> bool:
         host = (urlsplit(raw).hostname or "").strip().lower().rstrip(".")
         if not host:
             return False
-        host = host.split("%", 1)[0]  # an IPv6 zone id (fe80::1%eth0)
+        if ":" in host:
+            # An IPv6 zone id (fe80::1%eth0). ONLY there: in a NAME a "%" is
+            # percent-encoding, which a browser DECODES (URL Standard host
+            # parsing) — "evil%2ecom" opens evil.com, and cutting it at the
+            # "%" judged it a LAN name "evil" (v1.371.0 review). A name with a
+            # "%" then fails the name check below: fail closed.
+            host = host.split("%", 1)[0]
         try:
             ip = ipaddress.ip_address(host)
         except ValueError:
@@ -606,6 +623,7 @@ def reaches_outside(tool: Any, registry: Any = None) -> bool:
             or name in GENERATES_MEDIA_TOOLS
             or name in CALLS_YOUR_SERVICES_TOOLS
             or name in READS_APP_RESOURCES_TOOLS
+            or name in OPENS_PAGES_TOOLS
         ):
             return True
         if _browser_reaches_out(tool):

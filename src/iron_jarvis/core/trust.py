@@ -118,6 +118,9 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         # mid-way must still be able to stop what it started.
         "process_start",
         "process_write",
+        # v1.371.0: a screenshot of a local page goes to the model — flagged
+        # content must not point it at another app's page on this network.
+        "page_screenshot",
     }
 )
 

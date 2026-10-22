@@ -57,6 +57,9 @@ from tests.test_chat_turn_stop_v1241 import _asgi_post
 PLAN_TOOLS_CLAUDE = [
     "Read", "Glob", "Grep", "LS", "BashOutput", "TodoWrite", "WebFetch", "WebSearch",
     "AskUserQuestion", "ExitPlanMode",
+    # v1.371.0: looking at the dev server changes nothing on this PC, so plan
+    # mode has it too (it passes through every dialect) - moved on purpose.
+    "page_screenshot",
 ]
 EDITORS = {"Write", "Edit", "MultiEdit", "Bash", "TaskStop", "NotebookEdit", "apply_patch", "process_write"}
 
@@ -253,7 +256,10 @@ async def test_the_post_lane_has_no_door_and_no_question_in_plan_mode(tmp_path, 
     else:
         await run_chat_turn(platform, BUILTIN_PERSONAS, body, **kw)
         tools = script.calls[0]["tools"]
-        assert tools == [t for t in PLAN_TOOLS_CLAUDE if t not in ("AskUserQuestion", "ExitPlanMode")]
+        # The POST lane arms no ask-tier tool (page_screenshot is one, v1.371.0).
+        assert tools == [
+            t for t in PLAN_TOOLS_CLAUDE if t not in ("AskUserQuestion", "ExitPlanMode", "page_screenshot")
+        ]
         assert "present it in your reply" in script.calls[0]["system"]
 
 

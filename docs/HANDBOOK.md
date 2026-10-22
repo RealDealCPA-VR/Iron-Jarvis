@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.370.4 (2026-10-22).*
+holds itself to. Current as of v1.371.0 (2026-10-22).*
 
 ---
 
@@ -1896,6 +1896,43 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Pictures and your dev server in the IJ harness (v1.371.0)
+
+**Send a picture with your message.** In Build's IJ harness view, press the
+paperclip under the message box, paste a picture straight into the box
+(Ctrl+V), or drag one onto it. Each picture shows as a small thumbnail you
+can remove with ×. A picture on its own is a message too. If you press Enter
+while a picture is still uploading, Iron Jarvis waits for it and sends both
+together. The picture stays in the conversation as a thumbnail.
+
+**The agent can look at your dev server.** When the Browser pane shows a
+page on this PC or your network (for example `http://localhost:5173`), the
+agent knows which page you are looking at and can take a screenshot of it to
+see how it looks, for example after it changes your code. It does this in a
+private, invisible browser window (Edge or Chrome) with none of your logins
+or extensions, and it never opens public websites this way.
+
+- Looking at the page your Browser pane shows needs no approval: you opened
+  it.
+- Looking at any **other** page on this PC or your network always asks you
+  first, whatever your approval setting. A screenshot goes to the model
+  answering the session, and a local page can be another program's (an admin
+  page, a page with client names on it).
+- In a session kept on this PC (**Local only**), every screenshot asks first,
+  your Browser pane's page included: a page can load things from the
+  internet.
+- Claude and Codex see the screenshot itself. A model that cannot take
+  pictures stays on the session (it is never swapped for one that can) and is
+  told where the screenshot was saved instead.
+- The invisible browser keeps its files, and anything a page tries to
+  download, in a temporary folder that is deleted afterwards, and pressing
+  Stop closes it at once.
+
+**Fixed at the same time:** a Codex coding session that had a picture in it
+(attached, or a screenshot) was quietly answered by Claude instead, because
+Iron Jarvis thought Codex could not take pictures. Codex now answers it
+itself.
 
 ## How the coding harness measured up (v1.370.4)
 

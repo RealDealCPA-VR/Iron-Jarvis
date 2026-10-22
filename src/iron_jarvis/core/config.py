@@ -68,6 +68,11 @@ def default_permissions() -> dict[str, str]:
         "process_write": "ask",
         "process_read": "allow",
         "process_stop": "allow",
+        # v1.371.0: a screenshot of a page on this PC or the user's network
+        # goes to the turn's model. ASK, and the tool's own spend_check lifts
+        # the card ONLY for the dev server the Browser pane shows (the user
+        # opened it); any other local page cards in every posture.
+        "page_screenshot": "ask",
         # IJ HARNESS SESSIONS (v1.367.0, Phase 4). ask_user only ASKS (the
         # question itself is the consent surface; it changes nothing).
         # exit_plan_mode is the plan-mode door: ASK, and the stream lane cards

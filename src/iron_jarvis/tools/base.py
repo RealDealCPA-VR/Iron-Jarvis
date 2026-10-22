@@ -90,6 +90,14 @@ class ToolResult:
     #: creations after the fact, through the same path every other file
     #: mutation takes. Absolute paths.
     created_paths: list[str] | None = None
+    #: Pictures the MODEL should see with this result (v1.371.0,
+    #: ``page_screenshot``): ``[{"media_type": "image/png", "data_b64": …}]``.
+    #: Both chat lanes put them on the ``role="tool"`` message; an adapter
+    #: that can carry an image in a tool result (Claude, Codex, Anthropic)
+    #: sends it there, every other adapter sends the text alone — so the text
+    #: must still say what the picture is and where its file is. Never
+    #: persisted (the ledger keeps ``output`` and ``data``).
+    images: list[dict[str, str]] | None = None
 
 
 class Reversibility(str, Enum):

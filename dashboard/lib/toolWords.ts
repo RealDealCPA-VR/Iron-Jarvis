@@ -89,6 +89,9 @@ const WORDS: Record<string, string> = {
   // v1.367.0 (IJ harness Phase 4): a Build session's plan door — its
   // once-only card asks to start working on the plan it shows.
   exit_plan_mode: "start working on this plan",
+  // v1.371.0: a screenshot of a local page other than the one the Browser
+  // pane shows asks first (harness/page_shot).
+  page_screenshot: "take a screenshot of a page on your computer or network",
 };
 
 // The 14 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

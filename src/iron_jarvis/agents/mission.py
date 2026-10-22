@@ -264,6 +264,9 @@ ASK_WORDS: dict[str, str] = {
     # v1.367.0 (IJ harness Phase 4): the plan door of a Build session's plan
     # mode — its once-only card asks to start working on the plan shown.
     "exit_plan_mode": "start working on this plan",
+    # v1.371.0: a screenshot of a local page that is NOT the one the Browser
+    # pane shows asks first (harness/page_shot).
+    "page_screenshot": "take a screenshot of a page on your computer or network",
 }
 
 
@@ -435,6 +438,8 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     # v1.367.0 (IJ harness Phase 4): a Build session's question and plan door.
     "ask_user": ("asked you a question", "question"),
     "exit_plan_mode": ("presented its plan for approval", "plan for approval"),
+    # v1.371.0: looking at the user's dev server (harness/page_shot).
+    "page_screenshot": ("took a screenshot of a page", "page screenshot"),
 }
 
 #: browser/tools.py's 14 built-in browser tools, by EXACT name (the

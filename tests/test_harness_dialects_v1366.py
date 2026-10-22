@@ -341,7 +341,8 @@ def test_a_dialect_hides_the_real_names_its_tools_cover():
     names = [t.name for t in shown]
     assert "Read" in names and "Bash" in names and "TodoWrite" in names
     assert "read_file" not in passthrough and "shell" not in passthrough
-    assert passthrough == ["apply_patch", "process_write"]
+    # v1.371.0: page_screenshot has no Claude Code twin, so it passes through.
+    assert passthrough == ["apply_patch", "process_write", "page_screenshot"]
 
 
 def test_a_dialect_tool_is_offered_only_when_its_target_is_armed():
