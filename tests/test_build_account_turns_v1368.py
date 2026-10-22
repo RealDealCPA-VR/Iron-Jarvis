@@ -233,6 +233,24 @@ async def test_resume_when_ready_continues_after_the_reset(app, fake, work, monk
     assert "account_wait" not in setup and "account_limit" not in setup
 
 
+async def test_a_resumed_turn_that_fails_never_resumes_again_by_itself(app, fake, work, monkeypatch):
+    """The wait ends when the daemon CONTINUES — not when the continued turn
+    succeeds. A continued turn that fails for another reason (the account is
+    fine) must not leave a due wait behind: the loop would start a new
+    continuation every pass."""
+    beh, sid, card, view = await _limit_then_arm(app, fake, work, monkeypatch, park_s=1.0)
+    beh.moves = ["FAIL"]
+    await asyncio.sleep(1.2)
+    [resumed] = await build_routes.resume_due(app.state.d)
+    event = _events(app, "build.resumed")[-1]
+    frames = await _finish(app, event["turn_id"])
+    assert frames[-1][0] == "error"
+    assert "account_wait" not in setup_of(app, sid)
+    calls = len(beh.calls)
+    assert await build_routes.resume_due(app.state.d) == []
+    assert len(beh.calls) == calls, "no second continuation"
+
+
 async def test_a_still_parked_account_moves_the_next_check_on(app, fake, work, monkeypatch):
     beh, sid, card, view = await _limit_then_arm(app, fake, work, monkeypatch, park_s=600)
     wait = setup_of(app, sid)["account_wait"]

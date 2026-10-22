@@ -211,6 +211,9 @@ class AccountDouble(LLMAdapter):
 
             note_thinking_dropped()
         move = self.beh.moves.pop(0) if (self.beh.moves and tools) else "Done."
+        if move == "FAIL":
+            # Not an account problem: a permanent refusal of THIS request.
+            raise ProviderError(f"{self.provider}: the request was refused (HTTP 400)", status_code=400)
         usage = {"input_tokens": 3, "output_tokens": 1}
         if isinstance(move, str):
             resp = LLMResponse(text=move, usage=usage)
@@ -459,27 +462,54 @@ async def test_the_list_reads_only_the_cached_snapshot(app, fake):
     assert not hit & {"/iron/profiles", "/iron/states", "/iron/discover", "/iron/usage"}, hit
 
 
-async def test_an_unknown_plan_is_read_in_the_background_at_most_every_ten_minutes(app, fake):
+def _refreshed(fake) -> list[str]:
+    return [b.get("id") for m, p, b in fake.calls if p == "/iron/refresh"]
+
+
+async def test_an_unknown_plan_is_read_in_the_background(app, fake):
     """c-spare (Claude, no plan): Iron-Proxy's own status check reads it, in
-    the background, throttled; an account needing sign-in is NEVER re-checked
-    (v1.303.3); a Codex account has no status-command plan."""
+    the background; an account needing sign-in is NEVER re-checked (v1.303.3);
+    a Codex account has no status-command plan."""
+    from tests.test_build_sessions_v1367 import until
+
     await enable(app)
     fake.plan_on_refresh["c-spare"] = "pro"
     await asgi(app, "GET", "/build/accounts")
-    svc = app.state.platform.iron_proxy
+    assert await until(lambda: _refreshed(fake) == ["c-spare"]), _refreshed(fake)
+    row: dict = {}
+    for _ in range(100):  # the re-check's answer lands in the snapshot
+        status, body = await asgi(app, "GET", "/build/accounts")
+        row = {r["id"]: r for r in body["claude"]}["c-spare"]
+        if row["plan"]:
+            break
+        await asyncio.sleep(0.05)
+    assert row["plan"] == "pro" and row["plan_label"] == "Pro"
+    assert _refreshed(fake) == ["c-spare"], "never the signed-out account, never a Codex one"
 
-    def refreshed() -> list[str]:
-        return [b.get("id") for m, p, b in fake.calls if p == "/iron/refresh"]
 
+async def test_a_plan_iron_proxy_cannot_learn_is_asked_at_most_every_ten_minutes(app, fake, monkeypatch):
+    """A status check that names no plan (an account with none) must not
+    make every look at the list run the CLI's status command again: one ask
+    per account per 10 minutes (the service's own 10 s throttle is off here,
+    so only ours holds)."""
+    from iron_jarvis.iron_proxy import service as svc_mod
     from tests.test_build_sessions_v1367 import until
 
-    assert await until(lambda: refreshed() == ["c-spare"]), refreshed()
+    monkeypatch.setattr(svc_mod, "REFRESH_EVERY_S", 0.0)
+    await enable(app)
     await asgi(app, "GET", "/build/accounts")
-    await asyncio.sleep(0.2)
-    assert refreshed() == ["c-spare"], "throttled"
-    await asyncio.to_thread(svc.refresh_accounts)
+    assert await until(lambda: _refreshed(fake) == ["c-spare"]), _refreshed(fake)
+    for _ in range(3):
+        await asgi(app, "GET", "/build/accounts")
+    await asyncio.sleep(0.3)
+    assert _refreshed(fake) == ["c-spare"], "asked again within ten minutes"
+
+
+async def test_a_turned_off_account_is_not_in_the_list(app, fake):
+    fake.profiles["x-team"]["enabled"] = False
+    await enable(app)
     status, body = await asgi(app, "GET", "/build/accounts")
-    assert {r["id"]: r["plan"] for r in body["claude"]}["c-spare"] == "pro"
+    assert [r["id"] for r in body["codex"]] == ["x-plus"]
 
 
 async def test_iron_proxy_off_or_too_old_is_said_never_guessed(tmp_path, app):
