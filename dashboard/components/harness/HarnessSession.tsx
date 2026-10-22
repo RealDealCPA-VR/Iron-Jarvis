@@ -592,13 +592,26 @@ export function HarnessSession({
   // The list is the daemon's cached snapshot: read it again while it is open.
   useVisibleInterval(() => void refreshAccounts(), ACCOUNTS_POLL_MS, accountsOpen);
 
+  /** Read the session again after an account press and follow a turn the
+   *  daemon is running for it (a wait that resumed at once). The press's own
+   *  answer can be a moment behind: a Cancel or a plain pick that lands while
+   *  the daemon re-checks the account stops the continuation it was about to
+   *  start, and only a fresh read says which way that went (v1.368.0 review). */
+  async function rereadAndFollow(): Promise<void> {
+    const v = await load();
+    if (v?.running && v.turnId && v.turnId !== "running" && !turnRef.current) void runTurn(null, v.turnId);
+  }
+
+  /** A pick in the chip's list: the session moves to that account from its
+   *  next message. NEVER a continue — "carry on now" is offered only from the
+   *  limit card (lib/buildAccounts chooseAccountAndContinue). */
   async function pickAccount(a: BuildAccount) {
     setAccountBusy(true);
     setAccountNote(null);
     try {
       const v = decodeSessionView(await setSessionAccount(threadId, a.id));
       if (v) adopt(v);
-      else await load();
+      await rereadAndFollow();
       onChanged();
     } catch (e) {
       setAccountNote(e instanceof Error ? e.message : String(e));
@@ -625,8 +638,12 @@ export function HarnessSession({
     setLimitError(null);
     try {
       const v = decodeSessionView(await armResumeWhenReady(threadId));
+      // The daemon's view says whether it waits (it may have found the
+      // account ready and carried on at once); an answer that says nothing
+      // about accounts keeps the press's meaning.
       if (v) adopt(v);
-      setWaiting(true);
+      if (!v?.knowsAccounts) setWaiting(true);
+      await rereadAndFollow();
     } catch (e) {
       setLimitError(
         isMissing(e)
@@ -643,13 +660,22 @@ export function HarnessSession({
     try {
       const v = decodeSessionView(await cancelResumeWhenReady(threadId));
       if (v) adopt(v);
-      setWaiting(false);
+      if (!v?.knowsAccounts) setWaiting(false);
+      await rereadAndFollow();
     } catch (e) {
       setLimitError(e instanceof Error ? e.message : String(e));
     }
   }
 
   async function chooseAndContinue(a: BuildAccount) {
+    // "Carry on now" belongs to a session a limit cut off: with no limit on
+    // screen this is a plain pick (the daemon would accept a continue anyway
+    // and start a turn nobody asked for).
+    if (!limit && !decodeAccountLimit(view?.accountLimit)) {
+      setChoosing(false);
+      await pickAccount(a);
+      return;
+    }
     setLimitError(null);
     setAccountBusy(true);
     try {
@@ -673,6 +699,9 @@ export function HarnessSession({
             ? e.message
             : String(e),
       );
+      // A 409 here means a turn is already running for the session (the wait
+      // resumed it, or another window): show it rather than a dead card.
+      if (e instanceof ApiError && e.status === 409) await rereadAndFollow();
     } finally {
       setAccountBusy(false);
     }

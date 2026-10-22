@@ -398,12 +398,19 @@ describe("an account limit", () => {
     expect(within(off).queryByRole("button", { name: "Resume when ready" })).toBeNull();
   });
 
+  /** The daemon's state, as both its answers and a later GET read it. */
+  function serverState(over: Record<string, unknown>) {
+    const v = view(over);
+    api.gets["/build/sessions/s1"] = v;
+    return v;
+  }
+  const WAIT = { account: "work", account_name: "Work", resets_at: "2030-01-01T16:12:00Z" };
+
   it("Resume when ready arms the wait and offers Cancel while it waits", async () => {
-    api.postAnswers["POST /build/sessions/s1/resume-when-ready"] = view({
-      account_limit: LIMIT,
-      account_wait: { account: "work", account_name: "Work", resets_at: "2030-01-01T16:12:00Z" },
-    });
-    api.postAnswers["DELETE /build/sessions/s1/resume-when-ready"] = view({ account_limit: LIMIT, account_wait: null });
+    api.postAnswers["POST /build/sessions/s1/resume-when-ready"] = () =>
+      serverState({ account_limit: LIMIT, account_wait: WAIT });
+    api.postAnswers["DELETE /build/sessions/s1/resume-when-ready"] = () =>
+      serverState({ account_limit: LIMIT, account_wait: null });
     await hitLimit();
     fireEvent.click(screen.getByTestId("account-limit-resume"));
     await waitFor(() =>
@@ -415,6 +422,38 @@ describe("an account limit", () => {
       expect(api.calls.some((c) => c.method === "DELETE" && c.path === "/build/sessions/s1/resume-when-ready")).toBe(true),
     );
     expect(await screen.findByTestId("account-limit-resume")).toBeInTheDocument();
+  });
+
+  it("each press reads the session again: the re-read, not the press's answer, decides (v1.368.0 review)", async () => {
+    // A Cancel that lands while the daemon re-checks the account: its answer
+    // can still show the wait; the session read after it does not.
+    api.postAnswers["POST /build/sessions/s1/resume-when-ready"] = () =>
+      serverState({ account_limit: LIMIT, account_wait: WAIT });
+    api.postAnswers["DELETE /build/sessions/s1/resume-when-ready"] = () => {
+      const stale = view({ account_limit: LIMIT, account_wait: WAIT });
+      serverState({ account_limit: LIMIT, account_wait: null });
+      return stale;
+    };
+    await hitLimit();
+    fireEvent.click(screen.getByTestId("account-limit-resume"));
+    expect(await screen.findByTestId("account-limit-waiting")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("account-limit-cancel"));
+    expect(await screen.findByTestId("account-limit-resume")).toBeInTheDocument();
+    expect(screen.queryByTestId("account-limit-waiting")).toBeNull();
+  });
+
+  it("a wait the daemon could resume at once is followed straight away", async () => {
+    // The account was ready by the time Resume was pressed: the daemon cleared
+    // the card and started the turn; the screen follows it by its name.
+    api.postAnswers["POST /build/sessions/s1/resume-when-ready"] = () =>
+      serverState({ running: true, turn_id: "tr_now", account_limit: null, account_wait: null });
+    await hitLimit();
+    fetchMock.mockImplementation(async () => sse([["done", { reply: "Carried on." }]]));
+    fireEvent.click(screen.getByTestId("account-limit-resume"));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => (c as unknown[])[0] === "http://d/chat/turns/tr_now/stream")).toBe(true),
+    );
+    await waitFor(() => expect(screen.queryByTestId("account-limit-card")).toBeNull());
   });
 
   it("Choose account lists the accounts and continues on the one picked, following the new turn", async () => {
@@ -620,7 +659,11 @@ describe("the account chip", () => {
       codex: [{ id: "cx", name: "Codex", vendor: "codex", vendor_label: "Codex", provider: "codex-cli", default: true, plan: "plus", plan_label: "Plus", status: "ready" }],
       iron_proxy: { enabled: true, running: true, needs_update: true, note: "Iron-Proxy needs an update to keep a Build session on one account." },
     };
-    api.postAnswers["PATCH /build/sessions/s1"] = view({ account: HOME, account_vendor: "claude" });
+    api.postAnswers["PATCH /build/sessions/s1"] = () => {
+      const v = view({ account: HOME, account_vendor: "claude", setup: { provider: "claude-cli", account: "home", account_name: "Home" } });
+      api.gets["/build/sessions/s1"] = v;
+      return v;
+    };
     renderSession();
     const chip = await screen.findByTestId("account-chip");
     expect(chip).toHaveTextContent("Work");
@@ -640,6 +683,9 @@ describe("the account chip", () => {
     );
     // The answer is adopted: the chip names the new account.
     await waitFor(() => expect(screen.getByTestId("account-chip-name")).toHaveTextContent("Home"));
+    // A plain pick in the list never asks the daemon to carry on now: that
+    // is offered only from the limit card.
+    expect(api.calls.some((c) => c.path === "/build/sessions/s1/account")).toBe(false);
   });
 
   it("a session with no account names where its model runs, in plain words", async () => {
