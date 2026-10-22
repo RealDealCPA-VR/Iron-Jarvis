@@ -223,7 +223,11 @@ async def test_the_report_says_one_run_is_a_small_sample_and_parallel_runs_one_a
     from iron_jarvis.harness_bench.cli import bench_app
 
     raw = CliRunner().invoke(bench_app, ["run", "--help"]).output
-    help_text = " ".join(re.sub(r"[─-╿]", " ", raw).split())  # the help's box lines
+    # The help's colour codes (Rich colours it on a CI runner — FORCE_COLOR /
+    # TERM — and the v1.370.0 Tests gate read "\x1b[1m one\x1b[0m …") and
+    # its box lines are not words; strip both before reading (v1.370.1).
+    raw = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", raw)
+    help_text = " ".join(re.sub(r"[─-╿]", " ", raw).split())
     assert "one candidate at a time" in help_text
 
 

@@ -175,9 +175,9 @@ export function IjHarnessView({
   return (
     <div
       data-testid="ij-harness-view"
-      className="flex flex-col gap-4 lg:h-[calc(100vh-12rem-var(--ij-strip-h,0px))] lg:min-h-[480px] lg:flex-row"
+      className="flex flex-col gap-4 xl:h-[calc(100vh-12rem-var(--ij-strip-h,0px))] xl:min-h-[480px] xl:flex-row"
     >
-      <aside className="flex max-h-[22rem] w-full shrink-0 flex-col lg:max-h-none lg:w-60 xl:w-64">
+      <aside className="flex max-h-[22rem] w-full shrink-0 flex-col xl:max-h-none xl:w-56 2xl:w-64">
         <HarnessSidebar
           folders={folders}
           listError={listError}
@@ -190,7 +190,7 @@ export function IjHarnessView({
           onOpenTerminal={onOpenTerminal}
         />
       </aside>
-      <div className="min-w-0 flex-1 lg:min-h-0">
+      <div className="min-w-0 flex-1 xl:min-h-0">
         {selected ? (
           <HarnessSession
             key={selected}

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.370.0 (2026-10-21).*
+holds itself to. Current as of v1.370.1 (2026-10-21).*
 
 ---
 
@@ -1896,6 +1896,19 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Picking a folder for a coding session works again (v1.370.1)
+
+In Build's IJ harness view, **New session** → **Choose a folder** now opens
+folders as you click them, all the way down to your project. Before, clicking
+a folder started a session in it straight away: clicking `Users` said the
+folder could not be used, and clicking your own user folder started a session
+there instead of letting you go further. Click folders to open them, then
+press **Start**.
+
+The view also keeps the conversation readable on a smaller window. Below about
+1280 px wide, the session list, the conversation and the panes stack. Before,
+at 1024 px the conversation was squeezed to a sliver between them.
 
 ## The IJ harness and accounts
 

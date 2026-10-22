@@ -30,13 +30,23 @@ function classOf(testId: string): string {
 }
 
 describe("the phone conversation box", () => {
-  it("is a fixed screen-sized box below lg and fills the row from lg", () => {
+  it("is a fixed screen-sized box below xl and fills the row from xl", () => {
     const tokens = classOf("harness-conversation").split(/\s+/);
     expect(tokens).toContain("h-[78vh]");
     expect(tokens).toContain("flex-none");
     expect(tokens).not.toContain("flex-1");
-    expect(tokens).toContain("lg:flex-1");
-    expect(tokens).toContain("lg:h-auto");
+    expect(tokens).toContain("xl:flex-1");
+    expect(tokens).toContain("xl:h-auto");
+  });
+
+  it("goes side by side only from xl, in BOTH rows (v1.370.1)", () => {
+    // From lg, a 1024 px window gave the conversation ~90 px beside the
+    // app's sidebar, the session list and the panes (the user's report).
+    const view = readFileSync(join(process.cwd(), "components", "harness", "IjHarnessView.tsx"), "utf8");
+    for (const [name, text] of [["HarnessSession", src], ["IjHarnessView", view]] as const) {
+      expect(text, name).not.toMatch(/lg:(flex-row|flex-1|w-\[|w-60|h-auto|min-h-0|max-h-none|h-\[calc)/);
+      expect(text, name).toContain("xl:flex-row");
+    }
   });
 
   it("holds the composer, and the panes come after it", () => {

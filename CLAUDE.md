@@ -3664,6 +3664,22 @@ does not need a bump, stop and bump it.
   the agent's own work stays for inspection (`tests/test_ship_v1370.py`).
   `build_reflect` stays ON by default (one bounded call per idle stretch,
   skipped near a limit); flip it if the user wants to opt in instead.
+  v1.370.1 (a USER BUG + a CI fix): "it stops right here at VR and does not
+  allow me to drill down". `DirectoryTree`'s folder row was a `<button>`
+  with no `type`, and the IJ harness's New session panel draws the tree
+  inside its `<form>`, so every folder click SUBMITTED the form: `Users`
+  answered "not writable", `VR` started a session in `C:\Users\VR`. Every
+  button the tree draws is `type="button"` now (row, collapse, Open
+  terminal). The sidebar's tests MOCKED the tree away, which is how it
+  shipped: `harness-folder-picker-v1370-1` drives the real form with the
+  real tree (both pins red on the old code). A component a FORM may contain
+  never renders a typeless button. Same release: the harness's rows go side
+  by side from `xl`, not `lg` (at 1024 px the conversation got ~90 px
+  beside the app sidebar, the session list and the panes), pinned in
+  `ij-harness-phone-unit-v1369`; and `test_harness_refine_review_v1370`
+  strips Rich's colour codes before reading `--help` (v1.370.0's Tests gate
+  read `\x1b[1m` between the words; `FORCE_COLOR=1 COLUMNS=80` reproduced
+  it).
 
 - **The IJ harness is a VIEW of Build built from the chat's own pieces; the
   daemon writes the transcript, and a turn's end is on the record BEFORE its

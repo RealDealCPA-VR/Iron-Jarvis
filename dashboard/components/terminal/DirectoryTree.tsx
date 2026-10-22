@@ -175,7 +175,11 @@ function DirNode({
 
   return (
     <div>
+      {/* type="button": the tree is drawn inside forms (the IJ harness's New
+          session panel), and a typeless button SUBMITS its form — every
+          folder click started a session in that folder (v1.370.1). */}
       <button
+        type="button"
         onClick={onRowClick}
         title={node.path}
         style={{ paddingLeft: 6 + depth * 14 }}
@@ -459,6 +463,7 @@ export function DirectoryTree({
         </h2>
         {!hideHeaderCollapse && (
           <button
+            type="button"
             onClick={() => (onCollapse ? onCollapse() : setCollapsed((c) => !c))}
             title={onCollapse || !collapsed ? "Collapse panel" : "Expand panel"}
             className="ml-auto grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
@@ -574,6 +579,7 @@ export function DirectoryTree({
             )}
             {!hideAction && onOpenTerminal && (
               <button
+                type="button"
                 onClick={() => selectedPath && onOpenTerminal(selectedPath)}
                 disabled={!selectedPath}
                 className="btn-accent mt-2.5 w-full py-1.5 text-[12px]"
