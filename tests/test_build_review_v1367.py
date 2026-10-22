@@ -170,3 +170,33 @@ def test_a_build_session_is_never_counted_or_linked_as_chat_preference_evidence(
     _thread(platform, ["no tables"], days_ago=3)
     r = TestClient(app).post("/chat", json=_body("stop using tables"))
     assert r.json()["suggestion"] is not None
+
+
+# --------------------------------------------------------------------------- #
+# 4. the chat writer never writes into a Build session
+# --------------------------------------------------------------------------- #
+
+
+def test_the_daemons_chat_writer_refuses_a_build_session(tmp_path, work):
+    """``chat_append.append_to_chat_thread`` is how an @-panel reply, an
+    agent's delivery (``options.chat_thread_id``), a finished media job and a
+    remote's inbound line land in a chat. Given a Build session's id it used
+    to write a chat-shaped line into the session's transcript (and
+    un-archive it) — a second writer the session's design rules out. It now
+    refuses in words and touches nothing."""
+    from iron_jarvis.daemon.chat_append import append_to_chat_thread
+    from iron_jarvis.daemon.routes.chat import set_thread_archived
+
+    app = create_app(str(tmp_path / "home"))
+    engine = app.state.platform.engine
+    sid = new_session(app, work)["id"]
+    S.append_lines(engine, sid, [{"role": "user", "content": "the session's own line", "turnId": "t1"}])
+    set_thread_archived(engine, sid, True)
+    before = messages_of(app, sid)
+    out = append_to_chat_thread(engine, sid, [{
+        "role": "assistant", "content": "an @-agent's reply", "panelWho": "builtin:builder",
+    }])
+    assert out["ok"] is False and "Build session" in out["why"], out
+    assert messages_of(app, sid) == before, "a chat line landed in a Build session"
+    with session_scope(engine) as db:
+        assert db.get(ChatThreadRecord, sid).archived_at is not None, "the append un-archived it"
