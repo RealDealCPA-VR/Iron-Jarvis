@@ -19,6 +19,7 @@ import { HarnessSession } from "@/components/harness/HarnessSession";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import type { RailPane } from "@/components/terminal/PaneRail";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
+import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
 import {
   LAST_SESSION_KEY,
   createSession,
@@ -121,6 +122,21 @@ export function IjHarnessView({
   }, []);
 
   useVisibleInterval(() => void refresh(), SESSION_LIST_POLL_MS);
+
+  // A link to a session pressed while this view is showing (the bell): the
+  // page keeps its state on that navigation, so the link announces the
+  // session and this view opens it (lib/buildLinks, v1.369.0 review).
+  useEffect(() => {
+    const onLink = (e: Event) => {
+      const id = sessionOfEvent(e);
+      if (!id) return;
+      pickedRef.current = true;
+      setSelected(id);
+      void refresh();
+    };
+    window.addEventListener(BUILD_SESSION_EVENT, onLink);
+    return () => window.removeEventListener(BUILD_SESSION_EVENT, onLink);
+  }, [refresh]);
 
   useEffect(() => {
     if (!pickedRef.current) return;

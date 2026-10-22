@@ -37,7 +37,7 @@ import { clockTime, formatTokens } from "@/lib/format";
 import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
 import { agentsPath, missionPath } from "@/lib/mission";
 import { MISSION_ORIGIN, sessionHref } from "@/lib/missionLinks";
-import { buildLimitHeadline, buildSessionHref, buildThreadOf, sessionLinkFor } from "@/lib/buildLinks";
+import { announceBuildSessionLink, buildLimitHeadline, buildSessionHref, buildThreadOf, sessionLinkFor } from "@/lib/buildLinks";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
 import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
@@ -2252,7 +2252,16 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 w-80 origin-top-right">
+        <div
+          className="absolute right-0 z-50 mt-2 w-80 origin-top-right"
+          // v1.369.0 review: a row that opens a Build session, pressed while
+          // Build is already open, tells Build which session (the same-page
+          // navigation alone changes only the address — lib/buildLinks).
+          onClickCapture={(e) => {
+            const a = (e.target as HTMLElement | null)?.closest?.("a");
+            if (a) announceBuildSessionLink(a.getAttribute("href"));
+          }}
+        >
           <div className="card-surface overflow-hidden">
             <header className="flex items-center justify-between border-b hairline px-4 py-2.5">
               <span className="flex items-center gap-2 text-[13px] font-semibold text-zinc-200">

@@ -20,11 +20,15 @@ import { join } from "node:path";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  BUILD_SESSION_EVENT,
+  announceBuildSessionLink,
   buildLimitHeadline,
   buildSessionHref,
   buildThreadOf,
   isBuildSessionId,
   sessionLinkFor,
+  sessionOfEvent,
+  sessionOfHref,
 } from "@/lib/buildLinks";
 import { sessionHref } from "@/lib/missionLinks";
 import { chatAskHref, chatAskRowWords, parseChatAsk, toActivity } from "@/components/NotificationBell";
@@ -32,7 +36,10 @@ import { findingLink } from "@/components/SafetyChecks";
 import { TurnReceipt, accountWords } from "@/components/chat/TurnReceipt";
 import type { IJEvent } from "@/lib/types";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.history.replaceState(null, "", "/");
+});
 
 function ev(type: string, payload: Record<string, unknown>, session_id: string | null = null): IJEvent {
   return { id: `e-${type}`, type, ts: "2026-10-21T12:00:00Z", session_id, payload } as unknown as IJEvent;
@@ -150,5 +157,42 @@ describe("the receipt names the account a Build turn ran on", () => {
   it("a chat reply (no account) says nothing about one", () => {
     render(<TurnReceipt route={{ provider: "claude-cli", model: "opus", reason: "default", requested: "" }} />);
     expect(screen.queryByTestId("turn-account")).toBeNull();
+  });
+});
+
+describe("a session link pressed while Build is already open (v1.369.0 review)", () => {
+  // Next keeps the page's state on a same-page navigation that only changes
+  // the query: the address said the session, the screen did not. The press
+  // announces it instead.
+  it("reads the session off a Build link, and nothing else", () => {
+    expect(sessionOfHref(buildSessionHref("bs 1"))).toBe("bs 1");
+    expect(sessionOfHref("/terminals?focus=t1")).toBeNull();
+    expect(sessionOfHref("/sessions/x?session=y")).toBeNull();
+    expect(sessionOfHref("/chat?thread=t")).toBeNull();
+    expect(sessionOfHref(null)).toBeNull();
+  });
+
+  it("announces only on Build, with the session's id", () => {
+    const seen: (string | null)[] = [];
+    const on = (e: Event) => seen.push(sessionOfEvent(e));
+    window.addEventListener(BUILD_SESSION_EVENT, on);
+    try {
+      window.history.replaceState(null, "", "/chat");
+      expect(announceBuildSessionLink(buildSessionHref("bs_1"))).toBe(false);
+      window.history.replaceState(null, "", "/terminals?session=bs_0");
+      expect(announceBuildSessionLink("/terminals?focus=t1")).toBe(false);
+      expect(announceBuildSessionLink(buildSessionHref("bs_1"))).toBe(true);
+    } finally {
+      window.removeEventListener(BUILD_SESSION_EVENT, on);
+    }
+    expect(seen).toEqual(["bs_1"]);
+  });
+
+  it("the bell's dropdown announces a pressed Build row (one capture handler for every row)", () => {
+    const src = readFileSync(join(process.cwd(), "components", "NotificationBell.tsx"), "utf8").replace(/\r\n/g, "\n");
+    const open = src.indexOf("{open && (");
+    expect(open).toBeGreaterThan(-1);
+    const head = src.slice(open, open + 900);
+    expect(head).toMatch(/onClickCapture=\{\(e\) => \{[\s\S]*closest\?\.\("a"\)[\s\S]*announceBuildSessionLink\(a\.getAttribute\("href"\)\)/);
   });
 });

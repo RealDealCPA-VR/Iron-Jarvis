@@ -22,6 +22,45 @@ export function buildSessionHref(threadId: string): string {
   return `/terminals?session=${encodeURIComponent(threadId)}`;
 }
 
+/** v1.369.0 review: a link to a session clicked while Build is ALREADY open
+ *  (the bell's rows are on every page). Next keeps the page's state on a
+ *  same-page navigation that only changes the query, so the page never
+ *  re-reads `?session=` — the address changed and the screen did not. The
+ *  link's click announces the session with this window event; Build (the
+ *  page, and the IJ harness view when it is showing) opens it. */
+export const BUILD_SESSION_EVENT = "ij:open-build-session";
+
+/** The session a Build link names (`/terminals?session=<id>`), else null. */
+export function sessionOfHref(href: string | null | undefined): string | null {
+  const h = typeof href === "string" ? href.trim() : "";
+  const q = h.indexOf("?");
+  if (q < 0 || h.slice(0, q).replace(/\/+$/, "") !== "/terminals") return null;
+  try {
+    const id = new URLSearchParams(h.slice(q + 1)).get("session");
+    return id && id.trim() ? id.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Tell an open Build page that a link to one of its sessions was pressed.
+ *  Only on Build (anywhere else the navigation itself opens it). Answers
+ *  whether it was announced. */
+export function announceBuildSessionLink(href: string | null | undefined): boolean {
+  if (typeof window === "undefined") return false;
+  const id = sessionOfHref(href);
+  if (!id) return false;
+  if (window.location.pathname.replace(/\/+$/, "") !== "/terminals") return false;
+  window.dispatchEvent(new CustomEvent(BUILD_SESSION_EVENT, { detail: { id } }));
+  return true;
+}
+
+/** The session id a BUILD_SESSION_EVENT carries, else null. */
+export function sessionOfEvent(e: Event): string | null {
+  const d = (e as CustomEvent<{ id?: unknown }>).detail;
+  return d && typeof d.id === "string" && d.id.trim() ? d.id.trim() : null;
+}
+
 /** The session's thread id from a `build:<id>` session id, else null. */
 export function buildThreadOf(sessionId: string | null | undefined): string | null {
   const s = typeof sessionId === "string" ? sessionId.trim() : "";

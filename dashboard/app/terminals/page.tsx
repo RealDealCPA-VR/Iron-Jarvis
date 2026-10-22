@@ -58,6 +58,7 @@ import {
 } from "@/components/terminal/PaneState";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { viewFromSaved, type BuildView } from "@/lib/buildSessions";
+import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
 
 // xterm only runs in the browser — never during SSR / `next build`.
 const TerminalPane = dynamic(
@@ -188,6 +189,27 @@ export default function TerminalsPage() {
         /* no history API */
       }
     }
+  }, []);
+
+  // A link to a session pressed while Build is already open (the bell): the
+  // same-page navigation keeps this page's state, so the session is
+  // announced instead (lib/buildLinks BUILD_SESSION_EVENT) — open the IJ
+  // harness on it (v1.369.0 review). A harness view already showing opens
+  // it itself.
+  useEffect(() => {
+    const onLink = (e: Event) => {
+      const id = sessionOfEvent(e);
+      if (!id) return;
+      setLinkSession(id);
+      setShape("harness");
+      try {
+        window.localStorage.setItem(SHAPE_KEY, "harness");
+      } catch {
+        /* the view still opens */
+      }
+    };
+    window.addEventListener(BUILD_SESSION_EVENT, onLink);
+    return () => window.removeEventListener(BUILD_SESSION_EVENT, onLink);
   }, []);
 
   // A RENAME MUST LAND ON THE FIRST FRAME. The activity poll is the source of

@@ -222,6 +222,16 @@ describe("the view", () => {
     expect(new URL(window.location.href).searchParams.get("session")).toBe("b1");
   });
 
+  it("a session link pressed while the view shows another session opens it (v1.369.0 review)", async () => {
+    render(<IjHarnessView initialSession="a1" terminals={[]} onOpenTerminal={() => {}} defaultFolder={null} terminal={terminal} />);
+    await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "a1"));
+    act(() => {
+      window.dispatchEvent(new CustomEvent("ij:open-build-session", { detail: { id: "b1" } }));
+    });
+    await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "b1"));
+    expect(new URL(window.location.href).searchParams.get("session")).toBe("b1");
+  });
+
   it("a new session from the left pane is created and opened", async () => {
     render(<IjHarnessView initialSession={null} terminals={[]} onOpenTerminal={() => {}} defaultFolder={"C:\\work"} terminal={terminal} />);
     await screen.findByTestId("session-stub");

@@ -225,6 +225,17 @@ describe("links into Build", () => {
   });
 });
 
+describe("a session link pressed while Build is open (v1.369.0 review)", () => {
+  it("from the Terminals view: the IJ harness opens on that session", async () => {
+    render(<TerminalsPage />);
+    await screen.findByTestId("terminal-pane-t1");
+    expect(screen.queryByTestId("ij-harness-view")).toBeNull();
+    window.dispatchEvent(new CustomEvent("ij:open-build-session", { detail: { id: "bs_7" } }));
+    expect(await screen.findByTestId("ij-harness-view")).toHaveAttribute("data-initial", "bs_7");
+    expect(saved()).toBe("harness");
+  });
+});
+
 describe("a terminal from the IJ harness's Terminals group", () => {
   it("opens in the Terminals view, focused on it, and the session leaves the address", async () => {
     at("/terminals?session=bs_42");
