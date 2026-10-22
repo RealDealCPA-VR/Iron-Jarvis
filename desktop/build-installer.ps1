@@ -158,7 +158,11 @@ try {
         if ($Publish) {
             Invoke-Native "electron-builder (publish)" { pnpm exec electron-builder --win --publish always }
         } else {
-            Invoke-Native "electron-builder" { pnpm dist }
+            # NEVER publish without -Publish (v1.370.3): electron-builder's own
+            # default publishes on CI when a tag is pushed and GH_TOKEN is set,
+            # and the release workflow now builds the installer WHILE the tests
+            # run — only its publish job, after every test passed, may upload.
+            Invoke-Native "electron-builder" { pnpm exec electron-builder --win --publish never }
         }
     } catch {
         if ("$_" -match "symbolic link" -or "$_" -match "winCodeSign") {

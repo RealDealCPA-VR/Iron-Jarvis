@@ -16,16 +16,24 @@ permissions:
 
 # EVERY JOB CARRIES timeout-minutes (v1.286.0). GitHub's default is 360: a hung
 # job held the pipeline for six hours before saying anything. Each bound is ~2x
-# the job's measured CI time (backend ~60m as of v1.367.0, whose backend job
+# the job's measured CI time (one backend shard ~10-15m since v1.370.3, when
+# the ~60m single job was split six ways; before that v1.367.0's backend job
 # reached 100% and was cancelled one second later at the old 60 — dashboard
 # ~6m, the other two <1m),
 # a ceiling on a hang, not a speed test. A hung TEST is named sooner, by
 # pytest-timeout (`timeout` in pyproject.toml); this is the backstop behind it.
 # tests/test_gate_timeouts_v1286.py fails if a job is added without one.
 jobs:
+  # v1.370.3: the Python suite runs as six shards at once, split by test FILE
+  # (scripts/ci_shards.py, the same plan the release gate uses; every file in
+  # exactly one shard). One runner took ~60 min; a shard takes ~10-15.
   backend:
     runs-on: windows-latest # mirrors the packaged product (ConPTY terminals etc.)
-    timeout-minutes: 120
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false # one red shard must not hide what the others found
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
 
@@ -40,15 +48,21 @@ jobs:
       - name: Sync Python deps
         run: uv sync --extra dev
 
-      - name: Run the offline suite
+      - name: Every test file pytest collects is in a shard
+        if: matrix.shard == 1
         shell: bash
         run: |
-          # -n auto: one worker per core. This suite is the release gate, so
-          # its wall time is time the user waits for an update (23min serially
-          # on this runner). Measured parallel-safe over three local runs:
-          # 4814 passed / 2 skipped every time, identical to serial.
-          uv run pytest -q --no-header -n auto | tee pytest-out.txt
-          tail -1 pytest-out.txt >> "$GITHUB_STEP_SUMMARY"
+          uv run pytest --collect-only -q -p no:cacheprovider > collected.txt
+          uv run python scripts/ci_shards.py --shards 6 --check-collected collected.txt
+
+      - name: Run this shard of the offline suite
+        shell: bash
+        run: |
+          files="$(uv run python scripts/ci_shards.py --shards 6 --index ${{ matrix.shard }})"
+          echo "shard ${{ matrix.shard }}: $(wc -w <<< "$files") test files"
+          # -n auto: one worker per core of this runner.
+          uv run pytest -q --no-header -n auto -p no:cacheprovider $files | tee pytest-out.txt
+          echo "shard ${{ matrix.shard }}: $(tail -1 pytest-out.txt)" >> "$GITHUB_STEP_SUMMARY"
 
   dashboard:
     runs-on: windows-latest

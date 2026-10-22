@@ -297,13 +297,12 @@ def test_the_release_gate_builds_the_addon_inside_the_suite_job() -> None:
         "the `suite` job of .github/workflows/release.yml never builds the browser "
         "add-on, so the release gate does not cover a component the installer ships."
     )
-    # Every other step in this job carries the publish gate; an ungated one would
-    # spend CI minutes on every no-bump push to master, which the gate exists to avoid.
-    for step in steps:
-        assert "steps.gate.outputs.publish" in str(step.get("if", "")), (
-            f"step {step.get('name')!r} in the release `suite` job is missing the "
-            "publish gate its siblings all carry."
-        )
+    # The job carries the publish gate (v1.370.3: the `plan` job decides once,
+    # for every job); an ungated build would spend CI minutes on every no-bump
+    # push to master, which the gate exists to avoid.
+    assert "needs.plan.outputs.publish" in str(suite.get("if", "")), (
+        "the release `suite` job runs without the publish gate"
+    )
     # And it must not ONLY be there: the installer job runs build-installer.ps1, which
     # runs the same wrapper, so the bundled folder is built from verified sources.
     installer = workflow["jobs"]["windows-installer"]

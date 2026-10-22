@@ -7,7 +7,7 @@ unsigned, so Windows says "Windows protected your PC" — and only the README
 said which file to download and to press More info, then Run anyway. Someone
 sent the latest-release link never sees the README.
 
-`release.yml`'s `windows-installer` job now carries ONE notes text
+`release.yml`'s `publish` job (the `windows-installer` job before v1.370.3) carries ONE notes text
 (`env.RELEASE_NOTES`, `@VERSION@` replaced in bash) that BOTH the create step
 (a new release) and the publish step (`gh release edit`, so a draft an earlier
 run left behind gets it too) pass as `--notes`.
@@ -40,7 +40,9 @@ def _text(path: Path) -> str:
 
 
 def _job() -> dict:
-    return yaml.safe_load(_text(RELEASE))["jobs"]["windows-installer"]
+    # v1.370.3: the release is created and made public by the `publish` job
+    # (the installer job only builds now, while the tests run).
+    return yaml.safe_load(_text(RELEASE))["jobs"]["publish"]
 
 
 def _step(name_start: str) -> dict:

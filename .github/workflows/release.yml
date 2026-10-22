@@ -7,10 +7,29 @@ name: Release
 #   * master is pushed with a pyproject.toml version that has NO release yet
 #     (i.e. bump the version + push -> your installed app auto-updates);
 #   * a version tag (v1.2.3, must match pyproject.toml) is pushed;
-#   * the workflow is dispatched manually (Actions -> Release -> Run workflow).
+#   * the workflow is dispatched manually on master (Actions -> Release -> Run
+#     workflow). A manual run with `dry_run` builds and tests EVERYTHING and
+#     publishes NOTHING — on any branch: the way to try a change to this file.
 #
-# A master push WITHOUT a version bump is a no-op (the gate below skips the
-# whole build), so routine pushes cost nothing and never re-publish a version.
+# A master push WITHOUT a version bump is a no-op (the plan job decides, and
+# every other job is skipped), so routine pushes cost nothing and never
+# re-publish a version.
+#
+# THE SHAPE (v1.370.3, "speed up the releases"). It used to be two jobs in a
+# row: ONE runner ran the dashboard tests and then the whole Python suite
+# (~68 min), and only then a second one built the installer (~9.5 min) —
+# ~78 minutes per release. Now:
+#
+#   plan ──┬── suite              (dashboard + add-on + desktop checks)  ─┐
+#          ├── python ×6          (the Python suite, split by test file)  ├── publish
+#          └── windows-installer  (frozen daemon + installer; NOT published) ┘
+#
+# The test jobs and the installer build run AT THE SAME TIME, and the only job
+# that can make anything public is `publish`, which needs every one of them to
+# have passed. THE GATE IS UNCHANGED: no installer reaches the user's
+# auto-updating app unless the whole suite is green. The build job uploads its
+# files as a workflow artifact (private to this run); `publish` attaches them
+# to the release.
 
 on:
   push:
@@ -18,36 +37,27 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and test everything, publish nothing (safe on any branch)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write # create the GitHub Release + upload the installer
 
+# BOTH THE GATE AND THE BUILD CARRY timeout-minutes (v1.286.0): GitHub's
+# default is 360, so a hang held the release for six hours and no update
+# could ship meanwhile. Each bound is ~2x the job's measured time.
 jobs:
-  # THE SUITE IS A GATE, NOT A PARALLEL OPINION (v1.177.0). Tests and Release
-  # are separate workflows, so they ran CONCURRENTLY: on v1.176.0 Release
-  # finished green in 8 minutes and published the installer, and Tests went red
-  # 16 minutes later. The app auto-downloads from Releases, so a red suite
-  # shipped to the user's daily driver — while CLAUDE.md claimed "a red Tests
-  # run BLOCKS the installer". It never did. Nothing enforced it.
-  #
-  # Running the suite HERE (rather than waiting on the other workflow) keeps the
-  # gate self-contained: no workflow_run indirection, no cross-workflow SHA
-  # matching, and the installer job simply cannot start until this passes.
-  #
-  # It costs ~25 minutes, so it is spent ONLY when a release will actually be
-  # published — the gate script below is the same check the installer job runs,
-  # duplicated deliberately so a no-bump push to master still costs nothing.
-  #
-  # BOTH JOBS CARRY timeout-minutes (v1.286.0): GitHub's default is 360, so a
-  # hang held the release for six hours, and no update could ship meanwhile.
-  # ~2x measured: suite ~53m as of v1.367.0 (vitest + the backend suite; it
-  # was ~32m), installer ~9m, given
-  # a generous 60 since electron-builder uploads to GitHub and can be slow.
-  suite:
-    runs-on: windows-latest # same runner the product ships for
-    timeout-minutes: 120
+  # Decides whether this run publishes, once, for every other job.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       publish: ${{ steps.gate.outputs.publish }}
+      version: ${{ steps.gate.outputs.version }}
+      dry_run: ${{ steps.gate.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,51 +66,72 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           ver="$(grep -Po '^version\s*=\s*"\K[^"]+' pyproject.toml | head -1)"
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          if [[ "$DRY_RUN" == "true" ]]; then
+            # Everything runs, nothing publishes (the publish job checks this).
+            echo "dry run of v$ver on $GITHUB_REF_NAME: build and test only"
+            echo "dry_run=true" >> "$GITHUB_OUTPUT"
             echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "dry_run=false" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            # A tag must name the version the code carries (the installer's
+            # version is stamped from the tag).
+            if [[ "$GITHUB_REF_NAME" != "v$ver" ]]; then
+              echo "::error::release tag '$GITHUB_REF_NAME' does not match pyproject.toml version v$ver"
+              exit 1
+            fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"   # explicit tag always builds
+          elif [[ "$GITHUB_REF_NAME" != "master" ]]; then
+            # A real publish happens from master or a tag only, never a branch.
+            echo "not master and not a tag — nothing to publish (use dry_run to try a branch)"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
           elif [[ "$(gh release view "v$ver" --repo "$GITHUB_REPOSITORY" \
                     --json isDraft -q .isDraft 2>/dev/null)" == "false" ]]; then
+            # Skip only for a PUBLISHED release. A leftover DRAFT (a prior run
+            # that died mid-upload) must not block the retry.
+            echo "Release v$ver already exists — bump pyproject.toml to ship an update."
             echo "publish=false" >> "$GITHUB_OUTPUT"
           else
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Set up Python 3.12
-        if: steps.gate.outputs.publish == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+  # THE SUITE IS A GATE, NOT A PARALLEL OPINION (v1.177.0). Tests and Release
+  # are separate workflows, so they ran CONCURRENTLY: on v1.176.0 Release
+  # finished green in 8 minutes and published the installer, and Tests went red
+  # 16 minutes later. The app auto-downloads from Releases, so a red suite
+  # shipped to the user's daily driver. The gate therefore lives IN this
+  # workflow, and `publish` needs every gate job to pass.
+  #
+  # THE GATE COVERS WHAT THE INSTALLER CONTAINS. First cut ran only the backend
+  # suite — and the very next push proved why that is not enough: a dashboard
+  # test went red on CI while the backend was green, and the installer (which
+  # bundles that same dashboard) would have shipped regardless. The product is
+  # daemon + dashboard + desktop; the gate is all three or it is theatre. This
+  # job is the dashboard + add-on + desktop part; `python` is the daemon's.
+  suite:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: windows-latest # same runner the product ships for
+    timeout-minutes: 30 # ~11 min measured (vitest ~9.5)
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Set up uv
-        if: steps.gate.outputs.publish == 'true'
-        uses: astral-sh/setup-uv@v3
-
-      - name: Sync Python deps
-        if: steps.gate.outputs.publish == 'true'
-        run: uv sync --extra dev
-
-      # THE GATE COVERS WHAT THE INSTALLER CONTAINS. First cut ran only the
-      # backend suite — and the very next push proved why that is not enough: a
-      # dashboard test went red on CI while the backend was green, and the
-      # installer (which bundles that same dashboard) would have shipped
-      # regardless. The product is daemon + dashboard + desktop; the gate is all
-      # three or it is theatre.
       - name: Set up Node 20
-        if: steps.gate.outputs.publish == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Set up pnpm
-        if: steps.gate.outputs.publish == 'true'
         uses: pnpm/action-setup@v4
         with:
           version: 10
 
       - name: Install dashboard deps
-        if: steps.gate.outputs.publish == 'true'
         working-directory: dashboard
         run: pnpm install --frozen-lockfile
 
@@ -109,7 +140,7 @@ jobs:
       # extraResources -> resources/browser-addon). extensions/chrome/dist is
       # gitignored, so the bundle exists only because a build produced it; if
       # that build can fail, it must fail HERE, in the gate, and not in the
-      # installer job that publishes to the user's auto-updating daily driver.
+      # installer job.
       #
       # scripts/build.mjs is the same entry point desktop/build-installer.ps1
       # calls, and it runs three checks the gate needs by name: it verifies the
@@ -125,30 +156,78 @@ jobs:
       # missing is a test that cannot fail. Move this below `pnpm test` and the
       # dashboard job goes red on a checkout that never built the add-on.
       - name: Install browser add-on deps
-        if: steps.gate.outputs.publish == 'true'
         working-directory: extensions/chrome
         run: pnpm install --frozen-lockfile
 
       - name: Build + typecheck the browser add-on, and verify the pinned ID
-        if: steps.gate.outputs.publish == 'true'
         working-directory: extensions/chrome
         run: node scripts/build.mjs
 
       - name: Dashboard unit tests (vitest)
-        if: steps.gate.outputs.publish == 'true'
         working-directory: dashboard
         run: pnpm test
 
       - name: Syntax-check the desktop entry points
-        if: steps.gate.outputs.publish == 'true'
         shell: bash
         run: |
           for f in desktop/main.js desktop/preload.js desktop/spotlight-preload.js; do
             [ -f "$f" ] && node --check "$f"
           done
 
-      - name: Run the offline suite (a red suite must not ship an installer)
-        if: steps.gate.outputs.publish == 'true'
+  # The Python suite, split by test FILE across six runners
+  # (scripts/ci_shards.py: every file in exactly one shard, balanced by the
+  # measured seconds in scripts/ci_test_durations.json). One shard also checks
+  # that pytest collects no test file the plan missed, so a test can never
+  # quietly drop out of the gate.
+  python:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: windows-latest # mirrors the packaged product (ConPTY terminals etc.)
+    timeout-minutes: 45 # ~10-15 min measured per shard
+    strategy:
+      fail-fast: false # one red shard must not hide what the others found
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Sync Python deps
+        run: uv sync --extra dev
+
+      # tests/test_update_rehearsal_v1338.py draws a restored pane's bytes
+      # with the dashboard's @xterm/headless (dashboard/scripts/render-
+      # terminal.cjs), so the shard that holds it needs Node and the
+      # dashboard's packages.
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dashboard deps
+        working-directory: dashboard
+        run: pnpm install --frozen-lockfile
+
+      - name: Every test file pytest collects is in a shard
+        if: matrix.shard == 1
+        shell: bash
+        run: |
+          uv run pytest --collect-only -q -p no:cacheprovider > collected.txt
+          uv run python scripts/ci_shards.py --shards 6 --check-collected collected.txt
+
+      - name: Run this shard of the offline suite (a red suite must not ship an installer)
         shell: bash
         run: |
           # Actions runs `bash -eo pipefail`, so a failing pytest would abort the
@@ -157,125 +236,57 @@ jobs:
           # summary, then fail with pytest's own status. PIPESTATUS[0] is pytest's,
           # never tee's: piping pytest into tee/tail is the documented way to
           # report a red run as green.
+          files="$(uv run python scripts/ci_shards.py --shards 6 --index ${{ matrix.shard }})"
+          echo "shard ${{ matrix.shard }}: $(wc -w <<< "$files") test files"
           set +e
-          # -n auto: one worker per core. This suite is the release gate, so
-          # its wall time is time the user waits for an update (23min serially
-          # on this runner). Measured parallel-safe over three local runs:
-          # 4814 passed / 2 skipped every time, identical to serial.
-          uv run pytest -q --no-header -n auto | tee pytest-out.txt
+          # -n auto: one worker per core of this runner.
+          uv run pytest -q --no-header -n auto -p no:cacheprovider $files | tee pytest-out.txt
           code=${PIPESTATUS[0]}
           set -e
-          tail -1 pytest-out.txt >> "$GITHUB_STEP_SUMMARY"
+          echo "shard ${{ matrix.shard }}: $(tail -1 pytest-out.txt)" >> "$GITHUB_STEP_SUMMARY"
           exit "$code"
 
+  # Builds the installer WHILE the tests run, and publishes NOTHING: its
+  # files go into this run's private artifact store. Only `publish` — after
+  # every test job passed — attaches them to a release.
   windows-installer:
-    needs: suite
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
     runs-on: windows-latest
-    timeout-minutes: 60
-    # v1.353.0 (G37): THE RELEASE PAGE SAYS WHICH FILE TO TAKE AND WHAT TO
-    # PRESS AT THE WINDOWS WARNING. Someone sent the latest-release link saw
-    # three files and "installer built and uploaded by CI"; only the README said
-    # which one and that the unsigned installer trips SmartScreen. One text,
-    # the README's words: the create step uses it for a new release and the
-    # publish step passes it again, so a release a dead run left as a draft
-    # gets it too. @VERSION@ is replaced in bash (`${RELEASE_NOTES//@VERSION@/$ver}`).
-    # tests/test_release_notes_v13530.py pins both steps and the words.
-    env:
-      RELEASE_NOTES: |
-        **Iron Jarvis @VERSION@ for Windows**
-
-        **Which file to download:** `Iron-Jarvis-Setup-@VERSION@.exe` in the Assets list below. Ignore the `.blockmap` and `latest.yml` files; the app's updater reads those.
-
-        **The Windows warning:** the installer isn't code-signed yet, so Windows may say "Windows protected your PC". Press **More info**, then **Run anyway**. It happens once per download, not every launch. [Why it isn't signed yet](${{ github.server_url }}/${{ github.repository }}/blob/master/docs/SIGNING.md)
-
-        **Already using Iron Jarvis?** There is nothing to download: the app fetches each update by itself and installs it when you press **Restart to update**.
+    timeout-minutes: 60 # ~9.5 min measured
     steps:
       - uses: actions/checkout@v4
 
-      - name: Gate — publish only unreleased versions
-        id: gate
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ver="$(grep -Po '^version\s*=\s*"\K[^"]+' pyproject.toml | head -1)"
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"   # explicit tag always builds
-          elif [[ "$(gh release view "v$ver" --repo "$GITHUB_REPOSITORY" \
-                    --json isDraft -q .isDraft 2>/dev/null)" == "false" ]]; then
-            # Skip only for a PUBLISHED release. A leftover DRAFT (a prior run
-            # that died mid-upload) must not block the retry.
-            echo "Release v$ver already exists — bump pyproject.toml to ship an update."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # electron-builder can't CREATE a published release for a nonexistent tag
-      # (GitHub 422 "Published releases must have a valid tag") — and worse, its
-      # PARALLEL asset uploaders race to create the release when none exists:
-      # GitHub accepts BOTH creates, splitting the assets across two release
-      # objects on the same tag (live-hit on v1.1.0 + v1.1.1: exe+latest.yml in
-      # one, the blockmap orphaned in a duplicate). Pre-create BOTH the tag and
-      # the release so electron-builder only ever uploads into an existing one
-      # (it uploads to a published release when it's <2h old). Safe: pushes made
-      # with the workflow's GITHUB_TOKEN never trigger new workflow runs.
-      - name: Ensure the release tag + release exist
-        if: steps.gate.outputs.publish == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ver="${{ steps.gate.outputs.version }}"
-          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
-            git tag -f "v$ver"
-            git push -f origin "v$ver"
-          fi
-          # DRAFT until the installer is fully uploaded: releases/latest ignores
-          # drafts, so the app's updater never sees an assetless "newest"
-          # release (live-hit: rapid releases kept update checks landing inside
-          # the upload window — "files are still uploading" for hours).
-          notes="${RELEASE_NOTES//@VERSION@/$ver}"
-          gh release view "v$ver" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
-            gh release create "v$ver" --repo "$GITHUB_REPOSITORY" --draft --title "$ver" \
-              --notes "$notes"
-
       - name: Set up Python 3.12
-        if: steps.gate.outputs.publish == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Set up uv
-        if: steps.gate.outputs.publish == 'true'
         uses: astral-sh/setup-uv@v3
 
       - name: Set up Node 20
-        if: steps.gate.outputs.publish == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Set up pnpm
-        if: steps.gate.outputs.publish == 'true'
         uses: pnpm/action-setup@v4
         with:
           version: 10
 
       - name: Sync Python deps (creates .venv with pyinstaller + vosk)
-        if: steps.gate.outputs.publish == 'true'
         # --extra voice pulls Vosk so the frozen daemon bundles offline speech-to-
         # text (packaging/ironjarvis.spec _collect("vosk")).
         run: uv sync --extra dev --extra voice
 
-      # Freeze the daemon and BOOT it before publishing anything. PyInstaller has
-      # silently dropped bundled binaries before (OpenConsole.exe / winpty; a
-      # native wheel), shipping a daemon that dies at launch — and no unit test
-      # can catch that (it needs the frozen exe). Gate the release on a real
-      # /health from the frozen binary; the installer step then reuses it.
+      # Freeze the daemon and BOOT it before anything can be published.
+      # PyInstaller has silently dropped bundled binaries before
+      # (OpenConsole.exe / winpty; a native wheel), shipping a daemon that dies
+      # at launch — and no unit test can catch that (it needs the frozen exe).
+      # The release waits on a real /health from the frozen binary; the
+      # installer step then reuses it.
       - name: Freeze + smoke-test the daemon (must boot + serve /health)
-        if: steps.gate.outputs.publish == 'true'
         shell: pwsh
         run: |
           powershell -ExecutionPolicy Bypass -File packaging/build_daemon.ps1
@@ -298,22 +309,125 @@ jobs:
             if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force }
           }
 
-      - name: Build + publish the installer
-        if: steps.gate.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # -SkipDaemon: reuse the frozen daemon that the smoke step just built + verified.
-        run: powershell -ExecutionPolicy Bypass -File desktop/build-installer.ps1 -Publish -SkipDaemon
+      # NOT published from here: build-installer.ps1 without -Publish runs
+      # electron-builder with `--publish never`.
+      # -SkipDaemon: reuse the frozen daemon that the smoke step just built + verified.
+      - name: Build the installer (not published)
+        run: powershell -ExecutionPolicy Bypass -File desktop/build-installer.ps1 -SkipDaemon
 
-      # Only NOW does the release go public — with every asset attached. The
-      # updater's `latest` therefore always resolves to a COMPLETE release.
-      - name: Publish the release (assets are fully uploaded)
-        if: steps.gate.outputs.publish == 'true'
+      - name: Check the installer files before they are kept
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="${{ needs.plan.outputs.version }}"
+          cd desktop/release
+          for f in "Iron-Jarvis-Setup-$ver.exe" "Iron-Jarvis-Setup-$ver.exe.blockmap" latest.yml; do
+            [ -s "$f" ] || { echo "::error::$f was not built"; ls -la; exit 1; }
+          done
+          grep -q "^version: $ver\$" latest.yml || { echo "::error::latest.yml does not name $ver"; cat latest.yml; exit 1; }
+          grep -q "sha512:" latest.yml || { echo "::error::latest.yml carries no sha512"; exit 1; }
+
+      - name: Keep the installer files for the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: |
+            desktop/release/Iron-Jarvis-Setup-${{ needs.plan.outputs.version }}.exe
+            desktop/release/Iron-Jarvis-Setup-${{ needs.plan.outputs.version }}.exe.blockmap
+            desktop/release/latest.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  # THE ONLY JOB THAT MAKES ANYTHING PUBLIC. It runs only when the plan said
+  # publish, it is not a dry run, and every test job AND the build passed (a
+  # job-level `if` without a status function carries an implicit success()).
+  publish:
+    needs: [plan, suite, python, windows-installer]
+    if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.dry_run != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # v1.353.0 (G37): THE RELEASE PAGE SAYS WHICH FILE TO TAKE AND WHAT TO
+    # PRESS AT THE WINDOWS WARNING. Someone sent the latest-release link saw
+    # three files and "installer built and uploaded by CI"; only the README said
+    # which one and that the unsigned installer trips SmartScreen. One text,
+    # the README's words: the create step uses it for a new release and the
+    # publish step passes it again, so a release a dead run left as a draft
+    # gets it too. @VERSION@ is replaced in bash (`${RELEASE_NOTES//@VERSION@/$ver}`).
+    # tests/test_release_notes_v13530.py pins both steps and the words.
+    env:
+      RELEASE_NOTES: |
+        **Iron Jarvis @VERSION@ for Windows**
+
+        **Which file to download:** `Iron-Jarvis-Setup-@VERSION@.exe` in the Assets list below. Ignore the `.blockmap` and `latest.yml` files; the app's updater reads those.
+
+        **The Windows warning:** the installer isn't code-signed yet, so Windows may say "Windows protected your PC". Press **More info**, then **Run anyway**. It happens once per download, not every launch. [Why it isn't signed yet](${{ github.server_url }}/${{ github.repository }}/blob/master/docs/SIGNING.md)
+
+        **Already using Iron Jarvis?** There is nothing to download: the app fetches each update by itself and installs it when you press **Restart to update**.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Fetch the installer files the build job kept
+        uses: actions/download-artifact@v4
+        with:
+          name: installer
+          path: installer
+
+      # Pre-create BOTH the tag and the release, as a DRAFT, before any asset
+      # goes up. The release goes public only after every asset is attached.
+      # Safe: pushes made with the workflow's GITHUB_TOKEN never trigger new
+      # workflow runs.
+      - name: Ensure the release tag + release exist
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ver="${{ steps.gate.outputs.version }}"
+          ver="${{ needs.plan.outputs.version }}"
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            git tag -f "v$ver"
+            git push -f origin "v$ver"
+          fi
+          # DRAFT until the installer is fully uploaded: releases/latest ignores
+          # drafts, so the app's updater never sees an assetless "newest"
+          # release (live-hit: rapid releases kept update checks landing inside
+          # the upload window — "files are still uploading" for hours).
+          notes="${RELEASE_NOTES//@VERSION@/$ver}"
+          gh release view "v$ver" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
+            gh release create "v$ver" --repo "$GITHUB_REPOSITORY" --draft --title "$ver" \
+              --notes "$notes"
+
+      - name: Attach the installer files to the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ver="${{ needs.plan.outputs.version }}"
+          gh release upload "v$ver" --repo "$GITHUB_REPOSITORY" --clobber \
+            "installer/Iron-Jarvis-Setup-$ver.exe" \
+            "installer/Iron-Jarvis-Setup-$ver.exe.blockmap" \
+            "installer/latest.yml"
+          # All three must be on the release before it can go public.
+          have="$(gh release view "v$ver" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')"
+          for f in "Iron-Jarvis-Setup-$ver.exe" "Iron-Jarvis-Setup-$ver.exe.blockmap" latest.yml; do
+            grep -qxF "$f" <<< "$have" || { echo "::error::$f is not on the release"; exit 1; }
+          done
+
+      # Only NOW does the release go public — with every asset attached. The
+      # updater's `latest` therefore always resolves to a COMPLETE release.
+      - name: Publish the release (assets are fully uploaded)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="${{ needs.plan.outputs.version }}"
           # The same notes again: a draft an earlier run created keeps its old
           # body otherwise (the create above is skipped when it exists).
           notes="${RELEASE_NOTES//@VERSION@/$ver}"
@@ -330,16 +444,16 @@ jobs:
       # Runs AFTER the release is public: a manifest that points at a draft's
       # assets would 404 for every install.
       - name: Publish the update manifest to the updates branch
-        if: steps.gate.outputs.publish == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          ver="${{ steps.gate.outputs.version }}"
+          ver="${{ needs.plan.outputs.version }}"
           work="$(mktemp -d)"
           gh release download "v$ver" --repo "$GITHUB_REPOSITORY" --pattern latest.yml --dir "$work/in"
-          uv run python scripts/publish_update_manifest.py "$work/in/latest.yml" "$work/out/latest.yml" \
+          # stdlib-only script: --no-project skips installing the app here.
+          uv run --no-project python scripts/publish_update_manifest.py "$work/in/latest.yml" "$work/out/latest.yml" \
             --repo "$GITHUB_REPOSITORY" --version "$ver"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

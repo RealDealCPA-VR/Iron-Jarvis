@@ -54,7 +54,8 @@ def _jobs(name: str) -> dict:
 def test_every_job_in_both_workflows_carries_timeout_minutes():
     expected = {
         "tests.yml": {"backend", "dashboard", "browser-addon", "desktop"},
-        "release.yml": {"suite", "windows-installer"},
+        # v1.370.3: plan -> (suite, python shards, windows-installer) -> publish.
+        "release.yml": {"plan", "suite", "python", "windows-installer", "publish"},
     }
     for name, must_have in expected.items():
         jobs = _jobs(name)
@@ -68,7 +69,9 @@ def test_every_job_in_both_workflows_carries_timeout_minutes():
 
 def test_the_per_test_ceiling_fires_before_the_ci_job_bound():
     timeout_s = _pyproject()["tool"]["pytest"]["ini_options"]["timeout"]
-    for name, job in (("tests.yml", "backend"), ("release.yml", "suite")):
+    # v1.370.3: the Python suite runs in the `python` shards (release) and the
+    # `backend` shards (tests); each shard is bounded on its own.
+    for name, job in (("tests.yml", "backend"), ("release.yml", "python")):
         assert timeout_s < _jobs(name)[job]["timeout-minutes"] * 60, (name, job)
 
 
