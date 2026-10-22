@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.370.3 (2026-10-22).*
+holds itself to. Current as of v1.370.4 (2026-10-22).*
 
 ---
 
@@ -1896,6 +1896,28 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## How the coding harness measured up (v1.370.4)
+
+On 2026-10-22 the coding benchmark (`ironjarvis bench-harness`) ran all 30
+of its tasks on five setups: Claude Code and Codex on their own, Jarvis's IJ
+harness on the same Claude and Codex plans, and Jarvis on your own model
+server. Every run counted; none was left out for a limit or an unreachable
+server.
+
+| Setup | Tasks passed | Average time per task |
+|---|---|---|
+| Claude Code | 30 of 30 | 62 s |
+| Jarvis on Claude | 30 of 30 | 31 s |
+| Codex | 30 of 30 | 38 s |
+| Jarvis on Codex | 29 of 30 | 44 s |
+| Jarvis on your local model (glm-5.3-flash) | 27 of 30 | 23 s |
+
+On Claude, Jarvis passed every task in about half the time and read about
+60% fewer tokens than Claude Code. On Codex, Jarvis missed one hard task that
+Codex passed. Your local model missed three of the ten hard tasks and costs
+nothing per task. Thirty tasks is still a small sample: treat one task's
+difference as a hint, not a verdict.
 
 ## Updates arrive sooner (v1.370.3)
 

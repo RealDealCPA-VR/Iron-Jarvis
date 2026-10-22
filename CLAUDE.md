@@ -4041,6 +4041,15 @@ does not need a bump, stop and bump it.
   "outside" column watches only the bench's folder. NOT in CI (it spends
   model usage); the suite drives it with a scripted model and fake CLIs. Pins:
   `tests/test_harness_bench_v1363.py`, `tests/test_chat_round_budget_v1363.py`.
+  v1.370.4: the full 30-task comparison ran (results in
+  `docs/IJ-HARNESS-PLAN.md`) and found the ledger comparing money at 1e-9
+  while the chat lane rounds a turn's cost to 6 places — an honest record
+  read "the run says 0.065993, the ledger says 0.0659935". `ledger.differences
+  (..., records=N)` compares money within `MONEY_ROUNDING_USD` (half a
+  millionth) per record summed; tokens stay exact; `verify_plan` and the
+  refine ledger pass their record counts. Pin:
+  `tests/test_bench_ledger_rounding_v13704.py`. Known gap: a record names the
+  model only as "default"/"subscription", not the model that answered.
 
 - **"Stays on this network" is judged per MODEL: a name a proxy sends to the
   cloud is the cloud** (v1.362.0; live finding: the DGX Spark's LiteLLM proxy

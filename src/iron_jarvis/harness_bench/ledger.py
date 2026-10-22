@@ -92,19 +92,39 @@ class Rollout:
         return out
 
 
-def _equal(a: Any, b: Any) -> bool:
+#: Money is compared at the precision the run record carries it (v1.370.4).
+#: The chat lane reports a turn's cost rounded to the millionth of a dollar
+#: (``routes/chat.py`` rounds ``usage.cost_usd`` to 6 places) while the ledger
+#: adds each call's unrounded cost, so a record may sit up to half a millionth
+#: away from its ledger — a live run read "the run says 0.065993, the ledger
+#: says 0.0659935" and flagged an honest record. A sum of N records may drift
+#: by N halves. A missing or doubled call is orders of magnitude larger.
+MONEY_FIELDS: tuple[str, ...] = ("cost_metered_usd", "cost_list_price_usd")
+MONEY_ROUNDING_USD = 5e-7
+
+
+def _equal(a: Any, b: Any, *, abs_tol: float = 1e-9) -> bool:
     if a is None or b is None:
         return a is None and b is None
     if isinstance(a, float) or isinstance(b, float):
-        return math.isclose(float(a), float(b), rel_tol=1e-9, abs_tol=1e-9)
+        return math.isclose(float(a), float(b), rel_tol=1e-9, abs_tol=abs_tol)
     return a == b
 
 
-def differences(record: Mapping[str, Any], totals: Mapping[str, Any]) -> list[str]:
+def differences(
+    record: Mapping[str, Any], totals: Mapping[str, Any], *, records: int = 1
+) -> list[str]:
+    """Every field where ``record`` (the sum of ``records`` run records) and
+    the ledger's ``totals`` disagree. Tokens must match exactly; money within
+    the records' own rounding."""
+    money_tol = MONEY_ROUNDING_USD * max(1, records) + 1e-9
     return [
         f"{name}: the run says {record.get(name)!r}, the ledger says {totals.get(name)!r}"
         for name in TOTAL_FIELDS
-        if not _equal(record.get(name), totals.get(name))
+        if not _equal(
+            record.get(name), totals.get(name),
+            abs_tol=money_tol if name in MONEY_FIELDS else 1e-9,
+        )
     ]
 
 
@@ -162,9 +182,8 @@ class BudgetLedger:
         grand = sum_fields(
             asdict(c) for r in self.rollouts if r.task_id not in flagged for c in r.calls
         )
-        problems += differences(
-            sum_fields(r for r in executed if r.get("task_id") not in flagged), grand
-        )
+        counted = [r for r in executed if r.get("task_id") not in flagged]
+        problems += differences(sum_fields(counted), grand, records=len(counted))
         if problems:
             raise BudgetMismatch("the run plan does not add up: " + "; ".join(problems))
 

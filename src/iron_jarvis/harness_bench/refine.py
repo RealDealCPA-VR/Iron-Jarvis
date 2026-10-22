@@ -281,13 +281,14 @@ class RefineLedger:
     def problems(self) -> list[str]:
         """Every way the ledger does not add up (empty = it does)."""
         out: list[str] = []
-        for s in self.stages:
-            diff = differences(s.record_totals(), s.totals())
+        counts = [sum(1 for r in s.records if not r.get("reused")) for s in self.stages]
+        for s, n in zip(self.stages, counts):
+            diff = differences(s.record_totals(), s.totals(), records=n)
             if diff:
                 out.append(f"{s.stage} {s.label}: " + "; ".join(diff))
         grand = self.grand_totals()
         parts = sum_fields(s.record_totals() for s in self.stages)
-        diff = differences(parts, grand)
+        diff = differences(parts, grand, records=sum(counts))
         if diff:
             out.append("the stages do not sum to the whole: " + "; ".join(diff))
         proposals = self.count("propose")

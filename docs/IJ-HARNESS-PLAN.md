@@ -28,6 +28,24 @@ Benchmark on the final harness (glm-5.3-flash, generic dialect, `--tier
 all`): 28/30 (core 19/20, hard 9/10), 0 unscored. The CLAUDE.md bullets for
 each version record what was built and what each review found.
 
+**The "Done when" comparison (2026-10-22, v1.370.3, all 30 tasks, seed 0,
+every run scored, none unscored).** Each pair ran on its CLI's own default
+model; the bench records "default", not the served model's exact name.
+
+| Runner | Passed | Mean time | Mean tool calls | Tokens in | List-price $ |
+|---|---|---|---|---|---|
+| Claude Code | 30/30 | 62.2 s | 4.9 | 3,820,399 | 6.50 |
+| Jarvis on Claude (claude dialect) | 30/30 | 31.1 s | 7.2 | 1,494,441 | 3.66 |
+| Codex | 30/30 | 37.7 s | 3.8 | 1,979,415 | n/a |
+| Jarvis on Codex (gpt dialect) | 29/30 | 43.7 s | 6.6 | 1,776,431 | 1.07 |
+| Jarvis on glm-5.3-flash (generic) | 27/30 | 23.4 s | 8.9 | 1,522,553 | 0 (local) |
+
+Jarvis on Codex missed `hard-expression-evaluator` (5 of 9 hidden tests;
+it stopped after 6 tool calls while Codex passed). glm missed
+`hard-scheduler-ordering` and `hard-idempotent-migration` (as in every
+earlier run) and `hard-markdown-exporter` (passed before: variance). The
+run also found the cost-rounding false alarm fixed in v1.370.4.
+
 ## What we are building
 
 Build keeps two views:
