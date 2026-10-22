@@ -44,7 +44,7 @@ import { asPermissionMode } from "@/lib/permissionLevels";
 import { phaseLabel } from "@/lib/stepWords";
 import { collectDockAsks, dockAskKeyHint } from "@/lib/dockAsk";
 import { answerElicitation, decideSampling } from "@/lib/mcpInteract";
-import { modelGroupName, providerDisplay } from "@/lib/onboarding";
+import { machineName, modelGroupName, providerDisplay, providerHeading } from "@/lib/onboarding";
 import { reasoningDefaultOf } from "@/lib/reasoningChip";
 import type { ModelOption } from "@/lib/types";
 import { Markdown, MemoMarkdown } from "@/components/Markdown";
@@ -79,30 +79,34 @@ import {
 import { HarnessPanes, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { AccountChip, AccountLimitCard, AccountList } from "@/components/harness/HarnessAccounts";
 import {
-  accountFor,
   armResumeWhenReady,
   cancelResumeWhenReady,
   chooseAccountAndContinue,
   decodeAccountLimit,
-  decodeResumeWait,
+  decodeAccountWait,
   fetchAccounts,
+  limitCardWords,
   makeDefaultAccount,
+  sessionAccount,
   setSessionAccount,
-  vendorOfProvider,
-  type AccountGroups,
+  vendorOf,
   type AccountLimit,
+  type AccountsView,
   type BuildAccount,
 } from "@/lib/buildAccounts";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import {
   answerQuestion,
   archiveSession,
   decodeAskResolved,
   decodeAskUser,
+  decodeSessionView,
   deleteSession,
   getSession,
   isMissing,
   patchSession,
   planFromCards,
+  shownMessages,
   readSentSteers,
   unreadSteersFor,
   withSteersRestored,
@@ -157,15 +161,25 @@ function baseName(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
-/** Where a session runs when it has no account to pick: the model server's
- *  name for a local model, the demo model by its name, else "API key". */
-export function placeWords(provider: string, models: readonly ModelOption[]): string {
+/** Where a session runs when it has NO account (a local model or an API
+ *  key — Phase 5 gives no place words): the model server's name for a
+ *  local model (lib/onboarding machineName, else the group's name), the
+ *  demo model by its name, the provider's group name for an API key. */
+export function placeWords(provider: string, model: string, models: readonly ModelOption[]): string {
   if (!provider) return "";
   if (provider === "mock") return providerDisplay("mock");
-  const row = models.find((m) => m.provider === provider);
-  if (row && row.kind === "local" && row.on_this_network !== false) return modelGroupName(row);
-  return "API key";
+  const row =
+    models.find((m) => m.provider === provider && (!model || m.model === model)) ??
+    models.find((m) => m.provider === provider);
+  if (row && row.kind === "local" && row.on_this_network !== false) {
+    return machineName(provider, { name: row.name, model, catalog: models }) || modelGroupName(row);
+  }
+  return row ? modelGroupName(row) : providerHeading(provider) || provider;
 }
+
+/** How often the account list is read again while the chip's list is open
+ *  (the daemon answers from its cached snapshot). */
+export const ACCOUNTS_POLL_MS = 5000;
 
 export function HarnessSession({
   threadId,
@@ -207,7 +221,11 @@ export function HarnessSession({
   const [renaming, setRenaming] = useState<string | null>(null);
   // Accounts (Phase 5): undefined = not read yet, null = this Iron Jarvis has
   // none (the chip is hidden).
-  const [accounts, setAccounts] = useState<AccountGroups | null | undefined>(undefined);
+  const [accounts, setAccounts] = useState<AccountsView | null | undefined>(undefined);
+  const [accountsOpen, setAccountsOpen] = useState(false);
+  // The turn running now reported an account limit: its error frame is the
+  // same news in other words, so the card says it once.
+  const limitSeenRef = useRef(false);
   const [accountNote, setAccountNote] = useState<string | null>(null);
   const [accountBusy, setAccountBusy] = useState(false);
   const [limit, setLimit] = useState<AccountLimit | null>(null);
@@ -217,16 +235,22 @@ export function HarnessSession({
   const busy = sending || stream.streaming;
 
   // ------------------------------------------------------------- reading
+  /** Take a session view the daemon answered with: the view, and (from an
+   *  Iron Jarvis that keeps them) its limit card and armed wait. */
+  const adopt = useCallback((v: BuildSessionView) => {
+    setView(v);
+    setLoadError(null);
+    if (v.knowsAccounts) {
+      setLimit(decodeAccountLimit(v.accountLimit));
+      setWaiting(!!decodeAccountWait(v.accountWait));
+    }
+  }, []);
+
   const load = useCallback(async (): Promise<BuildSessionView | null> => {
     try {
       const v = await getSession(threadId);
       if (!v) throw new Error("The session could not be read.");
-      setView(v);
-      setLoadError(null);
-      const lim = decodeAccountLimit(v.accountLimit);
-      if (lim) setLimit(lim);
-      const wait = decodeResumeWait(v.resumeWhenReady);
-      setWaiting(!!wait);
+      adopt(v);
       return v;
     } catch (e) {
       if (isMissing(e)) {
@@ -236,7 +260,7 @@ export function HarnessSession({
       }
       return null;
     }
-  }, [threadId]);
+  }, [threadId, adopt]);
 
   const refreshAccounts = useCallback(async () => {
     try {
@@ -298,6 +322,7 @@ export function HarnessSession({
     } else if (event === "account_limit") {
       const lim = decodeAccountLimit(data);
       if (lim) {
+        limitSeenRef.current = true;
         setLimit(lim);
         setWaiting(false);
         setChoosing(false);
@@ -343,6 +368,7 @@ export function HarnessSession({
       setTurnId(id);
       setSending(true);
       setError(null);
+      limitSeenRef.current = false;
       let started = !!rejoinId;
       // A NEW turn retires the limit card at its first real frame (once —
       // the turn's own `account_limit` must stay up after it).
@@ -388,7 +414,8 @@ export function HarnessSession({
             return;
           }
         }
-        setError(turnErrorText(e));
+        // An account limit is said by its card; the error frame repeats it.
+        if (!limitSeenRef.current) setError(turnErrorText(e));
         if (!started && text) {
           // Never started: the words go back in the box, nothing was lost.
           setPending(null);
@@ -558,16 +585,21 @@ export function HarnessSession({
   const defaultProvider = daemon.health?.default_provider ?? "";
   const defaultModel = daemon.health?.default_model ?? "";
   const provider = view?.setup.provider || defaultProvider;
-  const vendor = vendorOfProvider(provider);
-  const groups = accounts ?? null;
-  const currentAccount: BuildAccount | null = accountFor(groups, vendor, view?.setup.account ?? "");
+  const model = view?.setup.provider ? view.setup.model : defaultModel;
+  // The account decides the vendor (Phase 5): the session view says which.
+  const vendor = vendorOf(view?.accountVendor);
+  const currentAccount: BuildAccount | null = sessionAccount(view?.account, vendor, accounts ?? null);
+  // The list is the daemon's cached snapshot: read it again while it is open.
+  useVisibleInterval(() => void refreshAccounts(), ACCOUNTS_POLL_MS, accountsOpen);
 
   async function pickAccount(a: BuildAccount) {
     setAccountBusy(true);
     setAccountNote(null);
     try {
-      await setSessionAccount(threadId, a.id);
-      await load();
+      const v = decodeSessionView(await setSessionAccount(threadId, a.id));
+      if (v) adopt(v);
+      else await load();
+      onChanged();
     } catch (e) {
       setAccountNote(e instanceof Error ? e.message : String(e));
     } finally {
@@ -579,8 +611,9 @@ export function HarnessSession({
     setAccountBusy(true);
     setAccountNote(null);
     try {
-      await makeDefaultAccount(a.id);
-      await refreshAccounts();
+      const next = await makeDefaultAccount(a.id);
+      if (next) setAccounts(next);
+      else await refreshAccounts();
     } catch (e) {
       setAccountNote(e instanceof Error ? e.message : String(e));
     } finally {
@@ -591,7 +624,8 @@ export function HarnessSession({
   async function resumeWhenReady() {
     setLimitError(null);
     try {
-      await armResumeWhenReady(threadId);
+      const v = decodeSessionView(await armResumeWhenReady(threadId));
+      if (v) adopt(v);
       setWaiting(true);
     } catch (e) {
       setLimitError(
@@ -607,7 +641,8 @@ export function HarnessSession({
   async function cancelWait() {
     setLimitError(null);
     try {
-      await cancelResumeWhenReady(threadId);
+      const v = decodeSessionView(await cancelResumeWhenReady(threadId));
+      if (v) adopt(v);
       setWaiting(false);
     } catch (e) {
       setLimitError(e instanceof Error ? e.message : String(e));
@@ -618,11 +653,18 @@ export function HarnessSession({
     setLimitError(null);
     setAccountBusy(true);
     try {
-      await chooseAccountAndContinue(threadId, a.id);
+      const res = await chooseAccountAndContinue(threadId, a.id);
+      const v = decodeSessionView(res.session);
+      if (v) adopt(v);
       setLimit(null);
       setChoosing(false);
-      const v = await load();
-      if (v?.running && v.turnId && v.turnId !== "running") void runTurn(null, v.turnId);
+      onChanged();
+      // The daemon carries on at once as a new turn on that account: follow it.
+      if (res.turnId) void runTurn(null, res.turnId);
+      else {
+        const again = await load();
+        if (again?.running && again.turnId && again.turnId !== "running") void runTurn(null, again.turnId);
+      }
     } catch (e) {
       setLimitError(
         isMissing(e)
@@ -684,7 +726,8 @@ export function HarnessSession({
   });
   const asking = asks.length > 0;
   const shown: BuildMessage[] = useMemo(() => {
-    const base = view?.messages ?? [];
+    // The daemon's own "carry on" questions are not shown (Phase 5).
+    const base = shownMessages(view?.messages ?? []);
     if (!pending) return base;
     // The daemon wrote the question already (a re-read mid-turn): not twice.
     const dup = base.some((m) => m.role === "user" && m.content === pending.content && m.turnId && m.turnId === turnId);
@@ -697,7 +740,7 @@ export function HarnessSession({
   const reasoningDef = reasoningDefaultOf(reasoningRowFor(choice, catalog.models, defaultProvider, defaultModel));
   const trigger = modelTriggerOf(choice, catalog.models, defaultProvider, defaultModel);
   const offline = !daemon.checking && !daemon.online;
-  const place = !vendor ? placeWords(provider, catalog.models) : "";
+  const place = !vendor && !currentAccount ? placeWords(provider, model, catalog.models) : "";
   const sendReady = !!input.trim() && !!view && !offline;
 
   if (loadError && !view) {
@@ -769,12 +812,16 @@ export function HarnessSession({
               ) : null}
             </p>
           </div>
-          {accounts && vendor ? (
+          {accounts && (vendor || currentAccount) ? (
             <AccountChip
               account={currentAccount}
-              groups={accounts}
+              view={accounts}
               onPick={(a) => void pickAccount(a)}
               onMakeDefault={(a) => void makeDefault(a)}
+              onOpenChange={(open) => {
+                setAccountsOpen(open);
+                if (open) void refreshAccounts();
+              }}
               busy={accountBusy}
               note={accountNote}
             />
@@ -866,7 +913,18 @@ export function HarnessSession({
                     <MemoMarkdown content={m.content} />
                   </div>
                 ) : null}
-                {m.error ? (
+                {(() => {
+                  // Phase 5: the limit card this reply ended on, as one quiet
+                  // line in the transcript (the live card is below).
+                  const lim = decodeAccountLimit(m.accountLimit);
+                  return lim ? (
+                    <p data-testid="harness-reply-limit" className="mt-1 flex items-start gap-1.5 text-[12px] text-tone-warn">
+                      <CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden /> {lim.accountName}:{" "}
+                      {limitCardWords(lim).title}
+                    </p>
+                  ) : null;
+                })()}
+                {m.error && !m.accountLimit ? (
                   <p data-testid="harness-reply-error" className="mt-1 flex items-start gap-1.5 text-[12px] text-tone-danger">
                     <CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden /> {m.error}
                   </p>
@@ -928,7 +986,7 @@ export function HarnessSession({
             <AccountLimitCard
               limit={limit}
               waiting={waiting}
-              waitingResetsAt={decodeResumeWait(view.resumeWhenReady)?.resetsAt ?? null}
+              waitingResetsAt={decodeAccountWait(view.accountWait)?.resetsAt ?? null}
               busy={accountBusy}
               error={limitError}
               onResume={() => void resumeWhenReady()}
@@ -941,7 +999,7 @@ export function HarnessSession({
                 choosing ? (
                   accounts ? (
                     <AccountList
-                      groups={accounts}
+                      view={accounts}
                       currentId={limit.account || null}
                       onPick={(a) => void chooseAndContinue(a)}
                       onMakeDefault={(a) => void makeDefault(a)}

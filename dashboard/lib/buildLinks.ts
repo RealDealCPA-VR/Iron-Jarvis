@@ -41,3 +41,16 @@ export function sessionLinkFor(sessionId: string): string {
   const build = buildThreadOf(sessionId);
   return build ? buildSessionHref(build) : `/sessions/${encodeURIComponent(sessionId)}`;
 }
+
+/** The bell's headline for a Build session's account that could not serve
+ *  (`build.account_limit`, Phase 5): a limit, or — not a reset — an account
+ *  that must sign in again, was removed, or is turned off. */
+export function buildLimitHeadline(kind: unknown, accountName: unknown): string {
+  const name = typeof accountName === "string" && accountName.trim() ? accountName.trim() : "";
+  const who = name ? `The ${name} account` : "A Build session's account";
+  if (kind === "signin") return `${who} needs to sign in again`;
+  if (kind === "missing") return name ? `The ${name} account was removed` : "A Build session's account was removed";
+  if (kind === "disabled") return `${who} is turned off`;
+  if (kind === "busy") return `${who} is busy right now`;
+  return `${who} reached its limit`;
+}

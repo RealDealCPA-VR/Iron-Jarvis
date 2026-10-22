@@ -323,20 +323,40 @@ describe("the plan door", () => {
 });
 
 describe("an account limit", () => {
+  // Phase 5's real shapes (v1.368.0): the list, and the frame sent right
+  // before the turn's last frame — whose error repeats it in other words.
   const ACCOUNTS = {
     claude: [
-      { id: "work", name: "Work", default: true, vendor: "claude", plan: "Max", status: "limit", resets_at: "2030-01-01T16:12:00Z" },
-      { id: "personal", name: "Personal", default: false, vendor: "claude", plan: "Pro", status: "ready" },
+      { id: "work", name: "Work", vendor: "claude", vendor_label: "Claude Code", provider: "claude-cli", default: true, plan: "max", plan_label: "Max", status: "limit", resets_at: "2030-01-01T16:12:00Z", limit_kind: "usage" },
+      { id: "personal", name: "Personal", vendor: "claude", vendor_label: "Claude Code", provider: "claude-cli", default: false, plan: "pro", plan_label: "Pro", status: "ready" },
     ],
     codex: [],
+    iron_proxy: { enabled: true, running: true, needs_update: false, note: "" },
+  };
+  const LIMIT = {
+    account: "work",
+    account_name: "Work",
+    provider: "claude-cli",
+    vendor: "claude",
+    kind: "usage",
+    resets_at: "2030-01-01T16:12:00Z",
+    resumable: true,
+    turn_id: "x",
   };
 
-  async function hitLimit() {
+  async function hitLimit(limit: Record<string, unknown> = LIMIT) {
     fetchMock.mockImplementation(async () =>
       sse([
         ["round", { round: 0 }],
-        ["account_limit", { account: "work", account_name: "Work", provider: "claude-cli", kind: "limit", resets_at: "2030-01-01T16:12:00Z" }],
-        ["done", { reply: "" }],
+        ["account_limit", limit],
+        [
+          "error",
+          {
+            detail: "parked",
+            title: 'The Claude Code account "Work" is out of usage until 4:12 PM. Wait for it to reset, or choose another account for this session.',
+            fix: "Your conversation and the work so far are kept.",
+          },
+        ],
       ]),
     );
     renderSession();
@@ -345,7 +365,7 @@ describe("an account limit", () => {
     return await screen.findByTestId("account-limit-card");
   }
 
-  it("shows the card in the mockup's words, with the account and its reset time", async () => {
+  it("shows the card in the mockup's words, with the account and its reset time — and says it once", async () => {
     const card = await hitLimit();
     expect(card).toHaveTextContent(
       "This account reached its limit. Wait for it to reset, or choose another account. Your conversation and work are preserved.",
@@ -353,9 +373,36 @@ describe("an account limit", () => {
     expect(screen.getByTestId("account-limit-line").textContent).toMatch(/^Work · resets /);
     expect(within(card).getByRole("button", { name: "Resume when ready" })).toBeInTheDocument();
     expect(within(card).getByRole("button", { name: "Choose account" })).toBeInTheDocument();
+    // The error frame says the same news: not a second time under the card.
+    await waitFor(() => expect(screen.queryByText(/is out of usage until/)).toBeNull());
+    expect(screen.queryByText("Your conversation and the work so far are kept.")).toBeNull();
+  });
+
+  it("an account that must sign in again is not a reset: no reset time, no Resume", async () => {
+    const card = await hitLimit({ ...LIMIT, kind: "signin", resumable: false });
+    expect(card).toHaveTextContent("This account needs to sign in again.");
+    expect(screen.getByTestId("account-limit-line").textContent).toBe("Work");
+    expect(within(card).queryByRole("button", { name: "Resume when ready" })).toBeNull();
+    expect(within(card).getByRole("button", { name: "Choose account" })).toBeInTheDocument();
+  });
+
+  it("a removed account and a turned-off one say so in their own words", async () => {
+    const card = await hitLimit({ ...LIMIT, kind: "missing", resumable: false });
+    expect(card).toHaveTextContent("The account this session used was removed.");
+    expect(within(card).queryByRole("button", { name: "Resume when ready" })).toBeNull();
+    cleanup();
+    // `resumable` not said: a turned-off account is not a reset, so no Resume.
+    const off = await hitLimit({ ...LIMIT, kind: "disabled", resumable: undefined });
+    expect(off).toHaveTextContent("This account is turned off.");
+    expect(within(off).queryByRole("button", { name: "Resume when ready" })).toBeNull();
   });
 
   it("Resume when ready arms the wait and offers Cancel while it waits", async () => {
+    api.postAnswers["POST /build/sessions/s1/resume-when-ready"] = view({
+      account_limit: LIMIT,
+      account_wait: { account: "work", account_name: "Work", resets_at: "2030-01-01T16:12:00Z" },
+    });
+    api.postAnswers["DELETE /build/sessions/s1/resume-when-ready"] = view({ account_limit: LIMIT, account_wait: null });
     await hitLimit();
     fireEvent.click(screen.getByTestId("account-limit-resume"));
     await waitFor(() =>
@@ -369,9 +416,15 @@ describe("an account limit", () => {
     expect(await screen.findByTestId("account-limit-resume")).toBeInTheDocument();
   });
 
-  it("Choose account lists the accounts and continues on the one picked", async () => {
+  it("Choose account lists the accounts and continues on the one picked, following the new turn", async () => {
     api.gets["/build/accounts"] = ACCOUNTS;
+    api.postAnswers["POST /build/sessions/s1/account"] = {
+      session: view({ running: true, turn_id: "bt_9", account: ACCOUNTS.claude[1], account_vendor: "claude" }),
+      turn_id: "bt_9",
+    };
     await hitLimit();
+    // The continuing turn (followed by name) carries on and ends cleanly.
+    fetchMock.mockImplementation(async () => sse([["done", { reply: "Carried on." }]]));
     fireEvent.click(screen.getByTestId("account-limit-choose"));
     fireEvent.click(await screen.findByTestId("account-pick-personal"));
     await waitFor(() =>
@@ -381,6 +434,10 @@ describe("an account limit", () => {
         body: { account: "personal", continue: true },
       }),
     );
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => (c as unknown[])[0] === "http://d/chat/turns/bt_9/stream")).toBe(true),
+    );
+    expect(screen.queryByTestId("account-limit-card")).toBeNull();
   });
 
   it("an older Iron Jarvis without the wait says so in words", async () => {
@@ -388,6 +445,33 @@ describe("an account limit", () => {
     await hitLimit();
     fireEvent.click(screen.getByTestId("account-limit-resume"));
     expect(await screen.findByText(/cannot wait for a reset yet/)).toBeInTheDocument();
+  });
+
+  it("the card and an armed wait survive a reload (the session view keeps them)", async () => {
+    api.gets["/build/sessions/s1"] = view({
+      account_limit: LIMIT,
+      account_wait: { account: "work", account_name: "Work", resets_at: "2030-01-01T16:12:00Z" },
+    });
+    renderSession();
+    expect(await screen.findByTestId("account-limit-card")).toBeInTheDocument();
+    expect(screen.getByTestId("account-limit-waiting")).toBeInTheDocument();
+    expect(screen.getByTestId("account-limit-cancel")).toBeInTheDocument();
+  });
+
+  it("the daemon's own continuation question is hidden; a reply that hit the limit says so", async () => {
+    api.gets["/build/sessions/s1"] = view({
+      messages: [
+        userLine("Build the page", "t1"),
+        { ...replyLine("Started the page.", "t1"), accountLimit: LIMIT, error: "parked" },
+        { role: "user", content: "Carry on with the work you were doing.", continuation: true, turnId: "t2" },
+        replyLine("Finished the page.", "t2"),
+      ],
+    });
+    renderSession();
+    expect(await screen.findByText("Finished the page.")).toBeInTheDocument();
+    expect(screen.queryByText("Carry on with the work you were doing.")).toBeNull();
+    expect(screen.getAllByTestId("harness-user-bubble")).toHaveLength(1);
+    expect(screen.getByTestId("harness-reply-limit")).toHaveTextContent("Work: This account reached its limit.");
   });
 });
 
@@ -476,25 +560,54 @@ describe("following a turn already running, and stopping one", () => {
 });
 
 describe("the account chip", () => {
-  it("names the session's account (its vendor's default when none is picked) and lists the accounts", async () => {
-    api.gets["/build/sessions/s1"] = view({ setup: { provider: "claude-cli", model: "claude-opus-4-8" } });
+  const WORK = {
+    id: "work", name: "Work", vendor: "claude", vendor_label: "Claude Code", provider: "claude-cli",
+    default: true, plan: "max", plan_label: "Max", status: "usage",
+    usage: { percent: 38, window: "7 days", window_mins: 10080, resets_at: "2030-01-01T16:12:00Z" },
+  };
+  const HOME = {
+    id: "home", name: "Home", vendor: "claude", vendor_label: "Claude Code", provider: "claude-cli",
+    default: false, plan: "pro", plan_label: "Pro", status: "limit", resets_at: "2030-01-01T16:12:00Z", limit_kind: "usage",
+  };
+
+  it("names the session's account and lists the accounts, grouped, with Iron-Proxy's note", async () => {
+    api.gets["/build/sessions/s1"] = view({
+      setup: { provider: "claude-cli", account: "work", account_name: "Work" },
+      account: WORK,
+      account_vendor: "claude",
+    });
     api.gets["/build/accounts"] = {
-      claude: [
-        { id: "work", name: "Work", default: true, vendor: "claude", plan: "Max", status: "ready", usage: { percent: 38, window: "7 days" } },
-        { id: "home", name: "Home", default: false, vendor: "claude", plan: "Pro", status: "limit", resets_at: "2030-01-01T16:12:00Z" },
-      ],
-      codex: [{ id: "cx", name: "Codex", default: true, vendor: "codex", plan: "Plus", status: "ready" }],
+      claude: [WORK, HOME],
+      codex: [{ id: "cx", name: "Codex", vendor: "codex", vendor_label: "Codex", provider: "codex-cli", default: true, plan: "plus", plan_label: "Plus", status: "ready" }],
+      iron_proxy: { enabled: true, running: true, needs_update: true, note: "Iron-Proxy needs an update to keep a Build session on one account." },
     };
+    api.postAnswers["PATCH /build/sessions/s1"] = view({ account: HOME, account_vendor: "claude" });
     renderSession();
     const chip = await screen.findByTestId("account-chip");
     expect(chip).toHaveTextContent("Work");
     fireEvent.click(chip);
-    const menu = screen.getByTestId("account-menu");
+    const menu = await screen.findByTestId("account-menu");
+    await waitFor(() =>
+      expect(within(menu).getByTestId("account-iron-proxy-note")).toHaveTextContent("Iron-Proxy needs an update"),
+    );
     expect(within(menu).getByText("Claude Code accounts")).toBeInTheDocument();
     expect(within(menu).getByText("Codex accounts")).toBeInTheDocument();
+    expect(within(within(menu).getByTestId("account-card-work")).getByTestId("account-vendor-plan")).toHaveTextContent(
+      "Claude Code · Max",
+    );
     fireEvent.click(within(menu).getByTestId("account-pick-home"));
     await waitFor(() =>
       expect(api.calls).toContainEqual({ method: "PATCH", path: "/build/sessions/s1", body: { account: "home" } }),
     );
+    // The answer is adopted: the chip names the new account.
+    await waitFor(() => expect(screen.getByTestId("account-chip-name")).toHaveTextContent("Home"));
+  });
+
+  it("a session with no account names where its model runs, in plain words", async () => {
+    api.gets["/build/sessions/s1"] = view({ setup: { provider: "anthropic", model: "claude-opus-4-8" }, account: null, account_vendor: "" });
+    api.gets["/build/accounts"] = { claude: [], codex: [], iron_proxy: { enabled: false, running: false, needs_update: false, note: "Iron-Proxy is off." } };
+    renderSession();
+    expect(await screen.findByTestId("harness-place")).toHaveTextContent("Anthropic");
+    expect(screen.queryByTestId("account-chip")).toBeNull();
   });
 });

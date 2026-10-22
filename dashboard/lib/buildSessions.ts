@@ -114,8 +114,9 @@ export interface BuildSetup {
   approvalMode: string;
   localOnly: boolean;
   grantedTools: string[];
-  /** Phase 5: the account the session runs on ("" = its vendor's default). */
+  /** Phase 5: the account the session runs on ("" = none), and its name. */
   account: string;
+  accountName: string;
 }
 
 export interface QueuedItem {
@@ -135,10 +136,17 @@ export interface BuildSessionView extends BuildSessionRow {
   queued: QueuedItem[];
   /** The running turn's id ("" = none) — rejoin with GET /chat/turns/{id}/stream. */
   turnId: string;
-  /** Phase 5: the armed "Resume when ready" wait, raw (lib/buildAccounts). */
-  resumeWhenReady: unknown;
-  /** Phase 5: a reached limit the session is parked on, raw (lib/buildAccounts). */
+  /** Phase 5 (lib/buildAccounts decodes these): the session's account (a
+   *  row, or {id, name, status}), its vendor ("" = a local model or an API
+   *  key — no account), the limit card it is parked on (kept across a
+   *  reload) and the armed "Resume when ready" wait. Raw. */
+  account: unknown;
+  accountVendor: string;
   accountLimit: unknown;
+  accountWait: unknown;
+  /** The daemon keeps accounts on the view (Phase 5): its limit card and
+   *  wait are then the truth (null = none), not "an older Iron Jarvis". */
+  knowsAccounts: boolean;
 }
 
 /** A transcript line: the chat page's own message shape (the daemon keeps
@@ -150,6 +158,11 @@ export type BuildMessage = PaneMessage & {
   error?: string;
   truncated?: boolean;
   folderRules?: string[];
+  /** Phase 5: the daemon's own "carry on" question (Resume when ready,
+   *  Choose account) — not shown, like the chat's hidden Continue turn. */
+  continuation?: boolean;
+  /** Phase 5: the account-limit card the reply ended on (raw). */
+  accountLimit?: unknown;
 };
 
 /** The keys a line may carry (the daemon's LINE_KEYS). Anything else dies. */
@@ -179,6 +192,9 @@ const LINE_KEYS = [
   "trustReason",
   "trustNote",
   "timing",
+  // Phase 5 (v1.368.0): a continuation question, and a reply's limit card.
+  "continuation",
+  "accountLimit",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {
@@ -224,6 +240,7 @@ function decodeSetup(raw: unknown): BuildSetup {
       ? r.granted_tools.filter((t): t is string => typeof t === "string" && !!t)
       : [],
     account: str(r.account, 120),
+    accountName: str(r.account_name, 80),
   };
 }
 
@@ -251,9 +268,18 @@ export function decodeSessionView(raw: unknown): BuildSessionView | null {
       .filter((t) => t.trim())
       .map((text) => ({ text })),
     turnId: str(r.turn_id, 80),
-    resumeWhenReady: r.resume_when_ready ?? null,
+    account: r.account ?? null,
+    accountVendor: r.account_vendor === "claude" || r.account_vendor === "codex" ? r.account_vendor : "",
     accountLimit: r.account_limit ?? null,
+    accountWait: r.account_wait ?? null,
+    knowsAccounts: "account_limit" in r || "account_wait" in r || "account" in r,
   };
+}
+
+/** The lines a session SHOWS: its transcript without the daemon's own
+ *  continuation questions. */
+export function shownMessages(messages: readonly BuildMessage[]): BuildMessage[] {
+  return messages.filter((m) => m.continuation !== true);
 }
 
 // ------------------------------------------------------------- the fetchers

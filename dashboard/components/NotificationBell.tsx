@@ -37,7 +37,7 @@ import { clockTime, formatTokens } from "@/lib/format";
 import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
 import { agentsPath, missionPath } from "@/lib/mission";
 import { MISSION_ORIGIN, sessionHref } from "@/lib/missionLinks";
-import { buildSessionHref, sessionLinkFor } from "@/lib/buildLinks";
+import { buildLimitHeadline, buildSessionHref, buildThreadOf, sessionLinkFor } from "@/lib/buildLinks";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
 import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
@@ -215,6 +215,11 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // v1.346.0: a media generation that finished in the background, or failed
   "media.completed",
   "media.failed",
+  // v1.369.0 (IJ harness Phase 6, on Phase 5's events): a Build session's
+  // account could not serve (it stopped), and a "Resume when ready" wait
+  // that carried on by itself.
+  "build.account_limit",
+  "build.resumed",
 ];
 
 /** Every /events type the bell reads (v1.311.0, wave 3,
@@ -843,6 +848,30 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: ok ? CheckCircle2 : AlertTriangle,
       title: ok ? `Your ${kind} is ready` : `Your ${kind} could not be made`,
       body: body.length > 140 ? `${body.slice(0, 139)}…` : body,
+    };
+  }
+  if (e.type === "build.account_limit" || e.type === "build.resumed") {
+    // v1.369.0: a Build session (Phase 5). Payload: {thread_id, title,
+    // account_name, …}; session_id "build:<id>". The row opens Build on THAT
+    // session. A limit stopped work nobody may be watching: it counts on the
+    // badge. A resume is good news, said once.
+    const thread =
+      (typeof p.thread_id === "string" && p.thread_id.trim()) ||
+      buildThreadOf(typeof e.session_id === "string" ? e.session_id : "") ||
+      "";
+    const title = typeof p.title === "string" ? p.title.trim() : "";
+    const name = typeof p.account_name === "string" ? p.account_name.trim() : "";
+    const limitRow = e.type === "build.account_limit";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: thread ? buildSessionHref(thread) : "/terminals",
+      icon: limitRow ? AlertTriangle : CheckCircle2,
+      title: limitRow
+        ? buildLimitHeadline(p.kind, name)
+        : `A Build session resumed${name ? ` on the ${name} account` : ""}`,
+      body: title.length > 140 ? `${title.slice(0, 139)}…` : title,
+      ...(limitRow ? { attention: true } : {}),
     };
   }
   if (e.type === "computeruse.run_finished") {

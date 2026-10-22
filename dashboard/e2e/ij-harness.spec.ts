@@ -13,9 +13,10 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  *     step writes RESULT.md; Undo removes it from disk);
  *  4. open a terminal from the session's Terminal tab, switch to it from the
  *     left pane (the Terminals view, focused on it) and back again;
- *  5. a faked account limit (the Phase 5 routes STUBBED in the browser with
- *     page.route — the scratch daemon has no Phase 5): the card's words, the
- *     armed "Resume when ready" with its Cancel;
+ *  5. a faked account limit — the Phase 5 routes STUBBED in the browser with
+ *     page.route, in Phase 5's own shapes (v1.368.0), so the test runs the
+ *     same against a daemon with or without Phase 5: the card's words, the
+ *     armed "Resume when ready" surviving a reload, and its Cancel;
  *  6. 390 px: Build never pans sideways.
  */
 
@@ -96,6 +97,7 @@ test("Build → IJ harness → a session → a reply with a change, and Undo", a
   page.once("dialog", (d) => void d.accept());
   await changes.getByTestId("changed-undo-0").click();
   await expect.poll(() => existsSync(join(work, "RESULT.md")), { timeout: 20_000 }).toBe(false);
+  if (process.env.IJ_E2E_SHOTS) await page.screenshot({ path: join(process.env.IJ_E2E_SHOTS, "ij-harness-desktop.png") });
 });
 
 test("a terminal from the left pane, and back", async ({ page }) => {
@@ -108,6 +110,8 @@ test("a terminal from the left pane, and back", async ({ page }) => {
   const row = page.locator('[data-testid^="harness-terminal-row-"]').first();
   await expect(row).toBeVisible({ timeout: 30_000 });
   const termId = ((await row.getAttribute("data-testid")) ?? "").replace("harness-terminal-row-", "");
+  await expect(page.getByTestId("pane-terminal")).toBeVisible();
+  if (process.env.IJ_E2E_SHOTS) await page.screenshot({ path: join(process.env.IJ_E2E_SHOTS, "ij-harness-terminal-tab.png") });
   await row.click();
   // The Terminals view, focused on THAT terminal.
   await expect(page.getByTestId("pane-rail")).toBeVisible();
@@ -123,35 +127,72 @@ test("a terminal from the left pane, and back", async ({ page }) => {
 test("a faked account limit shows the card; Resume when ready waits with a Cancel", async ({ page }) => {
   test.skip(!sessionId, "needs the session from the first test");
   const calls: string[] = [];
-  // Phase 5's routes, STUBBED (the scratch daemon predates them).
+  // Phase 5's routes, STUBBED in the browser with Phase 5's own shapes
+  // (v1.368.0), whether or not the scratch daemon has Phase 5: the session's
+  // account limit is faked; everything else is the real daemon's.
+  const WORK = {
+    id: "work", name: "Work", vendor: "claude", vendor_label: "Claude Code", provider: "claude-cli",
+    default: true, plan: "max", plan_label: "Max", status: "limit", resets_at: "2030-01-01T16:12:00Z", limit_kind: "usage",
+  };
+  const LIMIT = {
+    account: "work", account_name: "Work", provider: "claude-cli", vendor: "claude",
+    kind: "usage", resets_at: "2030-01-01T16:12:00Z", resumable: true, turn_id: "",
+  };
+  let limited = false;
+  let wait: Record<string, unknown> | null = null;
   await page.route(`${DAEMON}/build/accounts`, (route) =>
     stub(route, () => ({
       body: JSON.stringify({
         claude: [
-          { id: "work", name: "Work", default: true, vendor: "claude", plan: "Max", status: "limit", resets_at: "2030-01-01T16:12:00Z" },
-          { id: "personal", name: "Personal", default: false, vendor: "claude", plan: "Pro", status: "ready", usage: { percent: 38, window: "7 days" } },
+          WORK,
+          { ...WORK, id: "personal", name: "Personal", default: false, plan: "pro", plan_label: "Pro", status: "usage",
+            usage: { percent: 38, window: "7 days", window_mins: 10080, resets_at: "2030-01-01T16:12:00Z" } },
         ],
-        codex: [{ id: "cx", name: "Codex Plus", default: true, vendor: "codex", plan: "Plus", status: "ready" }],
+        codex: [{ id: "cx", name: "Codex Plus", vendor: "codex", vendor_label: "Codex", provider: "codex-cli", default: true, plan: "plus", plan_label: "Plus", status: "ready" }],
+        iron_proxy: { enabled: true, running: true, needs_update: false, note: "" },
       }),
     })),
   );
+  // The session as the real daemon answers it, with the faked account parts.
+  const withAccount = async (route: Route) => {
+    if (route.request().method() === "OPTIONS") return stub(route, () => ({ body: "" }));
+    const real = await route.fetch({ url: `${DAEMON}/build/sessions/${sessionId}`, method: "GET" });
+    const body = (await real.json()) as Record<string, unknown>;
+    return stub(route, () => ({
+      body: JSON.stringify({
+        ...body,
+        account: WORK,
+        account_vendor: "claude",
+        account_limit: limited ? LIMIT : null,
+        account_wait: wait,
+      }),
+    }));
+  };
+  await page.route(`${DAEMON}/build/sessions/${sessionId}`, withAccount);
   await page.route(`${DAEMON}/build/sessions/${sessionId}/turn`, async (route) => {
     const frames = [
       ["round", { round: 0 }],
-      ["account_limit", { account: "work", account_name: "Work", provider: "claude-cli", kind: "limit", resets_at: "2030-01-01T16:12:00Z" }],
-      ["done", { reply: "", tools_used: [] }],
+      ["account_limit", LIMIT],
+      ["error", { detail: "parked", title: 'The Claude Code account "Work" is out of usage.', fix: "Your conversation and the work so far are kept." }],
     ]
       .map(([e, d]) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`)
       .join("");
-    if (await stub(route, () => ({ contentType: "text/event-stream", body: frames }))) calls.push("turn");
+    if (await stub(route, () => ({ contentType: "text/event-stream", body: frames }))) {
+      calls.push("turn");
+      limited = true;
+    }
   });
   await page.route(`${DAEMON}/build/sessions/${sessionId}/resume-when-ready`, async (route) => {
     const method = route.request().method();
-    if (await stub(route, () => ({ body: JSON.stringify({ ok: true }) }))) calls.push(method);
+    if (method === "POST") wait = { account: "work", account_name: "Work", resets_at: "2030-01-01T16:12:00Z" };
+    if (method === "DELETE") wait = null;
+    if (method !== "OPTIONS") calls.push(method);
+    return withAccount(route);
   });
 
   await page.goto(`/terminals?session=${sessionId}`);
   await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByTestId("account-chip")).toContainText("Work");
   const box = page.getByTestId("harness-input");
   await box.fill("Keep going");
   await box.press("Enter");
@@ -161,11 +202,17 @@ test("a faked account limit shows the card; Resume when ready waits with a Cance
     "This account reached its limit. Wait for it to reset, or choose another account. Your conversation and work are preserved.",
   );
   await expect(page.getByTestId("account-limit-line")).toContainText("Work · resets");
+  // The card says it once: the error frame's words are not repeated.
+  await expect(page.getByText("is out of usage")).toHaveCount(0);
   await page.getByTestId("account-limit-resume").click();
   await expect(page.getByTestId("account-limit-waiting")).toBeVisible();
+  // The armed wait survives a reload (the session view keeps it).
+  await page.reload();
+  await expect(page.getByTestId("account-limit-waiting")).toBeVisible({ timeout: 60_000 });
   await page.getByTestId("account-limit-cancel").click();
   await expect(page.getByTestId("account-limit-resume")).toBeVisible();
   expect(calls).toEqual(["turn", "POST", "DELETE"]);
+  if (process.env.IJ_E2E_SHOTS) await page.screenshot({ path: join(process.env.IJ_E2E_SHOTS, "ij-harness-limit.png") });
 });
 
 test.describe("390 px — Build never pans sideways", () => {
