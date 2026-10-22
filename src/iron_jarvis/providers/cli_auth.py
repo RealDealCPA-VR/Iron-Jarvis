@@ -147,9 +147,16 @@ def _run_probe(argv: list[str]) -> tuple[int, str, str]:
     # `core.procs.run` (v1.333.0): a timeout kills the probe's whole tree (an
     # npm .cmd shim's node held the pipe past `subprocess.run`'s kill) and
     # still raises TimeoutExpired for the caller below.
-    from ..core import procs
+    import os
 
-    res = procs.run(argv, timeout=PROBE_TIMEOUT_S).check_timeout()  # argv list, no shell
+    from ..core import procs
+    from ..core.claude_markers import drop_claude_session_markers
+
+    # v1.368.0: a daemon started from inside a Claude Code session must not
+    # hand that session's markers (its messaging token among them) to the
+    # status probe — the same leak v1.303.1 closed for panes and child_env.
+    env = drop_claude_session_markers(dict(os.environ))
+    res = procs.run(argv, timeout=PROBE_TIMEOUT_S, env=env).check_timeout()  # argv list, no shell
     return res.returncode, procs.text(res.stdout, "utf-8"), procs.text(res.stderr, "utf-8")
 
 
