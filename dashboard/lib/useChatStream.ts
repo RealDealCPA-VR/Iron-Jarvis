@@ -840,9 +840,9 @@ export function decodeSSE(event: string, rawData: string): SSEEvent | null {
   return sseEventFrom(event, data);
 }
 
-/** Parse ONE raw SSE frame (the text between blank-line separators): its
- *  `event:` name + joined `data:` lines. `:`-comments (keepalives) yield null. */
-function parseFrame(raw: string): SSEEvent | null {
+/** ONE raw SSE frame (the text between blank-line separators): its `event:`
+ *  name + joined `data:` lines; null for a `:`-comment (keepalive). */
+function rawFrame(raw: string): { event: string; data: string } | null {
   let event = "message";
   const dataLines: string[] = [];
   for (const lineRaw of raw.split("\n")) {
@@ -852,7 +852,27 @@ function parseFrame(raw: string): SSEEvent | null {
     else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
   }
   if (dataLines.length === 0) return null;
-  return decodeSSE(event, dataLines.join("\n"));
+  return { event, data: dataLines.join("\n") };
+}
+
+/** v1.369.0: hand every frame, decoded or not, to the caller's tap (Build's
+ *  IJ harness reads the frames this file does not know: `ask_user`, an
+ *  `mcp_resolved` for one, `account_limit`). Junk JSON is no frame. A tap
+ *  that throws never breaks the stream. */
+function tapFrame(frame: { event: string; data: string }, onFrame?: StreamWatch["onFrame"]): void {
+  if (!onFrame) return;
+  let data: unknown;
+  try {
+    data = JSON.parse(frame.data);
+  } catch {
+    return;
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return;
+  try {
+    onFrame(frame.event, data as Record<string, unknown>);
+  } catch {
+    /* the caller's problem, never the turn's */
+  }
 }
 
 function isAbort(e: unknown): boolean {
@@ -899,6 +919,9 @@ export interface StreamWatch {
   prepMs?: number;
   /** The daemon finished preparing: the response has begun. */
   onOpen?: () => void;
+  /** v1.369.0: every frame's name and parsed data, before it is decoded —
+   *  the frames this file does not decode reach a caller only here. */
+  onFrame?: (event: string, data: Record<string, unknown>) => void;
 }
 
 /**
@@ -1068,7 +1091,10 @@ export async function* streamSSE(
         while ((sep = buffer.indexOf("\n\n")) !== -1) {
           const raw = buffer.slice(0, sep);
           buffer = buffer.slice(sep + 2);
-          const ev = parseFrame(raw);
+          const frame = rawFrame(raw);
+          if (!frame) continue;
+          tapFrame(frame, watch.onFrame);
+          const ev = decodeSSE(frame.event, frame.data);
           if (ev) yield ev;
         }
       }
@@ -1318,10 +1344,21 @@ export interface UseChatStream {
      *  starting one (`GET /chat/turns/{id}/stream`): what it has sent so far,
      *  then the rest, read exactly like a new turn's frames. `body` is then
      *  unused. */
-    opts?: { rejoin?: string },
+    opts?: RunOptions,
   ) => Promise<ChatStreamResult>;
   /** Abort the in-flight turn (resolves `run` with whatever streamed so far). */
   abort: () => void;
+}
+
+/** How `run` reaches its turn. */
+export interface RunOptions {
+  /** v1.336.0: REJOIN the daemon-owned turn with this id (see `run`). */
+  rejoin?: string;
+  /** v1.369.0: POST the body HERE instead of `/chat/stream` — a Build
+   *  session's turn (`/build/sessions/{id}/turn`) streams the same frames. */
+  path?: string;
+  /** v1.369.0: every frame's name and data, before decoding (StreamWatch). */
+  onFrame?: (event: string, data: Record<string, unknown>) => void;
 }
 
 /**
@@ -1428,7 +1465,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
       body: unknown,
       onToken?: (delta: string, full: string) => void,
       onReset?: () => void,
-      runOpts: { rejoin?: string } = {},
+      runOpts: RunOptions = {},
     ): Promise<ChatStreamResult> => {
       abortRef.current?.abort(); // tear down any prior turn
       const controller = new AbortController();
@@ -1457,6 +1494,13 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
           setPhase("working");
           setLastEventAt(Date.now());
         },
+        ...(runOpts.onFrame
+          ? {
+              onFrame: (event: string, data: Record<string, unknown>) => {
+                if (abortRef.current === controller) runOpts.onFrame?.(event, data);
+              },
+            }
+          : {}),
       };
 
       let acc = "";
@@ -1487,7 +1531,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
         for await (const ev of streamSSE(
           runOpts.rejoin
             ? `/chat/turns/${encodeURIComponent(runOpts.rejoin)}/stream`
-            : "/chat/stream",
+            : (runOpts.path ?? "/chat/stream"),
           runOpts.rejoin ? undefined : body,
           controller.signal,
           watch,

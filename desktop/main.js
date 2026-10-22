@@ -2917,6 +2917,11 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
     const prev = seen[id];
     const rec = prev ? { first: prev.first, sent: prev.sent } : { first: now, sent: 0 };
     const isChat = ask.kind === "chat";
+    // v1.369.0 (IJ harness Phase 6): a Build session parked on the user lists
+    // as a chat row with `surface: "build"`. It reads as the session and its
+    // click opens Build on it (/terminals?session=<id>) — a session never
+    // shows in Chat.
+    const isBuild = isChat && ask.surface === "build";
     const hasTool = typeof ask.tool === "string" && ask.tool !== "";
     // v1.358.0 (lane 8E): the card's words, then WHICH task is asking —
     // `save a file for “Draft the Q3 letter”` — so a toast on a closed
@@ -2927,11 +2932,11 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
     const threadId = isChat && typeof ask.thread_id === "string" ? ask.thread_id : "";
     // v1.357.0 (G76): the canon's words — the click opens the RUN that is
     // waiting (the bell's "Open run"), never the retired "job".
-    const where = isChat ? "the chat" : "the run";
+    const where = isBuild ? "the session" : isChat ? "the chat" : "the run";
     // A chat parked on an app's question names no tool: say what to do, not
     // "use a tool".
     const what = isChat && !hasTool ? "" : `${summary} — `;
-    const target = isChat ? { chat: true, threadId } : {};
+    const target = isBuild ? { chat: true, build: true, threadId } : isChat ? { chat: true, threadId } : {};
     if (!prev) {
       if (windowOpen) {
         rec.sent = 1; // the bell in front of the user has it
@@ -2940,7 +2945,11 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
           id,
           sessionId,
           ...target,
-          title: isChat ? "A chat is waiting for your OK" : "Jarvis is waiting for you",
+          title: isBuild
+            ? "A Build session is waiting for your OK"
+            : isChat
+              ? "A chat is waiting for your OK"
+              : "Jarvis is waiting for you",
           body: what ? `${what}click to open ${where}.` : `Click to open ${where}.`,
         });
         rec.sent = 1;
@@ -2957,7 +2966,11 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
           id,
           sessionId,
           ...target,
-          title: isChat ? "A chat is still waiting for your OK" : "Still waiting for you",
+          title: isBuild
+            ? "A Build session is still waiting for your OK"
+            : isChat
+              ? "A chat is still waiting for your OK"
+              : "Still waiting for you",
           body: what
             ? `${summary} has been ${waited} — click to open ${where}.`
             : `It has been ${waited} — click to open ${where}.`,
@@ -3250,7 +3263,11 @@ function showAskNotification(item) {
     note.on("click", () => {
       showMainWindow();
       if (!mainWin || mainWin.isDestroyed()) return;
-      if (item.chat) {
+      if (item.chat && item.build) {
+        // v1.369.0: a waiting BUILD SESSION opens Build on that session.
+        const q = item.threadId ? `?session=${encodeURIComponent(item.threadId)}` : "";
+        mainWin.loadURL(`${DASHBOARD_URL}/terminals${q}`);
+      } else if (item.chat) {
         // v1.351.0 (G05): a waiting CHAT opens that chat, where its card is.
         const q = item.threadId ? `?thread=${encodeURIComponent(item.threadId)}` : "";
         mainWin.loadURL(`${DASHBOARD_URL}/chat${q}`);

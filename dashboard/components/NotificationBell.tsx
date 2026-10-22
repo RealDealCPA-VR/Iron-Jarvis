@@ -37,6 +37,7 @@ import { clockTime, formatTokens } from "@/lib/format";
 import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
 import { agentsPath, missionPath } from "@/lib/mission";
 import { MISSION_ORIGIN, sessionHref } from "@/lib/missionLinks";
+import { buildSessionHref, sessionLinkFor } from "@/lib/buildLinks";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
 import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
@@ -589,7 +590,8 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       id: e.id,
       ts: e.ts,
       // A chat turn has no session row: its taint says session_id "chat".
-      href: sid === "chat" ? "/chat" : sid ? `/sessions/${encodeURIComponent(sid)}` : "/activity",
+      // v1.369.0: a Build session's ("build:<id>") opens in Build.
+      href: sid === "chat" ? "/chat" : sid ? sessionLinkFor(sid) : "/activity",
       icon: ShieldAlert,
       title: sid === "chat" ? "A chat turn dropped to low trust" : "A run dropped to low trust",
       body: typeof p.reason === "string" ? p.reason : "",
@@ -613,7 +615,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: sid === "chat" ? "/chat" : sid ? `/sessions/${encodeURIComponent(sid)}` : "/activity",
+      href: sid === "chat" ? "/chat" : sid ? sessionLinkFor(sid) : "/activity",
       icon: ShieldCheck,
       title: `Blocked ${n} suspicious passage${n === 1 ? "" : "s"} from ${source}`,
       body: cats.join(", "),
@@ -1153,6 +1155,9 @@ interface PendingAgentApproval {
 export interface ChatWaitingAsk {
   id: string;
   threadId: string;
+  /** v1.369.0: the row is a Build session's (`surface: "build"`), not a
+   *  chat's: it reads as the session and opens it in Build. */
+  build?: boolean;
 }
 
 /** Parse one pending row of kind "chat" (null = not a chat row). */
@@ -1162,19 +1167,30 @@ export function parseChatAsk(raw: unknown): ChatWaitingAsk | null {
   if (r.kind !== "chat") return null;
   const id = typeof r.id === "string" ? r.id : "";
   if (!id) return null;
-  return { id, threadId: typeof r.thread_id === "string" ? r.thread_id.trim() : "" };
+  const threadId = typeof r.thread_id === "string" ? r.thread_id.trim() : "";
+  return r.surface === "build" ? { id, threadId, build: true } : { id, threadId };
 }
 
-/** Where a waiting chat opens: that chat, else the chat page. */
-function chatAskHref(ask: ChatWaitingAsk): string {
+/** Where a waiting chat opens: that chat, else the chat page. A Build
+ *  session (v1.369.0) opens in Build, on that session. */
+export function chatAskHref(ask: ChatWaitingAsk): string {
+  if (ask.build) return ask.threadId ? buildSessionHref(ask.threadId) : "/terminals";
   return ask.threadId ? `/chat?thread=${encodeURIComponent(ask.threadId)}` : "/chat";
+}
+
+/** The waiting row's words: a chat's, or (v1.369.0) a Build session's. */
+export function chatAskRowWords(ask: ChatWaitingAsk): { title: string; open: string } {
+  return ask.build
+    ? { title: "A Build session is waiting for your OK", open: "Open the session in Build" }
+    : { title: "A chat is waiting for your OK", open: "Open the chat" };
 }
 
 /** The waiting chat as a bell row: the computer-use row's exact look (the
  *  amber tile, a title, one quiet line, the arrow). */
 function ChatWaitingRow({ ask, onOpen }: { ask: ChatWaitingAsk; onOpen: () => void }) {
+  const words = chatAskRowWords(ask);
   return (
-    <li data-testid="bell-chat-waiting">
+    <li data-testid="bell-chat-waiting" data-surface={ask.build ? "build" : "chat"}>
       <Link
         href={chatAskHref(ask)}
         onClick={onOpen}
@@ -1184,10 +1200,8 @@ function ChatWaitingRow({ ask, onOpen }: { ask: ChatWaitingAsk; onOpen: () => vo
           <MessageSquare size={15} />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-sm font-medium text-zinc-100">
-            A chat is waiting for your OK
-          </span>
-          <span className="block text-[11px] text-zinc-500">Open the chat</span>
+          <span className="block text-sm font-medium text-zinc-100">{words.title}</span>
+          <span className="block text-[11px] text-zinc-500">{words.open}</span>
         </span>
         <ArrowRight size={13} className="shrink-0 text-zinc-600" />
       </Link>
@@ -2475,7 +2489,9 @@ export function NotificationBell() {
                     : waiting.length > 0
                       ? "Open the Workflows page"
                       : agentAsks.length === 0 && chatAsks.length > 0
-                        ? "Open the chat"
+                        ? chatAsks[0].build
+                          ? "Open the session in Build"
+                          : "Open the chat"
                         : agentAsks.length === 0 && paneAsks.length > 0
                           ? "Open Build"
                           : "Open the Agents page"}{" "}

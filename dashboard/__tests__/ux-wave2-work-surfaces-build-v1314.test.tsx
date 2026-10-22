@@ -209,18 +209,8 @@ describe("One name for a terminal: the rail says Terminals / New terminal", () =
   });
 });
 
-describe("Canvas shape: the floating button is 'New terminal', not 'Add'", () => {
-  it("no button is named just 'Add'; the floating door opens a terminal", async () => {
-    localStorage.setItem(SHAPE_KEY, "canvas");
-    render(<TerminalsPage />);
-    await screen.findByTestId("shape-rail");
-    expect(screen.queryByRole("button", { name: /^\s*Add\s*$/ })).toBeNull();
-    const floating = await screen.findByTitle("Open a new terminal");
-    expect(floating.textContent ?? floating.getAttribute("aria-label") ?? "").toMatch(/New terminal/);
-    fireEvent.click(floating);
-    await waitFor(() => expect(api.posts.filter((p) => p.path === "/terminals")).toHaveLength(1));
-  });
-});
+// v1.369.0: the canvas (and its floating "New terminal" button) is gone; a
+// saved "canvas" opens the IJ harness view (ij-harness-switch-v1369).
 
 describe("source: PaneRail carries no 'New pane' / 'Panes' user words", () => {
   it("the rail's visible strings say terminal", () => {

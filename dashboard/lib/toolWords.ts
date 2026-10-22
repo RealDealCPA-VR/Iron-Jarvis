@@ -132,6 +132,14 @@ export function isBuiltinBrowserTool(tool: string): boolean {
  *  bell share. */
 export const PLAN_TOOL = "approve_plan";
 
+/** v1.369.0 (IJ harness Phase 6): a Build session's plan door (Claude
+ *  Code's ExitPlanMode, daemon harness/session_tools.py): the session asks to
+ *  leave plan mode and start working on the plan it shows. Once-only on every
+ *  surface — Allow once or Deny, never "Always" (the daemon cards it alone, in
+ *  every posture). Its arguments may be EMPTY: the plan is then the reply the
+ *  user read above the card. */
+export const EXIT_PLAN_TOOL = "exit_plan_mode";
+
 /** v1.358.0 (wave 8, lane 8C): the call to one of the user's saved web
  *  services (integrations/tools.RestCallTool, v1.357.0 G84). The ONE place
  *  its name is written on the dashboard: the approval card's words above, the

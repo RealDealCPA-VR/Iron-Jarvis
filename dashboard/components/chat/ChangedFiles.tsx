@@ -105,6 +105,10 @@ export interface TurnChangesArgs {
   since: number | string;
   until?: number | string;
   paths?: string[];
+  /** v1.369.0: whose undo journal to read — "build:<id>" for a Build
+   *  session's turn (its tool calls run under its own id). Absent = the
+   *  chat's ("chat"), exactly as before. */
+  sessionId?: string;
 }
 
 /** The rows plus whether the daemon listed only the first files. */
@@ -122,6 +126,7 @@ export async function fetchTurnChangeSet(args: TurnChangesArgs): Promise<TurnCha
   const body: Record<string, unknown> = { since: iso(args.since) };
   if (args.until !== undefined) body.until = iso(args.until);
   if (args.paths && args.paths.length) body.paths = args.paths;
+  if (args.sessionId) body.session_id = args.sessionId;
   const raw = await post<unknown>("/chat/changes", body);
   const more =
     !!raw &&

@@ -37,16 +37,20 @@ export const ALWAYS_EXACT = "Always allow exactly this";
 
 /** Where the wider answer applies: the open chat, or the agent run that
  *  asked (the session page, a project's task, the mission screen, the bell). */
-export type ApprovalScope = "chat" | "run";
+export type ApprovalScope = "chat" | "run" | "session";
 
 /** "Allow for this chat" / "Allow for this run": the daemon's `conversation`
  *  answer, named for where it applies. */
 export function scopeLabel(scope: ApprovalScope): string {
+  // v1.369.0: a Build session's card (the daemon's `conversation` answer
+  // keeps the grant on the session).
+  if (scope === "session") return "Allow for this session";
   return scope === "run" ? "Allow for this run" : "Allow for this chat";
 }
 
 /** The scope's own noun, for the card's explanation ("this chat" / "this run"). */
 export function scopeNoun(scope: ApprovalScope): string {
+  if (scope === "session") return "this session";
   return scope === "run" ? "this run" : "this chat";
 }
 

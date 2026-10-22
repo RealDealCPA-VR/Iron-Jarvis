@@ -1,18 +1,20 @@
 "use client";
 
-// Multi-terminal workspace: a FREE-FORM canvas of live xterm.js terminals on the
-// left/center (each pane is dragged by its header and resized from its edges,
-// like windows on a desktop), and a directory tree on the right for picking a
-// project folder to open a terminal in. xterm is dynamically imported (no SSR).
+// Build (v1.369.0): two views behind one header switch.
+//  - TERMINALS: the rail of live xterm.js terminals (every terminal with its
+//    state, one in focus) and the folder / files panel on the right.
+//  - IJ HARNESS: coding sessions (components/harness/IjHarnessView) — sessions
+//    grouped by folder, the conversation in the middle, its plan / terminal /
+//    changes / browser / files beside it.
+// The free-form canvas is gone (IJ harness plan Phase 6); a window that had it
+// saved opens the IJ harness view. xterm is dynamically imported (no SSR).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { Rnd } from "react-rnd";
 import {
-  LayoutGrid,
+  Bot,
   Loader2,
   MessageSquare,
-  PanelLeft,
   PanelLeftOpen,
   PanelRightClose,
   Plus,
@@ -49,12 +51,13 @@ import { disposePaneHost, retainPaneHosts } from "@/components/terminal/paneHost
 import { PANE_TOGGLE_PLACE, PANE_TOGGLE_SLOT } from "@/components/terminal/paneViewToggle";
 import { paneFrameClass } from "@/components/terminal/paneFrame";
 import {
-  PaneStateSummary,
   displayState,
   resolveState,
   type PaneActivity,
   type PaneState,
 } from "@/components/terminal/PaneState";
+import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
+import { viewFromSaved, type BuildView } from "@/lib/buildSessions";
 
 // xterm only runs in the browser — never during SSR / `next build`.
 const TerminalPane = dynamic(
@@ -85,8 +88,18 @@ const PaneChat = dynamic(
   },
 );
 
-// A pane's position + size on the free-form canvas.
-type Rect = { x: number; y: number; width: number; height: number };
+// The IJ harness view (v1.369.0): browser only, loaded when it is first shown.
+const IjHarnessView = dynamic(
+  () => import("@/components/harness/IjHarnessView").then((m) => m.IjHarnessView),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="grid h-48 place-items-center text-zinc-600">
+        <Loader2 size={18} className="animate-spin" />
+      </div>
+    ),
+  },
+);
 
 // What a pane is SHOWING: the live terminal (default) or the pane chat.
 // Persisted per pane id under `ij.pane.view.<paneId>` — only ever written on
@@ -95,7 +108,9 @@ type PaneView = "terminal" | "chat";
 
 const paneViewKey = (id: string) => `${PANE_VIEW_PREFIX}${id}`;
 
-/** Rail or canvas. Its own key — "ij_term_layout" is the RECT map. */
+/** Which view Build shows: "rail" (Terminals) or "harness" (IJ harness).
+ *  v1.369.0: a saved "canvas" (the retired free-form layout) opens the IJ
+ *  harness view (lib/buildSessions `viewFromSaved`). */
 const SHAPE_KEY = "ij.build.shape";
 
 /** The folder this window last worked in (v1.337.2): the last folder picked
@@ -103,21 +118,6 @@ const SHAPE_KEY = "ij.build.shape";
  *  there when nothing is picked, so a restart or an update does not send the
  *  user back through the folder tree to the project they were just in. */
 const BUILD_FOLDER_KEY = "ij.build.folder";
-
-// Cascading default (fallback only) so freshly opened panes stagger.
-function cascadeRect(i: number): Rect {
-  return { x: 24 + (i % 5) * 34, y: 24 + (i % 5) * 34, width: 620, height: 380 };
-}
-
-// Axis-aligned rectangle overlap test (a small gutter keeps panes from touching).
-function rectsOverlap(a: Rect, b: Rect, gutter = 6): boolean {
-  return (
-    a.x < b.x + b.width + gutter &&
-    a.x + a.width + gutter > b.x &&
-    a.y < b.y + b.height + gutter &&
-    a.y + a.height + gutter > b.y
-  );
-}
 
 /** The Build side panel's two tabs (v1.329.0: plain text tabs). */
 const BUILD_PANEL_TABS = [
@@ -138,27 +138,51 @@ export default function TerminalsPage() {
     "/terminals/activity",
     2500,
   );
-  // HOW BUILD IS LAID OUT (v1.218.0). "rail" is a list of every pane with its
-  // live state and ONE pane in focus; "canvas" is the free-form drag-and-drop
-  // workspace Build has always been. The rail is the default because it is the
-  // shape the state work was for — but the canvas is not deleted: seeing three
-  // panes at once is a real way to work, and taking it away to add a list would
-  // trade one workflow for another rather than adding one.
-  const [shape, setShape] = useState<"rail" | "canvas">("rail");
+  // WHICH VIEW (v1.218.0 the rail; v1.369.0 the IJ harness). "rail" lists
+  // every terminal with its live state and ONE in focus; "harness" is the
+  // coding sessions. The free-form canvas was retired in v1.369.0 (the IJ
+  // harness took its place in the switch), so a saved "canvas" opens the
+  // harness. A link to a session (`?session=<id>`) opens the harness on it; a
+  // link to a terminal (`?focus=<id>`) opens the rail on it.
+  const [shape, setShape] = useState<BuildView>("rail");
+  const [linkSession, setLinkSession] = useState<string | null>(null);
   useEffect(() => {
+    let params: URLSearchParams | null = null;
     try {
-      const saved = window.localStorage.getItem(SHAPE_KEY);
-      if (saved === "canvas" || saved === "rail") setShape(saved);
+      params = new URLSearchParams(window.location.search);
+    } catch {
+      params = null;
+    }
+    const session = params?.get("session") ?? null;
+    if (session) {
+      setLinkSession(session);
+      setShape("harness");
+      return;
+    }
+    if (params?.get("focus")) return; // a terminal link: the rail
+    try {
+      setShape(viewFromSaved(window.localStorage.getItem(SHAPE_KEY)));
     } catch {
       /* private mode / blocked storage — the default stands */
     }
   }, []);
-  const chooseShape = useCallback((next: "rail" | "canvas") => {
+  const chooseShape = useCallback((next: BuildView) => {
     setShape(next);
     try {
       window.localStorage.setItem(SHAPE_KEY, next);
     } catch {
       /* the choice still applies to this session */
+    }
+    if (next === "rail") {
+      // The session link belongs to the harness view; the rail's address is
+      // plain Build (the harness puts the session back when it opens).
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("session");
+        window.history.replaceState(window.history.state, "", url.toString());
+      } catch {
+        /* no history API */
+      }
     }
   }, []);
 
@@ -345,24 +369,6 @@ export default function TerminalsPage() {
     [terminals, paneActivity, unseenTermOutput, paneOverrides, chatStatus, cliLabel],
   );
 
-  /** The summary's rows. Built from the SAME resolve the panes use, so the
-   *  strip can never disagree with the chip on the pane it points at. */
-  const paneSummary = useMemo(
-    () =>
-      terminals
-        .filter((t) => t.alive)
-        .map((t) => {
-          const a = paneActivity.get(t.id);
-          return {
-            id: t.id,
-            name: paneOverrides[t.id]?.name ?? a?.name ?? null,
-            state: resolveState(a?.state, Boolean(unseenTermOutput[t.id])),
-          };
-        })
-        .filter((p) => p.state !== "unknown" && p.state !== "idle"),
-    [terminals, paneActivity, unseenTermOutput, paneOverrides],
-  );
-
   const viewsRef = useRef<Record<string, PaneView>>({});
   viewsRef.current = views;
 
@@ -430,81 +436,13 @@ export default function TerminalsPage() {
     }, TERM_PEEK_QUIET_MS);
   }, []);
 
-  // Per-terminal free-form layout (position + size), persisted to localStorage.
-  const [layout, setLayout] = useState<Record<string, Rect>>({});
-  // Stacking order — focusing/dragging a pane bumps it to the top. zTop is a
-  // monotonic counter handed out as the next-highest z-index.
-  const [zOrder, setZOrder] = useState<Record<string, number>>({});
-  const zTop = useRef(1);
-  const hydrated = useRef(false); // don't clobber stored layout before we read it
-  const canvasRef = useRef<HTMLDivElement | null>(null);
-
   // Seed persisted UI state on mount (client-only — no localStorage during SSR).
   useEffect(() => {
     setTreeCollapsed(localStorage.getItem("ij_term_tree_collapsed") === "1");
-    try {
-      const raw = localStorage.getItem("ij_term_layout");
-      if (raw) {
-        const parsed = JSON.parse(raw) as unknown;
-        if (parsed && typeof parsed === "object") {
-          setLayout(parsed as Record<string, Rect>);
-        }
-      }
-    } catch {
-      /* bad JSON / private mode — start clean */
-    }
-    hydrated.current = true;
   }, []);
 
-  // Persist the whole layout map whenever it changes (after hydration).
-  useEffect(() => {
-    if (!hydrated.current) return;
-    try {
-      localStorage.setItem("ij_term_layout", JSON.stringify(layout));
-    } catch {
-      /* private mode */
-    }
-  }, [layout]);
-
-  // Find a FREE (non-overlapping, in-bounds) slot for a w×h pane given the rects
-  // already placed — scans a coarse grid, falls back to a cascade only if the
-  // canvas is full (the user can Tidy or resize to make room). This is what
-  // keeps freshly-opened panes from spawning on top of existing ones.
-  const findFreeSlot = useCallback((placed: Rect[], w: number, h: number): Rect => {
-    const canvas = canvasRef.current;
-    const cw = canvas?.clientWidth ?? 1200;
-    const ch = canvas?.clientHeight ?? 640;
-    const step = 28;
-    for (let y = 12; y + h <= ch; y += step) {
-      for (let x = 12; x + w <= cw; x += step) {
-        const cand: Rect = { x, y, width: w, height: h };
-        if (!placed.some((p) => rectsOverlap(cand, p))) return cand;
-      }
-    }
-    return cascadeRect(placed.length);
-  }, []);
-
-  // Ensure every live terminal has a rect — fill missing ids with a FREE slot so
-  // re-attached panes on load don't overlap (never mutate during render).
-  useEffect(() => {
-    setLayout((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      const placed: Rect[] = Object.values(next);
-      terminals.forEach((t) => {
-        if (!next[t.id]) {
-          const r = findFreeSlot(placed, 620, 380);
-          next[t.id] = r;
-          placed.push(r);
-          changed = true;
-        }
-      });
-      return changed ? next : prev;
-    });
-  }, [terminals, findFreeSlot]);
-
-  // Seed each pane's persisted view as it appears (mirrors the layout fill
-  // above — never during render, localStorage is client-only). Only a stored
+  // Seed each pane's persisted view as it appears (never during render,
+  // localStorage is client-only). Only a stored
   // "chat" flips anything; everything else stays the terminal default, and a
   // pane never toggled writes NOTHING back.
   useEffect(() => {
@@ -649,12 +587,10 @@ export default function TerminalsPage() {
     setTreeTab(tab);
   }
 
-  // Focus + raise a pane to the front of the stack.
   /** The pane the rail is showing (v1.218.0).
    *
-   *  On the canvas, "nothing focused" is a fine state — every pane is on screen
-   *  regardless. In the rail it is not: focus decides what is VISIBLE, so a
-   *  null would render an empty workspace. That is not hypothetical — it is
+   *  In the rail, focus decides what is VISIBLE, so a null would render an
+   *  empty workspace. That is not hypothetical — it is
    *  every page load (focus starts null) and every close of the focused pane
    *  (it resets to null). Falling back to the first live pane means the rail
    *  always has something in it, and the fallback is derived rather than
@@ -695,50 +631,20 @@ export default function TerminalsPage() {
     [notePaneOverride],
   );
 
+  // Focus a terminal (the rail shows the focused one).
   const bringToFront = useCallback((id: string) => {
     setFocusedId(id);
-    zTop.current += 1;
-    const z = zTop.current;
-    setZOrder((prev) => ({ ...prev, [id]: z }));
   }, []);
 
-  // Merge a position/size patch into a pane's rect (drag = x/y, resize = all).
-  const setRect = useCallback((id: string, patch: Partial<Rect>) => {
-    setLayout((prev) => ({
-      ...prev,
-      [id]: { ...(prev[id] ?? cascadeRect(0)), ...patch },
-    }));
-  }, []);
-
-  // The rect to render a pane at — persisted layout, else a cascading default.
-  const rectFor = (t: TerminalInfo, i: number): Rect => layout[t.id] ?? cascadeRect(i);
-
-  // Re-tile every pane into a neat 2-column grid that fits the canvas — the
-  // escape hatch when the free-form layout gets messy.
-  function tidy() {
-    if (terminals.length === 0) return;
-    const canvas = canvasRef.current;
-    const cols = 2;
-    const gap = 16;
-    const pad = 16;
-    const w = canvas?.clientWidth ?? 1200;
-    const h = canvas?.clientHeight ?? 640;
-    const rows = Math.ceil(terminals.length / cols) || 1;
-    const cellW = Math.floor((w - pad * 2 - gap * (cols - 1)) / cols);
-    const cellH = Math.floor((h - pad * 2 - gap * (rows - 1)) / rows);
-    const next: Record<string, Rect> = {};
-    terminals.forEach((t, i) => {
-      const c = i % cols;
-      const r = Math.floor(i / cols);
-      next[t.id] = {
-        x: pad + c * (cellW + gap),
-        y: pad + r * (cellH + gap),
-        width: Math.max(280, cellW),
-        height: Math.max(200, cellH),
-      };
-    });
-    setLayout(next);
-  }
+  /** From the IJ harness view's Terminals group: open that terminal in the
+   *  Terminals view, through the same focus the rail uses. */
+  const openInTerminals = useCallback(
+    (id: string) => {
+      bringToFront(id);
+      chooseShape("rail");
+    },
+    [bringToFront, chooseShape],
+  );
 
   // Re-attach to existing sessions + load the shell list on mount.
   useEffect(() => {
@@ -779,17 +685,6 @@ export default function TerminalsPage() {
         const target = focusId ? alive.find((t) => t.id === focusId) : undefined;
         if (target) {
           setFocusedId(target.id);
-          zTop.current += 1;
-          const z = zTop.current;
-          setZOrder((prev) => ({ ...prev, [target.id]: z }));
-          const cw = canvasRef.current?.clientWidth ?? 1200;
-          setLayout((prev) => {
-            const cur = prev[target.id] ?? cascadeRect(0);
-            return {
-              ...prev,
-              [target.id]: { ...cur, x: Math.max(24, Math.round((cw - cur.width) / 2)), y: 24 },
-            };
-          });
         } else {
           setFocusedId(alive[0]?.id ?? null);
         }
@@ -837,7 +732,7 @@ export default function TerminalsPage() {
   }, []);
 
   const addTerminal = useCallback(
-    async (cwd?: string | null, recipe?: string | null) => {
+    async (cwd?: string | null, recipe?: string | null): Promise<TerminalInfo | null> => {
       setBusy(true);
       setError(null);
       try {
@@ -860,20 +755,13 @@ export default function TerminalsPage() {
           recipe: recipe ?? undefined,
         });
         setTerminals((prev) => [...prev, info]);
-        // Place the new pane in a FREE slot so it never spawns on top of another,
-        // and raise it to the front.
-        setLayout((prev) => ({
-          ...prev,
-          [info.id]: findFreeSlot(Object.values(prev), 620, 380),
-        }));
-        zTop.current += 1;
-        const z = zTop.current;
-        setZOrder((prev) => ({ ...prev, [info.id]: z }));
         setFocusedId(info.id);
         setOffline(false);
+        return info;
       } catch (e) {
         if (e instanceof ApiError && e.status === 0) setOffline(true);
         else setError(e instanceof ApiError ? e.message : String(e));
+        return null;
       } finally {
         setBusy(false);
       }
@@ -887,12 +775,9 @@ export default function TerminalsPage() {
     (pane: { id: string }) => {
       const info = { alive: true, ...pane } as unknown as TerminalInfo;
       setTerminals((prev) => (prev.some((t) => t.id === info.id) ? prev : [...prev, info]));
-      setLayout((prev) =>
-        prev[info.id] ? prev : { ...prev, [info.id]: findFreeSlot(Object.values(prev), 620, 380) },
-      );
       bringToFront(info.id);
     },
-    [findFreeSlot, bringToFront],
+    [bringToFront],
   );
 
   const closeTerminal = useCallback((id: string) => {
@@ -911,100 +796,172 @@ export default function TerminalsPage() {
     });
   }, []);
 
+  /** ONE terminal body, drawn by the rail AND by a Build session's terminal
+   *  tab (the IJ harness view): the page's own TerminalPane with the page's
+   *  own state (names, launches, activity, accounts, writers, output). The
+   *  pane host keeps its xterm and socket whichever of the two shows it. */
+  const renderTerminalPane = (
+    t: TerminalInfo,
+    o: { focused: boolean; parked: boolean; reserveViewToggle: boolean; onClose: () => void },
+  ) => {
+    const act = paneActivity.get(t.id);
+    const paneState: PaneState = resolveState(act?.state, Boolean(unseenTermOutput[t.id]));
+    return (
+      <TerminalPane
+        info={t}
+        focused={o.focused}
+        parked={o.parked}
+        reserveViewToggle={o.reserveViewToggle}
+        paneName={paneOverrides[t.id]?.name ?? act?.name}
+        paneState={paneState}
+        agentCli={paneOverrides[t.id]?.cli ?? act?.agent_cli}
+        paneStateLine={act?.state_line}
+        onRenamed={(name) => notePaneOverride(t.id, { name: name || undefined })}
+        onLaunched={(cli) => notePaneOverride(t.id, { cli })}
+        onLaunchWithCapabilities={(cli) => void addTerminal(t.cwd, cli)}
+        onOpenedPane={adoptPane}
+        liveAccounts={livePaneAccounts(t, act)}
+        paneLimit={paneLimitOf(act)}
+        paneResumeFailed={resumeFailedOf(act)}
+        paneSignInNeeded={signInNeededOf(act)}
+        paneSignedIn={signedInOf(act)}
+        onFocus={() => bringToFront(t.id)}
+        onClose={o.onClose}
+        onWriterReady={(w) => registerWriter(t.id, w)}
+        onOutput={(chunk) => noteTermOutput(t.id, chunk)}
+        models={models}
+        aiClis={aiClis}
+        skills={skills}
+        otherTerminals={terminals.map((x) => ({
+          id: x.id,
+          shell: x.shell,
+          cwd: x.cwd,
+        }))}
+      />
+    );
+  };
+
+  /** What a Build session's terminal tab borrows: the live list, the page's
+   *  own add path, and the body above. */
+  const sessionTerminal: SessionTerminalApi = {
+    find: (id) => terminals.find((t) => t.id === id && t.alive !== false) ?? null,
+    open: (cwd) => addTerminal(cwd),
+    render: (info, { parked }) =>
+      renderTerminalPane(info, {
+        focused: !parked,
+        parked,
+        reserveViewToggle: false,
+        onClose: () => {
+          if (window.confirm(`End the terminal in ${info.cwd}? Its live shell session closes.`)) {
+            closeTerminal(info.id);
+          }
+        },
+      }),
+  };
+
   return (
     <PageShell>
       <Reveal>
         <PageHeader
           title="Build"
-          // v1.314.0 (UX wave 2): names the button that exists ("hit +"
-          // pointed at nothing in the default rail shape).
-          subtitle="Live terminals on this PC. Press New terminal to open one, or pick a project folder and open a terminal in it. Switch to Canvas to drag and resize them freely."
+          // v1.369.0: the two views the switch beside it names.
+          subtitle={
+            shape === "harness"
+              ? "Coding sessions that work in a folder and keep going when you leave. Start one, or open a terminal from the list."
+              : "Live terminals on this PC. Press New terminal to open one, or pick a project folder and open a terminal in it."
+          }
           actions={
             <div className="flex flex-wrap items-center gap-2">
-              {/* Back to the rail. Only on the canvas — in the rail its own
-                  footer holds the other direction, so the switch always lives
-                  in the shape you are leaving. */}
-              {shape === "canvas" && (
-                <button
-                  type="button"
-                  data-testid="shape-rail"
-                  onClick={() => chooseShape("rail")}
-                  title="Rail — every terminal in a list with its state, one in focus"
-                  className="btn-ghost flex items-center gap-1.5 py-1.5 text-[13px]"
-                >
-                  <PanelLeft size={14} />
-                  Rail
-                </button>
+              {/* THE SWITCH (v1.369.0): Terminals | IJ harness. Plain text
+                  tabs like the side panel's, the open one in ink. */}
+              <div
+                role="tablist"
+                aria-label="Build view"
+                data-testid="build-view-switch"
+                className="flex items-center gap-1 rounded-lg bg-white/[0.04] p-0.5"
+              >
+                {(
+                  [
+                    { value: "rail", label: "Terminals", icon: <SquareTerminal size={13} aria-hidden /> },
+                    { value: "harness", label: "IJ harness", icon: <Bot size={13} aria-hidden /> },
+                  ] as const
+                ).map((v) => {
+                  const selected = shape === v.value;
+                  return (
+                    <button
+                      key={v.value}
+                      type="button"
+                      role="tab"
+                      aria-selected={selected}
+                      tabIndex={selected ? 0 : -1}
+                      data-testid={v.value === "rail" ? "build-view-terminals" : "build-view-harness"}
+                      onClick={() => chooseShape(v.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+                        e.preventDefault();
+                        const next = v.value === "rail" ? "harness" : "rail";
+                        chooseShape(next);
+                        const sel = next === "rail" ? "build-view-terminals" : "build-view-harness";
+                        document.querySelector<HTMLButtonElement>(`[data-testid="${sel}"]`)?.focus();
+                      }}
+                      className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
+                        selected ? "bg-white/[0.08] font-medium text-zinc-100" : "text-zinc-500 hover:text-zinc-200"
+                      }`}
+                    >
+                      {v.icon}
+                      {v.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {shape === "rail" && (
+                <>
+                  <span className="mx-1 h-5 w-px bg-white/10" />
+                  {/* v1.329.0 (calm chat wave 8): a quiet sentence-case label and a
+                      borderless select that fills on hover, like the rail's own
+                      footer, not a boxed field under an uppercase caption. */}
+                  <label className="flex items-center gap-1.5 text-[13px] text-zinc-500">
+                    <SquareTerminal size={14} className="text-zinc-500" />
+                    Shell
+                  </label>
+                  <select
+                    aria-label="Shell"
+                    data-testid="header-shell"
+                    value={shell}
+                    onChange={(e) => setShell(e.target.value)}
+                    disabled={shells.length === 0}
+                    className="h-8 w-auto cursor-pointer rounded-lg border-0 bg-transparent pl-2 pr-1 text-[13px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {shells.length === 0 && <option value="">default</option>}
+                    {shells.map((s) => (
+                      <option key={s.name} value={s.name}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                  {/* v1.329.0 (calm chat): a quiet ghost, not a glowing accent
+                      slab; wave 8 dropped its hairline box too, so it reads like
+                      the rail's own "New terminal" and fills only on hover. */}
+                  <button
+                    type="button"
+                    data-testid="header-new-terminal"
+                    onClick={() => addTerminal(newFolder)}
+                    disabled={busy}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {busy ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Plus size={14} />
+                    )}
+                    New terminal
+                  </button>
+                </>
               )}
-              {/* Tidy — re-tile every pane into a neat grid when it gets messy. */}
-              {shape === "canvas" && (
-              <button
-                type="button"
-                onClick={tidy}
-                disabled={terminals.length === 0}
-                title="Tidy — re-tile all terminals into a neat grid"
-                className="btn-ghost flex items-center gap-1.5 py-1.5 text-[13px] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <LayoutGrid size={14} className="text-accent-soft/80" />
-                Tidy
-              </button>
-              )}
-              <span className="mx-1 h-5 w-px bg-white/10" />
-              {/* v1.329.0 (calm chat wave 8): a quiet sentence-case label and a
-                  borderless select that fills on hover, like the rail's own
-                  footer, not a boxed field under an uppercase caption. */}
-              <label className="flex items-center gap-1.5 text-[13px] text-zinc-500">
-                <SquareTerminal size={14} className="text-zinc-500" />
-                Shell
-              </label>
-              <select
-                aria-label="Shell"
-                data-testid="header-shell"
-                value={shell}
-                onChange={(e) => setShell(e.target.value)}
-                disabled={shells.length === 0}
-                className="h-8 w-auto cursor-pointer rounded-lg border-0 bg-transparent pl-2 pr-1 text-[13px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {shells.length === 0 && <option value="">default</option>}
-                {shells.map((s) => (
-                  <option key={s.name} value={s.name}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-              {/* v1.329.0 (calm chat): a quiet ghost, not a glowing accent
-                  slab; wave 8 dropped its hairline box too, so it reads like
-                  the rail's own "New terminal" and fills only on hover. */}
-              <button
-                type="button"
-                data-testid="header-new-terminal"
-                onClick={() => addTerminal(newFolder)}
-                disabled={busy}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {busy ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
-                  <Plus size={14} />
-                )}
-                New terminal
-              </button>
             </div>
           }
         />
       </Reveal>
-
-      {/* NEVER HUNT FOR THE STUCK ONE — the CANVAS's version (v1.217.0, scoped
-          to the canvas in v1.218.0). One line under the header naming the panes
-          that stopped and need a human, each a button that brings one to the
-          front. In the rail this is redundant: the list already shows every
-          pane's state and carries its own jump, and saying it twice is how a
-          surface teaches people to stop reading it. */}
-      {shape === "canvas" && paneSummary.length > 0 && (
-        <Reveal>
-          <PaneStateSummary panes={paneSummary} onFocus={bringToFront} />
-        </Reveal>
-      )}
 
       {offline && (
         <Reveal>
@@ -1025,19 +982,29 @@ export default function TerminalsPage() {
         </Reveal>
       )}
 
+      {shape === "harness" ? (
+        <Reveal>
+          <IjHarnessView
+            initialSession={linkSession}
+            terminals={railPanes}
+            onOpenTerminal={openInTerminals}
+            defaultFolder={newFolder}
+            terminal={sessionTerminal}
+          />
+        </Reveal>
+      ) : (
       <Reveal>
         <div className="flex flex-col gap-5 lg:flex-row">
           {/* THE RAIL (v1.218.0) — Build's spine. Every pane in one column with
               its live state; clicking one brings it into focus in the workspace
-              beside it. Hidden on the canvas, which has its own way of showing
-              you everything at once. */}
+              beside it. */}
           {/* v1.315.0 (phone): the rail's full height applied at EVERY width,
               so at 390 px the first screen was an empty PANES column and the
               stage sat a screen below. Below lg the rail is now capped
               (max-h-56; PaneRail's own list scrolls inside it); the full
               height — minus the demo strip, like every full-height module —
               is lg-only. Layout only: no terminal behaviour changes. */}
-          {shape === "rail" && !loading && (
+          {!loading && (
             <div className="flex w-full max-h-56 shrink-0 flex-col lg:w-56 lg:max-h-none lg:h-[calc(100vh-12rem-var(--ij-strip-h,0px))] lg:min-h-[480px] xl:w-64">
               <PaneRail
                 panes={railPanes}
@@ -1047,25 +1014,12 @@ export default function TerminalsPage() {
                 onRename={renamePane}
                 onNew={() => addTerminal(newFolder)}
                 busy={busy}
-                footer={
-                  <button
-                    type="button"
-                    data-testid="shape-canvas"
-                    onClick={() => chooseShape("canvas")}
-                    title="Free-form canvas — drag and resize terminals, several visible at once"
-                    className={RAIL_FOOTER_BUTTON}
-                  >
-                    <LayoutGrid size={14} className="shrink-0" />
-                    Canvas
-                  </button>
-                }
               />
             </div>
           )}
 
-          {/* The workspace. On the canvas it is a free-form surface of movable
-              panes; in the rail it is one box that every pane fills, with the
-              focused one visible. */}
+          {/* The workspace: one box that every pane fills, with the focused
+              one visible. */}
           <div className="min-w-0 flex-1">
             {loading ? (
               <Card>
@@ -1073,7 +1027,6 @@ export default function TerminalsPage() {
               </Card>
             ) : (
               <div
-                ref={canvasRef}
                 className="relative w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900/40"
                 // v1.315.0: subtracts the demo strip like the rail beside it
                 // (they must end on the same line at lg); 480 px floor kept
@@ -1102,8 +1055,7 @@ export default function TerminalsPage() {
                     </Empty>
                   </div>
                 ) : (
-                  terminals.map((t, i) => {
-                    const r = rectFor(t, i);
+                  terminals.map((t) => {
                     // A pane with no cwd can't ground a chat — force terminal
                     // view even if a stale "chat" key survives in storage.
                     const view: PaneView = t.cwd ? (views[t.id] ?? "terminal") : "terminal";
@@ -1113,17 +1065,6 @@ export default function TerminalsPage() {
                     // OUTRANKS mere streaming (it blocks the turn for up to
                     // 180s and needs the user). Terminal side only while the
                     // chat is showing and unseen output arrived.
-                    // WHAT THE AGENT IN THIS PANE IS DOING (v1.217.0). The
-                    // daemon reports the settled state as `idle`; whether the
-                    // user has LOOKED is a fact about this browser, and the
-                    // page already tracks it for the peek strip — so the
-                    // idle→done downgrade reuses that rather than inventing a
-                    // second notion of seen-ness on the server.
-                    const act = paneActivity.get(t.id);
-                    const paneState: PaneState = resolveState(
-                      act?.state,
-                      Boolean(unseenTermOutput[t.id]),
-                    );
                     const status = chatStatus[t.id];
                     const chatBadge =
                       view !== "chat" && status
@@ -1181,13 +1122,28 @@ export default function TerminalsPage() {
                           TERM_PEEK_QUIET_MS)
                         ? peek.lastLine
                         : null;
-                    // ONE pane body, TWO frames (v1.218.0). Everything below
-                    // — both layers, the toggle, the peek strip, the close
-                    // confirm — is identical in the rail and on the canvas;
-                    // only what holds it differs. Building it once is not
-                    // tidiness: the two frames would drift, and the drift
-                    // would land in the pane the user works in.
-                    const inner = (
+                    // RAIL: every pane fills the SAME box and only the focused
+                    // one is visible. Not `display:none` and not an unmount —
+                    // both are forbidden here for the reason v1.190.0 records:
+                    // a terminal whose holder has no size wraps its replay into
+                    // a default-sized buffer that no later fit can re-wrap, so
+                    // a hidden pane must keep a real box. `visibility` also
+                    // takes the hidden panes out of hit-testing and focus, so
+                    // they cannot sit invisibly over the live one.
+                    // v1.248.0: the hidden panes' TERMINALS also park in the
+                    // paneHost lot (TerminalPane `parked`), so only the focused
+                    // one renders or holds a GPU context; this box keeps its
+                    // size, so an unpark fits to the real width.
+                    return (
+                      <div
+                        key={t.id}
+                        data-testid={`rail-pane-${t.id}`}
+                        className="absolute inset-0"
+                        style={{
+                          visibility: activeId === t.id ? "visible" : "hidden",
+                          zIndex: activeId === t.id ? 2 : 1,
+                        }}
+                      >
                         <div className="relative h-full w-full">
                           {/* Terminal layer — ALWAYS mounted. Flipping to chat
                               hides it with visibility (NEVER display:none and
@@ -1204,72 +1160,37 @@ export default function TerminalsPage() {
                             className="h-full w-full"
                             style={{ visibility: view === "chat" ? "hidden" : "visible" }}
                           >
-                            <TerminalPane
-                              info={t}
-                              focused={focusedId === t.id}
-                              parked={shape === "rail" && activeId !== t.id}
-                              reserveViewToggle
-                              paneName={paneOverrides[t.id]?.name ?? act?.name}
-                              draggable={shape === "canvas"}
-                              paneState={paneState}
-                              agentCli={paneOverrides[t.id]?.cli ?? act?.agent_cli}
-                              paneStateLine={act?.state_line}
-                              onRenamed={(name) =>
-                                notePaneOverride(t.id, { name: name || undefined })
-                              }
-                              onLaunched={(cli) => notePaneOverride(t.id, { cli })}
-                              onLaunchWithCapabilities={(cli) => addTerminal(t.cwd, cli)}
-                              onOpenedPane={adoptPane}
-                              liveAccounts={livePaneAccounts(t, act)}
-                              paneLimit={paneLimitOf(act)}
-                              paneResumeFailed={resumeFailedOf(act)}
-                              paneSignInNeeded={signInNeededOf(act)}
-                              paneSignedIn={signedInOf(act)}
-                              onFocus={() => bringToFront(t.id)}
-                              onClose={() => setPendingClose(t.id)}
-                              onWriterReady={(w) => registerWriter(t.id, w)}
-                              onOutput={(chunk) => noteTermOutput(t.id, chunk)}
-                              models={models}
-                              aiClis={aiClis}
-                              skills={skills}
-                              otherTerminals={terminals.map((x) => ({
-                                id: x.id,
-                                shell: x.shell,
-                                cwd: x.cwd,
-                              }))}
-                            />
+                            {renderTerminalPane(t, {
+                              focused: focusedId === t.id,
+                              parked: activeId !== t.id,
+                              reserveViewToggle: true,
+                              onClose: () => setPendingClose(t.id),
+                            })}
                           </div>
 
                           {/* Chat layer — same box, chat grounded in this
-                              pane's folder. Its header carries ij-term-drag so
-                              the pane still drags by its header in chat view;
-                              the pane (not the view) stays the unit of focus,
-                              so the Files tab keeps following this cwd.
-                              SYMMETRIC with the terminal layer: mounted LAZILY
-                              on the first flip to chat, then NEVER unmounted —
-                              only hidden via visibility (never display:none,
-                              never an unmount). PaneChat owns an in-flight
-                              turn's stream and saves; unmounting it mid-turn
-                              leaves the turn finishing in a dead closure whose
-                              late last-write-wins save can erase a newer turn,
-                              or orphans the first exchange if a remount races
-                              the CREATE save. visibility:hidden also drops the
-                              hidden layer out of hit-testing, focus, and
-                              scrolling, so it can't sit invisibly over the
-                              terminal and steal input. */}
+                              pane's folder. The pane (not the view) stays the
+                              unit of focus, so the Files tab keeps following
+                              this cwd. SYMMETRIC with the terminal layer:
+                              mounted LAZILY on the first flip to chat, then
+                              NEVER unmounted — only hidden via visibility
+                              (never display:none, never an unmount). PaneChat
+                              owns an in-flight turn's stream and saves;
+                              unmounting it mid-turn leaves the turn finishing
+                              in a dead closure whose late last-write-wins save
+                              can erase a newer turn, or orphans the first
+                              exchange if a remount races the CREATE save.
+                              visibility:hidden also drops the hidden layer out
+                              of hit-testing, focus, and scrolling, so it can't
+                              sit invisibly over the terminal and steal input. */}
                           {(view === "chat" || chatOpened[t.id]) && (
                             <div
                               data-testid={`chat-layer-${t.id}`}
                               style={{ visibility: view === "chat" ? "visible" : "hidden" }}
-                              className={`absolute inset-0 z-10 flex flex-col overflow-hidden rounded-2xl border bg-ink-900 transition-colors ${paneFrameClass(
-                                focusedId === t.id,
-                                shape === "canvas",
-                              )}`}
+                              className={`absolute inset-0 z-10 flex flex-col overflow-hidden rounded-2xl border bg-ink-900 transition-colors ${paneFrameClass(focusedId === t.id)}`}
                             >
                               <header
-                                className={`flex shrink-0 items-center gap-2 border-b border-white/[0.06] bg-ink-900/60 px-3 py-2 ${
-                                  shape === "canvas" ? "ij-term-drag cursor-move" : ""
-                                }`}
+                                className={`flex shrink-0 items-center gap-2 border-b border-white/[0.06] bg-ink-900/60 px-3 py-2`}
                               >
                                 <MessageSquare
                                   size={13}
@@ -1319,11 +1240,8 @@ export default function TerminalsPage() {
                               just left of their close button
                               (components/terminal/paneViewToggle.ts). Below the
                               header it covered the side chat's right-aligned
-                              bubble. Still ONE element, deliberately outside
-                              every ij-term-drag region, and buttons besides,
-                              which react-rnd's `cancel` already exempts:
-                              clicking it can never start a drag, and the focus
-                              stays on it when the view flips. */}
+                              bubble. ONE element of buttons, so the focus stays
+                              on it when the view flips. */}
                           <div
                             data-testid={`pane-view-toggle-${t.id}`}
                             className={`${PANE_TOGGLE_PLACE} z-20 flex items-center gap-0.5 rounded-lg p-0.5`}
@@ -1352,9 +1270,6 @@ export default function TerminalsPage() {
                               }`}
                             >
                               <SquareTerminal size={12} />
-                              {/* INSIDE the button on purpose: react-rnd's
-                                  cancel="button…" exempts the whole subtree
-                                  from dragging, so the badge inherits it. */}
                               {termBadge ? (
                                 <span
                                   data-testid={`pane-term-badge-${t.id}`}
@@ -1390,10 +1305,8 @@ export default function TerminalsPage() {
                               }`}
                             >
                               <MessageSquare size={12} />
-                              {/* INSIDE the button (drag-exempt via the Rnd
-                                  cancel). Amber pulse = an approval is
-                                  WAITING; accent pulse = the chat is
-                                  streaming a turn. */}
+                              {/* Amber pulse = an approval is WAITING; accent
+                                  pulse = the chat is streaming a turn. */}
                               {chatBadge ? (
                                 <span
                                   data-testid={`pane-chat-badge-${t.id}`}
@@ -1413,11 +1326,8 @@ export default function TerminalsPage() {
                               above both layers (z-20; the visibility-hidden
                               layer is out of hit-testing anyway) and BELOW
                               the pendingClose confirm (z-30 — also gated out
-                              above). A BUTTON so react-rnd's cancel keeps it
-                              drag-exempt; pointer events live only on the
-                              strip itself. Renders ONLY with something true
-                              to say; clicking flips to the view doing the
-                              talking. */}
+                              above). Renders ONLY with something true to say;
+                              clicking flips to the view doing the talking. */}
                           {chatPeek ? (
                             <button
                               type="button"
@@ -1491,86 +1401,9 @@ export default function TerminalsPage() {
                             </div>
                           )}
                         </div>
-                    );
-                    if (shape === "canvas") {
-                      return (
-                        <Rnd
-                          key={t.id}
-                          size={{ width: r.width, height: r.height }}
-                          position={{ x: r.x, y: r.y }}
-                          bounds="parent"
-                          minWidth={280}
-                          minHeight={200}
-                          dragHandleClassName="ij-term-drag"
-                          cancel="button, select, input, textarea, .xterm, .xterm-viewport, .xterm-screen"
-                          style={{ zIndex: zOrder[t.id] ?? 1 }}
-                          onMouseDown={() => bringToFront(t.id)}
-                          onDragStart={() => bringToFront(t.id)}
-                          // Free movement: a pane goes exactly where you drop
-                          // it (windows may overlap — the focused one comes to
-                          // the front). No snap-back; Tidy re-packs the grid.
-                          onDragStop={(_e, d) => setRect(t.id, { x: d.x, y: d.y })}
-                          onResizeStop={(_e, _dir, ref, _delta, pos) =>
-                            setRect(t.id, {
-                              x: pos.x,
-                              y: pos.y,
-                              width: ref.offsetWidth,
-                              height: ref.offsetHeight,
-                            })
-                          }
-                        >
-                          {inner}
-                        </Rnd>
-                      );
-                    }
-                    // RAIL: every pane fills the SAME box and only the focused
-                    // one is visible. Not `display:none` and not an unmount —
-                    // both are forbidden here for the reason v1.190.0 records:
-                    // a terminal whose holder has no size wraps its replay into
-                    // a default-sized buffer that no later fit can re-wrap, so
-                    // a hidden pane must keep a real box. `visibility` also
-                    // takes the hidden panes out of hit-testing and focus, so
-                    // they cannot sit invisibly over the live one.
-                    // v1.248.0: the hidden panes' TERMINALS also park in the
-                    // paneHost lot (TerminalPane `parked`), so only the focused
-                    // one renders or holds a GPU context; this box keeps its
-                    // size, so an unpark fits to the real width.
-                    return (
-                      <div
-                        key={t.id}
-                        data-testid={`rail-pane-${t.id}`}
-                        className="absolute inset-0"
-                        style={{
-                          visibility: activeId === t.id ? "visible" : "hidden",
-                          zIndex: activeId === t.id ? 2 : 1,
-                        }}
-                      >
-                        {inner}
                       </div>
                     );
                   })
-                )}
-
-                {/* Compact floating add button — a small, always-there way to
-                    open a terminal without hunting for the header button. The
-                    rail has "New terminal" in its own footer, so on the rail
-                    this would be the third button doing one job. v1.314.0:
-                    it says "New terminal" too — one name for one thing. */}
-                {shape === "canvas" && (
-                <button
-                  onClick={() => addTerminal(newFolder)}
-                  disabled={busy}
-                  title="Open a new terminal"
-                  data-testid="canvas-new-terminal"
-                  className="absolute bottom-3 right-3 z-[9998] flex items-center gap-1.5 rounded-[10px] border border-white/[0.08] bg-ink-900/85 px-2.5 py-1.5 text-[12px] text-zinc-300 backdrop-blur transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {busy ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <Plus size={13} />
-                  )}
-                  New terminal
-                </button>
                 )}
               </div>
             )}
@@ -1663,7 +1496,7 @@ export default function TerminalsPage() {
                     {/* v1.329.0 (calm chat wave 6): the CALM picker and file
                         list, the same look the chat's project drawer draws,
                         so one file browser has one look across the app. No
-                        card; the terminal canvas beside it stays dark. */}
+                        card; the terminal stage beside it stays dark. */}
                     {treeTab === "folders" ? (
                       <DirectoryTree
                         variant="calm"
@@ -1691,6 +1524,7 @@ export default function TerminalsPage() {
           </div>
         </div>
       </Reveal>
+      )}
     </PageShell>
   );
 }

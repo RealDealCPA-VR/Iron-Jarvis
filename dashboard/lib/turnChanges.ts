@@ -62,7 +62,10 @@ export function turnWindow(m: TurnChangeSource, prevUserAt?: string): TurnChange
 
 /** The cache key: the same for a reply live and reopened. */
 export function turnChangesKey(w: TurnChangesArgs): string {
-  return [String(w.since), w.until === undefined ? "" : String(w.until), ...[...(w.paths ?? [])].sort()].join("\n");
+  const key = [String(w.since), w.until === undefined ? "" : String(w.until), ...[...(w.paths ?? [])].sort()].join("\n");
+  // v1.369.0: a Build session's window is read from its own journal, so its
+  // answer is kept apart from a chat's (a chat's key is unchanged).
+  return w.sessionId ? `${w.sessionId}\n${key}` : key;
 }
 
 const done = new Map<string, TurnChangeSet>();
