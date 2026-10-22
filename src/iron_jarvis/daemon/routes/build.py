@@ -1290,9 +1290,16 @@ def register(app: FastAPI, d: Any) -> None:
         from .chat import archive_thread
 
         await asyncio.to_thread(_session_or_404, thread_id)
-        return await archive_thread(
+        out = await archive_thread(
             engine_of(), thread_id, bool(body is not None and body.stop), noun="session",
         )
+        if isinstance(out, dict):
+            # v1.368.0 review: an archived session's "Resume when ready" wait
+            # ENDS — the wait loop skips archived sessions, so a wait left on
+            # the row came due the moment the session was unarchived, and
+            # the daemon carried on with work the user had put away.
+            await asyncio.to_thread(S.update, engine_of(), thread_id, setup={"account_wait": None})
+        return out
 
     @app.post("/build/sessions/{thread_id}/unarchive")
     def unarchive_build_session(thread_id: str) -> dict[str, Any]:

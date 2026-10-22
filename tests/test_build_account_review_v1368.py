@@ -214,6 +214,24 @@ async def test_a_turn_the_user_stopped_on_the_account_ends_the_wait(app, fake, w
     assert len(beh.calls) == calls and _continuations(app, sid) == [], "the stopped work is not carried on"
 
 
+async def test_archiving_a_session_ends_its_wait(app, fake, work, monkeypatch):
+    """The loop skips archived sessions, so a wait left on an archived row
+    came due the moment it was UNARCHIVED, and the daemon carried on with
+    work the user had put away."""
+    from tests.test_build_sessions_v1367 import asgi
+
+    beh, sid, card, view = await _limit_then_arm(app, fake, work, monkeypatch, park_s=1.0)
+    status, _ = await asgi(app, "POST", f"/build/sessions/{sid}/archive")
+    assert status == 200
+    await asyncio.sleep(1.2)  # the reset passes while it is archived
+    status, _ = await asgi(app, "POST", f"/build/sessions/{sid}/unarchive")
+    assert status == 200
+    assert "account_wait" not in setup_of(app, sid)
+    calls = len(beh.calls)
+    assert await build_routes.resume_due(app.state.d) == []
+    assert len(beh.calls) == calls and _continuations(app, sid) == []
+
+
 async def test_a_turn_iron_proxy_could_not_lease_keeps_the_wait(app, fake, work, monkeypatch):
     """The account never served — Iron-Proxy did not answer the pinned pick —
     so a momentary outage during the user's own turn does not throw the
