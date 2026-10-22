@@ -725,7 +725,9 @@ describe("a new session on a Default account that is at its limit (v1.368.0 ship
     );
     renderSession();
     expect(await screen.findByTestId("account-chip-name")).toHaveTextContent("Work");
-    expect(await screen.findByTestId("account-chip-status")).toHaveTextContent(/^Limit reached · resets /);
+    const status = await screen.findByTestId("account-chip-status");
+    expect(status.textContent).toBe("Limit reached");
+    expect(status.getAttribute("title")).toMatch(/^Limit reached · resets /);
     // Nothing on the screen side picks another account.
     expect(api.calls.some((c) => c.method === "PATCH" || c.path === "/build/sessions/s1/account")).toBe(false);
     await send("Start the page");

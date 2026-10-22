@@ -284,8 +284,15 @@ export function AccountChip({
           that account is at its limit (the daemon's choice, v1.368.0), and
           its first reply is then the limit card. */}
       {warn && line ? (
-        <span data-testid="account-chip-status" className="min-w-0 truncate text-[12px] text-tone-warn">
-          {line.text}
+        <span
+          data-testid="account-chip-status"
+          title={line.text}
+          className="shrink-0 whitespace-nowrap text-[12px] text-tone-warn"
+        >
+          {/* The short words only ("Limit reached"): the reset time is in
+              the tooltip and on the limit card, and a long line here
+              squeezed the session's title to a few letters. */}
+          {line.text.split(" · ")[0]}
         </span>
       ) : null}
       {open ? (
