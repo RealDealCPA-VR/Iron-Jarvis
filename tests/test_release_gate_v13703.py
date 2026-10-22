@@ -165,3 +165,57 @@ def test_gate_a_tag_must_name_the_version_the_code_carries(tmp_path):
     bad = _run_gate(tmp_path / "b", ref_type="tag", ref_name="v9.9.9")
     assert bad["_code"] != 0 and "does not match" in bad["_err"]
     assert bad.get("publish") != "true"
+
+
+# ------------------------------------- the installer check, run for real (review)
+
+
+def _check_script() -> str:
+    job = _wf()["jobs"]["windows-installer"]
+    step = next(s for s in job["steps"] if s.get("name") == "Check the installer files before they are kept")
+    return step["run"].replace("${{ needs.plan.outputs.version }}", "1.2.3")
+
+
+def _built(tmp_path: Path, *, payload: bytes = b"installer bytes") -> Path:
+    """The folder electron-builder really leaves with `--publish never` (the first
+    dry run's `ls`): productName with SPACES, latest.yml naming the dashed name."""
+    import base64
+    import hashlib
+
+    rel = tmp_path / "desktop" / "release"
+    rel.mkdir(parents=True)
+    (rel / "Iron Jarvis Setup 1.2.3.exe").write_bytes(payload)
+    (rel / "Iron Jarvis Setup 1.2.3.exe.blockmap").write_bytes(b"blockmap")
+    sha = base64.b64encode(hashlib.sha512(payload).digest()).decode()
+    (rel / "latest.yml").write_text(
+        "version: 1.2.3\nfiles:\n  - url: Iron-Jarvis-Setup-1.2.3.exe\n"
+        f"    sha512: {sha}\n    size: {len(payload)}\npath: Iron-Jarvis-Setup-1.2.3.exe\n"
+        f"sha512: {sha}\nreleaseDate: '2026-10-22T12:47:00.000Z'\n",
+        encoding="utf-8",
+    )
+    return rel
+
+
+def _run_check(cwd: Path) -> subprocess.CompletedProcess:
+    import sys
+
+    env = {**os.environ, "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}"}
+    return subprocess.run([_bash(), "-eo", "pipefail", "-c", _check_script()], cwd=cwd, env=env,
+                          capture_output=True, text=True, timeout=60)
+
+
+@needs_bash
+def test_the_installer_check_keeps_what_electron_builder_really_writes(tmp_path):
+    rel = _built(tmp_path)
+    proc = _run_check(tmp_path)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    names = sorted(p.name for p in rel.iterdir())
+    assert names == ["Iron-Jarvis-Setup-1.2.3.exe", "Iron-Jarvis-Setup-1.2.3.exe.blockmap", "latest.yml"]
+
+
+@needs_bash
+def test_the_installer_check_refuses_an_installer_latest_yml_does_not_describe(tmp_path):
+    rel = _built(tmp_path)
+    (rel / "Iron Jarvis Setup 1.2.3.exe").write_bytes(b"some other build")
+    proc = _run_check(tmp_path)
+    assert proc.returncode != 0 and "sha512 is not this installer" in proc.stdout + proc.stderr

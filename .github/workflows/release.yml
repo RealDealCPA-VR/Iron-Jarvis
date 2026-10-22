@@ -315,17 +315,33 @@ jobs:
       - name: Build the installer (not published)
         run: powershell -ExecutionPolicy Bypass -File desktop/build-installer.ps1 -SkipDaemon
 
+      # electron-builder writes the files under productName ("Iron Jarvis Setup
+      # X.exe", spaces), while latest.yml names the GitHub-safe
+      # "Iron-Jarvis-Setup-X.exe": its own GitHub publisher uploaded them under
+      # that name, and `--publish never` leaves them as written (the first dry
+      # run of this layout failed here on exactly that). Give them the name
+      # latest.yml uses, then prove the installer kept IS the one latest.yml
+      # describes — the files now reach the release by hand, not inside
+      # electron-builder, so nothing else checks that they belong together.
       - name: Check the installer files before they are kept
         shell: bash
         run: |
           set -euo pipefail
           ver="${{ needs.plan.outputs.version }}"
+          exe="Iron-Jarvis-Setup-$ver.exe"
           cd desktop/release
-          for f in "Iron-Jarvis-Setup-$ver.exe" "Iron-Jarvis-Setup-$ver.exe.blockmap" latest.yml; do
+          for ext in exe exe.blockmap; do
+            if [ ! -e "Iron-Jarvis-Setup-$ver.$ext" ] && [ -e "Iron Jarvis Setup $ver.$ext" ]; then
+              mv "Iron Jarvis Setup $ver.$ext" "Iron-Jarvis-Setup-$ver.$ext"
+            fi
+          done
+          for f in "$exe" "$exe.blockmap" latest.yml; do
             [ -s "$f" ] || { echo "::error::$f was not built"; ls -la; exit 1; }
           done
-          grep -q "^version: $ver\$" latest.yml || { echo "::error::latest.yml does not name $ver"; cat latest.yml; exit 1; }
-          grep -q "sha512:" latest.yml || { echo "::error::latest.yml carries no sha512"; exit 1; }
+          grep -qxF "version: $ver" latest.yml || { echo "::error::latest.yml does not name $ver"; cat latest.yml; exit 1; }
+          grep -qxF "path: $exe" latest.yml || { echo "::error::latest.yml does not name $exe"; cat latest.yml; exit 1; }
+          sum="$(python -c 'import base64,hashlib,sys;h=hashlib.sha512();f=open(sys.argv[1],"rb");[h.update(b) for b in iter(lambda:f.read(1<<20),b"")];print(base64.b64encode(h.digest()).decode())' "$exe")"
+          grep -qxF "sha512: $sum" latest.yml || { echo "::error::latest.yml's sha512 is not this installer's ($sum)"; cat latest.yml; exit 1; }
 
       - name: Keep the installer files for the publish job
         uses: actions/upload-artifact@v4

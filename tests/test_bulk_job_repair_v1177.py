@@ -602,9 +602,18 @@ def test_ordering_has_a_total_tiebreaker():
 def test_the_release_workflow_gates_on_the_suite():
     """v1.176.0 published a green installer while Tests went red 16 minutes
     later, because they are separate workflows running concurrently."""
+    import yaml
+
     wf = (_REPO / ".github/workflows/release.yml").read_text(encoding="utf-8")
-    assert re.search(r"^  suite:", wf, re.M), "no gate job"
-    assert re.search(r"^    needs: suite", wf, re.M), "the installer does not need it"
+    jobs = yaml.safe_load(wf)["jobs"]
+    assert "suite" in jobs and "python" in jobs, "no gate job"
+    # v1.370.3: the installer is BUILT alongside the suite now, so "the
+    # installer needs the suite" moved to "the one job that publishes needs the
+    # suite, every Python shard and the build" (tests/test_release_gate_v13703.py
+    # pins the rest of that rule).
+    needs = jobs["publish"]["needs"]
+    needs = [needs] if isinstance(needs, str) else needs
+    assert {"suite", "python", "windows-installer"} <= set(needs), "publishing does not need the gate"
     assert "uv run pytest" in wf
     # The gate must not be defeated by the pipeline-exit-code trap.
     assert "PIPESTATUS[0]" in wf
