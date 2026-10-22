@@ -528,6 +528,41 @@ def waiting_sessions(engine: Any) -> list[tuple[str, dict[str, Any]]]:
     return out
 
 
+def take_wait(engine: Any, thread_id: str, armed_at: str, account: str) -> bool:
+    """END a "Resume when ready" wait for the continuation that is about to
+    start (v1.368.0 review): in ONE locked write, True when the wait armed at
+    ``armed_at`` for ``account`` is still the session's (it is removed, and
+    the old limit card with it — the continuation's own end writes the next
+    one); False when it is gone — the user cancelled it, chose another account
+    or carried on themselves while the account was being re-checked, or
+    another pass took it. The same lock as :func:`update`, so a Cancel lands
+    either before (nothing starts) or after (the continuation already began).
+    BLOCKING."""
+    from ..daemon.routes.chat import _clean_setup
+
+    if not armed_at or not account:
+        return False
+    with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+        row = db.get(ChatThreadRecord, str(thread_id or ""))
+        if row is None or not is_build_thread(row) or getattr(row, "archived_at", None) is not None:
+            return False
+        setup = _setup(row)
+        wait = setup.get("account_wait")
+        if (
+            not isinstance(wait, dict)
+            or wait.get("armed_at") != armed_at
+            or wait.get("account") != account
+            or setup.get("account") != account
+        ):
+            return False
+        setup.pop("account_wait", None)
+        setup.pop("account_limit", None)
+        row.setup_json = _clean_setup(setup)
+        db.add(row)
+        db.commit()
+        return True
+
+
 def reconcile_interrupted_turns(engine: Any) -> int:
     """Boot step (after ``durable_turns.reconcile_interrupted_turns``): a
     build turn that a crash or restart cut off has its record marked
@@ -625,6 +660,8 @@ __all__ = [
     "rename_folder",
     "session_id_for",
     "session_view",
+    "take_wait",
     "thread_of",
     "update",
+    "waiting_sessions",
 ]

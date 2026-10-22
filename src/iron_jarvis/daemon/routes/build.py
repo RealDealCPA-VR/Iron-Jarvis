@@ -711,9 +711,11 @@ async def _note_account_limit(platform: Any, thread_id: str, turn_id: str,
                     "resets_at": limit.get("resets_at"),
                 }, session_id=S.session_id_for(thread_id))
         elif done:
-            # The account served a whole turn: the card goes, and so does a
-            # "Resume when ready" wait (the user carried on themselves — a
-            # later continuation would answer a question nobody asked).
+            # The account served the turn (it finished, or the user's own turn
+            # ran on it and then failed for another reason or was stopped):
+            # the card goes, and so does a "Resume when ready" wait (the user
+            # carried on themselves — a later continuation would answer a
+            # question nobody asked).
             row = await asyncio.to_thread(S.get_row, engine, thread_id)
             setup = _setup_of(row) if row is not None else {}
             if setup.get("account_limit") or setup.get("account_wait"):
@@ -775,10 +777,20 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
         if lines:
             with contextlib.suppress(BaseException):
                 await asyncio.shield(asyncio.to_thread(S.append_lines, engine, thread_id, lines))
-        if pin is not None and platform is not None and (watch.account_limit or status == "done"):
+        # The account SERVED this turn (a pinned lease succeeded): the card
+        # and any "Resume when ready" wait are over — whether the turn
+        # finished, failed for another reason, or the user stopped it. A later
+        # continuation would answer a question nobody asked (the user is
+        # driving the session). A turn the account parked ends on its own
+        # card instead (``watch.account_limit`` wins below), and a turn cut
+        # off by a shutdown ("interrupted") keeps the wait (v1.368.0 review).
+        served = status == "done" or (
+            pin is not None and status in ("error", "stopped") and bool(getattr(pin, "leased", None))
+        )
+        if pin is not None and platform is not None and (watch.account_limit or served):
             with contextlib.suppress(BaseException):
                 await asyncio.shield(_note_account_limit(
-                    platform, thread_id, turn_id, watch.account_limit, done=status == "done",
+                    platform, thread_id, turn_id, watch.account_limit, done=served,
                 ))
 
 
@@ -791,9 +803,16 @@ class SessionBusy(Exception):
     """The session already has a turn running (or starting)."""
 
 
+class WaitEnded(Exception):
+    """A "Resume when ready" continuation found its wait gone when it was
+    about to start: the user cancelled it, chose another account, or another
+    pass took it. Nothing was started."""
+
+
 async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            attachments: "list[str] | None" = None,
-                           continuation: bool = False) -> Any:
+                           continuation: bool = False,
+                           resume_of: "dict[str, Any] | None" = None) -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
     (follow it with ``lg.follow()``; nobody has to). The question is written
     when the turn starts, the reply when it ends (:func:`recorded_turn`).
@@ -806,7 +825,14 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     — an :class:`~iron_jarvis.iron_proxy.pin.AccountPin` is armed while the
     turn's driver task is created (the task copies the context), so every
     lease in the turn is a pinned pick of that account and the router holds
-    the turn on its provider."""
+    the turn on its provider.
+
+    ``resume_of`` (the wait loop only): the "Resume when ready" wait this
+    continuation answers. It is TAKEN — checked and removed with the old
+    limit card in one locked write — right before the question is written,
+    so a Cancel or a Choose account that landed while the account was being
+    re-checked starts nothing (:class:`WaitEnded`), and the continuation's
+    own limit card can never be wiped by a clear that ran after it."""
     from .chat import _turn_logs
     from ...iron_proxy.pin import reset_pin, set_pin
 
@@ -873,6 +899,15 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from None
+            if resume_of is not None:
+                took = await asyncio.to_thread(
+                    S.take_wait, platform.engine, thread_id,
+                    str(resume_of.get("armed_at") or ""), str(resume_of.get("account") or ""),
+                )
+                if not took:
+                    with contextlib.suppress(Exception):
+                        await gen.aclose()
+                    raise WaitEnded(thread_id)
             question: dict[str, Any] = {"role": "user", "content": text, "turnId": turn_id}
             if attachments:
                 question["attachmentPaths"] = list(attachments)
@@ -986,15 +1021,18 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
         if limit is None:
             turn_id = "bt_" + secrets.token_hex(8)
             try:
-                lg = await start_build_turn(d, thread_id, CONTINUE_TEXT, turn_id, continuation=True)
-            except SessionBusy:
+                # The wait is TAKEN inside the start (one locked write, right
+                # before the question): the check above can take seconds, and
+                # a Cancel / Choose account that landed meanwhile must start
+                # nothing — and no clear may run after the continuation began
+                # (it would wipe the card that turn's own limit wrote).
+                lg = await start_build_turn(d, thread_id, CONTINUE_TEXT, turn_id, continuation=True,
+                                            resume_of=wait)
+            except (SessionBusy, WaitEnded):
                 continue
             except HTTPException as exc:
                 log.info("resuming build session %s did not start: %s", thread_id, exc.detail)
                 continue
-            await asyncio.to_thread(S.update, engine, thread_id, setup={
-                "account_wait": None, "account_limit": None,
-            })
             row = await asyncio.to_thread(S.get_row, engine, thread_id)
             bus = getattr(platform, "event_bus", None)
             if bus is not None:

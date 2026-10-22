@@ -548,9 +548,22 @@ def _claude_model_arg(model: str | None) -> str | None:
 # --------------------------------------------------------------------------- #
 # v1.368.0: another account's signed thinking, refused
 # --------------------------------------------------------------------------- #
-#: Anthropic's words for a thinking block it will not accept (another
-#: account's signature, a block it did not sign).
-_THINKING_REFUSAL = re.compile(r"\b(signature|thinking|redacted_thinking)\b", re.IGNORECASE)
+#: Anthropic's words for a thinking BLOCK it will not accept (another
+#: account's signature, a block it did not sign): "Invalid `signature` in
+#: `thinking` block", "`thinking` or `redacted_thinking` blocks in the latest
+#: assistant message cannot be modified", "Invalid `data` in
+#: `redacted_thinking` block". NOT any 400 that merely says "thinking" — "`max_tokens`
+#: must be greater than `thinking.budget_tokens`", "`temperature` may only be
+#: set to 1 when thinking is enabled", "a final `assistant` message must start
+#: with a thinking block" are about the request, and sending it again without
+#: the earlier thinking would only repeat the refusal and put a false note on
+#: the receipt (v1.368.0 review).
+_THINKING_REFUSAL = re.compile(
+    r"\bsignature\b"
+    r"|(?:\b|_)thinking`?\s+blocks?\b[^.]*\bcannot be modified\b"
+    r"|\binvalid\b[^.]*(?:\b|_)thinking`?\s+block",
+    re.IGNORECASE,
+)
 
 
 def refused_thinking(attempt: Any) -> bool:
