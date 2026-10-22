@@ -74,13 +74,26 @@ does not need a bump, stop and bump it.
    tag push from the user's own credentials is what shipped v1.261.0 (a tag
    push triggers Release on its own — cancel the master-push run first or two
    runs publish the same version). CI (`.github/workflows/release.yml`) detects the
-   bump, RUNS THE OFFLINE SUITE AS A GATE (the `suite` job; the installer job
-   `needs:` it), PRE-CREATES the tag+release (electron-builder 422s otherwise),
-   builds the frozen daemon + installer, publishes `Iron-Jarvis-Setup-X.Y.Z.exe`
-   + blockmap + `latest.yml` (~35 min now that the gate runs first). A push with
-   no version bump skips the gate AND the installer entirely — which is why an
-   unbumped push is not a cheap shortcut but a change that never reaches the
-   user at all, and why the rule above is absolute.
+   bump, RUNS THE OFFLINE SUITE AS A GATE and builds the installer AT THE SAME
+   TIME (v1.370.3; it was ~78 min in series, ~15 now): `plan` decides once;
+   `suite` (dashboard + add-on + desktop checks), `python` (six shards split by
+   test FILE by `scripts/ci_shards.py`, balanced on
+   `scripts/ci_test_durations.json`; shard 1 checks pytest collects no file the
+   plan missed) and `windows-installer` (frozen daemon, `/health` smoke,
+   electron-builder `--publish never`, the files renamed to the dashed names
+   `latest.yml` carries and its sha512 checked, kept as a private artifact) run
+   in parallel; ONLY `publish` (`needs` all of them, implicit success(),
+   `dry_run == 'false'`, the one job with `contents: write`) makes anything
+   public: it re-checks the release (an already-public version is never
+   overwritten; one publish per version via job `concurrency`), pre-creates the
+   tag + DRAFT release, uploads `Iron-Jarvis-Setup-X.Y.Z.exe` + blockmap +
+   `latest.yml`, publishes, then writes the `updates` manifest. Try a workflow
+   change on a branch with `gh workflow run release.yml --ref <branch> -f
+   dry_run=true` (builds and tests everything, publishes nothing). Regenerate
+   the timings after big suite changes (the script's docstring says how). A
+   push with no version bump skips the gate AND the installer entirely — which
+   is why an unbumped push is not a cheap shortcut but a change that never
+   reaches the user at all, and why the rule above is absolute.
    **The gate is new in v1.177.0 and this file used to claim it already
    existed.** It did not: `Tests` and `Release` are separate workflows and ran
    CONCURRENTLY, so on v1.176.0 Release published a green installer in 8 minutes
@@ -959,7 +972,10 @@ does not need a bump, stop and bump it.
   `tests.yml` splits work across four jobs, so its vitest gets a runner to
   itself. `release.yml` runs ONE `suite` job: the add-on `pnpm install`, the
   add-on build, the dashboard suite, the node syntax checks, THEN the whole
-  Python suite at `-n auto`. Same command, far less machine. So:
+  Python suite at `-n auto`. Same command, far less machine. (Since v1.370.3
+  the Release gate runs the Python suite as six shards on their own runners,
+  like Tests, so the asymmetry is smaller — the habits below still hold for any
+  timing-sensitive test.) So:
     - A dashboard test that passes in Tests and fails in Release is a LOAD
       signal, not a flake and not a product defect. Read it as "this test has
       a wait that is wrong" first, and fix the wait.

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.370.2 (2026-10-21).*
+holds itself to. Current as of v1.370.3 (2026-10-22).*
 
 ---
 
@@ -1896,6 +1896,24 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Updates arrive sooner (v1.370.3)
+
+A new version now reaches your app in about 15 to 20 minutes after it is
+finished, instead of about 80. The checks that run before every release are
+the same; they just run side by side now instead of one after another. The
+full test suite is split across six machines at once, and the installer is
+built while the tests run.
+
+Nothing about how updates reach you has changed:
+
+- An update is published only after **every** test has passed. If any test
+  fails, nothing is published and your app keeps the version it has.
+- Your app still downloads the update by itself and installs it only when you
+  press **Restart to update**.
+- A version that is already published is never replaced with a different
+  build. If two release runs finish for the same version, the second one leaves
+  the first one's files alone.
 
 ## Build's view switch stays put (v1.370.2)
 
