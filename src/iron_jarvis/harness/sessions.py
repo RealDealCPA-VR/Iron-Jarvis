@@ -519,7 +519,12 @@ def reconcile_interrupted_turns(engine: Any) -> int:
                 frames = []
             text = []
             for frame in frames if isinstance(frames, list) else []:
-                if isinstance(frame, list) and len(frame) == 2 and frame[0] == "token":
+                if isinstance(frame, list) and len(frame) == 2 and frame[0] == "reset":
+                    # The lane discarded what it had streamed (a text-call
+                    # nudge, a language rewrite) — the live turn's own
+                    # writer (_ReplyWatch) drops it too (Phase 4 review).
+                    text = []
+                elif isinstance(frame, list) and len(frame) == 2 and frame[0] == "token":
                     try:
                         text.append(str(json.loads(frame[1]).get("text") or ""))
                     except (TypeError, ValueError, AttributeError):

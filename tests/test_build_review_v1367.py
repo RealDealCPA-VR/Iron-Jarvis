@@ -200,3 +200,68 @@ def test_the_daemons_chat_writer_refuses_a_build_session(tmp_path, work):
     assert messages_of(app, sid) == before, "a chat line landed in a Build session"
     with session_scope(engine) as db:
         assert db.get(ChatThreadRecord, sid).archived_at is not None, "the append un-archived it"
+
+
+# --------------------------------------------------------------------------- #
+# 5. the boot reconcile keeps only what the reply really says
+# --------------------------------------------------------------------------- #
+
+
+def test_the_boot_reconcile_drops_text_the_lane_reset(tmp_path, work):
+    """A ``reset`` frame means the lane threw away what it had streamed (the
+    text-call nudge, a language rewrite) — the live writer (``_ReplyWatch``)
+    drops it. The crash reconcile concatenated every token frame instead, so a
+    reply cut off after a nudge kept the discarded ``<tool_call>`` text."""
+    from iron_jarvis.core.ids import utcnow
+
+    app = create_app(str(tmp_path / "home"))
+    engine = app.state.platform.engine
+    sid = new_session(app, work)["id"]
+    S.append_lines(engine, sid, [{"role": "user", "content": "fix it", "turnId": "rc-x"}])
+    frames = [
+        ["token", json.dumps({"text": "<tool_call>Write{...}</tool_call>"})],
+        ["reset", json.dumps({})],
+        ["token", json.dumps({"text": "Fixing app.py now"})],
+        ["error", json.dumps({"detail": "cut off"})],
+    ]
+    with session_scope(engine) as db:
+        db.add(ChatTurnRecord(id="rc-x", thread_id=sid, status="interrupted",
+                              frames_json=json.dumps(frames), started_at=utcnow()))
+        db.commit()
+    assert S.reconcile_interrupted_turns(engine) == 1
+    reply = messages_of(app, sid)[-1]
+    assert reply["role"] == "assistant" and reply["interrupted"] is True
+    assert reply["content"] == "Fixing app.py now", reply["content"]
+    assert S.reconcile_interrupted_turns(engine) == 0, "a second boot wrote a second line"
+
+
+# --------------------------------------------------------------------------- #
+# 6. a lane that breaks outside its stream still leaves a reply line
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_lane_that_raises_leaves_an_error_line_not_a_bare_question(app, work, monkeypatch):
+    """The lane yields its own failures as ``error`` frames; an exception
+    that escapes it (a bug) was caught only by ``TurnLogs._drive`` — the log
+    got an error frame, but ``recorded_turn`` saw neither ``done`` nor
+    ``error`` and, with nothing streamed, wrote NO line: the session ended on
+    the question with no reply and no reason."""
+    from iron_jarvis.daemon.routes import build as build_routes
+
+    async def broken(platform, personas, body, **kw):
+        async def gen():
+            yield "event: phase\ndata: {\"phase\": \"recalling\"}\n\n"
+            raise RuntimeError("boom")
+
+        return gen()
+
+    monkeypatch.setattr(build_routes, "stream_chat_turn", broken)
+    sid = new_session(app, work)["id"]
+    status, raw = await open_turn(app, sid, {"text": "go", "turn_id": "rv-boom"})
+    assert status == 200
+    lg = await until(lambda: turn_log(app, "rv-boom"))
+    await until(lambda: lg.status != "running")
+    msgs = await until(lambda: [m for m in messages_of(app, sid) if m.get("role") == "assistant"])
+    assert msgs, "the session ended on the question with no reply line"
+    assert "internal error (RuntimeError)" in msgs[-1].get("error", ""), msgs[-1]
+    assert msgs[-1]["turnId"] == "rv-boom"

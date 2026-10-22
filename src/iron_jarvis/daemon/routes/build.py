@@ -387,6 +387,15 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any):
     except asyncio.CancelledError:
         status = "interrupted"
         raise
+    except Exception as exc:  # noqa: BLE001 — re-raised; TurnLogs._drive logs it
+        # The lane broke OUTSIDE its own error handling (it yields its own
+        # errors as frames). The log gets an error frame from the driver;
+        # the transcript must say so too, never end on the question with no
+        # reply at all (Phase 4 review — "a turn never ends empty").
+        if watch.done is None and watch.error is None:
+            watch.error = {"detail": f"The reply stopped on an internal error ({type(exc).__name__})."}
+        status = "error"
+        raise
     finally:
         lines = watch.lines(turn_id, status)
         if lines:
