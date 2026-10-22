@@ -294,11 +294,15 @@ def collect_changes(
                     "first_meta": meta,
                     "last": row,
                     "last_meta": meta,
-                    "undone": False,
+                    # The newest row NOT undone: what the disk should hold
+                    # now (None = every write of the file was undone).
+                    "live": None,
+                    "live_meta": None,
                 }
                 order.append(k)
             entry["last"], entry["last_meta"] = row, meta
-            entry["undone"] = entry["undone"] or row["undone"]
+            if not row["undone"]:
+                entry["live"], entry["live_meta"] = row, meta
 
     truncated_files = len(order) > MAX_FILES
     changes = [_one_change(home, files[k]) for k in order[:MAX_FILES]]
@@ -314,7 +318,6 @@ def collect_changes(
 def _one_change(home: str | Path, entry: dict[str, Any]) -> dict[str, Any]:
     target: Path = entry["target"]
     first, first_meta = entry["first"], entry["first_meta"]
-    last, last_meta = entry["last"], entry["last_meta"]
     out: dict[str, Any] = {
         "path": str(target),
         "rel": entry["rel"],
@@ -326,7 +329,10 @@ def _one_change(home: str | Path, entry: dict[str, Any]) -> dict[str, Any]:
         "truncated": False,
         "binary": False,
         "changed_since": None,
-        "undone": bool(entry["undone"]),
+        # v1.369.0 review: undone = EVERY write of the file in the window was
+        # undone (the newest-first undo walked them all back). A file whose
+        # newest write was undone but an earlier one still stands is not.
+        "undone": entry.get("live") is None,
         "note": "",
     }
     ok, reason = fs_read_ok(target)
@@ -364,16 +370,36 @@ def _one_change(home: str | Path, entry: dict[str, Any]) -> dict[str, Any]:
     elif not exists:
         out["status"] = "deleted"
 
-    last_patch = _patch_entry(last, last_meta, entry["rel"])
-    post = last_patch.get("post_sha256") if last_patch is not None else last.get("post_sha256")
-    if last_patch is not None and post is None:
-        # The patch deleted this file: still absent is no change since.
-        out["changed_since"] = exists
-    elif not exists:
-        out["changed_since"] = True
-    elif post is not None and now is not None:
-        mode = "raw" if last_patch is not None else str(last_meta.get("mode") or "raw")
-        out["changed_since"] = _hash_now(now, mode) != post
+    if out["undone"]:
+        # AN UNDO THAT WORKED READS AS UNDONE ONLY (v1.369.0 review). The undo
+        # put the file back as it was before the turn: gone for a file the
+        # turn created, the journal's prior bytes for one it overwrote. So
+        # "changed since" is measured against THAT state — never against the
+        # write the undo took back, which made every successful Undo read
+        # "changed since · undone" with "The file is no longer there."
+        if created:
+            out["changed_since"] = exists
+        elif not exists:
+            out["changed_since"] = True
+        elif prior is not None and now is not None:
+            mode = str(first_meta.get("mode") or "raw") if first_patch is None else "raw"
+            out["changed_since"] = _hash_now(now, mode) != _hash_now(prior, mode)
+        if out["changed_since"] is not True:
+            # Nothing to compare: the turn's change is gone, as asked.
+            return out
+    else:
+        # The newest write still standing is what the disk should hold now.
+        live, live_meta = entry["live"], entry["live_meta"]
+        last_patch = _patch_entry(live, live_meta, entry["rel"])
+        post = last_patch.get("post_sha256") if last_patch is not None else live.get("post_sha256")
+        if last_patch is not None and post is None:
+            # The patch deleted this file: still absent is no change since.
+            out["changed_since"] = exists
+        elif not exists:
+            out["changed_since"] = True
+        elif post is not None and now is not None:
+            mode = "raw" if last_patch is not None else str(live_meta.get("mode") or "raw")
+            out["changed_since"] = _hash_now(now, mode) != post
 
     if not exists and created:
         out["note"] = "The file is no longer there."

@@ -537,7 +537,14 @@ describe("the pane and page wiring (source-pinned)", () => {
   };
 
   it("the page parks every RAIL pane but the focused one, and no canvas pane", () => {
-    expect(page).toContain('parked={shape === "rail" && activeId !== t.id}');
+    // v1.369.0: the canvas is gone; the rail and the IJ harness's terminal
+    // tab draw through ONE helper (renderTerminalPane), which hands the pane
+    // the parked flag its caller decided.
+    expect(page).toContain("parked={o.parked}");
+    expect(page).toContain("parked: activeId !== t.id,");
+    // The session's terminal parks while its tab is not the one on screen.
+    expect(page).toContain("renderTerminalPane(info, { focused: !parked, parked,");
+    expect(page).not.toMatch(/<Rnd\b|shape === "canvas"/);
   });
 
   it("a pane parks only AFTER it has fitted and connected at its true size", () => {

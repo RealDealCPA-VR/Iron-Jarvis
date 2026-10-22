@@ -229,6 +229,11 @@ def test_models_route_offers_the_proxy_s_real_models_and_templates_accept_old_na
 
 
 def test_the_model_menu_panel_fits_the_window():
+    # v1.369.0: the composer's model menu is components/chat/ModelMenu (shared
+    # with Build's IJ harness); the chat page renders it.
+    menu = _src("dashboard/components/chat/ModelMenu.tsx")
+    assert 'testId="model-sub"' in menu and "<FitPanel" in menu
+    assert "max-h-[24rem]" not in menu
     from_page = _src("dashboard/app/chat/page.tsx")
-    assert 'testId="model-sub"' in from_page and "<FitPanel" in from_page
+    assert "<ModelMenu" in from_page
     assert "max-h-[24rem]" not in from_page

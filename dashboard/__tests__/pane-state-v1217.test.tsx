@@ -155,13 +155,14 @@ describe("the pane identity has a way IN (source-pinned)", () => {
     // Agents address panes by name and the summary strip lists them by name,
     // so a name only an API caller can set is not a shipped feature. The
     // rename lives in the header itself — the name IS the header.
-    // Anchored on the header's conditional drag class (v1.218.0 made the
-    // handle conditional, which moved the old literal), and closed at the
-    // model select — a window that spans only the header row.
+    // Anchored on the header itself (v1.369.0: the drag class this used to
+    // anchor on went with the canvas), and closed at the model select — a
+    // window that spans only the header row.
     const header = pane.slice(
-      pane.indexOf('draggable ? "ij-term-drag cursor-move"'),
+      pane.indexOf('data-testid="terminal-pane-header"'),
       pane.indexOf("Per-pane AI model"),
     );
+    expect(header.length).toBeGreaterThan(200);
     expect(header).toContain('data-testid="pane-name"');
     expect(header).toContain("setRenaming(true)");
     expect(pane).toContain("patch(`/terminals/${info.id}`, { name: next })");
@@ -189,6 +190,7 @@ describe("the pane identity has a way IN (source-pinned)", () => {
     expect(page).toContain("paneOverrides[t.id]?.name ?? act?.name");
     expect(page).toContain("paneOverrides[t.id]?.cli ?? act?.agent_cli");
     // …and the strip the user scans must agree with the pane it points at.
-    expect(page).toContain("name: paneOverrides[t.id]?.name ?? a?.name ?? null,");
+    // v1.369.0: the canvas strip is gone; the RAIL row is what the user scans.
+    expect(page).toContain("paneOverrides[t.id]?.name || a?.name || t.shell || t.id");
   });
 });

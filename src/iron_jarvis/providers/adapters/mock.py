@@ -48,6 +48,22 @@ DEMO_HANDED_OFF_LINE = (
 #: No step at all (a chat with no file tool): it read nothing and did nothing.
 DEMO_NOTHING_DONE_LINE = f"{DEMO_OPENING} No AI model read your message, so nothing was done."
 
+#: v1.369.0 (IJ harness Phase 6): the names the demo model's one scripted
+#: write goes by. ``write_file`` is Jarvis's own; ``Write`` is the Claude
+#: dialect's name for it (harness/dialects.py — a Build session's harness
+#: turn shows the model its family's names and translates the call back at
+#: the boundary), so a Build session on the demo model takes the same one
+#: step a chat does. Each name with the argument that carries its path.
+_DEMO_WRITE_TOOLS: tuple[tuple[str, str], ...] = (("write_file", "path"), ("Write", "file_path"))
+
+
+def _demo_write(tool_names: set[str]) -> tuple[str, str] | None:
+    """The write tool the demo model can call here, as (name, path key)."""
+    for name, key in _DEMO_WRITE_TOOLS:
+        if name in tool_names:
+            return name, key
+    return None
+
 
 class MockLLMAdapter(LLMAdapter):
     provider = "mock"
@@ -139,7 +155,9 @@ class MockLLMAdapter(LLMAdapter):
                     ],
                     finish_reason="tool_use",
                 )
-            if "write_file" in tool_names:
+            writer = _demo_write(tool_names)
+            if writer is not None:
+                name, key = writer
                 content = (
                     "# Iron Jarvis result\n\n"
                     f"Task: {task}\n\n"
@@ -149,8 +167,8 @@ class MockLLMAdapter(LLMAdapter):
                     tool_calls=[
                         ToolCall(
                             id="call_1",
-                            name="write_file",
-                            arguments={"path": "RESULT.md", "content": content},
+                            name=name,
+                            arguments={key: "RESULT.md", "content": content},
                         )
                     ],
                     finish_reason="tool_use",
@@ -183,7 +201,7 @@ class MockLLMAdapter(LLMAdapter):
             return LLMResponse(text="Done.", finish_reason="stop")
         if "delegate" in tool_names:
             return LLMResponse(text=DEMO_HANDED_OFF_LINE, finish_reason="stop")
-        if has_tool_result and "write_file" in tool_names:
+        if has_tool_result and _demo_write(tool_names) is not None:
             return LLMResponse(
                 text=DEMO_SAVED_LINE if _saved(messages) else DEMO_NOT_SAVED_LINE,
                 finish_reason="stop",
@@ -197,7 +215,7 @@ def _saved(messages: list[LLMMessage]) -> bool:
     carries its error instead.) Never raises."""
     try:
         for m in reversed(messages):
-            if m.role == "tool" and (getattr(m, "name", "") or "") == "write_file":
+            if m.role == "tool" and (getattr(m, "name", "") or "") in {n for n, _ in _DEMO_WRITE_TOOLS}:
                 return str(m.content or "").lstrip().lower().startswith("wrote ")
     except Exception:  # noqa: BLE001
         return False

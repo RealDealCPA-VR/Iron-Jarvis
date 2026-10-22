@@ -16,8 +16,11 @@
  *   - a hidden pane is HIDDEN, never unmounted (the v1.190.0 constraint: a
  *     terminal in a zero-sized holder wraps its replay into a buffer no later
  *     fit can undo),
- *   - the rail never reorders itself under the cursor,
- *   - and the canvas is still reachable, with the choice remembered.
+ *   - the rail never reorders itself under the cursor.
+ *
+ * v1.369.0: the free-form canvas was retired (the IJ harness view took its
+ * place in Build's switch); its tests here are gone, and the switch has its
+ * own file (ij-harness-switch-v1369).
  */
 
 import React from "react";
@@ -83,12 +86,6 @@ vi.mock("next/dynamic", () => {
     },
   };
 });
-
-vi.mock("react-rnd", () => ({
-  Rnd: ({ children }: { children?: React.ReactNode }) => (
-    <div data-testid="rnd">{children}</div>
-  ),
-}));
 
 /* ---- page chrome ----------------------------------------------------------- */
 
@@ -177,8 +174,8 @@ describe("the rail is what Build opens on", () => {
     expect(screen.getByTestId("pane-rail")).toBeTruthy();
     expect(row("t1")).toBeTruthy();
     expect(row("t2")).toBeTruthy();
-    // …and the canvas is not what rendered.
-    expect(screen.queryByTestId("rnd")).toBeNull();
+    // …and the IJ harness view is not what rendered.
+    expect(screen.queryByTestId("ij-harness-view")).toBeNull();
   });
 
   it("shows the first pane without being told to", async () => {
@@ -294,35 +291,8 @@ describe("what the rows say", () => {
   });
 });
 
-describe("the canvas is still there", () => {
-  it("switches to it and remembers the choice", async () => {
-    await renderPage();
-    fireEvent.click(screen.getByTestId("shape-canvas"));
-    await waitFor(() => expect(screen.getAllByTestId("rnd").length).toBe(2));
-    expect(screen.queryByTestId("pane-rail")).toBeNull();
-    expect(localStorage.getItem("ij.build.shape")).toBe("canvas");
-  });
-
-  it("opens on the canvas when that is what was chosen last", async () => {
-    localStorage.setItem("ij.build.shape", "canvas");
-    await renderPage();
-    await waitFor(() => expect(screen.queryByTestId("pane-rail")).toBeNull());
-    expect(screen.getAllByTestId("rnd").length).toBe(2);
-  });
-
-  it("offers the way back, and only from the canvas", async () => {
-    await renderPage();
-    // In the rail the switch lives in the rail's footer, not in the header —
-    // the control always sits in the shape you are leaving.
-    expect(screen.queryByTestId("shape-rail")).toBeNull();
-    fireEvent.click(screen.getByTestId("shape-canvas"));
-    await waitFor(() => expect(screen.getByTestId("shape-rail")).toBeTruthy());
-    fireEvent.click(screen.getByTestId("shape-rail"));
-    await waitFor(() => expect(screen.getByTestId("pane-rail")).toBeTruthy());
-    expect(localStorage.getItem("ij.build.shape")).toBe("rail");
-  });
-
-  it("keeps the summary strip for the canvas, where nothing else carries it", async () => {
+describe("the rail carries every pane's state (v1.369.0: the canvas is gone)", () => {
+  it("shows the stuck one in the rail and never a second summary strip", async () => {
     seedApi(
       [term("t1", "C:\\proj\\alpha")],
       [{ id: "t1", name: "builder", agent_cli: "claude", state: "blocked", state_line: "Edit?", alive: true }],
@@ -332,9 +302,8 @@ describe("the canvas is still there", () => {
     // surface teaches people to stop reading it.
     await waitFor(() => expect(screen.getByTestId("rail-jump-blocked")).toBeTruthy());
     expect(screen.queryByTestId("pane-summary")).toBeNull();
-
-    fireEvent.click(screen.getByTestId("shape-canvas"));
-    await waitFor(() => expect(screen.getByTestId("pane-summary")).toBeTruthy());
+    expect(screen.queryByTestId("shape-canvas")).toBeNull();
+    expect(screen.queryByTestId("ij-harness-view")).toBeNull();
   });
 });
 

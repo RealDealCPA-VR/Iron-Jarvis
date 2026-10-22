@@ -37,6 +37,7 @@ import { clockTime, formatTokens } from "@/lib/format";
 import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
 import { agentsPath, missionPath } from "@/lib/mission";
 import { MISSION_ORIGIN, sessionHref } from "@/lib/missionLinks";
+import { announceBuildSessionLink, buildLimitHeadline, buildSessionHref, buildThreadOf, sessionLinkFor } from "@/lib/buildLinks";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
 import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
@@ -214,6 +215,11 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // v1.346.0: a media generation that finished in the background, or failed
   "media.completed",
   "media.failed",
+  // v1.369.0 (IJ harness Phase 6, on Phase 5's events): a Build session's
+  // account could not serve (it stopped), and a "Resume when ready" wait
+  // that carried on by itself.
+  "build.account_limit",
+  "build.resumed",
 ];
 
 /** Every /events type the bell reads (v1.311.0, wave 3,
@@ -589,7 +595,8 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       id: e.id,
       ts: e.ts,
       // A chat turn has no session row: its taint says session_id "chat".
-      href: sid === "chat" ? "/chat" : sid ? `/sessions/${encodeURIComponent(sid)}` : "/activity",
+      // v1.369.0: a Build session's ("build:<id>") opens in Build.
+      href: sid === "chat" ? "/chat" : sid ? sessionLinkFor(sid) : "/activity",
       icon: ShieldAlert,
       title: sid === "chat" ? "A chat turn dropped to low trust" : "A run dropped to low trust",
       body: typeof p.reason === "string" ? p.reason : "",
@@ -613,7 +620,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: sid === "chat" ? "/chat" : sid ? `/sessions/${encodeURIComponent(sid)}` : "/activity",
+      href: sid === "chat" ? "/chat" : sid ? sessionLinkFor(sid) : "/activity",
       icon: ShieldCheck,
       title: `Blocked ${n} suspicious passage${n === 1 ? "" : "s"} from ${source}`,
       body: cats.join(", "),
@@ -841,6 +848,30 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: ok ? CheckCircle2 : AlertTriangle,
       title: ok ? `Your ${kind} is ready` : `Your ${kind} could not be made`,
       body: body.length > 140 ? `${body.slice(0, 139)}…` : body,
+    };
+  }
+  if (e.type === "build.account_limit" || e.type === "build.resumed") {
+    // v1.369.0: a Build session (Phase 5). Payload: {thread_id, title,
+    // account_name, …}; session_id "build:<id>". The row opens Build on THAT
+    // session. A limit stopped work nobody may be watching: it counts on the
+    // badge. A resume is good news, said once.
+    const thread =
+      (typeof p.thread_id === "string" && p.thread_id.trim()) ||
+      buildThreadOf(typeof e.session_id === "string" ? e.session_id : "") ||
+      "";
+    const title = typeof p.title === "string" ? p.title.trim() : "";
+    const name = typeof p.account_name === "string" ? p.account_name.trim() : "";
+    const limitRow = e.type === "build.account_limit";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: thread ? buildSessionHref(thread) : "/terminals",
+      icon: limitRow ? AlertTriangle : CheckCircle2,
+      title: limitRow
+        ? buildLimitHeadline(p.kind, name)
+        : `A Build session resumed${name ? ` on the ${name} account` : ""}`,
+      body: title.length > 140 ? `${title.slice(0, 139)}…` : title,
+      ...(limitRow ? { attention: true } : {}),
     };
   }
   if (e.type === "computeruse.run_finished") {
@@ -1153,6 +1184,9 @@ interface PendingAgentApproval {
 export interface ChatWaitingAsk {
   id: string;
   threadId: string;
+  /** v1.369.0: the row is a Build session's (`surface: "build"`), not a
+   *  chat's: it reads as the session and opens it in Build. */
+  build?: boolean;
 }
 
 /** Parse one pending row of kind "chat" (null = not a chat row). */
@@ -1162,19 +1196,30 @@ export function parseChatAsk(raw: unknown): ChatWaitingAsk | null {
   if (r.kind !== "chat") return null;
   const id = typeof r.id === "string" ? r.id : "";
   if (!id) return null;
-  return { id, threadId: typeof r.thread_id === "string" ? r.thread_id.trim() : "" };
+  const threadId = typeof r.thread_id === "string" ? r.thread_id.trim() : "";
+  return r.surface === "build" ? { id, threadId, build: true } : { id, threadId };
 }
 
-/** Where a waiting chat opens: that chat, else the chat page. */
-function chatAskHref(ask: ChatWaitingAsk): string {
+/** Where a waiting chat opens: that chat, else the chat page. A Build
+ *  session (v1.369.0) opens in Build, on that session. */
+export function chatAskHref(ask: ChatWaitingAsk): string {
+  if (ask.build) return ask.threadId ? buildSessionHref(ask.threadId) : "/terminals";
   return ask.threadId ? `/chat?thread=${encodeURIComponent(ask.threadId)}` : "/chat";
+}
+
+/** The waiting row's words: a chat's, or (v1.369.0) a Build session's. */
+export function chatAskRowWords(ask: ChatWaitingAsk): { title: string; open: string } {
+  return ask.build
+    ? { title: "A Build session is waiting for your OK", open: "Open the session in Build" }
+    : { title: "A chat is waiting for your OK", open: "Open the chat" };
 }
 
 /** The waiting chat as a bell row: the computer-use row's exact look (the
  *  amber tile, a title, one quiet line, the arrow). */
 function ChatWaitingRow({ ask, onOpen }: { ask: ChatWaitingAsk; onOpen: () => void }) {
+  const words = chatAskRowWords(ask);
   return (
-    <li data-testid="bell-chat-waiting">
+    <li data-testid="bell-chat-waiting" data-surface={ask.build ? "build" : "chat"}>
       <Link
         href={chatAskHref(ask)}
         onClick={onOpen}
@@ -1184,10 +1229,8 @@ function ChatWaitingRow({ ask, onOpen }: { ask: ChatWaitingAsk; onOpen: () => vo
           <MessageSquare size={15} />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-sm font-medium text-zinc-100">
-            A chat is waiting for your OK
-          </span>
-          <span className="block text-[11px] text-zinc-500">Open the chat</span>
+          <span className="block text-sm font-medium text-zinc-100">{words.title}</span>
+          <span className="block text-[11px] text-zinc-500">{words.open}</span>
         </span>
         <ArrowRight size={13} className="shrink-0 text-zinc-600" />
       </Link>
@@ -2079,10 +2122,21 @@ export function NotificationBell() {
           `${agentAsks.length} agent${agentAsks.length === 1 ? "" : "s"} asking permission` +
             (named.agent ? `: ${named.agent}` : ""),
         );
-      if (chatAsks.length)
+      // v1.369.0 review: a Build session parked on the user lists as a chat
+      // row (`surface: "build"`) but is said as the SESSION it is — its row
+      // already does; the ping read "1 chat waiting for your OK" for it.
+      const plainChats = chatAsks.filter((c) => !c.build);
+      const buildAsks = chatAsks.filter((c) => c.build);
+      const newIsBuild = !!named.chat && buildAsks.some((c) => !seenAsks.has(`c:${c.id}`));
+      if (plainChats.length)
         parts.push(
-          `${chatAsks.length} chat${chatAsks.length === 1 ? "" : "s"} waiting for your OK` +
-            (named.chat ? `: ${named.chat}` : ""),
+          `${plainChats.length} chat${plainChats.length === 1 ? "" : "s"} waiting for your OK` +
+            (named.chat && !newIsBuild ? `: ${named.chat}` : ""),
+        );
+      if (buildAsks.length)
+        parts.push(
+          `${buildAsks.length} Build session${buildAsks.length === 1 ? "" : "s"} waiting for your OK` +
+            (named.chat && newIsBuild ? `: ${named.chat}` : ""),
         );
       // v1.353.0 (G52): each waiting pane by its CLI's name.
       for (const pane of paneAsks) parts.push(paneWaitingTitle(pane));
@@ -2198,7 +2252,16 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 w-80 origin-top-right">
+        <div
+          className="absolute right-0 z-50 mt-2 w-80 origin-top-right"
+          // v1.369.0 review: a row that opens a Build session, pressed while
+          // Build is already open, tells Build which session (the same-page
+          // navigation alone changes only the address — lib/buildLinks).
+          onClickCapture={(e) => {
+            const a = (e.target as HTMLElement | null)?.closest?.("a");
+            if (a) announceBuildSessionLink(a.getAttribute("href"));
+          }}
+        >
           <div className="card-surface overflow-hidden">
             <header className="flex items-center justify-between border-b hairline px-4 py-2.5">
               <span className="flex items-center gap-2 text-[13px] font-semibold text-zinc-200">
@@ -2475,7 +2538,9 @@ export function NotificationBell() {
                     : waiting.length > 0
                       ? "Open the Workflows page"
                       : agentAsks.length === 0 && chatAsks.length > 0
-                        ? "Open the chat"
+                        ? chatAsks[0].build
+                          ? "Open the session in Build"
+                          : "Open the chat"
                         : agentAsks.length === 0 && paneAsks.length > 0
                           ? "Open Build"
                           : "Open the Agents page"}{" "}

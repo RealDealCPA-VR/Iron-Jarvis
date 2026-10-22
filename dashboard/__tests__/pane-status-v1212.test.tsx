@@ -207,21 +207,6 @@ vi.mock("next/dynamic", () => ({
 
 /* ---- page chrome ----------------------------------------------------------- */
 
-vi.mock("react-rnd", () => ({
-  Rnd: ({
-    children,
-    onMouseDown,
-    cancel,
-  }: {
-    children?: React.ReactNode;
-    onMouseDown?: () => void;
-    cancel?: string;
-  }) => (
-    <div data-testid="rnd" data-cancel={cancel} onMouseDown={onMouseDown}>
-      {children}
-    </div>
-  ),
-}));
 vi.mock("@/components/motion", () => ({
   PageShell: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   Reveal: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,

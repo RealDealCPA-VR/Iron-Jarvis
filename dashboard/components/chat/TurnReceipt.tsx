@@ -212,6 +212,20 @@ export interface TurnRoute {
    *  truth: `egress.stays_on_this_network`, the predicate the local-only
    *  lock reads). Absent on every reply from before v1.351.0. */
   on_this_network?: boolean;
+  /** v1.369.0 (IJ harness): the subscription ACCOUNT a Build session's turn
+   *  ran on (Iron-Proxy's name for it, never an e-mail), and the daemon's
+   *  note when the call was sent again without earlier thinking. Absent on
+   *  every chat reply. */
+  account?: { id?: string; name?: string; note?: string } | null;
+}
+
+/** v1.369.0: a Build session reply's account, as the receipt says it ("on
+ *  the Work account"), or null when the route names none. */
+export function accountWords(rt: Pick<TurnRoute, "account"> | null | undefined): { text: string; note: string } | null {
+  const a = rt?.account;
+  const name = a && typeof a.name === "string" ? a.name.trim() : "";
+  if (!name) return null;
+  return { text: `on the ${name} account`, note: a && typeof a.note === "string" ? a.note.trim() : "" };
 }
 
 /**
@@ -882,6 +896,23 @@ export function TurnReceipt({
         {whereTail}
       </span>,
     );
+  }
+  const account = accountWords(rt);
+  if (account) {
+    // v1.369.0: a Build session's turn names the account it ran on, quiet,
+    // beside who answered; the daemon's note (thinking left out) on hover.
+    parts.push(
+      <span key="account" data-testid="turn-account" className="text-zinc-500">
+        {account.text}
+      </span>,
+    );
+    if (account.note) {
+      parts.push(
+        <span key="account-note" data-testid="turn-account-note" title={account.note} className="text-zinc-500">
+          earlier thinking left out
+        </span>,
+      );
+    }
   }
   if (rt?.allowed_once === true) {
     // v1.332.0: a local-only chat sent this one message off this PC because

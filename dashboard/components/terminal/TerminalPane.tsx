@@ -446,7 +446,6 @@ export function TerminalPane({
   info,
   focused,
   paneName,
-  draggable = true,
   onRenamed,
   onLaunched,
   onLaunchWithCapabilities,
@@ -475,8 +474,6 @@ export function TerminalPane({
   /** The pane's human handle, when it has one — agents address panes by
    *  it, and it reads better in the header than the shell's name. */
   paneName?: string | null;
-  /** False in the rail, where the pane fills its box and does not move. */
-  draggable?: boolean;
   /** Told when the user renames this pane, so the page can update its own
    *  copy without waiting for the next activity poll. */
   onRenamed?: (name: string) => void;
@@ -1112,7 +1109,7 @@ export function TerminalPane({
     };
     const onWheel = (e: WheelEvent) => {
       // Guarantee scrollback scrolling on the mouse wheel — capture it here so
-      // it can't be swallowed by the container/react-rnd. Only in the NORMAL
+      // it can't be swallowed by the container. Only in the NORMAL
       // buffer; full-screen TUI apps (alt-screen) own the wheel themselves.
       if (!term || term.buffer.active.type !== "normal") return;
       e.preventDefault();
@@ -1452,18 +1449,14 @@ export function TerminalPane({
         }
         acceptSnips(files);
       }}
-      className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border bg-ink-900 transition-colors ${paneFrameClass(Boolean(focused), Boolean(draggable), dragOver)}`}
+      className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border bg-ink-900 transition-colors ${paneFrameClass(Boolean(focused), dragOver)}`}
     >
-      {/* Pane header: shell · cwd · connection state · close. The `ij-term-drag`
-          class marks this as the drag handle for react-rnd on the Terminals
-          page (buttons/selects inside are excluded via react-rnd's `cancel`). */}
-      {/* The drag handle is CONDITIONAL (v1.218.0). In the rail a pane fills
-          its box and cannot be moved, so `cursor-move` and the react-rnd
-          handle class would both be promises the layout does not keep. */}
+      {/* Pane header: shell · cwd · connection state · close. v1.369.0: the
+          free-form canvas (and its drag handle) is gone; a pane fills its box
+          in the rail and in a Build session's terminal tab. */}
       <header
-        className={`flex shrink-0 items-center gap-2 border-b border-white/[0.06] bg-ink-900/60 px-3 py-2 ${
-          draggable ? "ij-term-drag cursor-move" : ""
-        }`}
+        className={`flex shrink-0 items-center gap-2 border-b border-white/[0.06] bg-ink-900/60 px-3 py-2`}
+        data-testid="terminal-pane-header"
       >
         <TerminalIcon
           size={13}

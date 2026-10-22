@@ -23,12 +23,16 @@
 import type { PendingApproval } from "@/lib/useChatStream";
 import type { McpAsk, McpElicitationAsk, McpSamplingAsk } from "@/lib/mcpInteract";
 import type { CloudAsk } from "@/lib/localOnly";
+import type { AskUserAsk } from "@/lib/buildSessions";
 
 export type DockAskItem =
   | { kind: "approval"; id: string; approval: PendingApproval }
   | { kind: "elicitation"; id: string; ask: McpElicitationAsk }
   | { kind: "sampling"; id: string; ask: McpSamplingAsk }
-  | { kind: "cloud"; id: string; ask: CloudAsk };
+  | { kind: "cloud"; id: string; ask: CloudAsk }
+  /** v1.369.0: a question the model itself asked (`ask_user`, a Build
+   *  session's turn), answered in the dock like an app's. */
+  | { kind: "question"; id: string; ask: AskUserAsk };
 
 /** Every open question, in the order they are answered. */
 export function collectDockAsks({
@@ -36,12 +40,15 @@ export function collectDockAsks({
   mcpAsks,
   sessionApprovals,
   cloud,
+  questions,
 }: {
   approval?: PendingApproval | null;
   mcpAsks?: readonly McpAsk[] | null;
   sessionApprovals?: readonly PendingApproval[] | null;
   /** v1.332.0: the send waiting on "Send once" / "Keep it local". */
   cloud?: (CloudAsk & { id: string }) | null;
+  /** v1.369.0: the model's own open questions (a Build session's turn). */
+  questions?: readonly AskUserAsk[] | null;
 }): DockAskItem[] {
   const out: DockAskItem[] = [];
   const seen = new Set<string>();
@@ -58,6 +65,10 @@ export function collectDockAsks({
     else push({ kind: "sampling", id: a.id, ask: a });
   }
   for (const s of sessionApprovals ?? []) push({ kind: "approval", id: s.id, approval: s });
+  for (const q of questions ?? []) {
+    if (q.outcome) continue; // answered, skipped or ended: not a question now
+    push({ kind: "question", id: q.id, ask: q });
+  }
   return out;
 }
 
@@ -73,6 +84,7 @@ export function withHeadFirst(list: readonly DockAskItem[], headId: string | nul
 /** The keys line under the card while a question is in the composer's place. */
 export function dockAskKeyHint(kind: DockAskItem["kind"]): string {
   if (kind === "cloud") return "Enter to send once · Esc to keep it local";
+  if (kind === "question") return "Enter to send · Esc to skip";
   return kind === "elicitation" ? "Enter to send · Esc to decline" : "Enter to allow · Esc to decline";
 }
 

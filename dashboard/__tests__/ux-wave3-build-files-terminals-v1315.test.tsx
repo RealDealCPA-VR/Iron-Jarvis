@@ -84,9 +84,6 @@ vi.mock("next/dynamic", () => ({
     return DynamicStub;
   },
 }));
-vi.mock("react-rnd", () => ({
-  Rnd: ({ children }: { children?: React.ReactNode }) => <div data-testid="rnd">{children}</div>,
-}));
 vi.mock("@/components/motion", () => ({
   PageShell: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   Reveal: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
@@ -265,7 +262,8 @@ describe("Build: one collapse control, projects first, a phone-sized rail", () =
     }
     // Anti-vacuity: the rail's own buttons are all still there.
     expect(within(rail).getByRole("button", { name: /New terminal/ })).toBeInTheDocument();
-    expect(screen.getByTestId("shape-canvas")).toBeInTheDocument();
+    // v1.369.0: the view switch replaced the rail's Canvas door.
+    expect(screen.getByTestId("build-view-harness")).toBeInTheDocument();
   });
 
   it("anti-vacuity: the stage keeps its 480 px minimum at every width", async () => {

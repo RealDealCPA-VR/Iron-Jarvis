@@ -34,9 +34,10 @@
 
 import { useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { House } from "lucide-react";
-import { ApprovalCard } from "@/components/chat/ApprovalCard";
+import { ApprovalCard, type ApprovalScope } from "@/components/chat/ApprovalCard";
 import { Button } from "@/components/ui";
 import { ElicitationCard } from "@/components/chat/ElicitationCard";
+import { AskUserCard, type AskAnswer } from "@/components/chat/AskUserCard";
 import { SamplingCard } from "@/components/chat/SamplingCard";
 import { dockKeyAction, withHeadFirst, type DockAskItem } from "@/lib/dockAsk";
 import { choiceKey, findChoice } from "@/lib/letteredChoices";
@@ -64,6 +65,9 @@ const EDGE: Record<DockAskItem["kind"], string> = {
     "shadow-[0_0_0_0.5px_rgb(var(--accent-rgb)/0.5),0_6px_24px_rgb(0_0_0/0.35)] [[data-scheme=light]_&]:shadow-[0_0_0_0.5px_rgb(var(--accent-rgb)/0.55),0_4px_18px_rgb(var(--white)/0.08)]",
   cloud:
     "shadow-[0_0_0_0.5px_rgb(var(--tone-warn)/0.55),0_6px_24px_rgb(0_0_0/0.35)] [[data-scheme=light]_&]:shadow-[0_0_0_0.5px_rgb(var(--tone-warn)/0.6),0_4px_18px_rgb(var(--white)/0.08)]",
+  // v1.369.0: the model's own question reads like an app's (the accent).
+  question:
+    "shadow-[0_0_0_0.5px_rgb(var(--accent-rgb)/0.5),0_6px_24px_rgb(0_0_0/0.35)] [[data-scheme=light]_&]:shadow-[0_0_0_0.5px_rgb(var(--accent-rgb)/0.55),0_4px_18px_rgb(var(--white)/0.08)]",
 };
 
 /** v1.332.0: a "local only" chat asks before a message leaves this PC. The
@@ -122,6 +126,9 @@ export function DockAsk({
   onAnswerElicitation,
   onDecideSampling,
   onCloudAnswer,
+  onAnswerQuestion,
+  planText,
+  scope,
   onStop,
   returnFocus,
   armDelayMs = DOCK_KEY_ARM_MS,
@@ -138,6 +145,15 @@ export function DockAsk({
   onDecideSampling: (id: string, decision: "approve" | "deny") => Promise<boolean>;
   /** v1.332.0: the answer to a `cloud` question: true = "Send once". */
   onCloudAnswer?: (send: boolean) => void;
+  /** v1.369.0: the answer to the model's own question (null = Skip);
+   *  resolves to an error sentence, or null. */
+  onAnswerQuestion?: (id: string, answer: AskAnswer | null) => Promise<string | null>;
+  /** v1.369.0: the reply above a Build session's plan door (its plan, when
+   *  the call carries none). */
+  planText?: string;
+  /** v1.369.0: where an approval's wider answer applies (a Build session's
+   *  card says "Allow for this session"); unset = the chat's. */
+  scope?: ApprovalScope;
   /** Stop the running reply. The composer (and its Stop) is hidden while a
    *  question is up, so the dock offers it too. */
   onStop?: () => void;
@@ -162,7 +178,8 @@ export function DockAsk({
     if (!headId) return;
     shownAtRef.current = Date.now();
     const ae = document.activeElement;
-    const composerHadIt = !!ae && !!ae.closest?.('[data-testid="chat-composer"]');
+    // v1.369.0: Build's IJ harness composer marks itself `data-dock-composer`.
+    const composerHadIt = !!ae && !!ae.closest?.('[data-testid="chat-composer"], [data-dock-composer]');
     if (bodyHasFocus() || composerHadIt) wrapRef.current?.focus({ preventScroll: true });
   }, [headId]);
 
@@ -280,8 +297,26 @@ export function DockAsk({
       )}
       {head.kind === "cloud" ? (
         <CloudAskCard key={head.id} ask={head.ask} onAnswer={(send) => onCloudAnswer?.(send)} />
+      ) : head.kind === "question" ? (
+        <AskUserCard
+          key={head.id}
+          ask={head.ask}
+          onAnswer={(answer) =>
+            onAnswerQuestion
+              ? onAnswerQuestion(head.id, answer)
+              : Promise.resolve("This question cannot be answered here.")
+          }
+          docked
+        />
       ) : head.kind === "approval" ? (
-        <ApprovalCard key={head.id} approval={head.approval} onConversation={onConversation} docked />
+        <ApprovalCard
+          key={head.id}
+          approval={head.approval}
+          onConversation={onConversation}
+          docked
+          planText={planText}
+          scope={scope}
+        />
       ) : head.kind === "elicitation" ? (
         <ElicitationCard
           key={head.id}

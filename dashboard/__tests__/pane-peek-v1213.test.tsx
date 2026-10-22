@@ -212,21 +212,6 @@ vi.mock("next/dynamic", () => ({
 
 /* ---- page chrome ----------------------------------------------------------- */
 
-vi.mock("react-rnd", () => ({
-  Rnd: ({
-    children,
-    onMouseDown,
-    cancel,
-  }: {
-    children?: React.ReactNode;
-    onMouseDown?: () => void;
-    cancel?: string;
-  }) => (
-    <div data-testid="rnd" data-cancel={cancel} onMouseDown={onMouseDown}>
-      {children}
-    </div>
-  ),
-}));
 vi.mock("@/components/motion", () => ({
   PageShell: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   Reveal: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
@@ -489,7 +474,7 @@ describe("chat-activity peek strip (page, terminal view)", () => {
     // literal amber (the strip lies over the always-dark terminal canvas).
     expect(strip.className).toContain("text-tone-warn");
     expect(strip.className).not.toMatch(/amber/);
-    expect(strip.tagName).toBe("BUTTON"); // react-rnd cancel="button…" drag-exempt
+    expect(strip.tagName).toBe("BUTTON"); // a real button: keyboard-reachable
 
     // Approval resolved, tool still running → "Chat: <tool>…".
     fireEvent.click(screen.getByTestId("emit-tool-t1"));

@@ -7,10 +7,9 @@
  *
  *  - a file dragged over it: an accent hairline, because a drop target must
  *    say "here" while something is held over it;
- *  - the focused pane on the CANVAS: a soft accent hairline, because several
- *    windows overlap there and you need to see which one has the keyboard;
- *  - the focused pane in the RAIL: a slightly brighter hairline (it is the only
- *    pane on screen, so an accent edge would only be decoration);
+ *  - the focused pane: a slightly brighter hairline (it is the only pane on
+ *    screen, so an accent edge would only be decoration — v1.369.0 retired
+ *    the free-form canvas, the one place several overlapped);
  *  - every other pane: the quiet hairline, a touch brighter on hover.
  *
  * No glow, no ring, no shadow card. Theme tokens only (`white` is remapped on
@@ -19,8 +18,8 @@
  * Used by BOTH layers of a pane (TerminalPane and the page's chat layer) so
  * the frame never changes when the view flips.
  */
-export function paneFrameClass(focused: boolean, canvas: boolean, dragOver = false): string {
+export function paneFrameClass(focused: boolean, dragOver = false): string {
   if (dragOver) return "border-accent/60";
-  if (focused) return canvas ? "border-accent/30" : "border-white/[0.1]";
+  if (focused) return "border-white/[0.1]";
   return "border-white/[0.06] hover:border-white/[0.12]";
 }
