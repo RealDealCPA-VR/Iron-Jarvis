@@ -90,7 +90,8 @@ async def test_two_turns_then_idle_make_ONE_reflection_over_both(app, work, monk
     state = L.status_of(sid)
     assert state["turns"] == 1 and state["due_at"] and not state["running"]
     due = datetime.fromisoformat(state["due_at"].replace("Z", "+00:00"))
-    assert timedelta(minutes=55) < due - datetime.now(timezone.utc) <= timedelta(hours=1)
+    # (two clocks read microseconds apart: a second of slack either way)
+    assert timedelta(minutes=55) < due - datetime.now(timezone.utc) <= timedelta(hours=1, seconds=1)
     await _turn(app, sid, "take notes", f"{sid}-b")
     await asyncio.sleep(0)
     assert script.reflections == [] and L.status_of(sid)["turns"] == 2
@@ -127,7 +128,7 @@ async def test_the_idle_wait_fires_by_itself_and_a_new_turn_restarts_it(app, wor
     assert len(script.reflections) == 1 and "TURN 2 OF 2" in script.reflections[0]["prompt"]
 
 
-async def test_a_running_turn_holds_the_reflection_back(app, work, monkeypatch):
+async def test_a_running_turn_holds_the_reflection_back_and_the_wait_starts_again(app, work, monkeypatch):
     from iron_jarvis.daemon.routes import build as build_routes
 
     monkeypatch.setattr(L, "REFLECT_IDLE_S", 3600.0)
@@ -135,11 +136,15 @@ async def test_a_running_turn_holds_the_reflection_back(app, work, monkeypatch):
     await _turn(app, sid, "fix add", f"{sid}-a")
     build_routes._STARTING.add(sid)
     try:
-        assert L.flush(app.state.platform, sid) is None
+        monkeypatch.setattr(L, "REFLECT_IDLE_S", 0.05)
+        assert L.flush(app.state.platform, sid) is None  # not idle: nothing now
+        await asyncio.sleep(0)
+        assert script.reflections == [] and L.status_of(sid)["turns"] == 1
+        assert L.status_of(sid)["due_at"] is not None  # ...and it waits again
     finally:
         build_routes._STARTING.discard(sid)
     await L.drain()
-    assert script.reflections == [] and L.status_of(sid)["turns"] == 1
+    assert len(script.reflections) == 1
 
 
 async def test_archiving_a_session_reflects_on_it_now(app, work, monkeypatch):

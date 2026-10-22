@@ -1253,7 +1253,11 @@ def flush(platform: Any, thread_id: str) -> "asyncio.Task | None":
             _arm(platform, thread_id, REFLECT_IDLE_S)
             return None
         if _session_busy(platform, thread_id):
+            # Not idle after all: the stretch waits one more idle period (a
+            # running turn's end restarts the wait anyway; a turn that had
+            # just ended and still read as running gets its reflection).
             _keep_for_later(thread_id, turns)
+            _arm(platform, thread_id, REFLECT_IDLE_S)
             return None
         loop = asyncio.get_running_loop()
     except Exception:  # noqa: BLE001 — never raises
