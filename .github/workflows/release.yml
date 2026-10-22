@@ -40,11 +40,12 @@ jobs:
   #
   # BOTH JOBS CARRY timeout-minutes (v1.286.0): GitHub's default is 360, so a
   # hang held the release for six hours, and no update could ship meanwhile.
-  # ~2x measured: suite ~32m (vitest + the backend suite), installer ~9m, given
+  # ~2x measured: suite ~53m as of v1.367.0 (vitest + the backend suite; it
+  # was ~32m), installer ~9m, given
   # a generous 60 since electron-builder uploads to GitHub and can be slow.
   suite:
     runs-on: windows-latest # same runner the product ships for
-    timeout-minutes: 75
+    timeout-minutes: 120
     outputs:
       publish: ${{ steps.gate.outputs.publish }}
     steps:
