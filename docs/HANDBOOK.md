@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.366.0 (2026-10-21).*
+holds itself to. Current as of v1.367.0 (2026-10-21).*
 
 ---
 
@@ -1894,6 +1894,28 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Coding sessions keep going without you (v1.367.0)
+
+Step four of the coding screen: the sessions it will show. The screen itself
+arrives in a later release; nothing new appears in Chat.
+
+- **A coding session belongs to a folder.** It keeps its own conversation,
+  its model and its approval setting. It never shows up in your chat list,
+  memory recall or chat search.
+- **A reply keeps running when you look away.** Close the window, reload, or
+  lose the connection, and the session finishes its work. Coming back shows
+  where it is. A restart in the middle of a reply leaves one line saying the
+  reply was cut off. Sending the same message twice never runs the work
+  twice.
+- **Plan first, if you want.** In plan mode the model can only read and
+  plan. When it is ready it shows the plan and asks once. Allow switches the
+  session to doing the work and keeps the plan; Deny keeps it planning. No
+  approval setting answers that question for you.
+- **The model can ask you a question.** In a coding session it can stop and
+  ask, with choices. It waits until you answer or stop it.
+- **Deleting or archiving stops what it started.** A session still answering
+  can't be deleted from either place; stop it first.
 
 ## The coding harness speaks each model's language (v1.366.0)
 

@@ -32,6 +32,47 @@ def _local_ocr_off_by_default():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _never_the_users_iron_proxy():
+    """v1.367.0: the suite must NEVER find the Iron-Proxy on this machine.
+
+    ``iron_proxy.service`` finds a running proxy through
+    ``<IRON_PROXY_DATA_DIR or ~/.iron-proxy>/proxy.json``. On a dev box where
+    the packaged app runs one, a test whose service was switched on leased
+    REAL accounts: claude-native tests were answered "the Claude account
+    'TSI' … needs to sign in again" by the user's own proxy, and a fake CLI's
+    scripted 401 could be reported to it as that account's sign-in failure.
+    Every worker gets a throwaway data dir; a test that needs its own sets
+    the variable with monkeypatch on top of this one.
+    """
+    old = os.environ.get("IRON_PROXY_DATA_DIR")
+    os.environ["IRON_PROXY_DATA_DIR"] = tempfile.mkdtemp(prefix="ij-test-iron-proxy-")
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("IRON_PROXY_DATA_DIR", None)
+        else:
+            os.environ["IRON_PROXY_DATA_DIR"] = old
+
+
+@pytest.fixture(autouse=True)
+def _iron_proxy_service_per_test():
+    """v1.367.0: ``iron_proxy.service._CURRENT`` is the process's live service
+    (the last platform built registers itself). A test that switched it on
+    used to leave it on for every LATER test on the same worker — the
+    claude-native adapter tests then leased through a service they never
+    built. Each test starts with the service it had before and leaves none
+    behind."""
+    from iron_jarvis.iron_proxy import service as _svc
+
+    before = _svc.current()
+    try:
+        yield
+    finally:
+        _svc._set_current(before)
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _no_real_claude_model_discovery():
     """v1.300.0: never run the REAL ``claude`` picker handshake from the suite.
 
