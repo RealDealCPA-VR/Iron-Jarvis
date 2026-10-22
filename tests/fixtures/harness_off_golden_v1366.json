@@ -1,0 +1,1067 @@
+{
+ "post:armed_read": {
+  "calls": [
+   {
+    "messages": [
+     {
+      "content": "fix the bug in a.py",
+      "name": null,
+      "role": "user",
+      "tool_call_id": null,
+      "tool_calls": []
+     }
+    ],
+    "specs": [
+     {
+      "description": "Read a file from the session workspace: UTF-8 text (code, .md, .txt, .json) directly, and Word/PDF/Excel/PowerPoint/RTF by extracting their text automatically. read_document does the same with page/sheet selection for large documents. For a long file pass `offset` (the 1-based line to start at) and/or `limit` (lines, default 2000), and `numbered: true` for line numbers; the reply says which lines it showed and how many the file has.",
+      "input_schema": {
+       "properties": {
+        "_store_as": {
+         "description": "Optional variable name. Binds this result into the session's Python namespace INSTEAD of returning it, and returns a one-line receipt — use the `repl` tool to inspect it (len, slicing, comprehensions). The variable is a dict: v['output'] is the tool's text payload, v['data'] its structured metadata. Prefer this whenever the result may be large.",
+         "type": "string"
+        },
+        "limit": {
+         "description": "How many lines to read (default 2000 when offset, limit or numbered is given).",
+         "type": "integer"
+        },
+        "numbered": {
+         "description": "Prefix each line with its line number and a tab (cat -n style).",
+         "type": "boolean"
+        },
+        "offset": {
+         "description": "1-based line number to start reading at.",
+         "type": "integer"
+        },
+        "path": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "path"
+       ],
+       "type": "object"
+      },
+      "name": "read_file"
+     },
+     {
+      "description": "Hand this request to the full agent, which has every tool, a real workspace and many more steps. Call this ONLY when the request needs sustained multi-step work you cannot finish here — building or refactoring across files, running commands, long explore-edit-verify loops, or a tool you have not been given. Do NOT call it for questions you can answer, or for work the tools you already hold can do: it restarts the turn and costs the user time. Never tell the user to switch modes — there are no modes; call this instead. If you hold file or document tools, documents, spreadsheets and files are NOT a reason to call this: read, create and edit them here — this turn has the rounds for it.",
+      "input_schema": {
+       "properties": {
+        "agent": {
+         "description": "Optional: who should take this — a name from 'Who can take this work'. Leave out for the default builder.",
+         "type": "string"
+        },
+        "reason": {
+         "description": "One short line, shown to the user, on what this needs that you cannot do here (e.g. 'needs to edit several files').",
+         "type": "string"
+        }
+       },
+       "required": [
+        "reason"
+       ],
+       "type": "object"
+      },
+      "name": "escalate_to_agent"
+     },
+     {
+      "description": "Propose a reusable, repeatable workflow when the user describes a multi-step PROCESS they will want again — 'every Friday…', 'whenever a client sends…', 'first gather X, then check Y, then report Z'. The user sees the steps as a card they can save, run once, or edit — so call this INSTEAD of writing the steps out in prose. Do NOT call it for one-off requests, questions, or work to do right now; for those, answer or use your tools.",
+      "input_schema": {
+       "properties": {
+        "description": {
+         "description": "one line",
+         "type": "string"
+        },
+        "name": {
+         "description": "kebab-case-name",
+         "type": "string"
+        },
+        "steps": {
+         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`.",
+         "items": {
+          "properties": {
+           "agent": {
+            "description": "one of: builder, planner, researcher, reviewer, supervisor",
+            "type": "string"
+           },
+           "args": {
+            "description": "kind=tool only: the tool's arguments; {{Step Name}} inserts an earlier step's output",
+            "type": "object"
+           },
+           "group": {
+            "description": "adjacent steps sharing a group run in parallel",
+            "type": "string"
+           },
+           "kind": {
+            "description": "agent | tool | ask | notify (default agent)",
+            "type": "string"
+           },
+           "message": {
+            "description": "kind=ask: the question to ask the user; kind=notify: the notice to send",
+            "type": "string"
+           },
+           "name": {
+            "type": "string"
+           },
+           "on_failure": {
+            "description": "halt | retry | skip (default halt)",
+            "type": "string"
+           },
+           "task": {
+            "description": "a clear, self-contained instruction",
+            "type": "string"
+           },
+           "tool": {
+            "description": "kind=tool only: the tool to call",
+            "type": "string"
+           }
+          },
+          "required": [
+           "name"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "name",
+        "steps"
+       ],
+       "type": "object"
+      },
+      "name": "workflow_draft"
+     }
+    ],
+    "system": "You are Iron Jarvis, the user's personal AI running on their own machine. Answer directly and conversationally — helpful, sharp, warm, concise but complete. Use markdown when it helps.\n\n# Environment\n- Iron Jarvis runs on the user's machine; their home directory is <HOME>. The model answering (you) runs in the cloud, on the provider's servers — not on this PC and not on the user's network, so never say you run locally.\n- Answer directly. There are no modes for the user to pick: when a request needs sustained multi-step work you cannot finish here, call escalate_to_agent and it is taken over seamlessly.\n- When the user describes a repeatable multi-step process (\"every Friday…\", \"whenever a client sends…\"), call workflow_draft so they get a saveable workflow card instead of prose steps.\n\n# Drafts the user will send\nPut any email or message you draft FOR THE USER TO SEND inside a fenced ```email block, with `Subject: ...` as its first line when it is an email. That block renders as a card with one-press copy that keeps formatting when pasted into a mail client. Use markdown inside the fence and keep your own commentary outside it. Never use this fence for anything the user is not going to send.\n\n# Charts\nWhen numbers are clearer as a chart, put them in a fenced ```chart block holding ONLY JSON: {\"type\": \"bar\"|\"line\"|\"pie\", \"title\": \"...\", \"labels\": [...], \"series\": [{\"name\": \"...\", \"values\": [...]}]} with plain numbers, one value per label (a pie has one series). It renders as a chart the user can flip to a table. Only chart numbers you actually have — never invented ones.\n\n# What I can remember\n- Long-term bases: brain (markdown, empty)\nSearch these with the recall tool when available before assuming something isn't known.\n\n# Who can take this work\n- builder — hands-on doer for files, shell, and documents (no runs yet)\n- reviewer — careful second look at correctness and risk (no runs yet)\n- researcher — gathers and synthesizes findings from files an… (no runs yet)\n- memory — curates and tidies the platform's stored knowledge (no runs yet)\n- maintainer — carefully edits and tests Iron Jarvis's own co… (no runs yet)\n- automation — wires up schedules, webhooks, workflows, and i… (no runs yet)\n- guide — the Iron Jarvis expert who explains the app and fin… (no runs yet)\n\n# Working folder (bound by the user)\nThis chat is working in the folder: <TMP>/ws\nFiles you create are saved there, and files the user attached may have been copied into it. When the user says \"this codebase\", \"these files\", \"this folder\", or \"here\", they mean that folder and its contents. Call it the working folder — not a project, unless a project is named elsewhere in this prompt.\n\n# Tools\nThe user armed these tools for this chat: read_file. Use them when they help; answer directly when they don't.\nWHEN A CALL FAILS: read the error before doing anything else.\n- A missing or wrong argument: fix the call ONCE with the arguments the error names.\n- \"not armed\", \"permission denied\", \"low trust\" or \"you declined\": do not retry; tell the user what was refused and why.\n- The app's own failure (a pack exited or is failing, a provider is down, a background loop is failing): call app_health or pack_status when they are armed; otherwise tell the user exactly what is wrong and where to fix it (Settings → Tools, or Settings → Connections).\n- Never run the identical call a third time, and never claim a result you did not get.\nYour file tools operate INSIDE the folder <TMP>/ws; read, edit, and create files there directly, and use the absolute paths that file_search returns."
+   },
+   {
+    "messages": [
+     {
+      "content": "fix the bug in a.py",
+      "name": null,
+      "role": "user",
+      "tool_call_id": null,
+      "tool_calls": []
+     },
+     {
+      "content": "",
+      "name": null,
+      "role": "assistant",
+      "tool_call_id": null,
+      "tool_calls": [
+       [
+        "c1",
+        "read_file",
+        {
+         "path": "a.py"
+        }
+       ]
+      ]
+     },
+     {
+      "content": "x = 1\n\n\n[cached — already read earlier in this session — unchanged since (same size and modified time), so it was not read again; the text above is the file's current content, served from that `read_file` call. Move on rather than re-reading it.]",
+      "name": "read_file",
+      "role": "tool",
+      "tool_call_id": "c1",
+      "tool_calls": []
+     }
+    ],
+    "specs": [
+     {
+      "description": "Read a file from the session workspace: UTF-8 text (code, .md, .txt, .json) directly, and Word/PDF/Excel/PowerPoint/RTF by extracting their text automatically. read_document does the same with page/sheet selection for large documents. For a long file pass `offset` (the 1-based line to start at) and/or `limit` (lines, default 2000), and `numbered: true` for line numbers; the reply says which lines it showed and how many the file has.",
+      "input_schema": {
+       "properties": {
+        "_store_as": {
+         "description": "Optional variable name. Binds this result into the session's Python namespace INSTEAD of returning it, and returns a one-line receipt — use the `repl` tool to inspect it (len, slicing, comprehensions). The variable is a dict: v['output'] is the tool's text payload, v['data'] its structured metadata. Prefer this whenever the result may be large.",
+         "type": "string"
+        },
+        "limit": {
+         "description": "How many lines to read (default 2000 when offset, limit or numbered is given).",
+         "type": "integer"
+        },
+        "numbered": {
+         "description": "Prefix each line with its line number and a tab (cat -n style).",
+         "type": "boolean"
+        },
+        "offset": {
+         "description": "1-based line number to start reading at.",
+         "type": "integer"
+        },
+        "path": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "path"
+       ],
+       "type": "object"
+      },
+      "name": "read_file"
+     },
+     {
+      "description": "Hand this request to the full agent, which has every tool, a real workspace and many more steps. Call this ONLY when the request needs sustained multi-step work you cannot finish here — building or refactoring across files, running commands, long explore-edit-verify loops, or a tool you have not been given. Do NOT call it for questions you can answer, or for work the tools you already hold can do: it restarts the turn and costs the user time. Never tell the user to switch modes — there are no modes; call this instead. If you hold file or document tools, documents, spreadsheets and files are NOT a reason to call this: read, create and edit them here — this turn has the rounds for it.",
+      "input_schema": {
+       "properties": {
+        "agent": {
+         "description": "Optional: who should take this — a name from 'Who can take this work'. Leave out for the default builder.",
+         "type": "string"
+        },
+        "reason": {
+         "description": "One short line, shown to the user, on what this needs that you cannot do here (e.g. 'needs to edit several files').",
+         "type": "string"
+        }
+       },
+       "required": [
+        "reason"
+       ],
+       "type": "object"
+      },
+      "name": "escalate_to_agent"
+     },
+     {
+      "description": "Propose a reusable, repeatable workflow when the user describes a multi-step PROCESS they will want again — 'every Friday…', 'whenever a client sends…', 'first gather X, then check Y, then report Z'. The user sees the steps as a card they can save, run once, or edit — so call this INSTEAD of writing the steps out in prose. Do NOT call it for one-off requests, questions, or work to do right now; for those, answer or use your tools.",
+      "input_schema": {
+       "properties": {
+        "description": {
+         "description": "one line",
+         "type": "string"
+        },
+        "name": {
+         "description": "kebab-case-name",
+         "type": "string"
+        },
+        "steps": {
+         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`.",
+         "items": {
+          "properties": {
+           "agent": {
+            "description": "one of: builder, planner, researcher, reviewer, supervisor",
+            "type": "string"
+           },
+           "args": {
+            "description": "kind=tool only: the tool's arguments; {{Step Name}} inserts an earlier step's output",
+            "type": "object"
+           },
+           "group": {
+            "description": "adjacent steps sharing a group run in parallel",
+            "type": "string"
+           },
+           "kind": {
+            "description": "agent | tool | ask | notify (default agent)",
+            "type": "string"
+           },
+           "message": {
+            "description": "kind=ask: the question to ask the user; kind=notify: the notice to send",
+            "type": "string"
+           },
+           "name": {
+            "type": "string"
+           },
+           "on_failure": {
+            "description": "halt | retry | skip (default halt)",
+            "type": "string"
+           },
+           "task": {
+            "description": "a clear, self-contained instruction",
+            "type": "string"
+           },
+           "tool": {
+            "description": "kind=tool only: the tool to call",
+            "type": "string"
+           }
+          },
+          "required": [
+           "name"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "name",
+        "steps"
+       ],
+       "type": "object"
+      },
+      "name": "workflow_draft"
+     }
+    ],
+    "system": "You are Iron Jarvis, the user's personal AI running on their own machine. Answer directly and conversationally — helpful, sharp, warm, concise but complete. Use markdown when it helps.\n\n# Environment\n- Iron Jarvis runs on the user's machine; their home directory is <HOME>. The model answering (you) runs in the cloud, on the provider's servers — not on this PC and not on the user's network, so never say you run locally.\n- Answer directly. There are no modes for the user to pick: when a request needs sustained multi-step work you cannot finish here, call escalate_to_agent and it is taken over seamlessly.\n- When the user describes a repeatable multi-step process (\"every Friday…\", \"whenever a client sends…\"), call workflow_draft so they get a saveable workflow card instead of prose steps.\n\n# Drafts the user will send\nPut any email or message you draft FOR THE USER TO SEND inside a fenced ```email block, with `Subject: ...` as its first line when it is an email. That block renders as a card with one-press copy that keeps formatting when pasted into a mail client. Use markdown inside the fence and keep your own commentary outside it. Never use this fence for anything the user is not going to send.\n\n# Charts\nWhen numbers are clearer as a chart, put them in a fenced ```chart block holding ONLY JSON: {\"type\": \"bar\"|\"line\"|\"pie\", \"title\": \"...\", \"labels\": [...], \"series\": [{\"name\": \"...\", \"values\": [...]}]} with plain numbers, one value per label (a pie has one series). It renders as a chart the user can flip to a table. Only chart numbers you actually have — never invented ones.\n\n# What I can remember\n- Long-term bases: brain (markdown, empty)\nSearch these with the recall tool when available before assuming something isn't known.\n\n# Who can take this work\n- builder — hands-on doer for files, shell, and documents (no runs yet)\n- reviewer — careful second look at correctness and risk (no runs yet)\n- researcher — gathers and synthesizes findings from files an… (no runs yet)\n- memory — curates and tidies the platform's stored knowledge (no runs yet)\n- maintainer — carefully edits and tests Iron Jarvis's own co… (no runs yet)\n- automation — wires up schedules, webhooks, workflows, and i… (no runs yet)\n- guide — the Iron Jarvis expert who explains the app and fin… (no runs yet)\n\n# Working folder (bound by the user)\nThis chat is working in the folder: <TMP>/ws\nFiles you create are saved there, and files the user attached may have been copied into it. When the user says \"this codebase\", \"these files\", \"this folder\", or \"here\", they mean that folder and its contents. Call it the working folder — not a project, unless a project is named elsewhere in this prompt.\n\n# Tools\nThe user armed these tools for this chat: read_file. Use them when they help; answer directly when they don't.\nWHEN A CALL FAILS: read the error before doing anything else.\n- A missing or wrong argument: fix the call ONCE with the arguments the error names.\n- \"not armed\", \"permission denied\", \"low trust\" or \"you declined\": do not retry; tell the user what was refused and why.\n- The app's own failure (a pack exited or is failing, a provider is down, a background loop is failing): call app_health or pack_status when they are armed; otherwise tell the user exactly what is wrong and where to fix it (Settings → Tools, or Settings → Connections).\n- Never run the identical call a third time, and never claim a result you did not get.\nYour file tools operate INSIDE the folder <TMP>/ws; read, edit, and create files there directly, and use the absolute paths that file_search returns."
+   }
+  ],
+  "frames": [],
+  "keys": [
+   "adapted",
+   "approved",
+   "attached",
+   "auto_armed",
+   "config_cards",
+   "context",
+   "documents",
+   "doors",
+   "escalate",
+   "escalate_agent",
+   "escalate_reason",
+   "folder_rules",
+   "images",
+   "model",
+   "provider",
+   "refit",
+   "remembered",
+   "reply",
+   "resources",
+   "route",
+   "skill",
+   "suggestion",
+   "thinking",
+   "thread_refs",
+   "tools_used",
+   "truncated",
+   "trust",
+   "trust_note",
+   "trust_reason",
+   "usage",
+   "workflow_draft"
+  ],
+  "reply": "Done.",
+  "route": {
+   "allowed_once": false,
+   "from": "",
+   "label": "",
+   "local_only": false,
+   "model": "claude-sonnet-4-5",
+   "on_this_network": false,
+   "provider": "anthropic",
+   "reason": "default",
+   "reasoning": "",
+   "requested": "",
+   "text_only": false,
+   "why": ""
+  },
+  "route_order": [
+   "requested",
+   "provider",
+   "model",
+   "reason",
+   "reasoning",
+   "from",
+   "why",
+   "label",
+   "text_only",
+   "local_only",
+   "allowed_once",
+   "on_this_network"
+  ],
+  "tools_used": [
+   "read_file"
+  ]
+ },
+ "post:plain": {
+  "calls": [
+   {
+    "messages": [
+     {
+      "content": "what is a closure in python?",
+      "name": null,
+      "role": "user",
+      "tool_call_id": null,
+      "tool_calls": []
+     }
+    ],
+    "specs": [
+     {
+      "description": "Hand this request to the full agent, which has every tool, a real workspace and many more steps. Call this ONLY when the request needs sustained multi-step work you cannot finish here — building or refactoring across files, running commands, long explore-edit-verify loops, or a tool you have not been given. Do NOT call it for questions you can answer, or for work the tools you already hold can do: it restarts the turn and costs the user time. Never tell the user to switch modes — there are no modes; call this instead. If you hold file or document tools, documents, spreadsheets and files are NOT a reason to call this: read, create and edit them here — this turn has the rounds for it.",
+      "input_schema": {
+       "properties": {
+        "agent": {
+         "description": "Optional: who should take this — a name from 'Who can take this work'. Leave out for the default builder.",
+         "type": "string"
+        },
+        "reason": {
+         "description": "One short line, shown to the user, on what this needs that you cannot do here (e.g. 'needs to edit several files').",
+         "type": "string"
+        }
+       },
+       "required": [
+        "reason"
+       ],
+       "type": "object"
+      },
+      "name": "escalate_to_agent"
+     },
+     {
+      "description": "Propose a reusable, repeatable workflow when the user describes a multi-step PROCESS they will want again — 'every Friday…', 'whenever a client sends…', 'first gather X, then check Y, then report Z'. The user sees the steps as a card they can save, run once, or edit — so call this INSTEAD of writing the steps out in prose. Do NOT call it for one-off requests, questions, or work to do right now; for those, answer or use your tools.",
+      "input_schema": {
+       "properties": {
+        "description": {
+         "description": "one line",
+         "type": "string"
+        },
+        "name": {
+         "description": "kebab-case-name",
+         "type": "string"
+        },
+        "steps": {
+         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`.",
+         "items": {
+          "properties": {
+           "agent": {
+            "description": "one of: builder, planner, researcher, reviewer, supervisor",
+            "type": "string"
+           },
+           "args": {
+            "description": "kind=tool only: the tool's arguments; {{Step Name}} inserts an earlier step's output",
+            "type": "object"
+           },
+           "group": {
+            "description": "adjacent steps sharing a group run in parallel",
+            "type": "string"
+           },
+           "kind": {
+            "description": "agent | tool | ask | notify (default agent)",
+            "type": "string"
+           },
+           "message": {
+            "description": "kind=ask: the question to ask the user; kind=notify: the notice to send",
+            "type": "string"
+           },
+           "name": {
+            "type": "string"
+           },
+           "on_failure": {
+            "description": "halt | retry | skip (default halt)",
+            "type": "string"
+           },
+           "task": {
+            "description": "a clear, self-contained instruction",
+            "type": "string"
+           },
+           "tool": {
+            "description": "kind=tool only: the tool to call",
+            "type": "string"
+           }
+          },
+          "required": [
+           "name"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "name",
+        "steps"
+       ],
+       "type": "object"
+      },
+      "name": "workflow_draft"
+     }
+    ],
+    "system": "You are Iron Jarvis, the user's personal AI running on their own machine. Answer directly and conversationally — helpful, sharp, warm, concise but complete. Use markdown when it helps.\n\n# Environment\n- Iron Jarvis runs on the user's machine; their home directory is <HOME>. The model answering (you) runs in the cloud, on the provider's servers — not on this PC and not on the user's network, so never say you run locally.\n- Answer directly. There are no modes for the user to pick: when a request needs sustained multi-step work you cannot finish here, call escalate_to_agent and it is taken over seamlessly.\n- When the user describes a repeatable multi-step process (\"every Friday…\", \"whenever a client sends…\"), call workflow_draft so they get a saveable workflow card instead of prose steps.\n\n# Drafts the user will send\nPut any email or message you draft FOR THE USER TO SEND inside a fenced ```email block, with `Subject: ...` as its first line when it is an email. That block renders as a card with one-press copy that keeps formatting when pasted into a mail client. Use markdown inside the fence and keep your own commentary outside it. Never use this fence for anything the user is not going to send.\n\n# Charts\nWhen numbers are clearer as a chart, put them in a fenced ```chart block holding ONLY JSON: {\"type\": \"bar\"|\"line\"|\"pie\", \"title\": \"...\", \"labels\": [...], \"series\": [{\"name\": \"...\", \"values\": [...]}]} with plain numbers, one value per label (a pie has one series). It renders as a chart the user can flip to a table. Only chart numbers you actually have — never invented ones.\n\n# What I can remember\n- Long-term bases: brain (markdown, empty)\nSearch these with the recall tool when available before assuming something isn't known.\n\n# Who can take this work\n- builder — hands-on doer for files, shell, and documents (no runs yet)\n- reviewer — careful second look at correctness and risk (no runs yet)\n- researcher — gathers and synthesizes findings from files an… (no runs yet)\n- memory — curates and tidies the platform's stored knowledge (no runs yet)\n- maintainer — carefully edits and tests Iron Jarvis's own co… (no runs yet)\n- automation — wires up schedules, webhooks, workflows, and i… (no runs yet)\n- guide — the Iron Jarvis expert who explains the app and fin… (no runs yet)"
+   }
+  ],
+  "frames": [],
+  "keys": [
+   "adapted",
+   "approved",
+   "attached",
+   "auto_armed",
+   "config_cards",
+   "context",
+   "documents",
+   "doors",
+   "escalate",
+   "escalate_agent",
+   "escalate_reason",
+   "folder_rules",
+   "images",
+   "model",
+   "provider",
+   "refit",
+   "remembered",
+   "reply",
+   "resources",
+   "route",
+   "skill",
+   "suggestion",
+   "thinking",
+   "thread_refs",
+   "tools_used",
+   "truncated",
+   "trust",
+   "trust_note",
+   "trust_reason",
+   "usage",
+   "workflow_draft"
+  ],
+  "reply": "Done.",
+  "route": {
+   "allowed_once": false,
+   "from": "",
+   "label": "",
+   "local_only": false,
+   "model": "claude-sonnet-4-5",
+   "on_this_network": false,
+   "provider": "anthropic",
+   "reason": "default",
+   "reasoning": "",
+   "requested": "",
+   "text_only": false,
+   "why": ""
+  },
+  "route_order": [
+   "requested",
+   "provider",
+   "model",
+   "reason",
+   "reasoning",
+   "from",
+   "why",
+   "label",
+   "text_only",
+   "local_only",
+   "allowed_once",
+   "on_this_network"
+  ],
+  "tools_used": []
+ },
+ "stream:armed_read": {
+  "calls": [
+   {
+    "messages": [
+     {
+      "content": "fix the bug in a.py",
+      "name": null,
+      "role": "user",
+      "tool_call_id": null,
+      "tool_calls": []
+     }
+    ],
+    "specs": [
+     {
+      "description": "Read a file from the session workspace: UTF-8 text (code, .md, .txt, .json) directly, and Word/PDF/Excel/PowerPoint/RTF by extracting their text automatically. read_document does the same with page/sheet selection for large documents. For a long file pass `offset` (the 1-based line to start at) and/or `limit` (lines, default 2000), and `numbered: true` for line numbers; the reply says which lines it showed and how many the file has.",
+      "input_schema": {
+       "properties": {
+        "_store_as": {
+         "description": "Optional variable name. Binds this result into the session's Python namespace INSTEAD of returning it, and returns a one-line receipt — use the `repl` tool to inspect it (len, slicing, comprehensions). The variable is a dict: v['output'] is the tool's text payload, v['data'] its structured metadata. Prefer this whenever the result may be large.",
+         "type": "string"
+        },
+        "limit": {
+         "description": "How many lines to read (default 2000 when offset, limit or numbered is given).",
+         "type": "integer"
+        },
+        "numbered": {
+         "description": "Prefix each line with its line number and a tab (cat -n style).",
+         "type": "boolean"
+        },
+        "offset": {
+         "description": "1-based line number to start reading at.",
+         "type": "integer"
+        },
+        "path": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "path"
+       ],
+       "type": "object"
+      },
+      "name": "read_file"
+     },
+     {
+      "description": "Hand this request to the full agent, which has every tool, a real workspace and many more steps. Call this ONLY when the request needs sustained multi-step work you cannot finish here — building or refactoring across files, running commands, long explore-edit-verify loops, or a tool you have not been given. Do NOT call it for questions you can answer, or for work the tools you already hold can do: it restarts the turn and costs the user time. Never tell the user to switch modes — there are no modes; call this instead. If you hold file or document tools, documents, spreadsheets and files are NOT a reason to call this: read, create and edit them here — this turn has the rounds for it.",
+      "input_schema": {
+       "properties": {
+        "agent": {
+         "description": "Optional: who should take this — a name from 'Who can take this work'. Leave out for the default builder.",
+         "type": "string"
+        },
+        "reason": {
+         "description": "One short line, shown to the user, on what this needs that you cannot do here (e.g. 'needs to edit several files').",
+         "type": "string"
+        }
+       },
+       "required": [
+        "reason"
+       ],
+       "type": "object"
+      },
+      "name": "escalate_to_agent"
+     },
+     {
+      "description": "Propose a reusable, repeatable workflow when the user describes a multi-step PROCESS they will want again — 'every Friday…', 'whenever a client sends…', 'first gather X, then check Y, then report Z'. The user sees the steps as a card they can save, run once, or edit — so call this INSTEAD of writing the steps out in prose. Do NOT call it for one-off requests, questions, or work to do right now; for those, answer or use your tools.",
+      "input_schema": {
+       "properties": {
+        "description": {
+         "description": "one line",
+         "type": "string"
+        },
+        "name": {
+         "description": "kebab-case-name",
+         "type": "string"
+        },
+        "steps": {
+         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`.",
+         "items": {
+          "properties": {
+           "agent": {
+            "description": "one of: builder, planner, researcher, reviewer, supervisor",
+            "type": "string"
+           },
+           "args": {
+            "description": "kind=tool only: the tool's arguments; {{Step Name}} inserts an earlier step's output",
+            "type": "object"
+           },
+           "group": {
+            "description": "adjacent steps sharing a group run in parallel",
+            "type": "string"
+           },
+           "kind": {
+            "description": "agent | tool | ask | notify (default agent)",
+            "type": "string"
+           },
+           "message": {
+            "description": "kind=ask: the question to ask the user; kind=notify: the notice to send",
+            "type": "string"
+           },
+           "name": {
+            "type": "string"
+           },
+           "on_failure": {
+            "description": "halt | retry | skip (default halt)",
+            "type": "string"
+           },
+           "task": {
+            "description": "a clear, self-contained instruction",
+            "type": "string"
+           },
+           "tool": {
+            "description": "kind=tool only: the tool to call",
+            "type": "string"
+           }
+          },
+          "required": [
+           "name"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "name",
+        "steps"
+       ],
+       "type": "object"
+      },
+      "name": "workflow_draft"
+     }
+    ],
+    "system": "You are Iron Jarvis, the user's personal AI running on their own machine. Answer directly and conversationally — helpful, sharp, warm, concise but complete. Use markdown when it helps.\n\n# Environment\n- Iron Jarvis runs on the user's machine; their home directory is <HOME>. The model answering (you) runs in the cloud, on the provider's servers — not on this PC and not on the user's network, so never say you run locally.\n- Answer directly. There are no modes for the user to pick: when a request needs sustained multi-step work you cannot finish here, call escalate_to_agent and it is taken over seamlessly.\n- When the user describes a repeatable multi-step process (\"every Friday…\", \"whenever a client sends…\"), call workflow_draft so they get a saveable workflow card instead of prose steps.\n\n# Drafts the user will send\nPut any email or message you draft FOR THE USER TO SEND inside a fenced ```email block, with `Subject: ...` as its first line when it is an email. That block renders as a card with one-press copy that keeps formatting when pasted into a mail client. Use markdown inside the fence and keep your own commentary outside it. Never use this fence for anything the user is not going to send.\n\n# Charts\nWhen numbers are clearer as a chart, put them in a fenced ```chart block holding ONLY JSON: {\"type\": \"bar\"|\"line\"|\"pie\", \"title\": \"...\", \"labels\": [...], \"series\": [{\"name\": \"...\", \"values\": [...]}]} with plain numbers, one value per label (a pie has one series). It renders as a chart the user can flip to a table. Only chart numbers you actually have — never invented ones.\n\n# What I can remember\n- Long-term bases: brain (markdown, empty)\nSearch these with the recall tool when available before assuming something isn't known.\n\n# Who can take this work\n- builder — hands-on doer for files, shell, and documents (no runs yet)\n- reviewer — careful second look at correctness and risk (no runs yet)\n- researcher — gathers and synthesizes findings from files an… (no runs yet)\n- memory — curates and tidies the platform's stored knowledge (no runs yet)\n- maintainer — carefully edits and tests Iron Jarvis's own co… (no runs yet)\n- automation — wires up schedules, webhooks, workflows, and i… (no runs yet)\n- guide — the Iron Jarvis expert who explains the app and fin… (no runs yet)\n\n# Working folder (bound by the user)\nThis chat is working in the folder: <TMP>/ws\nFiles you create are saved there, and files the user attached may have been copied into it. When the user says \"this codebase\", \"these files\", \"this folder\", or \"here\", they mean that folder and its contents. Call it the working folder — not a project, unless a project is named elsewhere in this prompt.\n\n# Tools\nThe user armed these tools for this chat: read_file. Use them when they help; answer directly when they don't.\nWHEN A CALL FAILS: read the error before doing anything else.\n- A missing or wrong argument: fix the call ONCE with the arguments the error names.\n- \"not armed\", \"permission denied\", \"low trust\" or \"you declined\": do not retry; tell the user what was refused and why.\n- The app's own failure (a pack exited or is failing, a provider is down, a background loop is failing): call app_health or pack_status when they are armed; otherwise tell the user exactly what is wrong and where to fix it (Settings → Tools, or Settings → Connections).\n- Never run the identical call a third time, and never claim a result you did not get.\nYour file tools operate INSIDE the folder <TMP>/ws; read, edit, and create files there directly, and use the absolute paths that file_search returns."
+   },
+   {
+    "messages": [
+     {
+      "content": "fix the bug in a.py",
+      "name": null,
+      "role": "user",
+      "tool_call_id": null,
+      "tool_calls": []
+     },
+     {
+      "content": "",
+      "name": null,
+      "role": "assistant",
+      "tool_call_id": null,
+      "tool_calls": [
+       [
+        "c1",
+        "read_file",
+        {
+         "path": "a.py"
+        }
+       ]
+      ]
+     },
+     {
+      "content": "x = 1\n",
+      "name": "read_file",
+      "role": "tool",
+      "tool_call_id": "c1",
+      "tool_calls": []
+     }
+    ],
+    "specs": [
+     {
+      "description": "Read a file from the session workspace: UTF-8 text (code, .md, .txt, .json) directly, and Word/PDF/Excel/PowerPoint/RTF by extracting their text automatically. read_document does the same with page/sheet selection for large documents. For a long file pass `offset` (the 1-based line to start at) and/or `limit` (lines, default 2000), and `numbered: true` for line numbers; the reply says which lines it showed and how many the file has.",
+      "input_schema": {
+       "properties": {
+        "_store_as": {
+         "description": "Optional variable name. Binds this result into the session's Python namespace INSTEAD of returning it, and returns a one-line receipt — use the `repl` tool to inspect it (len, slicing, comprehensions). The variable is a dict: v['output'] is the tool's text payload, v['data'] its structured metadata. Prefer this whenever the result may be large.",
+         "type": "string"
+        },
+        "limit": {
+         "description": "How many lines to read (default 2000 when offset, limit or numbered is given).",
+         "type": "integer"
+        },
+        "numbered": {
+         "description": "Prefix each line with its line number and a tab (cat -n style).",
+         "type": "boolean"
+        },
+        "offset": {
+         "description": "1-based line number to start reading at.",
+         "type": "integer"
+        },
+        "path": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "path"
+       ],
+       "type": "object"
+      },
+      "name": "read_file"
+     },
+     {
+      "description": "Hand this request to the full agent, which has every tool, a real workspace and many more steps. Call this ONLY when the request needs sustained multi-step work you cannot finish here — building or refactoring across files, running commands, long explore-edit-verify loops, or a tool you have not been given. Do NOT call it for questions you can answer, or for work the tools you already hold can do: it restarts the turn and costs the user time. Never tell the user to switch modes — there are no modes; call this instead. If you hold file or document tools, documents, spreadsheets and files are NOT a reason to call this: read, create and edit them here — this turn has the rounds for it.",
+      "input_schema": {
+       "properties": {
+        "agent": {
+         "description": "Optional: who should take this — a name from 'Who can take this work'. Leave out for the default builder.",
+         "type": "string"
+        },
+        "reason": {
+         "description": "One short line, shown to the user, on what this needs that you cannot do here (e.g. 'needs to edit several files').",
+         "type": "string"
+        }
+       },
+       "required": [
+        "reason"
+       ],
+       "type": "object"
+      },
+      "name": "escalate_to_agent"
+     },
+     {
+      "description": "Propose a reusable, repeatable workflow when the user describes a multi-step PROCESS they will want again — 'every Friday…', 'whenever a client sends…', 'first gather X, then check Y, then report Z'. The user sees the steps as a card they can save, run once, or edit — so call this INSTEAD of writing the steps out in prose. Do NOT call it for one-off requests, questions, or work to do right now; for those, answer or use your tools.",
+      "input_schema": {
+       "properties": {
+        "description": {
+         "description": "one line",
+         "type": "string"
+        },
+        "name": {
+         "description": "kebab-case-name",
+         "type": "string"
+        },
+        "steps": {
+         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`.",
+         "items": {
+          "properties": {
+           "agent": {
+            "description": "one of: builder, planner, researcher, reviewer, supervisor",
+            "type": "string"
+           },
+           "args": {
+            "description": "kind=tool only: the tool's arguments; {{Step Name}} inserts an earlier step's output",
+            "type": "object"
+           },
+           "group": {
+            "description": "adjacent steps sharing a group run in parallel",
+            "type": "string"
+           },
+           "kind": {
+            "description": "agent | tool | ask | notify (default agent)",
+            "type": "string"
+           },
+           "message": {
+            "description": "kind=ask: the question to ask the user; kind=notify: the notice to send",
+            "type": "string"
+           },
+           "name": {
+            "type": "string"
+           },
+           "on_failure": {
+            "description": "halt | retry | skip (default halt)",
+            "type": "string"
+           },
+           "task": {
+            "description": "a clear, self-contained instruction",
+            "type": "string"
+           },
+           "tool": {
+            "description": "kind=tool only: the tool to call",
+            "type": "string"
+           }
+          },
+          "required": [
+           "name"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "name",
+        "steps"
+       ],
+       "type": "object"
+      },
+      "name": "workflow_draft"
+     }
+    ],
+    "system": "You are Iron Jarvis, the user's personal AI running on their own machine. Answer directly and conversationally — helpful, sharp, warm, concise but complete. Use markdown when it helps.\n\n# Environment\n- Iron Jarvis runs on the user's machine; their home directory is <HOME>. The model answering (you) runs in the cloud, on the provider's servers — not on this PC and not on the user's network, so never say you run locally.\n- Answer directly. There are no modes for the user to pick: when a request needs sustained multi-step work you cannot finish here, call escalate_to_agent and it is taken over seamlessly.\n- When the user describes a repeatable multi-step process (\"every Friday…\", \"whenever a client sends…\"), call workflow_draft so they get a saveable workflow card instead of prose steps.\n\n# Drafts the user will send\nPut any email or message you draft FOR THE USER TO SEND inside a fenced ```email block, with `Subject: ...` as its first line when it is an email. That block renders as a card with one-press copy that keeps formatting when pasted into a mail client. Use markdown inside the fence and keep your own commentary outside it. Never use this fence for anything the user is not going to send.\n\n# Charts\nWhen numbers are clearer as a chart, put them in a fenced ```chart block holding ONLY JSON: {\"type\": \"bar\"|\"line\"|\"pie\", \"title\": \"...\", \"labels\": [...], \"series\": [{\"name\": \"...\", \"values\": [...]}]} with plain numbers, one value per label (a pie has one series). It renders as a chart the user can flip to a table. Only chart numbers you actually have — never invented ones.\n\n# What I can remember\n- Long-term bases: brain (markdown, empty)\nSearch these with the recall tool when available before assuming something isn't known.\n\n# Who can take this work\n- builder — hands-on doer for files, shell, and documents (no runs yet)\n- reviewer — careful second look at correctness and risk (no runs yet)\n- researcher — gathers and synthesizes findings from files an… (no runs yet)\n- memory — curates and tidies the platform's stored knowledge (no runs yet)\n- maintainer — carefully edits and tests Iron Jarvis's own co… (no runs yet)\n- automation — wires up schedules, webhooks, workflows, and i… (no runs yet)\n- guide — the Iron Jarvis expert who explains the app and fin… (no runs yet)\n\n# Working folder (bound by the user)\nThis chat is working in the folder: <TMP>/ws\nFiles you create are saved there, and files the user attached may have been copied into it. When the user says \"this codebase\", \"these files\", \"this folder\", or \"here\", they mean that folder and its contents. Call it the working folder — not a project, unless a project is named elsewhere in this prompt.\n\n# Tools\nThe user armed these tools for this chat: read_file. Use them when they help; answer directly when they don't.\nWHEN A CALL FAILS: read the error before doing anything else.\n- A missing or wrong argument: fix the call ONCE with the arguments the error names.\n- \"not armed\", \"permission denied\", \"low trust\" or \"you declined\": do not retry; tell the user what was refused and why.\n- The app's own failure (a pack exited or is failing, a provider is down, a background loop is failing): call app_health or pack_status when they are armed; otherwise tell the user exactly what is wrong and where to fix it (Settings → Tools, or Settings → Connections).\n- Never run the identical call a third time, and never claim a result you did not get.\nYour file tools operate INSIDE the folder <TMP>/ws; read, edit, and create files there directly, and use the absolute paths that file_search returns."
+   }
+  ],
+  "frames": [
+   "phase",
+   "phase",
+   "round",
+   "tool_call",
+   "tool_call",
+   "round",
+   "token",
+   "done"
+  ],
+  "keys": [
+   "adapted",
+   "approved",
+   "auto_armed",
+   "config_cards",
+   "context",
+   "denied_tools",
+   "documents",
+   "doors",
+   "escalate",
+   "escalate_agent",
+   "escalate_reason",
+   "folder_rules",
+   "model",
+   "provider",
+   "refit",
+   "remembered",
+   "reply",
+   "resources",
+   "route",
+   "suggestion",
+   "thread_refs",
+   "tools_used",
+   "truncated",
+   "trust",
+   "trust_note",
+   "trust_reason",
+   "usage",
+   "workflow_draft"
+  ],
+  "reply": "Done.",
+  "route": {
+   "allowed_once": false,
+   "from": "",
+   "label": "",
+   "local_only": false,
+   "model": "claude-sonnet-4-5",
+   "on_this_network": false,
+   "provider": "anthropic",
+   "reason": "",
+   "reasoning": "",
+   "requested": "anthropic",
+   "text_only": false,
+   "why": ""
+  },
+  "route_order": [
+   "requested",
+   "provider",
+   "model",
+   "reason",
+   "from",
+   "why",
+   "reasoning",
+   "label",
+   "text_only",
+   "local_only",
+   "allowed_once",
+   "on_this_network"
+  ],
+  "tools_used": [
+   "read_file"
+  ]
+ },
+ "stream:plain": {
+  "calls": [
+   {
+    "messages": [
+     {
+      "content": "what is a closure in python?",
+      "name": null,
+      "role": "user",
+      "tool_call_id": null,
+      "tool_calls": []
+     }
+    ],
+    "specs": [
+     {
+      "description": "Hand this request to the full agent, which has every tool, a real workspace and many more steps. Call this ONLY when the request needs sustained multi-step work you cannot finish here — building or refactoring across files, running commands, long explore-edit-verify loops, or a tool you have not been given. Do NOT call it for questions you can answer, or for work the tools you already hold can do: it restarts the turn and costs the user time. Never tell the user to switch modes — there are no modes; call this instead. If you hold file or document tools, documents, spreadsheets and files are NOT a reason to call this: read, create and edit them here — this turn has the rounds for it.",
+      "input_schema": {
+       "properties": {
+        "agent": {
+         "description": "Optional: who should take this — a name from 'Who can take this work'. Leave out for the default builder.",
+         "type": "string"
+        },
+        "reason": {
+         "description": "One short line, shown to the user, on what this needs that you cannot do here (e.g. 'needs to edit several files').",
+         "type": "string"
+        }
+       },
+       "required": [
+        "reason"
+       ],
+       "type": "object"
+      },
+      "name": "escalate_to_agent"
+     },
+     {
+      "description": "Propose a reusable, repeatable workflow when the user describes a multi-step PROCESS they will want again — 'every Friday…', 'whenever a client sends…', 'first gather X, then check Y, then report Z'. The user sees the steps as a card they can save, run once, or edit — so call this INSTEAD of writing the steps out in prose. Do NOT call it for one-off requests, questions, or work to do right now; for those, answer or use your tools.",
+      "input_schema": {
+       "properties": {
+        "description": {
+         "description": "one line",
+         "type": "string"
+        },
+        "name": {
+         "description": "kebab-case-name",
+         "type": "string"
+        },
+        "steps": {
+         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`.",
+         "items": {
+          "properties": {
+           "agent": {
+            "description": "one of: builder, planner, researcher, reviewer, supervisor",
+            "type": "string"
+           },
+           "args": {
+            "description": "kind=tool only: the tool's arguments; {{Step Name}} inserts an earlier step's output",
+            "type": "object"
+           },
+           "group": {
+            "description": "adjacent steps sharing a group run in parallel",
+            "type": "string"
+           },
+           "kind": {
+            "description": "agent | tool | ask | notify (default agent)",
+            "type": "string"
+           },
+           "message": {
+            "description": "kind=ask: the question to ask the user; kind=notify: the notice to send",
+            "type": "string"
+           },
+           "name": {
+            "type": "string"
+           },
+           "on_failure": {
+            "description": "halt | retry | skip (default halt)",
+            "type": "string"
+           },
+           "task": {
+            "description": "a clear, self-contained instruction",
+            "type": "string"
+           },
+           "tool": {
+            "description": "kind=tool only: the tool to call",
+            "type": "string"
+           }
+          },
+          "required": [
+           "name"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "name",
+        "steps"
+       ],
+       "type": "object"
+      },
+      "name": "workflow_draft"
+     }
+    ],
+    "system": "You are Iron Jarvis, the user's personal AI running on their own machine. Answer directly and conversationally — helpful, sharp, warm, concise but complete. Use markdown when it helps.\n\n# Environment\n- Iron Jarvis runs on the user's machine; their home directory is <HOME>. The model answering (you) runs in the cloud, on the provider's servers — not on this PC and not on the user's network, so never say you run locally.\n- Answer directly. There are no modes for the user to pick: when a request needs sustained multi-step work you cannot finish here, call escalate_to_agent and it is taken over seamlessly.\n- When the user describes a repeatable multi-step process (\"every Friday…\", \"whenever a client sends…\"), call workflow_draft so they get a saveable workflow card instead of prose steps.\n\n# Drafts the user will send\nPut any email or message you draft FOR THE USER TO SEND inside a fenced ```email block, with `Subject: ...` as its first line when it is an email. That block renders as a card with one-press copy that keeps formatting when pasted into a mail client. Use markdown inside the fence and keep your own commentary outside it. Never use this fence for anything the user is not going to send.\n\n# Charts\nWhen numbers are clearer as a chart, put them in a fenced ```chart block holding ONLY JSON: {\"type\": \"bar\"|\"line\"|\"pie\", \"title\": \"...\", \"labels\": [...], \"series\": [{\"name\": \"...\", \"values\": [...]}]} with plain numbers, one value per label (a pie has one series). It renders as a chart the user can flip to a table. Only chart numbers you actually have — never invented ones.\n\n# What I can remember\n- Long-term bases: brain (markdown, empty)\nSearch these with the recall tool when available before assuming something isn't known.\n\n# Who can take this work\n- builder — hands-on doer for files, shell, and documents (no runs yet)\n- reviewer — careful second look at correctness and risk (no runs yet)\n- researcher — gathers and synthesizes findings from files an… (no runs yet)\n- memory — curates and tidies the platform's stored knowledge (no runs yet)\n- maintainer — carefully edits and tests Iron Jarvis's own co… (no runs yet)\n- automation — wires up schedules, webhooks, workflows, and i… (no runs yet)\n- guide — the Iron Jarvis expert who explains the app and fin… (no runs yet)"
+   }
+  ],
+  "frames": [
+   "phase",
+   "phase",
+   "round",
+   "token",
+   "done"
+  ],
+  "keys": [
+   "adapted",
+   "approved",
+   "auto_armed",
+   "config_cards",
+   "context",
+   "denied_tools",
+   "documents",
+   "doors",
+   "escalate",
+   "escalate_agent",
+   "escalate_reason",
+   "folder_rules",
+   "model",
+   "provider",
+   "refit",
+   "remembered",
+   "reply",
+   "resources",
+   "route",
+   "suggestion",
+   "thread_refs",
+   "tools_used",
+   "truncated",
+   "trust",
+   "trust_note",
+   "trust_reason",
+   "usage",
+   "workflow_draft"
+  ],
+  "reply": "Done.",
+  "route": {
+   "allowed_once": false,
+   "from": "",
+   "label": "",
+   "local_only": false,
+   "model": "claude-sonnet-4-5",
+   "on_this_network": false,
+   "provider": "anthropic",
+   "reason": "",
+   "reasoning": "",
+   "requested": "anthropic",
+   "text_only": false,
+   "why": ""
+  },
+  "route_order": [
+   "requested",
+   "provider",
+   "model",
+   "reason",
+   "from",
+   "why",
+   "reasoning",
+   "label",
+   "text_only",
+   "local_only",
+   "allowed_once",
+   "on_this_network"
+  ],
+  "tools_used": []
+ }
+}

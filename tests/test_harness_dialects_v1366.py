@@ -56,18 +56,57 @@ def test_the_family_is_read_off_the_serving_provider_and_model(provider, model, 
     assert D.family_for(provider, model) == family
 
 
-def test_every_family_speaks_a_dialect_and_glm_and_deepseek_speak_claude():
+def test_every_family_speaks_a_dialect_and_deepseek_speaks_claude():
     assert set(D.FAMILY_DIALECT) == {"claude", "gpt", "glm", "qwen", "deepseek", "generic"}
-    assert D.FAMILY_DIALECT["glm"] == "claude" and D.FAMILY_DIALECT["deepseek"] == "claude"
+    assert D.FAMILY_DIALECT["deepseek"] == "claude"
     assert D.FAMILY_DIALECT["qwen"] == "qwen" and D.FAMILY_DIALECT["gpt"] == "gpt"
     for family in D.FAMILY_DIALECT:
         assert family in D.FAMILY_EVIDENCE and len(D.FAMILY_EVIDENCE[family]) > 20
 
 
 def test_auto_takes_the_familys_dialect_and_a_forced_one_wins():
-    assert D.resolve("auto", "custom", "glm-5.3-flash") == ("glm", D.CLAUDE)
+    assert D.resolve("auto", "custom", "glm-5.3-flash") == ("glm", D.GENERIC)
+    assert D.resolve("claude", "custom", "glm-5.3-flash") == ("glm", D.CLAUDE)
     assert D.resolve("generic", "custom", "glm-5.3-flash") == ("glm", D.GENERIC)
     assert D.resolve("gpt", "anthropic", "claude-x") == ("claude", D.GPT)
+
+
+def test_glm_speaks_generic_because_the_benchmark_chose_it():
+    """Review of Phase 3 (Harness² principle 8). glm-5.3-flash on the 30-task
+    benchmark, 2026-10-21: Jarvis's own names and Claude Code's passed the
+    same 28/30, and Claude Code's cost ~1.7x the input tokens and ~1.55x the
+    time. The vendor's advice (Claude Code) lost on cost at equal pass rate,
+    so the DEFAULT is generic — and this fails if glm silently maps back."""
+    assert D.FAMILY_DIALECT["glm"] == "generic", (
+        "glm maps to the claude dialect again: the 2026-10-21 benchmark measured generic at the "
+        "same pass rate for ~58% of the input tokens (FAMILY_MEASURED['glm'])"
+    )
+    for model in ("glm-5.3-flash", "GLM-5.3-Flash-Think", "zai/glm-5"):
+        assert D.resolve("auto", "custom", model)[1] is D.GENERIC, model
+    measured = D.FAMILY_MEASURED["glm"]
+    assert isinstance(measured, D.Measurement) and measured.chosen == "generic"
+    assert measured.date == "2026-10-21"
+    assert {r[0] for r in measured.rows} == {"generic", "claude"}
+    assert {"8405051e0b9f", "34e162cf6d13"} <= {r[1] for r in measured.rows}
+    # Claude Code's dialect stays selectable for a glm model.
+    assert "claude" in D.DIALECTS
+
+
+def test_every_row_says_what_it_rests_on():
+    """A row is either chosen by a measurement (and then FAMILY_DIALECT must
+    hold the dialect the measurement chose) or says it is not yet measured —
+    deepseek and qwen follow their vendors' advice until a benchmark runs."""
+    assert set(D.FAMILY_MEASURED) == set(D.FAMILY_DIALECT)
+    for family, evidence in D.FAMILY_MEASURED.items():
+        if isinstance(evidence, D.Measurement):
+            assert D.FAMILY_DIALECT[family] == evidence.chosen, family
+            assert evidence.chosen in {r[0] for r in evidence.rows}, family
+            assert all(len(r[1]) == 12 and r[2] for r in evidence.rows), family
+        elif family != "generic":
+            assert evidence == D.NOT_YET_MEASURED, family
+    for family in ("deepseek", "qwen"):
+        assert D.FAMILY_MEASURED[family] == D.NOT_YET_MEASURED
+        assert "not yet measured" in D.FAMILY_EVIDENCE[family].lower()
 
 
 # --------------------------------------------------------------------------- #

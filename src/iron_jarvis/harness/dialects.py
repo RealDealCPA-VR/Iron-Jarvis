@@ -33,16 +33,27 @@ FAMILIES (:data:`FAMILIES`), read off the SERVING provider + model the way
   ``tests/fixtures/harness_tool_inventory_v1364.json``);
 * ``gpt`` — openai, codex-cli, an ``openai/…`` route, a gpt/o-series/codex id
   → Codex 0.157.0's shapes (same inventory);
-* ``glm`` and ``deepseek`` → the CLAUDE dialect: both makers tell their users
-  to run their models in Claude Code (read 2026-10-21: docs.z.ai
-  "Use GLM models like GLM-5.3 & GLM-5.3-FLASH for AI coding in Claude Code";
-  api-docs.deepseek.com/guides/anthropic_api "Use DeepSeek in Claude Code");
+* ``glm`` → the GENERIC dialect, BY MEASUREMENT (:data:`FAMILY_MEASURED`):
+  Z.ai tells its users to code in Claude Code (docs.z.ai, read 2026-10-21),
+  but on the benchmark glm-5.3-flash passed exactly as many tasks under
+  Jarvis's own names with ~58% of the input tokens and ~64% of the time it
+  needed under Claude Code's (2026-10-21). Harness² principle 8: a mapping is
+  adopted only when it measures at least as well, cost included. Claude
+  Code's dialect stays selectable (``harness="claude"``, ``--dialect claude``);
+* ``deepseek`` → the CLAUDE dialect: DeepSeek documents running its models in
+  Claude Code (api-docs.deepseek.com/guides/anthropic_api, read 2026-10-21) —
+  NOT YET MEASURED;
 * ``qwen`` → Qwen Code's shapes, read from QwenLM/qwen-code at commit
   13a4fea5 (2026-10-21; ``packages/core/src/tools/tool-names.ts`` and each
   tool's parameter schema — names and shapes only, no code taken). Two names
   differ from older Qwen Code: the editor is ``edit`` (not ``replace``) and
-  the content search is ``grep_search`` (not ``search_file_content``);
+  the content search is ``grep_search`` (not ``search_file_content``) — NOT
+  YET MEASURED;
 * ``generic`` — anything else: Jarvis's own tool names, exactly as registered.
+
+Every row says what it rests on (:data:`FAMILY_MEASURED`): a benchmark that
+chose it, or "not yet measured" (the vendor's own advice, kept until a
+benchmark says otherwise).
 
 DECISION (Codex ``exec_command``): it maps to ``process_start`` with
 ``until_exit`` — Codex's own semantics: a command that ends within
@@ -65,14 +76,76 @@ from typing import Any, Callable, Iterable
 #: ``read_file`` (Claude Code's Read shows images; Jarvis's reader is text).
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
 
-#: Every family the table knows, and the dialect it speaks.
+#: Every family the table knows, and the dialect it speaks. A row is either
+#: CHOSEN BY A MEASUREMENT (its :data:`FAMILY_MEASURED` entry names the
+#: dialect that won) or the vendor's own advice, marked not yet measured.
 FAMILY_DIALECT: dict[str, str] = {
     "claude": "claude",
     "gpt": "gpt",
-    "glm": "claude",
+    # MEASURED 2026-10-21 (FAMILY_MEASURED["glm"]): Claude Code's dialect
+    # passed no more tasks than Jarvis's own names and cost ~1.7x the input
+    # tokens. Do not map glm back to "claude" without a benchmark that says so.
+    "glm": "generic",
     "deepseek": "claude",
     "qwen": "qwen",
     "generic": "generic",
+}
+
+
+@dataclass(frozen=True)
+class Measurement:
+    """The benchmark a family's row rests on (Harness² principle 8: a dialect
+    is adopted only when it measures at least as well as the alternative,
+    cost included). ``chosen`` is the dialect the numbers picked — the pin
+    holds :data:`FAMILY_DIALECT` to it."""
+
+    date: str
+    #: What ran: the command, the model and where it ran, the tasks.
+    setup: str
+    #: ``(dialect, bench setup id, the numbers)`` for each row compared.
+    rows: tuple[tuple[str, str, str], ...]
+    chosen: str
+    why: str
+
+
+#: Said for a row nothing has measured yet.
+NOT_YET_MEASURED = "not yet measured"
+
+#: What each row of :data:`FAMILY_DIALECT` rests on.
+FAMILY_MEASURED: dict[str, "Measurement | str"] = {
+    "glm": Measurement(
+        date="2026-10-21",
+        setup=(
+            "ironjarvis bench-harness run --runner jarvis --provider custom --model "
+            "glm-5.3-flash (the DGX Spark proxy, called by that exact name), all 30 tasks "
+            "(core 20, hard 10), Iron Jarvis 1.363.0 + IJ harness Phase 3"
+        ),
+        rows=(
+            ("generic", "8405051e0b9f",
+             "28/30 passed (core 20/20, hard 8/10); 8.5 tool calls, 7.9 rounds, 25.3 s, "
+             "1,465,803 input tokens per 30 tasks"),
+            ("claude", "34e162cf6d13",
+             "28/30 passed (core 20/20, hard 8/10); 12.1 tool calls, 10.7 rounds, 39.3 s, "
+             "2,542,447 input tokens per 30 tasks"),
+            # The review's confirmation, with glm's row switched to generic
+            # (--dialect auto, hard tier only, one run): on the same 10 hard
+            # tasks the two rows above took 14.5 / 23.5 tool calls, 53.1 /
+            # 89.9 s and 931,401 / 1,980,048 input tokens.
+            ("generic", "8cd018764235",
+             "confirmation, hard tier only: 9/10 passed; 19.9 tool calls, 17.5 rounds, 75.4 s, "
+             "1,773,401 input tokens per 10 tasks"),
+        ),
+        chosen="generic",
+        why=(
+            "the same pass rate for ~58% of the input tokens and ~64% of the time; "
+            "Claude Code's dialect stays selectable"
+        ),
+    ),
+    "deepseek": NOT_YET_MEASURED,
+    "qwen": NOT_YET_MEASURED,
+    "claude": NOT_YET_MEASURED,
+    "gpt": NOT_YET_MEASURED,
+    "generic": "the baseline: Jarvis's own tool names",
 }
 
 #: Why each family speaks its dialect (the report and the Handbook read it).
@@ -80,13 +153,14 @@ FAMILY_EVIDENCE: dict[str, str] = {
     "claude": "Claude was trained in Claude Code (inventory: Claude Code 2.1.306).",
     "gpt": "GPT's coding models were trained in Codex (inventory: Codex 0.157.0).",
     "glm": (
-        "Z.ai tells GLM users to code in Claude Code (docs.z.ai devpack, read 2026-10-21)."
+        "Measured (2026-10-21, glm-5.3-flash, 30 tasks): Jarvis's own tool names passed as many "
+        "tasks as Claude Code's, which Z.ai recommends, for ~58% of the input tokens."
     ),
     "deepseek": (
         "DeepSeek documents running its models in Claude Code "
-        "(api-docs.deepseek.com/guides/anthropic_api, read 2026-10-21)."
+        "(api-docs.deepseek.com/guides/anthropic_api, read 2026-10-21). Not yet measured."
     ),
-    "qwen": "Qwen Code's own tools (QwenLM/qwen-code @ 13a4fea5, read 2026-10-21).",
+    "qwen": "Qwen Code's own tools (QwenLM/qwen-code @ 13a4fea5, read 2026-10-21). Not yet measured.",
     "generic": "No dialect known: Jarvis's own tool names.",
 }
 

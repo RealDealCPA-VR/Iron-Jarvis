@@ -320,6 +320,11 @@ def _parse_plugins(text: str, known_tools: "set[str] | None") -> Plugins:
             )
         if known_tools is not None and tool not in known_tools:
             raise LayerInvalid(f"{PLUGINS_FILE}: the rule names {tool}, which is not an Iron Jarvis tool")
+        # ONE rule per tool: the plan reads the FIRST rule for a tool while
+        # the overrides apply them all, so `ask` then `deny` showed the model
+        # a tool every call of which was refused (review of v1.366.0).
+        if any(tool == seen for seen, _ in rules):
+            raise LayerInvalid(f"{PLUGINS_FILE} has two rules for {tool}; keep one")
         rules.append((tool, action))
     checks: list[Check] = []
     for check in checks_raw:

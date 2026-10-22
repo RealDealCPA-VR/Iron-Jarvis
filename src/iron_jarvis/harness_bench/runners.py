@@ -66,8 +66,10 @@ DEFAULT_ROUNDS = 60
 #: chat lane's cap — and ``shell`` through the folder rule. Harness mode arms
 #: the coding set itself now.)
 JARVIS_APPROVAL_MODE = "yolo"
-#: ``--dialect``: "auto" — the model family's own (glm → claude); "generic"
-#: — Jarvis's own tool names on any model; or a dialect id to force one.
+#: ``--dialect``: "auto" — the model family's own row of the dialect table
+#: (glm → generic, by measurement: ``harness/dialects.FAMILY_MEASURED``);
+#: "generic" — Jarvis's own tool names on any model; or a dialect id to force
+#: one ("claude" reproduces the glm row that lost on cost).
 DEFAULT_DIALECT = "auto"
 #: The session id the chat lanes give their tools (``ToolContext(session_id=
 #: "chat")`` in routes/chat.py): what a turn's shell leaves running is kept
