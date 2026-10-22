@@ -13,7 +13,11 @@ PROPOSE – PROBE – COMPOSE, measured by the benchmark's own hidden checks:
    the check's VERDICT and its one-line reason, and the harness files
    themselves (plus the component tree the model reads). Never the hidden
    check, never its output (it can quote the answer key), never a score from
-   a run that was not graded.
+   a run that was not graded. A rubric failure says only that the answer is
+   wrong (:func:`evidence_grade_reason`); a trajectory line carrying the
+   grader (:func:`grader_marks` — an agent's shell can read a hidden file) is
+   removed; and the finished tree goes through the tripwire before a
+   proposer may read it.
 3. PROPOSE: a model — the runner's own model, as a harness-mode turn with
    read-only tools plus the two file writers, confined to a fresh copy of the
    evidence — is told only WHERE the evidence is (a short pointer, never a
@@ -75,6 +79,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import re
 import shutil
 import time
 import tomllib
@@ -108,9 +113,27 @@ from .runners import (
     layer_tree_hash,
     parse_sse,
 )
-from .tripwire import leaks
+from .tripwire import HiddenCheckLeak, leaks
 
 MODES = ("parallel", "sequential")
+#: What each mode means, said in the report and the command's help — both run
+#: ONE model call at a time on this PC; "parallel" is about where the
+#: candidates start, never about running at once (review, v1.370.0).
+MODE_WORDS = {
+    "parallel": (
+        "Parallel: the k candidates were each proposed from the same look at the evidence, side by "
+        "side (none saw another); they were proposed and tried one after another, not at the same time."
+    ),
+    "sequential": (
+        "Sequential: k rounds of one candidate each, every round proposed from the evidence so far "
+        "and built on the best harness so far."
+    ),
+}
+#: Said in every refine report (review, v1.370.0).
+SMALL_SAMPLE = (
+    "Each harness ran each task ONCE. That is a small sample: a difference of one task can be "
+    "chance, so treat \"better\" here as a lead to check, not a proven gain."
+)
 MAX_K = 8
 #: The harness files a proposal may write (Phase 3's text components and the
 #: declarative tool rules).
@@ -410,15 +433,139 @@ def _verdict_word(record: dict[str, Any] | None) -> str:
     return "unscored"
 
 
+#: The check's own reasons that carry nothing of the grader (grading.run_check
+#: writes exactly these shapes; the exit code and the time limit are facts
+#: about the run, not about the answer key).
+_SAFE_CHECK_REASONS = (
+    re.compile(r"the check (passed|failed)"),
+    re.compile(r"the check ran past its [0-9.]+ s limit \(the code it tests did not finish\)"),
+    re.compile(r"the check ended with exit code -?[0-9]+, which is not a verdict"),
+    re.compile(r"no Python interpreter was found to run the check with"),
+)
+#: A rubric's reasons about the answer FILE's shape (its name is in the task
+#: the agent was given), never about the expected answer.
+_SAFE_RUBRIC_REASON = re.compile(r"[\w.\-]+ (was not written|is not valid JSON|is not a JSON object)")
+RUBRIC_WRONG = "the answer is wrong (which part is not shown: that would give away the answer)"
+
+
+def _safe_part_reason(part: dict[str, Any]) -> str:
+    reason = str(part.get("reason") or "")
+    if part.get("kind") == "rubric":
+        if _SAFE_RUBRIC_REASON.fullmatch(reason):
+            return reason
+        return RUBRIC_WRONG
+    if any(rx.fullmatch(reason) for rx in _SAFE_CHECK_REASONS):
+        return reason
+    if reason.startswith("the check could not start"):
+        return "the check could not start"
+    return "the check did not pass" if part.get("passed") is False else "the check could not run"
+
+
+def evidence_grade_reason(record: dict[str, Any]) -> str:
+    """The check's one-line reason as the IMPROVER may read it (review,
+    v1.370.0): never the grader's material. A rubric's own reason names the
+    keys it found wrong and QUOTES a required phrase verbatim ("no mention of
+    '…'") — both read straight off the hidden ``task.toml``, so a rubric
+    failure says only that the answer is wrong. A check's reason is kept only
+    in the fixed shapes ``grading.run_check`` writes."""
+    reason = str(record.get("grade_reason") or "")
+    if reason.startswith("did not run:"):
+        return reason
+    parts = record.get("grade_parts")
+    if isinstance(parts, list) and parts:
+        bad = [p for p in parts if isinstance(p, dict) and p.get("passed") is not True]
+        return "; ".join(_safe_part_reason(p) for p in bad)
+    if not reason:
+        return ""
+    if reason.startswith("the answer is wrong") or "no mention of" in reason:
+        return RUBRIC_WRONG
+    if any(rx.fullmatch(reason) for rx in _SAFE_CHECK_REASONS) or _SAFE_RUBRIC_REASON.fullmatch(reason):
+        return reason
+    return "the check did not pass" if record.get("passed") is False else "the check could not run"
+
+
+# --------------------------------------------------------------------------- #
+# the grader's material, kept out of the evidence
+# --------------------------------------------------------------------------- #
+
+#: A hidden file's line at least this long, found in no other hidden file
+#: (boilerplate such as ``with self.assertRaises(ValueError):`` says nothing
+#: about one task's grader) and nowhere the agent was given (the task's repo,
+#: its prompt), marks a text as carrying the grader.
+_MARK_MIN_CHARS = 24
+SCRUBBED_LINE = "[removed: this line carried the hidden check's material]"
+
+
+def _hidden_lines(task: Task) -> dict[Path, set[str]]:
+    from .catalog import normalized_bytes
+
+    out: dict[Path, set[str]] = {}
+    for path in task.hidden_files():
+        try:
+            text = normalized_bytes(path).decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        out[path] = {ln.strip() for ln in text.splitlines() if len(ln.strip()) >= _MARK_MIN_CHARS}
+    return out
+
+
+def grader_marks(tasks: Sequence[Task]) -> list[str]:
+    """Everything that marks a text as carrying the grader's material, for
+    every task: the hidden-check marker, each hidden check file's NAME, and
+    each distinctive line of a hidden file (see :data:`_MARK_MIN_CHARS`) —
+    as written and as JSON escapes it (a tool call's arguments are shown as
+    JSON). BLOCKING (reads the task folders)."""
+    from collections import Counter
+
+    from .catalog import HIDDEN_CANARY, normalized_bytes
+
+    pool: dict[str, Task] = {t.id: t for t in tasks}
+    with contextlib.suppress(TaskError, OSError):
+        for t in load_tasks():
+            pool.setdefault(t.id, t)
+    per_task = {tid: _hidden_lines(t) for tid, t in pool.items()}
+    common = Counter(line for files in per_task.values() for lines in files.values() for line in lines)
+    marks: set[str] = {HIDDEN_CANARY}
+    for task in tasks:
+        given: list[str] = [task.prompt]
+        if task.repo_dir.is_dir():
+            for path in sorted(task.repo_dir.rglob("*")):
+                if path.is_file():
+                    with contextlib.suppress(OSError):
+                        given.append(normalized_bytes(path).decode("utf-8", errors="replace"))
+        seen = "\n".join(given)
+        for path, lines in per_task.get(task.id, {}).items():
+            if task.check_dir in path.parents:
+                marks.add(path.name)
+            for probe in lines:
+                if common[probe] == 1 and probe not in seen:
+                    marks.add(probe)
+                    marks.add(json.dumps(probe, ensure_ascii=False)[1:-1])
+    return sorted(m for m in marks if m)
+
+
+def scrub(text: str, marks: Sequence[str]) -> tuple[str, int]:
+    """``(text, lines removed)``: every line carrying one of ``marks`` is
+    replaced by :data:`SCRUBBED_LINE` (its indent kept)."""
+    out: list[str] = []
+    removed = 0
+    for line in text.split("\n"):
+        if any(m in line for m in marks):
+            removed += 1
+            out.append(line[: len(line) - len(line.lstrip())] + SCRUBBED_LINE)
+        else:
+            out.append(line)
+    return "\n".join(out), removed
+
+
 def _trajectory_md(label: str, record: dict[str, Any] | None, steps: list[dict[str, Any]] | None) -> str:
     """One run as the improver reads it: the verdict (and its one-line
     reason, never the check's own output), the numbers, every step."""
     lines = [f"# {label}", ""]
     if record is None:
         return "\n".join(lines + ["This harness was not run on this task."]) + "\n"
-    lines.append(f"Check: {_verdict_word(record)}" + (
-        f" ({record.get('grade_reason')})" if record.get("grade_reason") and record.get("passed") is not True else ""
-    ))
+    why = evidence_grade_reason(record) if record.get("passed") is not True else ""
+    lines.append(f"Check: {_verdict_word(record)}" + (f" ({why})" if why else ""))
     if record.get("passed") is None and record.get("failure_reason"):
         lines.append(f"Not scored: {record.get('failure_reason')}")
     lines.append(
@@ -499,6 +646,12 @@ def build_evidence(
         what = "the built-in default (no files)" if not p.files else ", ".join(sorted(p.files))
         extra = f" — built on {p.base}, changed {', '.join(p.changed)}" if p.base else ""
         harness_lines.append(f"- harness/{p.label}/: {what}{extra}" + (f". Its author said: {p.summary}" if p.summary else ""))
+    # The GRADER'S MATERIAL is kept out (principle 4, review v1.370.0): an
+    # agent's own tool output can carry it (a shell can read a hidden check
+    # file by its full path, or an earlier run's grading copy), so every
+    # trajectory is scrubbed line by line, and the finished tree is put
+    # through the tripwire before any proposer may read it.
+    marks = grader_marks(tasks)
     for task in tasks:
         tdir = folder / "tasks" / task.id
         tdir.mkdir(parents=True)
@@ -508,10 +661,12 @@ def build_evidence(
             steps = None
             if p.config_dir is not None:
                 steps = _read_json(p.config_dir / "runs" / task.id / TRAJECTORY_NAME)
-            (tdir / f"{p.label}.md").write_bytes(
+            text, _removed = scrub(
                 _trajectory_md(f"{task.id} — harness {p.label}", rec,
-                               steps if isinstance(steps, list) else None).encode("utf-8")
+                               steps if isinstance(steps, list) else None),
+                marks,
             )
+            (tdir / f"{p.label}.md").write_bytes(text.encode("utf-8"))
     readme = [
         "# Evidence for improving the IJ harness",
         "",
@@ -546,6 +701,14 @@ def build_evidence(
         "Prefer a change that helps on any coding task over one that fits these tasks.",
     ]
     (folder / "README.md").write_bytes(("\n".join(readme) + "\n").encode("utf-8"))
+    found = [f"{task.id}: {item}" for task in tasks for item in leaks(task, folder, "")]
+    if found:
+        # Never handed to a proposer: the tree is removed and the loop stops.
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HiddenCheckLeak(
+            "the evidence for the improver would carry the grader (" + "; ".join(found[:5]) + "), "
+            "so it was not written"
+        )
     return folder
 
 
@@ -786,6 +949,33 @@ async def run_refine(
         known = None
     rendered: dict[str, str] = {"current": _rendered_tree(platform, settings, None)}
 
+    try:
+        await _measure(platform, home, settings, use_seed, chosen, folder, result, ledger, known, rendered, echo)
+    except BudgetMismatch as exc:
+        # A PROBE whose own records did not add up (``run_bench`` checks
+        # every configuration it runs) stops the loop — but the refine
+        # ledger, the results and the report are written FIRST, naming it,
+        # exactly as a refine-level mismatch is (review, v1.370.0): the
+        # command line says "the results were written", and they must be.
+        problems = [f"a probe's budget does not add up: {exc}", *ledger.problems()]
+        result.adopted = None
+        await asyncio.to_thread(_clear_adopted, folder)
+        await asyncio.to_thread(_write_outputs, folder, result, problems)
+        raise BudgetMismatch("the refine budget does not add up: " + "; ".join(problems)) from exc
+
+    problems = ledger.problems()
+    await asyncio.to_thread(_write_outputs, folder, result, problems)
+    if problems:
+        raise BudgetMismatch("the refine budget does not add up: " + "; ".join(problems))
+    return result
+
+
+async def _measure(
+    platform: Any, home: Path, settings: RefineSettings, use_seed: int, chosen: Sequence[Task],
+    folder: Path, result: RefineResult, ledger: RefineLedger, known: Any, rendered: dict[str, str],
+    echo: Callable[[str], None],
+) -> None:
+    """Steps 1–7 of the loop (see the module docstring); fills ``result``."""
     # 1. the current harness
     baseline = await _probe(platform, home, settings, use_seed, chosen, "current", None,
                             ledger, "baseline", echo)
@@ -872,12 +1062,6 @@ async def run_refine(
         # layer behind to read as this run's result.
         await asyncio.to_thread(_clear_adopted, folder)
     result.composition = comp_view
-
-    problems = ledger.problems()
-    await asyncio.to_thread(_write_outputs, folder, result, problems)
-    if problems:
-        raise BudgetMismatch("the refine budget does not add up: " + "; ".join(problems))
-    return result
 
 
 async def _candidate(
@@ -1001,8 +1185,12 @@ def refine_report(result: RefineResult, problems: list[str]) -> str:
         f"{s.mode.capitalize()}, k={s.k}, seed {result.seed}, {len(result.tasks)} task(s): "
         + ", ".join(result.tasks) + ".",
         "",
+        MODE_WORDS.get(s.mode, ""),
+        "",
         "Two harnesses are compared only on the tasks both of their runs scored; a run whose check "
         "could not run, or that did not run, leaves the comparison.",
+        "",
+        SMALL_SAMPLE,
         "",
         "| Harness | Built on | Changed | Passed / scored | Versus current | Note |",
         "|---|---|---|---|---|---|",
@@ -1067,9 +1255,11 @@ def adopt_into(source: Path, folder: Path, *, known_tools: Any = None) -> list[s
     any folder holding ``.ironjarvis/harness/``) into ``folder``'s harness
     files. Refuses (``BenchRefused``) when the source is not a valid layer,
     when ``folder`` already has a DIFFERENT file of the same name (named;
-    nothing is copied), or when the result would not be a valid layer (what
-    was copied is removed again). Returns the files written. BLOCKING."""
-    from ..harness.components import read_project_layer
+    nothing is copied), when ``folder`` is not an existing folder or its
+    harness folder / a file in it is a link that leads elsewhere, or when the
+    result would not be a valid layer (what was copied is removed again).
+    Returns the files written. BLOCKING."""
+    from ..harness.components import _inside, read_project_layer
 
     source = Path(source)
     if (source / "adopted").is_dir() and not _harness_dir(source).is_dir():
@@ -1078,7 +1268,27 @@ def adopt_into(source: Path, folder: Path, *, known_tools: Any = None) -> list[s
     if not layer.used:
         raise BenchRefused(f"{source} holds no valid harness files ({layer.note or 'none found'}).")
     files = read_layer_files(source)
+    folder = Path(folder)
+    if not folder.is_dir():
+        raise BenchRefused(f"There is no folder at {folder}; nothing was copied.")
     target = _harness_dir(folder)
+    # WRITES ONLY WHERE ASKED (review, v1.370.0): the harness folder must be
+    # inside the project folder, and each file inside it — a link or a
+    # junction (``.ironjarvis`` pointing elsewhere, a dangling ``memory.md``
+    # link) would carry the write outside, where the validator run AFTER the
+    # copy could only void the layer, never take the write back.
+    root = folder.resolve()
+    if not _inside(target, root):
+        raise BenchRefused(
+            f"{folder}'s .ironjarvis/harness points outside the folder; nothing was copied."
+        )
+    hroot = target.resolve()
+    for name in files:
+        path = target / name
+        if path.is_symlink() or not _inside(path, hroot):
+            raise BenchRefused(
+                f"{folder}'s .ironjarvis/harness/{name} is a link; nothing was copied. Move it away first."
+            )
     clash = []
     for name, text in files.items():
         path = target / name

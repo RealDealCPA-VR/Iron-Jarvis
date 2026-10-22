@@ -2017,13 +2017,23 @@ v1.370.0); this section is the whole picture in one place.
   least as well are combined, the combination is tried too, and it is kept
   only if it scores at least as well as the current harness on the hidden
   checks.
-- Parallel makes k proposals from one look at the evidence; sequential makes
-  one at a time, each starting from the best so far.
+- Parallel makes k proposals side by side from one look at the evidence
+  (none sees another); sequential makes k in turn, each starting from the
+  best so far. Both make and try one proposal at a time on this PC —
+  "parallel" is about where the proposals start, not about running at once.
+- What the model proposing reads never carries the hidden checks: a failed
+  answer file says only that the answer is wrong (never which part, which
+  would give the answer away), any line of what an agent did that carries a
+  hidden check's text is removed, and the whole folder of evidence is checked
+  for the grader before the model may read it.
+- Each harness runs each task once, so the report says plainly that its
+  numbers are a small sample: a difference of one task can be chance.
 - A kept result is written as a proposed set of harness files in the
   benchmark's own folder. Nothing is applied to any project:
   `ironjarvis bench-harness adopt --from <that folder> --folder <project>`
   copies it into a project's `.ironjarvis/harness/`, and never overwrites a
-  file there that is different.
+  file there that is different. It refuses a folder that does not exist, and
+  a harness folder or file there that is a link leading somewhere else.
 - Every model call of the loop is counted in a ledger by stage, and the totals
   must add up; a run whose check could not run is left out of every
   comparison, never counted as a pass or a fail.

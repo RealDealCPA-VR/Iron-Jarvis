@@ -50,8 +50,9 @@ def run_command(
     k: int = typer.Option(2, "--k", help="--refine: how many candidate harnesses (1 to 8)."),
     mode: str = typer.Option(
         "parallel", "--mode",
-        help="--refine: parallel (k candidates from one round of evidence) or sequential (k rounds, "
-        "each building on the best so far).",
+        help="--refine: parallel (k candidates proposed side by side from one round of evidence) or "
+        "sequential (k rounds, each building on the best so far). Both propose and try one candidate "
+        "at a time.",
     ),
 ) -> None:
     """Run one configuration over the tasks and write JSON + report.md
@@ -118,7 +119,8 @@ def _refine(*, runner: str, provider: str, model: str, tasks: str, seed: int | N
             dialect: str, k: int, mode: str) -> None:
     from .bench import BenchRefused, resolve_bench_home
     from .ledger import BudgetMismatch
-    from .refine import RefineSettings, run_refine
+    from .refine import SMALL_SAMPLE, RefineSettings, run_refine
+    from .tripwire import HiddenCheckLeak
 
     if runner != "jarvis":
         typer.echo("--refine improves Iron Jarvis's own harness: run it with --runner jarvis.")
@@ -143,6 +145,9 @@ def _refine(*, runner: str, provider: str, model: str, tasks: str, seed: int | N
     except BudgetMismatch as exc:
         typer.echo(f"The results were written, but {exc}")
         raise typer.Exit(code=1) from exc
+    except HiddenCheckLeak as exc:
+        typer.echo(f"Stopped: {exc}.")
+        raise typer.Exit(code=1) from exc
     if dry_run:
         for line in result.plan_lines:
             typer.echo(line)
@@ -160,6 +165,7 @@ def _refine(*, runner: str, provider: str, model: str, tasks: str, seed: int | N
             f"Adopted as a proposed layer ({'better than' if a['better'] else 'the same as'} the current "
             f"harness: {a['passed']} vs {a['current_passed']} on {a['compared']} task(s)). {a['how_to_use']}"
         )
+        typer.echo(SMALL_SAMPLE)
     else:
         typer.echo("Nothing was adopted: the current harness stays.")
     if result.ledger is not None:
