@@ -261,6 +261,140 @@ def _words(items: list[str]) -> str:
     return ", ".join(items[:-1]) + " and " + items[-1]
 
 
+# --------------------------------------------------------------------------- #
+# Delete / archive one conversation — shared by Chat and Build (v1.367.0)
+# --------------------------------------------------------------------------- #
+
+
+def _end_build_programs(thread_id: str) -> None:
+    """Stop what an IJ harness session started (its ``process_start``
+    programs and the windowless children its commands left running) —
+    ``procs.end_session("build:<id>")``, the one door every run end already
+    calls. BLOCKING (a tree kill): call it off the event loop. Never raises."""
+    try:
+        from ...harness.sessions import end_session_programs
+
+        end_session_programs(thread_id)
+    except Exception:  # noqa: BLE001 — a delete/archive always completes
+        log.warning("could not stop the programs of build session %s", thread_id, exc_info=True)
+
+
+def delete_thread(engine: Any, thread_id: str) -> bool:
+    """Delete a conversation AND its history-search docs in one transaction;
+    False = no such thread. An IJ harness session's programs are stopped too
+    (v1.367.0). BLOCKING: a sync route runs it in the threadpool."""
+    from ...core.db import search_index
+    from ...core.models import ChatThreadRecord, is_build_thread
+
+    with _THREAD_SAVE_LOCK, session_scope(engine) as db:
+        r = db.get(ChatThreadRecord, thread_id)
+        if r is None:
+            return False
+        build = is_build_thread(r)
+        db.delete(r)
+        try:
+            index = search_index(engine)
+            if index is not None:
+                index.drop_thread(thread_id, db=db)
+        except Exception:  # noqa: BLE001 — a delete must always complete
+            log.warning("history-search drop failed for thread %s", thread_id,
+                        exc_info=True)
+        db.commit()
+    if build:
+        _end_build_programs(thread_id)
+    return True
+
+
+def set_thread_archived(engine: Any, thread_id: str, archive: bool) -> dict[str, Any] | None:
+    """Stamp (or clear) ``archived_at``; None = no such thread. Nothing
+    else on the row changes — not ``updated_at`` (archiving is not
+    activity, and the list's order must not jump), not the transcript,
+    not the search docs (an archived chat stays findable). An already
+    archived chat keeps its first stamp.
+
+    v1.367.0: archiving an IJ harness session stops the programs it started
+    (a dev server must not outlive a session the user put away). BLOCKING:
+    callers on the loop use ``asyncio.to_thread``."""
+    from ...core.ids import utcnow as _now
+    from ...core.models import ChatThreadRecord, is_build_thread
+
+    with _THREAD_SAVE_LOCK, session_scope(engine) as db:
+        r = db.get(ChatThreadRecord, thread_id)
+        if r is None:
+            return None
+        if archive and r.archived_at is None:
+            r.archived_at = _now()
+        elif not archive:
+            r.archived_at = None
+        db.add(r)
+        db.commit()
+        db.refresh(r)
+        out = {
+            "id": r.id,
+            "archived": r.archived_at is not None,
+            "archived_at": r.archived_at.isoformat() if r.archived_at else None,
+        }
+        build = is_build_thread(r)
+    if archive and build:
+        _end_build_programs(thread_id)
+    return out
+
+
+def _thread_exists(engine: Any, thread_id: str) -> bool:
+    from ...core.models import ChatThreadRecord
+
+    with session_scope(engine) as db:
+        return db.get(ChatThreadRecord, thread_id) is not None
+
+
+async def archive_thread(engine: Any, thread_id: str, stop: bool, *, noun: str = "chat") -> Any:
+    """THE archive rules (v1.328.0), shared by ``POST /chat/threads/{id}/
+    archive`` and Build's session archive (v1.367.0). See the chat route's
+    docstring: a conversation running something answers 409 (one sentence +
+    ``running``) unless ``stop``, which stops its named turns first, waits up
+    to ``ARCHIVE_STOP_GRACE_S``, archives, and names what is still finishing.
+    ``noun`` is the word the 409 uses ("chat" / "session")."""
+    if not await asyncio.to_thread(_thread_exists, engine, thread_id):
+        raise HTTPException(status_code=404, detail="no such thread")
+    running = _running_for(thread_id)
+    stopped: list[str] = []
+    still: list[str] = []
+    if running and not stop:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": (
+                    f"This {noun} is still working: {_words(running)}."
+                    " Stop it and archive, or wait until it finishes."
+                ),
+                "running": running,
+            },
+        )
+    if running:
+        key = thread_key(thread_id)
+        handles = _thread_handles(key)
+        for h in handles:
+            h.stop()
+        if handles:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + max(0.0, float(ARCHIVE_STOP_GRACE_S))
+            while _running_for(thread_id) and loop.time() < deadline:
+                await asyncio.sleep(_ARCHIVE_POLL_S)
+        still = _running_for(thread_id)
+        stopped = [w for w in running if w not in still]
+    out = await asyncio.to_thread(set_thread_archived, engine, thread_id, True)
+    if out is None:  # deleted while we stopped its turns
+        raise HTTPException(status_code=404, detail="no such thread")
+    out["stopped"] = stopped
+    out["still_running"] = still
+    if still:
+        out["note"] = (
+            f"Archived. This could not be stopped from here and will"
+            f" finish on its own: {_words(still)}."
+        )
+    return out
+
+
 def _sse(event: str, data: dict[str, Any]) -> str:
     """Serialize one Server-Sent Event frame (FX-01 wire format)."""
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
@@ -870,7 +1004,47 @@ def _clean_setup(raw: Any) -> str:
     # out, exactly like the posture's default above.
     if raw.get("local_only") is True:
         out["local_only"] = True
+    # IJ HARNESS SESSIONS (v1.367.0, Phase 4) — the same whitelist, so a
+    # Build session's setup survives every write: its MODE ("plan" stored;
+    # "act", the default, stored as nothing) and the PLAN the user approved
+    # through exit_plan_mode ({text, steps, approved_at}, bounded).
+    if raw.get("mode") == "plan":
+        out["mode"] = "plan"
+    plan = _clean_plan(raw.get("plan"))
+    if plan:
+        out["plan"] = plan
     return json.dumps(out, separators=(",", ":")) if out else ""
+
+
+def _clean_plan(raw: Any) -> dict[str, Any] | None:
+    """A session's kept plan: ``{text, steps: [{step, status}], approved_at}``
+    — text ≤ 20,000 chars, ≤ 50 steps of ≤ 500 chars, a status from the plan
+    tool's vocabulary. None when nothing valid remains."""
+    if not isinstance(raw, dict):
+        return None
+    text = raw.get("text")
+    text = str(text)[:20_000] if isinstance(text, str) else ""
+    steps: list[dict[str, str]] = []
+    for item in raw.get("steps") or []:
+        if not isinstance(item, dict) or not isinstance(item.get("step"), str):
+            continue
+        step = " ".join(item["step"].split())[:500]
+        status = item.get("status")
+        if not step:
+            continue
+        steps.append({
+            "step": step,
+            "status": status if status in ("pending", "in_progress", "completed") else "pending",
+        })
+        if len(steps) >= 50:
+            break
+    if not text.strip() and not steps:
+        return None
+    out: dict[str, Any] = {"text": text, "steps": steps}
+    approved = raw.get("approved_at")
+    if isinstance(approved, str) and approved.strip():
+        out["approved_at"] = approved.strip()[:40]
+    return out
 
 
 def _local_one_shot_pick(
@@ -1212,6 +1386,7 @@ def register(app: FastAPI, d) -> None:
         from sqlalchemy import and_, case, func
 
         from ...core.models import ChatThreadRecord as T
+        from ...core.models import chat_surface_only
 
         which = (archived or "").strip().lower()
         if which not in ("", "only", "all"):
@@ -1246,6 +1421,11 @@ def register(app: FastAPI, d) -> None:
                 T.comm_channel, T.comm_display, T.updated_at,
                 count_expr, setup_expr, T.archived_at,
             )
+            # v1.367.0 (IJ harness Phase 4): an IJ harness session lives in
+            # Build and NEVER in this list (NULL = a thread from before the
+            # field = chat). Applied before the LIMIT, so the list still holds
+            # 100 chats however many Build sessions there are.
+            stmt = stmt.where(chat_surface_only(T.surface))
             if pid:
                 stmt = stmt.where(T.project_id == pid)
             if which == "":
@@ -1336,6 +1516,9 @@ def register(app: FastAPI, d) -> None:
             # v1.336.0: what is waiting for this chat's reply (the page's
             # queue, kept across a reload).
             "queued": _queued_of(r),
+            # v1.367.0 (IJ harness Phase 4, additive, LAST): "build" for an
+            # IJ harness session — it opens in Build, never in Chat.
+            "surface": getattr(r, "surface", None) or "chat",
         }
 
     @app.put("/chat/threads/{thread_id}/queue")
@@ -1528,7 +1711,7 @@ def register(app: FastAPI, d) -> None:
 
         from ...core.db import search_index
         from ...core.ids import utcnow as _now
-        from ...core.models import ChatThreadRecord
+        from ...core.models import ChatThreadRecord, is_build_thread
 
         msgs = body.get("messages")
         raw_setup = body.get("setup")
@@ -1557,6 +1740,16 @@ def register(app: FastAPI, d) -> None:
                         detail="This conversation was updated from another window"
                         " — reloading it before saving.",
                     )
+            # v1.367.0 (IJ harness Phase 4): an IJ harness session has ONE
+            # writer — the daemon (its turns append the question and the
+            # reply) and the /build routes (title, setup, mode). A chat page
+            # saving over it would be a second writer, and this route is the
+            # only door that could turn it into a chat; neither happens.
+            if r is not None and is_build_thread(r):
+                raise HTTPException(
+                    status_code=409,
+                    detail="This is a Build session — change it in Build.",
+                )
             # getattr-read (defaults "user") so the guard works even before
             # the additive owner column lands — no import-order coupling.
             daemon_owned = r is not None and getattr(r, "owner", "user") == "daemon"
@@ -1678,56 +1871,16 @@ def register(app: FastAPI, d) -> None:
 
         The index has no foreign key back to the thread row (deliberately — see
         ``search/index.py``), so a delete that skipped this would leave the
-        transcript searchable forever: "delete" has to mean deleted."""
-        from ...core.db import search_index
-        from ...core.models import ChatThreadRecord
+        transcript searchable forever: "delete" has to mean deleted.
 
-        with _THREAD_SAVE_LOCK, session_scope(d.platform.engine) as db:
-            r = db.get(ChatThreadRecord, thread_id)
-            if r is None:
-                raise HTTPException(status_code=404, detail="no such thread")
-            db.delete(r)
-            try:
-                index = search_index(d.platform.engine)
-                if index is not None:
-                    index.drop_thread(thread_id, db=db)
-            except Exception:  # noqa: BLE001 — a delete must always complete
-                log.warning("history-search drop failed for thread %s", thread_id,
-                            exc_info=True)
-            db.commit()
+        v1.367.0: deleting an IJ harness session also stops the programs it
+        started (:func:`delete_thread`)."""
+        if not delete_thread(d.platform.engine, thread_id):
+            raise HTTPException(status_code=404, detail="no such thread")
         return {"deleted": thread_id}
 
     def _set_archived(thread_id: str, archive: bool) -> dict[str, Any] | None:
-        """Stamp (or clear) ``archived_at``; None = no such thread. Nothing
-        else on the row changes — not ``updated_at`` (archiving is not
-        activity, and the list's order must not jump), not the transcript,
-        not the search docs (an archived chat stays findable). An already
-        archived chat keeps its first stamp."""
-        from ...core.ids import utcnow as _now
-        from ...core.models import ChatThreadRecord
-
-        with _THREAD_SAVE_LOCK, session_scope(d.platform.engine) as db:
-            r = db.get(ChatThreadRecord, thread_id)
-            if r is None:
-                return None
-            if archive and r.archived_at is None:
-                r.archived_at = _now()
-            elif not archive:
-                r.archived_at = None
-            db.add(r)
-            db.commit()
-            db.refresh(r)
-            return {
-                "id": r.id,
-                "archived": r.archived_at is not None,
-                "archived_at": r.archived_at.isoformat() if r.archived_at else None,
-            }
-
-    def _thread_exists(thread_id: str) -> bool:
-        from ...core.models import ChatThreadRecord
-
-        with session_scope(d.platform.engine) as db:
-            return db.get(ChatThreadRecord, thread_id) is not None
+        return set_thread_archived(d.platform.engine, thread_id, archive)
 
     @app.post("/chat/threads/{thread_id}/archive")
     async def archive_chat_thread(
@@ -1748,47 +1901,13 @@ def register(app: FastAPI, d) -> None:
         ``note`` — never claimed as stopped.
 
         A daemon-owned (phone) chat can be archived too: it is only hidden.
-        Async because it may wait; every database touch is off the loop."""
-        stop = bool(body is not None and body.stop)
-        if not await asyncio.to_thread(_thread_exists, thread_id):
-            raise HTTPException(status_code=404, detail="no such thread")
-        running = _running_for(thread_id)
-        stopped: list[str] = []
-        still: list[str] = []
-        if running and not stop:
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "detail": (
-                        f"This chat is still working: {_words(running)}."
-                        " Stop it and archive, or wait until it finishes."
-                    ),
-                    "running": running,
-                },
-            )
-        if running:
-            key = thread_key(thread_id)
-            handles = _thread_handles(key)
-            for h in handles:
-                h.stop()
-            if handles:
-                loop = asyncio.get_running_loop()
-                deadline = loop.time() + max(0.0, float(ARCHIVE_STOP_GRACE_S))
-                while _running_for(thread_id) and loop.time() < deadline:
-                    await asyncio.sleep(_ARCHIVE_POLL_S)
-            still = _running_for(thread_id)
-            stopped = [w for w in running if w not in still]
-        out = await asyncio.to_thread(_set_archived, thread_id, True)
-        if out is None:  # deleted while we stopped its turns
-            raise HTTPException(status_code=404, detail="no such thread")
-        out["stopped"] = stopped
-        out["still_running"] = still
-        if still:
-            out["note"] = (
-                f"Archived. This could not be stopped from here and will"
-                f" finish on its own: {_words(still)}."
-            )
-        return out
+        Async because it may wait; every database touch is off the loop.
+
+        v1.367.0: the body is :func:`archive_thread`, shared with Build's
+        session archive (the same rules, the same 409)."""
+        return await archive_thread(
+            d.platform.engine, thread_id, bool(body is not None and body.stop)
+        )
 
     @app.post("/chat/threads/{thread_id}/unarchive")
     def unarchive_chat_thread(thread_id: str) -> dict[str, Any]:
@@ -1815,7 +1934,7 @@ def register(app: FastAPI, d) -> None:
     async def _share_chat_thread(
         thread_id: str, body: ChatShareBody, local_only: bool = False, setup: str = ""
     ) -> dict[str, Any]:
-        from ...core.models import ChatThreadRecord
+        from ...core.models import ChatThreadRecord, is_build_thread
 
         mode = (body.mode or "full").strip().lower()
         fmt = (body.format or "markdown").strip().lower()
@@ -1825,7 +1944,9 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=400, detail="format must be 'markdown' or 'html'")
         with session_scope(d.platform.engine) as db:
             r = db.get(ChatThreadRecord, thread_id)
-        if r is None:
+        # v1.367.0: Chat's share renders CHATS; an IJ harness session is not
+        # one (it never shows in Chat), so it is not found here either.
+        if r is None or is_build_thread(r):
             raise HTTPException(status_code=404, detail="no such thread")
         try:
             msgs = json.loads(r.messages_json or "[]")
@@ -2572,6 +2693,8 @@ async def stream_chat_turn(
     round_budget: "int | None" = None,
     stay_in_chat: bool = False,
     harness: "bool | str | None" = None,
+    session_id: "str | None" = None,
+    plan_mode: bool = False,
 ):
     """Streaming twin of :func:`chat_complete` (FX-01) — the turn itself.
 
@@ -2707,6 +2830,19 @@ async def stream_chat_turn(
     (``"generic"`` …) forces that dialect. Checked EAGERLY; keyword only.
     Omitted, every byte is what it was. MIRROR NOTE (lock-step):
     ``chat_turn.run_chat_turn`` takes the same knob.
+
+    ``session_id`` / ``plan_mode`` (v1.367.0, IJ harness Phase 4 — Build's
+    session turn): every TOOL CALL runs under the session's own
+    ``build:<thread id>`` (the ledger rows, the process tools,
+    ``procs.owned_by``) instead of "chat"; ``plan_mode`` (harness only) arms
+    the read-only tools plus ``exit_plan_mode`` — carded ONCE-ONLY in every
+    posture (``harness.mode.ONCE_ONLY_TOOLS``) — and renders the tree's
+    plan-mode text. A harness turn whose client draws the cards
+    (``body.mcp_cards``) also arms ``ask_user``, whose question rides the
+    same side channel as an app's (``mcp_turn.TurnInteractions.ask_user``).
+    Checked EAGERLY; keyword only; omitted, byte-identical. MIRROR NOTE
+    (lock-step): ``chat_turn.run_chat_turn`` takes ``session_id`` and
+    ``plan_mode`` (it never arms the two asking tools).
     """
     _eager_checks(platform, body)
     round_budget = _chat_turn.turn_round_budget(round_budget)
@@ -2714,6 +2850,10 @@ async def stream_chat_turn(
     # (lock-step): chat_turn.run_chat_turn does the same.
     harness = _chat_turn.turn_harness(harness)
     round_budget, stay_in_chat = _chat_turn.harness_turn_knobs(harness, round_budget, stay_in_chat)
+    # v1.367.0 (IJ harness Phase 4): checked eagerly too. MIRROR NOTE
+    # (lock-step): chat_turn.run_chat_turn.
+    session_id = _chat_turn.turn_session_id(session_id)
+    plan_mode = _chat_turn.turn_plan_mode(plan_mode, harness)
     # LOCAL ONLY (v1.332.0): the scope is decided HERE (one row read when the
     # body names a saved chat) and set around the WHOLE stream by
     # `egress.scoped_frames`, in the task that iterates it — so the model pump
@@ -2748,7 +2888,7 @@ async def stream_chat_turn(
         arm_family=arm_family, trust=trust, trust_reason=trust_reason,
         suggest_preferences=suggest_preferences, thread_turn=thread_turn,
         prep=_prep, round_budget=round_budget, stay_in_chat=stay_in_chat,
-        harness=harness,
+        harness=harness, session_id=session_id, plan_mode=plan_mode,
     ), _prep), _lo_scope))
     if thread_turn is not None:
         # v1.328.0: the named turn's handle rides with the per-chat entry so
@@ -2908,6 +3048,8 @@ async def chat_stream(
     round_budget: "int | None" = None,
     stay_in_chat: bool = False,
     harness: "str | None" = None,
+    session_id: "str | None" = None,
+    plan_mode: bool = False,
 ):
     """THE STREAMING CHAT LANE — the lifted route body itself.
 
@@ -2943,6 +3085,9 @@ async def chat_stream(
     # v1.366.0: `stream_chat_turn` already checked it; idempotent here so a
     # direct caller of the lane gets the same validation.
     harness = _chat_turn.turn_harness(harness)
+    # v1.367.0: the same for the Build session's knobs.
+    _tool_session = _chat_turn.turn_session_id(session_id)
+    plan_mode = _chat_turn.turn_plan_mode(plan_mode, harness)
 
     # (The 400 for empty messages is `_eager_checks`, run by
     # `stream_chat_turn` before this generator exists — v1.312.0.)
@@ -3174,6 +3319,10 @@ async def chat_stream(
             tool_ceiling=tool_ceiling,
             approval_mode=normalize_approval_mode(getattr(body, "approval_mode", "")),
             text_only=text_only_pick,
+            # v1.367.0: a Build session's plan mode (lock-step), and ask_user
+            # only when this client draws the question card.
+            plan_mode=plan_mode,
+            ask_user=bool(getattr(body, "mcp_cards", False)),
         )
         system = _harness.system_without_exits(system, _chat_turn._ENV_EXIT_LINES)
         _grounding.harness = True
@@ -3744,7 +3893,10 @@ async def chat_stream(
                 (resolved_proj.root or "") if resolved_proj is not None else "",
             )
         ctx = ToolContext(
-            workspace=tool_ws, session_id="chat", agent_run_id="chat",
+            # v1.367.0: "chat", or a Build session's own "build:<id>" (its
+            # ledger rows, process tools and kept programs). MIRROR NOTE
+            # (lock-step): chat_turn.run_chat_turn.
+            workspace=tool_ws, session_id=_tool_session, agent_run_id=_tool_session,
             # v1.276.0 — lock-step: the sidebar's turn id, for the risk door's
             # resolver; "" for the chat page (the ask stays a queue row).
             turn_id=str(getattr(body, "turn_id", "") or ""),
@@ -3931,6 +4083,10 @@ async def chat_stream(
     # `allowed_names` — a granted tool nothing armed is still refused by the
     # armed-set gate and never shown to the model. A low-trust deny is never
     # granted back. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+    # v1.367.0: the once-only tools (exit_plan_mode) card whatever a grant
+    # says — both card predicates below force it.
+    from ...harness.mode import ONCE_ONLY_TOOLS as _ONCE_ONLY
+
     _conv_grants = {
         g for g in _conversation_grants(
             d.platform.registry,
@@ -3952,6 +4108,13 @@ async def chat_stream(
     # is left as "stopped". POST /chat builds none (packs get decline / -1).
     _ti = TurnInteractions(
         d, stop=_stop, low_trust=lambda: bool(_trust_state["low"]), poll_s=_ASK_POLL_S,
+        # v1.367.0: the conversation the ask_user answer route checks.
+        owner=str(getattr(body, "thread_id", "") or ""),
+        # v1.367.0 (Phase 4 review): the question channel exists only for a
+        # HARNESS turn that armed ask_user (its client draws the card — see
+        # `_build_harness(ask_user=)`). A chat turn that armed it by name
+        # from the "+" menu gets a refusal, never an unrendered question.
+        asks_user=_harness is not None and "ask_user" in {*armed, *ask_armed},
     )
     # v1.327.0: the chat list's "waiting" reads this turn's open app asks
     # live; an approval card parks it below (`thread_turn.park`).
@@ -4048,6 +4211,7 @@ async def chat_stream(
                 usage_in=usage_in, usage_out=usage_out,
                 started_at=turn_started, cost_usd=_tally.cost_usd,
                 thread_id=getattr(body, "thread_id", ""),
+                tool_session=_tool_session,  # v1.367.0 (lock-step)
             )
 
         # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office
@@ -4358,6 +4522,18 @@ async def chat_stream(
                     # per-call branch below repeats this rule.
                     if _c.name not in {*armed, *ask_armed}:
                         return ""
+                    if _c.name in _ONCE_ONLY:
+                        # v1.367.0: the plan door cards in EVERY posture, by
+                        # itself (never batched with another call). The
+                        # per-call branch below is what DECIDES (pinned); this
+                        # mirror keeps the two predicates agreeing (the
+                        # v1.247.0 rule) — its per-call key joins no batch, so
+                        # it changes no grouping by itself.
+                        _ct = d.platform.registry.get(_c.name)
+                        _cp = _ct.perm_key() if _ct is not None else _c.name
+                        if d.platform.permissions.mode_for(_cp, overrides) is PermissionMode.DENY:
+                            return ""
+                        return _ask_first_key(_c, _cp)
                     if _ask_first(_c):
                         _ct = d.platform.registry.get(_c.name)
                         _cp = _ct.perm_key() if _ct is not None else _c.name
@@ -4507,10 +4683,20 @@ async def chat_stream(
                         not _unarmed and _ask_first(tc)
                         and _mode is not PermissionMode.DENY
                     )
-                    _card_key = _ask_first_key(tc, _perm_name) if _local_ask else _perm_name
-                    if _local_ask:
+                    # v1.367.0 (IJ harness Phase 4): the plan door
+                    # (exit_plan_mode) cards in EVERY posture, alone, once —
+                    # the v1.350.0 approve_plan rules. MIRROR NOTE:
+                    # `_would_card` reads it the same way.
+                    _once_only = (
+                        not _unarmed and tc.name in _ONCE_ONLY
+                        and _mode is not PermissionMode.DENY
+                    )
+                    _card_key = (
+                        _ask_first_key(tc, _perm_name) if (_local_ask or _once_only) else _perm_name
+                    )
+                    if _local_ask or _once_only:
                         _needs_card = True
-                    if _needs_card and not _local_ask and _tab_covered(tc):
+                    if _needs_card and not _local_ask and not _once_only and _tab_covered(tc):
                         # A COVERED CALL CARRIES ITS GRANT (v1.270.1). The
                         # card is skipped, but the registry's own permission
                         # gate still runs inside `invoke` and refuses an
@@ -4524,7 +4710,7 @@ async def chat_stream(
                         _needs_card = False
                         if _engine_asks:
                             _grant_extra = {tc.name, _perm_name}
-                    if _needs_card and not _local_ask and _grant_covers(
+                    if _needs_card and not _local_ask and not _once_only and _grant_covers(
                         d.platform, _grant_scopes, tc.name, tc.arguments
                     ):
                         # A STANDING GRANT COVERS IT (v1.299.0): no card. The
@@ -4582,7 +4768,7 @@ async def chat_stream(
                                 # the next quote is a different spend.
                                 "can_always": _can_always(
                                     d.platform, _grant_scopes, _trust_state, tc.name
-                                ) and not _local_ask and not _spend_card,
+                                ) and not _local_ask and not _spend_card and not _once_only,
                                 # 0 = no expiry (v1.247.0): the turn waits
                                 # for the person it asked.
                                 "timeout_s": (
@@ -4614,10 +4800,11 @@ async def chat_stream(
                                 _frame["cost_note"] = spend_words_for(
                                     _spend.get(id(_c)) for _c in _group
                                 )
-                            if _local_ask:
+                            if _local_ask or _once_only:
                                 # v1.332.0 (L3): this card offers "Allow
                                 # once" and "Deny" only; any wider answer is
-                                # read as once below.
+                                # read as once below. v1.367.0: the plan
+                                # door's card too.
                                 _frame["once_only"] = True
                             if _count > 1:
                                 _examples = [
@@ -4690,7 +4877,7 @@ async def chat_stream(
                                 # no frame is emitted (as every stop path).
                                 _persist_once(AgentState.CANCELLED)
                                 return
-                            if _local_ask and _decision in ("tab", "conversation", "always"):
+                            if (_local_ask or _once_only) and _decision in ("tab", "conversation", "always"):
                                 # v1.332.0 (L3): a local-only card is "Allow
                                 # once": no tab grant, no conversation grant,
                                 # no standing grant is recorded from it.

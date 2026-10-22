@@ -102,7 +102,7 @@ class _Ask:
     """One pending question, by id, in :data:`PENDING`."""
 
     id: str
-    kind: str                       # "elicitation" | "sampling"
+    kind: str                       # "elicitation" | "sampling" | "ask_user"
     turn: "TurnInteractions"
     loop: asyncio.AbstractEventLoop
     fut: "asyncio.Future[tuple[str, Any]]"
@@ -231,8 +231,22 @@ class TurnInteractions:
         route: Callable[[], tuple[str, str]] | None = None,
         low_trust: Callable[[], bool] | None = None,
         poll_s: float = ASK_POLL_S,
+        owner: str = "",
+        asks_user: bool = False,
     ) -> None:
         self.d = d
+        #: v1.367.0: the saved conversation this turn answers for ("" = none)
+        #: — the ``ask_user`` answer route checks an ask belongs to the
+        #: session it is answered from.
+        self.owner = str(owner or "")
+        #: v1.367.0 (Phase 4 review): True ONLY for a turn whose client draws
+        #: the ``ask_user`` card — a Build session's harness turn that armed
+        #: the tool. Every other stream turn (the chat page, a Build pane, the
+        #: sidebar) gets a scope with NO ``ask``, so an ``ask_user`` the user
+        #: armed by name from the "+" menu (or a skill's playbook named)
+        #: refuses at once in words instead of parking the turn on a question
+        #: no page renders — with no clock, a watched chat would wait forever.
+        self.asks_user = bool(asks_user)
         self.side: asyncio.Queue = asyncio.Queue()
         self._stop = stop
         self.route: Callable[[], tuple[str, str]] = route or (lambda: ("", ""))
@@ -279,12 +293,19 @@ class TurnInteractions:
         async def _sample(pack: str, params: dict) -> dict:
             return await self.sample(cid, pack, params)
 
+        async def _ask(questions: list) -> tuple[str, Any]:
+            return await self.ask_user(cid, questions)
+
         return InteractionScope(
             loop=asyncio.get_running_loop(),
             call_id=cid,
             elicit=_elicit,
             sample=_sample,
             progress=self.progress,
+            # v1.367.0: the ask_user tool's way to the user — the SAME side
+            # channel and wait as an app's question. Only where a card for it
+            # is drawn (``asks_user``); None = the tool refuses at once.
+            ask=_ask if self.asks_user else None,
         )
 
     # -- waiting ----------------------------------------------------------- #
@@ -305,7 +326,7 @@ class TurnInteractions:
     def _open(self, kind: str, pack: str, call_id: str, fields=None) -> _Ask:
         loop = asyncio.get_running_loop()
         ask = _Ask(
-            id=_new_id("el" if kind == "elicitation" else "sa"),
+            id=_new_id({"elicitation": "el", "sampling": "sa"}.get(kind, "aq")),
             kind=kind, turn=self, loop=loop, fut=loop.create_future(),
             pack=str(pack or ""), call_id=call_id, fields=list(fields or []),
         )
@@ -375,6 +396,32 @@ class TurnInteractions:
         if outcome == "decline":
             return {"action": "decline"}
         return {"action": "cancel"}  # cancel / stopped
+
+    # -- a question from the model itself (v1.367.0) ------------------------ #
+
+    async def ask_user(self, call_id: str, questions: list) -> tuple[str, Any]:
+        """The ``ask_user`` tool's question (IJ harness Phase 4): an
+        ``ask_user`` frame ``{id, call_id, questions}`` on the side queue, a
+        wait with NO clock (an answer, Stop, a dropped connection / the
+        orphan guard, or the turn's end), then ``mcp_resolved {id, kind:
+        "ask_user", outcome}``. Answers ``("answered", answer)``,
+        ``("skipped", None)`` or ``("stopped", None)``. Settled through
+        ``POST /build/sessions/{id}/answer``."""
+        if self.closed:
+            return "stopped", None
+        ask = self._open("ask_user", "", call_id)
+        self._emit("ask_user", {
+            "id": ask.id,
+            "call_id": call_id,
+            "questions": list(questions or []),
+        })
+        outcome, content = await self._wait(ask)
+        self._emit("mcp_resolved", {"id": ask.id, "kind": "ask_user", "outcome": outcome})
+        if outcome == "answered":
+            return "answered", content
+        if outcome == "skipped":
+            return "skipped", None
+        return "stopped", None
 
     # -- sampling ---------------------------------------------------------- #
 

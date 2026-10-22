@@ -366,6 +366,12 @@
       "kind": "table",
       "card": "change a notebook",
       "desktop": "change a notebook"
+    },
+    {
+      "tool": "exit_plan_mode",
+      "kind": "table",
+      "card": "start working on this plan",
+      "desktop": "start working on this plan"
     }
   ]
 }

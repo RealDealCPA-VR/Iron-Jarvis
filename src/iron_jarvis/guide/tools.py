@@ -276,7 +276,15 @@ class AppSearchTool(Tool):
             from ..core.models import ChatThreadRecord
 
             with session_scope(p.engine) as db:
-                stmt = select(ChatThreadRecord).order_by(ChatThreadRecord.updated_at.desc()).limit(300)  # type: ignore[attr-defined]
+                from ..core.models import chat_surface_only
+
+                # v1.367.0: a Build session is not a chat (it opens in Build).
+                stmt = (
+                    select(ChatThreadRecord)
+                    .where(chat_surface_only(ChatThreadRecord.surface))
+                    .order_by(ChatThreadRecord.updated_at.desc())  # type: ignore[attr-defined]
+                    .limit(300)
+                )
                 for r in db.exec(stmt):
                     out.append((kind, r.id, r.title or "(untitled)", f"persona {r.persona or 'default'}"))
         elif kind == "session":

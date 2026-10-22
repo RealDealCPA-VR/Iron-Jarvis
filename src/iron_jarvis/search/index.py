@@ -1413,6 +1413,10 @@ class SearchIndex:
         todo = self._unindexed(keys, "thread_id", ["chat", "comm"], force)
         indexed = 0
         for rec in self._load_rows(ChatThreadRecord, todo):
+            if str(getattr(rec, "surface", "") or "") == "build":
+                # v1.367.0: an IJ harness (Build) session is never indexed —
+                # Chat's history search and memory recall leave it out.
+                continue
             kind = "comm" if (rec.owner == "daemon" or rec.comm_channel) else "chat"
             try:
                 msgs = json.loads(rec.messages_json or "[]")

@@ -328,6 +328,11 @@ SETTINGS: tuple[SettingDef, ...] = (
       "When there is no cap and more than this many background runs are going at once, "
       "the bell asks whether to queue the extras. 0 = never ask.",
       tier="allow", check=_range(0, 64), aliases=("busy notice", "busy runs")),
+    # v1.367.0 (IJ harness Phase 4): one Build session turn's tool rounds.
+    S("build_round_budget", "Steps per Build session reply", "automation", "number",
+      "How many steps (tool rounds) one reply in a Build session may take before it stops and "
+      "answers with what it has. The work stays in the session; nothing is handed to an agent.",
+      tier="allow", check=_range(1, 200), aliases=("build round budget", "build steps")),
     # v1.350.0: an agent's plan, shown before any step runs. Turning it OFF
     # from chat asks every time (a model must not quietly drop the check).
     S("plan_approval", "Ask me to approve an agent's plan before it starts", "automation", "bool",

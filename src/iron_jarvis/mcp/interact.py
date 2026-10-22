@@ -92,6 +92,11 @@ class InteractionScope:
     sample: Callable[[str, dict], Awaitable[dict]]
     #: Called ON THE LOOP with one ``mcp_progress`` frame dict.
     progress: Callable[[dict], None]
+    #: v1.367.0 (IJ harness Phase 4): ``(questions) -> (outcome, answer)`` —
+    #: the ``ask_user`` tool's way to the user (outcome "answered" /
+    #: "skipped" / "stopped"). ``None`` = this turn cannot ask (only a Build
+    #: session's stream turn sets it).
+    ask: "Callable[[list], Awaitable[tuple[str, Any]]] | None" = None
 
 
 MCP_SCOPE: "contextvars.ContextVar[InteractionScope | None]" = contextvars.ContextVar(

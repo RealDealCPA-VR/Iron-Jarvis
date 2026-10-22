@@ -22,7 +22,10 @@ from iron_jarvis.platform import build_platform
 INVENTORY = json.loads(
     (Path(__file__).parent / "fixtures" / "harness_tool_inventory_v1364.json").read_text(encoding="utf-8")
 )
-ALL = frozenset(M.CODING_TOOLS)
+# v1.367.0 (Phase 4, moved on purpose): a dialect may also target the two
+# Build-session tools (AskUserQuestion / request_user_input -> ask_user,
+# ExitPlanMode -> exit_plan_mode).
+ALL = frozenset(M.CODING_TOOLS) | {M.ASK_USER_TOOL, M.EXIT_PLAN_TOOL}
 
 
 @pytest.fixture(scope="module")

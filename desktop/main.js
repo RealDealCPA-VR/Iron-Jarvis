@@ -2806,6 +2806,7 @@ const TOOL_WORDS = {
   multi_edit: "change a file",
   apply_patch: "change files with a patch",
   notebook_edit: "change a notebook",
+  exit_plan_mode: "start working on this plan",
 };
 
 //: The batch forms ("rename or move 4 files") for the asks that come in

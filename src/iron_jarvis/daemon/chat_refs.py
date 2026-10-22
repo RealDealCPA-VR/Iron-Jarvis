@@ -196,12 +196,16 @@ def _load(engine: Any, ids: list[str]) -> dict[str, tuple[str, str]]:
 
     from ..core.db import session_scope
     from ..core.models import ChatThreadRecord as T
+    from ..core.models import chat_surface_only
 
     if not ids:
         return {}
     with session_scope(engine) as db:
         rows = list(db.exec(
             select(T.id, T.title, T.messages_json).where(T.id.in_(ids))  # type: ignore[attr-defined]
+            # v1.367.0: an IJ harness (Build) session is not a chat the user
+            # can point to with "@" — its id resolves as unknown.
+            .where(chat_surface_only(T.surface))
         ))
     return {tid: (title or "", msgs or "[]") for tid, title, msgs in rows}
 
@@ -385,9 +389,11 @@ def search_thread_refs(engine: Any, q: str = "", exclude: str = "") -> list[dict
     # An ARCHIVED chat is not offered (v1.327.0): the user put it away, and
     # the menu follows the chat list, which hides it too. Resolving an id the
     # user already picked (``read_thread_refs`` / ``_load``) still reads it.
+    from ..core.models import chat_surface_only
+
     stmt = select(T.id, T.title, T.updated_at).where(
         T.archived_at.is_(None)  # type: ignore[union-attr]
-    )
+    ).where(chat_surface_only(T.surface))  # v1.367.0: never a Build session
     if needle:
         stmt = stmt.where(func.lower(T.title).contains(needle, autoescape=True))
     if skip:

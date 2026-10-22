@@ -144,6 +144,8 @@ def _next_stamp(prev: datetime | None) -> datetime:
 def _index(db: Any, engine: Any, record: ChatThreadRecord, msgs: list) -> None:
     """Re-index for history search in the caller's session — best-effort, as
     the PUT route and the comm store do. Never raises."""
+    if str(getattr(record, "surface", "") or "") == "build":
+        return  # v1.367.0: a Build session is never in Chat's history search
     try:
         from ..core.db import search_index  # lazy: keeps the import graph flat
 
@@ -207,6 +209,14 @@ def append_to_chat_thread(
                 return out
             if (getattr(r, "owner", "user") or "user") == "daemon":
                 out["why"] = "a messaging thread — Iron Jarvis's messaging store writes it"
+                return out
+            if str(getattr(r, "surface", "") or "") == "build":
+                # v1.367.0 (Phase 4 review): a Build session has ONE writer —
+                # its own turns (harness/sessions.append_lines). A chat-shaped
+                # line from an @-panel round, an agent's delivery, a media job
+                # or a remote's inbound must not land in its transcript (nor
+                # un-archive it); the caller reads ``why``.
+                out["why"] = "a Build session — its own turns write it"
                 return out
             try:
                 msgs = json.loads(r.messages_json or "[]")

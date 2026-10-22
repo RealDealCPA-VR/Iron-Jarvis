@@ -216,15 +216,20 @@ def _work(d, db, since) -> list[dict[str, Any]]:
     def chats() -> dict[str, Any]:
         from ...core.turns import CHAT_INFLIGHT
 
+        from ...core.models import chat_surface_only
+
+        # v1.367.0: Build sessions are not chats.
+        chats_only = chat_surface_only(ChatThreadRecord.surface)
         total = _count(
-            db, select(func.count()).select_from(ChatThreadRecord).where(ChatThreadRecord.archived_at.is_(None))  # type: ignore[union-attr]
+            db, select(func.count()).select_from(ChatThreadRecord).where(ChatThreadRecord.archived_at.is_(None)).where(chats_only)  # type: ignore[union-attr]
         )
         used = _count(
             db,
             select(func.count())
             .select_from(ChatThreadRecord)
             .where(ChatThreadRecord.updated_at >= since)
-            .where(ChatThreadRecord.archived_at.is_(None)),  # type: ignore[union-attr]
+            .where(ChatThreadRecord.archived_at.is_(None))  # type: ignore[union-attr]
+            .where(chats_only),
         )
         return _node(
             "chats", "Chats", "/chat", setup=total, used=used, live=CHAT_INFLIGHT.count(), unit="chat",

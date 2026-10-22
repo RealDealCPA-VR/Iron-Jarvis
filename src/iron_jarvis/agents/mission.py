@@ -261,6 +261,9 @@ ASK_WORDS: dict[str, str] = {
     "multi_edit": "change a file",
     "apply_patch": "change files with a patch",
     "notebook_edit": "change a notebook",
+    # v1.367.0 (IJ harness Phase 4): the plan door of a Build session's plan
+    # mode — its once-only card asks to start working on the plan shown.
+    "exit_plan_mode": "start working on this plan",
 }
 
 
@@ -429,6 +432,9 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "process_stop": ("stopped a running program", "program stop"),
     "mcp_list_resources": ("listed an app's resources", "resource listing"),
     "mcp_read_resource": ("read an app's resource", "resource read"),
+    # v1.367.0 (IJ harness Phase 4): a Build session's question and plan door.
+    "ask_user": ("asked you a question", "question"),
+    "exit_plan_mode": ("presented its plan for approval", "plan for approval"),
 }
 
 #: browser/tools.py's 14 built-in browser tools, by EXACT name (the
@@ -630,6 +636,8 @@ _PRESENT: dict[str, str] = {
     # v1.364.0 (IJ harness Phase 1).
     "applied": "apply",
     "stopped": "stop",
+    # v1.367.0 (IJ harness Phase 4).
+    "presented": "present",
 }
 
 

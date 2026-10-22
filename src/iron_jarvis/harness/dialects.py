@@ -593,6 +593,44 @@ def _view_image(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, 
     return "view_image", out
 
 
+def _questions(args: dict[str, Any]) -> Any:
+    """A vendor's question list in ``ask_user``'s shape (v1.367.0): Claude
+    Code's ``multiSelect`` → ``multi``; Codex's ``id`` / ``header`` kept;
+    Codex's async ``title`` → ``question`` (options may be plain strings)."""
+    raw = args.get("questions")
+    if not isinstance(raw, list):
+        return raw
+    out = []
+    for q in raw:
+        if not isinstance(q, dict):
+            out.append(q)
+            continue
+        item: dict[str, Any] = {}
+        _put(item, "id", q.get("id"))
+        _put(item, "header", q.get("header"))
+        _put(item, "question", _first(q, "question", "title"))
+        _put(item, "options", q.get("options"))
+        _put(item, "multi", _bool(_first(q, "multiSelect", "multi_select", "multi")))
+        out.append(item)
+    return out
+
+
+def _ask_user(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    if "questions" in args:
+        _put(out, "questions", _questions(args))
+    else:
+        for key in ("question", "options", "multi"):
+            _put(out, key, args.get(key))
+    return "ask_user", out
+
+
+def _exit_plan(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    out: dict[str, Any] = {}
+    _put(out, "plan", args.get("plan"))
+    return "exit_plan_mode", out
+
+
 # --------------------------------------------------------------------------- #
 # schemas
 # --------------------------------------------------------------------------- #
@@ -789,6 +827,41 @@ _CLAUDE_TOOLS: tuple[DialectTool, ...] = (
         ("web_search",), _web_search,
     ),
     DialectTool(
+        "AskUserQuestion",
+        "Asks the user one to four multiple-choice questions and waits for the answers. Each "
+        "question has a short header, two to four options (label + description; put the "
+        "recommended one first and add \"(Recommended)\" to its label) and multiSelect. The "
+        "user can always answer in their own words instead. Ask only what is the user's to "
+        "decide.",
+        _obj({
+            "questions": {
+                "type": "array",
+                "description": "Questions to ask the user (1-4)",
+                "items": _obj({
+                    "question": _d("The complete question", _S),
+                    "header": _d("A very short label (12 characters at most)", _S),
+                    "options": {
+                        "type": "array",
+                        "items": _obj({"label": _S, "description": _S}, ["label", "description"]),
+                    },
+                    "multiSelect": _d("Let the user pick several options", _B),
+                }, ["question", "header", "options", "multiSelect"]),
+            },
+        }, ["questions"]),
+        ("ask_user",), _ask_user,
+    ),
+    DialectTool(
+        "ExitPlanMode",
+        "Asks the user to approve your plan and leave plan mode. Write the plan in your reply "
+        "first; the user reads it and approves it or not before anything changes. Use it only "
+        "in plan mode, once the plan is ready.",
+        # Claude Code 2.1.306's shape: no arguments (its only property,
+        # allowedPrompts, is deprecated) — the plan is what the reply says.
+        # A `plan` an older model still sends is passed through.
+        {"type": "object", "properties": {}, "required": [], "additionalProperties": True},
+        ("exit_plan_mode",), _exit_plan,
+    ),
+    DialectTool(
         "ListMcpResourcesTool",
         "Lists the resources the user's connected apps offer.",
         _obj({"server": _d("Only this app", _S)}, []),
@@ -811,7 +884,7 @@ CLAUDE = Dialect(
         "read_file", "write_file", "edit_file", "multi_edit", "glob", "grep", "list_files",
         "shell", "process_start", "process_read", "process_stop", "plan_update",
         "notebook_edit", "web_fetch", "web_search", "view_image", "mcp_list_resources",
-        "mcp_read_resource",
+        "mcp_read_resource", "ask_user", "exit_plan_mode",
     }),
     prompt=(
         "Your tools use Claude Code's names and shapes: {tools}. Read a file before you Edit "
@@ -891,6 +964,29 @@ _GPT_TOOLS: tuple[DialectTool, ...] = (
         ("view_image",), _view_image,
     ),
     DialectTool(
+        "request_user_input",
+        "Request user input for one to three short questions and wait for the response. Each "
+        "question has an id, a short header, the question and 2-3 options (label + "
+        "description; the recommended one first with \"(Recommended)\" in its label). The "
+        "user can always answer in their own words instead.",
+        _obj({
+            "questions": {
+                "type": "array",
+                "description": "Questions to show the user. Prefer 1 and do not exceed 3",
+                "items": _obj({
+                    "id": _d("Stable identifier for mapping answers (snake_case).", _S),
+                    "header": _d("Short header label shown in the UI (12 or fewer chars).", _S),
+                    "question": _d("Single-sentence prompt shown to the user.", _S),
+                    "options": {
+                        "type": "array",
+                        "items": _obj({"label": _S, "description": _S}, ["label", "description"]),
+                    },
+                }, ["id", "header", "question", "options"]),
+            },
+        }, ["questions"]),
+        ("ask_user",), _ask_user, aliases=("request_user_input_async",),
+    ),
+    DialectTool(
         "list_mcp_resources",
         "Lists resources provided by the user's connected apps (MCP servers).",
         _obj({"server": _d("Only this server.", _S)}, []),
@@ -912,7 +1008,7 @@ GPT = Dialect(
     hides=frozenset({
         "shell", "process_start", "process_read", "process_write", "process_stop",
         "write_file", "edit_file", "multi_edit", "apply_patch", "plan_update", "view_image",
-        "mcp_list_resources", "mcp_read_resource",
+        "mcp_list_resources", "mcp_read_resource", "ask_user",
     }),
     prompt=(
         "Your tools use Codex's names and shapes: {tools}. Edit files with apply_patch. Read and "

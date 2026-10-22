@@ -29,4 +29,13 @@ Phase 3 (v1.366.0) makes the harness an explicit, per-family system:
 * :mod:`.mode` — HARNESS MODE for a chat turn (``harness=`` on the two chat
   lanes): the coding tool set, the dialect, the tree, no escalation, one
   nudge for a tool call written as text.
+
+Phase 4 (v1.367.0) is the SESSION backend behind Build's IJ harness view:
+
+* :mod:`.sessions` — a session is a chat thread with ``surface = "build"``:
+  grouped by folder, one display-name store (a project root's name is the
+  project's), its own ``build:<id>`` process/tool session, act / plan mode.
+* :mod:`.session_tools` — ``ask_user`` (a question the turn waits on) and
+  ``exit_plan_mode`` (the plan-mode door, carded once-only).
+* The routes are ``daemon/routes/build.py``.
 """

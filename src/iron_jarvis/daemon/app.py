@@ -962,6 +962,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
             n = reconcile_interrupted_turns(platform.engine)
             if n:
                 log.info("kept %d chat answer(s) a restart or crash cut off", n)
+            # v1.367.0 (IJ harness Phase 4): a Build session's transcript is
+            # written by the daemon, so a turn the crash cut off gets its
+            # (interrupted) reply line now — AFTER the records are marked.
+            from ..harness.sessions import reconcile_interrupted_turns as _build_reconcile
+
+            m = _build_reconcile(platform.engine)
+            if m:
+                log.info("kept %d Build session answer(s) a restart or crash cut off", m)
 
         _rehydrate_step("reconcile_chat_turns", _reconcile_chat_turns)
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
@@ -3279,6 +3287,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import mcp_interact as _mcp_interact_routes
 
     _mcp_interact_routes.register(app, d)
+    # Build's IJ harness sessions (v1.367.0, plan Phase 4): sessions grouped
+    # by folder, their turns (harness mode, durable), plan mode, ask_user.
+    from .routes import build as _build_routes
+
+    _build_routes.register(app, d)
     # Share my profile with Build (v1.306.0): the per-CLI switches on the
     # Memory page's "What Jarvis knows about you" card.
     from .routes import profile_share as _profile_share_routes
