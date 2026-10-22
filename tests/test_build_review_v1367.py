@@ -11,10 +11,9 @@ import asyncio
 import json
 
 import pytest
-from sqlmodel import select
 
 from iron_jarvis.core.db import session_scope
-from iron_jarvis.core.models import ChatThreadRecord, ChatTurnRecord, ToolInvocation
+from iron_jarvis.core.models import ChatThreadRecord, ChatTurnRecord
 from iron_jarvis.daemon import mcp_turn
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.daemon.chat_stream import stream_chat_turn
