@@ -713,6 +713,20 @@ def _rank(p: Probed, baseline: Probed) -> tuple:
     return (-mine, tokens, p.label)
 
 
+def compose_files(winners: Sequence[Probed]) -> tuple[dict[str, str], dict[str, str]]:
+    """``(file -> the winner it came from, file -> its text)`` for a parallel
+    composition: each harness file a winner CHANGED, from the best-ranked
+    winner that changed it (``winners`` is already ranked best first)."""
+    source: dict[str, str] = {}
+    chosen: dict[str, str] = {}
+    for w in winners:
+        for name in w.changed:
+            if name not in source:
+                source[name] = w.label
+                chosen[name] = w.files.get(name, "")
+    return source, chosen
+
+
 def _winners(probed: Sequence[Probed], baseline: Probed) -> list[Probed]:
     out = []
     for p in probed:
@@ -825,13 +839,7 @@ async def run_refine(
         composition = winners[0]
         comp_view.update({"from": [composition.label], "probed_as": composition.label})
     else:
-        chosen_files: dict[str, str] = {}
-        source: dict[str, str] = {}
-        for w in winners:
-            for name in w.changed:
-                if name not in source:
-                    source[name] = w.label
-                    chosen_files[name] = w.files.get(name, "")
+        source, chosen_files = compose_files(winners)
         if len(set(source.values())) == 1:
             composition = next(w for w in winners if w.label == next(iter(source.values())))
             comp_view.update({"from": [composition.label], "probed_as": composition.label})

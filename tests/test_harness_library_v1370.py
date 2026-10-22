@@ -190,6 +190,13 @@ async def test_the_turns_end_schedules_it_by_itself_and_the_bell_hears(app, work
     assert events[0]["summary"] == "add() lives in calc.py."
 
 
+async def test_with_the_switch_off_a_turn_schedules_nothing(app, work, monkeypatch):
+    monkeypatch.setattr(L, "AUTO_REFLECT", False)
+    sid, script = await _worked(app, work, GOOD)
+    await L.drain()
+    assert script.reflections == [] and _rows(app) == []
+
+
 async def test_a_turn_that_only_read_is_not_reflected_on(app, work):
     sid, script = await _worked(app, work, GOOD, moves=[
         [ToolCall(id="r", name="Read", arguments={"file_path": "calc.py"})], "It subtracts.",
@@ -302,6 +309,14 @@ async def test_only_an_accepted_lesson_rides_the_next_session_in_that_folder(app
     script = wire(app, Script(["ok"]))
     await _turn(app, sid2, "and again", "n3")
     assert "Lessons from earlier sessions" not in script.calls[0]["system"]
+
+
+async def test_only_a_kept_lesson_can_be_forgotten(app, work):
+    sid, _ = await _worked(app, work, GOOD)
+    out = await L.reflect(app.state.platform, sid, _TURN[sid])
+    status, body = await asgi(app, "DELETE", f"/build/library/{out.minted[0].id}")
+    assert status == 409 and "kept lesson" in body["detail"]
+    assert L.get(app.state.platform.engine, out.minted[0].id) is not None
 
 
 def test_the_library_component_is_scanned_and_bounded(tmp_path):
