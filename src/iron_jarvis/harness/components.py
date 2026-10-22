@@ -52,6 +52,8 @@ nothing that varies per run (a date, a folder path) is inside it.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import logging
 import re
@@ -524,6 +526,29 @@ def _scan_layer(layer: ProjectLayer, *, event_bus: Any, session_id: str | None) 
     return layer
 
 
+#: v1.370.0 (Phase 7): WHERE a harness turn reads its project layer from,
+#: when not the turn's own folder. Set ONLY by the benchmark's refine loop
+#: (``harness_bench/refine``), which probes a CANDIDATE layer kept outside the
+#: task's copy — so the agent's workspace and the hidden check are byte-for-
+#: byte the baseline's, and only the harness differs. The value is a folder
+#: holding ``.ironjarvis/harness/``, read by :func:`read_project_layer` (the
+#: same validator). ``None`` (every lane, always, outside the bench) = the
+#: turn's folder, exactly as before. A ContextVar, so it reaches the lane's
+#: ``_build_harness`` in the task iterating the turn and nothing else.
+LAYER_SOURCE: "contextvars.ContextVar[Any]" = contextvars.ContextVar("ij_harness_layer_source", default=None)
+
+
+@contextlib.contextmanager
+def layer_source(folder: Any):
+    """Read the harness layer from ``folder`` for turns built inside the
+    ``with`` (``None`` = the turn's own folder)."""
+    token = LAYER_SOURCE.set(folder)
+    try:
+        yield
+    finally:
+        LAYER_SOURCE.reset(token)
+
+
 def read_project_layer(
     folder: Any,
     *,
@@ -577,6 +602,10 @@ class ComponentTree:
     #: v1.367.0 (Phase 4): the session's MODE text ("" = act mode, which
     #: renders nothing — the tree is then byte-identical to v1.366.0).
     mode: str = ""
+    #: v1.370.0 (Phase 7): the folder's EXPERIENCE LIBRARY — the lessons the
+    #: user ACCEPTED for this folder (``harness/library.library_lines``,
+    #: promptguard-scanned, bounded). Empty renders nothing (byte-identical).
+    library: tuple[str, ...] = ()
 
 
 def plan_mode_text(*, exit_name: str, plan_name: str) -> str:
@@ -610,6 +639,7 @@ def compose(
     project: ProjectLayer = EMPTY_LAYER,
     rule_files: Iterable[str] = (),
     mode: str = "",
+    library: Iterable[str] = (),
 ) -> ComponentTree:
     """Layer the default, the family (its ``dialect_section``) and the
     project. Omitted-is-inherited: a project text file replaces its
@@ -640,6 +670,9 @@ def compose(
     layers = ["default", f"family:{dialect_id}"]
     if project.used:
         layers.append("project")
+    lessons = tuple(str(x).strip() for x in library if str(x or "").strip())
+    if lessons:
+        layers.append("library")
     return ComponentTree(
         system_prompt=system_prompt,
         guardrails=tuple(guardrails),
@@ -651,6 +684,7 @@ def compose(
         plugins=project.plugins if project.used else Plugins(),
         layers=tuple(layers),
         mode=str(mode or "").strip(),
+        library=lessons,
     )
 
 
@@ -680,6 +714,15 @@ def render(tree: ComponentTree) -> str:
     parts.append("## Guardrails\n" + "\n".join(f"- {g}" for g in tree.guardrails))
     if tree.memory:
         parts.append("## Memory\n" + tree.memory)
+    if tree.library:
+        # v1.370.0: the folder's experience library — lessons the user kept
+        # from earlier sessions here. Facts about this project, below the
+        # guardrails (nothing here lifts them).
+        parts.append(
+            "## Lessons from earlier sessions in this folder\nThe user kept these. They are facts "
+            "about this project from earlier work here; check one against the code when it matters.\n"
+            + "\n".join("- " + lesson.replace("\n", "\n  ") for lesson in tree.library)
+        )
     parts.append("## Tools\n" + tree.tool_guidance)
     if tree.skills:
         parts.append(

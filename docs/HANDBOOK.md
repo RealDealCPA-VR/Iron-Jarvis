@@ -1897,6 +1897,178 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## The IJ harness and accounts
+
+The IJ harness is Iron Jarvis working as a coding agent in one of your
+project folders, on whichever model you choose — the way Claude Code or Codex
+work, but inside Iron Jarvis, with its approvals, Undo and activity log. It
+lives in Build, beside your terminals. It was built in steps (v1.366.0 to
+v1.370.0); this section is the whole picture in one place.
+
+**A coding session**
+
+- A coding session belongs to a project folder. It keeps its own
+  conversation, model, approval setting and account, and it never shows up
+  in your chat list, chat search or memory recall.
+- A reply keeps going when you look away: close the window, reload or lose
+  the connection and the session finishes its work. Stop ends it. A restart
+  in the middle of a reply leaves one line saying it was cut off.
+- **Plan first, if you like.** In plan mode the model can only read and plan.
+  When the plan is ready it asks you once; Allow switches the session to
+  doing the work and keeps the plan, Deny keeps it planning. No approval
+  setting answers that question for you.
+- The model can stop and ask you a question with choices, and waits for your
+  answer.
+- Deleting or archiving a session stops the programs it started.
+
+**The harness: the same rules, each model's own tools**
+
+- Every model gets the coding tools Claude Code and Codex give theirs:
+  reading parts of files, exact edits, patches across files, search,
+  programs that keep running, a step list. Each model sees them in the shape
+  it was trained on (Claude sees Claude Code's tools, GPT sees Codex's, Qwen
+  sees Qwen Code's, others see Iron Jarvis's own). Every call is translated
+  to the real Iron Jarvis tool before it runs, so approvals, Undo, the
+  activity log and your limits always apply.
+- Four rules come first in every session and can never be removed: work
+  inside the session's folder; never stop a program the session did not
+  start; never end programs by name; only rewrite git history when asked.
+- **A folder can add its own harness files** in `.ironjarvis/harness/`:
+  `system_prompt.md` (how to work), `guardrails.md` (more rules — added after
+  the four), `memory.md` (notes), `tool_guidance.md` (tool advice), `skills/`,
+  `sub_agents/`, `scripts/` and `plugins.toml` (make a tool ask first or
+  refuse it, and checks that run after an edit). A file the folder does not
+  have keeps the built-in version. Everything is checked before it is used;
+  a folder setup that is invalid or reads like an attempt to steer the model
+  is ignored as a whole, with a note on the reply.
+
+**Accounts**
+
+- Each session runs on ONE account (a Claude Code or Codex account from
+  Iron-Proxy; a new session starts on the one marked Default). It never moves
+  to another account on its own.
+- When that account reaches its limit, the reply stops after its last
+  finished step, the files it changed stay changed, and the session shows
+  when the account resets. **Resume when ready** waits for the reset and
+  carries on by itself (even after a restart); **Choose account** carries on
+  now on another account with the same conversation.
+- A model on your own model server, or an API key, needs no account: the
+  session names the place instead.
+
+**Rewind (v1.370.0)**
+
+- You can rewind a session to before any of its replies: point at a message
+  you sent and press **Rewind to here**. The first press only shows what
+  would happen; the second rewinds. The files its
+  replies changed from that point on go back to how they were, newest change
+  first, through the same Undo the activity log uses — files the session
+  created are removed, files it changed get their earlier content back. The
+  conversation is cut back to before your question, and the question goes
+  back in your message box, so you can ask again differently. Rewinding to
+  an earlier reply rewinds every later one too, and a suggestion from the
+  library (below) that came from a rewound reply goes with it.
+- **All or nothing.** If a file changed after the session changed it (you
+  edited it yourself, say), or the saved copy of a file is gone, the rewind
+  names the file and nothing is touched — neither the files nor the
+  conversation. Before anything happens you can see the list of files that
+  would go back.
+- What a rewind does not undo, and says so: commands the session ran (their
+  effects stay), programs it started (they keep running), and the money or
+  usage already spent. A plan you approved in a rewound reply is taken back,
+  and the session is in plan mode again.
+- A session that is still answering is not rewound: stop it first.
+
+**The experience library (v1.370.0)**
+
+- Once a session has been idle for 10 minutes after replies that changed
+  files or ran commands (or when you archive it), Iron Jarvis may suggest ONE
+  short lesson for that folder — for example how the project's tests are
+  run, or which file holds what — and sometimes a small edit to one of the
+  folder's harness files (usually `memory.md`). That is ONE extra request
+  for all the replies since the last one, never one per reply, sent to the
+  session's own model on the session's own account — on a Claude Code or
+  Codex plan it counts toward that plan's limits. The request is cut to a
+  fixed size and has a time limit. It waits while the account is at its
+  limit or Iron-Proxy says it has used 70% or more of a window, and a reply
+  that read something flagged as an injection is never learned from. Turn
+  it off with the **Learn from Build sessions** setting.
+- **Checked against the record.** A file a lesson names must be one this
+  session's own work touched or named, and text it quotes must be exactly
+  what was asked, said or shown in that reply. A line that is not supported
+  is removed; a lesson with nothing left, or nothing it can show, is not
+  suggested. The demo model never writes a lesson.
+- A suggestion shows as a card in the session, with **Accept** and
+  **Decline**, and the bell tells you when one is made.
+- **Nothing is kept until you accept it.** An accepted lesson is read by
+  every later session in that folder, as its own short section of the
+  harness. An accepted edit is written into the folder's file at that moment
+  — if the file changed since the edit was suggested, or the folder's
+  harness files would not be valid with it, nothing is written and you are
+  told why. You can forget a kept lesson at any time. Declining one means the
+  same suggestion is not made again for 14 days, and at most three
+  suggestions wait in a folder at once.
+- Lessons are kept in Iron Jarvis's own data, never in your folder — only an
+  edit you accept writes into the folder.
+
+**Improving the harness itself (developer tool, v1.370.0)**
+
+- `ironjarvis bench-harness run --refine --k 2 --mode parallel` (or
+  `--mode sequential`) improves the harness's own files with the benchmark.
+  It runs the current harness on the chosen tasks, writes what happened as
+  files (each task, what the agent did step by step, and whether the hidden
+  check passed — never the check itself), and asks a model, pointed at those
+  files, to propose harness file changes. Each proposal is checked like a
+  folder's harness files (a bad one gets one more try, then is dropped), and
+  tried on the same tasks with the same settings. The proposals that did at
+  least as well are combined, the combination is tried too, and it is kept
+  only if it scores at least as well as the current harness on the hidden
+  checks.
+- Parallel makes k proposals side by side from one look at the evidence
+  (none sees another); sequential makes k in turn, each starting from the
+  best so far. Both make and try one proposal at a time on this PC —
+  "parallel" is about where the proposals start, not about running at once.
+- What the model proposing reads never carries the hidden checks: a failed
+  answer file says only that the answer is wrong (never which part, which
+  would give the answer away), any line of what an agent did that carries a
+  hidden check's text is removed, and the whole folder of evidence is checked
+  for the grader before the model may read it.
+- Each harness runs each task once, so the report says plainly that its
+  numbers are a small sample: a difference of one task can be chance.
+- A kept result is written as a proposed set of harness files in the
+  benchmark's own folder. Nothing is applied to any project:
+  `ironjarvis bench-harness adopt --from <that folder> --folder <project>`
+  copies it into a project's `.ironjarvis/harness/`, and never overwrites a
+  file there that is different. It refuses a folder that does not exist, and
+  a harness folder or file there that is a link leading somewhere else.
+- Every model call of the loop is counted in a ledger by stage, and the totals
+  must add up; a run whose check could not run is left out of every
+  comparison, never counted as a pass or a fail.
+
+**The benchmark on this harness (2026-10-22, this PC)**
+
+- **The harness as it ships in v1.370.0**, on your DGX Spark's
+  `glm-5.3-flash` with Iron Jarvis's own tool names (all 30 tasks, one run
+  each): **28 of 30** (93%) — 19 of 20 core tasks and 9 of 10 hard ones,
+  none left unscored, at no cost. On average a task took 10.9 tool calls and
+  34 seconds; the whole run read 2,164,692 tokens and wrote 49,397. The two
+  it missed were `bugfix-csv-quoting` and `hard-idempotent-migration`. The
+  same model, measured the same way when the tool dialects were chosen
+  (v1.366.0), had also passed 28 of 30 but missed two other tasks
+  (`hard-expression-evaluator` and `hard-scheduler-ordering`, both passed
+  now) — one run per task, so a single task going either way can be chance.
+- **The first improvement loop** (`--refine --k 2 --mode parallel` on three
+  core tasks: `bugfix-csv-quoting`, `bugfix-pagination`, `feature-slugify`):
+  both proposals were valid on the first try — one rewrote the tool guidance,
+  the other "How you work" (both say, in short: make every change with a
+  tool call, and never say tests pass without having run them). Each passed
+  all three tasks, where the current harness had passed two; their
+  combination passed all three as well and was kept as a proposed set of
+  harness files. With one run per task this is a small sample, so it is a
+  proposal for you to try, not a proven gain. The loop's ledger: 2 proposals
+  and 9 task runs (the current harness's 3 runs were reused), 11 runs in all,
+  66 model calls, 327,865 tokens in and 5,584 out, at no cost — inside the
+  planned limit of 4 proposals and 12 task runs, with every stage adding up.
+
 ## The coding screen in Build (v1.369.0)
 
 Step six of the coding screen: you can use it now. Open **Build** and choose

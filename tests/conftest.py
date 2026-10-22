@@ -171,6 +171,29 @@ def _isolate_local_model_servers_probe():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _isolate_build_library_reflection():
+    """No bare test starts the Build EXPERIENCE LIBRARY's background
+    reflection (v1.370.0, IJ harness Phase 7).
+
+    In production, every Build turn that did real work schedules ONE extra
+    model call after its reply is written. In a test that is a background
+    call on the scripted model that lands at an arbitrary moment — one more
+    ``script.calls`` entry, one more usage row on the thread — so exact
+    counts in older build-turn pins would go red by timing. The automatic
+    scheduling is off for the whole session; the library's own pins
+    (``tests/test_harness_library_v1370.py``) set
+    ``library.AUTO_REFLECT`` back to True via monkeypatch."""
+    from iron_jarvis.harness import library
+
+    original = library.AUTO_REFLECT
+    library.AUTO_REFLECT = False
+    try:
+        yield
+    finally:
+        library.AUTO_REFLECT = original
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_subscription_cli_detection():
     """Keep Claude/OpenAI subscription INHERITANCE out of bare tests.
 

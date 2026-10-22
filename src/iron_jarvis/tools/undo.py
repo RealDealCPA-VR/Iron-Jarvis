@@ -111,6 +111,7 @@ def make_file_descriptor(
     prior_bytes: bytes | None = None,
     pre_sha256: str | None = None,
     post_sha256: str | None = None,
+    exact: bool = False,
 ) -> dict[str, Any]:
     """Build the journal descriptor for a file mutation.
 
@@ -120,6 +121,11 @@ def make_file_descriptor(
     ``pre_ref``. ``kind`` is ``file_restore`` (overwrote existing → restore prior
     bytes) or ``file_delete`` (created new → unlink on undo)."""
     meta: dict[str, Any] = {"path": path, "mode": mode, "data": None}
+    if exact:
+        # v1.370.0: ``prior_bytes`` are the file's exact bytes — the revert
+        # writes them back as they are, even in ``text`` mode (whose HASH
+        # stays newline-invariant). Rows without the flag keep the old write.
+        meta["exact"] = True
     pre_ref: str | None = None
     if prior_bytes is not None:
         if len(prior_bytes) <= INLINE_MAX_BYTES:
@@ -354,7 +360,7 @@ async def revert_workspace_file(
                 return ToolResult(ok=False, error="undo: pre-image unavailable")
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
-                if mode == "text":
+                if mode == "text" and not meta.get("exact"):
                     target.write_text(prior.decode("utf-8"), encoding="utf-8")
                 else:
                     target.write_bytes(prior)

@@ -220,6 +220,9 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // that carried on by itself.
   "build.account_limit",
   "build.resumed",
+  // v1.370.0 (IJ harness Phase 7): the experience library suggested a lesson
+  // (or an edit to the folder's harness files) for a Build session's folder.
+  "library.proposal",
 ];
 
 /** Every /events type the bell reads (v1.311.0, wave 3,
@@ -872,6 +875,29 @@ export function toActivity(e: IJEvent): ActivityItem | null {
         : `A Build session resumed${name ? ` on the ${name} account` : ""}`,
       body: title.length > 140 ? `${title.slice(0, 139)}…` : title,
       ...(limitRow ? { attention: true } : {}),
+    };
+  }
+  if (e.type === "library.proposal") {
+    // v1.370.0 (IJ harness Phase 7): a suggestion waits for the user's
+    // Accept on a Build session's screen. Payload: {id, kind, folder_name,
+    // thread_id, summary} — the folder's NAME, never its path. Quiet: it is
+    // a suggestion, not news that stopped anything.
+    const thread =
+      (typeof p.thread_id === "string" && p.thread_id.trim()) ||
+      buildThreadOf(typeof e.session_id === "string" ? e.session_id : "") ||
+      "";
+    const folder = typeof p.folder_name === "string" && p.folder_name.trim() ? p.folder_name.trim() : "";
+    const summary = typeof p.summary === "string" ? p.summary.trim() : "";
+    const lesson = p.kind !== "layer_edit";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: thread ? buildSessionHref(thread) : "/terminals",
+      icon: Lightbulb,
+      title: lesson
+        ? `A lesson is suggested${folder ? ` for ${folder}` : ""}`
+        : `A change to a harness file is suggested${folder ? ` for ${folder}` : ""}`,
+      body: summary.length > 140 ? `${summary.slice(0, 139)}…` : summary,
     };
   }
   if (e.type === "computeruse.run_finished") {

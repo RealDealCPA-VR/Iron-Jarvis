@@ -1970,6 +1970,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 await asyncio.to_thread(_procs.end_all)
             except Exception:  # noqa: BLE001 — shutdown never raises
                 log.debug("kept process jobs at shutdown failed", exc_info=True)
+            # v1.370.0 review: the Build library's idle waits and any running
+            # reflection stop with the daemon (a stretch not reflected on is
+            # forgotten; nothing was spent on it). Only when it was imported.
+            _library = sys.modules.get("iron_jarvis.harness.library")
+            if _library is not None:
+                try:
+                    _library.shutdown()
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    log.debug("build library shutdown failed", exc_info=True)
             # IJ harness phase 2: every live `codex app-server` (a parked one
             # waits up to 10 minutes for tool results) goes with the daemon.
             # Only when codex-cli was ever used: the module is not imported
@@ -3340,6 +3349,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build as _build_routes
 
     _build_routes.register(app, d)
+    # Build's experience library (v1.370.0, plan Phase 7): a folder's kept
+    # lessons and proposed harness edits — accepted or declined by the user.
+    from .routes import build_library as _build_library_routes
+
+    _build_library_routes.register(app, d)
     # Share my profile with Build (v1.306.0): the per-CLI switches on the
     # Memory page's "What Jarvis knows about you" card.
     from .routes import profile_share as _profile_share_routes

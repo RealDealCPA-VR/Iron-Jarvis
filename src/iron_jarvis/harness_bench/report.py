@@ -223,7 +223,11 @@ def _setup(config: Mapping[str, Any]) -> str:
     key = str(config.get("key", ""))[:12]
     harness = config.get("harness")
     dialect = harness.get("dialect") if isinstance(harness, Mapping) else None
-    return f"{key} ({dialect} dialect)" if dialect else key
+    # v1.370.0: a refine probe ran a CANDIDATE harness layer — said, so its
+    # row never reads as the default harness.
+    layer = isinstance(harness, Mapping) and bool(harness.get("layer_sha256"))
+    words = ", ".join(w for w in (f"{dialect} dialect" if dialect else "", "candidate layer" if layer else "") if w)
+    return f"{key} ({words})" if words else key
 
 
 def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any]]]]) -> str:

@@ -601,6 +601,7 @@ def build(
     today: "str | None" = None,
     plan_mode: bool = False,
     ask_user: bool = False,
+    library: Iterable[str] = (),
 ) -> HarnessTurn:
     """Plan the tools, compose the tree and render it. Pure apart from the
     registry / permission reads (no I/O): the project layer is read by the
@@ -628,7 +629,7 @@ def build(
         )
     tree = _components.compose(
         dialect_section=section, dialect_id=dialect.id, project=layer, rule_files=rule_files,
-        mode=mode_text,
+        mode=mode_text, library=library,
     )
     rendered = _components.render(tree)
     if today is None:

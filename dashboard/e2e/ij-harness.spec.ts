@@ -18,7 +18,11 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  *     same against a daemon with or without Phase 5: the card's words, the
  *     armed "Resume when ready" surviving a reload, its Cancel, and the
  *     daemon's resume (the page rejoins the resumed turn and the card goes);
- *  6. 390 px: Build never pans sideways.
+ *  6. 390 px: Build never pans sideways;
+ *  7. (v1.370.0, Phase 7) Rewind to here on the demo model: the first press
+ *     says what goes back and touches nothing, the second removes the file
+ *     the turn wrote, puts the message back in the box and drops the reply;
+ *     the demo model leaves no library suggestion.
  */
 
 const DAEMON = "http://127.0.0.1:8807";
@@ -99,6 +103,40 @@ test("Build → IJ harness → a session → a reply with a change, and Undo", a
   await changes.getByTestId("changed-undo-0").click();
   await expect.poll(() => existsSync(join(work, "RESULT.md")), { timeout: 20_000 }).toBe(false);
   if (process.env.IJ_E2E_SHOTS) await page.screenshot({ path: join(process.env.IJ_E2E_SHOTS, "ij-harness-desktop.png") });
+});
+
+test("Rewind to here: the file goes back, the message returns to the box, the demo model leaves no lesson", async ({ page }) => {
+  test.skip(!sessionId, "needs the session from the first test");
+  // v1.370.0 (IJ harness Phase 7) on the demo model: its scripted step writes
+  // RESULT.md, so a second message makes a turn with a file to rewind.
+  await page.goto(`/terminals?session=${sessionId}`);
+  await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+  const box = page.getByTestId("harness-input");
+  await box.fill("Write it once more");
+  await box.press("Enter");
+  await expect(page.getByTestId("harness-reply").last()).toContainText("saved RESULT.md", { timeout: 90_000 });
+  await expect.poll(() => existsSync(join(work, "RESULT.md")), { timeout: 20_000 }).toBe(true);
+  const replies = await page.getByTestId("harness-reply").count();
+
+  // First press: what would go back, in words — nothing is touched yet.
+  const bubble = page.getByTestId("harness-user-bubble").last();
+  await bubble.hover();
+  await page.getByTestId("rewind-start").last().click();
+  const confirm = page.getByTestId("rewind-confirm");
+  await expect(confirm).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("rewind-files")).toContainText("RESULT.md is removed");
+  expect(existsSync(join(work, "RESULT.md"))).toBe(true);
+  if (process.env.IJ_E2E_SHOTS) await page.screenshot({ path: join(process.env.IJ_E2E_SHOTS, "ij-harness-rewind.png") });
+
+  // Second press: the file goes, the message is back in the box, the reply
+  // it led to is gone from the conversation.
+  await page.getByTestId("rewind-confirm-button").click();
+  await expect.poll(() => existsSync(join(work, "RESULT.md")), { timeout: 20_000 }).toBe(false);
+  await expect(box).toHaveValue("Write it once more", { timeout: 20_000 });
+  await expect(page.getByTestId("harness-reply")).toHaveCount(replies - 1);
+  // The demo model never writes a lesson (the library's honest-mock rule).
+  await expect(page.getByTestId("library-cards")).toHaveCount(0);
+  await box.fill("");
 });
 
 test("a terminal from the left pane, and back", async ({ page }) => {
