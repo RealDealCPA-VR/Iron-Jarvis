@@ -4110,6 +4110,11 @@ async def chat_stream(
         d, stop=_stop, low_trust=lambda: bool(_trust_state["low"]), poll_s=_ASK_POLL_S,
         # v1.367.0: the conversation the ask_user answer route checks.
         owner=str(getattr(body, "thread_id", "") or ""),
+        # v1.367.0 (Phase 4 review): the question channel exists only for a
+        # HARNESS turn that armed ask_user (its client draws the card — see
+        # `_build_harness(ask_user=)`). A chat turn that armed it by name
+        # from the "+" menu gets a refusal, never an unrendered question.
+        asks_user=_harness is not None and "ask_user" in {*armed, *ask_armed},
     )
     # v1.327.0: the chat list's "waiting" reads this turn's open app asks
     # live; an approval card parks it below (`thread_turn.park`).

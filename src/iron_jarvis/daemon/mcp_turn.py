@@ -232,12 +232,21 @@ class TurnInteractions:
         low_trust: Callable[[], bool] | None = None,
         poll_s: float = ASK_POLL_S,
         owner: str = "",
+        asks_user: bool = False,
     ) -> None:
         self.d = d
         #: v1.367.0: the saved conversation this turn answers for ("" = none)
         #: — the ``ask_user`` answer route checks an ask belongs to the
         #: session it is answered from.
         self.owner = str(owner or "")
+        #: v1.367.0 (Phase 4 review): True ONLY for a turn whose client draws
+        #: the ``ask_user`` card — a Build session's harness turn that armed
+        #: the tool. Every other stream turn (the chat page, a Build pane, the
+        #: sidebar) gets a scope with NO ``ask``, so an ``ask_user`` the user
+        #: armed by name from the "+" menu (or a skill's playbook named)
+        #: refuses at once in words instead of parking the turn on a question
+        #: no page renders — with no clock, a watched chat would wait forever.
+        self.asks_user = bool(asks_user)
         self.side: asyncio.Queue = asyncio.Queue()
         self._stop = stop
         self.route: Callable[[], tuple[str, str]] = route or (lambda: ("", ""))
@@ -294,8 +303,9 @@ class TurnInteractions:
             sample=_sample,
             progress=self.progress,
             # v1.367.0: the ask_user tool's way to the user — the SAME side
-            # channel and wait as an app's question.
-            ask=_ask,
+            # channel and wait as an app's question. Only where a card for it
+            # is drawn (``asks_user``); None = the tool refuses at once.
+            ask=_ask if self.asks_user else None,
         )
 
     # -- waiting ----------------------------------------------------------- #
