@@ -187,31 +187,6 @@ vi.mock("next/dynamic", async () => {
   };
 });
 
-/* ---- react-rnd: passthrough that exposes the drag contract ---------------- */
-
-vi.mock("react-rnd", () => ({
-  Rnd: ({
-    children,
-    onMouseDown,
-    dragHandleClassName,
-    cancel,
-  }: {
-    children?: React.ReactNode;
-    onMouseDown?: () => void;
-    dragHandleClassName?: string;
-    cancel?: string;
-  }) => (
-    <div
-      data-testid="rnd"
-      data-drag-handle={dragHandleClassName}
-      data-cancel={cancel}
-      onMouseDown={onMouseDown}
-    >
-      {children}
-    </div>
-  ),
-}));
-
 /* ---- page chrome ----------------------------------------------------------- */
 
 vi.mock("@/components/motion", () => ({
@@ -295,13 +270,13 @@ afterEach(() => {
 });
 
 
-/** Build opens on the RAIL since v1.218.0, where one pane is visible and the
- *  rest are `visibility:hidden` (and so out of the accessibility tree). The
- *  three tests below are about the CANVAS specifically — the react-rnd
- *  wrapper, its drag exemptions, and two panes reachable at once — so they say
- *  so rather than quietly depending on whichever shape happens to be default.
- *  Rail behaviour has its own file. */
-const useCanvas = () => localStorage.setItem("ij.build.shape", "canvas");
+/** Build opens on the RAIL, where one pane is visible and the rest are
+ *  `visibility:hidden` (and so out of the accessibility tree). v1.369.0
+ *  retired the free-form canvas (and react-rnd with it): the tests that were
+ *  about its drag wrapper are gone, and the ones that only used it to reach
+ *  two panes at once now bring a pane forward through the rail. */
+const focusRow = (id: string) =>
+  fireEvent.click(screen.getByTestId(`rail-row-${id}`).querySelector("button") as HTMLButtonElement);
 
 /* ---- rendered behavior ------------------------------------------------------ */
 
@@ -401,34 +376,8 @@ describe("persistence", () => {
   });
 });
 
-describe("the toggle never starts a drag", () => {
-  it("sits OUTSIDE every ij-term-drag region, as buttons the Rnd cancel exempts", async () => {
-    useCanvas();
-    await renderPage();
-    const toggle = screen.getByTestId("pane-view-toggle-t1");
-    // Not inside the drag handle: a mousedown here can never begin a drag.
-    expect(toggle.closest(".ij-term-drag")).toBeNull();
-    // Both controls are <button>s — matched by react-rnd's `cancel` selector.
-    const buttons = toggle.querySelectorAll("button");
-    expect(buttons.length).toBe(2);
-    const rnd = screen.getAllByTestId("rnd")[0];
-    expect(rnd.getAttribute("data-cancel")).toContain("button");
-    expect(rnd.getAttribute("data-drag-handle")).toBe("ij-term-drag");
-
-    // In chat view the pane must STILL drag by its header — the chat header
-    // carries the handle class — while the toggle stays outside it.
-    fireEvent.click(chatBtn("t1"));
-    const chatHeader = screen
-      .getByTestId("chat-layer-t1")
-      .querySelector("header.ij-term-drag");
-    expect(chatHeader).not.toBeNull();
-    expect(screen.getByTestId("pane-view-toggle-t1").closest(".ij-term-drag")).toBeNull();
-  });
-});
-
 describe("v1.329.0: the toggle sits in the header row, never over the conversation", () => {
   it("is placed over the slot each header keeps, not below the header", async () => {
-    useCanvas();
     await renderPage();
     const toggle = screen.getByTestId("pane-view-toggle-t1");
     // In the header row, just left of the close button (paneViewToggle.ts).
@@ -484,36 +433,42 @@ describe("a pane without a cwd", () => {
     // Even a stale persisted "chat" must not strand a cwd-less pane in a chat
     // view that has nothing to ground itself in — and must not mount PaneChat.
     localStorage.setItem("ij.pane.view.t3", "chat");
-    useCanvas();
     await renderPage();
     await screen.findByTestId("terminal-pane-t3");
+    focusRow("t3");
 
     const btn = chatBtn("t3");
     expect(btn).toBeDisabled();
     expect(btn.getAttribute("title")).toMatch(/no cwd/i);
     expect(screen.queryByTestId("chat-layer-t3")).toBeNull();
     expect(counters.chatMounts).toBe(0);
-    // A pane WITH a cwd on the same canvas is unaffected.
+    // A pane WITH a cwd beside it is unaffected.
+    focusRow("t1");
     expect(chatBtn("t1")).not.toBeDisabled();
   });
 });
 
 describe("the Files tab follows the PANE, not the view", () => {
   it("a chat-view pane is still focusable and its cwd drives the Files tab", async () => {
-    useCanvas();
     await renderPage();
     // Initial focus lands on t1 → the Files tab auto-follows its cwd.
     await waitFor(() =>
       expect(screen.getByTestId("files-panel")).toHaveTextContent("C:\\proj\\alpha"),
     );
 
-    // Flip t2 to chat, then focus it (mousedown anywhere in the pane bubbles
-    // to the Rnd wrapper exactly as in the real canvas).
+    // Flip t2 to chat, leave it, then bring it back through the rail while
+    // it shows its chat: the PANE (not the view) is what is focused.
+    focusRow("t2");
     fireEvent.click(chatBtn("t2"));
-    fireEvent.mouseDown(screen.getByTestId("chat-layer-t2"));
+    focusRow("t1");
+    await waitFor(() =>
+      expect(screen.getByTestId("files-panel")).toHaveTextContent("C:\\proj\\alpha"),
+    );
+    focusRow("t2");
     await waitFor(() =>
       expect(screen.getByTestId("files-panel")).toHaveTextContent("C:\\proj\\beta"),
     );
+    expect(screen.getByTestId("chat-layer-t2")).toHaveStyle({ visibility: "visible" });
   });
 });
 
@@ -679,8 +634,8 @@ describe("page.tsx source pins", () => {
     expect(writes.length).toBe(1);
   });
 
-  it("keeps the button exemption on the Rnd, so toggle clicks cannot drag", () => {
-    expect(page).toMatch(/cancel="button/);
+  it("v1.369.0: the free-form canvas and its drag wrapper are gone", () => {
+    expect(page).not.toMatch(/react-rnd|<Rnd\b|cancel="button/);
   });
 });
 

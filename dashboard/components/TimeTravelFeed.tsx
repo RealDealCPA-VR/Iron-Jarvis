@@ -28,6 +28,7 @@ import { timeAgo, clockTime } from "@/lib/format";
 import { EVENT_WORDS, humanSummary } from "@/lib/eventWords";
 import { couldntLoad } from "@/lib/loadFailed";
 import { originLabel } from "@/components/sessions/OriginChip";
+import { sessionLinkFor } from "@/lib/buildLinks";
 import { toolWords } from "@/lib/toolWords";
 
 /** Aggregates over the currently-loaded window, surfaced to the host page. */
@@ -734,7 +735,8 @@ function TimelineRow({
             // v1.314.0: words on the link; the session id (a record — the
             // Sessions search finds it) rides the title.
             <Link
-              href={`/sessions/${e.session_id}`}
+              // v1.369.0: a Build session ("build:<id>") opens in Build.
+              href={sessionLinkFor(e.session_id)}
               title={`Open session ${e.session_id}`}
               className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] text-zinc-500 transition-colors hover:border-accent/30 hover:text-accent-soft"
             >

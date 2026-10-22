@@ -25,7 +25,6 @@
     "react-dom": "^19.0.0",
     "react-force-graph-3d": "^1.29.1",
     "react-markdown": "^10.1.0",
-    "react-rnd": "^10.5.3",
     "remark-gfm": "^4.0.1",
     "shiki": "4.4.3",
     "simple-icons": "^16.26.0",

@@ -3553,6 +3553,44 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **The IJ harness is a VIEW of Build built from the chat's own pieces; the
+  daemon writes the transcript, and a turn's end is on the record BEFORE its
+  last frame** (v1.369.0, Phase 6 of `docs/IJ-HARNESS-PLAN.md`). The canvas
+  and `react-rnd` are gone (see the map). `components/harness/*` uses
+  WorkLine / step rows / `ReplyChanges` / `TurnReceipt` / `DockAsk` (which now
+  draws `ask_user` with lettered choices and the once-only `exit_plan_mode`
+  card — Allow once / Deny, empty args = "the plan is the reply above") and
+  `components/chat/ModelMenu` (LIFTED from the chat page; both share it). The
+  screen NEVER PUTs a session's messages (only `/queue`), mints its own
+  `turn_id`, rejoins a running turn, stops by turn name, and puts unread
+  steer notes back in the box. Accounts: everything in `lib/buildAccounts.ts`
+  (decoders; every piece hides on a 404); a pick in the chip's list sends
+  PATCH with NO `continue` — `continue: true` only from the limit card; the
+  session view is the truth for which account and for the card.
+  `routes/build.recorded_turn` writes the reply line and the account-limit
+  card (shielded, once) BEFORE passing `done`/`error` on — a re-read right
+  after the last frame must see them; the account-list refresh and the bell
+  event stay after. Links: a `build:<id>` row (bell, safety findings, time
+  travel, `/chat/approvals/pending` `surface: "build"`) opens
+  `/terminals?session=<id>`; main.js says "A Build session is waiting for
+  your OK". Panes: Terminal = a normal Build terminal in the session's folder
+  (parked, never `display:none`; × is two presses), Changes = `POST
+  /chat/changes` with `session_id: "build:<id>"`, Browser = this PC or the
+  user's network ONLY (a remembered address is re-checked on read), Files =
+  `FilesPanel variant="calm"`. SAME RELEASE, shared fixes: `routes/
+  chat_changes._one_change` calls a file "undone" only when every write of it
+  in the window was undone and measures "changed since" against what the
+  Undo left (an Undo that worked used to read "changed since · undone" + "no
+  longer there", in chat too); `DirectoryTree` loads in a mount effect, never
+  during render (React's "state update on a component that hasn't mounted
+  yet", 3 of 10 cold /terminals loads). Below `lg` the conversation box is
+  `flex-none` (a `flex-1` box took its content's height, so a long
+  conversation grew the page instead of scrolling). Pins:
+  `dashboard/__tests__/ij-harness-*-v1369.test.tsx`,
+  `changed-files-undone-v1369`, `directory-tree-no-render-load-v1369`,
+  `tests/test_{ij_harness_desktop,mock_harness_write,chat_changes_undone,
+  build_turn_end_order}_v1369.py`, e2e `dashboard/e2e/ij-harness.spec.ts`.
+
 - **A Build session is PINNED to one account; a lost pin is a rotation, so
   the pin rides a ContextVar that every lease path copies** (v1.368.0, Phase 5
   of `docs/IJ-HARNESS-PLAN.md`; Iron-Proxy `1b1ea71` vendored — pinned pick,
@@ -6516,28 +6554,31 @@ does not need a bump, stop and bump it.
   markdown.py (the shared block parser), tools (read/write/extract_pdf/
   convert_document). `tools/images.py` — view_image (vision via the router),
   image_convert/resize/info (Pillow). `tools/pixio.py` — generative media.
-- **Build (`app/terminals/page.tsx`) has TWO shapes** (v1.218.0), chosen by
-  `ij.build.shape` and defaulting to `rail`. `rail` is
-  `components/terminal/PaneRail.tsx` — every live pane in a column with its
-  state, one pane focused beside it; `canvas` is the original free-form
-  react-rnd surface. ONE pane body serves both: only the wrapper differs, and
-  keeping it that way is the point (two copies would drift inside the pane the
-  user works in). In the rail every pane still RENDERS — same box, all mounted,
-  `visibility` toggled — because the v1.190.0 rule stands: a terminal whose
-  holder has no size wraps its replay into a buffer no later fit can re-wrap,
-  so a hidden pane must keep a real box. Never `display:none`, never an
-  unmount. The rail also needs a fallback focus (`activeId`): on the canvas a
-  null focus is harmless, in the rail it renders an empty workspace. The
-  TerminalPane component itself CAN unmount (leaving Build, a shape flip) —
-  since v1.243.0 its xterm and socket live in `components/terminal/
-  paneHost.ts` and are parked, not destroyed (see the hard rule).
+- **Build (`app/terminals/page.tsx`) has TWO views** (v1.369.0; the
+  free-form react-rnd CANVAS of v1.218.0 is gone, and a saved
+  `ij.build.shape = "canvas"` opens the IJ harness): **Terminals** =
+  `components/terminal/PaneRail.tsx` (every live pane in a column with its
+  state, one focused beside it) and **IJ harness** = `components/harness/*`
+  (Build sessions: left pane of folder groups + a Terminals group, the
+  session's conversation built from the chat page's own pieces, the right
+  panes Plan / Terminal / Changes / Browser / Files). `?session=<id>` opens a
+  session, `?focus=<id>` a terminal; the bell's Build links go through
+  `lib/buildLinks.BUILD_SESSION_EVENT` because Next keeps page state on a
+  query-only change. In the rail every pane still RENDERS — same box, all
+  mounted, `visibility` toggled — because the v1.190.0 rule stands: a
+  terminal whose holder has no size wraps its replay into a buffer no later
+  fit can re-wrap, so a hidden pane must keep a real box. Never
+  `display:none`, never an unmount. The rail needs a fallback focus
+  (`activeId`). The TerminalPane component itself CAN unmount (leaving Build,
+  the view switch) — since v1.243.0 its xterm and socket live in
+  `components/terminal/paneHost.ts` and are parked, not destroyed (see the
+  hard rule).
 - `dashboard/app/<route>/page.tsx` per page; shared in `dashboard/components/`
   (`ui.tsx` primitives, `AppSidebar.tsx` the persistent sidebar +
   `Sidebar.tsx` its phone drawer (v1.321.0; Simple/Advanced is retired),
   `ModelSwitcher.tsx` quality dial — no longer mounted in the title bar) and `dashboard/lib/` (`api.ts` fetch+auth,
   `useEvents.ts` one socket per window (EventsProvider), `types.ts`). Canvas editors: `components/workflow/`
-  (agents.ts lives HERE, not lib/). Terminals page = free-form react-rnd
-  canvas; pane header class `ij-term-drag` is the drag handle.
+  (agents.ts lives HERE, not lib/).
 - `desktop/main.js` — supervisor (auto-restart children), tray, global
   hotkeys (Ctrl+Shift+J window, Ctrl+Shift+Space Spotlight), updater +
   update IPC, native clipboard IPC, media permissions. `preload.js` exposes

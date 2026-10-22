@@ -231,9 +231,11 @@ describe("the chat surfaces wire the status in (source pins)", () => {
   it("the hook hands its watch to streamSSE", () => {
     const src = readSrc("lib/useChatStream.ts");
     // v1.336.0: the path is "/chat/stream" or a rejoin's GET; both get the
-    // same signal and the same watch (the stall watchdog).
+    // same signal and the same watch (the stall watchdog). v1.369.0: a Build
+    // session's turn names its own route (`runOpts.path`), "/chat/stream"
+    // stays the default, and it gets the same signal and watch.
     expect(src).toMatch(
-      /streamSSE\(\s*runOpts\.rejoin[\s\S]{0,200}?"\/chat\/stream",\s*runOpts\.rejoin \? undefined : body,\s*controller\.signal,\s*watch,?\s*\)/,
+      /streamSSE\(\s*runOpts\.rejoin[\s\S]{0,200}?\(runOpts\.path \?\? "\/chat\/stream"\),\s*runOpts\.rejoin \? undefined : body,\s*controller\.signal,\s*watch,?\s*\)/,
     );
   });
 });

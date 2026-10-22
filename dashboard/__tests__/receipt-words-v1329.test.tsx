@@ -340,11 +340,15 @@ describe("the reasoning chip and the ask card", () => {
     // (lib/reasoningChip.reasoningTitle), so the pin reads the select's title
     // EXPRESSION and the words it produces for the unknown case, where the
     // chip still says "Reasoning".
-    const page = read("app/chat/page.tsx");
-    const at = page.indexOf('aria-label="Reasoning level"');
+    // v1.369.0: the chip is components/chat/ModelMenu's ReasoningChip (shared
+    // with Build's IJ harness); the page hands it the model's default.
+    const chip = read("components/chat/ModelMenu.tsx");
+    const at = chip.indexOf('aria-label="Reasoning level"');
     expect(at).toBeGreaterThan(0);
-    const select = page.slice(at, at + 900);
-    expect(select).toMatch(/title=\{reasoningTitle\(reasoningDefaultFor\(choice\)\)\}/);
+    const select = chip.slice(at, at + 900);
+    expect(select).toMatch(/title=\{reasoningTitle\(def\)\}/);
+    const page = read("app/chat/page.tsx");
+    expect(page).toMatch(/<ReasoningChip[\s\S]{0,200}?def=\{reasoningDefaultFor\(choice\)\}/);
     const title = reasoningTitle("");
     expect(title).toBe(
       "How hard the model thinks before answering. Higher is slower and costs more. With nothing picked the model decides.",

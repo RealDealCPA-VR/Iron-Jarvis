@@ -765,7 +765,9 @@ function blackSlabs(src: string): string[] {
 describe("F. surfaces follow the theme (black is not remapped)", () => {
   it("the Build stage is a recessed THEME surface, not bg-black (a grey slab in Daylight)", () => {
     const src = read("app", "terminals", "page.tsx");
-    const at = src.indexOf("ref={canvasRef}");
+    // v1.369.0: the canvas (and its ref) is gone; the stage is the Terminals
+    // view's workspace, named by its test id.
+    const at = src.indexOf('data-testid="build-stage"');
     expect(at).toBeGreaterThan(-1);
     const cls = src.slice(at, at + 400).match(/className="([^"]*)"/)?.[1] ?? "";
     expect(cls).not.toMatch(/bg-black/);

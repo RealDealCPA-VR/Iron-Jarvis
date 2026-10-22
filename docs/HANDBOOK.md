@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.368.0 (2026-10-21).*
+holds itself to. Current as of v1.369.0 (2026-10-21).*
 
 ---
 
@@ -761,7 +761,8 @@ with the request typed in.
   "approval timed out" receipt).
 
 ### Terminals, Creative, and the rest
-Free-form terminal canvas with AI assist per pane; a Creative gallery for
+Build: live terminals with AI assist per terminal, and the IJ harness coding
+screen (v1.369.0); a Creative gallery for
 generated media (Pixio); Skills (yours + auto-suggested from successful
 sessions, approval-gated); Connections (providers/health); Usage (token
 costs); Activity (the full undo-capable action ledger); the **/you** page
@@ -794,7 +795,8 @@ seam); Train (teach it your writing voice, suggest-only).
   page no longer closes your terminals. Each pane's terminal and its link to
   the shell stay open in the background, so coming back is instant — exactly
   the screen you left, with no replay, no redraw and no stray characters.
-  Flipping Rail ⇄ Canvas keeps every terminal the same way. A Claude or Codex
+  Switching between the Terminals and IJ harness views keeps every terminal
+  the same way. A Claude or Codex
   you left working keeps working: a pane nobody is watching is still read, so
   the program never stalls waiting for you to come back. A reload or a daemon
   restart still replays the pane's history, and the answers the terminal
@@ -2045,11 +2047,55 @@ v1.370.0); this section is the whole picture in one place.
   66 model calls, 327,865 tokens in and 5,584 out, at no cost — inside the
   planned limit of 4 proposals and 12 task runs, with every stage adding up.
 
+## The coding screen in Build (v1.369.0)
+
+Step six of the coding screen: you can use it now. Open **Build** and choose
+**IJ harness** at the top, beside **Terminals**.
+
+- **Sessions on the left.** Your coding sessions are listed by folder, newest
+  first, with a dot on one that is working or needs you. **New session**
+  starts one in a folder you type or pick, and the **+** beside a folder
+  starts another there. Rename a folder's group to give it a short name (for
+  a project's folder, that renames the project). Below them, **Terminals**
+  lists your open terminals with their state: press one to open it in the
+  Terminals view, and press **IJ harness** to come back.
+- **The conversation in the middle**, drawn like a chat reply: what it did,
+  the reply, the files it changed with Undo, and who answered. A question it
+  asks you, an approval, or a plan to approve takes the place of the message
+  box, as in Chat. **Plan first** in the message box makes the session read
+  and plan before it changes anything.
+- **Five tabs on the right.** **Plan** shows its step list. **Terminal**
+  opens a normal Build terminal in the session's folder. **Changes** lists
+  every file the session changed, with Undo. **Browser** previews a page the
+  session started on this PC or your own network. **Files** shows the folder.
+- **Keep typing while it works.** Enter adds a note it reads at its next
+  step, and Ctrl+Enter queues a message for after. A note it never got to
+  goes back in your message box.
+- **The account it runs on.** A session on a Claude Code or Codex account
+  shows that account at the top, with its plan and how much of it is used,
+  and you can switch accounts or make one the default there. When the account
+  reaches its limit, a card says so. **Resume when ready** waits for the
+  reset and carries on by itself (**Cancel** stops the wait), and **Choose
+  account** moves the session to another account. Your conversation and work
+  are kept either way. A new session starts on the account your list marks
+  Default even when that account is at its limit, so its first reply can be
+  that card.
+- **The free-form terminal canvas is gone.** If you last used it, Build now
+  opens on the IJ harness. The Terminals view still has every terminal.
+- **Links open the session.** The bell, the tray and Activity open a coding
+  session in Build, never in Chat — also when Build is already open on
+  another session or on the Terminals view.
+- **An Undo reads as undone.** After an Undo that worked, the changes line —
+  here and under a chat reply — says "undone", never "changed since". It
+  still says "changed since" when the file changed again after the Undo.
+- **On a phone** the conversation and its message box are one screen-high
+  box (the conversation scrolls inside it); the five tabs come after it.
+
 ## Each coding session runs on the account you picked (v1.368.0)
 
 Step five of the coding screen: accounts. It needs Iron-Proxy turned on
-(Connections → Iron-Proxy) with your Claude Code or Codex accounts in it. The
-screen that shows this arrives in the next release.
+(Connections → Iron-Proxy) with your Claude Code or Codex accounts in it.
+Since v1.369.0, Build's IJ harness view shows it.
 
 - **One account per session.** A new coding session starts on the account
   your list marks **Default**. You can pick another one for that session.
@@ -2075,8 +2121,8 @@ screen that shows this arrives in the next release.
 
 ## Coding sessions keep going without you (v1.367.0)
 
-Step four of the coding screen: the sessions it will show. The screen itself
-arrives in a later release; nothing new appears in Chat.
+Step four of the coding screen: the sessions it shows (Build's IJ harness
+view, since v1.369.0). Nothing new appears in Chat.
 
 - **A coding session belongs to a folder.** It keeps its own conversation,
   its model and its approval setting. It never shows up in your chat list,
@@ -2097,8 +2143,8 @@ arrives in a later release; nothing new appears in Chat.
 
 ## The coding harness speaks each model's language (v1.366.0)
 
-Step three of the coding screen: the engine it will run on. Nothing new
-appears in Chat yet. The screen arrives in a later release.
+Step three of the coding screen: the engine it runs on. Nothing new
+appears in Chat. Build's IJ harness view uses it since v1.369.0.
 
 - **One harness, many models.** For a coding session Jarvis gives the model
   its coding tools (reading, exact edits, patches, search, programs that keep

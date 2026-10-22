@@ -81,6 +81,7 @@
 
 import { useState } from "react";
 import { ApprovalPreview } from "@/components/chat/ApprovalPreview";
+import { Markdown } from "@/components/Markdown";
 import { LoaderInline } from "@/components/ui";
 import { post } from "@/lib/api";
 import { exampleValue } from "@/lib/approvalPreview";
@@ -94,7 +95,7 @@ import {
   undoLine,
   type ApprovalScope,
 } from "@/lib/approvalWords";
-import { isBuiltinBrowserTool, PLAN_TOOL, toolWords } from "@/lib/toolWords";
+import { EXIT_PLAN_TOOL, isBuiltinBrowserTool, PLAN_TOOL, toolWords } from "@/lib/toolWords";
 import type { PendingApproval } from "@/lib/useChatStream";
 import { ShieldQuestion } from "lucide-react";
 
@@ -148,6 +149,7 @@ export function ApprovalCard({
   onConversation,
   docked = false,
   scope,
+  planText,
 }: {
   approval: ApprovalAsk;
   /** Called on "Allow for this chat" so the page adds the tool to the
@@ -161,6 +163,10 @@ export function ApprovalCard({
    *  when it is docked or has a composer to arm (`onConversation`), else an
    *  agent run's ask (the session page, a project's paused task). */
   scope?: ApprovalScope;
+  /** v1.369.0: a Build session's plan door (`exit_plan_mode`) whose call
+   *  carries no plan: the reply the user read above the card IS the plan,
+   *  shown here so the card says what Allow approves. */
+  planText?: string;
 }) {
   const where: ApprovalScope = scope ?? (docked || onConversation ? "chat" : "run");
   // Which button is in flight; the card disables itself after one click. The
@@ -180,7 +186,10 @@ export function ApprovalCard({
   // daemon always sends `once_only` for it, but a listing or a session row
   // carries no flags, so the card knows it by its name too.
   const planAsk = approval.tool === PLAN_TOOL;
-  const onceOnly = approval.onceOnly === true || planAsk;
+  // v1.369.0: a Build session's plan door is once-only BY NAME too (a
+  // listing row carries no flags), and is not a local-only card.
+  const buildPlanAsk = approval.tool === EXIT_PLAN_TOOL;
+  const onceOnly = approval.onceOnly === true || planAsk || buildPlanAsk;
   const browserAction = isBuiltinBrowserTool(approval.tool) && !onceOnly;
   // v1.299.0: offered by the daemon, never inferred here — a batch has no
   // single argument set to key a grant on, and the daemon says so by omission.
@@ -221,6 +230,11 @@ export function ApprovalCard({
   );
   const undo = undoLine(approval.reversible);
   const noun = scopeNoun(where);
+  // The plan a Build session asks to start: the call's own `plan`, else the
+  // reply above the card (the caller hands it in), else nothing to show.
+  const buildPlan = buildPlanAsk
+    ? (typeof args.plan === "string" && args.plan.trim() ? args.plan : (planText ?? "")).trim()
+    : "";
   return (
     <div
       role="alertdialog"
@@ -268,7 +282,22 @@ export function ApprovalCard({
               )}
             </div>
           )
-        : Object.keys(args).length > 0 && <ApprovalPreview tool={approval.tool} args={args} />}
+        : buildPlanAsk
+          ? buildPlan
+            ? (
+                <div
+                  data-testid="approval-plan-text"
+                  className="max-h-48 overflow-y-auto rounded-lg bg-white/[0.03] px-3 py-2 text-[13px] leading-relaxed text-zinc-200"
+                >
+                  <Markdown content={buildPlan} />
+                </div>
+              )
+            : (
+                <p data-testid="approval-plan-above" className="text-[12px] text-zinc-400">
+                  The plan is the reply above.
+                </p>
+              )
+          : Object.keys(args).length > 0 && <ApprovalPreview tool={approval.tool} args={args} />}
 
       {approval.costNote && (
         <p data-testid="approval-cost" className="text-[11px] leading-relaxed text-zinc-400">
@@ -278,7 +307,7 @@ export function ApprovalCard({
 
       {/* v1.352.0 (G25): can it be undone, in the cost line's quiet style.
           Never on a plan ask (a plan is not an action). */}
-      {!planAsk && undo && (
+      {!planAsk && !buildPlanAsk && undo && (
         <p
           data-testid="approval-undo"
           data-reversible={approval.reversible ? "true" : "false"}
@@ -292,7 +321,12 @@ export function ApprovalCard({
         {waitingLine(approval.timeoutS)}
       </p>
       <p className="text-[11px] leading-relaxed text-zinc-400">
-        {planAsk ? (
+        {buildPlanAsk ? (
+          <>
+            Nothing changes until you answer. “Allow once” approves this plan
+            and the session starts working on it; Deny keeps it planning.
+          </>
+        ) : planAsk ? (
           <>
             No step runs until you answer. “Allow once” lets it follow this
             plan; Deny ends the run before any step runs.
@@ -320,7 +354,7 @@ export function ApprovalCard({
 
       {/* Only a local-only chat's card says so: a plan ask is once-only for
           its own reason (the line above). */}
-      {onceOnly && !planAsk && (
+      {onceOnly && !planAsk && !buildPlanAsk && (
         <p data-testid="approval-local-only" className="text-[11px] leading-relaxed text-zinc-400">
           This chat is local only, so this asks every time.
         </p>

@@ -73,10 +73,6 @@ vi.mock("next/dynamic", () => ({
     },
 }));
 
-vi.mock("react-rnd", () => ({
-  Rnd: ({ children }: { children?: React.ReactNode }) => <div data-testid="rnd">{children}</div>,
-}));
-
 vi.mock("@/components/motion", () => ({
   PageShell: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   Reveal: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
@@ -320,13 +316,6 @@ describe("New terminal is a quiet button", () => {
     await waitFor(() => expect(api.posts.map(([p]) => p)).toContain("/terminals"));
   });
 
-  it("the canvas's floating New terminal has no accent border", () => {
-    const src = read("app", "terminals", "page.tsx");
-    const at = src.indexOf('data-testid="canvas-new-terminal"');
-    expect(at).toBeGreaterThan(-1);
-    const cls = src.slice(at, at + 600).match(/className="([^"]*)"/)?.[1] ?? "";
-    expect(cls).not.toMatch(/border-accent|text-accent|shadow-card/);
-  });
 });
 
 /* ------------------------------------------------------------ 3. the frame */
@@ -334,22 +323,19 @@ describe("New terminal is a quiet button", () => {
 describe("the pane frame is a hairline, never a glow", () => {
   it("no state draws a glow, a ring or a shadow card", () => {
     for (const focused of [false, true]) {
-      for (const canvas of [false, true]) {
-        for (const drag of [false, true]) {
-          const cls = paneFrameClass(focused, canvas, drag);
-          expect(cls).not.toMatch(/shadow|ring|glow/);
-          expect(cls).toMatch(/^border-/);
-        }
+      for (const drag of [false, true]) {
+        const cls = paneFrameClass(focused, drag);
+        expect(cls).not.toMatch(/shadow|ring|glow/);
+        expect(cls).toMatch(/^border-/);
       }
     }
   });
 
-  it("only the canvas marks the focused pane in the accent; the rail's lone pane does not", () => {
-    expect(paneFrameClass(true, false)).not.toContain("accent");
-    expect(paneFrameClass(true, true)).toContain("border-accent/30");
-    expect(paneFrameClass(false, false)).not.toContain("accent");
+  it("the focused pane is not marked in the accent (v1.369.0: the canvas that did is gone)", () => {
+    expect(paneFrameClass(true)).not.toContain("accent");
+    expect(paneFrameClass(false)).not.toContain("accent");
     // A held file still says "drop here".
-    expect(paneFrameClass(false, false, true)).toContain("border-accent");
+    expect(paneFrameClass(false, true)).toContain("border-accent");
   });
 
   it("the terminal layer and the chat layer both draw it, with no glow left behind", () => {

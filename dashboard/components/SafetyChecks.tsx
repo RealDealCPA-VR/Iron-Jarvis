@@ -23,6 +23,7 @@ import { ChevronDown, ChevronRight, ShieldAlert, ShieldCheck } from "lucide-reac
 import { useApi } from "@/lib/useApi";
 import { OFFLINE_TITLE } from "@/lib/offlineWords";
 import { timeAgo } from "@/lib/format";
+import { buildSessionHref, buildThreadOf } from "@/lib/buildLinks";
 import { Card, DataError, OfflineHint, SkeletonRows } from "@/components/ui";
 import type {
   AgentEvent,
@@ -117,6 +118,10 @@ export function findingLink(
   if (SESSION_ID_RE.test(sessionId)) {
     return { href: `/sessions/${sessionId}`, label: "Open the session" };
   }
+  // v1.369.0: a Build session's calls run under "build:<id>" — it opens in
+  // Build, on that session (there is no /sessions page for it).
+  const build = buildThreadOf(sessionId);
+  if (build) return { href: buildSessionHref(build), label: "Open the Build session" };
   return null;
 }
 

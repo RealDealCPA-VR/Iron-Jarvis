@@ -355,6 +355,18 @@ describe("(4) the 'N pending' ping names ONE new ask in its row's words", () => 
     expect(pings()[0][1]).toBe("1 chat waiting for your OK: it wants to save a file");
   });
 
+  it("a Build session parked on its card is said as the session, never as a chat (v1.369.0 review)", async () => {
+    await mountThenPoll({
+      [PENDING_PATH]: {
+        approvals: [
+          { id: "chat:bs_1", kind: "chat", thread_id: "bs_1", tool: "write_file", surface: "build" },
+        ],
+      },
+    });
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    expect(pings()[0][1]).toBe("1 Build session waiting for your OK: it wants to save a file");
+  });
+
   it("several at once keep their counts alone", async () => {
     await mountThenPoll({ [RUNS_PATH]: { runs: [NIGHTLY] }, [PENDING_PATH]: { approvals: [AGENT_ASK] } });
     await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));

@@ -105,6 +105,10 @@ export interface TurnChangesArgs {
   since: number | string;
   until?: number | string;
   paths?: string[];
+  /** v1.369.0: whose undo journal to read — "build:<id>" for a Build
+   *  session's turn (its tool calls run under its own id). Absent = the
+   *  chat's ("chat"), exactly as before. */
+  sessionId?: string;
 }
 
 /** The rows plus whether the daemon listed only the first files. */
@@ -122,6 +126,7 @@ export async function fetchTurnChangeSet(args: TurnChangesArgs): Promise<TurnCha
   const body: Record<string, unknown> = { since: iso(args.since) };
   if (args.until !== undefined) body.until = iso(args.until);
   if (args.paths && args.paths.length) body.paths = args.paths;
+  if (args.sessionId) body.session_id = args.sessionId;
   const raw = await post<unknown>("/chat/changes", body);
   const more =
     !!raw &&
@@ -188,7 +193,7 @@ function Preview({ change, id }: { change: FileChange; id: string }) {
         <p className="px-3 py-1 font-sans text-zinc-500">binary file</p>
       ) : lines.length === 0 ? (
         <p className="px-3 py-1 font-sans text-zinc-500">
-          {change.note || "No line changes to show."}
+          {change.note || (change.undone ? "This change was undone." : "No line changes to show.")}
         </p>
       ) : (
         lines.map((l, i) => (
@@ -313,6 +318,9 @@ export function ChangedFiles({
   const openFile = onOpen ?? ((path: string) => setViewing(path));
   const shown = viewing ? changes.find((c) => c.path === viewing) : undefined;
   const warn = changes.some((c) => c.changed_since);
+  // v1.369.0 review: every change in the list was undone (and stayed that
+  // way) — the closed line says so, rather than reading as live changes.
+  const allUndone = changes.every((c) => c.undone && !c.changed_since);
 
   async function runUndo(actionId: string, path: string) {
     if (!onUndo || undoing) return;
@@ -344,6 +352,7 @@ export function ChangedFiles({
         <span>{filesWord(changes.length)}</span>
         {sum && <Counts added={sum.added} removed={sum.removed} />}
         {warn && !open && <span className="text-tone-warn">· changed since</span>}
+        {allUndone && !open && <span data-testid="changed-files-undone">· undone</span>}
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
       </button>
       {open && (

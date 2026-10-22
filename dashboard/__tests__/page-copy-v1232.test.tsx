@@ -150,9 +150,15 @@ describe("U8 — chat controls explain themselves", () => {
   });
 
   it("the footer names the default model instead of saying 'default model'", () => {
+    // v1.369.0: the trigger's words live in components/chat/ModelMenu (the
+    // composer's model chip, shared with Build's IJ harness); the page hands
+    // it the default model and recomputes when either changes.
     expect(chat).toContain("const defaultModelName = useDaemon().health?.default_model ?? \"\";");
-    expect(chat).toContain("return defaultModelName ? `default · ${defaultModelName}` : \"default model\";");
-    expect(chat).toContain("}, [choice, defaultModelName]);");
+    expect(chat).toContain("modelTriggerOf(choice, models, defaultProviderId, defaultModelName)");
+    expect(chat).toContain("[choice, models, defaultProviderId, defaultModelName],");
+    expect(src("components/chat/ModelMenu.tsx")).toContain(
+      "label = defaultModelName ? `default · ${defaultModelName}` : \"default model\";",
+    );
   });
 
   it("the receipt words a tool cap as the local model's cap", async () => {

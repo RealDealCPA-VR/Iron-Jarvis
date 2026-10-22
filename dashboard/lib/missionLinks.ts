@@ -14,6 +14,7 @@
 // under them.
 
 import { missionPath } from "./mission";
+import { buildSessionHref, buildThreadOf } from "./buildLinks";
 
 /** The origin POST /missions stamps on a mission's root session. */
 export const MISSION_ORIGIN = "job:mission";
@@ -34,5 +35,9 @@ export function isMissionRow(row: Pick<SessionLinkRow, "origin">): boolean {
  *  on its session page. */
 export function sessionHref(row: SessionLinkRow): string {
   if (isMissionRow(row)) return missionPath(row.id, row.project_id ?? "");
+  // v1.369.0: a Build session (`build:<id>`) has no run page; it opens in
+  // Build, on that session (lib/buildLinks).
+  const build = buildThreadOf(row.id);
+  if (build) return buildSessionHref(build);
   return `/sessions/${encodeURIComponent(row.id)}`;
 }
