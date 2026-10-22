@@ -289,6 +289,21 @@ describe("the browser pane", () => {
   });
 });
 
+describe("the browser pane's remembered address (v1.369.0 review)", () => {
+  it("a saved address on this PC opens again; a saved outside address never loads on its own", async () => {
+    localStorage.setItem("ij.build.preview.s1", "http://localhost:3000/");
+    renderPanes(view());
+    fireEvent.click(screen.getByTestId("harness-pane-tab-browser"));
+    expect(screen.getByTestId("preview-frame")).toHaveAttribute("src", "http://localhost:3000/");
+    cleanup();
+    localStorage.setItem("ij.build.preview.s1", "https://example.com/track");
+    renderPanes(view());
+    fireEvent.click(screen.getByTestId("harness-pane-tab-browser"));
+    expect(screen.queryByTestId("preview-frame")).toBeNull();
+    expect(screen.getByTestId("preview-empty")).toBeInTheDocument();
+  });
+});
+
 describe("the files pane", () => {
   it("is the calm FilesPanel on the session's folder", () => {
     renderPanes(view());

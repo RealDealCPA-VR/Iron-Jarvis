@@ -25,9 +25,14 @@ import { isPreviewAddress } from "@/lib/buildSessions";
 
 const PREVIEW_PREFIX = "ij.build.preview.";
 
+/** The address this window last previewed for the session — re-checked on
+ *  read: it loads in a frame with no press, so a saved value that is not a
+ *  page on this PC or the user's network (storage is writable by anything
+ *  on this origin) never loads on its own (v1.369.0 review). */
 function readAddress(threadId: string): string {
   try {
-    return window.localStorage.getItem(PREVIEW_PREFIX + threadId) ?? "";
+    const saved = window.localStorage.getItem(PREVIEW_PREFIX + threadId) ?? "";
+    return saved && isPreviewAddress(saved) ? saved : "";
   } catch {
     return "";
   }
