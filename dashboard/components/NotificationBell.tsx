@@ -2122,10 +2122,21 @@ export function NotificationBell() {
           `${agentAsks.length} agent${agentAsks.length === 1 ? "" : "s"} asking permission` +
             (named.agent ? `: ${named.agent}` : ""),
         );
-      if (chatAsks.length)
+      // v1.369.0 review: a Build session parked on the user lists as a chat
+      // row (`surface: "build"`) but is said as the SESSION it is — its row
+      // already does; the ping read "1 chat waiting for your OK" for it.
+      const plainChats = chatAsks.filter((c) => !c.build);
+      const buildAsks = chatAsks.filter((c) => c.build);
+      const newIsBuild = !!named.chat && buildAsks.some((c) => !seenAsks.has(`c:${c.id}`));
+      if (plainChats.length)
         parts.push(
-          `${chatAsks.length} chat${chatAsks.length === 1 ? "" : "s"} waiting for your OK` +
-            (named.chat ? `: ${named.chat}` : ""),
+          `${plainChats.length} chat${plainChats.length === 1 ? "" : "s"} waiting for your OK` +
+            (named.chat && !newIsBuild ? `: ${named.chat}` : ""),
+        );
+      if (buildAsks.length)
+        parts.push(
+          `${buildAsks.length} Build session${buildAsks.length === 1 ? "" : "s"} waiting for your OK` +
+            (named.chat && newIsBuild ? `: ${named.chat}` : ""),
         );
       // v1.353.0 (G52): each waiting pane by its CLI's name.
       for (const pane of paneAsks) parts.push(paneWaitingTitle(pane));
