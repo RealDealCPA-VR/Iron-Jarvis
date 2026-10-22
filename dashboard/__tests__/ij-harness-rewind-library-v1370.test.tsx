@@ -77,7 +77,7 @@ import { RewindControl, REWIND_LABEL } from "@/components/harness/RewindControl"
 import { LibraryCards } from "@/components/harness/LibraryCards";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { toActivity } from "@/components/NotificationBell";
-import { LIBRARY_REREAD_MS } from "@/lib/buildLibrary";
+import { LIBRARY_DUE_GRACE_MS, LIBRARY_REREAD_MS, LIBRARY_RUNNING_MS, nextLibraryRead } from "@/lib/buildLibrary";
 
 const PREVIEW_PATH = "/build/sessions/s1/rewind?to=t1";
 const REWIND_PATH = "POST /build/sessions/s1/rewind";
@@ -314,6 +314,60 @@ describe("the library's suggestions: Accept / Decline", () => {
       vi.advanceTimersByTime(600_000);
     });
     expect(reads()).toBe(2 + LIBRARY_REREAD_MS.length);
+  });
+
+  // v1.370.0 review: the daemon reflects ONCE a session has been idle (one
+  // request per idle period, never one per reply), and says when it is due.
+  it("reads again only when the daemon says a suggestion is due, then while it is made", async () => {
+    vi.useFakeTimers();
+    const t0 = Date.now();
+    let phase: "due" | "running" | "done" = "due";
+    api.gets[LIB] = () => ({
+      folder_name: "w", lessons: [], edits: [],
+      proposals: phase === "done" ? [lessonItem] : [],
+      reflection: phase === "due"
+        ? { due_at: new Date(t0 + 600_000).toISOString(), running: false, turns: 1 }
+        : { due_at: null, running: phase === "running", turns: 0 },
+    });
+    render(<LibraryCards threadId="s1" refreshKey={0} />);
+    await act(async () => {});
+    const reads = () => api.calls.filter((c) => c.path === LIB).length;
+    expect(reads()).toBe(1);
+    // Nothing until the idle wait ends (plus its grace).
+    await act(async () => {
+      vi.advanceTimersByTime(600_000);
+    });
+    expect(reads()).toBe(1);
+    phase = "running";
+    await act(async () => {
+      vi.advanceTimersByTime(LIBRARY_DUE_GRACE_MS + 1);
+    });
+    expect(reads()).toBe(2);
+    // While it is being made: one read per LIBRARY_RUNNING_MS.
+    phase = "done";
+    await act(async () => {
+      vi.advanceTimersByTime(LIBRARY_RUNNING_MS);
+    });
+    expect(reads()).toBe(3);
+    expect(screen.getByTestId("library-card-lib_1")).toBeInTheDocument();
+    // Nothing due: no more reads, ever.
+    await act(async () => {
+      vi.advanceTimersByTime(3_600_000);
+    });
+    expect(reads()).toBe(3);
+  });
+
+  it("nextLibraryRead: running, due, nothing", () => {
+    const base = { folderName: "w", lessons: [], proposals: [] };
+    expect(nextLibraryRead(null)).toBeNull();
+    expect(nextLibraryRead({ ...base, reflection: { dueAt: null, running: false } })).toBeNull();
+    expect(nextLibraryRead({ ...base, reflection: { dueAt: null, running: true } })).toBe(LIBRARY_RUNNING_MS);
+    const now = Date.parse("2026-10-22T10:00:00Z");
+    expect(nextLibraryRead({ ...base, reflection: { dueAt: "2026-10-22T10:10:00Z", running: false } }, now))
+      .toBe(600_000 + LIBRARY_DUE_GRACE_MS);
+    // A due time already past reads soon, never in the past.
+    expect(nextLibraryRead({ ...base, reflection: { dueAt: "2026-10-22T09:00:00Z", running: false } }, now))
+      .toBe(1000);
   });
 });
 

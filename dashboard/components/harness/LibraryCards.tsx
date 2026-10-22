@@ -9,10 +9,12 @@
  * (`.ironjarvis/harness/…`); nothing is written into the folder until it is
  * accepted, and the daemon refuses in words when the file changed since.
  *
- * The suggestion is made in the background after a reply that changed files
- * or ran commands, so the library is read when the session opens, when a
- * reply ends and a few times shortly after (LIBRARY_REREAD_MS) — never polled
- * forever.
+ * The suggestion is made in the background ONCE the session has been idle a
+ * while after replies that changed files or ran commands (one request to the
+ * session's model, never one per reply), so the library is read when the
+ * session opens, when a reply ends (and once shortly after,
+ * LIBRARY_REREAD_MS), and then only when the daemon says a suggestion is due
+ * or being made (`nextLibraryRead`) — never polled forever.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -24,6 +26,7 @@ import {
   declineLibraryItem,
   fetchSessionLibrary,
   forgetLesson,
+  nextLibraryRead,
   type LibraryItem,
 } from "@/lib/buildLibrary";
 import { MemoMarkdown } from "@/components/Markdown";
@@ -196,6 +199,8 @@ export function LibraryCards({ threadId, refreshKey }: { threadId: string; refre
   const [kept, setKept] = useState<LibraryItem[]>([]);
   const [folderName, setFolderName] = useState("");
   const [note, setNote] = useState<string | null>(null);
+  /** When to read again (ms from the last read), per the daemon's answer. */
+  const [next, setNext] = useState<{ inMs: number; at: number } | null>(null);
   const liveRef = useRef(true);
 
   const read = useCallback(async () => {
@@ -205,6 +210,8 @@ export function LibraryCards({ threadId, refreshKey }: { threadId: string; refre
       setItems(v ? v.proposals : []);
       setKept(v ? v.lessons : []);
       if (v) setFolderName(v.folderName);
+      const inMs = nextLibraryRead(v);
+      setNext(inMs === null ? null : { inMs, at: Date.now() });
     } catch {
       /* no card rather than a wrong one */
     }
@@ -215,19 +222,28 @@ export function LibraryCards({ threadId, refreshKey }: { threadId: string; refre
     setItems([]);
     setKept([]);
     setNote(null);
+    setNext(null);
     return () => {
       liveRef.current = false;
     };
   }, [threadId]);
 
-  // On open, when a reply ends, and a few times after (the suggestion is made
-  // in the background, one more request to the model).
+  // On open, when a reply ends (and once shortly after: the daemon starts
+  // the session's idle wait a moment after the reply's last frame).
   useEffect(() => {
     void read();
     if (refreshKey === 0) return;
     const timers = LIBRARY_REREAD_MS.map((ms) => setTimeout(() => void read(), ms));
     return () => timers.forEach(clearTimeout);
   }, [read, refreshKey]);
+
+  // Then only when the daemon said a suggestion is due (its idle wait ends)
+  // or being made — one read each time, never a fixed poll.
+  useEffect(() => {
+    if (!next) return;
+    const timer = setTimeout(() => void read(), next.inMs);
+    return () => clearTimeout(timer);
+  }, [next, read]);
 
   if (!items.length && !note && !kept.length) return null;
   return (

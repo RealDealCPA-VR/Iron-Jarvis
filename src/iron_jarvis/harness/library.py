@@ -41,11 +41,25 @@ bounded (:data:`MAX_LESSONS`, :data:`MAX_LIBRARY_CHARS`), rendered by
 ``chat_turn._build_harness``, i.e. BEFORE the history planner, like the rest
 of the tree.
 
-The reflection is ONE router completion on the model that served the turn,
-PINNED (no failover: the user chose that model) and on the session's ONE
-account (its ``AccountPin``) and under its Local only scope; billed to the
-session's usage. It runs in the background after the turn's reply is written;
-it never delays or fails a turn. ``build_reflect`` (a setting) turns it off.
+The reflection is ONE router completion on the model that served the
+session's newest turn, PINNED (no failover: the user chose that model) and on
+the session's ONE account (its ``AccountPin``) and under its Local only scope;
+billed to the session's usage. ``build_reflect`` (a setting) turns it off.
+
+COST AND PACE (review, v1.370.0). On a Claude Code or Codex plan that call
+spends the user's own plan limits on work they did not ask for, so it is
+rationed: a finished turn that did work is only NOTED; the session is
+reflected on ONCE it has been idle for :data:`REFLECT_IDLE_S` (a new turn
+restarts the wait), or when it is archived — one call over the whole stretch
+of noted turns (at most :data:`MAX_STRETCH_TURNS`), never one per turn. The
+call is bounded: the prompt is cut to :data:`PROMPT_CHARS`, the call to
+:data:`REFLECT_TIMEOUT_S`. It never runs while the session's account is at
+its limit (a limit card, a "Resume when ready" wait, or Iron-Proxy says so),
+nor when Iron-Proxy says the account has used :data:`ACCOUNT_BUSY_PERCENT` or
+more of a window — those stretches wait for a later idle period. A stretch in
+which a turn's trust was lowered (it read something flagged) is not learned
+from at all: injected words must not become a lesson. Pending stretches live
+in memory: a restart forgets them (nothing was spent).
 
 Every database / file function here is BLOCKING; the async ones hop.
 """
@@ -53,12 +67,14 @@ Every database / file function here is BLOCKING; the async ones hop.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
 import os
 import re
 import shutil
+import time
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -101,6 +117,22 @@ PROMPT_STEPS = 30
 STEP_OUTPUT_CHARS = 600
 PROMPT_CHARS = 14_000
 LAYER_FILE_CHARS = 4000
+#: The harness notes shown to the reflector, in all (the rest of
+#: :data:`PROMPT_CHARS` is the session's work). A file longer than
+#: :data:`LAYER_FILE_CHARS`, or past this total, is NAMED and never offered
+#: for an edit: an edit is the file's FULL new text, so a model shown a cut
+#: copy would write the cut copy back (review, v1.370.0).
+NOTES_CHARS = 6000
+#: A session is reflected on once it has been idle this long after a turn
+#: that did work (a new turn restarts the wait) — review, v1.370.0.
+REFLECT_IDLE_S = 600.0
+#: Turns one reflection covers, at most (the newest).
+MAX_STRETCH_TURNS = 8
+#: The reflection call's own time limit.
+REFLECT_TIMEOUT_S = 180.0
+#: An account Iron-Proxy says has used this much of a window or more is not
+#: used for a reflection (it must never push the account into its limit).
+ACCOUNT_BUSY_PERCENT = 70
 #: Ledger rows read for one session's path facts.
 LEDGER_ROWS = 2000
 #: The tools that count as "ran a command".
@@ -117,6 +149,10 @@ REASON_MODEL_FAILED = "the reflection call failed"
 REASON_NOTHING = "nothing the record supports was left to keep"
 REASON_ACCOUNT = "the session's account could not be used for the reflection"
 REASON_REWOUND = "the turn was rewound while it was being reflected on"
+REASON_LOW_TRUST = "a turn read something that lowered its trust, so the library does not learn from it"
+REASON_ACCOUNT_LIMIT = "the session's account is at its limit"
+REASON_ACCOUNT_BUSY = "the session's account is close to its limit ({percent}% used), so it is not spent on this"
+REASON_SESSION_BUSY = "the session is answering"
 
 STALE_SENTENCE = "The file changed since this was suggested, so it was not written. Ask again after your next turn."
 INVALID_SENTENCE = "With this edit the folder's harness files would not be valid ({note}), so nothing was written."
@@ -271,24 +307,37 @@ def get(engine: Any, item_id: str) -> HarnessLibraryRecord | None:
 @dataclass
 class Evidence:
     thread_id: str
+    #: The NEWEST turn reflected on (a stretch's proposals carry it: a rewind
+    #: to any of the stretch's turns takes the newest one too).
     turn_id: str
     folder: str
     question: str
     reply: str
     route: dict[str, Any]
-    #: The turn's transcript: every text a quote may be checked against.
+    #: The turns' transcript: every text a quote may be checked against.
     transcript: str
     #: Normalised paths the SESSION's ledger names (see :func:`_norm_path`).
     paths: set[str]
-    #: The turn changed a file / ran a command (from the ledger).
+    #: The turns changed a file / ran a command (from the ledger).
     changed_files: list[str] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)
-    #: For the prompt: [{tool, args, ok, output}] of the turn.
+    #: For the prompt: [{tool, args, ok, output, turn}] of the turns (newest
+    #: :data:`PROMPT_STEPS` kept).
     steps: list[dict[str, Any]] = field(default_factory=list)
+    #: Every turn reflected on, oldest first: [{turn_id, question, reply}].
+    turns: list[dict[str, Any]] = field(default_factory=list)
+    #: A turn's trust was lowered (it read something flagged).
+    low_trust: bool = False
+    #: Every turn asked for was answered by the demo model.
+    mock_only: bool = False
 
     @property
     def real_work(self) -> bool:
         return bool(self.changed_files or self.commands)
+
+    @property
+    def turn_ids(self) -> list[str]:
+        return [str(t["turn_id"]) for t in self.turns]
 
 
 def _norm_path(path: str) -> str:
@@ -343,6 +392,20 @@ def _journal_targets(pre_inline: str | None, kind: str) -> set[str]:
 def turn_evidence(engine: Any, thread_id: str, turn_id: str) -> Evidence | None:
     """What the record says about one turn of a Build session, or None when
     the session or the turn's question + reply are not there. BLOCKING."""
+    return stretch_evidence(engine, thread_id, [turn_id])
+
+
+def stretch_evidence(engine: Any, thread_id: str, turn_ids: Any) -> Evidence | None:
+    """What the record says about a STRETCH of a Build session's turns (one
+    reflection covers every turn since the last one — review, v1.370.0), or
+    None when the session or none of the turns' question + reply are there.
+
+    A turn the demo model answered is left out (HONEST MOCK); when every turn
+    was, ``mock_only`` is set. A turn whose trust was lowered sets
+    ``low_trust``. A ledger row belongs to a turn when it was recorded at or
+    after the turn's question AND strictly after the line before it (the
+    previous turn's reply): on a coarse clock the previous turn's last tool
+    row can carry the very stamp of the next question. BLOCKING."""
     from sqlalchemy import literal_column
     from sqlmodel import select
 
@@ -360,20 +423,57 @@ def turn_evidence(engine: Any, thread_id: str, turn_id: str) -> Evidence | None:
             messages = []
         folder = folder_of(row)
     messages = [m for m in messages if isinstance(m, dict)] if isinstance(messages, list) else []
-    question = next((m for m in messages if m.get("turnId") == turn_id and m.get("role") == "user"
-                     and not m.get("steer")), None)
-    reply = next((m for m in reversed(messages) if m.get("turnId") == turn_id
-                  and m.get("role") == "assistant"), None)
-    if question is None or reply is None:
+    wanted = list(dict.fromkeys(str(t) for t in (turn_ids or []) if t))
+    kept: list[dict[str, Any]] = []
+    windows: list[tuple[Any, Any, Any]] = []
+    mock_seen = False
+    low_trust = False
+    for tid in wanted:
+        qi = next((i for i, m in enumerate(messages) if m.get("turnId") == tid and m.get("role") == "user"
+                   and not m.get("steer")), None)
+        reply = next((m for m in reversed(messages) if m.get("turnId") == tid
+                      and m.get("role") == "assistant"), None)
+        if qi is None or reply is None:
+            continue
+        route = reply.get("route") if isinstance(reply.get("route"), dict) else {}
+        if _is_mock(route.get("provider"), route.get("reason")):
+            mock_seen = True
+            continue
+        if reply.get("trust") and reply.get("trust") != "full":
+            low_trust = True
+        question = messages[qi]
+        prev_end = _naive_utc(messages[qi - 1].get("at")) if qi > 0 else None
+        windows.append((_naive_utc(question.get("at")), _naive_utc(reply.get("at")), prev_end))
+        kept.append({"turn_id": tid, "question": str(question.get("content") or ""),
+                     "reply": str(reply.get("content") or ""), "route": route, "steps_detail": reply.get("steps")})
+    if not kept:
+        if mock_seen:
+            return Evidence(thread_id=thread_id, turn_id=wanted[-1] if wanted else "", folder=folder,
+                            question="", reply="", route={"provider": "mock"}, transcript="", paths=set(),
+                            mock_only=True)
         return None
-    since = _naive_utc(question.get("at"))
-    until = _naive_utc(reply.get("at"))
     sid = session_id_for(thread_id)
-    texts: list[str] = [str(question.get("content") or ""), str(reply.get("content") or "")]
-    for step in reply.get("steps") or []:
-        detail = step.get("detail") if isinstance(step, dict) else None
-        if isinstance(detail, dict):
-            texts += [str(detail.get("input") or ""), str(detail.get("output") or "")]
+    texts: list[str] = []
+    for t in kept:
+        texts += [t["question"], t["reply"]]
+        for step in t.pop("steps_detail") or []:
+            detail = step.get("detail") if isinstance(step, dict) else None
+            if isinstance(detail, dict):
+                texts += [str(detail.get("input") or ""), str(detail.get("output") or "")]
+
+    def owner(created: Any) -> "int | None":
+        if created is None:
+            return None
+        for i, (since, until, prev_end) in enumerate(windows):
+            if since is None or created < since:
+                continue
+            if prev_end is not None and created <= prev_end:
+                continue
+            if until is not None and created > until:
+                continue
+            return i
+        return None
+
     paths: set[str] = set()
     changed: list[str] = []
     commands: list[str] = []
@@ -403,10 +503,8 @@ def turn_evidence(engine: Any, thread_id: str, turn_id: str) -> Evidence | None:
                 paths.add(_norm_path(args[key]))
         if journal is not None:
             paths |= _journal_targets(journal[1], journal[0])
-        in_turn = since is not None and created is not None and created >= since and (
-            until is None or created <= until
-        )
-        if not in_turn or is_undo:
+        turn_index = owner(created)
+        if turn_index is None or is_undo:
             continue
         texts += values + [str(output or "")]
         if ok and not undone:
@@ -414,20 +512,23 @@ def turn_evidence(engine: Any, thread_id: str, turn_id: str) -> Evidence | None:
                 changed += sorted(_journal_targets(journal[1], journal[0]))[:1] or [tool]
             elif tool in COMMAND_TOOLS:
                 commands.append(next((v for v in values if v.strip()), tool))
-        if len(steps) < PROMPT_STEPS:
-            steps.append({
-                "tool": tool,
-                "args": {k: (v if len(str(v)) < 300 else str(v)[:300] + "…") for k, v in args.items()}
-                if isinstance(args, dict) else {},
-                "ok": bool(ok),
-                "output": str(output or "")[:STEP_OUTPUT_CHARS],
-            })
-    route = reply.get("route") if isinstance(reply.get("route"), dict) else {}
+        steps.append({
+            "tool": tool,
+            "args": {k: (v if len(str(v)) < 300 else str(v)[:300] + "…") for k, v in args.items()}
+            if isinstance(args, dict) else {},
+            "ok": bool(ok),
+            "output": str(output or "")[:STEP_OUTPUT_CHARS],
+            "turn": turn_index,
+        })
+    newest = kept[-1]
     return Evidence(
-        thread_id=thread_id, turn_id=turn_id, folder=folder,
-        question=str(question.get("content") or ""), reply=str(reply.get("content") or ""),
-        route=route, transcript="\n".join(t for t in texts if t),
-        paths={p for p in paths if p}, changed_files=changed, commands=commands, steps=steps,
+        thread_id=thread_id, turn_id=newest["turn_id"], folder=folder,
+        question="\n\n".join(t["question"] for t in kept), reply="\n\n".join(t["reply"] for t in kept),
+        route=newest["route"], transcript="\n".join(t for t in texts if t),
+        paths={p for p in paths if p}, changed_files=changed, commands=commands,
+        steps=steps[-PROMPT_STEPS:],
+        turns=[{"turn_id": t["turn_id"], "question": t["question"], "reply": t["reply"]} for t in kept],
+        low_trust=low_trust,
     )
 
 
@@ -695,29 +796,61 @@ REFLECT_SYSTEM = (
 )
 
 
+def notes_shown(layer_files: dict[str, str]) -> tuple[list[str], set[str]]:
+    """``(prompt lines, files shown IN FULL)`` for the folder's harness notes.
+    A file is shown whole or not at all (named as too long): an edit is the
+    file's FULL new text, so only a file the model read whole may be edited —
+    a model shown a cut copy would write the cut copy back. A file that does
+    not exist is shown as empty and may be started."""
+    lines: list[str] = []
+    full: set[str] = set()
+    used = 0
+    for name in EDIT_FILES:
+        text = layer_files.get(name) or ""
+        if not text:
+            full.add(name)
+            continue
+        if len(text) > LAYER_FILE_CHARS or used + len(text) > NOTES_CHARS:
+            lines.append(f"--- {name} --- (too long to show here; do not propose an edit to it)")
+            continue
+        lines += [f"--- {name} ---", text]
+        used += len(text)
+        full.add(name)
+    if not lines:
+        lines.append("(none yet)")
+    return lines, full
+
+
 def reflect_prompt(evidence: Evidence, layer_files: dict[str, str]) -> str:
-    """The user message of the ONE reflection call — the turn, bounded."""
-    parts = [
-        "THE REQUEST:", evidence.question[:3000], "",
-        "THE TOOL CALLS (in order):",
-    ]
-    for i, step in enumerate(evidence.steps, 1):
-        parts.append(
-            f"{i}. {step['tool']} {json.dumps(step['args'], ensure_ascii=False)[:600]} -> "
-            + ("ok" if step["ok"] else "FAILED")
-        )
-        out = step["output"].strip()
-        if out:
-            parts.append("   output: " + out.replace("\n", "\n   "))
-    parts += ["", "THE REPLY:", evidence.reply[:3000], "", "THE FOLDER'S HARNESS NOTES NOW:"]
-    if any(v for v in layer_files.values()):
-        for name, text in layer_files.items():
-            if text:
-                parts += [f"--- {name} ---", text[:LAYER_FILE_CHARS]]
-    else:
-        parts.append("(none yet)")
-    text = "\n".join(parts)
-    return text[:PROMPT_CHARS]
+    """The user message of the ONE reflection call — the stretch of turns,
+    bounded at :data:`PROMPT_CHARS` in all. The harness notes come first in
+    the budget (the edit rule above needs them whole), the turns get the
+    rest, each cut to its share."""
+    notes, _full = notes_shown(layer_files)
+    tail = ["", "THE FOLDER'S HARNESS NOTES NOW:", *notes]
+    room = max(2000, PROMPT_CHARS - len("\n".join(tail)))
+    turns = evidence.turns or [{"turn_id": evidence.turn_id, "question": evidence.question,
+                                "reply": evidence.reply}]
+    share = max(400, min(3000, room // (3 * len(turns))))
+    parts: list[str] = []
+    for index, turn in enumerate(turns):
+        if len(turns) > 1:
+            parts.append(f"=== TURN {index + 1} OF {len(turns)} ===")
+        parts += ["THE REQUEST:", turn["question"][:share], "", "THE TOOL CALLS (in order):"]
+        mine = [s for s in evidence.steps if s.get("turn", 0) == index] if len(turns) > 1 else evidence.steps
+        if not mine:
+            parts.append("(none)")
+        for i, step in enumerate(mine, 1):
+            parts.append(
+                f"{i}. {step['tool']} {json.dumps(step['args'], ensure_ascii=False)[:600]} -> "
+                + ("ok" if step["ok"] else "FAILED")
+            )
+            out = step["output"].strip()
+            if out:
+                parts.append("   output: " + out.replace("\n", "\n   "))
+        parts += ["", "THE REPLY:", turn["reply"][:share], ""]
+    head = "\n".join(parts)[:room]
+    return head + "\n".join(tail)
 
 
 def _is_mock(provider: Any, reason: Any = "") -> bool:
@@ -730,9 +863,51 @@ class Reflection:
     reason: str = ""
 
 
-async def _complete(platform: Any, evidence: Evidence, prompt: str) -> tuple[Any, str]:
+def account_refusal(platform: Any, setup: dict[str, Any]) -> str:
+    """Why the session's account must NOT be spent on a reflection now ("" =
+    it may): a limit card or a "Resume when ready" wait on the session, or
+    Iron-Proxy's CACHED word for that account — at its limit, signed out,
+    turned off, or :data:`ACCOUNT_BUSY_PERCENT` or more of a window used.
+    An account Iron-Proxy has not listed yet is not refused here: the
+    reflection's pinned pick refuses a parked account without spending
+    anything. Never a network call; never raises."""
+    if setup.get("account_limit") or setup.get("account_wait"):
+        return REASON_ACCOUNT_LIMIT
+    account = str(setup.get("account") or "")
+    if not account:
+        return ""
+    try:
+        from . import build_accounts as BA
+
+        row = BA.find(getattr(platform, "iron_proxy", None), account)
+    except Exception:  # noqa: BLE001 — unknown is not a refusal
+        return ""
+    if row is None:
+        return ""
+    status = row.get("status")
+    if status in (BA.LIMIT, BA.NEEDS_SIGN_IN, BA.OFF):
+        return REASON_ACCOUNT_LIMIT
+    usage = row.get("usage") if isinstance(row.get("usage"), dict) else {}
+    percent = usage.get("percent")
+    if status == BA.USAGE and isinstance(percent, (int, float)) and percent >= ACCOUNT_BUSY_PERCENT:
+        return REASON_ACCOUNT_BUSY.format(percent=int(percent))
+    return ""
+
+
+def _retry_later(reason: str) -> bool:
+    """A stretch kept for a LATER idle period: nothing was spent and its
+    turns are still worth learning from (the account was at or near its
+    limit, or the session was answering)."""
+    return reason in (REASON_ACCOUNT_LIMIT, REASON_SESSION_BUSY) or reason.startswith(
+        REASON_ACCOUNT_BUSY.split("{", 1)[0]
+    )
+
+
+async def _complete(platform: Any, evidence: Evidence, prompt: str,
+                    setup: "dict[str, Any] | None" = None) -> tuple[Any, str]:
     """ONE pinned completion on the model that served the turn, on the
-    session's account and under its Local only scope. ``(route, reason)``."""
+    session's account and under its Local only scope, within
+    :data:`REFLECT_TIMEOUT_S`. ``(route, reason)``."""
     from ..providers import egress as _egress
     from ..providers.adapters.base import LLMMessage
 
@@ -743,10 +918,11 @@ async def _complete(platform: Any, evidence: Evidence, prompt: str) -> tuple[Any
     model = str(evidence.route.get("model") or "")
     if not provider:
         return None, REASON_NO_MODEL
-    from .sessions import _setup, get_row
+    if setup is None:
+        from .sessions import _setup, get_row
 
-    row = await asyncio.to_thread(get_row, platform.engine, evidence.thread_id)
-    setup = _setup(row) if row is not None else {}
+        row = await asyncio.to_thread(get_row, platform.engine, evidence.thread_id)
+        setup = _setup(row) if row is not None else {}
     pin = None
     if setup.get("account"):
         try:
@@ -760,11 +936,12 @@ async def _complete(platform: Any, evidence: Evidence, prompt: str) -> tuple[Any
     token = set_pin(pin) if pin is not None else None
     try:
         with _egress.local_only_scope(setup.get("local_only") is True):
-            route = await router.complete(
-                provider=provider, model=model or None, system=REFLECT_SYSTEM,
-                messages=[LLMMessage(role="user", content=prompt)], tools=[],
-                session_id=None, pin=True,
-            )
+            async with asyncio.timeout(REFLECT_TIMEOUT_S):
+                route = await router.complete(
+                    provider=provider, model=model or None, system=REFLECT_SYSTEM,
+                    messages=[LLMMessage(role="user", content=prompt)], tools=[],
+                    session_id=None, pin=True,
+                )
     except Exception:  # noqa: BLE001 — a failed reflection is a reason, never a crash
         log.info("Build library reflection failed", exc_info=True)
         return None, REASON_MODEL_FAILED
@@ -804,45 +981,59 @@ def _clean_lesson(text: Any) -> str:
     return text[:MAX_LESSON_CHARS].rstrip()
 
 
-async def reflect(platform: Any, thread_id: str, turn_id: str) -> Reflection:
-    """Reflect on ONE finished build turn: at most one lesson and one edit
-    proposal minted for the session's folder (see the module docstring).
-    Never raises; ``reason`` says why nothing was minted."""
+async def reflect(platform: Any, thread_id: str, turn_id: "str | Any") -> Reflection:
+    """Reflect on finished build turns — ``turn_id`` is one turn, or a
+    stretch of them (oldest first): ONE model call, at most one lesson and
+    one edit proposal minted for the session's folder (see the module
+    docstring). Never raises; ``reason`` says why nothing was minted."""
     out = Reflection()
+    turns = [turn_id] if isinstance(turn_id, str) else [str(t) for t in (turn_id or [])]
     try:
-        return await _reflect(platform, thread_id, turn_id, out)
+        return await _reflect(platform, thread_id, turns, out)
     except Exception:  # noqa: BLE001 — a reflector must never take anything down
         log.warning("Build library reflection failed", exc_info=True)
         out.reason = REASON_MODEL_FAILED
         return out
 
 
-async def _reflect(platform: Any, thread_id: str, turn_id: str, out: Reflection) -> Reflection:
+async def _reflect(platform: Any, thread_id: str, turn_ids: list[str], out: Reflection) -> Reflection:
     from ..core.promptguard import scan_context
     from .components import TEXT_FILES
+    from .sessions import _setup, get_row
 
     if not bool(getattr(getattr(platform, "config", None), "build_reflect", True)):
         out.reason = REASON_OFF
         return out
     engine = platform.engine
-    evidence = await asyncio.to_thread(turn_evidence, engine, thread_id, turn_id)
+    evidence = await asyncio.to_thread(stretch_evidence, engine, thread_id, turn_ids)
     if evidence is None or not evidence.folder:
         out.reason = REASON_NO_TURN
         return out
-    if _is_mock(evidence.route.get("provider"), evidence.route.get("reason")):
+    if evidence.mock_only or _is_mock(evidence.route.get("provider"), evidence.route.get("reason")):
         out.reason = REASON_MOCK
+        return out
+    if evidence.low_trust:
+        out.reason = REASON_LOW_TRUST
         return out
     if not evidence.real_work:
         out.reason = REASON_NO_WORK
         return out
+    turn_id = evidence.turn_id
     key = folder_key(evidence.folder)
     if await asyncio.to_thread(_open_count, engine, key) >= OPEN_LIMIT:
         out.reason = REASON_FULL
         return out
+    row = await asyncio.to_thread(get_row, engine, thread_id)
+    setup = _setup(row) if row is not None else {}
+    refusal = await asyncio.to_thread(account_refusal, platform, setup)
+    if refusal:
+        out.reason = refusal
+        return out
     layer_files = {}
     for name in EDIT_FILES:
         layer_files[name] = await asyncio.to_thread(read_layer_file, evidence.folder, name) or ""
-    route, why = await _complete(platform, evidence, reflect_prompt(evidence, layer_files))
+    _notes, shown_full = notes_shown(layer_files)
+    route, why = await _complete(platform, evidence, reflect_prompt(evidence, layer_files), setup)
     if route is None:
         out.reason = why
         return out
@@ -866,7 +1057,8 @@ async def _reflect(platform: Any, thread_id: str, turn_id: str, out: Reflection)
             if not await asyncio.to_thread(_suppressed, engine, sig):
                 minted = await asyncio.to_thread(_mint_for_turn, engine, HarnessLibraryRecord(
                     folder_key=key, folder=evidence.folder, kind=KIND_LESSON, text=kept_lesson,
-                    evidence_json=json.dumps(ev), signature=sig, thread_id=thread_id,
+                    evidence_json=json.dumps({**ev, "turns": evidence.turn_ids}), signature=sig,
+                    thread_id=thread_id,
                     turn_id=turn_id, provider=provider, model=model,
                 ))
                 if minted is None:
@@ -878,7 +1070,10 @@ async def _reflect(platform: Any, thread_id: str, turn_id: str, out: Reflection)
 
     # THE EDIT (only beside a lesson the record supports)
     edit = answer.get("edit")
-    if kept_lesson and isinstance(edit, dict) and str(edit.get("file") or "") in EDIT_FILES:
+    # (only to a file the reflector was shown WHOLE: an edit is the file's full
+    # new text, and a model shown a cut copy writes the cut copy back.)
+    if (kept_lesson and isinstance(edit, dict) and str(edit.get("file") or "") in EDIT_FILES
+            and str(edit.get("file")) in shown_full):
         name = str(edit["file"])
         before = await asyncio.to_thread(read_layer_file, evidence.folder, name)
         after = str(edit.get("text") or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -904,7 +1099,8 @@ async def _reflect(platform: Any, thread_id: str, turn_id: str, out: Reflection)
                     minted = await asyncio.to_thread(_mint_for_turn, engine, HarnessLibraryRecord(
                         folder_key=key, folder=evidence.folder, kind=KIND_LAYER_EDIT,
                         text=why_line, file=name, before=before, after=after_checked,
-                        evidence_json=json.dumps(ev), signature=sig, thread_id=thread_id,
+                        evidence_json=json.dumps({**ev, "turns": evidence.turn_ids}), signature=sig,
+                        thread_id=thread_id,
                         turn_id=turn_id, provider=provider, model=model,
                     ))
                     if minted is not None:
@@ -933,63 +1129,230 @@ async def _publish(platform: Any, row: HarnessLibraryRecord) -> None:
         log.debug("library.proposal publish failed", exc_info=True)
 
 
-#: The turn's end schedules a reflection by itself (production). The test
+#: A finished turn arms the idle reflection by itself (production). The test
 #: suite turns this off for every bare test (``tests/conftest.py``) so a
 #: background model call never lands in another test's exact counts.
 AUTO_REFLECT = True
 
-#: Reflections running in the background (kept so they are not collected,
-#: and so tests and the shutdown can wait for them).
+#: thread -> its finished turns not yet reflected on, oldest first.
+_STRETCH: dict[str, list[str]] = {}
+#: thread -> its idle timer, and when it fires (``time.time()``).
+_TIMERS: dict[str, asyncio.Task] = {}
+_DUE: dict[str, float] = {}
+#: thread -> (its running reflection, the turns it covers).
+_REFLECTING: dict[str, tuple[asyncio.Task, tuple[str, ...]]] = {}
+#: Every timer and reflection task (kept so they are not collected, and so
+#: tests and the shutdown can wait for / stop them).
 _PENDING: set[asyncio.Task] = set()
-_RUNNING_KEYS: set[str] = set()
-#: "thread:turn" -> its running reflection (so a rewind can stop it).
-_TASKS: dict[str, asyncio.Task] = {}
 
 
-def schedule(platform: Any, thread_id: str, turn_id: str) -> "asyncio.Task | None":
-    """Start the reflection for a finished turn in the background (at most one
-    per turn). Must be called on the loop. Never raises."""
+def _track(task: asyncio.Task) -> None:
+    _PENDING.add(task)
+    task.add_done_callback(_PENDING.discard)
+
+
+def _session_busy(platform: Any, thread_id: str) -> bool:
+    """Is a turn of this session starting or running right now?"""
+    try:
+        from ..core.turns import TURNS
+        from ..daemon.routes.build import _STARTING
+
+        if thread_id in _STARTING:
+            return True
+        logs = getattr(platform, "turn_logs", None)
+        if logs is not None and any(lg.thread_id == thread_id for lg in logs.running()):
+            return True
+        return bool((TURNS.thread_states().get(thread_id) or {}).get("running"))
+    except Exception:  # noqa: BLE001 — unknown is not busy
+        return False
+
+
+def _cancel_timer(thread_id: str) -> None:
+    timer = _TIMERS.pop(thread_id, None)
+    _DUE.pop(thread_id, None)
+    if timer is not None and not timer.done() and timer is not asyncio.current_task():
+        timer.cancel()
+
+
+def _arm(platform: Any, thread_id: str, delay: float) -> "asyncio.Task | None":
+    _cancel_timer(thread_id)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+    async def _wait() -> None:
+        await asyncio.sleep(max(0.0, delay))
+        if _TIMERS.get(thread_id) is asyncio.current_task():
+            _TIMERS.pop(thread_id, None)
+            _DUE.pop(thread_id, None)
+        flush(platform, thread_id)
+
+    task = loop.create_task(_wait())
+    _TIMERS[thread_id] = task
+    _DUE[thread_id] = time.time() + max(0.0, delay)
+    _track(task)
+    return task
+
+
+def note_turn_finished(platform: Any, thread_id: str, turn_id: str) -> "asyncio.Task | None":
+    """A turn of the session FINISHED: note it, and (re)start the session's
+    idle wait — the reflection runs ONCE the session has been idle for
+    :data:`REFLECT_IDLE_S`, over every turn noted since the last one (review,
+    v1.370.0: one model call per idle period, never one per turn). Must be
+    called on the loop. Never raises; returns the idle timer."""
     if not AUTO_REFLECT:
         return None
-    key = f"{thread_id}:{turn_id}"
-    if key in _RUNNING_KEYS:
-        return None
     try:
-        _RUNNING_KEYS.add(key)
-        task = asyncio.get_running_loop().create_task(reflect(platform, thread_id, turn_id))
-    except RuntimeError:
-        _RUNNING_KEYS.discard(key)
+        if not bool(getattr(getattr(platform, "config", None), "build_reflect", True)):
+            return None
+        turns = _STRETCH.setdefault(thread_id, [])
+        if turn_id and turn_id not in turns:
+            turns.append(turn_id)
+        del turns[:-MAX_STRETCH_TURNS]
+        return _arm(platform, thread_id, REFLECT_IDLE_S)
+    except Exception:  # noqa: BLE001 — a turn's end never fails on this
+        log.debug("noting a Build turn for the library failed", exc_info=True)
         return None
-    _PENDING.add(task)
-    _TASKS[key] = task
+
+
+#: The name v1.370.0's first cut gave the turn's end call.
+schedule = note_turn_finished
+
+
+def note_turn_started(thread_id: str) -> None:
+    """A turn of the session STARTED: it is not idle — the wait stops (the
+    turn's end starts it again). A reflection already running is left to
+    finish (its call was already made). Never raises."""
+    with contextlib.suppress(Exception):
+        _cancel_timer(thread_id)
+
+
+def _keep_for_later(thread_id: str, turns: list[str]) -> None:
+    have = _STRETCH.get(thread_id, [])
+    merged = list(dict.fromkeys([*turns, *have]))[-MAX_STRETCH_TURNS:]
+    if merged:
+        _STRETCH[thread_id] = merged
+
+
+def flush(platform: Any, thread_id: str) -> "asyncio.Task | None":
+    """Reflect on the session's noted stretch NOW (the idle wait ended, or
+    the session was archived): ONE reflection task over every noted turn.
+    Nothing when nothing is noted; when a turn of the session is running the
+    stretch waits (that turn's end restarts the wait); when a reflection of
+    the session still runs, the stretch waits one more idle period. Must be
+    called on the loop. Never raises."""
+    try:
+        _cancel_timer(thread_id)
+        turns = _STRETCH.pop(thread_id, None)
+        if not turns:
+            return None
+        running = _REFLECTING.get(thread_id)
+        if running is not None and not running[0].done():
+            _keep_for_later(thread_id, turns)
+            _arm(platform, thread_id, REFLECT_IDLE_S)
+            return None
+        if _session_busy(platform, thread_id):
+            _keep_for_later(thread_id, turns)
+            return None
+        loop = asyncio.get_running_loop()
+    except Exception:  # noqa: BLE001 — never raises
+        log.debug("starting a Build library reflection failed", exc_info=True)
+        return None
+    stretch = tuple(turns)
+
+    async def _run() -> Reflection:
+        out = await reflect(platform, thread_id, list(stretch))
+        if _retry_later(out.reason):
+            _keep_for_later(thread_id, list(stretch))
+        return out
+
+    task = loop.create_task(_run())
+    _REFLECTING[thread_id] = (task, stretch)
+    _track(task)
 
     def _done(t: asyncio.Task) -> None:
-        _PENDING.discard(t)
-        _RUNNING_KEYS.discard(key)
-        if _TASKS.get(key) is t:
-            _TASKS.pop(key, None)
+        current = _REFLECTING.get(thread_id)
+        if current is not None and current[0] is t:
+            _REFLECTING.pop(thread_id, None)
 
     task.add_done_callback(_done)
     return task
 
 
+def take_stretch(thread_id: str) -> list[str]:
+    """The session's noted turns, TAKEN (the reflect route reflects on them
+    now, so the idle wait has nothing left to do)."""
+    _cancel_timer(thread_id)
+    return list(_STRETCH.pop(thread_id, None) or [])
+
+
+def status_of(thread_id: str) -> dict[str, Any]:
+    """``{due_at, running, turns}`` — when the session's next reflection is
+    due (ISO; None when nothing waits for one), whether one is running now,
+    and how many finished turns wait for it. In memory; never raises."""
+    from datetime import datetime, timezone
+
+    due = _DUE.get(thread_id)
+    running = _REFLECTING.get(thread_id)
+    return {
+        "due_at": (datetime.fromtimestamp(due, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+                   if due is not None else None),
+        "running": bool(running is not None and not running[0].done()),
+        "turns": len(_STRETCH.get(thread_id) or []),
+    }
+
+
 def cancel_reflections(thread_id: str, turn_ids: Any) -> int:
-    """Stop the background reflections of these turns (a rewind took them
-    away). Returns how many were stopped. Call on the loop."""
-    stopped = 0
-    for turn_id in turn_ids or []:
-        task = _TASKS.get(f"{thread_id}:{turn_id}")
-        if task is not None and not task.done():
-            task.cancel()
-            stopped += 1
-    return stopped
+    """A REWIND took these turns away: they leave the session's noted stretch
+    (no turn left = no idle wait), and a running reflection that covers any
+    of them stops. Returns how many reflections were stopped. Call on the
+    loop."""
+    gone = {str(t) for t in (turn_ids or []) if t}
+    if not gone:
+        return 0
+    noted = _STRETCH.get(thread_id)
+    if noted is not None:
+        left = [t for t in noted if t not in gone]
+        if left:
+            _STRETCH[thread_id] = left
+        else:
+            _STRETCH.pop(thread_id, None)
+            _cancel_timer(thread_id)
+    running = _REFLECTING.get(thread_id)
+    if running is not None and not running[0].done() and gone & set(running[1]):
+        running[0].cancel()
+        return 1
+    return 0
+
+
+def shutdown() -> None:
+    """At the daemon's shutdown: every idle wait and running reflection stops
+    (a stretch not reflected on is forgotten — nothing was spent on it).
+    Never raises."""
+    for task in list(_PENDING):
+        with contextlib.suppress(Exception):  # a task of a loop already closed
+            if not task.done():
+                task.cancel()
+    _PENDING.clear()
+    _STRETCH.clear()
+    _TIMERS.clear()
+    _DUE.clear()
+    _REFLECTING.clear()
 
 
 async def drain(timeout: float = 30.0) -> None:
-    """Wait for the background reflections started so far."""
-    tasks = [t for t in list(_PENDING) if not t.done()]
-    if tasks:
-        await asyncio.wait(tasks, timeout=timeout)
+    """Wait for the idle waits and reflections started so far (and the ones
+    they start), up to ``timeout``."""
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while True:
+        me = asyncio.current_task()
+        tasks = [t for t in list(_PENDING) if not t.done() and t is not me]
+        left = end - loop.time()
+        if not tasks or left <= 0:
+            return
+        await asyncio.wait(tasks, timeout=left)
 
 
 # --------------------------------------------------------------------------- #
@@ -1099,8 +1462,13 @@ __all__ = [
     "drain",
     "forget",
     "library_lines",
+    "flush",
+    "note_turn_finished",
+    "note_turn_started",
     "reflect",
     "schedule",
+    "status_of",
+    "stretch_evidence",
     "turn_evidence",
     "validate_edit",
     "view",

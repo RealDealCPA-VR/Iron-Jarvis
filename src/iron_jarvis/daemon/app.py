@@ -1970,6 +1970,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 await asyncio.to_thread(_procs.end_all)
             except Exception:  # noqa: BLE001 — shutdown never raises
                 log.debug("kept process jobs at shutdown failed", exc_info=True)
+            # v1.370.0 review: the Build library's idle waits and any running
+            # reflection stop with the daemon (a stretch not reflected on is
+            # forgotten; nothing was spent on it). Only when it was imported.
+            _library = sys.modules.get("iron_jarvis.harness.library")
+            if _library is not None:
+                try:
+                    _library.shutdown()
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    log.debug("build library shutdown failed", exc_info=True)
             # IJ harness phase 2: every live `codex app-server` (a parked one
             # waits up to 10 minutes for tool results) goes with the daemon.
             # Only when codex-cli was ever used: the module is not imported

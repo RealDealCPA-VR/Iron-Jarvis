@@ -861,15 +861,16 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
         if pin is not None and platform is not None and watch.account_limit:
             with contextlib.suppress(BaseException):
                 await asyncio.shield(_announce_account_limit(platform, thread_id, watch.account_limit))
-        # v1.370.0 (Phase 7): the EXPERIENCE LIBRARY may reflect on a turn
-        # that FINISHED — in the background, after the reply line is written
-        # (``end`` above; it reads the ledger to see whether the turn did real
-        # work). It never delays or fails the turn.
+        # v1.370.0 (Phase 7): the EXPERIENCE LIBRARY notes a turn that
+        # FINISHED; the session is reflected on ONCE it has been idle (one
+        # model call per idle period over every noted turn — never one per
+        # turn: on a Claude Code or Codex plan it spends the user's limits).
+        # It never delays or fails the turn.
         if status == "done" and platform is not None:
             from ...harness import library as _library
 
             with contextlib.suppress(Exception):
-                _library.schedule(platform, thread_id, turn_id)
+                _library.note_turn_finished(platform, thread_id, turn_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -919,6 +920,11 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     if thread_id in _STARTING or _running_turn(d, thread_id):
         raise SessionBusy(thread_id)
     _STARTING.add(thread_id)
+    # v1.370.0 review: the session is not idle — its library reflection waits
+    # (this turn's end starts the idle wait again).
+    from ...harness import library as _library
+
+    _library.note_turn_started(thread_id)
     try:
         row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
         if row is None:
@@ -1478,6 +1484,12 @@ def register(app: FastAPI, d: Any) -> None:
             # the row came due the moment the session was unarchived, and
             # the daemon carried on with work the user had put away.
             await asyncio.to_thread(S.update, engine_of(), thread_id, setup={"account_wait": None})
+            # v1.370.0 review: an archived session is left — its library
+            # reflection runs now over the turns noted since the last one
+            # (still only when its account has room; never raises).
+            from ...harness import library as _library
+
+            _library.flush(d.platform, thread_id)
         return out
 
     @app.post("/build/sessions/{thread_id}/unarchive")

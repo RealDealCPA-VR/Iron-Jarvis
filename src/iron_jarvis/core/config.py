@@ -436,11 +436,13 @@ class Config(BaseModel):
     #: turn may take before it ends in its own conversation with an answer
     #: (it never hands the work to an agent run). 1..200; the plan's 60.
     build_round_budget: int = 60
-    #: v1.370.0 (IJ harness Phase 7): after a Build session's reply that
-    #: changed files or ran commands, the EXPERIENCE LIBRARY may suggest one
-    #: lesson for that folder (and one edit to its harness files) — one extra
-    #: model call on the model that served the reply. Nothing is kept until
-    #: the user accepts it.
+    #: v1.370.0 (IJ harness Phase 7): once a Build session has been idle
+    #: after replies that changed files or ran commands, the EXPERIENCE
+    #: LIBRARY may suggest one lesson for that folder (and one edit to its
+    #: harness files) — ONE extra model call per idle period, on the session's
+    #: own model and account (it counts toward a subscription plan's limits;
+    #: skipped while that account is at or near its limit). Nothing is kept
+    #: until the user accepts it.
     build_reflect: bool = True
     #: OCR (v1.174.0) — scanned documents are transcribed by a VISION model
     #: (there is no tesseract in this app); off means a scan honestly reports

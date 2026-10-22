@@ -4,9 +4,9 @@
  * `POST /build/library/{id}/accept|decline` and `DELETE /build/library/{id}`
  * (daemon `harness/library`).
  *
- * After a reply that changed files or ran commands, Iron Jarvis may SUGGEST
- * one lesson for the session's folder, and sometimes an edit to one of the
- * folder's harness files. Nothing is kept until the user accepts it: an
+ * Once a session has been idle a while after replies that changed files or
+ * ran commands, Iron Jarvis may SUGGEST one lesson for the session's folder,
+ * and sometimes an edit to one of the folder's harness files. Nothing is kept until the user accepts it: an
  * accepted lesson is read by every later session in that folder; an accepted
  * edit is written into the folder's file at that moment (the daemon refuses
  * in words when the file changed since).
@@ -29,10 +29,21 @@ export interface LibraryItem {
   turnId: string;
 }
 
+/** When the session's next suggestion can arrive (v1.370.0 review): the
+ *  daemon reflects ONCE a session has been idle a while after replies that
+ *  did work — never after every reply — so the screen reads the library
+ *  again only when one is due or running. */
+export interface LibraryReflection {
+  /** ISO time the idle wait ends; null when nothing waits for one. */
+  dueAt: string | null;
+  running: boolean;
+}
+
 export interface LibraryView {
   folderName: string;
   lessons: LibraryItem[];
   proposals: LibraryItem[];
+  reflection: LibraryReflection;
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -62,10 +73,12 @@ export function decodeLibraryView(raw: unknown): LibraryView | null {
   const r = rec(raw);
   if (!Array.isArray(r.proposals) || !Array.isArray(r.lessons)) return null;
   const items = (v: unknown[]) => v.map(decodeLibraryItem).filter((x): x is LibraryItem => x !== null);
+  const refl = rec(r.reflection);
   return {
     folderName: str(r.folder_name),
     lessons: items(r.lessons as unknown[]),
     proposals: items(r.proposals as unknown[]).filter((p) => p.status === "proposed"),
+    reflection: { dueAt: str(refl.due_at) || null, running: refl.running === true },
   };
 }
 
@@ -114,7 +127,25 @@ export async function forgetLesson(id: string): Promise<string> {
   }
 }
 
-/** After a reply ends, the suggestion arrives a little later (one more
- *  request to the model, in the background): the library is read again at
- *  these delays, and no more. */
-export const LIBRARY_REREAD_MS: readonly number[] = [4000, 10_000, 20_000, 40_000];
+/** After a reply ends the library is read once at once and once more after
+ *  these delays (the daemon notes the finished reply a moment after its last
+ *  frame, which is when its idle wait — `reflection.dueAt` — starts). */
+export const LIBRARY_REREAD_MS: readonly number[] = [3000];
+
+/** A suggestion is read for this long after its idle wait ends (the one
+ *  request to the model takes a little while). */
+export const LIBRARY_DUE_GRACE_MS = 15_000;
+/** While a suggestion is being made, the library is read this often. */
+export const LIBRARY_RUNNING_MS = 15_000;
+
+/** When to read the library next, from the last answer: `null` = not again
+ *  until a reply ends or the session is opened (nothing is due) — never a
+ *  poll that runs forever. */
+export function nextLibraryRead(view: LibraryView | null, now: number = Date.now()): number | null {
+  if (!view) return null;
+  if (view.reflection.running) return LIBRARY_RUNNING_MS;
+  if (!view.reflection.dueAt) return null;
+  const due = Date.parse(view.reflection.dueAt);
+  if (!Number.isFinite(due)) return null;
+  return Math.max(1000, due - now + LIBRARY_DUE_GRACE_MS);
+}

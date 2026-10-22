@@ -1980,12 +1980,18 @@ v1.370.0); this section is the whole picture in one place.
 
 **The experience library (v1.370.0)**
 
-- After a reply that changed files or ran commands, Iron Jarvis may suggest
-  ONE short lesson for that folder — for example how the project's tests are
+- Once a session has been idle for 10 minutes after replies that changed
+  files or ran commands (or when you archive it), Iron Jarvis may suggest ONE
+  short lesson for that folder — for example how the project's tests are
   run, or which file holds what — and sometimes a small edit to one of the
-  folder's harness files (usually `memory.md`). It costs one extra request
-  to the model that answered the reply, on the same account. Turn it off
-  with the **Learn from Build sessions** setting.
+  folder's harness files (usually `memory.md`). That is ONE extra request
+  for all the replies since the last one, never one per reply, sent to the
+  session's own model on the session's own account — on a Claude Code or
+  Codex plan it counts toward that plan's limits. The request is cut to a
+  fixed size and has a time limit. It waits while the account is at its
+  limit or Iron-Proxy says it has used 70% or more of a window, and a reply
+  that read something flagged as an injection is never learned from. Turn
+  it off with the **Learn from Build sessions** setting.
 - **Checked against the record.** A file a lesson names must be one this
   session's own work touched or named, and text it quotes must be exactly
   what was asked, said or shown in that reply. A line that is not supported

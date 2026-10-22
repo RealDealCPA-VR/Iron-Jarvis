@@ -411,9 +411,12 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="ask", put=False, section="Share with Build"),
     # v1.370.0 (IJ harness Phase 7): the Build experience library.
     S("build_reflect", "Learn from Build sessions", "memory", "bool",
-      "After a Build session's reply that changed files or ran commands, Iron Jarvis may suggest "
-      "one lesson for that folder, and sometimes a small edit to the folder's harness files. It "
-      "costs one extra request to the model that answered. Nothing is kept until you accept it.",
+      "When a Build session has been idle for 10 minutes after replies that changed files or ran "
+      "commands, Iron Jarvis may suggest one lesson for that folder, and sometimes a small edit to "
+      "the folder's harness files. It sends one request, cut to a fixed size, to the session's own "
+      "model on the session's own account, so on a Claude Code or Codex plan it counts toward that "
+      "plan's limits. It waits while that account is at or near its limit. Nothing is kept until "
+      "you accept it.",
       tier="allow", aliases=("build library", "build lessons", "learn from build")),
     S("chat_folder_rules", "Follow a project folder's own instructions in chat", "memory", "bool",
       "When a chat is in a project that has a folder, it reads the instruction files kept in "

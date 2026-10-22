@@ -75,6 +75,14 @@ class LibScript(Script):
                                       tools=tools, task_class=task_class, **kw)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_library_state():
+    """The idle waits live in module state: none crosses a test."""
+    L.shutdown()
+    yield
+    L.shutdown()
+
+
 @pytest.fixture()
 def app(tmp_path):
     return create_app(str(tmp_path / "home"))
@@ -172,7 +180,10 @@ async def test_a_turn_that_did_real_work_gets_one_ledger_checked_lesson(app, wor
 
 
 async def test_the_turns_end_schedules_it_by_itself_and_the_bell_hears(app, work, monkeypatch):
+    # v1.370.0 review: the turn's end only NOTES the turn; the reflection
+    # runs once the session has been idle (here: a moment).
     monkeypatch.setattr(L, "AUTO_REFLECT", True)
+    monkeypatch.setattr(L, "REFLECT_IDLE_S", 0.05)
     seen: list[tuple[str, dict]] = []
     bus = app.state.platform.event_bus
     real_publish = bus.publish

@@ -12,10 +12,11 @@
 * ``POST /build/library/{id}/decline`` — no (the same suggestion is not made
   again for 14 days);
 * ``DELETE /build/library/{id}`` — forget a kept lesson;
-* ``POST /build/sessions/{id}/reflect {turn_id?}`` — reflect on one finished
-  turn now (default: the newest), answering what was suggested or, in words,
-  why nothing was (``{minted: [...], reason}``). The same reflector the
-  turn's end runs by itself; it costs one model call.
+* ``POST /build/sessions/{id}/reflect {turn_id?}`` — reflect now on one
+  finished turn, or (default) on every turn noted since the last reflection
+  plus the newest, answering what was suggested or, in words, why nothing
+  was (``{minted: [...], reason}``). The same reflector an idle session runs
+  by itself; it costs one model call.
 
 Nothing here writes into a user's folder except an Accept of an edit. Every
 blocking step runs off the loop.
@@ -59,11 +60,14 @@ def register(app: FastAPI, d: Any) -> None:
 
     @app.get("/build/sessions/{thread_id}/library")
     def build_session_library(thread_id: str) -> dict[str, Any]:
+        """The session folder's library, plus ``reflection: {due_at,
+        running, turns}`` — when this session's next reflection is due (it
+        runs once the session has been idle; the screen re-reads then)."""
         row = S.get_row(engine_of(), thread_id)
         if row is None:
             raise HTTPException(status_code=404, detail="no such Build session")
         try:
-            return L.view(engine_of(), S.folder_of(row))
+            return {**L.view(engine_of(), S.folder_of(row)), "reflection": L.status_of(thread_id)}
         except L.LibraryRefused as exc:
             raise _refused(exc) from None
 
@@ -98,12 +102,19 @@ def register(app: FastAPI, d: Any) -> None:
         if row is None:
             raise HTTPException(status_code=404, detail="no such Build session")
         turn_id = (body.turn_id if body is not None else "").strip()
+        turns: list[str] = [turn_id] if turn_id else []
         if not turn_id:
             starts = turn_starts(S._messages(row))
             if not starts:
                 raise HTTPException(status_code=409, detail="This session has no turn to learn from yet.")
             turn_id = starts[-1][1]["turnId"]
+            # The turns noted since the last reflection (the idle wait's
+            # stretch) are reflected on now, in this ONE call.
+            turns = L.take_stretch(thread_id) or [turn_id]
+            if turn_id not in turns and S.has_turn_reply(row, turn_id):
+                turns.append(turn_id)
         if _running_turn(d, thread_id) and not S.has_turn_reply(row, turn_id):
             raise HTTPException(status_code=409, detail="That turn is still answering.")
-        out = await L.reflect(platform, thread_id, turn_id)
-        return {"minted": [L.row_view(r) for r in out.minted], "reason": out.reason, "turn_id": turn_id}
+        out = await L.reflect(platform, thread_id, turns)
+        return {"minted": [L.row_view(r) for r in out.minted], "reason": out.reason, "turn_id": turn_id,
+                "turns": turns}
