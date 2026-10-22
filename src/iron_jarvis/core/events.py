@@ -200,6 +200,15 @@ class EventType:
     # messages = the thread's NEW message count after the append. Published
     # only for daemon-origin writes; desktop PUT saves don't self-notify.
     CHAT_THREAD_UPDATED = "chat.thread_updated"
+    # IJ harness accounts (v1.368.0, Phase 5). A Build session's ONE account
+    # could not serve its turn (parked, needs sign-in, gone) and the turn
+    # ended on the account-limit card: {thread_id, title, account_name,
+    # vendor, kind, resets_at}. And a "Resume when ready" wait found the
+    # account usable again and CONTINUED the session as a new build turn:
+    # {thread_id, title, account, account_name, turn_id} — the bell says it
+    # resumed. session_id = "build:<thread id>". Names only, never an e-mail.
+    BUILD_ACCOUNT_LIMIT = "build.account_limit"
+    BUILD_RESUMED = "build.resumed"
     # Live round-tables (v1.140.0): the agent-thread store persisted one round
     # entry — the user's turn or one participant's answer — so an open
     # Agents-page thread can render the round AS it unfolds (agents/threads.py

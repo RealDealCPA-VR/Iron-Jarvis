@@ -1028,7 +1028,43 @@ def _clean_setup(raw: Any) -> str:
     plan = _clean_plan(raw.get("plan"))
     if plan:
         out["plan"] = plan
+    # IJ HARNESS ACCOUNTS (v1.368.0, Phase 5) — a Build session's ONE account
+    # (an Iron-Proxy id + its name for the header when Iron-Proxy is off), the
+    # last limit it hit (the card survives a reload) and a "Resume when ready"
+    # wait (DURABLE: the daemon's wait loop reads it after a restart). Only
+    # the daemon's /build routes write them; each is whitelisted key by key.
+    out.update(_clean_account_setup(raw))
     return json.dumps(out, separators=(",", ":")) if out else ""
+
+
+#: The keys of a Build session's limit record / resume wait (v1.368.0).
+_ACCOUNT_LIMIT_KEYS = ("account", "account_name", "provider", "vendor", "kind",
+                       "resets_at", "at", "turn_id")
+_ACCOUNT_WAIT_KEYS = ("account", "account_name", "resets_at", "armed_at", "next_check_at")
+
+
+def _clean_account_setup(raw: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    acct = raw.get("account")
+    if isinstance(acct, str) and acct.strip() and len(acct.strip()) <= 200:
+        out["account"] = acct.strip()
+        name = raw.get("account_name")
+        if isinstance(name, str) and name.strip():
+            out["account_name"] = " ".join(name.split())[:120]
+    for key, keys in (("account_limit", _ACCOUNT_LIMIT_KEYS), ("account_wait", _ACCOUNT_WAIT_KEYS)):
+        value = raw.get(key)
+        if not isinstance(value, dict) or not isinstance(value.get("account"), str) \
+                or not value["account"].strip():
+            continue
+        kept: dict[str, Any] = {}
+        for k in keys:
+            v = value.get(k)
+            if isinstance(v, str) and v.strip():
+                kept[k] = v.strip()[:200]
+        if key == "account_limit" and isinstance(value.get("resumable"), bool):
+            kept["resumable"] = value["resumable"]
+        out[key] = kept
+    return out
 
 
 def _clean_plan(raw: Any) -> dict[str, Any] | None:

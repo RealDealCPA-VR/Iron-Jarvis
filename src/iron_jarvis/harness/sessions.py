@@ -83,6 +83,10 @@ LINE_KEYS: tuple[str, ...] = (
     "thinking", "truncated", "interrupted", "error", "folderRules",
     "approved", "refit", "doors", "trust", "trustReason", "trustNote",
     "timing",
+    # v1.368.0 (Phase 5): a continuation question the DAEMON wrote ("Resume
+    # when ready" / "Choose account" — the screen hides it, like the chat's
+    # hidden Continue turn), and the account-limit card a reply ended on.
+    "continuation", "accountLimit",
 )
 
 
@@ -434,10 +438,15 @@ def session_view(row: Any, *, states: "dict[str, dict[str, bool]] | None" = None
         "setup": {
             k: setup[k] for k in (
                 "provider", "model", "reasoning", "approval_mode", "local_only", "granted_tools",
+                "account", "account_name",
             ) if k in setup
         },
         "messages": _messages(row),
         "session_id": session_id_for(row.id),
+        # v1.368.0 (Phase 5): the last limit the session's account hit (the
+        # card) and a pending "Resume when ready" wait — None when neither.
+        "account_limit": setup.get("account_limit") or None,
+        "account_wait": setup.get("account_wait") or None,
     })
     return out
 
@@ -493,6 +502,65 @@ def list_grouped(engine: Any, *, include_archived: bool = False,
             "sessions": groups[key]["sessions"],
         })
     return {"folders": folders}
+
+
+def waiting_sessions(engine: Any) -> list[tuple[str, dict[str, Any]]]:
+    """``[(thread id, setup)]`` of every unarchived session with a "Resume
+    when ready" wait (v1.368.0) — the wait loop's one read: the id and setup
+    COLUMNS only (never a transcript), build threads only. BLOCKING."""
+    from sqlmodel import select
+
+    T = ChatThreadRecord
+    out: list[tuple[str, dict[str, Any]]] = []
+    with session_scope(engine) as db:
+        stmt = select(T.id, T.setup_json).where(T.surface == BUILD_SURFACE).where(
+            T.archived_at.is_(None)  # type: ignore[union-attr]
+        )
+        for tid, raw in db.exec(stmt):
+            if not raw or "account_wait" not in raw:
+                continue
+            try:
+                setup = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(setup, dict) and isinstance(setup.get("account_wait"), dict):
+                out.append((str(tid), setup))
+    return out
+
+
+def take_wait(engine: Any, thread_id: str, armed_at: str, account: str) -> bool:
+    """END a "Resume when ready" wait for the continuation that is about to
+    start (v1.368.0 review): in ONE locked write, True when the wait armed at
+    ``armed_at`` for ``account`` is still the session's (it is removed, and
+    the old limit card with it — the continuation's own end writes the next
+    one); False when it is gone — the user cancelled it, chose another account
+    or carried on themselves while the account was being re-checked, or
+    another pass took it. The same lock as :func:`update`, so a Cancel lands
+    either before (nothing starts) or after (the continuation already began).
+    BLOCKING."""
+    from ..daemon.routes.chat import _clean_setup
+
+    if not armed_at or not account:
+        return False
+    with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+        row = db.get(ChatThreadRecord, str(thread_id or ""))
+        if row is None or not is_build_thread(row) or getattr(row, "archived_at", None) is not None:
+            return False
+        setup = _setup(row)
+        wait = setup.get("account_wait")
+        if (
+            not isinstance(wait, dict)
+            or wait.get("armed_at") != armed_at
+            or wait.get("account") != account
+            or setup.get("account") != account
+        ):
+            return False
+        setup.pop("account_wait", None)
+        setup.pop("account_limit", None)
+        row.setup_json = _clean_setup(setup)
+        db.add(row)
+        db.commit()
+        return True
 
 
 def reconcile_interrupted_turns(engine: Any) -> int:
@@ -592,6 +660,8 @@ __all__ = [
     "rename_folder",
     "session_id_for",
     "session_view",
+    "take_wait",
     "thread_of",
     "update",
+    "waiting_sessions",
 ]

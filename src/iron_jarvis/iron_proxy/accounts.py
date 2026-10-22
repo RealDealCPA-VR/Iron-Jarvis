@@ -40,6 +40,23 @@ THE RULES (the shared contract, section 2):
 The client comes from the daemon's Iron-Proxy service
 (``service.current().client()``), imported lazily; :func:`set_client_source`
 is the test seam.
+
+A BUILD SESSION'S ACCOUNT (v1.368.0, IJ harness Phase 5): while an
+:class:`~iron_jarvis.iron_proxy.pin.AccountPin` is armed (the build route arms
+one per turn), :func:`lease` is a PINNED pick of that ONE account
+(``/iron/pick?profileId=&pinned=1``, only when Iron-Proxy advertises
+``pick-pinned``) — that account or a plain refusal, never the next one, and a
+lease for any other subscription provider is refused; :func:`retry_lease`
+reports a limit and NEVER leases another account. When the account is parked
+or needs sign-in the facts land on the pin (``pin.limit``) for the turn's
+``account_limit`` frame, and the words are Iron Jarvis's own: Iron-Proxy's
+hint for a pinned refusal ("pick without a profile id") is the wrong advice
+inside a session the user pinned. Chat keeps first-free + rotation.
+
+USAGE (v1.368.0, ``plan-usage``): a success reports the vendor's own words
+about the account — Claude's ``anthropic-ratelimit-*`` response headers, Codex's
+rate-limit snapshot (:func:`rate_limits_body`) — on ``/finished``, a limit on
+``/signal``, so Iron-Proxy learns each account's plan and usage windows.
 """
 
 from __future__ import annotations
@@ -52,6 +69,9 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
+
+from . import pin as _pin
+from .service import PINNED_PICK_FEATURE, PLAN_USAGE_FEATURE
 
 log = logging.getLogger("ironjarvis.iron_proxy")
 
@@ -464,6 +484,201 @@ def _unavailable_error(spec: ProviderAccounts, exc: BaseException) -> Exception:
     return _refusal(spec, said if said.endswith((".", "!", "?")) else said + ".")
 
 
+# --------------------------------------------------------------------------- #
+# A Build session's ONE account (v1.368.0)
+# --------------------------------------------------------------------------- #
+#: Iron Jarvis provider -> the vendor word a Build session's account list
+#: groups by (``claude`` / ``codex``).
+VENDOR_OF = {"claude-cli": "claude", "codex-cli": "codex", "grok-cli": "grok"}
+
+#: The pinned pick needs ``pick-pinned``; an older Iron-Proxy IGNORES
+#: ``pinned`` (it would answer the next ready account), so it is never asked.
+PINNED_TOO_OLD = (
+    "The Iron-Proxy running on this PC is too old to keep a Build session on one "
+    "account — update Iron-Proxy, then try again."
+)
+
+#: A park kind a later reset (or a sign-in) can end — "Resume when ready" waits
+#: for these; an account that no longer exists never comes back.
+_RESUMABLE_KINDS = frozenset({"usage", "rate", "busy", "other", "signin", "disabled"})
+
+
+def _has_feature(client: Any, name: str) -> bool:
+    """Does the running Iron-Proxy advertise ``name`` (health ``features``)?
+    The service's cached answer when the live service is in use; a test
+    client's own ``health()`` otherwise. BLOCKING at worst (one health read);
+    never raises — unknown is "no"."""
+    try:
+        if _client_source is None:
+            svc = _service_module().current()
+            if svc is not None and hasattr(svc, "has_feature"):
+                return bool(svc.has_feature(name))
+        feats = getattr(client, "features", None)
+        if isinstance(feats, (list, tuple, set, frozenset)):
+            return name in feats
+        health = getattr(client, "health", None)
+        if not callable(health):
+            return False
+        doc = health()
+        found = doc.get("features") if isinstance(doc, dict) else None
+        return isinstance(found, list) and name in found
+    except Exception:  # noqa: BLE001 — unknown is "no", never a crash
+        return False
+
+
+def iso_utc(value: Any) -> str | None:
+    """An ISO instant (or unix seconds) as ISO-8601 UTC with a ``Z``, or None."""
+    if value is None or value == "":
+        return None
+    try:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            when = datetime.fromtimestamp(float(value), tz=timezone.utc)
+        else:
+            when = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _note_limit(pin: "_pin.AccountPin", spec: ProviderAccounts, kind: str,
+                resets_at: Any, title: str) -> dict[str, Any]:
+    """Put the pinned account's park on the pin — the turn's ``account_limit``
+    frame. Names, never an e-mail; the id only as ``account``."""
+    limit = {
+        "account": pin.profile_id,
+        "account_name": title or pin.title or "",
+        "provider": spec.ij_provider,
+        "vendor": VENDOR_OF.get(spec.ij_provider, ""),
+        "kind": kind,
+        "resets_at": iso_utc(resets_at),
+        "resumable": kind in _RESUMABLE_KINDS,
+    }
+    pin.limit = limit
+    return limit
+
+
+def pinned_words(spec: ProviderAccounts, title: str, kind: str, resets_at: Any) -> str:
+    """Iron Jarvis's OWN sentence for a pinned account that cannot serve. Never
+    Iron-Proxy's hint: it says "pick without a profile id", which would move a
+    session the user pinned onto another account."""
+    who = f'The {spec.label} account "{title}"'
+    choose = "or choose another account for this session."
+    if kind == "signin":
+        return f"{who} needs to sign in again — sign it in on {_CONNECTIONS}, {choose}"
+    if kind == "missing":
+        return f"{who} no longer exists in Iron-Proxy — choose another account for this session."
+    if kind == "disabled":
+        return f"{who} is turned off on the Iron-Proxy card — turn it on in Connections, {choose}"
+    words, _secs = _local_time(resets_at) if resets_at else ("", None)
+    what = _WHAT.get(kind, "parked")
+    until = f" until {words}" if words else ""
+    return f"{who} is {what}{until}. Wait for it to reset, {choose}"
+
+
+def _pinned_refusal(spec: ProviderAccounts, pin: "_pin.AccountPin", kind: str,
+                    resets_at: Any, title: str) -> Exception:
+    _note_limit(pin, spec, kind, resets_at, title)
+    _words, seconds = _local_time(resets_at) if resets_at else ("", None)
+    return _refusal(spec, pinned_words(spec, title, kind, resets_at), seconds)
+
+
+def _other_provider_refused(spec: ProviderAccounts | None, ij_provider: str,
+                            pin: "_pin.AccountPin") -> Exception:
+    from ..providers.adapters.base import ProviderError
+
+    held = PROVIDERS.get(pin.ij_provider)
+    label = held.label if held is not None else pin.ij_provider
+    title = pin.title or "the session's account"
+    words = (f'This Build session runs on the {label} account "{title}", so nothing was sent '
+             f"to another account.")
+    err = ProviderError(f"{ij_provider}: {words}", transient=False)
+    err.no_failover = True  # type: ignore[attr-defined]
+    return err
+
+
+def _pinned_error(spec: ProviderAccounts, pin: "_pin.AccountPin", exc: BaseException) -> Exception:
+    """Any Iron-Proxy error for the pinned pick, as Iron Jarvis's sentence —
+    by kind where its code/details say so (docs/ADOPTING.md, "A given
+    account")."""
+    code = str(getattr(exc, "code", "") or "")
+    details = _details(exc)
+    title = str(details.get("title") or pin.title or "").strip() or "the session's account"
+    if code == "QUOTA_EXCEEDED" or (code == "ALL_PROFILES_EXHAUSTED" and details.get("resetAt")):
+        raw_kind = str(details.get("kind") or "")
+        kind = _account_kind({"parkedReason": {"kind": raw_kind}}) if raw_kind else "other"
+        return _pinned_refusal(spec, pin, kind, details.get("resetAt") or details.get("earliestResetAt"),
+                               title)
+    if code == "AUTH_REQUIRED":
+        if details.get("profileId"):
+            return _pinned_refusal(spec, pin, "signin", None, title)
+        _note("pick", exc)
+        return _refused_error(spec)  # our token, not the account
+    if code == "PROFILE_NOT_FOUND":
+        return _pinned_refusal(spec, pin, "missing", None, title)
+    message = str(getattr(exc, "message", "") or exc or "")
+    if code == "INVALID_REQUEST" and "disabled" in message.lower():
+        return _pinned_refusal(spec, pin, "disabled", None, title)
+    _note("pick", exc)
+    if code == "INVALID_REQUEST" and details.get("provider"):
+        return _refusal(spec, f'"{title}" is not a {spec.label} subscription account — choose '
+                              "another account for this session.")
+    if getattr(exc, "status", None) == 404:
+        return _too_old_error(spec)
+    if _is_unavailable(exc):
+        return _unavailable_error(spec, exc)
+    return _unanswered_error(spec, exc)
+
+
+def _pinned_lease(spec: ProviderAccounts, pin: "_pin.AccountPin") -> Lease:
+    """THE pinned account's lease, or a ``no_failover`` refusal in Iron Jarvis's
+    words. Never None (the session asked for this account: running it on this
+    PC's own login instead would land it on an account nobody picked), never
+    another account. BLOCKING — call through ``asyncio.to_thread``."""
+    title = pin.title or "the session's account"
+    try:
+        client = _client(for_lease=True)
+    except Exception as exc:  # noqa: BLE001 — sorted as an unpinned lease is
+        if _is_unavailable(exc):
+            raise _unavailable_error(spec, exc) from None
+        _note("client", exc)
+        raise _unanswered_error(spec, exc) from None
+    if client is None:
+        raise _refusal(spec, f'Iron-Proxy is off, so this session cannot run on the {spec.label} '
+                             f'account "{title}" — turn Iron-Proxy on in Connections to continue.')
+    if not _has_feature(client, PINNED_PICK_FEATURE):
+        raise _refusal(spec, PINNED_TOO_OLD)
+    try:
+        answer = client.pick(spec.proxy_provider, lane="cli", profile_id=pin.profile_id, pinned=True)
+    except Exception as exc:  # noqa: BLE001 — sorted by Iron-Proxy's code
+        raise _pinned_error(spec, pin, exc) from None
+    got = _lease_of(spec, answer)
+    if got is None or got.profile_id != pin.profile_id:
+        raise _refusal(spec, f'Iron-Proxy answered with a different {spec.label} account than '
+                             f'"{title}", so nothing was sent — update Iron-Proxy.')
+    if not pin.title:
+        pin.title = got.title
+    pin.leased.append(got.profile_id)
+    return got
+
+
+def _parked_after_call(spec: ProviderAccounts, pin: "_pin.AccountPin", current: Lease,
+                       answer: dict[str, Any]) -> Exception:
+    """Iron-Proxy parked the pinned account after a call it served: its
+    ``signal`` (kind, reset) — or the parked ``state`` — on the pin, and the
+    session's own sentence."""
+    sig = answer.get("signal") if isinstance(answer.get("signal"), dict) else {}
+    state = answer.get("state") if isinstance(answer.get("state"), dict) else {}
+    raw = str(sig.get("kind") or "")
+    if raw:
+        kind = _account_kind({"parkedReason": {"kind": raw}})
+    else:
+        kind = _account_kind(state) if state else "other"
+    reset = sig.get("resetAt") or state.get("parkedUntil")
+    return _pinned_refusal(spec, pin, kind, reset, pin.title or current.title)
+
+
 def lease(ij_provider: str) -> Lease | None:
     """The account to run ``ij_provider``'s CLI as right now, or None (run as
     today: the default login). BLOCKING — call through ``asyncio.to_thread``.
@@ -477,6 +692,13 @@ def lease(ij_provider: str) -> Lease | None:
     executor API, one that is starting/down (``IronProxyUnavailable``) — so a
     call never silently runs on the default login."""
     spec = PROVIDERS.get(ij_provider)
+    pinned = _pin.current()
+    if pinned is not None:
+        # v1.368.0: a Build session's ONE account — never the next one, and
+        # never another subscription provider's (no spec: grok included).
+        if spec is None or spec.ij_provider != pinned.ij_provider:
+            raise _other_provider_refused(spec, ij_provider, pinned)
+        return _pinned_lease(spec, pinned)
     if spec is None:
         return None
     try:
@@ -564,31 +786,86 @@ def make_lease(
 # --------------------------------------------------------------------------- #
 # Report
 # --------------------------------------------------------------------------- #
-def _report(
+def rate_limits_body(snapshot: Any) -> dict[str, Any] | None:
+    """A vendor's account rate-limit snapshot (Codex's ``RateLimitSnapshot`` as
+    ``codex_native.protocol.rate_limit_snapshot`` keeps it) in the shape
+    Iron-Proxy reads as ``rateLimits``: ``planType``, ``primary`` /
+    ``secondary`` ``{usedPercent, windowDurationMins?, resetsAt?}``,
+    ``observedAt``. Unreadable fields are LEFT OUT (never null, never a
+    guess); None when nothing is left."""
+    if not isinstance(snapshot, dict):
+        return None
+    out: dict[str, Any] = {}
+    plan = snapshot.get("planType")
+    if isinstance(plan, str) and plan.strip():
+        out["planType"] = plan.strip()
+    for key in ("primary", "secondary"):
+        win = snapshot.get(key)
+        if not isinstance(win, dict):
+            continue
+        used = win.get("usedPercent")
+        if isinstance(used, bool) or not isinstance(used, (int, float)):
+            continue
+        clean: dict[str, Any] = {"usedPercent": used}
+        for field_name in ("windowDurationMins", "resetsAt"):
+            value = win.get(field_name)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                clean[field_name] = int(value)
+        out[key] = clean
+    seen = snapshot.get("observedAt")
+    if out and isinstance(seen, (int, float)) and not isinstance(seen, bool):
+        out["observedAt"] = int(seen)
+    return out or None
+
+
+def _report_answer(
     lease: Lease | None,
     status: int | None = None,
     headers: dict[str, str] | None = None,
     text: str | None = None,
-) -> bool | None:
-    """True = Iron-Proxy PARKED the account, False = it was told and declined,
-    None = it could not be told (off, unreachable, an error). Never raises.
-    BLOCKING."""
+    rate_limits: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Iron-Proxy's answer to a limit report (``{"parked": bool, "signal"?,
+    "state"?}``), or None when it could not be told (off, unreachable, an
+    error). ``rate_limits`` rides only when Iron-Proxy advertises
+    ``plan-usage``. Never raises. BLOCKING."""
     if lease is None:
         return None
     client = _client()
     if client is None:
         return None
+    extra: dict[str, Any] = {}
+    body = rate_limits_body(rate_limits)
+    if body and _has_feature(client, PLAN_USAGE_FEATURE):
+        extra["rate_limits"] = body
     try:
         answer = client.signal(
             lease.profile_id,
             status=status,
             headers=dict(headers) if headers else None,
             text=(text or "")[:4000] or None,
+            **extra,
         )
     except Exception as exc:  # noqa: BLE001 — reporting never fails a turn
         _note("signal", exc)
         return None
-    return bool(isinstance(answer, dict) and answer.get("parked") is True)
+    return answer if isinstance(answer, dict) else {"parked": False}
+
+
+def _report(
+    lease: Lease | None,
+    status: int | None = None,
+    headers: dict[str, str] | None = None,
+    text: str | None = None,
+    rate_limits: dict[str, Any] | None = None,
+) -> bool | None:
+    """True = Iron-Proxy PARKED the account, False = it was told and declined,
+    None = it could not be told (off, unreachable, an error). Never raises.
+    BLOCKING."""
+    answer = _report_answer(lease, status, headers, text, rate_limits)
+    if answer is None:
+        return None
+    return answer.get("parked") is True
 
 
 def report_limit(
@@ -596,10 +873,11 @@ def report_limit(
     status: int | None = None,
     headers: dict[str, str] | None = None,
     text: str | None = None,
+    rate_limits: dict[str, Any] | None = None,
 ) -> bool:
     """Hand Iron-Proxy what a failed attempt saw; True when it PARKED the
     account (its classifier decided). Never raises. BLOCKING."""
-    return _report(lease, status, headers, text) is True
+    return _report(lease, status, headers, text, rate_limits) is True
 
 
 def _usage_body(usage: dict[str, Any] | None) -> dict[str, int] | None:
@@ -627,19 +905,33 @@ def report_success(
     usage: dict[str, Any] | None = None,
     duration_ms: int | None = None,
     model: str | None = None,
+    headers: dict[str, str] | None = None,
+    rate_limits: dict[str, Any] | None = None,
 ) -> None:
-    """Tell Iron-Proxy the account served a request. Never raises. BLOCKING."""
+    """Tell Iron-Proxy the account served a request. ``headers`` (Claude's
+    allow-listed ``anthropic-ratelimit-*`` response headers) and
+    ``rate_limits`` (Codex's snapshot) ride only when Iron-Proxy advertises
+    ``plan-usage`` — what the vendor said about the account's plan and usage.
+    Never raises. BLOCKING."""
     if lease is None:
         return
     client = _client()
     if client is None:
         return
+    extra: dict[str, Any] = {}
+    body = rate_limits_body(rate_limits)
+    if (headers or body) and _has_feature(client, PLAN_USAGE_FEATURE):
+        if headers:
+            extra["headers"] = {str(k).lower(): str(v) for k, v in headers.items()}
+        if body:
+            extra["rate_limits"] = body
     try:
         client.finished(
             lease.profile_id,
             usage=_usage_body(usage),
             duration_ms=int(duration_ms) if duration_ms is not None else None,
             model=model or None,
+            **extra,
         )
     except Exception as exc:  # noqa: BLE001 — reporting never fails a turn
         _note("finished", exc)
@@ -650,12 +942,14 @@ async def report_success_async(
     usage: dict[str, Any] | None = None,
     duration_ms: int | None = None,
     model: str | None = None,
+    headers: dict[str, str] | None = None,
+    rate_limits: dict[str, Any] | None = None,
 ) -> None:
     """:func:`report_success` off the loop."""
     if lease is None:
         return
     try:
-        await asyncio.to_thread(report_success, lease, usage, duration_ms, model)
+        await asyncio.to_thread(report_success, lease, usage, duration_ms, model, headers, rate_limits)
     except Exception as exc:  # noqa: BLE001
         _note("finished", exc)
 
@@ -772,10 +1066,23 @@ async def retry_lease(
     # From here the failure IS an account's limit/sign-in while a lease existed:
     # whatever leaves carries no_failover (a raw 429 would otherwise read
     # transient — retried on the same account, then failed over elsewhere).
-    told = await asyncio.to_thread(_report, current, **signal)
+    answer = await asyncio.to_thread(_report_answer, current, **signal)
+    told = None if answer is None else answer.get("parked") is True
     tried.append(current.profile_id)
     if told is None:
         raise _untold_error(current, cause, signal) from cause
+    pinned = _pin.current()
+    if pinned is not None:
+        # v1.368.0: a Build session's ONE account. Reported, NEVER rotated:
+        # no next account, no other provider. Parked -> the facts land on the
+        # pin (the turn's account_limit frame) and the words are ours.
+        if told:
+            spec = PROVIDERS.get(current.ij_provider)
+            if spec is not None:
+                refusal = _parked_after_call(spec, pinned, current, answer)
+                if retry_ok:
+                    raise refusal from cause
+        raise _marked(cause)
     if not retry_ok:
         raise _marked(cause)  # text already streamed: its own words, no switch
     if not told or len(tried) >= MAX_ATTEMPTS:
