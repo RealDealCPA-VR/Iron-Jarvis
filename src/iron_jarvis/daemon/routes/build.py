@@ -257,8 +257,12 @@ def _svc_of(platform: Any) -> Any:
 def account_patch(platform: Any, setup: dict[str, Any], account_id: "str | None",
                   model: "str | None" = None) -> dict[str, Any]:
     """The setup changes that put a session on ``account_id`` — validated
-    against the CACHED snapshot (never a call). ``""`` / None = no account
-    (this PC's own login: exactly Phase 4). The account decides the vendor: a
+    against the CACHED snapshot (never a call). ``""`` / None clears the
+    account: with Iron-Proxy off that is this PC's own login (exactly Phase
+    4); with Iron-Proxy on, the next turn stores the vendor's Default again
+    (:func:`turn_account` — a session never runs "first free, rotating"). To
+    use this PC's own login under Iron-Proxy, pick the account Iron-Proxy
+    adopted for it. The account decides the vendor: a
     Claude Code account serves ``claude-cli``, a Codex account ``codex-cli``;
     another account of the SAME vendor keeps the model, a different vendor's
     gets ``model`` or that vendor's default. Any change cancels a "Resume when
@@ -314,8 +318,8 @@ def turn_account(platform: Any, thread_id: str, setup: dict[str, Any]) -> "tuple
     re-read Iron-Proxy's accounts once and store the session's account).
 
     * Iron-Proxy off and no account: ``(None, "")`` — exactly Phase 4.
-    * no account yet, Iron-Proxy on: the vendor's Default (first usable in
-      order) is STORED on the session and pinned — a session never runs
+    * no account yet, Iron-Proxy on: the vendor's Default (the badged one)
+      is STORED on the session and pinned — a session never runs
       "first free, rotating" (that would land on an account nobody picked);
       no account for the vendor (or a local model / an API key): Phase 4.
     * an account: pinned; the provider is that account's vendor's CLI.
@@ -1229,8 +1233,8 @@ def register(app: FastAPI, d: Any) -> None:
             }.items() if v
         }
         # v1.368.0: the session's ONE account — the one asked for, else the
-        # Default of the vendor its model uses (first usable in Iron-Proxy's
-        # order). Iron-Proxy off / no account for that vendor / a local model
+        # Default of the vendor its model uses (the account the list badges
+        # Default, whatever its status). Iron-Proxy off / no account for that vendor / a local model
         # or an API key: none (exactly Phase 4). Off the loop: the vendor of a
         # keyless API provider is read through provider availability.
         setup = await asyncio.to_thread(_with_initial_account, d.platform, setup, body.account.strip())

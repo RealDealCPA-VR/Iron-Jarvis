@@ -574,16 +574,21 @@ async def _new(app, work, **extra) -> dict:
     return view
 
 
-async def test_a_new_session_starts_on_the_vendors_first_usable_account(app, fake, work):
+async def test_a_new_session_starts_on_the_vendors_default_account(app, fake, work):
+    """v1.368.0 ship: a new session starts on the account the list badges
+    Default, even when it is at its limit — never on another account the user
+    did not pick (the header then says "limit"; the first turn shows the card
+    with Choose account)."""
     await enable(app)
     view = await _new(app, work)
     assert view["account"]["id"] == "c-work" and view["account"]["status"] == "usage"
+    assert view["account"]["default"] is True
     assert view["account_vendor"] == "claude" and view["setup"]["provider"] == "claude-cli"
-    # The first in order is parked: the first USABLE one.
+    # The Default is parked: a new session still starts on it.
     fake.states["c-work"].update({"status": "parked", "parkedUntil": iso(600)})
     await asyncio.to_thread(app.state.platform.iron_proxy.refresh_accounts)
     view = await _new(app, work)
-    assert view["account"]["id"] == "c-spare"
+    assert view["account"]["id"] == "c-work" and view["account"]["status"] == "limit"
     # A Codex model starts on the Codex Default.
     view = await _new(app, work, provider="codex-cli", model="")
     assert view["account"]["id"] == "x-plus" and view["account_vendor"] == "codex"

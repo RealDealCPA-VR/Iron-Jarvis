@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.367.0 (2026-10-21).*
+holds itself to. Current as of v1.368.0 (2026-10-21).*
 
 ---
 
@@ -1894,6 +1894,34 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Each coding session runs on the account you picked (v1.368.0)
+
+Step five of the coding screen: accounts. It needs Iron-Proxy turned on
+(Connections → Iron-Proxy) with your Claude Code or Codex accounts in it. The
+screen that shows this arrives in the next release.
+
+- **One account per session.** A new coding session starts on the account
+  your list marks **Default**. You can pick another one for that session.
+  The session only ever runs on that account: it never moves to another
+  account on its own, not even when this one hits its limit.
+- **Plan and usage come from the vendor.** Each account shows its plan
+  (for example Max or Plus) and how much of its limit is used, as the vendor
+  reports it. If the vendor sends no number, there is no number; nothing is
+  estimated. A Codex account's numbers appear after its first use.
+- **At a limit, the session pauses.** It stops after the last finished step,
+  and the files it already changed stay changed. It tells you when the
+  account resets. Then you choose:
+  - **Resume when ready:** Iron Jarvis waits for the reset and carries on by
+    itself, even after a restart. You can cancel the wait.
+  - **Choose account:** pick another account and carry on with the same
+    conversation. Choosing a Codex account switches the session to Codex's
+    models.
+- **Nothing runs on an account you did not pick.** If Iron-Proxy is off,
+  out of date or not answering, the session says so instead of running on
+  this PC's own sign-in.
+- **The accounts' own numbers stay accurate.** After each reply, Iron Jarvis
+  reports the vendor's usage headers to Iron-Proxy, and nothing else.
 
 ## Coding sessions keep going without you (v1.367.0)
 

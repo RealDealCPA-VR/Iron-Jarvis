@@ -13,8 +13,11 @@ never a network call, the v1.302.0 rule for a list) and words it:
   (+ ``usage: {percent, window, window_mins, resets_at}`` — the window nearest
   its limit, Iron-Proxy's windows only; no percent when the vendor sent none);
 * :func:`find` / :func:`default_for` — one account, or the vendor's Default
-  for a new session (the first USABLE in order; the first in order when none
-  is usable, so the session's first turn shows the limit card);
+  for a new session: the account the list badges **Default** (the first one
+  turned on), even when it is at its limit — the header shows that, and the
+  first turn shows the limit card with Choose account. Starting a new session
+  on a different account than the badge says would be the app choosing an
+  account the user did not (v1.368.0 ship decision; the plan's wording);
 * :func:`vendor_of` — which vendor a session's model belongs to ("" for a
   local model or an API key: such a session has no account, its header names
   the place in words);
@@ -241,10 +244,6 @@ def row_of(profile: Mapping[str, Any], state: Mapping[str, Any] | None, *,
     return row
 
 
-def _usable(row: Mapping[str, Any]) -> bool:
-    return row.get("status") in (READY, USAGE)
-
-
 def vendor_rows(snap: tuple[list[dict[str, Any]], dict[str, Any]], vendor: str, *,
                 include_off: bool = False) -> list[dict[str, Any]]:
     """The vendor's CLI accounts in Iron-Proxy's order; the Default is the
@@ -274,14 +273,14 @@ def find(svc: Any, account_id: str) -> dict[str, Any] | None:
 
 
 def default_for(svc: Any, vendor: str) -> dict[str, Any] | None:
-    """A new session's account: the vendor's first USABLE account in
-    Iron-Proxy's order, else its first one (the session then shows the limit
-    card on its first turn); None when Iron-Proxy has none (or is off)."""
+    """A new session's account: the vendor's **Default** (the row the list
+    badges — the first account turned on in Iron-Proxy's order), whatever its
+    status; None when Iron-Proxy has none (or is off)."""
     snap = snapshot(svc)
     if snap is None or vendor not in VENDORS:
         return None
     rows = vendor_rows(snap, vendor)
-    return next((r for r in rows if _usable(r)), rows[0] if rows else None)
+    return next((r for r in rows if r.get("default")), rows[0] if rows else None)
 
 
 # --------------------------------------------------------------------------- #

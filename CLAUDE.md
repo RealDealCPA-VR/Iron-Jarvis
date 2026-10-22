@@ -3553,6 +3553,51 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A Build session is PINNED to one account; a lost pin is a rotation, so
+  the pin rides a ContextVar that every lease path copies** (v1.368.0, Phase 5
+  of `docs/IJ-HARNESS-PLAN.md`; Iron-Proxy `1b1ea71` vendored — pinned pick,
+  plan/usage; features `pick-pinned`, `plan-usage`). `iron_proxy/pin.py`
+  `AccountPin` is set by `start_build_turn` while the driver task is CREATED
+  (task, pump, lease thread inherit it); every lease hop is
+  `asyncio.to_thread` (copies context) — NEVER `run_in_executor` / a bare
+  thread on a lease path, or the turn falls back to the UNPINNED lease,
+  which rotates. Under a pin `accounts.lease` makes `pick(profileId, pinned=1)`
+  or refuses in Jarvis's own words (never Iron-Proxy's "pick without a
+  profile id" hint), `retry_lease` never takes the next account, the router's
+  `held = pinned or _account_held(provider)` blocks reroute/default/sideways
+  failover in BOTH `complete()`/`stream()`, and the one-shots
+  (`_one_shot_complete`, `_compaction_complete`) are held too
+  (`daemon/app._pin_armed`). A parked Codex session resumes only under the
+  SAME pin. Chat/Auto are untouched (`held` needs a pin AND an explicit
+  provider). `harness/build_accounts.py`: rows from the CACHED snapshot only
+  (`GET /build/accounts` `{claude, codex, iron_proxy}`; status
+  ready|usage|limit|needs_sign_in; usage = the window nearest its limit,
+  vendor numbers only; plan reads throttled 10 min/account, background,
+  never for a signed-out one); a new session starts on the BADGE Default
+  (`default_for`: the first account turned on, whatever its status — never
+  another account the user did not pick); the account decides the vendor
+  (claude-cli / codex-cli; another vendor gets its default model). The wait
+  ("Resume when ready") lives in `setup_json` (no column): the
+  `bg_tasks["build_accounts"]` loop (60 s + wake) re-checks at `resets_at`;
+  `sessions.take_wait` takes it ATOMICALLY right before the continuation's
+  question is written (a Cancel / Choose during the re-check wins —
+  `WaitEnded`); a turn whose pinned lease SUCCEEDED ends the card and the
+  wait (done, error or stopped); archive clears it; shutdown cancels the
+  loop BEFORE cutting turns off. Frames: `account_limit {account,
+  account_name, provider, vendor, kind, resets_at, resumable, turn_id}` before
+  the terminal frame; `done.route.account {id, name, note?}`; events
+  `build.account_limit` / `build.resumed`. Usage: the relay's allow-listed
+  `anthropic-ratelimit-*` headers (`extra["ratelimit_headers"]`) and Codex's
+  snapshot (`rateLimits`) go on `/finished` + `/signal` only when
+  `plan-usage` is advertised, off the loop, never failing a turn. The Claude
+  thinking replay fires only on a 400 naming a signature or an invalid /
+  unmodifiable thinking block. KNOWN GAP: Iron-Proxy has no read-only usage
+  route, so a Codex account's plan/percent arrive with its first real call.
+  Same release: `cli_auth._run_probe` drops a parent Claude Code session's
+  markers from the probe's env (the v1.303.1 leak class). Pins:
+  `tests/test_build_account{s,_turns,_usage,_review}_v1368.py`,
+  `tests/test_ship_v1368.py`.
+
 - **A Build session is a chat ROW that is never a chat; its turn is the
   daemon's; plan mode asks ONCE and nothing grants it** (v1.367.0, Phase 4 of
   `docs/IJ-HARNESS-PLAN.md`). `ChatThreadRecord.surface = "build"`
