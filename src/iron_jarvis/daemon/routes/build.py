@@ -384,6 +384,25 @@ def turn_account(platform: Any, thread_id: str, setup: dict[str, Any]) -> "tuple
     return AccountPin(profile_id=account, ij_provider=provider, title=name), provider
 
 
+def _turn_pair(platform: Any, body: Any, project: Any) -> "tuple[str, str]":
+    """The provider + model a Build turn REALLY runs on (v1.372.0 review):
+    the session's own pick, else its project folder's default, else the
+    configured default — the stream lane's own order (``provider_choice``).
+    A session made from the dashboard names no provider, and a hold on ""
+    binds nothing, so the hold is armed with the resolved pair. "auto" stays
+    "auto" (the user delegated the choice). Never raises."""
+    prov = str(getattr(body, "provider", "") or "").strip()
+    mdl = str(getattr(body, "model", "") or "").strip()
+    if not prov and project is not None:
+        prov = str(getattr(project, "default_provider", "") or "").strip()
+        mdl = mdl or str(getattr(project, "default_model", "") or "").strip()
+    if not prov:
+        cfg = getattr(platform, "config", None)
+        prov = str(getattr(cfg, "default_provider", "") or "").strip()
+        mdl = mdl or str(getattr(cfg, "default_model", "") or "").strip()
+    return prov, mdl
+
+
 def check_account(platform: Any, setup: dict[str, Any]) -> "dict[str, Any] | None":
     """Can the session's account serve RIGHT NOW? A pinned pick through
     Iron-Proxy (the authority: it clears a park whose reset has passed).
@@ -445,6 +464,9 @@ class _ReplyWatch:
         #: v1.368.0: the account-limit card this turn ended on (the
         #: ``account_limit`` frame's payload), kept on the reply line.
         self.account_limit: dict[str, Any] | None = None
+        #: v1.372.0: the helper agents this turn started (``helper`` frames),
+        #: by call id, in the order they started — kept on the reply line.
+        self.helpers: dict[str, dict[str, Any]] = {}
 
     def see(self, event: str, raw: str) -> None:
         try:
@@ -507,6 +529,8 @@ class _ReplyWatch:
                     approved = str(plan or "").strip() or "".join(self.text).strip()
                     self.approved_plans.append(approved)
                     self.approved_text = approved
+        elif event == "helper":
+            self.see_helper(data)
         elif event == "approval_resolved" and data.get("decision") == "conversation":
             tool = str(data.get("tool") or "")
             if tool and tool not in self.granted:
@@ -515,6 +539,60 @@ class _ReplyWatch:
             self.done = data
         elif event == "error":
             self.error = data
+
+    def see_helper(self, data: dict[str, Any]) -> None:
+        """Fold one ``helper`` frame (v1.372.0) into what the reply keeps of
+        that helper: who, what it was asked, how it ended, its report and
+        its finished steps (each step's name, outcome and masked detail —
+        never its raw arguments or output)."""
+        from ...harness.helpers import MAX_SAVED_HELPERS, MAX_SAVED_STEPS, STATES
+
+        hid = str(data.get("id") or "")
+        if not hid:
+            return
+        h = self.helpers.get(hid)
+        if h is None:
+            if len(self.helpers) >= MAX_SAVED_HELPERS:
+                return
+            h = {"id": hid, "work": [], "steps": 0}
+            self.helpers[hid] = h
+        for key, dest in (("agent", "agent"), ("task", "task"), ("session", "session"),
+                          ("result", "result")):
+            val = data.get(key)
+            if isinstance(val, str) and val:
+                h[dest] = val
+        state = data.get("state")
+        if state in STATES:
+            h["state"] = state
+        if isinstance(data.get("steps"), int):
+            h["steps"] = max(int(h.get("steps") or 0), int(data["steps"]))
+        if isinstance(data.get("since"), int) and "startedAt" not in h:
+            h["startedAt"] = data["since"]
+        if isinstance(data.get("ended"), int):
+            h["endedAt"] = data["ended"]
+        step = data.get("step")
+        if isinstance(step, dict) and step.get("status") == "finished":
+            if len(h["work"]) < MAX_SAVED_STEPS:
+                item: dict[str, Any] = {
+                    "name": str(step.get("name") or ""),
+                    "ok": bool(step.get("ok")) if step.get("ok") is not None else None,
+                    "ms": None,
+                }
+                if isinstance(step.get("detail"), dict):
+                    item["detail"] = step["detail"]
+                h["work"].append(item)
+
+    def helper_lines(self, status: str) -> list[dict[str, Any]]:
+        """The helpers as the reply keeps them. A helper the turn left
+        unfinished (stopped, cut off) reads as stopped, never as running."""
+        out = []
+        for h in self.helpers.values():
+            row = {k: v for k, v in h.items() if v not in (None, "")}
+            if row.get("state") not in ("done", "failed", "stopped"):
+                row["state"] = "stopped"
+                row.setdefault("endedAt", int(time.time() * 1000))
+            out.append(row)
+        return out
 
     def lines(self, turn_id: str, status: str) -> list[dict[str, Any]]:
         """The steer notes (as the user's) and the reply line."""
@@ -558,8 +636,10 @@ class _ReplyWatch:
             ) or str(err.get("detail") or "The reply failed.")
             line.update({"content": partial, "error": words, "interrupted": bool(partial)})
         else:
-            if not partial.strip():
+            if not partial.strip() and not self.helpers:
                 return out  # stopped before a word: nothing to keep
+            # (v1.372.0: a turn stopped while its helpers worked keeps a line
+            # for them — what they did is part of the session.)
             line.update({"content": partial, "interrupted": True})
             if status == "interrupted":
                 line["error"] = _durable.INTERRUPTED_DETAIL
@@ -569,6 +649,9 @@ class _ReplyWatch:
             line["accountLimit"] = self.account_limit
         if self.steps:
             line["steps"] = self.steps
+        if self.helpers:
+            # v1.372.0: the helper agents this turn started.
+            line["helpers"] = self.helper_lines(status)
         line["timing"] = {
             "startedAt": int(self.started_at * 1000),
             "firstTokenAt": int(self.first_token_at * 1000) if self.first_token_at else None,
@@ -982,6 +1065,12 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         from ...harness.preview import reset_preview, set_preview
 
         preview_token = set_preview(preview_url)
+        # v1.372.0: the session's MODEL is held for the turn and every helper
+        # it starts, pinned account or not (``providers.hold``): nothing moves
+        # the turn to another provider on its own.
+        from ...providers.hold import reset_hold, set_hold
+
+        hold_token = set_hold(*_turn_pair(platform, chat_body, project))
         try:
             try:
                 gen = await stream_chat_turn(
@@ -1021,6 +1110,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
             ))
         finally:
+            reset_hold(hold_token)
             reset_preview(preview_token)
             if token is not None:
                 reset_pin(token)

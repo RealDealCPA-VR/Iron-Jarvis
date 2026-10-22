@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from ..core import procs
 from .base import Sandbox, SandboxResult
@@ -338,8 +339,12 @@ class NativeSandbox(Sandbox):
         return True
 
     def run(
-        self, command: str, *, cwd: Path, timeout: float | None = None
+        self, command: str, *, cwd: Path, timeout: float | None = None,
+        on_spawn: Any = None, cancelled: Any = None,
     ) -> SandboxResult:
+        """``on_spawn`` / ``cancelled`` (v1.372.0): ``procs.run``'s seams,
+        passed by the shell tool so a STOPPED call kills its command's tree
+        instead of letting it run to its timeout. Omitted: unchanged."""
         limit = timeout if timeout is not None else self.policy.timeout_s
         # NOT child_env (review): a shell line pipes and redirects, and
         # PYTHONIOENCODING=utf-8 would make `type x.csv | python ...` fail on
@@ -371,6 +376,8 @@ class NativeSandbox(Sandbox):
             timeout=limit,
             no_window=False,
             keep_windows=True,
+            **({"on_spawn": on_spawn} if on_spawn is not None else {}),
+            **({"cancelled": cancelled} if cancelled is not None else {}),
         )
         if res.timed_out:
             return SandboxResult(

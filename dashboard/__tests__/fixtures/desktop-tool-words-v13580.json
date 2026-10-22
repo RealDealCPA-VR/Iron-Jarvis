@@ -378,6 +378,18 @@
       "kind": "table",
       "card": "take a screenshot of a page on your computer or network",
       "desktop": "take a screenshot of a page on your computer or network"
+    },
+    {
+      "tool": "delegate",
+      "kind": "table",
+      "card": "hand part of the work to a helper agent",
+      "desktop": "hand part of the work to a helper agent"
+    },
+    {
+      "tool": "spawn_agent",
+      "kind": "table",
+      "card": "start a helper agent",
+      "desktop": "start a helper agent"
     }
   ]
 }

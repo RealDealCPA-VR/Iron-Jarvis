@@ -87,6 +87,9 @@ LINE_KEYS: tuple[str, ...] = (
     # when ready" / "Choose account" — the screen hides it, like the chat's
     # hidden Continue turn), and the account-limit card a reply ended on.
     "continuation", "accountLimit",
+    # v1.372.0 (part 2, Phase 1): the helper agents a reply's turn started
+    # (``routes/build._ReplyWatch.helper_lines``).
+    "helpers",
 )
 
 

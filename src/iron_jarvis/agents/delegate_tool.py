@@ -245,11 +245,17 @@ class DelegateTool(Tool):
             inherited_workspace_root,
         )
         from . import team as _team
+        from ..harness import helpers as _helpers
         from .runtime import AgentRuntime
         from .types import get_agent_definition
 
         task = args.get("task") or ""
         raw_type = str(args.get("agent_type") or "builder").strip()
+        # AN IJ HARNESS TURN'S HELPER (v1.372.0): the turn armed what its
+        # helper inherits — the session's model, account, folder, Local only,
+        # trust and approval posture (``harness/helpers``). None for every
+        # other caller, whose behaviour below is unchanged.
+        _hp = _helpers.parent_for(ctx)
 
         # CAPABILITY ROSTER (v1.139.0): resolve the target through the roster
         # first — it validates builtin names AND surfaces dynamic
@@ -267,6 +273,11 @@ class DelegateTool(Tool):
             entry = None
 
         _low = raw_type.lower()
+        # A harness turn's helper never leaves this PC (another computer is
+        # another provider): refused in words before anything is resolved.
+        _remote_refusal = _helpers.target_refusal(_hp, entry=entry, raw=raw_type)
+        if _remote_refusal:
+            return ToolResult(ok=False, output="", error=_remote_refusal)
         if entry is None and not _low.startswith("remote:"):
             # THE DAY OFF / THE ALLOWANCE (v1.295.0): a paused agent is
             # ``healthy=False`` on the roster, so ``resolve_target`` answers
@@ -360,6 +371,14 @@ class DelegateTool(Tool):
             reason = allowance.refusal_for(rec, self.platform.engine)
             if reason:
                 return ToolResult(ok=False, output="", error=reason)
+            # A harness turn's helper runs on the SESSION's model: a custom
+            # agent pinned to another one is refused, never run on its pin.
+            _pin_refusal = _helpers.target_refusal(
+                _hp, entry=entry, record=rec,
+                manager=getattr(self.platform, "providers", None),
+            )
+            if _pin_refusal:
+                return ToolResult(ok=False, output="", error=_pin_refusal)
             dyn_provider = (rec.provider or None) if rec is not None else None
             dyn_model = (rec.model or None) if rec is not None else None
             agent_type = definition.type
@@ -442,6 +461,25 @@ class DelegateTool(Tool):
             approval_mode = approval_mode or (rec.approval_mode or "")
             max_steps = rec.max_steps or None
         target_name = entry.name if entry is not None else agent_type.value
+        # AN IJ HARNESS TURN'S HELPER (v1.372.0) has no parent ROW (its turn
+        # runs under ``build:<id>``): everything above read None and would
+        # have handed it the configured default model in a scratch folder.
+        # It inherits from the turn instead — the SESSION's provider + model
+        # (never a pin of its own: refused above), folder, project, the
+        # conversation's grants + posture (``yolo`` is normalised by
+        # ``create_session``), trust, Local only, and the ATTENDED asking
+        # origin so its asks reach the Build screen.
+        _helper_options = None
+        if _hp is not None:
+            provider, model = _hp.provider or provider, _hp.model or model
+            project_id = _hp.project_id or project_id
+            workspace_root = _hp.folder or workspace_root
+            allow_tools, approval_mode = _hp.grants()
+            if rec is not None:
+                approval_mode = approval_mode or (rec.approval_mode or "")
+            _trust, _trust_reason = _hp.trust()
+            origin = _helpers.HELPER_ORIGIN
+            _helper_options = _hp.options()
 
         # BOUNDED FAN-OUT (v1.193.0). A coordinator emitting 8 delegate calls in
         # ONE assistant turn used to start 8 concurrent child runs — these calls
@@ -449,10 +487,12 @@ class DelegateTool(Tool):
         # governor. Routing them through ``spawn_managed`` would DEADLOCK (the
         # parent is blocked awaiting the child while holding a governed slot);
         # ``child_slot`` documents the cycle-free alternative in full.
+        # v1.372.0: a harness turn's helpers also wait for one of the
+        # session's 3 helper slots (``helpers.helper_slot``; no-op otherwise).
         async with child_slot(
             self.platform.config,
             child_fanout_key(ctx.agent_run_id, ctx.session_id),
-        ):
+        ), _helpers.helper_slot(_hp):
             child_session = await orch.create_session(
                 task,
                 agent_type,
@@ -474,6 +514,9 @@ class DelegateTool(Tool):
                 trust_reason=_trust_reason,
                 # A mission's teammate may ask the user (v1.309.0).
                 origin=origin,
+                # v1.372.0: a harness turn's local-only helper (passed only
+                # then — every other call keeps its exact kwargs).
+                **({"options": _helper_options} if _helper_options else {}),
             )
             await publish_delegation_started(
                 self.platform,
@@ -483,6 +526,8 @@ class DelegateTool(Tool):
                 target=target_name,
                 task=task,
             )
+            # v1.372.0: the harness row starts following the helper.
+            _helpers.child_started(_hp, self.platform, child_session.id, target_name, task)
 
             # The child must ALWAYS settle (v1.167.0). A bare await left the child
             # session ACTIVE forever when the parent was cancelled mid-delegation
@@ -500,13 +545,22 @@ class DelegateTool(Tool):
                     # this one teammate can cancel exactly it
                     # (``team.stop_child``); awaiting it keeps the old
                     # semantics, and a cancel of THIS run still reaches it.
-                    child_task = asyncio.ensure_future(
-                        AgentRuntime(self.platform).run(
-                            child_session,
-                            definition or get_agent_definition(child_session.agent_type),
-                            parent_id=ctx.agent_run_id,
+                    # v1.372.0: a harness helper's task is created with the
+                    # turn's account pin armed (``helpers.pinned``).
+                    # v1.372.0 review: and it works with the SESSION's tools
+                    # (``helpers.helper_definition``; unchanged off a turn).
+                    with _helpers.pinned(_hp):
+                        child_task = asyncio.ensure_future(
+                            AgentRuntime(self.platform).run(
+                                child_session,
+                                _helpers.helper_definition(
+                                    _hp,
+                                    definition or get_agent_definition(child_session.agent_type),
+                                    custom=rec is not None,
+                                ),
+                                parent_id=ctx.agent_run_id,
+                            )
                         )
-                    )
                     _team.bind_task(child_session.id, child_task)
                     run = await child_task
             except asyncio.CancelledError:

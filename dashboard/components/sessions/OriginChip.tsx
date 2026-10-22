@@ -48,6 +48,8 @@ export function originKind(origin: string): string {
 const EXACT_WORDS: Record<string, string> = {
   "job:mission": "Objective",
   "job:mission-member": "Objective teammate",
+  // v1.372.0: a helper agent a Build session started (harness/helpers).
+  "job:build-helper": "Build helper",
   "job:agents": "Agents page",
   self_dev: "Self-development",
   "memory-review": "Memory review",

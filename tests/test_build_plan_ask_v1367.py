@@ -57,9 +57,13 @@ from tests.test_chat_turn_stop_v1241 import _asgi_post
 PLAN_TOOLS_CLAUDE = [
     "Read", "Glob", "Grep", "LS", "BashOutput", "TodoWrite", "WebFetch", "WebSearch",
     "AskUserQuestion", "ExitPlanMode",
+    # v1.372.0: a skill is text to read, so plan mode loads skills too (Skill
+    # is Claude Code's loader; skill_search passes through) - moved on purpose.
+    "Skill",
     # v1.371.0: looking at the dev server changes nothing on this PC, so plan
     # mode has it too (it passes through every dialect) - moved on purpose.
     "page_screenshot",
+    "skill_search",
 ]
 EDITORS = {"Write", "Edit", "MultiEdit", "Bash", "TaskStop", "NotebookEdit", "apply_patch", "process_write"}
 

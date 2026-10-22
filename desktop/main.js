@@ -2808,6 +2808,8 @@ const TOOL_WORDS = {
   notebook_edit: "change a notebook",
   exit_plan_mode: "start working on this plan",
   page_screenshot: "take a screenshot of a page on your computer or network",
+  delegate: "hand part of the work to a helper agent",
+  spawn_agent: "start a helper agent",
 };
 
 //: The batch forms ("rename or move 4 files") for the asks that come in
@@ -2931,13 +2933,24 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
     const summary = task ? `${plainAskSummary(ask)} for “${task}”` : plainAskSummary(ask);
     const sessionId = !isChat && typeof ask.session_id === "string" ? ask.session_id : "";
     const threadId = isChat && typeof ask.thread_id === "string" ? ask.thread_id : "";
+    // v1.372.0: a Build session's HELPER agent names the session it works
+    // for (`build_session`); its click opens Build on THAT session, where
+    // the helper's row carries this same question — like the bell's row.
+    const helperOf =
+      !isChat && typeof ask.build_session === "string" ? ask.build_session.trim() : "";
     // v1.357.0 (G76): the canon's words — the click opens the RUN that is
     // waiting (the bell's "Open run"), never the retired "job".
-    const where = isBuild ? "the session" : isChat ? "the chat" : "the run";
+    const where = isBuild || helperOf ? "the session" : isChat ? "the chat" : "the run";
     // A chat parked on an app's question names no tool: say what to do, not
     // "use a tool".
     const what = isChat && !hasTool ? "" : `${summary} — `;
-    const target = isBuild ? { chat: true, build: true, threadId } : isChat ? { chat: true, threadId } : {};
+    const target = isBuild
+      ? { chat: true, build: true, threadId }
+      : isChat
+        ? { chat: true, threadId }
+        : helperOf
+          ? { href: `/terminals?session=${encodeURIComponent(helperOf)}` }
+          : {};
     if (!prev) {
       if (windowOpen) {
         rec.sent = 1; // the bell in front of the user has it

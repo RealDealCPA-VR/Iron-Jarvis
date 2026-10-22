@@ -143,6 +143,10 @@ def test_the_claude_dialect_is_claude_codes_names_and_arguments():
 
 def test_the_gpt_dialect_is_codexs_names_and_arguments():
     params = _inventory_params("codex")
+    # v1.372.0: Codex's helper tool lives in the multi_agent_v1 namespace.
+    for name in list(params):
+        if name.startswith("multi_agent_v1."):
+            params.setdefault(name.split(".", 1)[1], params[name])
     for tool in D.GPT.tools:
         assert tool.name in params, tool.name
         if tool.name == "apply_patch":
@@ -342,7 +346,11 @@ def test_a_dialect_hides_the_real_names_its_tools_cover():
     assert "Read" in names and "Bash" in names and "TodoWrite" in names
     assert "read_file" not in passthrough and "shell" not in passthrough
     # v1.371.0: page_screenshot has no Claude Code twin, so it passes through.
-    assert passthrough == ["apply_patch", "process_write", "page_screenshot"]
+    # v1.372.0: nor do list_agents and skill_search (Agent and Skill cover
+    # delegate / spawn_agent / skill_load).
+    assert passthrough == [
+        "apply_patch", "process_write", "page_screenshot", "list_agents", "skill_search",
+    ]
 
 
 def test_a_dialect_tool_is_offered_only_when_its_target_is_armed():

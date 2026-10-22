@@ -553,6 +553,14 @@ def _vision_route_kwargs(router: Any, config: Any) -> "dict[str, Any]":
     Same defensive shape as :mod:`.batch`: resolution failures fall back to the
     router's own default route, never to an exception.
     """
+    # A BUILD TURN'S HOLD (v1.372.0 review): OCR inside a Build session (a
+    # picture or scanned PDF read with read_file, a scanned attachment) is
+    # read by the session's model — never the vision role's or the default.
+    from ..providers.hold import current_hold
+
+    hold = current_hold()
+    if hold is not None and hold.provider and hold.provider != "auto":
+        return {"provider": hold.provider, "model": hold.model or None}
     if config is None:
         return {}
     try:
@@ -598,7 +606,17 @@ async def _transcribe(
     guard, or a first-call failure). A failure AFTER some pages succeeded keeps
     what was transcribed; the caller's note discloses the page count."""
     from ..providers.adapters.base import LLMMessage
+    from ..providers.hold import held_model_cannot_see
 
+    if held_model_cannot_see(getattr(router, "manager", None)):
+        # v1.372.0 review: a Build session's model is never swapped for one
+        # that can see; a model without vision must not "read" a scan it was
+        # never shown. What this PC read itself is kept by the caller.
+        return [], (
+            "scanned document — the model this Build session uses cannot read "
+            "pictures, so the scan was not read by a model; choose a model that "
+            "can (Claude or Codex) for the session"
+        )
     pages: list[str] = []
     labels = list(page_numbers or range(1, len(blobs) + 1))
     for i, blob in zip(labels, blobs):

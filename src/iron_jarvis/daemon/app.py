@@ -152,12 +152,19 @@ async def _complete_with_retry(adapter, *, system, messages, tools, attempts: in
 
 
 def _pin_armed() -> bool:
-    """Is a Build turn's account pin armed for this call (``iron_proxy.pin``,
-    v1.368.0)? Never raises."""
+    """Is a Build turn holding this call — to its ONE account
+    (``iron_proxy.pin``, v1.368.0) or to its own model (``providers.hold``,
+    v1.372.0: a session on this PC's own login, a local model or an API key
+    has no account pin, and its one-shots must not move either)? Never
+    raises."""
     try:
         from ..iron_proxy.pin import current
+        from ..providers.hold import current_hold
 
-        return current() is not None
+        hold = current_hold()
+        # A session on Auto delegated the choice: its hold holds nothing
+        # (the router's ``_session_held`` says the same).
+        return current() is not None or (hold is not None and hold.provider != "auto")
     except Exception:  # noqa: BLE001 — a reader never breaks a call
         return False
 
@@ -2707,7 +2714,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
         including after a cross-provider failover.
         """
         from ..providers.adapters.mock import MockLLMAdapter
+        from ..providers.hold import current_hold
 
+        # A Build turn's hold BINDS (v1.372.0 review): a helper's run asks for
+        # its compaction with no provider, and the summary of its transcript
+        # is written by the session's model, never the configured default.
+        _hold = current_hold()
+        if (
+            not (provider or "").strip()
+            and _hold is not None and _hold.provider and _hold.provider != "auto"
+        ):
+            provider, model = _hold.provider, (model or _hold.model)
         prov = (provider or "").strip() or platform.config.default_provider
         mdl = (model or "").strip() or platform.config.default_model
         try:

@@ -72,6 +72,8 @@ from ...core.trust import (
 from .. import chat_turn as _chat_turn
 from .. import durable_turns as _durable
 from ...settings.tools import ALWAYS_CARD_TOOLS
+from ...harness.helpers import STOPPED_RESULT as _HELPER_STOPPED
+from ...harness.helpers import asking as _helper_asking
 from ..chat_turn import (
     preference_block,
     remembered_from_result,
@@ -102,6 +104,8 @@ from ..chat_turn import (
     _batchable_call,
     _fence_tool_output,
     _run_tool_round,
+    _invoke_helper,
+    _HELPER_TOOLS,
     _trust_receipt,
     _DOC_WRITING_TOOLS,
     _reports_document,  # noqa: F401 — re-exported (the lane reads reported_document_paths)
@@ -1386,6 +1390,8 @@ def register(app: FastAPI, d) -> None:
             # an unreadable chain is "no mission", never a broken listing.
             from ...agents.team import MISSION_ORIGIN, mission_root
             from ...core.models import Session
+            from ...harness.helpers import BUILD_SESSION_OPTION as _HELPER_BUILD_OPTION
+            from ...harness.helpers import HELPER_ORIGIN as _HELPER_ORIGIN
 
             out: dict[str, tuple[str | None, str | None, str | None, str | None]] = {}
             for sid in session_ids:
@@ -1397,6 +1403,7 @@ def register(app: FastAPI, d) -> None:
                         own_project = getattr(row, "project_id", None) if row else None
                         task_line = _ask_task_line(getattr(row, "task", None) if row else None)
                         origin = (str(getattr(row, "origin", "") or "").strip() or None) if row else None
+                        options_raw = getattr(row, "options_json", None) if row else None
                     root = mission_root(d.platform.engine, sid)
                     # Only a coordinator-origin ROOT is a mission: a plain job
                     # is its own root and never invents one.
@@ -1408,10 +1415,22 @@ def register(app: FastAPI, d) -> None:
                         getattr(root, "project_id", None) if is_mission else None
                     )
                     out[sid] = (mission_id, project_id or None, task_line, origin)
+                    # v1.372.0 review: a Build session's HELPER names the
+                    # session it belongs to (its run option), so the bell
+                    # and the desktop open Build on it. Only for that origin.
+                    if origin == _HELPER_ORIGIN:
+                        try:
+                            _opts = json.loads(options_raw or "{}")
+                        except (TypeError, ValueError):
+                            _opts = {}
+                        _bs = _opts.get(_HELPER_BUILD_OPTION) if isinstance(_opts, dict) else None
+                        if isinstance(_bs, str) and _bs.strip():
+                            builds[sid] = _bs.strip()
                 except Exception:  # noqa: BLE001
                     out[sid] = (None, None, None, None)
             return out
 
+        builds: dict[str, str] = {}
         places = await asyncio.to_thread(_places, {row["session_id"] for row in listed})
         for row in listed:
             mission_id, project_id, task_line, origin = places.get(
@@ -1421,6 +1440,10 @@ def register(app: FastAPI, d) -> None:
             row["project_id"] = project_id
             row["task"] = task_line
             row["origin"] = origin
+            if row["session_id"] in builds:
+                # Additive, ONLY on a Build helper's row (every other row's
+                # keys are unchanged).
+                row["build_session"] = builds[row["session_id"]]
         # v1.351.0 (G05): the chats waiting on the user with nobody watching,
         # after the agent asks (their own shape — see the docstring).
         return {"approvals": listed + chat_rows}
@@ -4182,7 +4205,29 @@ async def chat_stream(
     # v1.327.0: the chat list's "waiting" reads this turn's open app asks
     # live; an approval card parks it below (`thread_turn.park`).
     if thread_turn is not None:
-        thread_turn.watch(lambda: _pack_asks_open(_ti))
+        # v1.372.0: and a HELPER of this harness turn parked on the user (its
+        # own ask, answered on its row) — the session list says "waiting".
+        thread_turn.watch(
+            lambda: _pack_asks_open(_ti) or (harness is not None and _helper_asking(_tool_session))
+        )
+    # HELPER AGENTS (v1.372.0): what a harness turn's helper inherits — the
+    # session, its folder, Local only and the turn's ACCOUNT PIN, read here in
+    # the turn's own context. The rest (route, posture, grants, trust) is
+    # read at call time. None off a harness turn. MIRROR NOTE (lock-step):
+    # chat_turn.run_chat_turn builds the same base at the same seam.
+    _helper_base = (
+        _chat_turn.helper_base(
+            harness, tool_session=_tool_session, tool_ws=tool_ws,
+            in_project_folder=in_project_folder,
+            project_id=(pid if resolved_proj is not None else None),
+        )
+        if ctx is not None else None
+    )
+
+    def _helper_emit(event: str, data: dict[str, Any]) -> None:
+        # A helper's row frames ride the turn's side channel: yielded while
+        # its call runs, kept in the turn's log (a rejoin replays them).
+        _ti.side.put_nowait((event, data))
 
     # ------------------------------------------------------------------ #
     # STREAM — the round + tool loop, emitting SSE frames as it goes.
@@ -5072,42 +5117,84 @@ async def chat_stream(
                             if body.mcp_cards
                             else contextlib.nullcontext()
                         ):
-                            result = await d.platform.registry.invoke(
-                                tc.name,
-                                # ``shell`` isolates under low trust (v1.298.0)
-                                # — lock-step with chat_turn.
-                                _low_trust_args(_trust_state, tc.name, tc.arguments),
-                                # v1.366.0: a translated call's ctx carries the
-                                # model's name for the ledger (lock-step).
-                                _harness.ctx_for(ctx, tc) if _harness is not None else ctx,
-                                d.platform.permissions,
-                                overrides,
-                                session_allow=(armed_grant | _p["grant_extra"]),
-                                allowed_names=_turn_tools,
-                                # v1.246.0 — lock-step with chat_turn.
-                                deadline_s=chat_tool_deadline(d.platform),
-                                # STANDING GRANTS (v1.299.0) — lock-step with
-                                # chat_turn: the store + scopes, only when a
-                                # store exists, so the registry's gate lifts a
-                                # covered ask and records the grant id.
-                                **_grant_invoke_kwargs(d.platform, _grant_scopes),
-                                **(
-                                    {"deny_reason": _deny_reason}
-                                    if _deny_reason
-                                    else {}
-                                ),
-                                # v1.298.0: the low-trust refusal names itself
-                                # on the ledger; a human refusal keeps the
-                                # registry's default label (nothing passed).
-                                **(
-                                    {"deny_label": _deny_label}
-                                    if _deny_reason and _deny_label
-                                    else {}
-                                ),
+                            if (
+                                _helper_base is not None
+                                and tc.name in _HELPER_TOOLS
+                                and not _deny_reason
+                            ):
+                                # HELPER AGENTS (v1.372.0): the helper inherits
+                                # the turn (`harness/helpers`), draws ONE row
+                                # (its `helper` frames, on the side channel)
+                                # and is STOPPED with the turn (raced against
+                                # the turn's Stop). MIRROR NOTE (lock-step):
+                                # chat_turn.run_chat_turn makes the same call.
+                                result, _stopped = await _invoke_helper(
+                                    _chat_turn.helper_parent_now(
+                                        _helper_base, d.platform,
+                                        provider=route_provider or provider_choice,
+                                        model=route_model or model_choice,
+                                        approval_mode=approval_mode,
+                                        grants={
+                                            *(getattr(body, "granted_tools", None) or ()),
+                                            *card_grants,
+                                        },
+                                        overrides=overrides, trust_state=_trust_state,
+                                        # v1.372.0 review: the helper works
+                                        # with THIS turn's tools (lock-step:
+                                        # the POST lane passes its `armed`).
+                                        tools=_turn_tools,
+                                    ),
+                                    tc.id, tc.name, tc.arguments,
+                                    lambda: _registry_invoke(tc, _p, _low_kw, _deny_reason, _deny_label),
+                                    emit=_helper_emit, handle=handle,
+                                )
+                                if _stopped:
+                                    return None, _HELPER_STOPPED
+                                return result, ""
+                            result = await _registry_invoke(
+                                tc, _p, _low_kw, _deny_reason, _deny_label,
                             )
                         return result, ""
                     except Exception as exc:  # noqa: BLE001
                         return None, f"{type(exc).__name__}: {exc}"
+
+                def _registry_invoke(tc, _p, _low_kw, _deny_reason, _deny_label):
+                    """The call through the registry (an awaitable) — its own
+                    function since v1.372.0 so a helper call can be armed
+                    around it. MIRROR NOTE (lock-step): chat_turn."""
+                    return d.platform.registry.invoke(
+                        tc.name,
+                        # ``shell`` isolates under low trust (v1.298.0)
+                        # — lock-step with chat_turn.
+                        _low_trust_args(_trust_state, tc.name, tc.arguments),
+                        # v1.366.0: a translated call's ctx carries the
+                        # model's name for the ledger (lock-step).
+                        _harness.ctx_for(ctx, tc) if _harness is not None else ctx,
+                        d.platform.permissions,
+                        overrides,
+                        session_allow=(armed_grant | _p["grant_extra"]),
+                        allowed_names=_turn_tools,
+                        # v1.246.0 — lock-step with chat_turn.
+                        deadline_s=chat_tool_deadline(d.platform),
+                        # STANDING GRANTS (v1.299.0) — lock-step with
+                        # chat_turn: the store + scopes, only when a
+                        # store exists, so the registry's gate lifts a
+                        # covered ask and records the grant id.
+                        **_grant_invoke_kwargs(d.platform, _grant_scopes),
+                        **(
+                            {"deny_reason": _deny_reason}
+                            if _deny_reason
+                            else {}
+                        ),
+                        # v1.298.0: the low-trust refusal names itself
+                        # on the ledger; a human refusal keeps the
+                        # registry's default label (nothing passed).
+                        **(
+                            {"deny_label": _deny_label}
+                            if _deny_reason and _deny_label
+                            else {}
+                        ),
+                    )
 
                 async def _settle(i: int, outcome: tuple[Any, str]) -> None:
                     tc = calls[i]
@@ -5146,7 +5233,15 @@ async def chat_stream(
                 async with contextlib.aclosing(
                     # v1.324.0: the turn's side queue — a pack's frames are
                     # yielded WHILE its tool runs, drained before it settles.
-                    _run_tool_round(_batched, _invoke, _settle, side=_ti.side)
+                    _run_tool_round(
+                        _batched, _invoke, _settle, side=_ti.side,
+                        # v1.372.0: a harness turn's helpers run together
+                        # (lock-step with chat_turn's `together=`).
+                        together=_chat_turn.helper_together(
+                            _helper_base is not None, calls,
+                            [bool(_p["refused"] or _p["card_deny"]) for _p in _plans],
+                        ),
+                    )
                 ) as _round_events:
                     async for _kind, _i in _round_events:
                         if _kind == "side":

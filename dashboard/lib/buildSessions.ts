@@ -163,6 +163,9 @@ export type BuildMessage = PaneMessage & {
   continuation?: boolean;
   /** Phase 5: the account-limit card the reply ended on (raw). */
   accountLimit?: unknown;
+  /** v1.372.0: the helper agents the reply's turn started (raw; read by
+   *  lib/buildHelpers decodeSavedHelpers). */
+  helpers?: unknown;
 };
 
 /** The keys a line may carry (the daemon's LINE_KEYS). Anything else dies. */
@@ -195,6 +198,8 @@ const LINE_KEYS = [
   // Phase 5 (v1.368.0): a continuation question, and a reply's limit card.
   "continuation",
   "accountLimit",
+  // v1.372.0 (part 2, Phase 1): the helper agents a reply's turn started.
+  "helpers",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {

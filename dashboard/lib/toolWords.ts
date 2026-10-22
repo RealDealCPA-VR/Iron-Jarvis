@@ -92,6 +92,11 @@ const WORDS: Record<string, string> = {
   // v1.371.0: a screenshot of a local page other than the one the Browser
   // pane shows asks first (harness/page_shot).
   page_screenshot: "take a screenshot of a page on your computer or network",
+  // v1.372.0 (IJ harness part 2, Phase 1): a Build session starts helper
+  // agents (harness/helpers); both doors are ask-tier, so their card says
+  // what starting one does.
+  delegate: "hand part of the work to a helper agent",
+  spawn_agent: "start a helper agent",
 };
 
 // The 14 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

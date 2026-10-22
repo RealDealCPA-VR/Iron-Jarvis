@@ -3569,6 +3569,101 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A Build session can start HELPERS, and a Build turn is HELD on its
+  model, pinned account or not** (v1.372.0, IJ harness part 2 Phase 1 —
+  `docs/IJ-HARNESS-PLAN-2.md`; the user's decision 4: "at most 3 at a time,
+  always on the session's own account and model (never another provider),
+  each with the session's folder and approval setting"). ARMING:
+  `harness/mode.CODING_TOOLS` gains `delegate`, `spawn_agent`, `list_agents`,
+  `skill_search`, `skill_load`; plan mode only the two skill tools (a helper
+  can change files). The dialects map Claude Code's `Agent`/`Task`/`Skill`
+  and Codex's `spawn_agent` onto them; a `Skill` naming a FOLDER skill
+  (`.ironjarvis/harness/skills/<name>`) reads its SKILL.md
+  (`HarnessTurn._folder_skill`). `HELPER_DOORS` (`delegate`, `spawn_agent`)
+  are armed GRANTED in the STREAM lane in every posture — the live check
+  parked a "search with two helpers" turn on a card for the first helper;
+  starting a helper changes nothing by itself and Claude Code / Codex never
+  ask — while the user's permission table can still deny them and a folder
+  rule "ask" keeps a card; the POST lane keeps the plain tier (it can show no
+  card, so a helper there could wait forever on its own ask). INHERITANCE
+  (`harness/helpers.py`): a `HelperParent` ContextVar is armed inside the ONE
+  tool call that starts a helper (never across a `yield`); `delegate` /
+  `spawn_agent` read it (`parent_for`) instead of the parent's Session row (a
+  harness turn has none): the SERVED provider+model, the folder, Local only,
+  low trust, the posture (`yolo` → `approve_for_me` at create), the
+  conversation grants (none under `always_ask`; under Local only never a
+  reaching-out tool), and the TURN'S OWN TOOLS (`helper_definition`: the
+  builder gets the turn's set, read-only types its read-only part, a custom
+  agent the part of its roster the turn holds; folder rules ride along; the
+  runtime arms nothing on top — `arm_for_task` is skipped for
+  `HELPER_ORIGIN`). A custom agent pinned to another model and a `remote:`
+  agent are REFUSED in words (`target_refusal`). Origin `job:build-helper`
+  (attended + asking): a helper's ask waits for the user under its own
+  session id, drawn on its row (`ask` on the `helper` frame) and answered
+  through `POST /chat/approvals/{id}`; the pending listing names its
+  `build_session` and the bell / desktop open `/terminals?session=<id>`.
+  CAP: `MAX_HELPERS` (3) per session; a 4th WAITS (`helper_slot`, row
+  "waiting to start"), never refused. LIFETIME: a helper is ONE tool call —
+  the call awaits its run — and the lane races helper calls against Stop
+  (`until_stopped`); consecutive helper calls in one message run together
+  (`_run_tool_round(together=)`); archive / delete / shutdown end the
+  session's programs, whose end hook stops any helper still registered; a
+  cancelled `shell` call kills its command tree at once. ROWS: `HelperCall`
+  follows the helper's stream and pending asks onto the turn's side channel
+  as `helper` frames (kept in the turn log, so a rejoin replays them); the
+  reply line saves the settled `helpers`; the screen is
+  `components/harness/HarnessHelpers.tsx` (the chat's `AgentRunRow` /
+  `WorkLine`, no new styles) + `lib/buildHelpers.ts`. SKILLS: `skill_search`
+  / `skill_load` are READONLY; `skill_load` returns
+  `framework.guarded_instructions` (a skill that did not come from the user
+  is scanned, off the loop). THE HOLD: `providers/hold.py` `ProviderHold`
+  (ContextVar) is set by `start_build_turn` beside the account pin and the
+  preview address (reset in reverse) with the pair the turn REALLY runs on
+  (`routes/build._turn_pair`: the session's pick, else the project folder's
+  default, else the configured default — the stream lane's own order; the
+  dashboard's New session posts only the folder, and a hold on "" binds
+  nothing), and again by `helpers.pinned` around a helper's task. It BINDS,
+  not only freezes (`ModelRouter._bind_to_hold`, first thing in BOTH
+  `complete()` and `stream()`): a call naming no provider — or "auto" — is
+  served by the session's pair, a call naming another provider
+  raises `HeldProviderRefused` (no_failover, one sentence) — an ALIAS that
+  resolves to the same adapter (keyless `anthropic` → `claude-cli`) passes
+  (`_same_provider`). `_session_held(auto_selected)` then keeps the
+  prompted-tools wrap (same model), skips `_enforce_capabilities`, and
+  raises the provider's own error before the default fallback (A) and
+  sideways failover (B) — but AFTER the v1.162.0/v1.228.0 local refusal, so
+  a held local model that never answered still gets "isn't connected" and
+  the banner. A hold on Auto (or on the default, "") binds and holds
+  nothing. Before this a Build session on this PC's own login, a local model
+  or an API key could fall back to the default provider, and a picture could
+  be rerouted to a vision model. Every model call a turn or helper makes
+  follows the hold: `view_image` and OCR (`documents/ocr._vision_route_kwargs`)
+  ask the session's model, never the vision role, and both refuse honestly
+  when that model cannot see (`hold.held_model_cannot_see`) — a model that
+  was never shown the picture must not describe it; a helper's compaction
+  (`app._compaction_complete` with no provider) is written by the session's
+  model; the decomposed lane's plan/judge/synthesize ROLES are not used
+  under a hold (`role_cfg`); `app._pin_armed` (the one-shot failover chain)
+  answers True for a non-Auto hold. A helper is finalized INSIDE the turn,
+  so the EVENT BUS drops the hold and the account pin in its handlers'
+  context copy (`core/events._drop_build_turn_scope`) — the skill-distill
+  sweep a `session.completed` handler hops onto the loop had inherited the
+  session's account and model. Under `always_ask` a helper gets an "ask"
+  rule for every `STRICT_ASK_TOOLS` tool the turn holds (`helper_parent_now`):
+  the runtime cards only the engine's ask tier, so with the doors granted a
+  helper's writes and web calls ran uncarded. `spawn_agent` (Claude's
+  `run_in_background`) refuses a custom agent pinned to another model, as
+  `delegate` does; `target_refusal(manager=)` resolves an ALIAS first (a
+  keyless `anthropic` agent on a `claude-cli` session is the same model).
+  Same release: `test_build_sessions_v1367`'s grouping test created one
+  session and appended to another inside one 15.6 ms clock tick and failed 5
+  runs in 6 on an idle PC (at v1.371.0 too) — it waits past a tick now. The bench's
+  Jarvis runner answers a helper's own ask "once", like any card. Pins:
+  `tests/test_harness_helpers_v1372.py`,
+  `tests/test_harness_helpers_review_v1372.py`,
+  `tests/test_build_model_hold_v1372.py`,
+  `dashboard/__tests__/ij-harness-helpers{,-bell}-v1372.test.tsx`.
+
 - **The IJ harness SEES: a picture rides the message and the tool result;
   the Browser pane's page is looked at without asking, any other local page
   asks** (v1.371.0; the user: "attach and paste images in the IJ harness

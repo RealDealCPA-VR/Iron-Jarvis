@@ -1352,16 +1352,23 @@ async def run_decomposed(
     p = runtime.p
     cfg = getattr(p, "config", None)
     provs = getattr(p, "providers", None)
+    # A BUILD SESSION'S HELPER (v1.372.0 review): every step stays on the
+    # session's model — a role naming another provider (or another model) is
+    # not used under the hold (``providers.hold``); the roles resolve to the
+    # session pair exactly as with model_roles empty.
+    from ..providers.hold import current_hold
+
+    role_cfg = None if current_hold() is not None else cfg
     plan_llm = resolve_role(
-        cfg, provs, "plan",
+        role_cfg, provs, "plan",
         fallback_provider=session.provider, fallback_model=session.model,
     )
     judge_llm = resolve_role(
-        cfg, provs, "judge",
+        role_cfg, provs, "judge",
         fallback_provider=session.provider, fallback_model=session.model,
     )
     synth_llm = resolve_role(
-        cfg, provs, "synthesize",
+        role_cfg, provs, "synthesize",
         fallback_provider=session.provider, fallback_model=session.model,
     )
     # PHASES (v1.149.0): this pipeline always knew whether it was planning or

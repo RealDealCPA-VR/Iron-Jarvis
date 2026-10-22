@@ -62,8 +62,24 @@ CODING_TOOLS: tuple[str, ...] = (
     "mcp_list_resources", "mcp_read_resource",
     # v1.371.0: look at the user's dev server (harness/page_shot).
     "page_screenshot",
+    # v1.372.0 (part 2, Phase 1): helper agents and the user's skill library
+    # (harness/helpers). Helpers inherit the session's folder, model, account,
+    # Local only, trust and approval posture; at most 3 run at once.
+    "delegate", "spawn_agent", "list_agents",
+    "skill_search", "skill_load",
 )
 _MCP_RESOURCE_TOOLS = frozenset({"mcp_list_resources", "mcp_read_resource"})
+#: v1.372.0: the HELPER DOORS. Starting a helper changes nothing by itself:
+#: the helper works with THIS turn's tools, folder, model, account, Local only,
+#: trust and approval posture (``harness/helpers``), and every ask-tier step it
+#: takes still asks, on its own row. So a harness turn arms them GRANTED in
+#: every posture — Claude Code's Agent/Task and Codex's spawn_agent need no
+#: approval either; a card per helper was a click per helper (the live check
+#: parked a "search with two helpers" turn on the first one). The user's
+#: permission table can still deny them, and a folder rule "ask" keeps a card.
+#: STREAM LANE ONLY: the POST lane can show no card, so a helper started there
+#: could park on its own ask with nobody to answer; it keeps the plain tier.
+HELPER_DOORS = frozenset({"delegate", "spawn_agent"})
 
 #: v1.367.0 (Phase 4): a Build session in PLAN mode arms ONLY these — tools
 #: that change nothing on this PC (they read files, search, look at an image
@@ -79,6 +95,9 @@ PLAN_MODE_TOOLS: tuple[str, ...] = (
     "mcp_list_resources", "mcp_read_resource",
     # v1.371.0: looking at a page changes nothing on this PC.
     "page_screenshot",
+    # v1.372.0: a skill is text to read. No helper in plan mode: a helper can
+    # change files, and nothing may change before the plan is approved.
+    "skill_search", "skill_load",
 )
 #: The plan-mode door and the question tool (harness/session_tools).
 EXIT_PLAN_TOOL = "exit_plan_mode"
@@ -231,9 +250,10 @@ def plan_tools(
             continue
         if plugins.rule_for(name) == "ask":
             ask.append(name)
-        elif mode == "allow" or name in consented:
+        elif mode == "allow" or name in consented or (stream and name in HELPER_DOORS):
             # A connector the user toggled on for the chat is armed (granted)
-            # exactly as the chat lanes arm it on every other turn.
+            # exactly as the chat lanes arm it on every other turn; a helper
+            # door is granted for the reason at HELPER_DOORS.
             allow.append(name)
         else:
             ask.append(name)
@@ -432,6 +452,14 @@ class HarnessTurn:
         armed = self.plan.gate
         for call in calls or []:
             t = _dialects.translate(self.plan.dialect, call.name, call.arguments, armed)
+            folder_skill = self._folder_skill(t)
+            if folder_skill is not None:
+                # v1.372.0: a SKILL OF THIS FOLDER (`.ironjarvis/harness/
+                # skills/<name>`) asked for by name (Claude Code's `Skill`,
+                # or skill_load) is read from its SKILL.md — the library
+                # loader knows only the user's skill library.
+                t = _dialects.Translated(real="read_file", args={"path": folder_skill},
+                                         called_as=call.name)
             if t.real != call.name or t.args is not call.arguments:
                 self._called_as[call.id] = call.name
                 tool = self.plan.dialect.lookup(call.name)
@@ -441,6 +469,20 @@ class HarnessTurn:
             else:
                 out.append(call)
         return out
+
+    def _folder_skill(self, t: "_dialects.Translated") -> "str | None":
+        """The SKILL.md path of the folder skill a ``skill_load`` call names,
+        when the folder's layer lists one by that name and ``read_file`` is
+        in the turn's gate; else None (the library loader answers)."""
+        if t.real != "skill_load" or "read_file" not in self.plan.gate:
+            return None
+        name = str((t.args or {}).get("name") or "").strip().lower()
+        if not name or not self.layer.used:
+            return None
+        for skill in self.tree.skills:
+            if str(getattr(skill, "name", "")).lower() == name:
+                return str(getattr(skill, "rel", "")) or None
+        return None
 
     def called_as(self, call: Any) -> str:
         """The name the model used for ``call`` (its real name when nothing

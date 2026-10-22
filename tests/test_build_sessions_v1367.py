@@ -401,6 +401,11 @@ def test_sessions_are_grouped_by_folder_newest_first(home, tmp_path):
     s1 = new_session(client, a, title="one")["id"]
     s2 = new_session(client, b, title="two")["id"]
     s3 = new_session(client, a, title="three")["id"]
+    # v1.372.0: Windows' clock ticks every 15.6 ms, so on a fast PC s3's
+    # creation and s1's append landed on the SAME stamp and the order was a
+    # coin toss (it failed 5 runs in 6 on an idle machine, at v1.371.0 too).
+    # The append is meant to be LATER than s3's creation: make it so.
+    time.sleep(0.05)
     S.append_lines(client.app.state.platform.engine, s1, [{"role": "user", "content": "newest"}])
     out = client.get("/build/sessions").json()["folders"]
     assert [f["name"] for f in out] == ["alpha", "beta"]

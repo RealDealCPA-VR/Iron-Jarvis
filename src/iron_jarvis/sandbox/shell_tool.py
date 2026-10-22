@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import shlex
+import threading
 from collections import OrderedDict
 from typing import Any
 
@@ -241,6 +242,34 @@ class SandboxedShellTool(Tool):
         # copy of this logic lived in the SHADOWED tools/builtins.ShellTool —
         # platform.py registers THIS class under the same name, so the offload
         # has to be here.
+        # A STOP REACHES THE COMMAND (v1.372.0). A cancelled await does not
+        # cancel the worker thread (the v1.228.0 trap): Stop on a chat turn, on
+        # an agent run or on a Build session's helper used to leave the
+        # command running until its own timeout. The native runtime publishes
+        # the child's handle here (``procs.run``'s ``on_spawn`` / ``cancelled``
+        # seams — ``procs.run_async``'s own mechanism), and a cancel kills its
+        # tree below. Only the REAL native ``run`` takes the seams: a test
+        # double that overrides it keeps its own signature.
+        _lock = threading.Lock()
+        _box: dict[str, Any] = {"proc": None, "cancelled": False}
+
+        def _published(proc: Any) -> bool:
+            with _lock:
+                _box["proc"] = proc
+                return bool(_box["cancelled"])
+
+        def _was_cancelled() -> bool:
+            with _lock:
+                return bool(_box["cancelled"])
+
+        def _native_run(sandbox: Sandbox) -> SandboxResult:
+            if type(sandbox).run is NativeSandbox.run:
+                return sandbox.run(  # type: ignore[call-arg]
+                    args["command"], cwd=run_cwd, timeout=timeout,
+                    on_spawn=_published, cancelled=_was_cancelled,
+                )
+            return sandbox.run(args["command"], cwd=run_cwd, timeout=timeout)
+
         def _select_and_run() -> tuple[Sandbox, SandboxResult | None]:
             # Resolve the concrete runtime once so we can tell whether
             # confinement actually held (and warn the operator when it didn't).
@@ -249,7 +278,9 @@ class SandboxedShellTool(Tool):
             # the same hop, before any process exists (v1.298.0).
             if must_isolate and isinstance(sandbox, NativeSandbox):
                 return sandbox, None
-            if isinstance(sandbox, NativeSandbox) or not rel_cwd:
+            if isinstance(sandbox, NativeSandbox):
+                return sandbox, _native_run(sandbox)
+            if not rel_cwd:
                 return sandbox, sandbox.run(args["command"], cwd=run_cwd, timeout=timeout)
             # An isolating runtime mounts the WORKSPACE (so ".." still reaches
             # the session's other files) and changes into the subfolder first.
@@ -262,8 +293,23 @@ class SandboxedShellTool(Tool):
         # v1.333.0: what a FINISHED command left running hidden (a dev server
         # the agent started on purpose) belongs to this session until its run
         # ends (`procs.end_session`); the context reaches the worker thread.
-        with procs.owned_by(ctx.session_id):
-            sandbox, result = await asyncio.to_thread(_select_and_run)
+        try:
+            with procs.owned_by(ctx.session_id):
+                sandbox, result = await asyncio.to_thread(_select_and_run)
+        except asyncio.CancelledError:
+            # The call was stopped: the command's tree is killed now (shielded,
+            # so a second cancel cannot abandon it half-way); a cancel before
+            # the spawn finished is honoured by the worker itself (``on_spawn``
+            # answers True). Always re-raised.
+            with _lock:
+                _box["cancelled"] = True
+                proc = _box["proc"]
+            if proc is not None:
+                try:
+                    await asyncio.shield(asyncio.to_thread(procs.kill_tree, proc))
+                except asyncio.CancelledError:
+                    pass
+            raise
         if result is None:
             logger.warning("shell refused under low trust: %s", LOW_TRUST_SHELL_REFUSAL)
             return ToolResult(

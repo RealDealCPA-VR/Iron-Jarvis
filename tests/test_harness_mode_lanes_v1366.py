@@ -178,9 +178,15 @@ async def test_the_stream_lane_arms_the_coding_set_in_claudes_dialect_past_the_c
     tools = model.calls[0]["tools"]
     assert tools == [
         "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS", "Bash", "BashOutput", "TaskStop",
-        "TodoWrite", "NotebookEdit", "WebFetch", "WebSearch", "apply_patch", "process_write",
+        "TodoWrite", "NotebookEdit", "WebFetch", "WebSearch",
+        # v1.372.0: helper agents (Agent, ask-tier) and skills (Skill) in
+        # Claude Code's names; skill_search and list_agents pass through (in
+        # the registry's order, like every pass-through).
+        "Agent", "Skill",
+        "apply_patch", "process_write",
         # v1.371.0: no Claude Code tool looks at a page, so it passes through.
         "page_screenshot",
+        "skill_search", "list_agents",
     ]
     assert len(tools) > chat_turn._MAX_ARMED_TOOLS
     assert "escalate_to_agent" not in tools and "workflow_draft" not in tools

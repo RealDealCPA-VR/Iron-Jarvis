@@ -300,6 +300,28 @@ class Event:
         }
 
 
+def _drop_build_turn_scope() -> None:
+    """Clear a Build turn's model hold and account pin (v1.372.0 review) in
+    the CURRENT context — always the worker thread's own copy of the
+    publisher's context (``asyncio.to_thread`` runs the handlers in a copy),
+    so the turn itself keeps both. A helper's run is finalized INSIDE the
+    turn that started it; without this a handler that schedules background
+    work from ``session.completed`` (the skill-distill sweep) carried the
+    session's account and model into it. Never raises."""
+    try:
+        from ..providers.hold import PROVIDER_HOLD
+
+        PROVIDER_HOLD.set(None)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from ..iron_proxy.pin import ACCOUNT_PIN
+
+        ACCOUNT_PIN.set(None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class EventBus:
     def __init__(self, history_size: int = 1000) -> None:
         self._subscribers: set[asyncio.Queue[Event]] = set()
@@ -359,6 +381,7 @@ class EventBus:
         """Run every sync handler for one event, in registration order, on the
         calling (worker) thread. A raising handler is logged and the rest still
         run — a bad consumer must not break publishing."""
+        _drop_build_turn_scope()
         for handler in handlers:
             try:
                 handler(event)
@@ -387,8 +410,12 @@ class EventBus:
         """Run ONE sync handler off the loop; a failure is logged, never raised.
         (``publish`` batches every handler into one hop since v1.311.0; this
         stays for callers that dispatch a single handler.)"""
+        def _run() -> None:
+            _drop_build_turn_scope()
+            handler(event)
+
         try:
-            await asyncio.to_thread(handler, event)
+            await asyncio.to_thread(_run)
         except Exception:  # a bad consumer must not break publishing
             logger.warning(
                 "event handler %r failed for %s", handler, event.type, exc_info=True

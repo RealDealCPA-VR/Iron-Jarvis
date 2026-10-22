@@ -152,6 +152,24 @@ def _account_held(provider: str | None) -> bool:
         return False
 
 
+def _session_held(auto_selected: bool) -> bool:
+    """True while a Build turn's :class:`~iron_jarvis.providers.hold.
+    ProviderHold` is armed (v1.372.0) and the call is not an AUTO call: the
+    router keeps it on the provider it resolved to — no capability reroute,
+    no default fallback, no sideways failover — with or without an Iron-Proxy
+    account pin. Never raises."""
+    if auto_selected:
+        return False
+    try:
+        from .hold import current_hold
+
+        hold = current_hold()
+        # A session on Auto delegated the choice: its hold holds nothing.
+        return hold is not None and hold.provider != "auto"
+    except Exception:  # noqa: BLE001 — a reader never breaks routing
+        return False
+
+
 def is_transient_error(exc: Exception) -> bool:
     """Classify a provider failure as transient (retry / fail over) or permanent.
 
@@ -809,6 +827,39 @@ class ModelRouter:
         return dp() if callable(dp) else dp
 
     # -- availability snapshot ---------------------------------------------
+    def _bind_to_hold(
+        self, provider: "str | None", model: "str | None"
+    ) -> "tuple[str | None, str | None]":
+        """A Build turn's MODEL HOLD BINDS, not only freezes (v1.372.0
+        review): inside a held turn (or a helper's run) a call that names no
+        provider — OCR, a compaction, anything on "the default" — is served
+        by the SESSION's provider and model, and a call naming ANOTHER
+        provider is refused in a sentence (``HeldProviderRefused``, never
+        failed over). A hold on Auto or on the default ("") binds nothing.
+        Never raises except that refusal."""
+        from .hold import HeldProviderRefused, current_hold
+
+        hold = current_hold()
+        if hold is None or not hold.provider or hold.provider == "auto":
+            return provider, model
+        if not provider or provider == "auto":
+            # An "auto" call inside a session on a CONCRETE model is that
+            # model's call (the session did not delegate the choice).
+            return hold.provider, (hold.model or None)
+        if provider == hold.provider or self._same_provider(provider, hold.provider):
+            return provider, model
+        raise HeldProviderRefused(hold.provider, provider)
+
+    def _same_provider(self, a: str, b: str) -> bool:
+        """Do two provider names reach the same adapter (an alias such as a
+        keyless ``anthropic`` served by ``claude-cli``)? Never raises."""
+        try:
+            pa = getattr(self.manager.get(a), "provider", None)
+            pb = getattr(self.manager.get(b), "provider", None)
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(pa) and pa == pb
+
     def _safe_available(self, provider: str) -> bool:
         try:
             return bool(self.manager.available(provider))
@@ -1804,6 +1855,8 @@ class ModelRouter:
         #: Captured HERE (not off ``reason``, which the capability block below
         #: rewrites): Auto is the ONE case where the user delegated the choice of
         #: model to the router, so an unreachable local pick may be replaced.
+        # A BUILD TURN'S HOLD BINDS (v1.372.0): MIRROR NOTE (lock-step).
+        provider, model = self._bind_to_hold(provider, model)
         auto_selected = (provider or self.default_provider) == "auto"
         if auto_selected:
             adapter, wanted, downgraded, routed_payload = await self._resolve_auto(
@@ -1837,6 +1890,11 @@ class ModelRouter:
         # words stay the plain ones: this is not the strict-pin setting.
         # MIRROR NOTE (lock-step): complete() and stream().
         held = pinned or _account_held(provider)
+        # A BUILD SESSION'S MODEL (v1.372.0): held even with no account pin —
+        # the user's "never another provider" (IJ harness part 2, decision 4).
+        # Unlike ``held`` it keeps the prompted-tools wrap (same model).
+        # MIRROR NOTE (lock-step): complete() and stream().
+        session_held = _session_held(auto_selected)
         # LOCAL ONLY (v1.332.0): a primary that leaves this network is refused
         # HERE, before any probe, breaker or attempt; the one the user allowed
         # for this message is pinned (``egress_pin``). MIRROR NOTE (lock-step).
@@ -1867,7 +1925,10 @@ class ModelRouter:
             if need_tools and not _supports_tools(adapter):
                 adapter = self._wrap_for_tools(adapter)
                 reason = "prompted-tools"
-            repl = self._enforce_capabilities(adapter, need_tools, need_vision, avail)
+            repl = (
+                None if session_held
+                else self._enforce_capabilities(adapter, need_tools, need_vision, avail)
+            )
             if repl is not None:
                 adapter = repl
                 reason = "failover"
@@ -2009,6 +2070,12 @@ class ModelRouter:
                 raise self._unavailable_error(
                     adapter.provider, pinned, kind=refusal, exc=exc
                 ) from exc
+            # A BUILD TURN'S HOLD (v1.372.0): its own error — but AFTER the
+            # local refusal above, so a held local model that never answered
+            # still gets the plain "isn't connected" words and the banner.
+            # MIRROR NOTE (lock-step): complete() and stream().
+            if session_held:
+                raise
             # (A) DEFAULT-PROVIDER FALLBACK — runs even for a NON-transient primary
             # failure: an explicit provider that ANSWERED WITH AN ERROR must
             # still reach the healthy default. (A local pick that was never
@@ -2286,6 +2353,8 @@ class ModelRouter:
         offline/mock-default path may fall through to mock's scripted stream)."""
         # ---- resolve (identical to complete's preflight) --------------------
         routed_payload: dict | None = None
+        # A BUILD TURN'S HOLD BINDS (v1.372.0): MIRROR NOTE (lock-step).
+        provider, model = self._bind_to_hold(provider, model)
         auto_selected = (provider or self.default_provider) == "auto"
         if auto_selected:
             adapter, wanted, downgraded, routed_payload = await self._resolve_auto(
@@ -2321,6 +2390,11 @@ class ModelRouter:
         # words stay the plain ones: this is not the strict-pin setting.
         # MIRROR NOTE (lock-step): complete() and stream().
         held = pinned or _account_held(provider)
+        # A BUILD SESSION'S MODEL (v1.372.0): held even with no account pin —
+        # the user's "never another provider" (IJ harness part 2, decision 4).
+        # Unlike ``held`` it keeps the prompted-tools wrap (same model).
+        # MIRROR NOTE (lock-step): complete() and stream().
+        session_held = _session_held(auto_selected)
         # LOCAL ONLY (v1.332.0): a primary that leaves this network is refused
         # HERE, before any probe, breaker or attempt; the one the user allowed
         # for this message is pinned (``egress_pin``). MIRROR NOTE (lock-step).
@@ -2342,7 +2416,10 @@ class ModelRouter:
             if need_tools and not _supports_tools(adapter):
                 adapter = self._wrap_for_tools(adapter)
                 reason = "prompted-tools"
-            repl = self._enforce_capabilities(adapter, need_tools, need_vision, avail)
+            repl = (
+                None if session_held
+                else self._enforce_capabilities(adapter, need_tools, need_vision, avail)
+            )
             if repl is not None:
                 adapter = repl
                 reason = "failover"
@@ -2483,6 +2560,12 @@ class ModelRouter:
                 raise self._unavailable_error(
                     adapter.provider, pinned, kind=refusal, exc=exc
                 ) from exc
+            # A BUILD TURN'S HOLD (v1.372.0): its own error — but AFTER the
+            # local refusal above, so a held local model that never answered
+            # still gets the plain "isn't connected" words and the banner.
+            # MIRROR NOTE (lock-step): complete() and stream().
+            if session_held:
+                raise
 
         # (A) DEFAULT-PROVIDER FALLBACK — runs for transient AND permanent primary
         # failures (an explicit pick that ANSWERED WITH AN ERROR must reach the

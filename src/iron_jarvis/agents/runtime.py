@@ -1863,16 +1863,26 @@ class AgentRuntime:
 
         packs_starting = await wait_for_starting_packs(self.p)
         adaptations: list[str] = []
-        armed_names = list(
-            await asyncio.to_thread(
-                arm_for_task,
-                self.p,
-                session.task,
-                agent_def.tools,
-                max_tools=env_profile.max_tools(),
-                adaptations=adaptations,
+        # A BUILD SESSION'S HELPER (v1.372.0 review) works with the session's
+        # tools and no others: its definition was cut to them at the door
+        # (``harness.helpers.helper_definition``), so nothing is armed on top
+        # for its task — a task that mentions the browser or the web would
+        # otherwise hand it a tool the session's own turn does not hold.
+        from ..harness.helpers import HELPER_ORIGIN as _HELPER_ORIGIN
+
+        if str(getattr(session, "origin", "") or "") == _HELPER_ORIGIN:
+            armed_names = list(agent_def.tools or [])
+        else:
+            armed_names = list(
+                await asyncio.to_thread(
+                    arm_for_task,
+                    self.p,
+                    session.task,
+                    agent_def.tools,
+                    max_tools=env_profile.max_tools(),
+                    adaptations=adaptations,
+                )
             )
-        )
         # THE FOLDER (v1.297.0): a custom agent's notebook tool rides every
         # one of its runs — it is the agent's own file, so it is armed here
         # (after the capability cap, which must not drop it) rather than put

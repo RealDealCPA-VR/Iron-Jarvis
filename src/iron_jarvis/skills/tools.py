@@ -7,9 +7,10 @@ Both wrap a :class:`SkillRegistry` injected via the constructor.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
-from ..tools.base import Tool, ToolContext, ToolResult
+from ..tools.base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
 from .framework import SkillRegistry
 
 
@@ -26,6 +27,10 @@ class SkillSearchTool(Tool):
         },
         "required": ["query"],
     }
+    #: v1.372.0: a search of the skill library changes nothing (the IJ
+    #: harness arms it in plan mode, whose tools must all be reads).
+    reversibility = Reversibility.READONLY
+    risk_class = RiskClass.READ
 
     def __init__(self, registry: SkillRegistry) -> None:
         self._registry = registry
@@ -54,6 +59,9 @@ class SkillLoadTool(Tool):
         "properties": {"name": {"type": "string"}},
         "required": ["name"],
     }
+    #: v1.372.0: loading a skill returns its text and changes nothing.
+    reversibility = Reversibility.READONLY
+    risk_class = RiskClass.READ
 
     def __init__(self, registry: SkillRegistry) -> None:
         self._registry = registry
@@ -63,9 +71,23 @@ class SkillLoadTool(Tool):
         skill = self._registry.get(name)
         if skill is None:
             return ToolResult(ok=False, error=f"unknown skill '{name}'")
+        # v1.372.0: the ONE rule ``inject`` and the "/skill" playbook follow
+        # (``framework.guarded_instructions``): a skill that did not come from
+        # the user (another program's skill folder, a plugin, an agent-made
+        # one) is scanned for planted instructions before a model reads it;
+        # the user's own and the bundled ones come back verbatim. The IJ
+        # harness arms this tool on every turn, so the loader must not be the
+        # door that skips the scan. Off the loop (the scan reads the text).
+        from .framework import guarded_instructions
+
+        text = await asyncio.to_thread(
+            guarded_instructions, skill,
+            event_bus=getattr(ctx, "event_bus", None),
+            session_id=getattr(ctx, "session_id", None),
+        )
         return ToolResult(
             ok=True,
-            output=skill.instructions,
+            output=text,
             data={
                 "name": skill.name,
                 "description": skill.description,

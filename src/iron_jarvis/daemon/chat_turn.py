@@ -80,6 +80,8 @@ from .doors import (
     with_connect_door,
 )
 from .mcp_turn import read_turn_resources as _read_turn_resources
+from ..harness.helpers import HELPER_TOOLS as _HELPER_TOOLS
+from ..harness.helpers import invoke_helper as _invoke_helper
 from .chat_refs import read_thread_refs as _read_thread_refs
 
 log = logging.getLogger(__name__)
@@ -2772,10 +2774,20 @@ async def _with_side(aw, side: asyncio.Queue, box: list):
             task.cancel()
 
 
-async def _run_tool_round(batched: list[bool], invoke, settle, side: "asyncio.Queue | None" = None):
+async def _run_tool_round(batched: list[bool], invoke, settle, side: "asyncio.Queue | None" = None,
+                          together: "list[bool] | None" = None):
     """Run one tool round. An async generator of ``("started", i)`` — call
     ``i`` is about to begin — and ``("ready", i)`` — call ``i`` is settled AND
     so is every call before it.
+
+    ``together`` (v1.372.0, IJ harness helpers): calls marked True that come
+    ONE AFTER ANOTHER among the round's serial calls run AT THE SAME TIME, at
+    the place of the first of them — the helpers a harness turn starts in one
+    message (``delegate`` / ``spawn_agent``), each of which awaits a whole
+    agent run. Consent comes first as for every serial call (their cards were
+    answered before the round ran), they are settled in call order, and a
+    call the model listed between two of them keeps its place. ``None`` (and
+    every lane that is not a harness turn) is byte-identical to before.
 
     ``side`` (v1.324.0, the stream lane's ``TurnInteractions.side``): while
     an ``invoke`` is in flight, every frame a pack queues there (a question
@@ -2841,9 +2853,34 @@ async def _run_tool_round(batched: list[bool], invoke, settle, side: "asyncio.Qu
             settled[i] = True
         for i in _ready():
             yield ("ready", i)
-    for i in range(n):
-        if batched[i]:
+    serial = [i for i in range(n) if not batched[i]]
+    k = 0
+    while k < len(serial):
+        group = [serial[k]]
+        if together is not None and together[serial[k]]:
+            while k + len(group) < len(serial) and together[serial[k + len(group)]]:
+                group.append(serial[k + len(group)])
+        k += len(group)
+        if len(group) > 1:
+            # v1.372.0: helpers started in one message run together.
+            for i in group:
+                yield ("started", i)
+            _aw = asyncio.gather(*(invoke(i) for i in group))
+            if side is not None:
+                _box = []
+                async with contextlib.aclosing(_with_side(_aw, side, _box)) as _frames:
+                    async for _frame in _frames:
+                        yield ("side", _frame)
+                outcomes = _box[0]
+            else:
+                outcomes = await _aw
+            for i, outcome in zip(group, outcomes):
+                await settle(i, outcome)
+                settled[i] = True
+            for j in _ready():
+                yield ("ready", j)
             continue
+        i = group[0]
         yield ("started", i)
         if side is not None:
             _box = []
@@ -4970,6 +5007,150 @@ def turn_session_id(session_id: "str | None") -> str:
     if not thread_of(sid) or len(sid) > 120:
         raise ValueError(f"session_id must be 'chat' or 'build:<thread id>'; got {session_id!r}")
     return sid
+
+
+# --------------------------------------------------------------------------- #
+# HELPER AGENTS (v1.372.0, IJ harness part 2 Phase 1) — what a harness turn's
+# helper inherits, built by BOTH lanes at the same seams. MIRROR NOTE
+# (lock-step): routes/chat.py's stream lane and run_chat_turn call these.
+# --------------------------------------------------------------------------- #
+
+
+def helper_base(
+    harness: "str | None", *, tool_session: str, tool_ws: Any, in_project_folder: bool,
+    project_id: "str | None",
+):
+    """The parts of a harness turn's :class:`~iron_jarvis.harness.helpers.
+    HelperParent` known before the first round: the session, its folder, its
+    project, Local only, and the turn's Iron-Proxy ACCOUNT PIN — read HERE,
+    in the turn's own context, and carried explicitly to the helper's task
+    (``helpers.pinned``). None when the turn is not a harness turn (no
+    helper is armed there, and ``delegate`` / ``spawn_agent`` keep reading
+    their parent row exactly as before)."""
+    if harness is None:
+        return None
+    from ..harness.helpers import HelperParent
+    from ..iron_proxy.pin import current as _pin_current
+
+    return HelperParent(
+        session_id=str(tool_session or "chat"),
+        folder=str(tool_ws) if in_project_folder and tool_ws else "",
+        provider="",
+        model="",
+        project_id=project_id or None,
+        pin=_pin_current(),
+        local_only=bool(_egress.current_scope().on),
+    )
+
+
+def helper_parent_now(
+    base, platform: Any, *, provider: str, model: str, approval_mode: str,
+    grants: Any, overrides: "dict[str, str]", trust_state: "dict[str, Any]",
+    tools: Any = (),
+):
+    """The parent a helper call starts from, completed AT CALL TIME: the
+    provider + model that serve the turn now (its route), its approval
+    posture, the conversation's grants (a low-trust deny is never handed
+    down), and its trust as it stands — a turn tainted earlier hands its
+    helper low trust. None without a base.
+
+    v1.372.0 review: ``tools`` — the real tools THIS turn may run — bound
+    what the helper works with (``helpers.helper_definition``), and the
+    turn's NARROWING overrides (its folder rules, low-trust denies) ride
+    along as ``rules``. Under Local only every tool that reaches outside this
+    PC (``egress.ask_first_tools``: a command, an app, a page) asks in the
+    helper too — never a conversation grant: the parent cards those every
+    time, and a grant handed down would have run them without a word."""
+    if base is None:
+        return None
+    import dataclasses as _dc
+
+    registry = getattr(platform, "registry", None)
+    permissions = getattr(platform, "permissions", None)
+
+    def _base_mode(key: str) -> str:
+        try:
+            return str(getattr(permissions.mode_for(key, {}), "value", "ask"))
+        except Exception:  # noqa: BLE001 — unknown reads as ask (narrowing stays safe)
+            return "ask"
+
+    # Sorted: the stream lane hands a SET, and a helper's tool list must not
+    # change order between two identical calls.
+    turn_tools = tuple(sorted({str(t) for t in (tools or ()) if str(t).strip()}))
+    rules: dict[str, str] = {}
+    for key, mode in (overrides or {}).items():
+        if mode == "deny":
+            rules[str(key)] = "deny"
+        elif mode == "ask" and _base_mode(str(key)) != "deny":
+            # An "ask" over a DENIED base policy would raise it: never.
+            rules[str(key)] = "ask"
+    away: set[str] = set()
+    if base.local_only and registry is not None:
+        try:
+            away = set(_egress.ask_first_tools(registry, list(turn_tools)))
+        except Exception:  # noqa: BLE001
+            away = set()
+        for name in sorted(away):
+            tool = registry.get(name)
+            for key in {name, tool.perm_key() if tool is not None else name}:
+                if rules.get(key) != "deny" and _base_mode(key) != "deny":
+                    rules[key] = "ask"
+    if str(approval_mode or "").strip() == "always_ask" and registry is not None:
+        # v1.372.0 review: "Ask before every action" cards file edits and web
+        # calls in the TURN (STRICT_ASK_TOOLS) while the agent runtime cards
+        # only the engine's ask tier — so with the helper doors granted, a
+        # builder helper's write_file / apply_patch and a researcher's
+        # web_fetch ran without a word. They ask in the helper too, as an
+        # "ask" rule (never over a deny).
+        for name in turn_tools:
+            if name not in STRICT_ASK_TOOLS:
+                continue
+            tool = registry.get(name)
+            for key in {name, tool.perm_key() if tool is not None else name}:
+                if rules.get(key) != "deny" and _base_mode(key) != "deny":
+                    rules[key] = "ask"
+    allow = []
+    for name in sorted({str(g) for g in (grants or ()) if str(g).strip()}):
+        if overrides.get(name) == "deny":
+            continue
+        if registry is not None and registry.get(name) is None:
+            continue
+        if name in away:
+            continue
+        allow.append(name)
+    low = bool(trust_state.get("low") or trust_state.get("tainted"))
+    # A route that named no model: the provider's own default model, never
+    # the configured default of ANOTHER provider (``create_session`` falls
+    # back to ``config.default_model`` for an empty model).
+    model = str(model or "") or (
+        _egress.default_model_of(str(provider or ""), getattr(platform, "providers", None))
+        if provider else ""
+    )
+    return _dc.replace(
+        base,
+        provider=str(provider or ""),
+        model=model,
+        approval_mode=str(approval_mode or ""),
+        allow_tools=tuple(allow),
+        low_trust=low,
+        trust_reason=str(trust_state.get("reason") or "") if low else "",
+        tools=turn_tools,
+        rules=tuple(sorted(rules.items())),
+    )
+
+
+def helper_together(harness_on: bool, calls: Any, refused: Any) -> "list[bool] | None":
+    """Which of a round's calls start a HELPER and may run together
+    (``_run_tool_round(together=)``): ``delegate`` / ``spawn_agent`` in a
+    harness turn that nothing refused. None off a harness turn."""
+    if not harness_on:
+        return None
+    from ..harness.helpers import HELPER_TOOLS
+
+    return [
+        getattr(tc, "name", "") in HELPER_TOOLS and not refused[i]
+        for i, tc in enumerate(calls)
+    ]
 
 
 def turn_plan_mode(plan_mode: Any, harness: "str | None") -> bool:
@@ -7835,6 +8016,18 @@ async def run_chat_turn(
         )
         if overrides.get(g) != "deny"
     }
+    # HELPER AGENTS (v1.372.0): what a harness turn's helper inherits (the
+    # session, its folder, Local only, the account pin) — None off a harness
+    # turn or when nothing is armed. MIRROR NOTE (lock-step): routes/chat.py
+    # builds the same base at the same seam.
+    _helper_base = (
+        helper_base(
+            harness, tool_session=_tool_session, tool_ws=tool_ws,
+            in_project_folder=in_project_folder,
+            project_id=(pid if resolved_proj is not None else None),
+        )
+        if armed else None
+    )
     # (provider_choice/model_choice were resolved above the attachments —
     # budgets needed them early; the values are identical.)
     # Accumulate token usage + completion count ACROSS the (up to 4) tool
@@ -8063,34 +8256,64 @@ async def run_chat_turn(
                     # only — the stream lane cards the same verdict.
                     _low_kw = _low_trust_invoke_kwargs(_trust_state, tc.name)
                     _deny_kw = _low_kw or spend_not_asked_invoke_kwargs(_spend.get(id(tc)))
-                    return await d.platform.registry.invoke(
-                        tc.name,
-                        # ``shell`` isolates under low trust (v1.298.0).
-                        _low_trust_args(_trust_state, tc.name, tc.arguments),
-                        # v1.366.0: a translated call's ctx carries the name
-                        # the model used, for the ledger row (lock-step).
-                        _harness.ctx_for(ctx, tc) if _harness is not None else ctx,
-                        d.platform.permissions,
-                        overrides, session_allow=armed_grant,
-                        allowed_names=set(armed),
-                        # v1.246.0: the agent run's tool deadline, so a hung
-                        # tool ends as a failed result instead of a hung turn.
-                        deadline_s=chat_tool_deadline(d.platform),
-                        **_deny_kw,
-                        # STANDING GRANTS (v1.299.0) — lock-step with the
-                        # stream lane: the store + this turn's scopes ride
-                        # into the registry's gate (only when a store
-                        # exists). This lane never CARDS — every armed tool
-                        # is its own grant — so it has no "always" to
-                        # answer; the kwargs keep the ledger's grant id
-                        # honest for a call a standing grant lifted.
-                        **_grant_invoke_kwargs(
-                            d.platform,
-                            chat_grant_scopes(pid if resolved_proj is not None else None),
-                        ),
-                    ), ""
+                    if _helper_base is not None and tc.name in _HELPER_TOOLS and not _deny_kw:
+                        # HELPER AGENTS (v1.372.0): the helper inherits the
+                        # turn (``harness/helpers``). This lane draws no row
+                        # and has no Stop handle. MIRROR NOTE (lock-step):
+                        # routes/chat.py's `_invoke` makes the same call.
+                        _hres, _ = await _invoke_helper(
+                            helper_parent_now(
+                                _helper_base, d.platform,
+                                provider=getattr(route, "provider", "") or provider_choice,
+                                model=getattr(route, "model", "") or model_choice,
+                                approval_mode=normalize_approval_mode(
+                                    getattr(body, "approval_mode", "")
+                                ),
+                                grants=getattr(body, "granted_tools", None) or (),
+                                overrides=overrides, trust_state=_trust_state,
+                                # v1.372.0 review: the helper works with
+                                # THIS turn's tools (lock-step: the stream
+                                # lane passes its `_turn_tools`).
+                                tools=armed,
+                            ),
+                            tc.id, tc.name, tc.arguments,
+                            lambda: _registry_invoke(tc, _deny_kw),
+                        )
+                        return _hres, ""
+                    return await _registry_invoke(tc, _deny_kw), ""
                 except Exception as exc:  # noqa: BLE001
                     return None, f"{type(exc).__name__}: {exc}"
+
+            def _registry_invoke(tc, _deny_kw):
+                """The call through the registry (an awaitable) — its own
+                function since v1.372.0 so a helper call can be armed around
+                it."""
+                return d.platform.registry.invoke(
+                    tc.name,
+                    # ``shell`` isolates under low trust (v1.298.0).
+                    _low_trust_args(_trust_state, tc.name, tc.arguments),
+                    # v1.366.0: a translated call's ctx carries the name
+                    # the model used, for the ledger row (lock-step).
+                    _harness.ctx_for(ctx, tc) if _harness is not None else ctx,
+                    d.platform.permissions,
+                    overrides, session_allow=armed_grant,
+                    allowed_names=set(armed),
+                    # v1.246.0: the agent run's tool deadline, so a hung
+                    # tool ends as a failed result instead of a hung turn.
+                    deadline_s=chat_tool_deadline(d.platform),
+                    **_deny_kw,
+                    # STANDING GRANTS (v1.299.0) — lock-step with the
+                    # stream lane: the store + this turn's scopes ride
+                    # into the registry's gate (only when a store
+                    # exists). This lane never CARDS — every armed tool
+                    # is its own grant — so it has no "always" to
+                    # answer; the kwargs keep the ledger's grant id
+                    # honest for a call a standing grant lifted.
+                    **_grant_invoke_kwargs(
+                        d.platform,
+                        chat_grant_scopes(pid if resolved_proj is not None else None),
+                    ),
+                )
 
             async def _settle(i: int, outcome: tuple[Any, str]) -> None:
                 tc = calls[i]
@@ -8124,7 +8347,12 @@ async def run_chat_turn(
                 _slots[i] = {"result": result, "content": content, "ran": ran}
 
             async with contextlib.aclosing(
-                _run_tool_round(_batched, _invoke, _settle)
+                # v1.372.0: a harness turn's helpers run together (lock-step
+                # with the stream lane's `together=`).
+                _run_tool_round(
+                    _batched, _invoke, _settle,
+                    together=helper_together(_helper_base is not None, calls, _refused),
+                )
             ) as _round_events:
                 async for _kind, _i in _round_events:
                     if _kind != "ready":

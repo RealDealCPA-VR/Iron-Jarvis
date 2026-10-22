@@ -80,6 +80,8 @@ import { HarnessPanes, type SessionTerminalApi } from "@/components/harness/Harn
 import { AccountChip, AccountLimitCard, AccountList } from "@/components/harness/HarnessAccounts";
 import { RewindControl } from "@/components/harness/RewindControl";
 import { LibraryCards } from "@/components/harness/LibraryCards";
+import { LiveHelperRows, SavedHelperRows } from "@/components/harness/HarnessHelpers";
+import { applyHelperFrame, helperCallIds, type HelperView } from "@/lib/buildHelpers";
 import {
   AttachButton,
   AttachmentChips,
@@ -220,6 +222,9 @@ export function HarnessSession({
   const [pending, setPending] = useState<BuildMessage | null>(null);
   const [questions, setQuestions] = useState<AskUserAsk[]>([]);
   const [steerNotes, setSteerNotes] = useState<string[]>([]);
+  // v1.372.0: the helper agents the running turn started, one row each
+  // (its `helper` frames; lib/buildHelpers). The reply keeps them after.
+  const [helpers, setHelpers] = useState<HelperView[]>([]);
   const [queued, setQueued] = useState<string[]>([]);
   const turnRef = useRef<string | null>(null);
   const [turnId, setTurnId] = useState<string | null>(null);
@@ -358,6 +363,8 @@ export function HarnessSession({
         setWaiting(false);
         setChoosing(false);
       }
+    } else if (event === "helper") {
+      setHelpers((prev) => applyHelperFrame(prev, data));
     }
   }, []);
 
@@ -387,6 +394,8 @@ export function HarnessSession({
       if (turnRef.current === null) {
         setPending(null);
         setSteerNotes([]);
+        // The reply line now keeps the helpers (its `helpers`).
+        setHelpers([]);
         setQuestions((prev) => prev.map((q) => (q.outcome ? q : { ...q, outcome: "stopped" })));
       }
       const sent = readSentSteers(threadId);
@@ -410,6 +419,8 @@ export function HarnessSession({
       setTurnId(id);
       setSending(true);
       setError(null);
+      // A new (or rejoined: its frames replay) turn draws its own helpers.
+      setHelpers([]);
       limitSeenRef.current = false;
       let started = !!rejoinId;
       // A NEW turn retires the limit card at its first real frame (once —
@@ -1038,6 +1049,8 @@ export function HarnessSession({
                   {...paneWorkInput(m)}
                   cutOff={m.truncated ? "truncated" : m.interrupted ? "interrupted" : null}
                 />
+                {/* v1.372.0: the helper agents this reply's turn started. */}
+                <SavedHelperRows raw={m.helpers} />
                 {m.content ? (
                   <div className={PANE_REPLY_PROSE}>
                     <MemoMarkdown content={m.content} />
@@ -1099,7 +1112,14 @@ export function HarnessSession({
           )}
           {busy ? (
             <div data-testid="harness-live" className="min-w-0 space-y-2">
-              {stream.tools.length ? <LiveToolRows cards={stream.tools} since={stream.startedAt ?? null} /> : null}
+              {/* v1.372.0: each helper is ONE row (its own tool card is not
+                  drawn a second time). */}
+              <LiveHelperRows helpers={helpers} />
+              {(() => {
+                const ids = helperCallIds(helpers);
+                const cards = ids.size ? stream.tools.filter((t) => !ids.has(t.id)) : stream.tools;
+                return cards.length ? <LiveToolRows cards={cards} since={stream.startedAt ?? null} /> : null;
+              })()}
               <LiveText stream={stream} />
               {steerNotes.length ? (
                 <ul data-testid="harness-steer-notes" className="space-y-0.5">

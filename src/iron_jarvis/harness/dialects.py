@@ -632,6 +632,101 @@ def _exit_plan(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, A
 
 
 # --------------------------------------------------------------------------- #
+# v1.372.0 (IJ harness part 2, Phase 1): helper agents and skills
+# --------------------------------------------------------------------------- #
+
+#: A vendor's helper type → the Jarvis helper that does that kind of work.
+#: Claude Code's built-in subagents (``general-purpose``, ``Explore``,
+#: ``Plan``) and Codex's roles (``default``, ``worker``, ``explorer``).
+#: ``Plan`` maps to the researcher, never Jarvis's planner: the planner hands
+#: work out itself, and a helper that can start helpers is refused by both
+#: doors (the anti-fork-bomb rule). A name not in the table is passed on as
+#: written — a builtin type or a custom agent the roster knows; anything else
+#: the door resolves to the builder, as it always has.
+HELPER_TYPES: dict[str, str] = {
+    "": "builder",
+    "general-purpose": "builder",
+    "general": "builder",
+    "default": "builder",
+    "worker": "builder",
+    "explore": "researcher",
+    "explorer": "researcher",
+    "research": "researcher",
+    "plan": "researcher",
+    "review": "reviewer",
+    "code-reviewer": "reviewer",
+}
+
+
+def _helper_type(value: Any) -> str:
+    raw = " ".join(str(value or "").split())
+    return HELPER_TYPES.get(raw.lower(), raw)
+
+
+def _helper_task(*parts: Any) -> str:
+    """The helper's instruction: the vendor's short label (Claude Code's
+    ``description``) as a heading over the prompt, when both are given."""
+    texts = [str(p).strip() for p in parts if isinstance(p, str) and str(p).strip()]
+    if len(texts) >= 2 and texts[0] not in texts[1]:
+        return f"{texts[0]}\n\n{texts[1]}"
+    return texts[-1] if texts else ""
+
+
+def _claude_agent(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    """Claude Code's ``Agent`` / ``Task`` → ``delegate`` (it waits for the
+    helper's report); ``run_in_background: true`` → ``spawn_agent`` when that
+    is armed (it waits too: a helper's report always comes back in the same
+    call here). ``model`` / ``effort`` are not used: a helper runs on the
+    session's own model."""
+    kind = _helper_type(args.get("subagent_type"))
+    task = _helper_task(args.get("description"), _first(args, "prompt", "task"))
+    if _bool(args.get("run_in_background")) and "spawn_agent" in armed:
+        # spawn_agent knows a custom agent by its bare name ("scout"), never
+        # the roster's "custom:scout" (review: that read "unknown agent").
+        if kind.lower().startswith("custom:"):
+            kind = kind.split(":", 1)[1].strip() or kind
+        out: dict[str, Any] = {"agent": kind}
+        _put(out, "task", task or None)
+        return "spawn_agent", out
+    out = {"agent_type": kind}
+    _put(out, "task", task or None)
+    return "delegate", out
+
+
+def _codex_items_text(items: Any) -> str:
+    if not isinstance(items, list):
+        return ""
+    texts = []
+    for item in items:
+        if isinstance(item, dict) and str(item.get("type") or "text") == "text" and item.get("text"):
+            texts.append(str(item["text"]))
+    return "\n".join(texts)
+
+
+def _codex_spawn(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    """Codex's ``spawn_agent`` (v1 ``message`` / ``items``, v2 ``task_name``
+    + ``message``) → ``delegate``: the helper's report comes back in the same
+    call, so there is nothing to wait for afterwards. ``model`` /
+    ``reasoning_effort`` / ``fork_context`` are not used here."""
+    kind = _helper_type(args.get("agent_type"))
+    message = _first(args, "message", "task") or _codex_items_text(args.get("items"))
+    task = _helper_task(args.get("task_name"), message)
+    out: dict[str, Any] = {"agent_type": kind}
+    _put(out, "task", task or None)
+    return "delegate", out
+
+
+def _skill(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]:
+    """Claude Code's ``Skill`` → ``skill_load`` (a skill from the user's
+    library). A skill of THIS folder (``.ironjarvis/harness/skills``) is read
+    from its SKILL.md instead — :meth:`mode.HarnessTurn.translate_calls`
+    knows the folder's skills; this table does not."""
+    out: dict[str, Any] = {}
+    _put(out, "name", _first(args, "skill", "name"))
+    return "skill_load", out
+
+
+# --------------------------------------------------------------------------- #
 # schemas
 # --------------------------------------------------------------------------- #
 
@@ -873,6 +968,37 @@ _CLAUDE_TOOLS: tuple[DialectTool, ...] = (
         _obj({"server": _S, "uri": _S}, ["server", "uri"]),
         ("mcp_read_resource",), _mcp_read,
     ),
+    # v1.372.0 (IJ harness part 2, Phase 1): helper agents and skills.
+    DialectTool(
+        "Agent",
+        "Starts a helper agent for a self-contained part of the work: it works in this session's "
+        "folder, on this session's model and account, with its own context, and returns its "
+        "final report in this call. Several Agent calls in ONE message run at the same time (at "
+        "most 3 at once; more wait for a free slot) — use that to search different parts of the "
+        "code in parallel. Give each a complete prompt: it cannot see this conversation. "
+        "subagent_type: general-purpose (can change files, default), Explore (reads and "
+        "searches), or a name from list_agents. model and effort are not used here.",
+        _obj({
+            "description": _d("A short (3-5 word) description of the task", _S),
+            "prompt": _d("The task for the agent to perform", _S),
+            "subagent_type": _d("The type of specialized agent to use for this task", _S),
+            "model": {"type": "string", "description": "Not used: helpers run on this session's model"},
+            "run_in_background": _d("Accepted; the report still comes back in this call", _B),
+        }, ["description", "prompt"]),
+        ("delegate", "spawn_agent"), _claude_agent, aliases=("Task",),
+        reaches=lambda armed: frozenset(t for t in ("delegate", "spawn_agent") if t in armed),
+    ),
+    DialectTool(
+        "Skill",
+        "Loads a skill — a playbook for a kind of task — by name and returns its instructions. "
+        "Use it when a skill fits the task: the skills listed for this folder, or one "
+        "skill_search finds in the user's skill library. Do not guess names.",
+        _obj({
+            "skill": _d("The name of a skill (from this folder's list or skill_search)", _S),
+            "args": _d("Optional arguments for the skill", _S),
+        }, ["skill"]),
+        ("skill_load",), _skill,
+    ),
 )
 
 CLAUDE = Dialect(
@@ -885,6 +1011,8 @@ CLAUDE = Dialect(
         "shell", "process_start", "process_read", "process_stop", "plan_update",
         "notebook_edit", "web_fetch", "web_search", "view_image", "mcp_list_resources",
         "mcp_read_resource", "ask_user", "exit_plan_mode",
+        # v1.372.0: Agent / Task and Skill cover these.
+        "delegate", "spawn_agent", "skill_load",
     }),
     prompt=(
         "Your tools use Claude Code's names and shapes: {tools}. Read a file before you Edit "
@@ -998,6 +1126,24 @@ _GPT_TOOLS: tuple[DialectTool, ...] = (
         _obj({"server": _S, "uri": _S}, ["server", "uri"]),
         ("mcp_read_resource",), _mcp_read,
     ),
+    # v1.372.0 (IJ harness part 2, Phase 1): Codex's multi-agent spawn.
+    DialectTool(
+        "spawn_agent",
+        "Spawn a sub-agent for a well-scoped task. It works in this session's folder, on this "
+        "session's model and account, and this call returns its final report when it is done — "
+        "there is nothing to wait for or close afterwards. Several spawn_agent calls in one "
+        "message run at the same time (at most 3 at once; more wait for a free slot). The "
+        "sub-agent cannot see this conversation: put everything it needs in message. "
+        "agent_type: default or worker (can change files), explorer (reads and searches), or a "
+        "name from list_agents.",
+        # Codex 0.157.0's multi_agent_v1.spawn_agent arguments that mean
+        # something here (v2's task_name is still accepted by the translation).
+        _obj({
+            "message": _d("Initial plain-text task for the new agent.", _S),
+            "agent_type": _d("Agent type for the new agent (default, worker, explorer).", _S),
+        }, ["message"]),
+        ("delegate",), _codex_spawn,
+    ),
 )
 
 GPT = Dialect(
@@ -1009,6 +1155,9 @@ GPT = Dialect(
         "shell", "process_start", "process_read", "process_write", "process_stop",
         "write_file", "edit_file", "multi_edit", "apply_patch", "plan_update", "view_image",
         "mcp_list_resources", "mcp_read_resource", "ask_user",
+        # v1.372.0: Codex's spawn_agent covers delegate (and takes the real
+        # spawn_agent's name, so the real tool is not shown under it).
+        "delegate", "spawn_agent",
     }),
     prompt=(
         "Your tools use Codex's names and shapes: {tools}. Edit files with apply_patch. Read and "

@@ -1199,6 +1199,10 @@ interface PendingAgentApproval {
   /** v1.352.0 (G25): the daemon's undo verdict for the tool — true = it can
    *  be undone, false = it may not be; absent = nothing to undo (a read). */
   reversible?: boolean;
+  /** v1.372.0: the Build session (its thread id) a HELPER agent belongs to
+   *  — the row opens Build on it, where the helper's row and card are.
+   *  Absent for every other run and on an older daemon. */
+  buildSession?: string;
 }
 
 /** v1.351.0 (G03, with G05): a CHAT turn parked on its own approval card
@@ -1317,6 +1321,10 @@ function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
     ...(typeof r.task === "string" && r.task.trim() ? { task: r.task.trim() } : {}),
     ...(typeof r.origin === "string" && r.origin.trim() ? { origin: r.origin.trim() } : {}),
     ...(typeof r.reversible === "boolean" ? { reversible: r.reversible } : {}),
+    // v1.372.0: a Build session's helper names its session.
+    ...(typeof r.build_session === "string" && r.build_session.trim()
+      ? { buildSession: r.build_session.trim() }
+      : {}),
   };
 }
 
@@ -1435,9 +1443,11 @@ export function newAskWords(
   };
 }
 
-/** Where a run's ask opens: its mission screen, else its session page. */
+/** Where a run's ask opens: its mission screen, a Build session's helper its
+ *  Build session (v1.372.0), else its session page. */
 function agentAskHref(ask: PendingAgentApproval): string | null {
   if (ask.missionId) return missionPath(ask.missionId, ask.projectId ?? "");
+  if (ask.buildSession) return buildSessionHref(ask.buildSession);
   return ask.sessionId ? `/sessions/${encodeURIComponent(ask.sessionId)}` : null;
 }
 
@@ -1595,6 +1605,16 @@ function AgentApprovalRow({
               className="mt-1 inline-block text-[12px] text-accent-soft transition-colors hover:text-accent"
             >
               Open the objective →
+            </Link>
+          ) : ask.buildSession ? (
+            // v1.372.0: a Build session's helper opens that session in Build
+            // — the helper's row is there, with this same question on it.
+            <Link
+              data-testid="bell-approval-build"
+              href={buildSessionHref(ask.buildSession)}
+              className="mt-1 inline-block text-[12px] text-accent-soft transition-colors hover:text-accent"
+            >
+              Open the Build session →
             </Link>
           ) : null}
           <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-zinc-600 empty:hidden">

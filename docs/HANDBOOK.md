@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.371.0 (2026-10-22).*
+holds itself to. Current as of v1.372.0 (2026-10-22).*
 
 ---
 
@@ -1896,6 +1896,52 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Helper agents and skills in the IJ harness (v1.372.0)
+
+**A session can split the work.** Ask a Build session in the IJ harness for
+something that has separate parts, for example "find every place we read the
+config and list the ones that ignore my setting", and it can start helper
+agents that work at the same time (Claude calls them agents, Codex calls them
+spawned agents). Each helper is one row in the conversation: who it is, what
+it was asked, and how many steps it has taken. Open a row to see its steps as
+they happen; when it finishes, the row shows its report and an **Open run**
+link. The session then answers with what the helpers found.
+
+- At most **3 helpers** work at once in a session. A fourth waits its turn
+  and its row says so.
+- Helpers use **the session's own model and account**, never another one,
+  and work in the session's folder with its approval setting, Local only
+  setting and the same tools the session has (never more).
+- Starting a helper does not ask you. What a helper **does** still asks
+  exactly as the session would: if it wants to run a command, its approval
+  card appears on its row, and you answer it there. With **Ask before every
+  action**, a helper also asks before it changes a file or opens a web page.
+  The bell and the desktop notice take you to that session.
+- **Stop** stops every helper with the session. Archiving or deleting a
+  session stops them too.
+- A custom agent set to a different model, or an agent on another computer,
+  is not used as a helper; the session is told why.
+- While planning (**Plan first**) the session starts no helpers, because a
+  helper can change files.
+
+**Skills.** A session can look through your skill library and load a skill
+when the task matches, and it can load a skill kept in the project folder
+(`.ironjarvis/harness/skills/<name>`). A skill that came from another program
+or that an agent wrote is checked for hidden instructions before the model
+reads it; your own skills are read as you wrote them.
+
+**Fixed at the same time:** a Build session that was not using an Iron-Proxy
+account (for example on this PC's own Claude or Codex login, a local model,
+or an API key) could be moved to your default model when its own model
+failed, and a picture could be sent to a separate vision model. Now a Build
+session and its helpers always stay on the session's model: if that model
+fails, you see its error instead of an answer from another one. That covers
+everything the session does along the way too: reading a picture or a
+scanned PDF, summarising a long helper run, and planning a big task in
+steps. If the session's model cannot look at pictures, the session says so
+instead of guessing what a picture shows. (Choosing **Auto** for a session
+still lets Iron Jarvis pick.)
 
 ## Pictures and your dev server in the IJ harness (v1.371.0)
 

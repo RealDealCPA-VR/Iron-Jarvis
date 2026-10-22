@@ -267,11 +267,20 @@ class SpawnAgentTool(Tool):
             inherited_workspace_root,
         )
         from . import team as _team
+        from ..harness import helpers as _helpers
         from .runtime import AgentRuntime
         from .types import get_agent_definition
 
         agent_name = (args.get("agent") or "builder").strip()
         task = args.get("task") or ""
+        # AN IJ HARNESS TURN'S HELPER (v1.372.0) — the same parent ``delegate``
+        # reads (``harness/helpers``); None for every other caller.
+        _hp = _helpers.parent_for(ctx)
+        # A harness helper never leaves this PC (a ``remote:`` name is
+        # refused, as in ``delegate``).
+        _remote_refusal = _helpers.target_refusal(_hp, raw=agent_name)
+        if _remote_refusal:
+            return ToolResult(ok=False, output="", error=_remote_refusal)
 
         # Prefer a dynamic agent of this name; otherwise treat the name as a
         # built-in AgentType.
@@ -378,15 +387,43 @@ class SpawnAgentTool(Tool):
         if record is not None:
             approval_mode = approval_mode or (record.approval_mode or "")
             max_steps = record.max_steps or None
+        # AN IJ HARNESS TURN'S HELPER (v1.372.0): no parent row — it inherits
+        # from the turn, exactly as in ``delegate`` (one predicate, both
+        # doors): the session's provider + model (spawn never used a custom
+        # agent's own pin), folder, project, grants + posture, trust, Local
+        # only, and the attended asking origin.
+        # v1.372.0 review: a custom agent pinned to another model is REFUSED
+        # in words, exactly as ``delegate`` refuses it — Claude Code's
+        # background agents arrive through this door, and running the agent
+        # on the session's model while its card names another was a silent
+        # override of the agent's own setting.
+        _pin_refusal = _helpers.target_refusal(
+            _hp, raw=agent_name, record=record,
+            manager=getattr(self.platform, "providers", None),
+        )
+        if _pin_refusal:
+            return ToolResult(ok=False, output="", error=_pin_refusal)
+        _helper_options = None
+        if _hp is not None:
+            provider, model = _hp.provider or provider, _hp.model or model
+            project_id = _hp.project_id or project_id
+            workspace_root = _hp.folder or workspace_root
+            allow_tools, approval_mode = _hp.grants()
+            if record is not None:
+                approval_mode = approval_mode or (record.approval_mode or "")
+            _trust, _trust_reason = _hp.trust()
+            origin = _helpers.HELPER_ORIGIN
+            _helper_options = _hp.options()
 
         # BOUNDED FAN-OUT (v1.193.0), the same cap `delegate` takes — spawn is
         # the other door onto the identical hazard. Deliberately NOT
         # `spawn_managed`: this caller is blocked awaiting the child, so parking
         # the child behind the session governor deadlocks it (`child_slot`).
+        # v1.372.0: plus the session's 3 helper slots in a harness turn.
         async with child_slot(
             self.platform.config,
             child_fanout_key(ctx.agent_run_id, ctx.session_id),
-        ):
+        ), _helpers.helper_slot(_hp):
             child_session = await orch.create_session(
                 task,
                 base_type,
@@ -412,6 +449,8 @@ class SpawnAgentTool(Tool):
                 trust_reason=_trust_reason,
                 # A mission's teammate may ask the user (v1.309.0).
                 origin=origin,
+                # v1.372.0: a harness turn's local-only helper (only then).
+                **({"options": _helper_options} if _helper_options else {}),
             )
             await publish_delegation_started(
                 self.platform,
@@ -420,6 +459,11 @@ class SpawnAgentTool(Tool):
                 child_session_id=child_session.id,
                 target=agent_name,
                 task=task,
+            )
+            # v1.372.0: the harness row starts following the helper.
+            _helpers.child_started(
+                _hp, self.platform, child_session.id,
+                canonical_roster_name(self.platform, agent_name), task,
             )
             # THE CHILD MUST ALWAYS SETTLE — the same guard `delegate` grew in
             # v1.167.0, and since v1.193.0 spawn cannot go without it. A bare
@@ -445,11 +489,19 @@ class SpawnAgentTool(Tool):
                 ):
                     # Its OWN task (v1.309.0), so Stop on this one child can
                     # cancel exactly it — the same shape as `delegate`.
-                    child_task = asyncio.ensure_future(
-                        AgentRuntime(self.platform).run(
-                            child_session, definition, parent_id=ctx.agent_run_id
+                    # v1.372.0: created with the turn's account pin armed.
+                    # v1.372.0 review: and it works with the SESSION's tools
+                    # (``helpers.helper_definition``; unchanged off a turn).
+                    with _helpers.pinned(_hp):
+                        child_task = asyncio.ensure_future(
+                            AgentRuntime(self.platform).run(
+                                child_session,
+                                _helpers.helper_definition(
+                                    _hp, definition, custom=record is not None
+                                ),
+                                parent_id=ctx.agent_run_id,
+                            )
                         )
-                    )
                     _team.bind_task(child_session.id, child_task)
                     run = await child_task
             except asyncio.CancelledError:

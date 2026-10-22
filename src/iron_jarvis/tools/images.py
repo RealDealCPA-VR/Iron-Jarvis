@@ -211,6 +211,25 @@ class ViewImageTool(_ImageTool):
         # and an unmapped/unknown/unavailable role keeps today's default route
         # byte-for-byte (no extra kwargs, so narrow fake routers keep working).
         router = self._router_resolver()
+        # A BUILD SESSION (v1.372.0) looks with its OWN model — never the
+        # vision role's, which may be another provider (``providers.hold``).
+        from ..providers.hold import current_hold, held_model_cannot_see
+
+        hold = current_hold()
+        if hold is not None:
+            if held_model_cannot_see(getattr(router, "manager", None)):
+                return ToolResult(ok=False, error=_HELD_NO_VISION_ERROR)
+            held_kwargs: dict[str, Any] = (
+                {"provider": hold.provider, "model": hold.model} if hold.provider else {}
+            )
+            result = await router.complete(
+                system="You are a precise visual analyst.",
+                messages=[message],
+                tools=[],
+                session_id=ctx.session_id,
+                **held_kwargs,
+            )
+            return _vision_result(result, raw, media_type, blob)
         vision = resolve_role(
             ctx.config,
             getattr(router, "manager", None),
@@ -229,21 +248,34 @@ class ViewImageTool(_ImageTool):
             session_id=ctx.session_id,
             **route_kwargs,
         )
-        text = (getattr(result.response, "text", "") or "").strip()
-        if not text:
-            # Honest error beats a fabricated description (mock/text-only models).
-            return ToolResult(ok=False, error=_NO_VISION_ERROR)
-        return ToolResult(
-            ok=True,
-            output=text,
-            data={
-                "path": raw,
-                "media_type": media_type,
-                "bytes": len(blob),
-                "provider": getattr(result, "provider", None),
-                "model": getattr(result, "model", None),
-            },
-        )
+        return _vision_result(result, raw, media_type, blob)
+
+
+def _vision_result(result: Any, raw: str, media_type: str, blob: bytes) -> ToolResult:
+    text = (getattr(result.response, "text", "") or "").strip()
+    if not text:
+        # Honest error beats a fabricated description (mock/text-only models).
+        return ToolResult(ok=False, error=_NO_VISION_ERROR)
+    return ToolResult(
+        ok=True,
+        output=text,
+        data={
+            "path": raw,
+            "media_type": media_type,
+            "bytes": len(blob),
+            "provider": getattr(result, "provider", None),
+            "model": getattr(result, "model", None),
+        },
+    )
+
+
+#: v1.372.0 review: a Build session's model is never swapped for one that can
+#: see, so a model without vision gets an honest refusal instead of the
+#: picture being dropped and "described" anyway.
+_HELD_NO_VISION_ERROR = (
+    "The model this Build session uses cannot look at pictures, so the picture "
+    "was not described. Choose a model that can (Claude or Codex) for the session."
+)
 
 
 class ImageConvertTool(_ImageTool):

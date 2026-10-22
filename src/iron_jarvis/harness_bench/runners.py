@@ -504,6 +504,15 @@ class JarvisRunner:
                                     # is answered for this call only.
                                     if approvals.resolve(str(data.get("id") or ""), "once"):
                                         out.notes.append(f"answered an approval for {data.get('tool')}")
+                                elif event == "helper" and isinstance(data.get("ask"), dict):
+                                    # v1.372.0: a HELPER's own ask (yolo is
+                                    # never handed down — a helper asks) is
+                                    # answered the same way: this call only.
+                                    _ask = data["ask"]
+                                    if approvals.resolve(str(_ask.get("id") or ""), "once"):
+                                        out.notes.append(
+                                            f"answered a helper's approval for {_ask.get('tool')}"
+                                        )
                                 elif event == "error":
                                     error = str(data.get("detail") or data.get("title") or "the turn failed")
                                     error_fix_kind = str(data.get("fix_kind") or "")
