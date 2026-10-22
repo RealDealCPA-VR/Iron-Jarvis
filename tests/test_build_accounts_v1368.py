@@ -55,8 +55,13 @@ def iso(seconds: float) -> str:
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
+    yield from isolate(tmp_path, monkeypatch)
+
+
+def isolate(tmp_path, monkeypatch):
     """Our OWN Iron-Proxy data dir (the fake writes proxy.json there), no
-    bundle to start, no inherited homes or keys, fresh throttles."""
+    bundle to start, no inherited homes or keys, fresh throttles. (A
+    generator the other v1368 files' own autouse fixtures delegate to.)"""
     monkeypatch.setenv("IRON_PROXY_DATA_DIR", str(tmp_path / "ipd"))
     monkeypatch.setenv("IRONJARVIS_IRON_PROXY_BUNDLE", str(tmp_path / "no-bundle.mjs"))
     monkeypatch.delenv("IRONJARVIS_IRON_PROXY_NODE", raising=False)
@@ -586,6 +591,28 @@ async def test_a_new_session_starts_on_the_vendors_first_usable_account(app, fak
     view = await _new(app, work, account="x-team", provider="claude-cli")
     assert view["account"]["id"] == "x-team" and view["setup"]["provider"] == "codex-cli"
     assert "model" not in view["setup"], "a Codex account gets the Codex default model"
+
+
+async def test_the_accounts_vendor_is_read_off_the_event_loop(app, fake, work, monkeypatch):
+    """A keyless anthropic/openai's vendor is read through provider
+    availability (CLI presence, sign-in): never on the daemon's one loop."""
+    import threading
+
+    await enable(app)
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+    real = BA.vendor_of
+
+    def spy(platform, provider):
+        seen.append(threading.get_ident())
+        return real(platform, provider)
+
+    monkeypatch.setattr(BA, "vendor_of", spy)
+    sid = (await _new(app, work))["id"]
+    await _new(app, work, account="x-plus")
+    status, _ = await asgi(app, "POST", f"/build/sessions/{sid}/account", {"account": "x-team"})
+    assert status == 200
+    assert seen and loop_thread not in seen, "the vendor was read on the event loop"
 
 
 async def test_with_iron_proxy_off_a_session_is_exactly_phase_4(app, work):

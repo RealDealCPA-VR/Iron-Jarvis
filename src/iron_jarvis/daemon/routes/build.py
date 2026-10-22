@@ -288,6 +288,27 @@ def account_patch(platform: Any, setup: dict[str, Any], account_id: "str | None"
     return patch
 
 
+def _with_initial_account(platform: Any, setup: dict[str, Any], account_id: str) -> dict[str, Any]:
+    """A NEW session's setup with its account: ``account_id`` when asked for
+    (validated; the model asked for is kept when it is that account's
+    vendor's, another vendor's account gets its own default model), else the
+    Default of the vendor its model uses. BLOCKING-safe (cached reads)."""
+    from ...harness import build_accounts as BA
+
+    out = dict(setup)
+    if account_id:
+        patch = account_patch(platform, out, account_id, None)
+        out.update({k: v for k, v in patch.items() if v is not None})
+        if "model" in patch and patch["model"] is None:
+            out.pop("model", None)
+        return out
+    vendor = BA.vendor_of(platform, str(out.get("provider") or ""))
+    row = BA.default_for(_svc_of(platform), vendor) if vendor else None
+    if row is not None:
+        out.update({"account": row["id"], "account_name": row["name"], "provider": row["provider"]})
+    return out
+
+
 def turn_account(platform: Any, thread_id: str, setup: dict[str, Any]) -> "tuple[Any, str]":
     """``(AccountPin | None, provider)`` for one build turn. BLOCKING (it may
     re-read Iron-Proxy's accounts once and store the session's account).
@@ -332,7 +353,7 @@ def turn_account(platform: Any, thread_id: str, setup: dict[str, Any]) -> "tuple
         raise HTTPException(
             status_code=409,
             detail=f"This session runs on the account{who}, and Iron-Proxy is off — turn it on "
-                   "in Connections to continue, or choose this PC's login for the session.",
+                   "in Connections to continue.",
         )
     row = BA.find(svc, account)
     if row is not None:
@@ -1172,23 +1193,9 @@ def register(app: FastAPI, d: Any) -> None:
         # v1.368.0: the session's ONE account — the one asked for, else the
         # Default of the vendor its model uses (first usable in Iron-Proxy's
         # order). Iron-Proxy off / no account for that vendor / a local model
-        # or an API key: none (exactly Phase 4).
-        from ...harness import build_accounts as BA
-
-        platform = d.platform
-        if body.account.strip():
-            # The model asked for is kept when it is the account's vendor's;
-            # another vendor's account gets its own default model.
-            patch = account_patch(platform, setup, body.account.strip(), None)
-            setup.update({k: v for k, v in patch.items() if v is not None})
-            if "model" in patch and patch["model"] is None:
-                setup.pop("model", None)
-        else:
-            vendor = BA.vendor_of(platform, body.provider)
-            row_acct = BA.default_for(_svc_of(platform), vendor) if vendor else None
-            if row_acct is not None:
-                setup.update({"account": row_acct["id"], "account_name": row_acct["name"],
-                              "provider": row_acct["provider"]})
+        # or an API key: none (exactly Phase 4). Off the loop: the vendor of a
+        # keyless API provider is read through provider availability.
+        setup = await asyncio.to_thread(_with_initial_account, d.platform, setup, body.account.strip())
         row = await asyncio.to_thread(S.create, engine_of(), folder, body.title, setup)
         return await asyncio.to_thread(_full_view, row)
 
@@ -1376,7 +1383,9 @@ def register(app: FastAPI, d: Any) -> None:
                 content={"detail": RUNNING_SENTENCE, "turn_id": _running_turn(d, thread_id)},
             )
         row = await asyncio.to_thread(_session_or_404, thread_id)
-        patch = account_patch(platform, _setup_of(row), body.account.strip(), body.model.strip() or None)
+        patch = await asyncio.to_thread(
+            account_patch, platform, _setup_of(row), body.account.strip(), body.model.strip() or None,
+        )
         row = await asyncio.to_thread(S.update, platform.engine, thread_id, setup=patch)
         if row is None:
             raise HTTPException(status_code=404, detail="no such Build session")

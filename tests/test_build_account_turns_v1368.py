@@ -40,16 +40,14 @@ from iron_jarvis.daemon.routes import build as build_routes
 from iron_jarvis.harness import sessions as S
 from iron_jarvis.iron_proxy import accounts
 from iron_jarvis.iron_proxy import pin as P
-from tests.test_build_accounts_v1368 import (  # noqa: F401 — fixtures
+from tests.test_build_accounts_v1368 import (
     Behaviour,
-    _isolated,
-    app,
     enable,
-    fake,
     iso,
+    isolate,
+    make_fake,
     picks,
     wire_doubles,
-    work,
     write_call,
 )
 from tests.test_build_sessions_v1367 import (
@@ -64,6 +62,31 @@ from tests.test_build_sessions_v1367 import (
     until,
     wire,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated(tmp_path, monkeypatch):
+    yield from isolate(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def fake(tmp_path):
+    f = make_fake(tmp_path)
+    yield f
+    f.stop()
+
+
+@pytest.fixture
+def app(tmp_path):
+    return create_app(str(tmp_path / "home"))
+
+
+@pytest.fixture
+def work(tmp_path):
+    folder = tmp_path / "work"
+    folder.mkdir()
+    (folder / "app.py").write_text("x = 1\n", encoding="utf-8")
+    return folder
 
 
 async def _session(app, work, **extra) -> str:
@@ -498,7 +521,6 @@ async def test_no_failover_ever_moves_a_pinned_turn(app, fake, work, monkeypatch
 
 
 async def test_an_iron_proxy_too_old_for_pinning_is_said_and_nothing_runs(tmp_path, app, work, monkeypatch):
-    from tests.test_build_accounts_v1368 import make_fake
     from fake_iron_proxy_v1301 import FEATURES_PICK_PROFILE
 
     stale = make_fake(tmp_path, features=FEATURES_PICK_PROFILE)
