@@ -319,7 +319,11 @@ class IronProxyClient:
 
     # ------------------------------------------- the external-executor API
     def pick(
-        self, provider: str, lane: str = "cli", profile_id: str | None = None
+        self,
+        provider: str,
+        lane: str = "cli",
+        profile_id: str | None = None,
+        pinned: bool = False,
     ) -> dict[str, Any]:
         """``{"profile": Profile, "env": {"set": {...}, "unset": [...]}}`` — the
         account a call should run as right now. Raises ``NO_PROFILE``,
@@ -330,10 +334,18 @@ class IronProxyClient:
         Iron-Proxy whose health ``features`` has ``"pick-profile"``). Same 200
         shape; an account that cannot be used answers an error naming it. An
         older Iron-Proxy IGNORES the parameter and picks the first free account
-        — callers check the feature first and compare the answer's id."""
+        — callers check the feature first and compare the answer's id.
+
+        ``pinned`` (v1.368.0, health ``features`` has ``"pick-pinned"``):
+        ``pinned=1`` — THAT account or its park (``QUOTA_EXCEEDED`` with
+        ``resetAt``/``kind`` and a ``retry-after``, ``AUTH_REQUIRED``,
+        ``PROFILE_NOT_FOUND``), never another; a pinned pick with no id is a
+        400. Sent only together with ``profile_id``."""
         params: dict[str, Any] = {"provider": provider, "lane": lane}
         if profile_id:
             params["profileId"] = profile_id
+            if pinned:
+                params["pinned"] = "1"
         return self._call("GET", "/iron/pick", params=params)
 
     def signal(
@@ -342,7 +354,10 @@ class IronProxyClient:
         status: int | None = None,
         headers: dict[str, str] | None = None,
         text: str | None = None,
+        rate_limits: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """``rate_limits`` (v1.368.0, ``plan-usage``): the vendor's account
+        snapshot (Codex's ``RateLimitSnapshot`` shape), sent as ``rateLimits``."""
         body: dict[str, Any] = {}
         if status is not None:
             body["status"] = int(status)
@@ -350,6 +365,8 @@ class IronProxyClient:
             body["headers"] = {str(k).lower(): str(v) for k, v in headers.items()}
         if text is not None:
             body["text"] = text
+        if rate_limits:
+            body["rateLimits"] = dict(rate_limits)
         return self._call("POST", f"/iron/profiles/{self._id(profile_id)}/signal", json=body)
 
     def finished(
@@ -358,7 +375,13 @@ class IronProxyClient:
         usage: dict[str, int] | None = None,
         duration_ms: int | None = None,
         model: str | None = None,
+        headers: dict[str, str] | None = None,
+        rate_limits: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """``headers`` / ``rate_limits`` (v1.368.0, ``plan-usage``): what the
+        vendor said about the account on this call — Claude's
+        ``anthropic-ratelimit-unified-*`` response headers, Codex's rate-limit
+        snapshot — so Iron-Proxy learns the plan and the usage windows."""
         body: dict[str, Any] = {}
         if usage:
             body["usage"] = dict(usage)
@@ -366,4 +389,8 @@ class IronProxyClient:
             body["durationMs"] = int(duration_ms)
         if model:
             body["model"] = model
+        if headers:
+            body["headers"] = {str(k).lower(): str(v) for k, v in headers.items()}
+        if rate_limits:
+            body["rateLimits"] = dict(rate_limits)
         return self._call("POST", f"/iron/profiles/{self._id(profile_id)}/finished", json=body)

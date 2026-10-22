@@ -941,8 +941,17 @@ def assemble(
         str(b.get("thinking")) for b in blocks
         if b.get("type") == "thinking" and isinstance(b.get("thinking"), str) and b.get("thinking")
     )
+    # v1.368.0 (IJ harness Phase 5): what Anthropic said about the ACCOUNT on
+    # this answer — the relay's allow-listed ``anthropic-ratelimit-*`` (and
+    # ``retry-after``) response headers — for Iron-Proxy's ``/finished``
+    # (each account's plan usage windows). Never a credential: the relay
+    # keeps only that allow-list (``admission.exposed_headers``).
+    extra: dict[str, Any] = {}
+    seen = dict(getattr(admission, "headers", None) or {}) if used else {}
+    if seen:
+        extra["ratelimit_headers"] = seen
     return LLMResponse(text=text, tool_calls=calls, finish_reason=finish, usage=usage,
-                       raw_blocks=[raw], thinking=thinking), remainder
+                       raw_blocks=[raw], thinking=thinking, extra=extra), remainder
 
 
 # --------------------------------------------------------------------------- #

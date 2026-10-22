@@ -151,6 +151,17 @@ async def _complete_with_retry(adapter, *, system, messages, tools, attempts: in
             delay *= 2.5
 
 
+def _pin_armed() -> bool:
+    """Is a Build turn's account pin armed for this call (``iron_proxy.pin``,
+    v1.368.0)? Never raises."""
+    try:
+        from ..iron_proxy.pin import current
+
+        return current() is not None
+    except Exception:  # noqa: BLE001 — a reader never breaks a call
+        return False
+
+
 def _provider_error_http(exc: Exception) -> HTTPException:
     """Map a provider failure to an honest, human-readable HTTP error."""
     if _is_transient_provider_error(exc):
@@ -1610,6 +1621,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     clear=lambda: loop_health.pop("iron_proxy", None),
                 )
             )
+            # IJ HARNESS ACCOUNTS (v1.368.0): "Resume when ready". The waits
+            # live on the Build sessions (setup.account_wait), so they survive
+            # a restart; this loop re-checks each at its reset and continues
+            # the session when its account is usable. Each pass reports ITS
+            # OWN outcome on loop_health["build_accounts"].
+            from .routes.build import account_wait_loop as _build_wait_loop
+
+            bg_tasks["build_accounts"] = asyncio.create_task(
+                _build_wait_loop(_app.state.d, lambda ok, exc: _tick("build_accounts", ok, exc))
+            )
 
         # SHARE MY PROFILE WITH BUILD (v1.306.0): when a switch is on, bring
         # its block up to date — on a timer THREAD (poke returns at once), so
@@ -1831,6 +1852,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 orchestrator.shutdown_queue()
             except Exception:  # noqa: BLE001 — shutdown never raises
                 pass
+            # v1.368.0 review: "Resume when ready" stops FIRST — a wait that
+            # came due during shutdown would otherwise start a continuation
+            # AFTER the turns below were cut off (its wait consumed, its turn
+            # destroyed with the loop, nothing saved).
+            _build_waits = bg_tasks.pop("build_accounts", None)
+            if _build_waits is not None:
+                _build_waits.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(_build_waits, return_exceptions=True), timeout=5.0
+                    )
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    pass
             # v1.336.0: daemon-owned chat turns are cut off HERE, with what
             # they wrote saved and an "interrupted" end on their log — not
             # destroyed with the loop, which saved nothing.
@@ -2592,6 +2626,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 ) from exc
             if not _is_transient_provider_error(exc):
                 raise _provider_error_http(exc)
+            # A BUILD SESSION'S ACCOUNT (v1.368.0 review): a one-shot made
+            # inside a Build turn (its automatic compaction) is HELD like the
+            # turn itself — the router holds the turn (``held``), and these
+            # utilities call the adapter directly, so the hold is repeated
+            # here. A pinned account that failed is surfaced, never handed to
+            # another provider (an API key, another vendor, another machine)
+            # the session did not choose.
+            if _pin_armed():
+                raise _provider_error_http(exc)
             for alt, alt_provider in _failover_candidates(provider):
                 try:
                     resp = await _complete_with_retry(
@@ -2663,6 +2706,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
         except Exception:  # noqa: BLE001 — fall through to failover
             adapter = None
         if adapter is None or isinstance(adapter, MockLLMAdapter):
+            if _pin_armed():
+                # A Build turn on its ONE account (v1.368.0 review): the
+                # summary is written by the turn's own model or by nobody
+                # (the deterministic recap keeps the job), never a stand-in.
+                return None
             adapter, prov = _failover_adapter("mock")
         if adapter is None:
             return None

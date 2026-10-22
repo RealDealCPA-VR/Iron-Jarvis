@@ -138,6 +138,20 @@ def is_no_failover(exc: BaseException) -> bool:
     return bool(getattr(exc, "no_failover", False))
 
 
+def _account_held(provider: str | None) -> bool:
+    """True while a Build session's account pin is armed for this call
+    (``iron_proxy.pin``, v1.368.0) and the call names its provider explicitly:
+    the router then holds the call like a strict pick. Never raises."""
+    if not provider or provider == "auto":
+        return False
+    try:
+        from ..iron_proxy.pin import current
+
+        return current() is not None
+    except Exception:  # noqa: BLE001 — a reader never breaks routing
+        return False
+
+
 def is_transient_error(exc: Exception) -> bool:
     """Classify a provider failure as transient (retry / fail over) or permanent.
 
@@ -1808,6 +1822,13 @@ class ModelRouter:
         # request (MCP sampling) is answered by the turn's own model or not
         # at all — never sent to a fallback. MIRROR NOTE (lock-step).
         pinned = bool(provider) and provider != "auto" and (pin or self._strict_pin())
+        # A BUILD SESSION'S ACCOUNT (v1.368.0): a turn running on the one
+        # account the user picked is HELD like an explicit strict pick — no
+        # capability reroute, no default fallback, no sideways failover (any
+        # of them could land the turn on an account nobody picked). The
+        # words stay the plain ones: this is not the strict-pin setting.
+        # MIRROR NOTE (lock-step): complete() and stream().
+        held = pinned or _account_held(provider)
         # LOCAL ONLY (v1.332.0): a primary that leaves this network is refused
         # HERE, before any probe, breaker or attempt; the one the user allowed
         # for this message is pinned (``egress_pin``). MIRROR NOTE (lock-step).
@@ -1834,7 +1855,7 @@ class ModelRouter:
         # seam to guided decoding; everything else keeps the fenced contract
         # byte-identical. MIRROR NOTE (lock-step): stream() carries the
         # identical seam — edit both or neither.
-        if not pinned and not egress_pin and not downgraded and adapter.provider != "mock":
+        if not held and not egress_pin and not downgraded and adapter.provider != "mock":
             if need_tools and not _supports_tools(adapter):
                 adapter = self._wrap_for_tools(adapter)
                 reason = "prompted-tools"
@@ -1964,7 +1985,7 @@ class ModelRouter:
             # verbatim rather than answering from a different provider. The
             # local-only one-message OK pins the same way (v1.332.0): it was
             # for THIS provider, never for whatever would stand in.
-            if pinned or egress_pin:
+            if held or egress_pin:
                 raise
             # A LOCAL ENDPOINT THAT NEVER ANSWERED REFUSES — it never fails
             # over, whether it was never reached or merely never replied in
@@ -2285,6 +2306,13 @@ class ModelRouter:
         # request (MCP sampling) is answered by the turn's own model or not
         # at all — never sent to a fallback. MIRROR NOTE (lock-step).
         pinned = bool(provider) and provider != "auto" and (pin or self._strict_pin())
+        # A BUILD SESSION'S ACCOUNT (v1.368.0): a turn running on the one
+        # account the user picked is HELD like an explicit strict pick — no
+        # capability reroute, no default fallback, no sideways failover (any
+        # of them could land the turn on an account nobody picked). The
+        # words stay the plain ones: this is not the strict-pin setting.
+        # MIRROR NOTE (lock-step): complete() and stream().
+        held = pinned or _account_held(provider)
         # LOCAL ONLY (v1.332.0): a primary that leaves this network is refused
         # HERE, before any probe, breaker or attempt; the one the user allowed
         # for this message is pinned (``egress_pin``). MIRROR NOTE (lock-step).
@@ -2302,7 +2330,7 @@ class ModelRouter:
         # (_wrap_for_tools — MIRROR NOTE, lock-step with complete(): edit
         # both or neither), vision keeps the reroute. Under the pin the
         # user's pick keeps the request, tools offered RAW (no wrap).
-        if not pinned and not egress_pin and not downgraded and adapter.provider != "mock":
+        if not held and not egress_pin and not downgraded and adapter.provider != "mock":
             if need_tools and not _supports_tools(adapter):
                 adapter = self._wrap_for_tools(adapter)
                 reason = "prompted-tools"
@@ -2433,7 +2461,7 @@ class ModelRouter:
             # verbatim rather than streaming from a different provider. The
             # local-only one-message OK pins the same way (v1.332.0).
             # MIRROR NOTE (lock-step): complete().
-            if pinned or egress_pin:
+            if held or egress_pin:
                 raise
             # A LOCAL ENDPOINT THAT NEVER ANSWERED REFUSES — it never fails over.
             # MIRROR NOTE (lock-step): complete() carries the identical guard.

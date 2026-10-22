@@ -189,6 +189,21 @@ def _alive(s: S.CodexSession) -> bool:
         return False
 
 
+def _on_pinned_account(s: S.CodexSession) -> bool:
+    """v1.368.0: may this parked session continue under the account pin
+    armed for this call (a Build turn's ONE account)? True with no pin; with
+    one, only when the session runs as exactly that account."""
+    try:
+        from ....iron_proxy.pin import current
+
+        pin = current()
+    except Exception:  # noqa: BLE001
+        return True
+    if pin is None:
+        return True
+    return s.lease is not None and getattr(s.lease, "profile_id", None) == pin.profile_id
+
+
 def _which_cli(binary: str) -> str | None:
     from ..subprocess_cli import _which_cli as resolve
 
@@ -316,6 +331,12 @@ class CodexNativeAdapter(LLMAdapter):
             claimed, stale = S.POOL.claim(ids)
             await _teardown_all(stale)
             if claimed is not None and not _alive(claimed):
+                await _teardown(claimed)
+                claimed = None
+            if claimed is not None and not _on_pinned_account(claimed):
+                # v1.368.0: a Build session moved to another account — a
+                # parked Codex session runs as the OLD account's CODEX_HOME;
+                # nothing may continue on an account the session left.
                 await _teardown(claimed)
                 claimed = None
             if claimed is not None:
@@ -720,6 +741,10 @@ class CodexNativeAdapter(LLMAdapter):
                     break
                 failure = P.turn_failure(err, emitted=attempt.emitted, rate_limits=s.rate_limits)
                 attempt.signal = failure.signal
+                if attempt.signal is not None and s.rate_limits:
+                    # v1.368.0: the account's snapshot rides the limit report
+                    # (Iron-Proxy parks to the used-up window's reset).
+                    attempt.signal = {**attempt.signal, "rate_limits": dict(s.rate_limits)}
                 if failure.sign_in and s.lease is None:
                     from ...cli_auth import note_cli_failure
 
@@ -759,8 +784,11 @@ class CodexNativeAdapter(LLMAdapter):
         if s.lease is not None:
             from ....iron_proxy import accounts
 
+            # v1.368.0: with the account's rate-limit snapshot (Iron-Proxy's
+            # ``rateLimits``: the plan and the usage windows).
             await accounts.report_success_async(
-                s.lease, usage, int((time.monotonic() - started) * 1000), s.served_model or self.model
+                s.lease, usage, int((time.monotonic() - started) * 1000), s.served_model or self.model,
+                rate_limits=s.rate_limits,
             )
         yield {"type": "final", "response": response}
 
