@@ -175,7 +175,11 @@ export default function TerminalsPage() {
     }
     if (next === "rail") {
       // The session link belongs to the harness view; the rail's address is
-      // plain Build (the harness puts the session back when it opens).
+      // plain Build (the harness puts the session back when it opens). The
+      // link the page was opened with is spent too: coming back to the
+      // harness opens the session this window had open, not that old link
+      // (v1.369.0 review).
+      setLinkSession(null);
       try {
         const url = new URL(window.location.href);
         url.searchParams.delete("session");

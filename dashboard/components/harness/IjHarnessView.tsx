@@ -12,7 +12,7 @@
  * the window is visible (no event fires when a session changes).
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageSquarePlus } from "lucide-react";
 import { HarnessSidebar } from "@/components/harness/HarnessSidebar";
 import { HarnessSession } from "@/components/harness/HarnessSession";
@@ -80,6 +80,12 @@ export function IjHarnessView({
   const [folders, setFolders] = useState<BuildFolder[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  // The first pick (the address, else the session this window had open) is
+  // made when the list answers. Until then `selected` is only "not picked
+  // yet" and must not be written back: the write ran BEFORE the pick and
+  // erased the remembered session, so Build came back to the newest session
+  // instead of the one it had open (v1.369.0 review).
+  const pickedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -101,11 +107,14 @@ export function IjHarnessView({
 
   useEffect(() => {
     void refresh().then((list) => {
+      // A session started before the list answered is already the pick.
+      if (pickedRef.current) return;
       const wanted = initialSession ?? readLastSession();
       const known = list?.some((f) => f.sessions.some((s) => s.id === wanted));
       // A session from the URL is opened even when the list does not have it
       // yet (it may be archived); a remembered one only while it is listed.
       const pick = initialSession ?? (known ? wanted : null) ?? list?.[0]?.sessions[0]?.id ?? null;
+      pickedRef.current = true;
       setSelected(pick);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -114,6 +123,7 @@ export function IjHarnessView({
   useVisibleInterval(() => void refresh(), SESSION_LIST_POLL_MS);
 
   useEffect(() => {
+    if (!pickedRef.current) return;
     writeLastSession(selected);
     writeUrlSession(selected);
   }, [selected]);
@@ -127,6 +137,7 @@ export function IjHarnessView({
     try {
       const made = await createSession(folder);
       if (!made) return "The session could not be started.";
+      pickedRef.current = true;
       setSelected(made.id);
       void refresh();
       return null;

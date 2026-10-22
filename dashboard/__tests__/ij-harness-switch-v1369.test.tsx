@@ -237,6 +237,18 @@ describe("a terminal from the IJ harness's Terminals group", () => {
     expect(saved()).toBe("rail");
     expect(window.location.search).not.toContain("session=");
   });
+
+  it("back in the IJ harness, the link the page was opened with is spent (v1.369.0 review)", async () => {
+    // The harness then opens the session this window had open, not the old
+    // link: the user had moved to another session before going to a terminal.
+    at("/terminals?session=bs_42");
+    render(<TerminalsPage />);
+    expect(await screen.findByTestId("ij-harness-view")).toHaveAttribute("data-initial", "bs_42");
+    fireEvent.click(await screen.findByTestId("stub-open-t2"));
+    await screen.findByTestId("pane-rail");
+    fireEvent.click(screen.getByTestId("build-view-harness"));
+    expect(await screen.findByTestId("ij-harness-view")).toHaveAttribute("data-initial", "");
+  });
 });
 
 describe("the canvas is gone", () => {

@@ -211,6 +211,17 @@ describe("the view", () => {
     expect(screen.getByTestId("session-stub")).toHaveAttribute("data-running", "true");
   });
 
+  it("with no address, the remembered session opens even when it is NOT the newest (v1.369.0 review)", async () => {
+    // The first render's "nothing picked yet" used to be written back before
+    // the list answered, erasing the remembered session: Build then opened
+    // the newest session instead of the one it had open.
+    localStorage.setItem("ij.build.session", "b1");
+    render(<IjHarnessView initialSession={null} terminals={[]} onOpenTerminal={() => {}} defaultFolder={null} terminal={terminal} />);
+    await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "b1"));
+    expect(localStorage.getItem("ij.build.session")).toBe("b1");
+    expect(new URL(window.location.href).searchParams.get("session")).toBe("b1");
+  });
+
   it("a new session from the left pane is created and opened", async () => {
     render(<IjHarnessView initialSession={null} terminals={[]} onOpenTerminal={() => {}} defaultFolder={"C:\\work"} terminal={terminal} />);
     await screen.findByTestId("session-stub");
