@@ -1933,7 +1933,13 @@ Step six of the coding screen: you can use it now. Open **Build** and choose
 - **The free-form terminal canvas is gone.** If you last used it, Build now
   opens on the IJ harness. The Terminals view still has every terminal.
 - **Links open the session.** The bell, the tray and Activity open a coding
-  session in Build, never in Chat.
+  session in Build, never in Chat — also when Build is already open on
+  another session or on the Terminals view.
+- **An Undo reads as undone.** After an Undo that worked, the changes line —
+  here and under a chat reply — says "undone", never "changed since". It
+  still says "changed since" when the file changed again after the Undo.
+- **On a phone** the conversation and its message box are one screen-high
+  box (the conversation scrolls inside it); the five tabs come after it.
 
 ## Each coding session runs on the account you picked (v1.368.0)
 
