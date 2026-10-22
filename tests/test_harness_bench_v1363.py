@@ -969,25 +969,31 @@ def test_the_jarvis_identity_names_its_harness(tmp_path):
 
 
 def test_the_dialect_and_the_tree_join_the_configuration_fingerprint(tmp_path):
-    """v1.366.0: ``--dialect auto`` (glm → Claude Code's dialect) and
-    ``--dialect generic`` are two setups, never a reused result."""
+    """v1.366.0: ``--dialect claude`` and ``--dialect generic`` are two
+    setups, never a reused result. (Review: glm's own row is generic by
+    measurement, so ``--dialect auto`` speaks generic for a glm model — and is
+    still its own setup, because what was ASKED is part of the identity.)"""
     platform = build_platform(str(tmp_path / "root"))
     auto = JarvisRunner(platform, provider="custom", model="glm-5.3-flash").identity()
     generic = JarvisRunner(platform, provider="custom", model="glm-5.3-flash", dialect="generic").identity()
-    assert auto["family"] == generic["family"] == "glm"
-    assert auto["dialect"] == "claude" and generic["dialect"] == "generic"
-    assert auto["tools"][:3] == ["Read", "Write", "Edit"] and "read_file" in generic["tools"]
-    assert auto["harness_fingerprint"] != generic["harness_fingerprint"]
-    assert auto["tools_sha256"] != generic["tools_sha256"]
-    keys = {Configuration("jarvis", "custom", "glm-5.3-flash", h).key for h in (auto, generic)}
-    assert len(keys) == 2
+    claude = JarvisRunner(platform, provider="custom", model="glm-5.3-flash", dialect="claude").identity()
+    assert auto["family"] == generic["family"] == claude["family"] == "glm"
+    assert auto["dialect"] == generic["dialect"] == "generic" and claude["dialect"] == "claude"
+    assert auto["dialect_requested"] == "auto" and claude["dialect_requested"] == "claude"
+    assert claude["tools"][:3] == ["Read", "Write", "Edit"] and "read_file" in generic["tools"]
+    assert claude["harness_fingerprint"] != generic["harness_fingerprint"]
+    assert claude["tools_sha256"] != generic["tools_sha256"]
+    assert auto["harness_fingerprint"] == generic["harness_fingerprint"]
+    keys = {Configuration("jarvis", "custom", "glm-5.3-flash", h).key for h in (auto, generic, claude)}
+    assert len(keys) == 3
     # The fingerprint is the tree's, not the day's.
     assert JarvisRunner(platform, provider="custom", model="glm-5.3-flash").identity() == auto
 
 
 async def test_the_jarvis_runner_runs_its_turn_in_harness_mode(tmp_path, monkeypatch):
-    """A glm model is shown Claude Code's tools; its ``Read`` / ``Write`` calls
-    run the real tools; the record keeps the harness the turn reported."""
+    """A glm model run with ``--dialect claude`` is shown Claude Code's
+    tools; its ``Read`` / ``Write`` calls run the real tools; the record keeps
+    the harness the turn reported."""
     platform = build_platform(str(tmp_path / "root"))
     task = TASKS["bugfix-pagination"]
     seen: list[list[str]] = []
@@ -1006,7 +1012,7 @@ async def test_the_jarvis_runner_runs_its_turn_in_harness_mode(tmp_path, monkeyp
         yield {"type": "final", "response": resp, "provider": "custom", "model": "glm-5.3-flash"}
 
     monkeypatch.setattr(platform.router, "stream", stream)
-    runner = JarvisRunner(platform, provider="custom", model="glm-5.3-flash", round_budget=8)
+    runner = JarvisRunner(platform, provider="custom", model="glm-5.3-flash", round_budget=8, dialect="claude")
     res = await run_bench(runner=runner, home=platform.config.home, tasks=[task])
     rec = res.records[0]
     assert rec["passed"] is True, (rec["error"], rec["grade_reason"])

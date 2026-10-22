@@ -488,8 +488,10 @@ class HarnessTurn:
 
     def wants_nudge(self, reply: str, has_calls: bool, round_index: int, rounds: int) -> bool:
         """True ONCE per turn: the reply called no tool, wrote one as text, and
-        a round is left to call it for real."""
-        if self.nudged or has_calls or round_index >= rounds - 1:
+        a round is left to call it for real. Never on a turn that offered no
+        tool (a text-only model): "call the tool itself" would name a tool it
+        does not have, and the extra round could only repeat the answer."""
+        if self.nudged or has_calls or round_index >= rounds - 1 or not self.plan.offered_names:
             return False
         names = set(self.plan.offered_names) | self.plan.gate
         kind = text_tool_call(reply, names)
@@ -543,7 +545,16 @@ class HarnessTurn:
                 )
                 continue
             status, text = await run_check(check.command, check.timeout_s)
-            if status == "refused":
+            if status == "refused" and not {"shell", "process_start"} & self.plan.gate:
+                # The POST lane (and a ceiling without either) gives the model
+                # no command tool: "run it yourself" would send it to a tool it
+                # does not have (review of v1.366.0). Codex's dialect reaches
+                # process_start, not the shell, so it keeps the sentence below.
+                parts.append(
+                    f"Check not run (this turn cannot run commands): `{check.command}` checks this "
+                    "edit; tell the user to run it."
+                )
+            elif status == "refused":
                 parts.append(
                     f"Check not run (running it needs the user's approval): run `{check.command}` "
                     "yourself with your command tool."
