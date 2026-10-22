@@ -217,6 +217,8 @@ describe("the view", () => {
     fireEvent.click(screen.getByTestId("harness-new-session"));
     fireEvent.click(screen.getByTestId("harness-new-start"));
     await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "new1"));
+    // The folder only: the daemon chooses the account (its Default, even at
+    // its limit — v1.368.0); the screen never picks one for a new session.
     expect(api.posts).toContainEqual(["/build/sessions", { folder: "C:\\work" }]);
   });
 

@@ -255,7 +255,7 @@ export function AccountChip({
   const line = account ? accountStatusLine(account) : null;
   const warn = !!line && warns(line.kind);
   return (
-    <div ref={boxRef} className="relative min-w-0">
+    <div ref={boxRef} className="relative flex min-w-0 items-center gap-1.5">
       <button
         type="button"
         data-testid="account-chip"
@@ -279,6 +279,15 @@ export function AccountChip({
         {warn ? <CircleAlert size={12} aria-hidden className="shrink-0" /> : null}
         <ChevronDown size={12} aria-hidden className="shrink-0 opacity-70" />
       </button>
+      {/* An account that cannot serve says so beside its name, before the
+          user types: a NEW session starts on the Default account even when
+          that account is at its limit (the daemon's choice, v1.368.0), and
+          its first reply is then the limit card. */}
+      {warn && line ? (
+        <span data-testid="account-chip-status" className="min-w-0 truncate text-[12px] text-tone-warn">
+          {line.text}
+        </span>
+      ) : null}
       {open ? (
         <div
           id={listId}

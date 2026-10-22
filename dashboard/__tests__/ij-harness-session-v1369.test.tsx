@@ -696,3 +696,49 @@ describe("the account chip", () => {
     expect(screen.queryByTestId("account-chip")).toBeNull();
   });
 });
+
+describe("a new session on a Default account that is at its limit (v1.368.0 ship)", () => {
+  // The daemon starts a NEW session on the account the list badges Default,
+  // even at its limit. The screen shows that, picks nothing else, and the
+  // first turn ends on the limit card.
+  const WORK = {
+    id: "work", name: "Work", vendor: "claude", vendor_label: "Claude Code", provider: "claude-cli",
+    default: true, plan: "max", plan_label: "Max", status: "limit", resets_at: "2030-01-01T16:12:00Z", limit_kind: "usage",
+  };
+  const PERSONAL = { ...WORK, id: "personal", name: "Personal", default: false, plan_label: "Pro", status: "ready", resets_at: null, limit_kind: "" };
+
+  it("the chip says the limit before anything is sent, and the screen moves the session nowhere", async () => {
+    api.gets["/build/sessions/s1"] = view({
+      setup: { provider: "claude-cli", account: "work", account_name: "Work" },
+      account: WORK,
+      account_vendor: "claude",
+      account_limit: null,
+      account_wait: null,
+    });
+    api.gets["/build/accounts"] = { claude: [WORK, PERSONAL], codex: [], iron_proxy: { enabled: true, running: true, needs_update: false, note: "" } };
+    fetchMock.mockImplementation(async () =>
+      sse([
+        ["round", { round: 0 }],
+        ["account_limit", { account: "work", account_name: "Work", provider: "claude-cli", vendor: "claude", kind: "usage", resets_at: "2030-01-01T16:12:00Z", resumable: true, turn_id: "x" }],
+        ["error", { detail: "parked", title: "Work is out of usage.", fix: "Your conversation and the work so far are kept." }],
+      ]),
+    );
+    renderSession();
+    expect(await screen.findByTestId("account-chip-name")).toHaveTextContent("Work");
+    expect(await screen.findByTestId("account-chip-status")).toHaveTextContent(/^Limit reached · resets /);
+    // Nothing on the screen side picks another account.
+    expect(api.calls.some((c) => c.method === "PATCH" || c.path === "/build/sessions/s1/account")).toBe(false);
+    await send("Start the page");
+    const card = await screen.findByTestId("account-limit-card");
+    expect(within(card).getByRole("button", { name: "Choose account" })).toBeInTheDocument();
+    expect(api.calls.some((c) => c.method === "PATCH" || c.path === "/build/sessions/s1/account")).toBe(false);
+  });
+
+  it("a ready account shows no status beside its name", async () => {
+    api.gets["/build/sessions/s1"] = view({ account: PERSONAL, account_vendor: "claude", account_limit: null, account_wait: null });
+    api.gets["/build/accounts"] = { claude: [WORK, PERSONAL], codex: [], iron_proxy: { enabled: true, running: true, needs_update: false, note: "" } };
+    renderSession();
+    expect(await screen.findByTestId("account-chip-name")).toHaveTextContent("Personal");
+    expect(screen.queryByTestId("account-chip-status")).toBeNull();
+  });
+});
