@@ -413,3 +413,44 @@ async def test_a_waiting_build_session_is_marked_on_the_pending_listing(app, wor
     assert list(row)[-1] == "surface"
     await asgi(app, "POST", "/chat/turns/rv-wait/stop", {})
     await until(lambda: lg.status != "running")
+
+
+# --------------------------------------------------------------------------- #
+# 11. a busy database while keeping a grant never ends the live turn
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_failed_read_while_keeping_a_grant_never_ends_the_turn(app, work, monkeypatch):
+    """``_apply_session_changes`` says it never raises, but its read of the
+    session (to merge an "allow for this conversation" grant) sat outside its
+    try: a busy database there escaped into ``recorded_turn`` and ended the
+    live turn mid-stream, after the user had just allowed the call."""
+    from tests.test_chat_turn_stop_v1241 import _asgi_post
+
+    sid = new_session(app, work)["id"]
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ran it"]))
+    real = S.get_row
+    calls = {"n": 0}
+
+    def flaky(engine, thread_id):
+        calls["n"] += 1
+        if calls["n"] >= 2:  # the turn route's own read passes; the grant merge's fails
+            raise RuntimeError("database is locked")
+        return real(engine, thread_id)
+
+    monkeypatch.setattr(S, "get_row", flaky)
+    drop = asyncio.Event()
+    task = asyncio.create_task(open_turn(app, sid, {"text": "run it", "turn_id": "rv-busy"}, drop=drop))
+    from tests.test_build_sessions_v1367 import turn_frames
+
+    card = await until(lambda: [d for e, d in turn_frames(app, "rv-busy") if e == "approval"])
+    assert (await _asgi_post(app, f"/chat/approvals/{card[0]['id']}", {"decision": "conversation"}))[0] == 200
+    lg = await until(lambda: turn_log(app, "rv-busy"))
+    await until(lambda: lg.status != "running")
+    drop.set()
+    await task
+    assert lg.status == "done", lg.status
+    events = [e for e, _ in turn_frames(app, "rv-busy")]
+    assert events[-1] == "done", events[-5:]
+    monkeypatch.setattr(S, "get_row", real)
+    assert messages_of(app, sid)[-1]["content"] == "ran it"

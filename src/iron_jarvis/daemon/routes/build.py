@@ -369,12 +369,19 @@ async def _apply_session_changes(engine: Any, thread_id: str, watch: _ReplyWatch
             "approved_at": utcnow().isoformat(),
         }
     if watch.granted:
-        row = await asyncio.to_thread(S.get_row, engine, thread_id)
-        have = list(_setup_of(row).get("granted_tools") or []) if row is not None else []
-        merged = have + [g for g in watch.granted if g not in have]
-        watch.granted = []
-        if merged != have:
-            setup["granted_tools"] = merged
+        try:
+            row = await asyncio.to_thread(S.get_row, engine, thread_id)
+        except Exception:  # noqa: BLE001 — "never raises" (Phase 4 review): a
+            # busy database here used to escape into recorded_turn and end
+            # the live turn mid-stream. The grant stays pending (the next
+            # frame tries again); an approved plan above is still written.
+            log.warning("reading build session %s failed", thread_id, exc_info=True)
+        else:
+            have = list(_setup_of(row).get("granted_tools") or []) if row is not None else []
+            merged = have + [g for g in watch.granted if g not in have]
+            watch.granted = []
+            if merged != have:
+                setup["granted_tools"] = merged
     if not setup:
         return
     try:
