@@ -4914,40 +4914,108 @@ def turn_plan_mode(plan_mode: Any, harness: "str | None") -> bool:
     return on
 
 
+#: v1.367.0: the longest one ``process_start`` / ``process_read`` call waits
+#: (the process tools' own cap); a longer check is polled in steps of it.
+_CHECK_STEP_MS = 30_000
+
+
+def check_carrier(gate) -> str:
+    """The real tool a folder's plugin check runs through this turn
+    (v1.367.0, the Phase 3 review's finding 5): ``shell`` when the turn arms
+    it (every dialect but Codex's), else ``process_start`` — the GPT dialect
+    maps Codex's ``exec_command`` there and arms no ``shell``, so a check
+    sent through ``shell`` was refused by the gate under every GPT model. A
+    turn with neither keeps ``shell`` (its refusal is the honest answer)."""
+    have = set(gate or ())
+    if "shell" in have:
+        return "shell"
+    if "process_start" in have:
+        return "process_start"
+    return "shell"
+
+
 def harness_check_runner(d, ctx, overrides: dict[str, str], grants, gate, trust_state):
     """The lane's ``run_check(command, timeout_s)`` for a folder's plugin
-    checks: an ordinary ``shell`` call THROUGH THE REGISTRY — the armed-set
-    gate (``gate``), the permission engine with the turn's CURRENT grants
+    checks: an ordinary call THROUGH THE REGISTRY — the armed-set gate
+    (``gate``), the permission engine with the turn's CURRENT grants
     (``grants()``; never the per-call auto-approve grant, so a check from a
     project file runs on its own only where the user has already allowed the
-    shell beyond one call), the ledger (``called_as`` "plugin check") and the
-    tool deadline. Its output is fenced and scanned like any shell result.
-    Answers ``(status, text)``: ``ran`` / ``failed`` / ``refused``."""
+    command tool beyond one call), the ledger (``called_as`` "plugin check")
+    and the tool deadline. Its output is fenced and scanned like any command
+    result. Answers ``(status, text)``: ``ran`` / ``failed`` / ``refused``.
+
+    v1.367.0: the check runs through the command tool the turn REALLY arms
+    (:func:`check_carrier`): ``shell``, or — under the GPT dialect, which
+    arms ``process_start`` and no ``shell`` — ``process_start`` with
+    ``until_exit``, polled with ``process_read`` up to the check's own
+    timeout and stopped with ``process_stop`` past it (each call gated,
+    permissioned and ledgered as "plugin check"). Passed = exit code 0."""
     import dataclasses as _dc
+
+    try:
+        check_ctx = _dc.replace(ctx, called_as="plugin check")
+    except Exception:  # noqa: BLE001
+        check_ctx = ctx
+
+    async def invoke(name: str, args: dict[str, Any]):
+        return await d.platform.registry.invoke(
+            name, args, check_ctx, d.platform.permissions, overrides,
+            session_allow=set(grants()), allowed_names=set(gate),
+            deadline_s=chat_tool_deadline(d.platform),
+        )
+
+    async def fenced(name: str, text: str) -> str:
+        # A command that ran and failed still printed the project's text:
+        # fenced and scanned exactly like a successful one.
+        return str(await _fence_tool_output(
+            d, trust_state, overrides, name, d.platform.registry.get(name), str(text or "")[:4000],
+        ))
+
+    async def via_shell(command: str, timeout_s: int) -> tuple[str, str]:
+        res = await invoke("shell", {"command": command, "timeout_s": int(timeout_s)})
+        if not res.ok and refusal_label(res.error or ""):
+            return "refused", str(res.error)[:2000]
+        text = await fenced("shell", (res.output if res.ok else (res.error or "error")) or "")
+        return ("ran" if res.ok else "failed"), text
+
+    async def via_process(command: str, timeout_s: int) -> tuple[str, str]:
+        loop = asyncio.get_running_loop()
+        budget = max(1, int(timeout_s))
+        began = loop.time()
+        res = await invoke("process_start", {
+            "command": command, "until_exit": True,
+            "wait_ms": int(min(budget * 1000, _CHECK_STEP_MS)),
+        })
+        if not res.ok:
+            if refusal_label(res.error or ""):
+                return "refused", str(res.error)[:2000]
+            return "failed", await fenced("process_start", res.error or "error")
+        data = dict(res.data or {})
+        handle = str(data.get("id") or "")
+        outputs = [str(res.output or "")]
+        while data.get("running") and handle:
+            left = budget - (loop.time() - began)
+            if left <= 0:
+                break
+            more = await invoke("process_read", {"id": handle, "wait_ms": int(min(left * 1000, _CHECK_STEP_MS))})
+            if not more.ok:
+                break
+            outputs.append(str(more.output or ""))
+            data = dict(more.data or {})
+        if data.get("running") and handle:
+            await invoke("process_stop", {"id": handle})
+            outputs.append(f"(the check did not finish within {budget} s, so it was stopped)")
+            return "failed", await fenced("process_start", "\n".join(outputs))
+        status = "ran" if data.get("exit_code") == 0 else "failed"
+        return status, await fenced("process_start", "\n".join(outputs))
 
     async def run(command: str, timeout_s: int) -> tuple[str, str]:
         try:
-            check_ctx = _dc.replace(ctx, called_as="plugin check")
-        except Exception:  # noqa: BLE001
-            check_ctx = ctx
-        try:
-            res = await d.platform.registry.invoke(
-                "shell", {"command": command, "timeout_s": int(timeout_s)},
-                check_ctx, d.platform.permissions, overrides,
-                session_allow=set(grants()), allowed_names=set(gate),
-                deadline_s=chat_tool_deadline(d.platform),
-            )
+            if check_carrier(gate) == "process_start":
+                return await via_process(command, timeout_s)
+            return await via_shell(command, timeout_s)
         except Exception as exc:  # noqa: BLE001 — a check never breaks the turn
             return "failed", f"{type(exc).__name__}: {exc}"
-        if not res.ok and refusal_label(res.error or ""):
-            return "refused", str(res.error)[:2000]
-        # A command that ran and failed still printed the project's text:
-        # fenced and scanned exactly like a successful one.
-        text = await _fence_tool_output(
-            d, trust_state, overrides, "shell", d.platform.registry.get("shell"),
-            str((res.output if res.ok else (res.error or "error")) or "")[:4000],
-        )
-        return ("ran" if res.ok else "failed"), str(text)
 
     return run
 

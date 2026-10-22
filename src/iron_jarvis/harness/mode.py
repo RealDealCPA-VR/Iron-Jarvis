@@ -529,8 +529,10 @@ class HarnessTurn:
         why_not: str = "",
     ) -> str:
         """The text appended to an edit's result: each matching check's
-        outcome. ``run_check(command, timeout_s)`` is the lane's ``shell`` call
-        through the registry, answering ``(status, text)`` — status ``ran`` /
+        outcome. ``run_check(command, timeout_s)`` is the lane's command call
+        through the registry (``shell``, or ``process_start`` under the GPT
+        dialect — ``chat_turn.check_carrier``, v1.367.0), answering
+        ``(status, text)`` — status ``ran`` /
         ``failed`` / ``refused``. ``may_run`` False (low trust, Local only)
         runs nothing and says so."""
         checks = self.checks_for(real_name, changed)
