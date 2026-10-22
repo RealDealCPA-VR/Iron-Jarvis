@@ -3340,6 +3340,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build as _build_routes
 
     _build_routes.register(app, d)
+    # Build's experience library (v1.370.0, plan Phase 7): a folder's kept
+    # lessons and proposed harness edits — accepted or declined by the user.
+    from .routes import build_library as _build_library_routes
+
+    _build_library_routes.register(app, d)
     # Share my profile with Build (v1.306.0): the per-CLI switches on the
     # Memory page's "What Jarvis knows about you" card.
     from .routes import profile_share as _profile_share_routes

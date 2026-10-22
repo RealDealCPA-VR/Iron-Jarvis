@@ -803,6 +803,15 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                 await asyncio.shield(_note_account_limit(
                     platform, thread_id, turn_id, watch.account_limit, done=served,
                 ))
+        # v1.370.0 (Phase 7): the EXPERIENCE LIBRARY may reflect on a turn
+        # that FINISHED — in the background, after the reply line is written
+        # (it reads the ledger to see whether the turn did real work). It
+        # never delays or fails the turn.
+        if status == "done" and platform is not None:
+            from ...harness import library as _library
+
+            with contextlib.suppress(Exception):
+                _library.schedule(platform, thread_id, turn_id)
 
 
 # --------------------------------------------------------------------------- #

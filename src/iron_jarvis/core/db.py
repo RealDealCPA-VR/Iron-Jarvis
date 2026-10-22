@@ -247,6 +247,7 @@ _LATE_MODEL_MODULES = (
     "..coach.models",         # CoachProposalRecord — the reflection coach's queue (v1.297.0)
     "..core.grants",          # StandingGrantRecord — approvals remembered by arguments (v1.299.0)
     "..media.models",         # MediaJobRecord — a generation finishing in the background (v1.346.0)
+    "..harness.library_models",  # HarnessLibraryRecord — a folder's lessons + harness edits (v1.370.0)
 )
 
 

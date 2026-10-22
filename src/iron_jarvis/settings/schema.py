@@ -409,6 +409,12 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("profile_share_codex", "Share my profile with Codex", "memory", "bool",
       "Write your profile into Codex's own instructions file on this PC.",
       tier="ask", put=False, section="Share with Build"),
+    # v1.370.0 (IJ harness Phase 7): the Build experience library.
+    S("build_reflect", "Learn from Build sessions", "memory", "bool",
+      "After a Build session's reply that changed files or ran commands, Iron Jarvis may suggest "
+      "one lesson for that folder, and sometimes a small edit to the folder's harness files. It "
+      "costs one extra request to the model that answered. Nothing is kept until you accept it.",
+      tier="allow", aliases=("build library", "build lessons", "learn from build")),
     S("chat_folder_rules", "Follow a project folder's own instructions in chat", "memory", "bool",
       "When a chat is in a project that has a folder, it reads the instruction files kept in "
       "that folder (AGENTS.md, CLAUDE.md and their .local versions) and follows them.",

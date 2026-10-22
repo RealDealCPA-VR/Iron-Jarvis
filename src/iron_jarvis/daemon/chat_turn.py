@@ -4858,6 +4858,7 @@ async def _build_harness(
                 f for f in rule_files if f not in grounding.folder_rules_used
             ]
     layer = _components.EMPTY_LAYER
+    library: list[str] = []
     if folder:
         try:
             known = set(d.platform.registry.names())
@@ -4866,6 +4867,16 @@ async def _build_harness(
         layer = await asyncio.to_thread(
             _components.read_project_layer, folder,
             known_tools=known, event_bus=bus, session_id="chat",
+        )
+        # v1.370.0 (Phase 7): the folder's EXPERIENCE LIBRARY — the lessons
+        # the user accepted for it — read off the loop and rendered as its
+        # own component, so it rides the prompt BEFORE the history planner.
+        # Never raises ([] on any failure); [] renders nothing.
+        from ..harness.library import library_lines
+
+        library = await asyncio.to_thread(
+            library_lines, getattr(d.platform, "engine", None), folder,
+            event_bus=bus, session_id="chat",
         )
     prov, mod = _harness_model(d.platform, provider, model)
     turn = _mode.build(
@@ -4885,6 +4896,7 @@ async def _build_harness(
         approval_mode=approval_mode,
         plan_mode=bool(plan_mode),
         ask_user=bool(ask_user) and stream,
+        library=library,
     )
     return turn, rules_section
 
