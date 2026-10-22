@@ -87,10 +87,15 @@ class BuildSessionCreate(BaseModel):
     reasoning: str = ""
     approval_mode: str = ""
     mode: str = ""
+    #: v1.368.0: the Iron-Proxy account to run on; "" = the vendor's Default.
+    account: str = Field(default="", max_length=200)
 
 
 class BuildSessionPatch(BaseModel):
-    """PARTIAL: an omitted field keeps its value; ``""`` clears a model pick."""
+    """PARTIAL: an omitted field keeps its value; ``""`` clears a model pick.
+    ``account`` (v1.368.0): another account ("" or null = none: this PC's own
+    login, exactly Phase 4); it may move the session to that account's vendor
+    and model, and it cancels a "Resume when ready" wait."""
 
     title: str | None = Field(default=None, max_length=400)
     provider: str | None = None
@@ -99,6 +104,19 @@ class BuildSessionPatch(BaseModel):
     approval_mode: str | None = None
     mode: str | None = None
     local_only: bool | None = None
+    account: str | None = Field(default=None, max_length=200)
+
+
+class BuildAccountChoice(BaseModel):
+    """``POST /build/sessions/{id}/account`` (v1.368.0, "Choose account")."""
+
+    model_config = {"populate_by_name": True}
+
+    account: str = Field(min_length=1, max_length=200)
+    #: Continue the cut-off work at once, as a new build turn.
+    continue_: bool = Field(default=False, alias="continue")
+    #: A model of that account's vendor ("" = keep / the vendor's default).
+    model: str = Field(default="", max_length=200)
 
 
 class BuildFolderRename(BaseModel):
@@ -207,6 +225,150 @@ def _clean_answer(answer: Any) -> Any:
 
 
 # --------------------------------------------------------------------------- #
+# the session's account (v1.368.0, IJ harness Phase 5)
+# --------------------------------------------------------------------------- #
+
+#: The question a continuation turn asks ("Resume when ready", "Choose
+#: account"). The transcript marks it ``continuation`` (the screen hides it,
+#: like the chat's hidden Continue turn); the model reads it as the user's.
+CONTINUE_TEXT = (
+    "Carry on with the task above from where it stopped. Do not repeat work that is "
+    "already done; check the files first if you are not sure what was finished."
+)
+ACCOUNT_OFF = "Iron-Proxy is off; turn it on in Connections first."
+ACCOUNT_UNKNOWN = (
+    "There is no Claude Code or Codex account like that in Iron-Proxy — choose one from "
+    "the account list."
+)
+ACCOUNT_TURNED_OFF = (
+    "That account is turned off on the Iron-Proxy card — turn it on in Connections first."
+)
+NOTHING_TO_WAIT_FOR = (
+    "This session's account is not waiting on a limit — send your message, or choose "
+    "another account."
+)
+NO_ACCOUNT = "This session does not run on an Iron-Proxy account."
+
+
+def _svc_of(platform: Any) -> Any:
+    return getattr(platform, "iron_proxy", None)
+
+
+def account_patch(platform: Any, setup: dict[str, Any], account_id: "str | None",
+                  model: "str | None" = None) -> dict[str, Any]:
+    """The setup changes that put a session on ``account_id`` — validated
+    against the CACHED snapshot (never a call). ``""`` / None = no account
+    (this PC's own login: exactly Phase 4). The account decides the vendor: a
+    Claude Code account serves ``claude-cli``, a Codex account ``codex-cli``;
+    another account of the SAME vendor keeps the model, a different vendor's
+    gets ``model`` or that vendor's default. Any change cancels a "Resume when
+    ready" wait and clears the old limit card. ``HTTPException`` in words."""
+    from ...harness import build_accounts as BA
+
+    if not account_id:
+        return {"account": None, "account_name": None, "account_wait": None, "account_limit": None}
+    svc = _svc_of(platform)
+    if svc is None or not getattr(svc, "enabled", False):
+        raise HTTPException(status_code=409, detail=ACCOUNT_OFF)
+    if BA.snapshot(svc) is None:
+        raise HTTPException(status_code=409, detail=BA.NOT_READ_NOTE)
+    row = BA.find(svc, account_id)
+    if row is None:
+        raise HTTPException(status_code=400, detail=ACCOUNT_UNKNOWN)
+    if row.get("status") == BA.OFF:
+        raise HTTPException(status_code=409, detail=ACCOUNT_TURNED_OFF)
+    patch: dict[str, Any] = {
+        "account": row["id"], "account_name": row["name"], "provider": row["provider"],
+        "account_wait": None, "account_limit": None,
+    }
+    if model:
+        patch["model"] = model
+    elif BA.vendor_of(platform, str(setup.get("provider") or "")) != row["vendor"]:
+        patch["model"] = None  # that vendor's own default model
+    return patch
+
+
+def turn_account(platform: Any, thread_id: str, setup: dict[str, Any]) -> "tuple[Any, str]":
+    """``(AccountPin | None, provider)`` for one build turn. BLOCKING (it may
+    re-read Iron-Proxy's accounts once and store the session's account).
+
+    * Iron-Proxy off and no account: ``(None, "")`` — exactly Phase 4.
+    * no account yet, Iron-Proxy on: the vendor's Default (first usable in
+      order) is STORED on the session and pinned — a session never runs
+      "first free, rotating" (that would land on an account nobody picked);
+      no account for the vendor (or a local model / an API key): Phase 4.
+    * an account: pinned; the provider is that account's vendor's CLI.
+      Iron-Proxy off: a 409 in words (the session's account cannot be
+      reached; nothing runs on another login)."""
+    from ...harness import build_accounts as BA
+    from ...iron_proxy.pin import AccountPin
+
+    svc = _svc_of(platform)
+    enabled = bool(svc is not None and getattr(svc, "enabled", False))
+    account = str(setup.get("account") or "")
+    name = str(setup.get("account_name") or "")
+    if not account:
+        if not enabled:
+            return None, ""
+        vendor = BA.vendor_of(platform, str(setup.get("provider") or ""))
+        if not vendor:
+            return None, ""
+        if BA.snapshot(svc) is None:
+            with contextlib.suppress(Exception):
+                if svc.running():
+                    svc.refresh_accounts()
+        row = BA.default_for(svc, vendor)
+        if row is None:
+            return None, ""
+        S.update(platform.engine, thread_id, setup={
+            "account": row["id"], "account_name": row["name"], "provider": row["provider"],
+        })
+        return AccountPin(profile_id=row["id"], ij_provider=row["provider"], title=row["name"]), row["provider"]
+    if not enabled:
+        who = f' "{name}"' if name else ""
+        raise HTTPException(
+            status_code=409,
+            detail=f"This session runs on the account{who}, and Iron-Proxy is off — turn it on "
+                   "in Connections to continue, or choose this PC's login for the session.",
+        )
+    row = BA.find(svc, account)
+    if row is not None:
+        provider, name = row["provider"], row["name"] or name
+    else:
+        vendor = BA.vendor_of(platform, str(setup.get("provider") or ""))
+        provider = BA.VENDORS[vendor]["provider"] if vendor else ""
+        if not provider:
+            raise HTTPException(status_code=409, detail="Choose this session's account again.")
+    return AccountPin(profile_id=account, ij_provider=provider, title=name), provider
+
+
+def check_account(platform: Any, setup: dict[str, Any]) -> "dict[str, Any] | None":
+    """Can the session's account serve RIGHT NOW? A pinned pick through
+    Iron-Proxy (the authority: it clears a park whose reset has passed).
+    None = usable; else the limit card (``kind``, ``resets_at``) — or
+    ``{"kind": "unknown"}`` when Iron-Proxy could not say. BLOCKING."""
+    from ...iron_proxy import accounts as _acc
+    from ...iron_proxy.pin import reset_pin, set_pin
+
+    if not setup.get("account"):
+        return {"kind": "unknown"}
+    try:
+        pin_account, provider = turn_account(platform, "", setup)
+    except HTTPException:
+        return {"kind": "unknown"}
+    if pin_account is None:
+        return None
+    token = set_pin(pin_account)
+    try:
+        _acc.lease(provider)
+        return None
+    except Exception:  # noqa: BLE001 — the refusal's facts are on the pin
+        return pin_account.limit or {"kind": "unknown"}
+    finally:
+        reset_pin(token)
+
+
+# --------------------------------------------------------------------------- #
 # the reply line, written by the daemon when the turn ends
 # --------------------------------------------------------------------------- #
 
@@ -238,6 +400,9 @@ class _ReplyWatch:
         #: an approved plan written as prose keeps THESE as its steps
         #: (v1.367.0 ship: the review saw a prose plan keep none).
         self.plan_update_steps: list[dict[str, str]] = []
+        #: v1.368.0: the account-limit card this turn ended on (the
+        #: ``account_limit`` frame's payload), kept on the reply line.
+        self.account_limit: dict[str, Any] | None = None
 
     def see(self, event: str, raw: str) -> None:
         try:
@@ -358,6 +523,8 @@ class _ReplyWatch:
                 line["error"] = _durable.INTERRUPTED_DETAIL
         if self.thinking:
             line["thinking"] = "".join(self.thinking)
+        if self.account_limit:
+            line["accountLimit"] = self.account_limit
         if self.steps:
             line["steps"] = self.steps
         line["timing"] = {
@@ -406,17 +573,156 @@ async def _apply_session_changes(engine: Any, thread_id: str, watch: _ReplyWatch
         log.warning("updating build session %s failed", thread_id, exc_info=True)
 
 
-async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any):
+#: Frames that END a turn: the account-limit card goes out right BEFORE one.
+_TERMINAL_EVENTS = ("done", "error")
+
+#: The receipt's words when a call was sent again without another account's
+#: thinking (v1.368.0).
+THINKING_DROPPED_NOTE = (
+    "This account would not accept the thinking from earlier replies, so the "
+    "request was sent again without it."
+)
+
+
+def account_receipt(pin: Any) -> dict[str, Any]:
+    """``route.account`` of a build turn that ran on an account: its id and
+    NAME (the Iron-Proxy title — never an e-mail), and the note when the call
+    was sent again without earlier thinking (v1.368.0)."""
+    out: dict[str, Any] = {"id": pin.profile_id, "name": pin.title or ""}
+    if getattr(pin, "thinking_dropped", False):
+        out["note"] = THINKING_DROPPED_NOTE
+    return out
+
+
+def _with_account(chunk: str, pin: Any) -> str:
+    """The ``done`` frame with ``route.account`` added (the receipt names the
+    account). Any other chunk, or one that does not parse, passes unchanged."""
+    frames = _durable.parse_chunk(chunk)
+    if len(frames) != 1 or frames[0][0] != "done":
+        return chunk
+    try:
+        data = json.loads(frames[0][1] or "{}")
+    except ValueError:
+        return chunk
+    if not isinstance(data, dict):
+        return chunk
+    route = data.get("route") if isinstance(data.get("route"), dict) else {}
+    data["route"] = {**route, "account": account_receipt(pin)}
+    return _durable.sse("done", data)
+
+
+#: The second half of a limit's words (the plan's card: nothing is lost).
+LIMIT_KEPT = "Your conversation and the work so far are kept."
+
+
+def limit_words(limit: "dict[str, Any] | None") -> str:
+    """The account's own sentence for a limit card: why it cannot serve and
+    what to do (wait for the reset, sign it in, or choose another account) —
+    the SAME words the pinned lease refused with (``accounts.pinned_words``).
+    "" when the card names no provider Iron Jarvis knows."""
+    from ...iron_proxy import accounts as _acc
+
+    if not isinstance(limit, dict):
+        return ""
+    spec = _acc.PROVIDERS.get(str(limit.get("provider") or ""))
+    if spec is None:
+        return ""
+    return _acc.pinned_words(
+        spec, str(limit.get("account_name") or "the session's account"),
+        str(limit.get("kind") or "other"), limit.get("resets_at"),
+    )
+
+
+def _with_limit_words(chunk: str, limit: "dict[str, Any]") -> str:
+    """An ``error`` frame for an account that could not serve, worded by
+    Iron Jarvis: ``title`` = :func:`limit_words`, ``fix`` = nothing is lost.
+    The generic "pick another model" fix — and Iron-Proxy's "pick without a
+    profile id" — would be the wrong advice inside a session the user pinned.
+    ``detail`` (the technical text) is unchanged. Any other chunk passes."""
+    frames = _durable.parse_chunk(chunk)
+    if len(frames) != 1 or frames[0][0] != "error":
+        return chunk
+    try:
+        data = json.loads(frames[0][1] or "{}")
+    except ValueError:
+        return chunk
+    said = limit_words(limit)
+    if not isinstance(data, dict) or not said:
+        return chunk
+    data["title"] = said
+    data["fix"] = LIMIT_KEPT
+    return _durable.sse("error", data)
+
+
+async def _note_account_limit(platform: Any, thread_id: str, turn_id: str,
+                              limit: "dict[str, Any] | None", *, done: bool) -> None:
+    """Keep the session's limit card across a reload (``setup.account_limit``)
+    — or clear it when a turn on the account finished — and tell the bell.
+    Off the loop; never raises."""
+    engine = platform.engine
+    try:
+        if limit:
+            record = {
+                **{k: v for k, v in limit.items() if v is not None},
+                "at": utcnow().isoformat(), "turn_id": turn_id,
+            }
+            await asyncio.to_thread(S.update, engine, thread_id, setup={"account_limit": record})
+            # The account list reads the CACHED snapshot: refresh it now (one
+            # profiles + states read, off the loop), so the chip and the list
+            # say "Limit reached" at once instead of at the next watch cycle.
+            svc = _svc_of(platform)
+            if svc is not None and hasattr(svc, "refresh_accounts"):
+                await asyncio.to_thread(svc.refresh_accounts)
+            row = await asyncio.to_thread(S.get_row, engine, thread_id)
+            bus = getattr(platform, "event_bus", None)
+            if bus is not None:
+                from ...core.events import EventType
+
+                await bus.publish(EventType.BUILD_ACCOUNT_LIMIT, {
+                    "thread_id": thread_id,
+                    "title": getattr(row, "title", "") or "",
+                    "account_name": limit.get("account_name") or "",
+                    "vendor": limit.get("vendor") or "",
+                    "kind": limit.get("kind") or "",
+                    "resets_at": limit.get("resets_at"),
+                }, session_id=S.session_id_for(thread_id))
+        elif done:
+            row = await asyncio.to_thread(S.get_row, engine, thread_id)
+            if row is not None and _setup_of(row).get("account_limit"):
+                await asyncio.to_thread(S.update, engine, thread_id, setup={"account_limit": None})
+    except Exception:  # noqa: BLE001 — the turn never fails on its session record
+        log.warning("recording build session %s's account limit failed", thread_id, exc_info=True)
+
+
+async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, *,
+                        pin: Any = None, platform: Any = None):
     """``frames`` (the lane's SSE iterator), passed through unchanged, with
     the session kept up to date: an approved plan and a conversation grant
     land as they happen, and the reply line (plus any steer notes) is written
-    when the turn ends — done, failed, stopped, or cut off by a shutdown."""
+    when the turn ends — done, failed, stopped, or cut off by a shutdown.
+
+    v1.368.0: ``pin`` — the turn's ONE account (``iron_proxy.pin``). When it
+    could not serve (parked, needs sign-in), a typed ``account_limit`` frame
+    goes out right BEFORE the turn's last frame and the card is kept on the
+    session; the ``done`` frame's ``route.account`` names the account."""
     watch = _ReplyWatch()
     status = "stopped"
+    limit_sent = False
     try:
         async with contextlib.aclosing(frames):
             async for chunk in frames:
-                for event, data in _durable.parse_chunk(chunk):
+                parsed = _durable.parse_chunk(chunk)
+                if pin is not None and any(ev in _TERMINAL_EVENTS for ev, _ in parsed):
+                    if pin.limit and not limit_sent:
+                        limit_sent = True
+                        card = {**pin.limit, "turn_id": turn_id}
+                        watch.account_limit = card
+                        yield _durable.sse("account_limit", card)
+                    if pin.limit:
+                        chunk = _with_limit_words(chunk, pin.limit)
+                    chunk = _with_account(chunk, pin)
+                    parsed = _durable.parse_chunk(chunk)
+                for event, data in parsed:
                     watch.see(event, data)
                 if watch.approved_plans or watch.granted:
                     await _apply_session_changes(engine, thread_id, watch)
@@ -439,6 +745,279 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any):
         if lines:
             with contextlib.suppress(BaseException):
                 await asyncio.shield(asyncio.to_thread(S.append_lines, engine, thread_id, lines))
+        if pin is not None and platform is not None and (watch.account_limit or status == "done"):
+            with contextlib.suppress(BaseException):
+                await asyncio.shield(_note_account_limit(
+                    platform, thread_id, turn_id, watch.account_limit, done=status == "done",
+                ))
+
+
+# --------------------------------------------------------------------------- #
+# starting a build turn (the route, "Choose account", "Resume when ready")
+# --------------------------------------------------------------------------- #
+
+
+class SessionBusy(Exception):
+    """The session already has a turn running (or starting)."""
+
+
+async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
+                           attachments: "list[str] | None" = None,
+                           continuation: bool = False) -> Any:
+    """Start ONE named, daemon-owned build turn and return its ``TurnLog``
+    (follow it with ``lg.follow()``; nobody has to). The question is written
+    when the turn starts, the reply when it ends (:func:`recorded_turn`).
+    ``continuation``: the daemon's own "carry on" question (the transcript
+    marks it). Raises :class:`SessionBusy`, or ``HTTPException`` in words
+    (404 no session, 409 archived / folder / account unreachable, 400 a lane
+    refusal).
+
+    v1.368.0: the turn runs on the session's ONE account (:func:`turn_account`)
+    — an :class:`~iron_jarvis.iron_proxy.pin.AccountPin` is armed while the
+    turn's driver task is created (the task copies the context), so every
+    lease in the turn is a pinned pick of that account and the router holds
+    the turn on its provider."""
+    from .chat import _turn_logs
+    from ...iron_proxy.pin import reset_pin, set_pin
+
+    platform = d.platform
+    logs = _turn_logs(d)
+    if thread_id in _STARTING or _running_turn(d, thread_id):
+        raise SessionBusy(thread_id)
+    _STARTING.add(thread_id)
+    try:
+        row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such Build session")
+        if getattr(row, "archived_at", None) is not None:
+            raise HTTPException(status_code=409, detail=ARCHIVED_SENTENCE)
+        folder = S.folder_of(row)
+        problem = await asyncio.to_thread(S.folder_problem, folder)
+        if problem:
+            raise HTTPException(
+                status_code=409, detail=f"This session's folder cannot be used now: {problem}",
+            )
+        setup = _setup_of(row)
+        pin, account_provider = await asyncio.to_thread(turn_account, platform, thread_id, setup)
+        from ...projects.locate import project_for_path
+
+        project = await asyncio.to_thread(project_for_path, platform.engine, folder)
+        # The transcript is up to 200 lines of JSON (replies with steps
+        # and thinking): parsed OFF the loop, like every other read here.
+        # Role + content only: no native carrier (no thinking, no signature)
+        # ever crosses into a turn — so a session MOVES between accounts and
+        # vendors with nothing another account would refuse (v1.368.0).
+        history = [ChatMessageBody(**m) for m in await asyncio.to_thread(S.history, row)]
+        chat_body = ChatBody(
+            messages=[*history, ChatMessageBody(role="user", content=text)],
+            provider=account_provider or str(setup.get("provider") or ""),
+            model=str(setup.get("model") or ""),
+            reasoning=str(setup.get("reasoning") or ""),
+            approval_mode=str(setup.get("approval_mode") or ""),
+            granted_tools=list(setup.get("granted_tools") or []),
+            workspace_dir=folder,
+            project_id=project.id if project is not None else "",
+            thread_id=thread_id,
+            turn_id=turn_id,
+            # The Build screen draws the question cards: an app's question
+            # and the model's own (ask_user).
+            mcp_cards=True,
+            attachments=list(attachments or []),
+            local_only=setup.get("local_only") is True,
+        )
+        holder: dict[str, Any] = {}
+        token = set_pin(pin) if pin is not None else None
+        try:
+            try:
+                gen = await stream_chat_turn(
+                    platform,
+                    getattr(d, "_PERSONAS", {}),
+                    chat_body,
+                    should_stop=_durable.stop_predicate(lambda: holder.get("log")),
+                    suggest_preferences=False,
+                    harness="auto",
+                    round_budget=build_round_budget(platform.config),
+                    stay_in_chat=True,
+                    session_id=S.session_id_for(thread_id),
+                    plan_mode=S.mode_of(row) == S.MODE_PLAN,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from None
+            question: dict[str, Any] = {"role": "user", "content": text, "turnId": turn_id}
+            if attachments:
+                question["attachmentPaths"] = list(attachments)
+            if continuation:
+                question["continuation"] = True
+            saved = await asyncio.to_thread(S.append_lines, platform.engine, thread_id, [question])
+            if not saved.get("ok"):
+                with contextlib.suppress(Exception):
+                    await gen.aclose()
+                raise HTTPException(status_code=404, detail="no such Build session")
+            lg = logs.start(turn_id, thread_id, recorded_turn(
+                platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
+            ))
+        finally:
+            if token is not None:
+                reset_pin(token)
+        lg.surface = "build"  # the waiting row says it is not a chat
+        holder["log"] = lg
+    finally:
+        _STARTING.discard(thread_id)
+    return lg
+
+
+# --------------------------------------------------------------------------- #
+# "Resume when ready": the durable wait and its loop (v1.368.0)
+# --------------------------------------------------------------------------- #
+
+#: The wait loop's own pace (it also wakes when a wait is armed).
+WAIT_TICK_S = 60.0
+#: After the reset, an account that is still not usable is re-checked this
+#: often ("and every few minutes after"), and a wait with no reset time too.
+WAIT_RECHECK_S = 300.0
+
+#: (loop, Event) the wait loop sleeps on — set by :func:`wake_wait_loop`.
+#: Holds no client and no live service (the v1.367.0 test-isolation rule).
+_WAKE: dict[str, Any] = {}
+
+
+def wake_wait_loop() -> None:
+    """Make the wait loop look now (a wait was armed). Thread-safe; a no-op
+    when no loop runs."""
+    loop, event = _WAKE.get("loop"), _WAKE.get("event")
+    if loop is None or event is None:
+        return
+    try:
+        if loop.is_running():
+            loop.call_soon_threadsafe(event.set)
+    except RuntimeError:  # the loop closed between the check and the call
+        pass
+
+
+def _parse_iso(value: Any):
+    from datetime import datetime, timezone
+
+    try:
+        when = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return when if when.tzinfo is not None else when.replace(tzinfo=timezone.utc)
+
+
+def wait_record(setup: dict[str, Any], resets_at: Any = None) -> dict[str, Any]:
+    """The durable wait stored on the session (``setup.account_wait``): the
+    account, the reset to wait for, when it was armed and when to look next
+    (the reset, or now when none is known)."""
+    now = utcnow()
+    reset = _parse_iso(resets_at) if resets_at else None
+    nxt = reset if reset is not None and reset > now else now
+    return {
+        "account": str(setup.get("account") or ""),
+        "account_name": str(setup.get("account_name") or ""),
+        "resets_at": reset.isoformat() if reset is not None else "",
+        "armed_at": now.isoformat(),
+        "next_check_at": nxt.isoformat(),
+    }
+
+
+async def resume_due(d: Any, *, now: Any = None) -> list[str]:
+    """ONE pass of the wait loop: every session whose "Resume when ready" wait
+    is due (its reset passed, or the next re-check) has its account checked
+    (a pinned pick); a usable account CONTINUES the same conversation as a new
+    named build turn, clears the wait and tells the bell (``build.resumed``);
+    a still-parked one moves the next check to its new reset (or a few
+    minutes on). A session that is running, archived, or moved to another
+    account is skipped / its wait cleared. Returns the thread ids resumed.
+    Survives a restart: the waits live on the sessions."""
+    from datetime import timedelta
+
+    from ...core.events import EventType
+
+    platform = d.platform
+    svc = _svc_of(platform)
+    if svc is None or not getattr(svc, "enabled", False):
+        return []
+    engine = platform.engine
+    waits = await asyncio.to_thread(S.waiting_sessions, engine)
+    when = now or utcnow()
+    resumed: list[str] = []
+    for thread_id, setup in waits:
+        wait = setup.get("account_wait") or {}
+        due = _parse_iso(wait.get("next_check_at")) or _parse_iso(wait.get("resets_at")) or when
+        if due > when:
+            continue
+        if thread_id in _STARTING or _running_turn(d, thread_id):
+            continue
+        if not setup.get("account") or wait.get("account") != setup.get("account"):
+            # The session moved to another account: this wait is not its.
+            await asyncio.to_thread(S.update, engine, thread_id, setup={"account_wait": None})
+            continue
+        limit = await asyncio.to_thread(check_account, platform, setup)
+        if limit is None:
+            turn_id = "bt_" + secrets.token_hex(8)
+            try:
+                lg = await start_build_turn(d, thread_id, CONTINUE_TEXT, turn_id, continuation=True)
+            except SessionBusy:
+                continue
+            except HTTPException as exc:
+                log.info("resuming build session %s did not start: %s", thread_id, exc.detail)
+                continue
+            await asyncio.to_thread(S.update, engine, thread_id, setup={
+                "account_wait": None, "account_limit": None,
+            })
+            row = await asyncio.to_thread(S.get_row, engine, thread_id)
+            bus = getattr(platform, "event_bus", None)
+            if bus is not None:
+                await bus.publish(EventType.BUILD_RESUMED, {
+                    "thread_id": thread_id,
+                    "title": getattr(row, "title", "") or "",
+                    "account": str(setup.get("account") or ""),
+                    "account_name": str(setup.get("account_name") or ""),
+                    "turn_id": lg.turn_id,
+                }, session_id=S.session_id_for(thread_id))
+            resumed.append(thread_id)
+            continue
+        if limit.get("resumable") is False:
+            # The account is gone: no reset will bring it back. The card
+            # says so (choose another account); the wait ends.
+            await asyncio.to_thread(S.update, engine, thread_id, setup={
+                "account_wait": None,
+                "account_limit": {**{k: v for k, v in limit.items() if v is not None},
+                                  "at": when.isoformat()},
+            })
+            continue
+        reset = _parse_iso(limit.get("resets_at"))
+        nxt = reset if reset is not None and reset > when else when + timedelta(seconds=WAIT_RECHECK_S)
+        new_wait = {**wait, "next_check_at": nxt.isoformat()}
+        if reset is not None:
+            new_wait["resets_at"] = reset.isoformat()
+        await asyncio.to_thread(S.update, engine, thread_id, setup={"account_wait": new_wait})
+    return resumed
+
+
+async def account_wait_loop(d: Any, on_tick: Any) -> None:
+    """The lifespan loop behind "Resume when ready": a pass every
+    :data:`WAIT_TICK_S` (and at once when a wait is armed), each pass
+    reporting ITS OWN outcome on ``loop_health["build_accounts"]`` (armed is
+    not healthy). Iron-Proxy off: the waits stay, nothing is checked."""
+    loop = asyncio.get_running_loop()
+    event = asyncio.Event()
+    _WAKE.update(loop=loop, event=event)
+    try:
+        while True:
+            try:
+                await resume_due(d)
+                on_tick(True, None)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — a failed pass is a row, not a crash
+                on_tick(False, exc)
+            event.clear()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(event.wait(), timeout=WAIT_TICK_S)
+    finally:
+        if _WAKE.get("event") is event:
+            _WAKE.clear()
 
 
 # --------------------------------------------------------------------------- #
@@ -465,7 +1044,96 @@ def register(app: FastAPI, d: Any) -> None:
             queued = []
         view["queued"] = [q for q in queued if isinstance(q, dict)] if isinstance(queued, list) else []
         view["turn_id"] = _running_turn(d, row.id) if view["running"] else ""
+        # v1.368.0: the session's account (with its live status, from the
+        # CACHED snapshot) and which vendor its model belongs to ("" = a
+        # local model or an API key: no account; the header names the place).
+        from ...harness import build_accounts as BA
+
+        setup = _setup_of(row)
+        svc = _svc_of(d.platform)
+        view["account"] = BA.session_account(
+            svc, str(setup.get("account") or ""), str(setup.get("account_name") or ""),
+        )
+        view["account_vendor"] = (
+            (view["account"] or {}).get("vendor")
+            or BA.vendor_of(d.platform, str(setup.get("provider") or ""))
+        )
         return view
+
+    def _vendor_switch(setup: dict[str, Any], provider: "str | None") -> dict[str, Any]:
+        """A model pick on ANOTHER vendor moves the session to that vendor's
+        Default account (or, with none / a local model / an API key, to no
+        account); the same vendor keeps the account. Cached reads only."""
+        from ...harness import build_accounts as BA
+
+        platform = d.platform
+        new_vendor = BA.vendor_of(platform, str(provider or ""))
+        if not setup.get("account"):
+            return {}
+        held = BA.find(_svc_of(platform), str(setup.get("account")))
+        old_vendor = (held or {}).get("vendor") or BA.vendor_of(platform, str(setup.get("provider") or ""))
+        if new_vendor == old_vendor:
+            return {}
+        row = BA.default_for(_svc_of(platform), new_vendor) if new_vendor else None
+        if row is None:
+            return {"account": None, "account_name": None, "account_wait": None, "account_limit": None}
+        return {"account": row["id"], "account_name": row["name"], "account_wait": None,
+                "account_limit": None}
+
+    @app.get("/build/accounts")
+    def build_accounts() -> dict[str, Any]:
+        """The account list behind a session's account chip (v1.368.0):
+        ``{claude: [...], codex: [...], iron_proxy: {enabled, running,
+        needs_update, note}}`` — each account ``{id, name, vendor,
+        vendor_label, provider, default, plan, plan_label, status}`` with
+        ``status`` ``ready`` | ``limit`` (+ ``resets_at``, ``limit_kind``) |
+        ``needs_sign_in`` | ``usage`` (+ ``usage: {percent, window,
+        window_mins, resets_at}``). From the CACHED snapshot — the chip never
+        makes Iron-Proxy run every CLI's status command (v1.302.0); a Claude
+        account whose plan Iron-Proxy does not know yet has it read in the
+        background (at most every 10 minutes)."""
+        from ...harness import build_accounts as BA
+
+        svc = _svc_of(d.platform)
+        view = BA.accounts_view(svc)
+        BA.kick_plan_reads(svc, view["claude"])
+        return view
+
+    @app.post("/build/accounts/{account_id}/default")
+    async def make_default_account(account_id: str) -> dict[str, Any]:
+        """"Make default": this account goes FIRST in its vendor's order —
+        Iron-Proxy's own order, changed through the same reorder the
+        Connections card uses. Answers the account list."""
+        from ...harness import build_accounts as BA
+        from ...iron_proxy.client import IronProxyError
+
+        svc = _svc_of(d.platform)
+        if svc is None or not getattr(svc, "enabled", False):
+            raise HTTPException(status_code=409, detail=ACCOUNT_OFF)
+        snap = BA.snapshot(svc)
+        if snap is None:
+            raise HTTPException(status_code=409, detail=BA.NOT_READ_NOTE)
+        row = BA.find(svc, account_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=ACCOUNT_UNKNOWN)
+        proxy = BA.VENDORS[row["vendor"]]["proxy"]
+        profiles, _states = snap
+        ids = [str(p.get("id")) for p in sorted(
+            (p for p in profiles if p.get("provider") == proxy), key=lambda p: p.get("order") or 0,
+        )]
+        ordered = [account_id] + [i for i in ids if i != account_id]
+        client = await asyncio.to_thread(svc.client)
+        if client is None:
+            raise HTTPException(status_code=409, detail=svc.status().get("error") or BA.NOT_READ_NOTE)
+        try:
+            await asyncio.to_thread(client.reorder, proxy, ordered)
+        except IronProxyError as exc:
+            from .iron_proxy import _said
+
+            raise HTTPException(status_code=409 if exc.status in (None, 401) else 502,
+                                detail=_said(exc)) from None
+        await asyncio.to_thread(svc.refresh_accounts)
+        return BA.accounts_view(svc)
 
     @app.get("/build/sessions")
     def build_sessions(archived: str = "") -> dict[str, Any]:
@@ -492,6 +1160,26 @@ def register(app: FastAPI, d: Any) -> None:
                 "approval_mode": body.approval_mode, "mode": mode,
             }.items() if v
         }
+        # v1.368.0: the session's ONE account — the one asked for, else the
+        # Default of the vendor its model uses (first usable in Iron-Proxy's
+        # order). Iron-Proxy off / no account for that vendor / a local model
+        # or an API key: none (exactly Phase 4).
+        from ...harness import build_accounts as BA
+
+        platform = d.platform
+        if body.account.strip():
+            # The model asked for is kept when it is the account's vendor's;
+            # another vendor's account gets its own default model.
+            patch = account_patch(platform, setup, body.account.strip(), None)
+            setup.update({k: v for k, v in patch.items() if v is not None})
+            if "model" in patch and patch["model"] is None:
+                setup.pop("model", None)
+        else:
+            vendor = BA.vendor_of(platform, body.provider)
+            row_acct = BA.default_for(_svc_of(platform), vendor) if vendor else None
+            if row_acct is not None:
+                setup.update({"account": row_acct["id"], "account_name": row_acct["name"],
+                              "provider": row_acct["provider"]})
         row = await asyncio.to_thread(S.create, engine_of(), folder, body.title, setup)
         return await asyncio.to_thread(_full_view, row)
 
@@ -507,13 +1195,26 @@ def register(app: FastAPI, d: Any) -> None:
         """PARTIAL: title, model / provider / reasoning, approval mode, mode
         ("act" | "plan"), local only. The folder never changes. A mode change
         takes effect from the NEXT turn (a running turn keeps its tools)."""
-        _session_or_404(thread_id)
+        current = _setup_of(_session_or_404(thread_id))
         setup: dict[str, Any] = {}
         fields = body.model_fields_set
         for key in ("provider", "model", "reasoning", "approval_mode"):
             if key in fields:
                 value = getattr(body, key)
                 setup[key] = value if value else None
+        # v1.368.0: the account decides the vendor. An explicit account wins
+        # (validated against the cached snapshot); a model pick on another
+        # vendor moves the session to that vendor's Default account.
+        if "account" in fields:
+            patch = account_patch(
+                d.platform, current, (body.account or "").strip(),
+                (body.model or None) if "model" in fields else None,
+            )
+            if "model" in fields and patch.get("account"):
+                patch.pop("model", None)  # the user's own pick (set above) wins
+            setup.update(patch)
+        elif "provider" in fields:
+            setup.update(_vendor_switch(current, body.provider))
         if "mode" in fields and body.mode is not None:
             mode = body.mode.strip().lower()
             if mode not in S.MODES:
@@ -613,77 +1314,14 @@ def register(app: FastAPI, d: Any) -> None:
                 return _follow_response(existing.follow())
         else:
             turn_id = "bt_" + secrets.token_hex(8)
-        if thread_id in _STARTING or _running_turn(d, thread_id):
+        try:
+            lg = await start_build_turn(d, thread_id, text, turn_id,
+                                        attachments=list(body.attachments or []))
+        except SessionBusy:
             return JSONResponse(
                 status_code=409,
                 content={"detail": RUNNING_SENTENCE, "turn_id": _running_turn(d, thread_id)},
             )
-        _STARTING.add(thread_id)
-        try:
-            row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
-            if row is None:
-                raise HTTPException(status_code=404, detail="no such Build session")
-            if getattr(row, "archived_at", None) is not None:
-                raise HTTPException(status_code=409, detail=ARCHIVED_SENTENCE)
-            folder = S.folder_of(row)
-            problem = await asyncio.to_thread(S.folder_problem, folder)
-            if problem:
-                raise HTTPException(
-                    status_code=409, detail=f"This session's folder cannot be used now: {problem}",
-                )
-            setup = _setup_of(row)
-            from ...projects.locate import project_for_path
-
-            project = await asyncio.to_thread(project_for_path, platform.engine, folder)
-            # The transcript is up to 200 lines of JSON (replies with steps
-            # and thinking): parsed OFF the loop, like every other read here.
-            history = [ChatMessageBody(**m) for m in await asyncio.to_thread(S.history, row)]
-            chat_body = ChatBody(
-                messages=[*history, ChatMessageBody(role="user", content=text)],
-                provider=str(setup.get("provider") or ""),
-                model=str(setup.get("model") or ""),
-                reasoning=str(setup.get("reasoning") or ""),
-                approval_mode=str(setup.get("approval_mode") or ""),
-                granted_tools=list(setup.get("granted_tools") or []),
-                workspace_dir=folder,
-                project_id=project.id if project is not None else "",
-                thread_id=thread_id,
-                turn_id=turn_id,
-                # The Build screen draws the question cards: an app's question
-                # and the model's own (ask_user).
-                mcp_cards=True,
-                attachments=list(body.attachments or []),
-                local_only=setup.get("local_only") is True,
-            )
-            holder: dict[str, Any] = {}
-            try:
-                gen = await stream_chat_turn(
-                    platform,
-                    getattr(d, "_PERSONAS", {}),
-                    chat_body,
-                    should_stop=_durable.stop_predicate(lambda: holder.get("log")),
-                    suggest_preferences=False,
-                    harness="auto",
-                    round_budget=build_round_budget(platform.config),
-                    stay_in_chat=True,
-                    session_id=S.session_id_for(thread_id),
-                    plan_mode=S.mode_of(row) == S.MODE_PLAN,
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from None
-            question = {"role": "user", "content": text, "turnId": turn_id}
-            if body.attachments:
-                question["attachmentPaths"] = list(body.attachments)
-            saved = await asyncio.to_thread(S.append_lines, platform.engine, thread_id, [question])
-            if not saved.get("ok"):
-                with contextlib.suppress(Exception):
-                    await gen.aclose()
-                raise HTTPException(status_code=404, detail="no such Build session")
-            lg = logs.start(turn_id, thread_id, recorded_turn(platform.engine, thread_id, turn_id, gen))
-            lg.surface = "build"  # the waiting row says it is not a chat
-            holder["log"] = lg
-        finally:
-            _STARTING.discard(thread_id)
         return _follow_response(lg.follow())
 
     @app.post("/build/sessions/{thread_id}/answer")
@@ -706,3 +1344,91 @@ def register(app: FastAPI, d: Any) -> None:
         if not settled:
             raise HTTPException(status_code=404, detail="no such question waiting")
         return {"ok": True, "skipped": bool(body.skip)}
+
+    # ------------------------------------------------------------------ #
+    # the session's account (v1.368.0, IJ harness Phase 5)
+    # ------------------------------------------------------------------ #
+
+    @app.post("/build/sessions/{thread_id}/account")
+    async def choose_build_account(thread_id: str, body: BuildAccountChoice) -> Any:
+        """"Choose account": put the session on ``account`` (validated
+        against the cached snapshot; another vendor's account moves the model
+        to that vendor's — ``model``, else its default), cancel a "Resume
+        when ready" wait, and with ``continue: true`` carry on with the
+        cut-off work at once as a new build turn on that account (follow it
+        with ``GET /chat/turns/{turn_id}/stream``). The conversation is the
+        session's own record (role + content), so it moves between accounts
+        and vendors as it is — no thinking and no native blocks cross.
+        Answers ``{session, turn_id}`` (``turn_id`` "" without continue)."""
+        platform = d.platform
+        if thread_id in _STARTING or _running_turn(d, thread_id):
+            return JSONResponse(
+                status_code=409,
+                content={"detail": RUNNING_SENTENCE, "turn_id": _running_turn(d, thread_id)},
+            )
+        row = await asyncio.to_thread(_session_or_404, thread_id)
+        patch = account_patch(platform, _setup_of(row), body.account.strip(), body.model.strip() or None)
+        row = await asyncio.to_thread(S.update, platform.engine, thread_id, setup=patch)
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such Build session")
+        turn_id = ""
+        if body.continue_:
+            turn_id = "bt_" + secrets.token_hex(8)
+            try:
+                await start_build_turn(d, thread_id, CONTINUE_TEXT, turn_id, continuation=True)
+            except SessionBusy:
+                return JSONResponse(
+                    status_code=409,
+                    content={"detail": RUNNING_SENTENCE, "turn_id": _running_turn(d, thread_id)},
+                )
+            row = await asyncio.to_thread(_session_or_404, thread_id)
+        return {"session": await asyncio.to_thread(_full_view, row), "turn_id": turn_id}
+
+    @app.post("/build/sessions/{thread_id}/resume-when-ready")
+    async def arm_resume_when_ready(thread_id: str) -> dict[str, Any]:
+        """"Resume when ready": a DURABLE wait on the session
+        (``setup.account_wait``). The daemon re-checks the account at its
+        reset (and every few minutes after), continues the same conversation
+        when it is usable, and the bell says it resumed (``build.resumed``).
+        It survives a restart. 409 when the session's account is not waiting
+        on anything, or a turn is running. Answers the session."""
+        from ...harness import build_accounts as BA
+
+        platform = d.platform
+        if thread_id in _STARTING or _running_turn(d, thread_id):
+            raise HTTPException(status_code=409, detail=RUNNING_SENTENCE)
+        row = await asyncio.to_thread(_session_or_404, thread_id)
+        setup = _setup_of(row)
+        if not setup.get("account"):
+            raise HTTPException(status_code=409, detail=NO_ACCOUNT)
+        limit = setup.get("account_limit") if isinstance(setup.get("account_limit"), dict) else None
+        if limit is not None and limit.get("account") != setup.get("account"):
+            limit = None
+        live = BA.find(_svc_of(platform), str(setup["account"]))
+        if limit is None and live is not None and live.get("status") in (BA.LIMIT, BA.NEEDS_SIGN_IN):
+            limit = {"resets_at": live.get("resets_at")}
+        if limit is None:
+            raise HTTPException(status_code=409, detail=NOTHING_TO_WAIT_FOR)
+        if limit.get("resumable") is False:
+            raise HTTPException(
+                status_code=409,
+                detail="This account no longer exists in Iron-Proxy — choose another account.",
+            )
+        wait = wait_record(setup, limit.get("resets_at"))
+        row = await asyncio.to_thread(S.update, platform.engine, thread_id, setup={"account_wait": wait})
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such Build session")
+        wake_wait_loop()
+        return await asyncio.to_thread(_full_view, row)
+
+    @app.delete("/build/sessions/{thread_id}/resume-when-ready")
+    async def cancel_resume_when_ready(thread_id: str) -> dict[str, Any]:
+        """Cancel a "Resume when ready" wait (nothing waits any more; the
+        limit card stays). Answers the session."""
+        await asyncio.to_thread(_session_or_404, thread_id)
+        row = await asyncio.to_thread(
+            S.update, d.platform.engine, thread_id, setup={"account_wait": None},
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such Build session")
+        return await asyncio.to_thread(_full_view, row)

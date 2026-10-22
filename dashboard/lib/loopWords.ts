@@ -84,6 +84,11 @@ const ROWS: Readonly<Record<string, Row>> = {
     href: "/connections",
     still: "",
   },
+  build_accounts: {
+    label: "Resume when ready",
+    problem: "Build sessions waiting for an account to reset aren't being checked",
+    href: "/terminals",
+  },
   dispatcher: { label: "Queued tasks", problem: "Queued tasks aren't starting", href: TEAM },
   autonomy: { label: "Autonomy", problem: "Work Jarvis plans on its own isn't being checked", href: "/autonomy" },
   sentinels: { label: "Watchers", problem: "Your watchers aren't checking", href: "/sentinels" },

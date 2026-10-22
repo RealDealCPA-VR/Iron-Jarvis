@@ -559,7 +559,7 @@ def _note_limit(pin: "_pin.AccountPin", spec: ProviderAccounts, kind: str,
     return limit
 
 
-def _pinned_words(spec: ProviderAccounts, title: str, kind: str, resets_at: Any) -> str:
+def pinned_words(spec: ProviderAccounts, title: str, kind: str, resets_at: Any) -> str:
     """Iron Jarvis's OWN sentence for a pinned account that cannot serve. Never
     Iron-Proxy's hint: it says "pick without a profile id", which would move a
     session the user pinned onto another account."""
@@ -581,7 +581,7 @@ def _pinned_refusal(spec: ProviderAccounts, pin: "_pin.AccountPin", kind: str,
                     resets_at: Any, title: str) -> Exception:
     _note_limit(pin, spec, kind, resets_at, title)
     _words, seconds = _local_time(resets_at) if resets_at else ("", None)
-    return _refusal(spec, _pinned_words(spec, title, kind, resets_at), seconds)
+    return _refusal(spec, pinned_words(spec, title, kind, resets_at), seconds)
 
 
 def _other_provider_refused(spec: ProviderAccounts | None, ij_provider: str,

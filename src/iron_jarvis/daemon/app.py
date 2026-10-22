@@ -1610,6 +1610,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     clear=lambda: loop_health.pop("iron_proxy", None),
                 )
             )
+            # IJ HARNESS ACCOUNTS (v1.368.0): "Resume when ready". The waits
+            # live on the Build sessions (setup.account_wait), so they survive
+            # a restart; this loop re-checks each at its reset and continues
+            # the session when its account is usable. Each pass reports ITS
+            # OWN outcome on loop_health["build_accounts"].
+            from .routes.build import account_wait_loop as _build_wait_loop
+
+            bg_tasks["build_accounts"] = asyncio.create_task(
+                _build_wait_loop(_app.state.d, lambda ok, exc: _tick("build_accounts", ok, exc))
+            )
 
         # SHARE MY PROFILE WITH BUILD (v1.306.0): when a switch is on, bring
         # its block up to date — on a timer THREAD (poke returns at once), so

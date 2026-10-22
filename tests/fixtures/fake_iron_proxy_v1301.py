@@ -73,6 +73,11 @@ FAKE_VERSION = "0.0.0-fake"
 #: Without "pick-profile" the fake behaves like the older one: the parameter is
 #: IGNORED and the first free account is answered.
 FEATURES_PICK_PROFILE = ("executor-v1", "pick-profile")
+#: v1.368.0 (IJ harness Phase 5): Iron-Proxy 1b1ea71's health features — the
+#: pinned pick (``pinned=1``: that account or its park, never the next one;
+#: no id is a 400) and plan/usage (states carry ``plan``/``windows``; the
+#: reports take ``rateLimits``, ``/finished`` takes ``headers``).
+FEATURES_PHASE5 = ("executor-v1", "pick-profile", "pick-pinned", "plan-usage")
 #: Iron-Proxy's own DEFAULT_HINTS (packages/core/src/errors.ts), verbatim.
 HINT_PROFILE_NOT_FOUND = (
     "Run iron-proxy profiles list (or open the switcher) and use one of the ids shown there."
@@ -132,6 +137,11 @@ class FakeIronProxy:
         self.login_ok: dict[str, bool] = {}
         #: Seconds a refresh takes (Iron-Proxy runs the vendor CLI's status).
         self.refresh_delay = 0.0
+        #: v1.368.0: how long a signal parks an account (a short fake reset).
+        self.park_seconds = 3600.0
+        #: v1.368.0: the plan a refresh reads per account (Claude Code's own
+        #: ``claude auth status`` subscriptionType), absent = none.
+        self.plan_on_refresh: dict[str, str] = {}
         self._seq = 0
         self.server: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
@@ -259,7 +269,18 @@ class FakeIronProxy:
                 reason = st.get("parkedReason")
                 if isinstance(reason, dict) and reason.get("kind"):
                     details["kind"] = reason["kind"]
-                raise FakeError("QUOTA_EXCEEDED", f'"{p["title"]}" is parked.', details=details)
+                # Iron-Proxy 1b1ea71's ProfileParkedError hint, verbatim shape.
+                raise FakeError(
+                    "QUOTA_EXCEEDED", f'Profile "{p["title"]}" is parked until {until}.',
+                    details=details,
+                    hint=f'Wait until {until} for "{p["title"]}" to reset, or pick without a '
+                         f"profile id so the next ready {p['provider']} account is used.",
+                )
+            if st["status"] == "parked" and until:
+                # A park whose reset has passed is cleared, as a request clears it.
+                st["status"] = "ready"
+                st.pop("parkedUntil", None)
+                st.pop("parkedReason", None)
         home_var = HOME_VAR.get(provider, "HOME")
         return {
             "profile": p,
@@ -268,6 +289,7 @@ class FakeIronProxy:
 
     def signal(self, pid: str, body: dict[str, Any]) -> dict[str, Any]:
         self._get(pid)
+        self.learn(pid, body)
         status = body.get("status")
         text = str(body.get("text") or "")
         kind = None
@@ -284,15 +306,57 @@ class FakeIronProxy:
         if kind == "auth-expired":
             st["status"] = "unauthenticated"
         else:
-            reset = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+            reset = (datetime.now(timezone.utc) + timedelta(seconds=self.park_seconds)).isoformat()
             sig["resetAt"] = reset
             st.update({"status": "parked", "parkedUntil": reset,
                        "parkedReason": {"kind": kind, "source": "status",
                                         "message": text[:80] or None}})
         return {"parked": True, "signal": sig, "state": st}
 
+    def learn(self, pid: str, body: dict[str, Any]) -> None:
+        """v1.368.0 (``plan-usage``): what a report says about the account —
+        Codex's ``rateLimits`` (planType, primary/secondary) and Claude's
+        ``anthropic-ratelimit-unified-5h|7d-utilization`` / ``-reset`` headers
+        (0..1 fraction, unix seconds) — onto its state, as Iron-Proxy 1b1ea71's
+        ``learnLimits`` does. Ignored without the feature."""
+        if "plan-usage" not in (self.features or []):
+            return
+        st = self.states[pid]
+        now = _now()
+        windows = {w["kind"]: w for w in st.get("windows") or []}
+        rl = body.get("rateLimits") if isinstance(body.get("rateLimits"), dict) else None
+        if rl:
+            if isinstance(rl.get("planType"), str):
+                st.update({"plan": rl["planType"].lower(), "planSource": "rate-limits", "planAt": now})
+            for kind in ("primary", "secondary"):
+                w = rl.get(kind)
+                if isinstance(w, dict) and isinstance(w.get("usedPercent"), (int, float)):
+                    win = {"kind": kind, "usedPercent": w["usedPercent"], "source": "rate-limits", "at": now}
+                    if isinstance(w.get("windowDurationMins"), int):
+                        win["windowMins"] = w["windowDurationMins"]
+                    if isinstance(w.get("resetsAt"), int):
+                        win["resetsAt"] = datetime.fromtimestamp(w["resetsAt"], tz=timezone.utc).isoformat()
+                    windows[kind] = win
+        hdrs = body.get("headers") if isinstance(body.get("headers"), dict) else {}
+        for kind, mins in (("5h", 300), ("7d", 10080)):
+            u = hdrs.get(f"anthropic-ratelimit-unified-{kind}-utilization")
+            if u is None:
+                continue
+            try:
+                pct = round(float(u) * 100)
+            except ValueError:
+                continue
+            win = {"kind": kind, "usedPercent": pct, "windowMins": mins, "source": "headers", "at": now}
+            reset = hdrs.get(f"anthropic-ratelimit-unified-{kind}-reset")
+            if reset and str(reset).isdigit():
+                win["resetsAt"] = datetime.fromtimestamp(int(reset), tz=timezone.utc).isoformat()
+            windows[kind] = win
+        if windows:
+            st["windows"] = list(windows.values())
+
     def finished(self, pid: str, body: dict[str, Any]) -> dict[str, Any]:
         prof = self._get(pid)
+        self.learn(pid, body)
         for other in self._ordered(prof["provider"]):
             if self.states[other["id"]]["status"] == "active":
                 self.states[other["id"]]["status"] = "ready"
@@ -315,6 +379,10 @@ class FakeIronProxy:
                 st["status"] = "disabled"
             elif st.get("status") not in ("parked", "active"):
                 st["status"] = "ready" if self.login_ok.get(prof["id"], True) else "unauthenticated"
+            plan = self.plan_on_refresh.get(prof["id"])
+            if plan and "plan" not in st:
+                # v1.368.0: the status check also names the plan (cli-status).
+                st.update({"plan": plan, "planSource": "cli-status", "planAt": _now()})
             out.append(dict(st))
         return out
 
@@ -373,6 +441,13 @@ class FakeIronProxy:
                 provider = (query.get("provider") or [""])[0]
                 lane = (query.get("lane") or ["cli"])[0]
                 chosen = (query.get("profileId") or [""])[0]
+                pinned = (query.get("pinned") or [""])[0]
+                if pinned in ("1", "true") and "pick-pinned" in (self.features or []) and not chosen:
+                    raise FakeError(
+                        "INVALID_REQUEST",
+                        "`pinned=1` needs `profileId`: a pinned pick answers that one account, "
+                        "never the next ready one.", status=400,
+                    )
                 if chosen and "pick-profile" in (self.features or []):
                     return 200, self.pick_profile(provider, lane, chosen)
                 return 200, self.pick(provider, lane)
