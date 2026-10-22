@@ -43,7 +43,8 @@ def test_publish_needs_every_test_job_and_the_build():
     # red shard from publishing.
     assert not re.search(r"\b(always|failure|cancelled)\(\)", cond), cond
     assert "needs.plan.outputs.publish == 'true'" in cond
-    assert "needs.plan.outputs.dry_run != 'true'" in cond
+    # Fail closed: a plan that never said "not a dry run" must not publish.
+    assert "needs.plan.outputs.dry_run == 'false'" in cond
 
 
 def test_no_job_but_publish_can_make_anything_public():
@@ -233,3 +234,16 @@ def test_every_release_shard_builds_the_addon_before_its_tests():
     shard = next(i for i, (_, r) in enumerate(runs) if "uv run pytest -q" in r)
     assert install < build < shard
     assert not any("if" in s for s in steps[install:build + 1]), "every shard builds it, not one"
+
+
+def test_only_the_publish_job_holds_a_token_that_can_write():
+    """The test and build jobs run thousands of third-party packages; a write
+    token there could push a tag or create a release whatever the gate said."""
+    wf = _wf()
+    assert wf["permissions"] == {"contents": "read"}
+    for name, job in wf["jobs"].items():
+        perms = job.get("permissions")
+        if name == "publish":
+            assert perms == {"contents": "write"}
+        else:
+            assert perms is None or "write" not in str(perms), f"{name} can write: {perms}"

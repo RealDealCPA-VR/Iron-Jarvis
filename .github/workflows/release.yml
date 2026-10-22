@@ -43,8 +43,13 @@ on:
         type: boolean
         default: false
 
+# READ-ONLY for every job but `publish` (review of v1.370.3). The test and build
+# jobs install and run thousands of third-party packages (npm, PyPI, PyInstaller,
+# electron-builder) and ~16k tests; with a write token any one of them could
+# push a tag or create a release. Only `publish` gets `contents: write`, so
+# "nothing becomes public without the gate" is a permission, not a convention.
 permissions:
-  contents: write # create the GitHub Release + upload the installer
+  contents: read
 
 # BOTH THE GATE AND THE BUILD CARRY timeout-minutes (v1.286.0): GitHub's
 # default is 360, so a hang held the release for six hours and no update
@@ -374,7 +379,11 @@ jobs:
   # job-level `if` without a status function carries an implicit success()).
   publish:
     needs: [plan, suite, python, windows-installer]
-    if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.dry_run != 'true'
+    # `dry_run == 'false'`, never `!= 'true'`: a plan that failed to say
+    # whether this is a dry run must not publish (fail closed).
+    if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.dry_run == 'false'
+    permissions:
+      contents: write # the tag, the release, its assets, the updates branch
     runs-on: windows-latest
     timeout-minutes: 30
     # v1.353.0 (G37): THE RELEASE PAGE SAYS WHICH FILE TO TAKE AND WHAT TO
