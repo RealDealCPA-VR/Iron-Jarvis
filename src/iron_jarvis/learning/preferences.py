@@ -444,7 +444,7 @@ def chat_occurrences(
     """Earlier similar corrections: this conversation's earlier turns (from the
     body) and other chat / phone threads touched in the last 30 days.
     Newest first; each ``{quote, at, where, link?}``."""
-    from ..core.models import ChatThreadRecord
+    from ..core.models import ChatThreadRecord, chat_surface_only
 
     found: list[tuple[str, dict[str, Any]]] = []
     for text in body_user[:-1]:
@@ -463,6 +463,9 @@ def chat_occurrences(
                     ChatThreadRecord.updated_at,
                 )
                 .where(ChatThreadRecord.updated_at >= cutoff)
+                # v1.367.0 (Phase 4 review): a Build session is not a chat —
+                # its lines are never evidence linked as "/chat?thread=".
+                .where(chat_surface_only(ChatThreadRecord.surface))
                 .order_by(ChatThreadRecord.updated_at.desc())
                 .limit(MAX_THREADS)
             )
@@ -659,7 +662,7 @@ def _typed_messages(harness: str, limit: int = SCAN_SESSIONS) -> tuple[int, list
 def _recent_chat_corrections(engine, now: datetime) -> list[dict[str, Any]]:
     """Correction-shaped user messages in chat / phone threads (30 days) —
     counted toward a scanned cluster, never minted on their own here."""
-    from ..core.models import ChatThreadRecord
+    from ..core.models import ChatThreadRecord, chat_surface_only
 
     cutoff = now - timedelta(days=LOOKBACK_DAYS)
     with session_scope(engine) as db:
@@ -667,6 +670,8 @@ def _recent_chat_corrections(engine, now: datetime) -> list[dict[str, Any]]:
             db.exec(
                 select(ChatThreadRecord.id, ChatThreadRecord.owner, ChatThreadRecord.messages_json)
                 .where(ChatThreadRecord.updated_at >= cutoff)
+                # v1.367.0 (Phase 4 review): never a Build session (see above).
+                .where(chat_surface_only(ChatThreadRecord.surface))
                 .order_by(ChatThreadRecord.updated_at.desc())
                 .limit(MAX_THREADS)
             )

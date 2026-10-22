@@ -133,3 +133,40 @@ async def test_a_turn_id_this_process_forgot_is_replayed_from_its_record_never_r
     # Another session cannot claim that turn id.
     status, body = await open_turn(app, other, {"text": "x", "turn_id": "rv-once"})
     assert status == 409, body
+
+
+# --------------------------------------------------------------------------- #
+# 3. a Build session is never a chat's preference evidence
+# --------------------------------------------------------------------------- #
+
+
+def test_a_build_session_is_never_counted_or_linked_as_chat_preference_evidence(tmp_path):
+    """The correction look-back (v1.305.0) read EVERY ChatThreadRecord, so a
+    Build session's "no tables" made a chat's second "stop using tables" a
+    suggestion, quoted "where: chat" with a ``/chat?thread=<build id>`` link —
+    the Memory page opened a Build session in Chat. Both readers now keep to
+    chats (``chat_surface_only``)."""
+    from datetime import datetime, timezone
+
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.learning import preferences as P
+    from tests.test_preferences_v1305 import _app, _body, _capture_complete, _thread
+
+    app, platform = _app(tmp_path)
+    _capture_complete(platform, [])
+    tid = _thread(platform, ["no tables"], days_ago=3)
+    with session_scope(platform.engine) as db:
+        row = db.get(ChatThreadRecord, tid)
+        row.surface = "build"  # the same lines, in a Build session
+        db.add(row)
+        db.commit()
+    r = TestClient(app).post("/chat", json=_body("stop using tables"))
+    assert r.status_code == 200, r.text
+    assert r.json()["suggestion"] is None, "a Build session's line was counted as chat evidence"
+    found = P._recent_chat_corrections(platform.engine, datetime.now(timezone.utc))
+    assert all(f"/chat?thread={tid}" != e.get("link") for e in found), found
+    # Control: the same lines in a CHAT do count (the pin is not vacuous).
+    _thread(platform, ["no tables"], days_ago=3)
+    r = TestClient(app).post("/chat", json=_body("stop using tables"))
+    assert r.json()["suggestion"] is not None
