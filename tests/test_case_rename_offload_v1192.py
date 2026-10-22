@@ -387,10 +387,13 @@ async def test_edit_file_stat_walk_runs_off_the_event_loop(tmp_path, monkeypatch
 async def test_write_file_capture_undo_runs_off_the_event_loop(tmp_path, monkeypatch):
     """The hook ``registry.invoke`` awaits BEFORE execute reads the whole prior
     file — on the loop that was the first of two freezes per write."""
+    # v1.370.0: the capture reads BYTES (the prior copy is kept exact, so an
+    # Undo or a Build rewind gives the file back byte for byte) — the slow
+    # read is the bytes read now.
     ctx = _ctx(tmp_path)
     (ctx.workspace / "doc.txt").write_text("prior", encoding="utf-8")
     seen: dict[str, str] = {}
-    monkeypatch.setattr(Path, "read_text", _slow(seen, "read", Path.read_text))
+    monkeypatch.setattr(Path, "read_bytes", _slow(seen, "read", Path.read_bytes))
 
     undo, ticks = await _ticks_during(
         WriteFileTool().capture_undo({"path": "doc.txt", "content": "next"}, ctx)
