@@ -846,17 +846,11 @@ export default function TerminalsPage() {
   const sessionTerminal: SessionTerminalApi = {
     find: (id) => terminals.find((t) => t.id === id && t.alive !== false) ?? null,
     open: (cwd) => addTerminal(cwd),
-    render: (info, { parked }) =>
-      renderTerminalPane(info, {
-        focused: !parked,
-        parked,
-        reserveViewToggle: false,
-        onClose: () => {
-          if (window.confirm(`End the terminal in ${info.cwd}? Its live shell session closes.`)) {
-            closeTerminal(info.id);
-          }
-        },
-      }),
+    // The pane's × asks first in the tab itself (HarnessPanes), like the
+    // rail's own close dialog — never a native prompt.
+    render: (info, { parked, onClose }) =>
+      renderTerminalPane(info, { focused: !parked, parked, reserveViewToggle: false, onClose }),
+    close: (id) => closeTerminal(id),
   };
 
   return (
@@ -1027,6 +1021,7 @@ export default function TerminalsPage() {
               </Card>
             ) : (
               <div
+                data-testid="build-stage"
                 className="relative w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900/40"
                 // v1.315.0: subtracts the demo strip like the rail beside it
                 // (they must end on the same line at lg); 480 px floor kept

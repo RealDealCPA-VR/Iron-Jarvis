@@ -73,10 +73,6 @@ vi.mock("next/dynamic", () => ({
     },
 }));
 
-vi.mock("react-rnd", () => ({
-  Rnd: ({ children }: { children?: React.ReactNode }) => <div data-testid="rnd">{children}</div>,
-}));
-
 vi.mock("@/components/motion", () => ({
   PageShell: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   Reveal: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,

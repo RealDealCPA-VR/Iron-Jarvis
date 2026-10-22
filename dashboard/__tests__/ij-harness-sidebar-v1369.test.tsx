@@ -193,7 +193,7 @@ describe("the Terminals group", () => {
 });
 
 describe("the view", () => {
-  const terminal = { find: () => null, open: async () => null, render: () => null };
+  const terminal = { find: () => null, open: async () => null, render: () => null, close: () => {} };
 
   it("opens the session the address names, and puts the open session in the address", async () => {
     render(<IjHarnessView initialSession="b1" terminals={[]} onOpenTerminal={() => {}} defaultFolder={null} terminal={terminal} />);

@@ -83,6 +83,7 @@ const terminal: SessionTerminalApi = {
   find: () => null,
   open: async () => null,
   render: () => <div data-testid="term-body" />,
+  close: () => {},
 };
 
 function view(over: Record<string, unknown> = {}) {
@@ -538,6 +539,44 @@ describe("following a turn already running, and stopping one", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("http://d/chat/turns/tr1/stream");
     expect(init.method).toBe("GET");
+  });
+
+  it("a wait the daemon resumed while the screen was open is followed (the list saw it run)", async () => {
+    const limit = {
+      account: "work", account_name: "Work", provider: "claude-cli", vendor: "claude",
+      kind: "usage", resets_at: "2030-01-01T16:12:00Z", resumable: true, turn_id: "",
+    };
+    api.gets["/build/sessions/s1"] = view({
+      account_limit: limit,
+      account_wait: { account: "work", account_name: "Work", resets_at: "2030-01-01T16:12:00Z" },
+    });
+    const { rerender } = renderSession();
+    expect(await screen.findByTestId("account-limit-waiting")).toBeInTheDocument();
+    // The reset came: the daemon started the session's turn by itself.
+    api.gets["/build/sessions/s1"] = view({ running: true, turn_id: "tr_resumed", account_limit: null, account_wait: null });
+    fetchMock.mockImplementation(async () => sse([["done", { reply: "Carried on." }]]));
+    rerender(
+      <HarnessSession threadId="s1" terminal={terminal} listRunning onChanged={() => {}} onGone={() => {}} />,
+    );
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => (c as unknown[])[0] === "http://d/chat/turns/tr_resumed/stream")).toBe(true),
+    );
+    await waitFor(() => expect(screen.queryByTestId("account-limit-card")).toBeNull());
+  });
+
+  it("a turn refused in words (an account while Iron-Proxy is off) says so, and keeps the message in the box", async () => {
+    const words = "This session runs on the account Work, and Iron-Proxy is off — turn it on in Connections to continue.";
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ detail: words }), { status: 409, headers: { "Content-Type": "application/json" } }),
+    );
+    renderSession();
+    await screen.findByTestId("harness-empty");
+    await send("Keep going");
+    expect(await screen.findByText(words)).toBeInTheDocument();
+    await waitFor(() => expect(box().value).toBe("Keep going"));
+    // Not a running turn: nothing was rejoined.
+    expect(fetchMock.mock.calls.some((c) => String((c as unknown[])[0]).includes("/chat/turns/"))).toBe(false);
   });
 
   it("Stop posts the running turn's stop by its name", async () => {

@@ -16,7 +16,8 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  *  5. a faked account limit — the Phase 5 routes STUBBED in the browser with
  *     page.route, in Phase 5's own shapes (v1.368.0), so the test runs the
  *     same against a daemon with or without Phase 5: the card's words, the
- *     armed "Resume when ready" surviving a reload, and its Cancel;
+ *     armed "Resume when ready" surviving a reload, its Cancel, and the
+ *     daemon's resume (the page rejoins the resumed turn and the card goes);
  *  6. 390 px: Build never pans sideways.
  */
 
@@ -124,12 +125,13 @@ test("a terminal from the left pane, and back", async ({ page }) => {
   await page.request.delete(`${DAEMON}/terminals/${termId}`);
 });
 
-test("a faked account limit shows the card; Resume when ready waits with a Cancel", async ({ page }) => {
+test("a faked account limit shows the card; Resume when ready waits, survives a reload, and resumes", async ({ page }) => {
   test.skip(!sessionId, "needs the session from the first test");
   const calls: string[] = [];
   // Phase 5's routes, STUBBED in the browser with Phase 5's own shapes
   // (v1.368.0), whether or not the scratch daemon has Phase 5: the session's
-  // account limit is faked; everything else is the real daemon's.
+  // account limit, its wait and the daemon's resume are faked; everything
+  // else is the real daemon's.
   const WORK = {
     id: "work", name: "Work", vendor: "claude", vendor_label: "Claude Code", provider: "claude-cli",
     default: true, plan: "max", plan_label: "Max", status: "limit", resets_at: "2030-01-01T16:12:00Z", limit_kind: "usage",
@@ -138,8 +140,12 @@ test("a faked account limit shows the card; Resume when ready waits with a Cance
     account: "work", account_name: "Work", provider: "claude-cli", vendor: "claude",
     kind: "usage", resets_at: "2030-01-01T16:12:00Z", resumable: true, turn_id: "",
   };
+  const RESUMED = "bt_resumed_e2e";
   let limited = false;
   let wait: Record<string, unknown> | null = null;
+  // "" → the limit stands; "running" → the daemon resumed the session (the
+  // reset came); "done" → the resumed turn finished and wrote its reply.
+  let resumed: "" | "running" | "done" = "";
   await page.route(`${DAEMON}/build/accounts`, (route) =>
     stub(route, () => ({
       body: JSON.stringify({
@@ -153,18 +159,36 @@ test("a faked account limit shows the card; Resume when ready waits with a Cance
       }),
     })),
   );
+  // The session list as the real daemon answers it; while the faked resume
+  // runs, this session reads as running (what the left pane polls).
+  await page.route(`${DAEMON}/build/sessions`, async (route) => {
+    if (route.request().method() === "OPTIONS") return stub(route, () => ({ body: "" }));
+    const real = await route.fetch();
+    const body = (await real.json()) as { folders: { sessions: { id: string; running?: boolean }[] }[] };
+    for (const f of body.folders ?? []) {
+      for (const s of f.sessions ?? []) if (s.id === sessionId && resumed === "running") s.running = true;
+    }
+    return stub(route, () => ({ body: JSON.stringify(body) }));
+  });
   // The session as the real daemon answers it, with the faked account parts.
   const withAccount = async (route: Route) => {
     if (route.request().method() === "OPTIONS") return stub(route, () => ({ body: "" }));
     const real = await route.fetch({ url: `${DAEMON}/build/sessions/${sessionId}`, method: "GET" });
     const body = (await real.json()) as Record<string, unknown>;
+    const messages = Array.isArray(body.messages) ? [...(body.messages as unknown[])] : [];
+    if (resumed === "done") {
+      messages.push({ role: "assistant", content: "Picked up where it stopped and finished.", turnId: RESUMED });
+    }
     return stub(route, () => ({
       body: JSON.stringify({
         ...body,
+        messages,
+        running: resumed === "running",
+        turn_id: resumed === "running" ? RESUMED : "",
         account: WORK,
         account_vendor: "claude",
-        account_limit: limited ? LIMIT : null,
-        account_wait: wait,
+        account_limit: limited && !resumed ? LIMIT : null,
+        account_wait: resumed ? null : wait,
       }),
     }));
   };
@@ -189,6 +213,19 @@ test("a faked account limit shows the card; Resume when ready waits with a Cance
     if (method !== "OPTIONS") calls.push(method);
     return withAccount(route);
   });
+  // The resumed turn the page rejoins by its name.
+  await page.route(`${DAEMON}/chat/turns/${RESUMED}/stream`, async (route) => {
+    const frames = [
+      ["token", { text: "Picked up where it stopped and finished." }],
+      ["done", { reply: "Picked up where it stopped and finished.", route: { provider: "claude-cli", model: "", account: { id: "work", name: "Work" } } }],
+    ]
+      .map(([e, d]) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`)
+      .join("");
+    if (await stub(route, () => ({ contentType: "text/event-stream", body: frames }))) {
+      calls.push("rejoin");
+      resumed = "done";
+    }
+  });
 
   await page.goto(`/terminals?session=${sessionId}`);
   await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
@@ -209,10 +246,21 @@ test("a faked account limit shows the card; Resume when ready waits with a Cance
   // The armed wait survives a reload (the session view keeps it).
   await page.reload();
   await expect(page.getByTestId("account-limit-waiting")).toBeVisible({ timeout: 60_000 });
+  if (process.env.IJ_E2E_SHOTS) await page.screenshot({ path: join(process.env.IJ_E2E_SHOTS, "ij-harness-limit.png") });
   await page.getByTestId("account-limit-cancel").click();
   await expect(page.getByTestId("account-limit-resume")).toBeVisible();
-  expect(calls).toEqual(["turn", "POST", "DELETE"]);
-  if (process.env.IJ_E2E_SHOTS) await page.screenshot({ path: join(process.env.IJ_E2E_SHOTS, "ij-harness-limit.png") });
+
+  // Armed again, and the reset comes: the daemon resumes the session on its
+  // own. The left pane's poll sees it running, the session rejoins the turn
+  // by its name, the card goes, and the reply is there.
+  await page.getByTestId("account-limit-resume").click();
+  await expect(page.getByTestId("account-limit-waiting")).toBeVisible();
+  resumed = "running";
+  await expect(page.getByTestId("harness-reply").last()).toContainText("Picked up where it stopped and finished.", {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("account-limit-card")).toHaveCount(0);
+  expect(calls).toEqual(["turn", "POST", "DELETE", "POST", "rejoin"]);
 });
 
 test.describe("390 px — Build never pans sideways", () => {

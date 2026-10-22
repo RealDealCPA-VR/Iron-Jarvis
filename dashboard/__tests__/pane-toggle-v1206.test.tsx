@@ -187,31 +187,6 @@ vi.mock("next/dynamic", async () => {
   };
 });
 
-/* ---- react-rnd: passthrough that exposes the drag contract ---------------- */
-
-vi.mock("react-rnd", () => ({
-  Rnd: ({
-    children,
-    onMouseDown,
-    dragHandleClassName,
-    cancel,
-  }: {
-    children?: React.ReactNode;
-    onMouseDown?: () => void;
-    dragHandleClassName?: string;
-    cancel?: string;
-  }) => (
-    <div
-      data-testid="rnd"
-      data-drag-handle={dragHandleClassName}
-      data-cancel={cancel}
-      onMouseDown={onMouseDown}
-    >
-      {children}
-    </div>
-  ),
-}));
-
 /* ---- page chrome ----------------------------------------------------------- */
 
 vi.mock("@/components/motion", () => ({

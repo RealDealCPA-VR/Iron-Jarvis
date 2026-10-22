@@ -28,6 +28,7 @@ import { PlanChecklist } from "@/components/chat/PlanChecklist";
 import { ChangedFiles, fetchTurnChangeSet, type ChangeUndoState, type FileChange } from "@/components/chat/ChangedFiles";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { BrowserPreview } from "@/components/harness/BrowserPreview";
+import { ConfirmButton } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
 import type { PlanView } from "@/lib/planChecklist";
 import {
@@ -46,8 +47,11 @@ export interface SessionTerminalApi {
   find: (id: string) => TerminalInfo | null;
   /** Open a NEW Build terminal in `cwd` (the page's own add path). */
   open: (cwd: string) => Promise<TerminalInfo | null>;
-  /** Draw the terminal with the page's own TerminalPane. */
-  render: (info: TerminalInfo, opts: { parked: boolean }) => ReactNode;
+  /** Draw the terminal with the page's own TerminalPane. `onClose` is the
+   *  pane's own close (×): the tab asks first, like the rail's dialog. */
+  render: (info: TerminalInfo, opts: { parked: boolean; onClose: () => void }) => ReactNode;
+  /** End the terminal (the page's own close path). */
+  close: (id: string) => void;
 }
 
 export type PaneTab = "plan" | "terminal" | "changes" | "browser" | "files";
@@ -115,6 +119,9 @@ function SessionTerminal({
   const [termId, setTermId] = useState<string | null>(() => readSessionTerminal(view.id));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The pane's × asks first (the rail's "Close this terminal?"): a live
+  // shell is not closed by one press.
+  const [closing, setClosing] = useState(false);
   const info = termId ? api.find(termId) : null;
 
   async function open() {
@@ -159,8 +166,29 @@ function SessionTerminal({
     );
   }
   return (
-    <div data-testid="pane-terminal" className="h-full min-h-[320px]">
-      {api.render(info, { parked: !visible })}
+    <div data-testid="pane-terminal" className="flex h-full min-h-[320px] flex-col gap-2">
+      {closing ? (
+        <div data-testid="pane-terminal-close" className="flex flex-wrap items-center gap-2 px-1 text-[13px] text-zinc-300">
+          <span className="min-w-0 flex-1 break-all">Close this terminal? It ends the live shell in {info.cwd}.</span>
+          <ConfirmButton
+            onConfirm={() => {
+              setClosing(false);
+              api.close(info.id);
+            }}
+            label="Close terminal"
+            confirmLabel="Confirm close"
+            title="End this shell session"
+          />
+          <button
+            type="button"
+            onClick={() => setClosing(false)}
+            className="rounded-md px-2 py-1 text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : null}
+      <div className="min-h-0 flex-1">{api.render(info, { parked: !visible, onClose: () => setClosing(true) })}</div>
     </div>
   );
 }
@@ -281,7 +309,7 @@ export function HarnessPanes({
     <div data-testid="harness-panes" className="flex h-full min-h-0 flex-col gap-2">
       <div
         role="tablist"
-        aria-label="Session panes"
+        aria-label="Session views"
         data-testid="harness-pane-tabs"
         className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 px-1"
       >

@@ -72,12 +72,18 @@ function view(over: Record<string, unknown> = {}): BuildSessionView {
   return v;
 }
 
-function terminalApi(): SessionTerminalApi & { opened: string[]; renders: { id: string; parked: boolean }[] } {
-  const live: TerminalInfo[] = [];
+function terminalApi(): SessionTerminalApi & {
+  opened: string[];
+  closed: string[];
+  renders: { id: string; parked: boolean }[];
+} {
+  let live: TerminalInfo[] = [];
   const opened: string[] = [];
+  const closed: string[] = [];
   const renders: { id: string; parked: boolean }[] = [];
   return {
     opened,
+    closed,
     renders,
     find: (id) => live.find((t) => t.id === id) ?? null,
     open: async (cwd) => {
@@ -86,9 +92,19 @@ function terminalApi(): SessionTerminalApi & { opened: string[]; renders: { id: 
       live.push(info);
       return info;
     },
-    render: (info, { parked }) => {
+    render: (info, { parked, onClose }) => {
       renders.push({ id: info.id, parked });
-      return <div data-testid="term-body" data-parked={String(parked)} />;
+      return (
+        <div data-testid="term-body" data-parked={String(parked)}>
+          <button type="button" data-testid="term-x" onClick={onClose}>
+            ×
+          </button>
+        </div>
+      );
+    },
+    close: (id) => {
+      closed.push(id);
+      live = live.filter((t) => t.id !== id);
     },
   };
 }
@@ -176,6 +192,27 @@ describe("the terminal pane", () => {
     expect(screen.getByTestId("pane-terminal-layer")).toHaveStyle({ visibility: "visible" });
     expect(screen.getByTestId("term-body")).toHaveAttribute("data-parked", "false");
     expect(t.opened).toEqual([FOLDER]);
+  });
+
+  it("the terminal's × asks first in the tab (never a native prompt); Cancel keeps it, two presses close it", async () => {
+    const t = renderPanes(view());
+    fireEvent.click(screen.getByTestId("harness-pane-tab-terminal"));
+    fireEvent.click(screen.getByTestId("pane-terminal-open"));
+    await screen.findByTestId("term-body");
+    const native = vi.spyOn(window, "confirm");
+    fireEvent.click(screen.getByTestId("term-x"));
+    const ask = screen.getByTestId("pane-terminal-close");
+    expect(ask).toHaveTextContent(`Close this terminal? It ends the live shell in ${FOLDER}.`);
+    fireEvent.click(within(ask).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("pane-terminal-close")).toBeNull();
+    expect(t.closed).toEqual([]);
+    fireEvent.click(screen.getByTestId("term-x"));
+    fireEvent.click(screen.getByRole("button", { name: "Close terminal" }));
+    expect(t.closed).toEqual([]); // one press only arms it
+    fireEvent.click(screen.getByRole("button", { name: "Confirm close" }));
+    expect(t.closed).toEqual(["term1"]);
+    expect(await screen.findByTestId("pane-terminal-open")).toBeInTheDocument();
+    expect(native).not.toHaveBeenCalled();
   });
 
   it("offers to open one again when the remembered terminal is gone", () => {

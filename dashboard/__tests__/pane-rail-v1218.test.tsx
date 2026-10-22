@@ -87,12 +87,6 @@ vi.mock("next/dynamic", () => {
   };
 });
 
-vi.mock("react-rnd", () => ({
-  Rnd: ({ children }: { children?: React.ReactNode }) => (
-    <div data-testid="rnd">{children}</div>
-  ),
-}));
-
 /* ---- page chrome ----------------------------------------------------------- */
 
 vi.mock("@/components/motion", () => ({
@@ -180,8 +174,8 @@ describe("the rail is what Build opens on", () => {
     expect(screen.getByTestId("pane-rail")).toBeTruthy();
     expect(row("t1")).toBeTruthy();
     expect(row("t2")).toBeTruthy();
-    // …and the canvas is not what rendered.
-    expect(screen.queryByTestId("rnd")).toBeNull();
+    // …and the IJ harness view is not what rendered.
+    expect(screen.queryByTestId("ij-harness-view")).toBeNull();
   });
 
   it("shows the first pane without being told to", async () => {
@@ -309,7 +303,7 @@ describe("the rail carries every pane's state (v1.369.0: the canvas is gone)", (
     await waitFor(() => expect(screen.getByTestId("rail-jump-blocked")).toBeTruthy());
     expect(screen.queryByTestId("pane-summary")).toBeNull();
     expect(screen.queryByTestId("shape-canvas")).toBeNull();
-    expect(screen.queryByTestId("rnd")).toBeNull();
+    expect(screen.queryByTestId("ij-harness-view")).toBeNull();
   });
 });
 

@@ -401,6 +401,9 @@ describe("G68: removing a writing sample takes two presses", () => {
 const KNOWN_NATIVE_CONFIRMS: Record<string, { count: number; why: string }> = {
   "app/chat/page.tsx": { count: 1, why: "undo of a chat's file change (confirmUndoPrompt says what it will do)" },
   "components/terminal/PaneChat.tsx": { count: 1, why: "undo of a pane's file change (paneUndoPrompt)" },
+  // v1.369.0: the IJ harness session's Undo says what it will do, the chat's
+  // way (lib/turnRecovery undoPrompt); closing its terminal asks in the tab.
+  "components/harness/HarnessSession.tsx": { count: 1, why: "undo of a Build session's file change (undoPrompt)" },
   // v1.355.0 integrate: "End this session?" became a ConfirmButton.
   "app/creative/page.tsx": { count: 1, why: "publish to a public link (confirmPublish)" },
   "components/chat/DocPreview.tsx": { count: 1, why: "replace a file of the same name when saving a copy" },
