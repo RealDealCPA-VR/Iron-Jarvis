@@ -57,6 +57,8 @@ RESULT_NAME = "result.json"
 #: Written when a run STARTS; a run folder holding it but no result.json was
 #: cut off part-way (the process was killed) and is reported as interrupted.
 STARTED_NAME = "started.json"
+#: v1.370.0: what the agent did, step by step (the refine loop's evidence).
+TRAJECTORY_NAME = "trajectory.json"
 
 
 class BenchRefused(RuntimeError):
@@ -332,6 +334,13 @@ async def run_task(
     wall = time.monotonic() - t0
     after = await asyncio.to_thread(_snapshot, cfg_dir, work)
     outside = changed_outside(before, after)
+    # v1.370.0: the run's trajectory (Jarvis runner) is kept beside the
+    # record, not inside it — evidence for the refine loop, never a column.
+    # Written AFTER the "outside its folder" snapshot: it is the bench's own
+    # file, not something the agent touched.
+    trajectory = outcome.extra.pop("trajectory", None) if isinstance(outcome.extra, dict) else None
+    if trajectory is not None:
+        await asyncio.to_thread(_write_json, run_dir / TRAJECTORY_NAME, trajectory)
     g = await asyncio.to_thread(grade, task, work, run_dir / "grade")
     failure = classify_failure(config.runner, outcome.ok_run, outcome.facts, outcome.error)
     record = _record(task, config, fingerprint, outcome, g, wall_s=wall, started=started,
@@ -434,8 +443,11 @@ async def run_bench(
     dry_run: bool = False,
     echo: Callable[[str], None] = lambda _s: None,
     tier: str = "all",
+    ledger: BudgetLedger | None = None,
 ) -> BenchResult:
-    """Run one configuration over the selected tasks."""
+    """Run one configuration over the selected tasks. ``ledger`` (v1.370.0):
+    the refine loop passes its own, to enter this probe's rollouts in its
+    stage; omitted, a fresh one (as before)."""
     all_tasks = list(tasks) if tasks is not None else await asyncio.to_thread(load_tasks)
     try:
         identity = await asyncio.to_thread(runner.identity)
@@ -458,7 +470,7 @@ async def run_bench(
             )
         return result
     await asyncio.to_thread(_save_config, cfg_dir, config, use_seed)
-    ledger = BudgetLedger()
+    ledger = ledger if ledger is not None else BudgetLedger()
     echo(f"{config.folder_name}: {len(selected)} task(s), seed {use_seed}")
     for task in selected:
         result.records.append(await run_task(task, runner, config, cfg_dir, ledger, echo=echo))

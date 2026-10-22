@@ -319,11 +319,31 @@ def _module_bytes(module: Any) -> bytes:
         return repr(getattr(module, "__name__", module)).encode("utf-8")
 
 
+#: Entries one run's TRAJECTORY keeps (v1.370.0): every tool call's input and
+#: output (the lane's own masked ``detail``), each round's words, the reply.
+TRAJECTORY_ENTRIES = 600
+
+
+def layer_tree_hash(layer_dir: Path) -> str:
+    """sha256 over a candidate layer's harness files (names + normalised
+    bytes) — the identity of the harness a refine probe runs."""
+    from ..harness.components import HARNESS_PARTS
+
+    root = Path(layer_dir).joinpath(*HARNESS_PARTS)
+    h = hashlib.sha256()
+    if root.is_dir():
+        for path in sorted(p for p in root.rglob("*") if p.is_file()):
+            h.update(path.relative_to(root).as_posix().encode("utf-8") + b"\0")
+            h.update(path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    return h.hexdigest()
+
+
 class JarvisRunner:
     name = "jarvis"
 
     def __init__(self, platform: Any, *, provider: str = "", model: str = "",
-                 round_budget: int = DEFAULT_ROUNDS, dialect: str = DEFAULT_DIALECT) -> None:
+                 round_budget: int = DEFAULT_ROUNDS, dialect: str = DEFAULT_DIALECT,
+                 layer_dir: "Path | str | None" = None) -> None:
         from ..daemon.chat_turn import turn_harness, turn_round_budget
 
         self.platform = platform
@@ -332,10 +352,27 @@ class JarvisRunner:
         self.round_budget = turn_round_budget(int(round_budget))
         # "auto" or a dialect id; anything else is refused before any run.
         self.dialect = turn_harness(dialect or DEFAULT_DIALECT) or DEFAULT_DIALECT
+        #: v1.370.0 (the refine loop): a CANDIDATE harness layer — a folder
+        #: holding ``.ironjarvis/harness/`` — that every turn reads instead of
+        #: the task copy's own (``components.LAYER_SOURCE``). None = the
+        #: default harness, exactly as before.
+        self.layer_dir = Path(layer_dir) if layer_dir else None
+
+    def _layer(self) -> Any:
+        from ..harness import components
+
+        if self.layer_dir is None:
+            return components.EMPTY_LAYER
+        try:
+            known = set(self.platform.registry.names())
+        except Exception:  # noqa: BLE001
+            known = None
+        return components.read_project_layer(self.layer_dir, known_tools=known, session_id=None)
 
     def harness(self) -> Any:
         """The harness turn this runner's turns will build (no folder: a
-        task's copy carries no harness layer), for the identity."""
+        task's copy carries no harness layer; a refine probe's candidate
+        layer when one is set), for the identity."""
         from ..daemon.chat_turn import _harness_model
         from ..harness.mode import build
 
@@ -343,7 +380,7 @@ class JarvisRunner:
         return build(
             registry=self.platform.registry, permissions=self.platform.permissions,
             requested=self.dialect, provider=provider, model=model, stream=True,
-            approval_mode=JARVIS_APPROVAL_MODE, today="",
+            approval_mode=JARVIS_APPROVAL_MODE, today="", layer=self._layer(),
         )
 
     def identity(self) -> dict[str, Any]:
@@ -383,6 +420,10 @@ class JarvisRunner:
             "profile_sha256": _sha(profile),
             "round_budget": self.round_budget,
             "approval_mode": JARVIS_APPROVAL_MODE,
+            # v1.370.0: a refine probe's candidate layer (absent for the
+            # default harness, so every earlier configuration keeps its key).
+            **({"layer_sha256": layer_tree_hash(self.layer_dir), "layer_used": bool(turn.layer.used)}
+               if self.layer_dir is not None else {}),
         }
 
     async def run(self, task: Task, workspace: Path, rollout: Rollout, *, timeout_s: float) -> RunOutcome:
@@ -411,7 +452,24 @@ class JarvisRunner:
         error = ""
         error_fix_kind = ""
         timed_out = False
-        with counting_router(self.platform, rollout, observed):
+        #: v1.370.0: the run's TRAJECTORY — what the agent did, step by step
+        #: (the refine loop's evidence; never shown to the agent).
+        trajectory: list[dict[str, Any]] = []
+        words: list[str] = []
+
+        def _note(entry: dict[str, Any]) -> None:
+            if len(trajectory) < TRAJECTORY_ENTRIES:
+                trajectory.append(entry)
+
+        def _flush_words() -> None:
+            text = "".join(words).strip()
+            words.clear()
+            if text:
+                _note({"kind": "text", "text": text[:4000]})
+
+        from ..harness.components import layer_source
+
+        with counting_router(self.platform, rollout, observed), layer_source(self.layer_dir):
             try:
                 gen = await stream_chat_turn(
                     self.platform, BUILTIN_PERSONAS, body,
@@ -425,8 +483,21 @@ class JarvisRunner:
                             for event, data in parse_sse(chunk):
                                 if event == "round":
                                     rounds += 1
+                                    _flush_words()
+                                elif event == "token":
+                                    words.append(str(data.get("text") or ""))
+                                elif event == "reset":
+                                    words.clear()
+                                elif event == "tool_call" and data.get("status") == "started":
+                                    _flush_words()
+                                    _note({"kind": "call", "id": data.get("id"), "tool": data.get("name"),
+                                           "args": data.get("args")})
                                 elif event == "tool_call" and data.get("status") == "finished":
                                     tools += 1
+                                    detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
+                                    _note({"kind": "result", "id": data.get("id"), "tool": data.get("name"),
+                                           "ok": data.get("ok"),
+                                           "output": str(detail.get("output") or data.get("output") or "")[:2000]})
                                 elif event == "approval":
                                     # Belt and braces: yolo grants every card
                                     # these tools raise; one that still shows
@@ -452,6 +523,12 @@ class JarvisRunner:
             out.notes.append(f"stopped {len(stopped)} program(s) the turn left running")
         if time.monotonic() > deadline and done is None:
             timed_out = True
+        _flush_words()
+        if done is not None:
+            _note({"kind": "reply", "text": str(done.get("reply") or "")[:4000]})
+        elif error:
+            _note({"kind": "error", "text": error[:2000]})
+        out.extra["trajectory"] = trajectory
         out.tool_calls = tools
         out.model_rounds = rounds
         out.extra["model_calls"] = len(rollout.calls)

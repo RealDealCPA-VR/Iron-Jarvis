@@ -52,6 +52,8 @@ nothing that varies per run (a date, a folder path) is inside it.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import logging
 import re
@@ -522,6 +524,29 @@ def _scan_layer(layer: ProjectLayer, *, event_bus: Any, session_id: str | None) 
         for a in layer.sub_agents
     ]
     return layer
+
+
+#: v1.370.0 (Phase 7): WHERE a harness turn reads its project layer from,
+#: when not the turn's own folder. Set ONLY by the benchmark's refine loop
+#: (``harness_bench/refine``), which probes a CANDIDATE layer kept outside the
+#: task's copy — so the agent's workspace and the hidden check are byte-for-
+#: byte the baseline's, and only the harness differs. The value is a folder
+#: holding ``.ironjarvis/harness/``, read by :func:`read_project_layer` (the
+#: same validator). ``None`` (every lane, always, outside the bench) = the
+#: turn's folder, exactly as before. A ContextVar, so it reaches the lane's
+#: ``_build_harness`` in the task iterating the turn and nothing else.
+LAYER_SOURCE: "contextvars.ContextVar[Any]" = contextvars.ContextVar("ij_harness_layer_source", default=None)
+
+
+@contextlib.contextmanager
+def layer_source(folder: Any):
+    """Read the harness layer from ``folder`` for turns built inside the
+    ``with`` (``None`` = the turn's own folder)."""
+    token = LAYER_SOURCE.set(folder)
+    try:
+        yield
+    finally:
+        LAYER_SOURCE.reset(token)
 
 
 def read_project_layer(

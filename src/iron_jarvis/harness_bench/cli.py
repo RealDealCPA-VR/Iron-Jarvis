@@ -41,8 +41,21 @@ def run_command(
         help="Jarvis only: auto (the model family's own tool dialect, the default), generic "
         "(Iron Jarvis's own tool names), or a dialect to force: claude, gpt, qwen.",
     ),
+    refine: bool = typer.Option(
+        False, "--refine",
+        help="Jarvis only: improve the harness (Propose-Probe-Compose). A model proposes harness "
+        "edits from the runs' evidence, each is probed on the same tasks, the winners are composed, "
+        "and a composition that scores at least as well is written as a PROPOSED layer.",
+    ),
+    k: int = typer.Option(2, "--k", help="--refine: how many candidate harnesses (1 to 8)."),
+    mode: str = typer.Option(
+        "parallel", "--mode",
+        help="--refine: parallel (k candidates from one round of evidence) or sequential (k rounds, "
+        "each building on the best so far).",
+    ),
 ) -> None:
-    """Run one configuration over the tasks and write JSON + report.md."""
+    """Run one configuration over the tasks and write JSON + report.md
+    (with --refine: run the harness improvement loop instead)."""
     from .bench import BenchRefused, make_runner, resolve_bench_home, run_bench
     from .ledger import BudgetMismatch
     from .runners import DEFAULT_ROUNDS
@@ -59,6 +72,13 @@ def run_command(
     if runner != "jarvis" and rounds is not None:
         typer.echo("--rounds applies to the jarvis runner only.")
         raise typer.Exit(code=2)
+    if refine:
+        _refine(
+            runner=runner, provider=provider, model=model, tasks=tasks, seed=seed,
+            max_tasks=max_tasks, tier=tier, rounds=rounds if rounds is not None else DEFAULT_ROUNDS,
+            dry_run=dry_run, root=root, dialect=dialect, k=k, mode=mode,
+        )
+        return
     try:
         home = resolve_bench_home(root)
         bench_runner = make_runner(
@@ -91,6 +111,87 @@ def run_command(
     )
     if result.report_path is not None:
         typer.echo(f"Report across every setup: {result.report_path}")
+
+
+def _refine(*, runner: str, provider: str, model: str, tasks: str, seed: int | None,
+            max_tasks: int | None, tier: str, rounds: int, dry_run: bool, root: str,
+            dialect: str, k: int, mode: str) -> None:
+    from .bench import BenchRefused, resolve_bench_home
+    from .ledger import BudgetMismatch
+    from .refine import RefineSettings, run_refine
+
+    if runner != "jarvis":
+        typer.echo("--refine improves Iron Jarvis's own harness: run it with --runner jarvis.")
+        raise typer.Exit(code=2)
+    settings = RefineSettings(
+        provider=provider, model=model, dialect=dialect or "auto", rounds=rounds, tier=tier,
+        tasks=tuple(_split(tasks) or ()), max_tasks=max_tasks, k=k, mode=mode,
+    )
+    try:
+        home = resolve_bench_home(root)
+        from ..daemon.chat_turn import turn_harness
+        from ..platform import build_platform
+
+        turn_harness(settings.dialect)
+        platform = build_platform(root)
+        result = asyncio.run(run_refine(
+            platform=platform, home=home, settings=settings, seed=seed, dry_run=dry_run, echo=typer.echo,
+        ))
+    except (BenchRefused, ValueError) as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=2) from exc
+    except BudgetMismatch as exc:
+        typer.echo(f"The results were written, but {exc}")
+        raise typer.Exit(code=1) from exc
+    if dry_run:
+        for line in result.plan_lines:
+            typer.echo(line)
+        typer.echo("Nothing was run (dry run).")
+        return
+    for c in result.candidates:
+        typer.echo(
+            f"{c.get('label')}: {c.get('status')}"
+            + (f" ({c.get('reason')})" if c.get("reason") else "")
+            + (f", changed {', '.join(c.get('changed') or [])}" if c.get("changed") else "")
+        )
+    if result.adopted:
+        a = result.adopted
+        typer.echo(
+            f"Adopted as a proposed layer ({'better than' if a['better'] else 'the same as'} the current "
+            f"harness: {a['passed']} vs {a['current_passed']} on {a['compared']} task(s)). {a['how_to_use']}"
+        )
+    else:
+        typer.echo("Nothing was adopted: the current harness stays.")
+    if result.ledger is not None:
+        t = result.ledger.grand_totals()
+        typer.echo(
+            f"Ledger: {t['rollouts']} rollouts, {t['model_calls']} model calls, {t['tokens_in']} tokens in, "
+            f"{t['tokens_out']} tokens out; every stage adds up."
+        )
+    typer.echo(f"Report: {result.report_path}")
+
+
+@bench_app.command("adopt")
+def adopt_command(
+    source: str = typer.Option(..., "--from", help="A refine folder (its adopted layer) or a folder holding .ironjarvis/harness."),
+    folder: str = typer.Option(..., "--folder", help="The project folder to write the harness files into."),
+) -> None:
+    """Copy an adopted harness layer into a project folder (your decision; a
+    file the folder already has and that differs is never overwritten)."""
+    from pathlib import Path
+
+    from .bench import BenchRefused
+    from .refine import adopt_into
+
+    try:
+        written = adopt_into(Path(source), Path(folder))
+    except BenchRefused as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=2) from exc
+    if written:
+        typer.echo("Written into " + str(Path(folder) / ".ironjarvis" / "harness") + ": " + ", ".join(written))
+    else:
+        typer.echo("The folder already had these files; nothing needed copying.")
 
 
 @bench_app.command("report")

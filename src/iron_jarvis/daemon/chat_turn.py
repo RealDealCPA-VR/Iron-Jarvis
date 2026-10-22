@@ -4864,8 +4864,12 @@ async def _build_harness(
             known = set(d.platform.registry.names())
         except Exception:  # noqa: BLE001
             known = None
+        # v1.370.0 (Phase 7): the benchmark's refine loop probes a CANDIDATE
+        # layer kept outside the task's copy (``components.LAYER_SOURCE``;
+        # None everywhere else — the folder's own layer, as before).
+        source = _components.LAYER_SOURCE.get()
         layer = await asyncio.to_thread(
-            _components.read_project_layer, folder,
+            _components.read_project_layer, source if source is not None else folder,
             known_tools=known, event_bus=bus, session_id="chat",
         )
         # v1.370.0 (Phase 7): the folder's EXPERIENCE LIBRARY — the lessons
