@@ -380,3 +380,36 @@ def test_the_session_list_reads_no_transcript(tmp_path, work):
     thread_reads = [s for s in seen if "from chatthreadrecord" in s]
     assert thread_reads, seen
     assert not any("messages_json" in s for s in thread_reads), thread_reads
+
+
+# --------------------------------------------------------------------------- #
+# 10. a waiting Build session is not announced as "a chat"
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_waiting_build_session_is_marked_on_the_pending_listing(app, work):
+    """A build turn parked on its approval card with no window following it
+    joins ``GET /chat/approvals/pending`` as a ``kind: "chat"`` row (the bell
+    and the desktop toast announce it). It was indistinguishable from a
+    chat's — whose bell link opens ``/chat?thread=<id>``. The row now says
+    ``surface: "build"`` (LAST; a chat's row is unchanged) so the screen that
+    opens it can tell (Phase 6 routes it to Build)."""
+    from tests.test_build_sessions_v1367 import asgi
+
+    sid = new_session(app, work)["id"]
+    wire(app, Script([[ToolCall(id="b1", name="Bash", arguments={"command": "echo hi"})], "Ran it."]))
+    drop = asyncio.Event()
+    status, _raw = await open_turn(app, sid, {"text": "run echo", "turn_id": "rv-wait"},
+                                   drop=drop, stop_after="event: approval")
+    assert status == 200
+    lg = await until(lambda: turn_log(app, "rv-wait"))
+    await until(lambda: not lg.watched())
+    status, body = await asgi(app, "GET", "/chat/approvals/pending")
+    assert status == 200
+    mine = [r for r in body["approvals"] if r.get("thread_id") == sid]
+    assert len(mine) == 1, body
+    row = mine[0]
+    assert row["kind"] == "chat" and row["surface"] == "build"
+    assert list(row)[-1] == "surface"
+    await asgi(app, "POST", "/chat/turns/rv-wait/stop", {})
+    await until(lambda: lg.status != "running")

@@ -657,6 +657,7 @@ def register(app: FastAPI, d: Any) -> None:
                     await gen.aclose()
                 raise HTTPException(status_code=404, detail="no such Build session")
             lg = logs.start(turn_id, thread_id, recorded_turn(platform.engine, thread_id, turn_id, gen))
+            lg.surface = "build"  # the waiting row says it is not a chat
             holder["log"] = lg
         finally:
             _STARTING.discard(thread_id)

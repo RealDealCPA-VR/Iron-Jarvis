@@ -100,6 +100,11 @@ class TurnLog:
     def __init__(self, turn_id: str, thread_id: str = "") -> None:
         self.turn_id = turn_id
         self.thread_id = thread_id
+        #: v1.367.0 (Phase 4 review): "build" for an IJ harness session's
+        #: turn (set by ``routes/build``), "" for a chat's — the waiting row
+        #: below says which, so a surface that opens it can tell a Build
+        #: session from a chat (Phase 6 routes it to Build).
+        self.surface = ""
         self.frames: list[list[str]] = []  # [event, data_json], merged
         self.status = "running"
         self.started_at = utcnow()
@@ -404,6 +409,10 @@ def waiting_unwatched(
                 # The listing's contract (v1.310.0): present on EVERY row.
                 "mission_id": None,
                 "project_id": None,
+                # v1.367.0 (Phase 4 review): a Build session is not a chat —
+                # additive and LAST, on a Build session's row only (a chat's
+                # row is byte-for-byte what it was).
+                **({"surface": "build"} if getattr(lg, "surface", "") == "build" else {}),
             })
     except Exception:  # noqa: BLE001 — a listing never fails because of this
         log.warning("could not list waiting chat turns", exc_info=True)
