@@ -1209,6 +1209,148 @@ var ToAnthropicStream = class {
   }
 };
 
+// ../core/src/quota/limits.ts
+var CLAUDE_USAGE_WINDOWS = [
+  { kind: "5h", windowMins: 300 },
+  { kind: "7d", windowMins: 10080 }
+];
+var CLAUDE_WINDOW_HEADER_PREFIX = "anthropic-ratelimit-unified-";
+var MAX_USED_PERCENT = 150;
+var OBSERVED_MAX_AGE_MS = 30 * 24 * 60 * 6e4;
+var OBSERVED_MAX_SKEW_MS = 6e4;
+var isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+var round1 = (n) => Math.round(n * 10) / 10;
+function normalizePlan(value) {
+  if (typeof value !== "string") return void 0;
+  const v = value.trim().toLowerCase();
+  if (!/^[a-z][a-z0-9_-]{0,39}$/.test(v) || v === "unknown") return void 0;
+  return v;
+}
+function unixSecondsToIso(n) {
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 1e9 || n >= 1e11) return void 0;
+  return new Date(Math.round(n * 1e3)).toISOString();
+}
+function headerInstantMs(value) {
+  if (value === null || value === void 0) return NaN;
+  const t = value.trim();
+  if (/^\d{9,10}(?:\.\d+)?$/.test(t)) return Math.round(Number(t) * 1e3);
+  return new Date(value).getTime();
+}
+function headerNumber(value) {
+  if (value === null || value === void 0) return void 0;
+  const t = value.trim();
+  if (!t) return void 0;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : void 0;
+}
+function windowsFromHeaders(provider, headers, now) {
+  if (provider !== "anthropic") return [];
+  const at = new Date(now).toISOString();
+  const out = [];
+  for (const w of CLAUDE_USAGE_WINDOWS) {
+    const u = headerNumber(headers(`${CLAUDE_WINDOW_HEADER_PREFIX}${w.kind}-utilization`));
+    if (u === void 0 || u < 0) continue;
+    const usedPercent = round1(u * 100);
+    if (usedPercent > MAX_USED_PERCENT) continue;
+    const resetMs = headerInstantMs(headers(`${CLAUDE_WINDOW_HEADER_PREFIX}${w.kind}-reset`));
+    out.push({
+      kind: w.kind,
+      usedPercent,
+      windowMins: w.windowMins,
+      ...Number.isFinite(resetMs) ? { resetsAt: new Date(resetMs).toISOString() } : {},
+      source: "headers",
+      at
+    });
+  }
+  return out;
+}
+function observedAt(value, now) {
+  const iso = unixSecondsToIso(value);
+  if (iso) {
+    const t = Date.parse(iso);
+    if (t <= now + OBSERVED_MAX_SKEW_MS && t >= now - OBSERVED_MAX_AGE_MS) return iso;
+  }
+  return new Date(now).toISOString();
+}
+function limitsFromRateLimits(rl, now) {
+  const at = observedAt(rl.observedAt, now);
+  const out = { windows: [] };
+  const plan = normalizePlan(rl.planType);
+  if (plan) out.plan = { plan, source: "rate-limits", at };
+  for (const kind of ["primary", "secondary"]) {
+    const w = rl[kind];
+    if (!isObject(w)) continue;
+    const used = w.usedPercent;
+    if (typeof used !== "number" || !Number.isFinite(used)) continue;
+    if (used < 0 || used > MAX_USED_PERCENT) continue;
+    const mins = w.windowDurationMins;
+    const resetsAt = unixSecondsToIso(w.resetsAt);
+    out.windows.push({
+      kind,
+      usedPercent: round1(used),
+      ...typeof mins === "number" && Number.isFinite(mins) && mins > 0 ? { windowMins: Math.round(mins) } : {},
+      ...resetsAt ? { resetsAt } : {},
+      source: "rate-limits",
+      at
+    });
+  }
+  return out;
+}
+function learnLimits(provider, input, now) {
+  const out = {
+    windows: input.headers ? windowsFromHeaders(provider, input.headers, now) : []
+  };
+  if (input.rateLimits) {
+    const rl = limitsFromRateLimits(input.rateLimits, now);
+    if (rl.plan) out.plan = rl.plan;
+    out.windows.push(...rl.windows);
+  }
+  return out;
+}
+function learnedNothing(l) {
+  return !l.plan && !l.windows.length;
+}
+function liveWindows(windows, now) {
+  return windows.filter((w) => w.resetsAt === void 0 || Date.parse(w.resetsAt) > now);
+}
+function mergeWindows(current, incoming, now) {
+  const byKind = /* @__PURE__ */ new Map();
+  for (const w of current ?? []) byKind.set(w.kind, w);
+  for (const w of incoming) {
+    const old = byKind.get(w.kind);
+    if (!old || !(Date.parse(old.at) > Date.parse(w.at))) byKind.set(w.kind, w);
+  }
+  return liveWindows([...byKind.values()], now);
+}
+function applyLimits(st, learned, now) {
+  let changed = false;
+  const p = learned.plan;
+  if (p && !(st.planAt !== void 0 && Date.parse(st.planAt) > Date.parse(p.at))) {
+    if (st.plan !== p.plan || st.planSource !== p.source || st.planAt !== p.at) {
+      st.plan = p.plan;
+      st.planSource = p.source;
+      st.planAt = p.at;
+      changed = true;
+    }
+  }
+  const merged = mergeWindows(st.windows, learned.windows, now);
+  if (JSON.stringify(merged) !== JSON.stringify(st.windows ?? [])) {
+    if (merged.length) st.windows = merged;
+    else delete st.windows;
+    changed = true;
+  }
+  return changed;
+}
+function exhaustedResetAt(windows, now) {
+  let best;
+  for (const w of windows) {
+    if (w.usedPercent < 100 || w.resetsAt === void 0) continue;
+    const t = Date.parse(w.resetsAt);
+    if (t > now && (best === void 0 || t > best)) best = t;
+  }
+  return best !== void 0 ? new Date(best).toISOString() : void 0;
+}
+
 // ../core/src/quota/detect.ts
 function headersFrom(h) {
   if (typeof h.get === "function") return (n) => h.get(n);
@@ -1292,11 +1434,11 @@ function resetFromHeaders(provider, headers, now) {
         headers("anthropic-ratelimit-input-tokens-reset"),
         headers("anthropic-ratelimit-output-tokens-reset"),
         headers("anthropic-ratelimit-tokens-reset"),
-        headers("anthropic-ratelimit-unified-reset")
+        unifiedLimitReached(headers) ? headers("anthropic-ratelimit-unified-reset") : void 0
       ];
       let best;
       for (const c of candidates) {
-        const t = c ? new Date(c).getTime() : NaN;
+        const t = c ? headerInstantMs(c) : NaN;
         if (!Number.isNaN(t) && (best === void 0 || t > best)) best = t;
       }
       return best !== void 0 ? new Date(best).toISOString() : void 0;
@@ -1312,6 +1454,12 @@ function resetFromHeaders(provider, headers, now) {
     case "google":
       return void 0;
   }
+}
+function unifiedLimitReached(headers) {
+  const status2 = headers("anthropic-ratelimit-unified-status")?.trim().toLowerCase();
+  if (!status2) return true;
+  const overage = headers("anthropic-ratelimit-unified-overage-status")?.trim().toLowerCase();
+  return status2 === "rejected" && (!overage || overage === "rejected");
 }
 function resetFromBody(body, now) {
   const g = /"retryDelay"\s*:\s*"([^"]+)"/.exec(body);
@@ -2366,7 +2514,12 @@ var CliLane = class {
     }
     yield { type: "finish", finishReason: "stop" };
   }
-  async checkAuth(profile) {
+  /**
+   * Run the CLI's own status command. When `detail` is given and the spec reads a
+   * plan from the same output (`status.plan`), the plan is put on it; nothing else
+   * from the output is kept.
+   */
+  async checkAuth(profile, _vault, detail) {
     if (!this.spec.status) return "unknown";
     const { binary, lead } = this.exe(profile);
     if (!await which(binary)) return "unknown";
@@ -2379,7 +2532,15 @@ var CliLane = class {
         timeoutMs: 2e4,
         cwd: profile.cli.home
       });
-      return this.spec.status.interpret(result);
+      const verdict = this.spec.status.interpret(result);
+      if (detail && this.spec.status.plan) {
+        try {
+          const plan = normalizePlan(this.spec.status.plan(result));
+          if (plan) detail.plan = plan;
+        } catch {
+        }
+      }
+      return verdict;
     } catch {
       return "unknown";
     }
@@ -2605,17 +2766,33 @@ var claudeSpec = {
   status: {
     args: ["auth", "status"],
     interpret(r) {
-      const j = tryJson(
-        r.stdout.trim().split("\n").find((l) => l.trim().startsWith("{")) ?? ""
-      ) ?? tryJson(r.stdout);
+      const j = claudeStatusJson(r.stdout);
       if (j && typeof j.loggedIn === "boolean") return j.loggedIn ? "ok" : "unauthenticated";
       if (/logged in|authenticated/i.test(r.stdout) && !/not logged in/i.test(r.stdout))
         return "ok";
       if (/not logged in|no credentials/i.test(r.stdout + r.stderr)) return "unauthenticated";
       return "unknown";
+    },
+    /**
+     * `claude auth status` prints JSON by default (verified on Claude Code 2.1.306,
+     * 2026-10-21): `{ loggedIn, authMethod, …, subscriptionType }` with
+     * subscriptionType `max` / `pro` / `team` / `enterprise` (Claude Code's own map of
+     * claude_max / claude_pro / claude_team / claude_enterprise), or null when not
+     * signed in with a subscription. Only `subscriptionType` is read, and only while
+     * signed in; the email and organisation the same output carries are never kept.
+     */
+    plan(r) {
+      const j = claudeStatusJson(r.stdout);
+      if (!j || j.loggedIn !== true) return void 0;
+      return typeof j.subscriptionType === "string" ? j.subscriptionType : void 0;
     }
   }
 };
+function claudeStatusJson(stdout) {
+  return tryJson(
+    stdout.trim().split("\n").find((l) => l.trim().startsWith("{")) ?? ""
+  ) ?? tryJson(stdout);
+}
 var codexSpec = {
   provider: "openai",
   displayName: "Codex CLI",
@@ -3328,8 +3505,22 @@ var Router = class {
   /* ---------------------------------------------------------------- */
   /* State                                                            */
   /* ---------------------------------------------------------------- */
+  /**
+   * The profile's state. A usage window whose reset has passed is left out (and
+   * so dropped by the next write): its percentage describes a window that is over.
+   */
   async state(profileId) {
-    return await this.deps.states.get(profileId) ?? { profileId, status: "unknown", served: 0 };
+    const st = await this.deps.states.get(profileId) ?? {
+      profileId,
+      status: "unknown",
+      served: 0
+    };
+    if (st.windows) {
+      const live = liveWindows(st.windows, this.clock.now());
+      if (!live.length) delete st.windows;
+      else if (live.length !== st.windows.length) st.windows = live;
+    }
+    return st;
   }
   /**
    * Resolves once every usage snapshot reported so far has been stored and its
@@ -3415,6 +3606,21 @@ var Router = class {
       ...info.model ? { model: info.model } : {}
     });
     return this.state(profile.id);
+  }
+  /**
+   * Store what a host learned about an account's plan and usage windows (see
+   * quota/limits.ts `applyLimits`), behind any usage write still in flight for it so
+   * neither overwrites the other. Emits `profile.state` when `emit` is set and
+   * something changed. Returns the stored state when something changed.
+   */
+  async recordLimits(profileId, learned, opts = {}) {
+    if (learnedNothing(learned)) return void 0;
+    await this.usageWrites.get(profileId);
+    const st = await this.state(profileId);
+    if (!applyLimits(st, learned, this.clock.now())) return void 0;
+    await this.deps.states.put(st);
+    if (opts.emit) this.deps.emitter.emit({ type: "profile.state", state: st });
+    return st;
   }
   async park(profile, signal) {
     const policy = this.policyFor(profile.provider);
@@ -4708,6 +4914,7 @@ var IronProxy = class {
         st.status = "ready";
         delete st.lastError;
         delete st.parkedReason;
+        forgetLimits(st);
         await this.states.put(st);
         this.events.emit({ type: "profile.state", state: st });
       }).catch(() => {
@@ -4733,10 +4940,17 @@ var IronProxy = class {
     await lane.logout?.(p, this.vault);
     const st = await this.router.state(id);
     st.status = "unauthenticated";
+    forgetLimits(st);
     await this.states.put(st);
     this.events.emit({ type: "profile.state", state: st });
   }
-  /** Re-check authentication for one or all profiles. */
+  /**
+   * Re-check authentication for one or all profiles. A vendor CLI whose status
+   * output names the subscription plan (Claude Code) also records it on the state
+   * (`plan`, `planSource: 'cli-status'`). A parked or serving account is not
+   * re-judged; its status command runs only while its plan is still unknown, and
+   * then only the plan is kept.
+   */
   async refreshStatus(id) {
     const targets = id ? [await this.getProfile(id)] : await this.listProfiles();
     const out = [];
@@ -4747,10 +4961,26 @@ var IronProxy = class {
           st.status = "disabled";
         } else if (st.status !== "parked" && st.status !== "active") {
           const lane = this.registry.laneFor(p);
-          const result = await lane.checkAuth(p, this.vault).catch(() => "unknown");
+          const detail = {};
+          const result = await (lane instanceof CliLane ? lane.checkAuth(p, this.vault, detail) : lane.checkAuth(p, this.vault)).catch(() => "unknown");
           st = await this.router.state(p.id);
           if (st.status !== "parked" && st.status !== "active") {
+            if (st.status === "unauthenticated" && result === "ok") forgetLimits(st);
             st.status = result === "unauthenticated" ? "unauthenticated" : result === "ok" ? "ready" : st.status === "unknown" ? "ready" : st.status;
+          }
+          this.notePlan(st, detail);
+        } else if (st.plan === void 0) {
+          let lane;
+          try {
+            lane = this.registry.laneFor(p);
+          } catch {
+            lane = void 0;
+          }
+          if (lane instanceof CliLane && lane.spec.status?.plan) {
+            const detail = {};
+            await lane.checkAuth(p, this.vault, detail).catch(() => "unknown");
+            st = await this.router.state(p.id);
+            this.notePlan(st, detail);
           }
         }
         await this.states.put(st);
@@ -4759,6 +4989,15 @@ var IronProxy = class {
       })
     );
     return out;
+  }
+  /** Put the plan a status check read on the state (mutated), as `cli-status`. */
+  notePlan(st, detail) {
+    if (!detail.plan) return;
+    applyLimits(
+      st,
+      { plan: { plan: detail.plan, source: "cli-status", at: isoNow(this.clock) }, windows: [] },
+      this.clock.now()
+    );
   }
   /* ---------------------------------------------------------------- */
   /* Running requests                                                 */
@@ -4900,13 +5139,30 @@ var IronProxy = class {
    */
   async reportSignal(id, input) {
     const p = await this.getProfile(id);
-    const { status: status2, headers, text } = validateSignalInput(input);
+    const { status: status2, headers, text, rateLimits } = validateSignalInput(input);
     const now = this.clock.now();
     const found = status2 !== void 0 ? detectFromHttp(p.provider, status2, headersFrom(headers ?? {}), text, now) : detectFromCliOutput(p.provider, text ?? "", now);
+    const learned = this.learnedFrom(p, headers, rateLimits, now);
+    await this.router.recordLimits(p.id, learned, { emit: !found });
     if (!found) return { parked: false };
-    const signal = found.message !== void 0 ? { ...found, message: redactSecrets(found.message) } : found;
+    let signal = found.message !== void 0 ? { ...found, message: redactSecrets(found.message) } : found;
+    if ((signal.kind === "rate-limit" || signal.kind === "quota-exhausted") && signal.resetAt === void 0 && signal.retryAfterMs === void 0) {
+      const resetAt = exhaustedResetAt(learned.windows, now);
+      if (resetAt) signal = { ...signal, resetAt };
+    }
     await this.router.park(p, signal);
     return { parked: true, signal, state: await this.router.state(id) };
+  }
+  /** The plan and usage windows one external report carried (see quota/limits.ts). */
+  learnedFrom(p, headers, rateLimits, now) {
+    return learnLimits(
+      p.provider,
+      {
+        ...headers ? { headers: headersFrom(headers) } : {},
+        ...rateLimits ? { rateLimits } : {}
+      },
+      now
+    );
   }
   /**
    * An external executor ran a request on this account and it succeeded. Recorded
@@ -4916,7 +5172,11 @@ var IronProxy = class {
    */
   async reportFinished(id, input = {}) {
     const p = await this.getProfile(id);
-    const { usage: usage2, durationMs, model } = validateFinishedInput(input);
+    const { usage: usage2, durationMs, model, headers, rateLimits } = validateFinishedInput(input);
+    await this.router.recordLimits(
+      p.id,
+      this.learnedFrom(p, headers, rateLimits, this.clock.now())
+    );
     return this.router.recordServed(p, {
       ...usage2 ? { usage: usage2 } : {},
       ...durationMs !== void 0 ? { durationMs } : {},
@@ -4926,10 +5186,21 @@ var IronProxy = class {
   /* ---------------------------------------------------------------- */
   /* State + diagnostics                                              */
   /* ---------------------------------------------------------------- */
+  /**
+   * Every profile's state. A usage window whose reset has passed since it was
+   * stored is left out (its percentage describes a window that is over).
+   */
   async allStates() {
     const states = await this.states.all();
     for (const p of await this.profiles.list())
       states[p.id] ??= { profileId: p.id, status: "unknown", served: 0 };
+    const now = this.clock.now();
+    for (const st of Object.values(states)) {
+      if (!st.windows) continue;
+      const live = liveWindows(st.windows, now);
+      if (live.length) st.windows = live;
+      else delete st.windows;
+    }
     return states;
   }
   unpark(id) {
@@ -5032,26 +5303,41 @@ function badInput(message) {
   });
 }
 var isCount = (v) => Number.isInteger(v) && v >= 0;
+function validateHeaders(headers) {
+  if (headers === void 0) return void 0;
+  if (!headers || typeof headers !== "object" || Array.isArray(headers) || Object.values(headers).some((v) => typeof v !== "string"))
+    throw badInput("`headers` must be an object of string values.");
+  return headers;
+}
+function validateRateLimits(rateLimits) {
+  if (rateLimits === void 0 || rateLimits === null) return void 0;
+  if (!rateLimits || typeof rateLimits !== "object" || Array.isArray(rateLimits))
+    throw badInput("`rateLimits` must be an object (a Codex rate-limit snapshot).");
+  return rateLimits;
+}
 function validateSignalInput(input) {
   if (!input || typeof input !== "object" || Array.isArray(input))
-    throw badInput("The signal must be an object: { status?, headers?, text? }.");
-  const { status: status2, headers, text } = input;
+    throw badInput("The signal must be an object: { status?, headers?, text?, rateLimits? }.");
+  const { status: status2, text } = input;
   if (status2 !== void 0 && (!Number.isInteger(status2) || status2 < 100 || status2 > 599))
     throw badInput("`status` must be an HTTP status code (100-599).");
   if (text !== void 0 && typeof text !== "string") throw badInput("`text` must be a string.");
-  if (headers !== void 0 && (!headers || typeof headers !== "object" || Array.isArray(headers) || Object.values(headers).some((v) => typeof v !== "string")))
-    throw badInput("`headers` must be an object of string values.");
+  const headers = validateHeaders(input.headers);
+  const rateLimits = validateRateLimits(input.rateLimits);
   if (status2 === void 0 && !text?.trim())
     throw badInput("A signal needs `status` (an HTTP failure) or `text` (what the CLI printed).");
   return {
     ...status2 !== void 0 ? { status: status2 } : {},
     ...headers !== void 0 ? { headers } : {},
-    ...text !== void 0 ? { text } : {}
+    ...text !== void 0 ? { text } : {},
+    ...rateLimits !== void 0 ? { rateLimits } : {}
   };
 }
 function validateFinishedInput(input) {
   if (!input || typeof input !== "object" || Array.isArray(input))
-    throw badInput("The report must be an object: { usage?, durationMs?, model? }.");
+    throw badInput(
+      "The report must be an object: { usage?, durationMs?, model?, headers?, rateLimits? }."
+    );
   const { usage: usage2, durationMs, model } = input;
   if (usage2 !== void 0) {
     if (!usage2 || typeof usage2 !== "object" || !isCount(usage2.inputTokens) || !isCount(usage2.outputTokens) || usage2.cacheReadTokens !== void 0 && !isCount(usage2.cacheReadTokens))
@@ -5062,6 +5348,8 @@ function validateFinishedInput(input) {
   if (durationMs !== void 0 && !isCount(durationMs))
     throw badInput("`durationMs` must be a non-negative integer.");
   if (model !== void 0 && typeof model !== "string") throw badInput("`model` must be a string.");
+  const headers = validateHeaders(input.headers);
+  const rateLimits = validateRateLimits(input.rateLimits);
   return {
     ...usage2 ? {
       usage: {
@@ -5071,8 +5359,16 @@ function validateFinishedInput(input) {
       }
     } : {},
     ...durationMs !== void 0 ? { durationMs } : {},
-    ...model ? { model } : {}
+    ...model ? { model } : {},
+    ...headers !== void 0 ? { headers } : {},
+    ...rateLimits !== void 0 ? { rateLimits } : {}
   };
+}
+function forgetLimits(st) {
+  delete st.plan;
+  delete st.planSource;
+  delete st.planAt;
+  delete st.windows;
 }
 function freeTitle(base, taken) {
   if (!taken.has(base)) return base;
@@ -5172,7 +5468,12 @@ var LocalIronClient = class {
 import { randomBytes as randomBytes4, timingSafeEqual } from "crypto";
 import { createServer } from "http";
 var PROXY_VERSION = true ? "0.1.0" : "0.0.0-dev";
-var PROXY_FEATURES = ["executor-v1", "pick-profile"];
+var PROXY_FEATURES = [
+  "executor-v1",
+  "pick-profile",
+  "pick-pinned",
+  "plan-usage"
+];
 var LANES = ["cli", "api-key", "oauth", "any"];
 var HttpError = class extends Error {
   constructor(status2, message, code2 = "INVALID_REQUEST", extra = {}) {
@@ -5571,6 +5872,12 @@ function createProxyServer(opts) {
           400,
           "`profileId` is empty: leave it out to pick the next ready account."
         );
+      const pinned = pinnedFlag(q.get("pinned"));
+      if (pinned && profileId === null)
+        throw new HttpError(
+          400,
+          "`pinned=1` needs `profileId`: a pinned pick answers that one account, never the next ready one."
+        );
       const profile = await iron.pickProfile(provider, {
         lane,
         ...profileId !== null ? { profileId, requireUsable: true } : {}
@@ -5719,6 +6026,13 @@ function switchedComment(ev) {
   return `: iron switched ${ev.fromProfileId} -> ${ev.toProfileId}${ev.resumed ? " resumed" : ""}
 
 `;
+}
+function pinnedFlag(raw) {
+  if (raw === null) return false;
+  const v = raw.trim().toLowerCase();
+  if (v === "1" || v === "true") return true;
+  if (v === "0" || v === "false") return false;
+  throw new HttpError(400, `\`pinned\` must be 1 or 0, not "${raw}".`);
 }
 function isSerialized(err) {
   return !!err && typeof err === "object" && typeof err.code === "string" && typeof err.message === "string" && "retryable" in err;
