@@ -3553,6 +3553,61 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A Build session is a chat ROW that is never a chat; its turn is the
+  daemon's; plan mode asks ONCE and nothing grants it** (v1.367.0, Phase 4 of
+  `docs/IJ-HARNESS-PLAN.md`). `ChatThreadRecord.surface = "build"`
+  (`core/models.BUILD_SURFACE`; NULL reads as chat; `chat_surface_only()` /
+  `is_build_thread()`): ONLY `POST /build/sessions` writes it. EVERY chat
+  reader filters it — chat list (+project/archived), the @ menu and its
+  resolver, history index (`chat_append` never indexes one; backfill skips),
+  memory recall, Guide `app_search`, Status map, share (404), preferences
+  look-back AND scan (`learning/preferences.py`), and
+  `chat_append.append_to_chat_thread` REFUSES one (the @-panel, delivery,
+  media and remote-inbound writer would otherwise land chat lines in it).
+  `PUT /chat/threads/{id}` 409s; Remember / Turn into workflow 409
+  (`BUILD_SESSION_NOT_A_CHAT`); the chat DELETE 409s while it answers (the
+  build DELETE's `RUNNING_SENTENCE`). A NEW reader of chat threads must take
+  the filter. `daemon/routes/build.py`: list (5 columns, never
+  `messages_json`), create (`fs_policy.root_problem`, 400 in words), GET/
+  PATCH (partial, the folder is IMMUTABLE)/DELETE, archive/unarchive (the
+  chat's `archive_thread`), folder rename (`BuildFolderRecord`; a project
+  root renames the PROJECT), `POST …/turn` (same SSE as /chat/stream, a
+  NAMED durable turn through `TurnLogs.start`; a repeated `turn_id` is
+  followed, and one whose record outlived the registry is REPLAYED from
+  `ChatTurnRecord`, never re-run — 409 if it belongs to another
+  conversation), `POST …/answer` (`ask_user`; checks kind AND session).
+  `recorded_turn` writes the reply line in the chat page's shape, writes an
+  error line when the lane raises, and applies an approved plan + "allow for
+  this conversation" to the session as they land
+  (`_apply_session_changes`, never raises). Both lanes take keyword-only
+  `session_id=` / `plan_mode=` (never on ChatBody): tool context, ledger and
+  `procs.owned_by` key on `build:<id>`; archive/delete call
+  `procs.end_session`. `build_round_budget` (1..200, default 60, clamped).
+  PLAN MODE arms `PLAN_MODE_TOOLS` (read-only) + `exit_plan_mode`, which
+  cards ONCE-ONLY in every posture (yolo, approve-for-me, user `allow`), no
+  grant covers it, Allow → act + plan kept (steps from the plan's list
+  items, else the turn's last `plan_update`), Deny → plan mode stays.
+  `ask_user` (allow, deadline-exempt) rides the MCP elicitation side
+  channel ONLY in a harness turn that armed it (`TurnInteractions(
+  asks_user=)`); anywhere else it refuses at once — the chat "+" menu can arm
+  it and the chat page draws no card. Plugin checks run through `shell`, else
+  `process_start(until_exit)` + `process_read` + `process_stop` (the GPT
+  dialect). `/chat/approvals/pending` marks a waiting unwatched session
+  `surface: "build"` (LAST key, build rows only). Boot reconcile writes ONE
+  interrupted line per cut-off turn (honouring `reset`). Pins:
+  `tests/test_build_{sessions,turns,plan_ask,checks,review,leftovers}_v1367.py`.
+  SAME RELEASE, A REAL HARM FROM THE SUITE: `iron_proxy.service._CURRENT`
+  is process-global (every `IronProxyService(register=True)` sets it), so a
+  test that switched Iron-Proxy on left it on for later tests on the same
+  worker, and that service found the USER'S running proxy through
+  `~/.iron-proxy/proxy.json`. Claude-native tests then leased the user's
+  real accounts, and a scripted 401 ("Invalid bearer token") was SIGNALLED
+  to it — the live "TSI" account read "needs to sign in again" (repaired
+  with the card's Check again). `tests/conftest.py` now gives every worker
+  a throwaway `IRON_PROXY_DATA_DIR` and restores `_CURRENT` after each
+  test. A NEW process-global that can reach the user's live services gets
+  the same two fixtures.
+
 - **Harness mode: one switch, a dialect per model family, a component tree
   per folder** (v1.366.0, Phase 3 of `docs/IJ-HARNESS-PLAN.md`; Harness²
   principles 1–3). `harness=` is KEYWORD-ONLY on `run_chat_turn` /

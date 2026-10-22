@@ -234,6 +234,10 @@ class _ReplyWatch:
         self.approved_text = ""
         #: tools allowed "for this conversation".
         self.granted: list[str] = []
+        #: The step list of the last plan_update call that ran this turn —
+        #: an approved plan written as prose keeps THESE as its steps
+        #: (v1.367.0 ship: the review saw a prose plan keep none).
+        self.plan_update_steps: list[dict[str, str]] = []
 
     def see(self, event: str, raw: str) -> None:
         try:
@@ -274,6 +278,18 @@ class _ReplyWatch:
                     if isinstance(data.get("detail"), dict):
                         step["detail"] = data["detail"]
                     self.steps.append(step)
+                if name == "plan_update" and ok is True:
+                    from ...harness.tools import parse_plan
+
+                    args = began[2] if began else None
+                    try:
+                        steps, _ = parse_plan(args if isinstance(args, dict) else {})
+                    except ValueError:
+                        steps = []
+                    if steps:
+                        self.plan_update_steps = [
+                            {"step": st["step"], "status": "pending"} for st in steps
+                        ]
                 if name == "exit_plan_mode" and ok is True:
                     # The plan the user approved: the call's own `plan`, else
                     # what the reply had said so far (Claude Code's
@@ -365,7 +381,7 @@ async def _apply_session_changes(engine: Any, thread_id: str, watch: _ReplyWatch
         watch.approved_plans = []
         setup["mode"] = None  # act is stored as nothing
         setup["plan"] = {
-            "text": text, "steps": plan_steps(text),
+            "text": text, "steps": plan_steps(text) or list(watch.plan_update_steps),
             "approved_at": utcnow().isoformat(),
         }
     if watch.granted:

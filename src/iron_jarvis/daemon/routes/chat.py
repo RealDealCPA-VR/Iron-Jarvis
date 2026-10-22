@@ -279,6 +279,21 @@ def _end_build_programs(thread_id: str) -> None:
         log.warning("could not stop the programs of build session %s", thread_id, exc_info=True)
 
 
+#: v1.367.0: Remember and Turn into workflow are the CHAT page's doors. An IJ
+#: harness session is never shown as a chat (`chat_surface_only`), so a link
+#: either door writes ("/chat?thread=<id>") would open nothing; refuse it here.
+BUILD_SESSION_NOT_A_CHAT = (
+    "That is a Build session, not a chat, so it cannot be used here."
+)
+
+
+def _refuse_build_session(row: Any) -> None:
+    from ...core.models import is_build_thread
+
+    if is_build_thread(row):
+        raise HTTPException(status_code=409, detail=BUILD_SESSION_NOT_A_CHAT)
+
+
 def delete_thread(engine: Any, thread_id: str) -> bool:
     """Delete a conversation AND its history-search docs in one transaction;
     False = no such thread. An IJ harness session's programs are stopped too
@@ -1874,7 +1889,17 @@ def register(app: FastAPI, d) -> None:
         transcript searchable forever: "delete" has to mean deleted.
 
         v1.367.0: deleting an IJ harness session also stops the programs it
-        started (:func:`delete_thread`)."""
+        started (:func:`delete_thread`), and one still answering is refused
+        exactly as ``DELETE /build/sessions/{id}`` refuses it — this door
+        must not be the way around that 409."""
+        from ...core.models import ChatThreadRecord, is_build_thread
+        from .build import RUNNING_SENTENCE
+
+        with session_scope(d.platform.engine) as db:
+            row = db.get(ChatThreadRecord, thread_id)
+            build = row is not None and is_build_thread(row)
+        if build and RUNNING_REPLY in _running_for(thread_id):
+            raise HTTPException(status_code=409, detail=RUNNING_SENTENCE)
         if not delete_thread(d.platform.engine, thread_id):
             raise HTTPException(status_code=404, detail="no such thread")
         return {"deleted": thread_id}
@@ -2063,6 +2088,7 @@ def register(app: FastAPI, d) -> None:
             r = db.get(ChatThreadRecord, thread_id)
         if r is None:
             raise HTTPException(status_code=404, detail="no such thread")
+        _refuse_build_session(r)
         try:
             msgs = json.loads(r.messages_json or "[]")
         except Exception:  # noqa: BLE001
@@ -2162,6 +2188,7 @@ def register(app: FastAPI, d) -> None:
             r = db.get(ChatThreadRecord, thread_id)
         if r is None:
             raise HTTPException(status_code=404, detail="no such thread")
+        _refuse_build_session(r)
         try:
             msgs = json.loads(r.messages_json or "[]")
         except Exception:  # noqa: BLE001
