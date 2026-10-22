@@ -1,0 +1,567 @@
+"use client";
+
+/**
+ * The composer's MODEL chip and REASONING chip (v1.369.0, IJ harness Phase 6).
+ *
+ * Lifted out of the chat page, markup for markup, so Build's IJ harness
+ * composer draws the SAME two chips instead of a copy: the model chip with its
+ * menu (type to find, the last picks first, providers local first with where
+ * each runs, a provider's models in a flyout, "Make this my default"), and the
+ * reasoning level chip, drawn only for a model that offers levels.
+ *
+ * The page owns what a pick MEANS (its `choice`, its setup save, its default
+ * note); this file owns the menu: its sub-menu, its filter and its recent
+ * rows, and closing on an outside press. `open` is the page's state, because
+ * the page reads it too (the jump pill steps aside while a composer menu is
+ * open, and "Switch model" in Ctrl K opens it).
+ */
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronRight } from "lucide-react";
+import { FitPanel } from "@/components/chat/FitPanel";
+import { ModelRowChips, modelText, modelTitle } from "@/components/ModelRowBits";
+import { composerChipClass } from "@/lib/composerChips";
+import { friendlyModelName } from "@/lib/friendlyModelName";
+import { modelGroupName, providerDisplay } from "@/lib/onboarding";
+import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
+import {
+  reasoningChipLabel,
+  reasoningDefaultOf,
+  reasoningDefaultOption,
+  reasoningTitle,
+} from "@/lib/reasoningChip";
+import type { ModelOption } from "@/lib/types";
+
+/** v1.263.0: the levels the composer may offer — the daemon's vocabulary. */
+export const REASONING_LEVELS = ["low", "medium", "high"];
+
+/** v1.277.0: how many rows a typed model filter lists. */
+export const MODEL_FILTER_MAX = 12;
+
+/** A pick's value is "provider::model"; "" is the server's default. */
+export function splitChoice(choice: string): { provider?: string; model?: string } {
+  const i = choice.indexOf("::");
+  if (i === -1) return {};
+  const provider = choice.slice(0, i);
+  const model = choice.slice(i + 2);
+  return provider && model ? { provider, model } : {};
+}
+
+/** The catalog row a pick (or, for "", the default) runs on. */
+export function reasoningRowFor(
+  choice: string,
+  models: readonly ModelOption[],
+  defaultProviderId: string,
+  defaultModelName: string,
+): ModelOption | undefined {
+  const { provider, model } = choice
+    ? splitChoice(choice)
+    : { provider: defaultProviderId, model: defaultModelName };
+  if (!provider || !model) return undefined;
+  return models.find((m) => m.provider === provider && m.model === model);
+}
+
+/** The levels that row offers, in the daemon's vocabulary. */
+export function reasoningLevelsOf(row: ModelOption | undefined): string[] {
+  return (row?.reasoning ?? []).filter((l) => REASONING_LEVELS.includes(l));
+}
+
+/** v1.330.0: the level the row runs at when nothing is sent ("" = unknown). */
+export function reasoningDefaultOfRow(row: ModelOption | undefined): string {
+  return reasoningDefaultOf(row);
+}
+
+export interface ProviderRow {
+  id: string;
+  label: string;
+  kind: string;
+  available: boolean;
+  size: number;
+}
+
+/**
+ * Providers for the composer's model menu, LOCAL FIRST (v1.148.0).
+ *
+ * The menu used to be whatever order the daemon happened to return, with no
+ * indication of where anything ran — a 14B on your own box and a metered
+ * frontier model read identically. Order is now: your own hardware, then
+ * flat-rate subscription CLIs, then metered APIs, then anything currently
+ * offline; within local, smallest model first, matching how the router now
+ * escalates. `kind` comes from the daemon (one definition, shared with
+ * /health), so the label can never disagree with the routing.
+ */
+export function modelProvidersOf(models: readonly ModelOption[]): ProviderRow[] {
+  const seen = new Map<string, ProviderRow>();
+  for (const m of models) {
+    // v1.230.0 (U5): a keyless API provider served through the logged-in
+    // CLI (`inherited_from`) is flat-rate — it ranks and labels as a CLI
+    // ("included"), never "metered". The daemon names the CLI; /health and
+    // /connections carry the same answer.
+    // v1.352.0 re-review (G21): an endpoint the daemon classes "local" (a
+    // fleet node, a custom URL) but says is OFF the user's network (a cloud
+    // API added on Connections) runs in the cloud: its badge says so, as
+    // the reply's receipt does (`on_this_network`, the same predicate),
+    // and it ranks with the cloud rows. Absent (an older daemon): the
+    // class decides, as before.
+    const kind = m.inherited_from
+      ? "cli"
+      : m.kind === "local" && m.on_this_network === false
+        ? "endpoint"
+        : (m.kind ?? "api");
+    const size = typeof m.size_b === "number" ? m.size_b : Number.POSITIVE_INFINITY;
+    const prev = seen.get(m.provider);
+    if (!prev) {
+      seen.set(m.provider, {
+        id: m.provider,
+        // v1.353.0 (G57): a plain name ("Claude Code", "Your model
+        // server"), an endpoint by the label the user gave it — never a
+        // raw provider id like "claude-cli" or "opencode-cli".
+        label: modelGroupName(m),
+        kind,
+        available: m.available !== false,
+        size,
+      });
+    } else {
+      // A provider is "available" if ANY of its models is, and sorts by its
+      // SMALLEST model — the rung the router would reach for first.
+      prev.available = prev.available || m.available !== false;
+      prev.size = Math.min(prev.size, size);
+    }
+  }
+  const RANK: Record<string, number> = { local: 0, cli: 1, api: 2, endpoint: 2 };
+  return [...seen.values()].sort((a, b) => {
+    if (a.available !== b.available) return a.available ? -1 : 1; // offline last
+    const ra = RANK[a.kind] ?? 3;
+    const rb = RANK[b.kind] ?? 3;
+    if (ra !== rb) return ra - rb;
+    if (a.size !== b.size) return a.size - b.size; // smallest local rung first
+    return a.label.localeCompare(b.label);
+  });
+}
+
+/** Badge for a provider row: where it runs, and for a cloud model how it
+ *  is paid for (v1.352.0, G21: "included" was a billing word for a model
+ *  that runs in the cloud; the receipt under a reply says "local" /
+ *  "cloud" in the same words). The title says the cost in full. */
+export const KIND_BADGE: Record<string, { text: string; cls: string; title: string }> = {
+  local: {
+    text: "local",
+    cls: "text-tone-success",
+    title: "Runs on your own hardware: this PC or a machine on your network. No charge per message.",
+  },
+  cli: {
+    text: "cloud · on your plan",
+    cls: "text-tone-info",
+    title: "Runs in the cloud through a subscription you already have. No charge per message; your plan's limits apply.",
+  },
+  api: {
+    text: "cloud · pay per use",
+    cls: "text-zinc-500",
+    title: "Runs in the cloud on your API key. Each message is billed to that account.",
+  },
+  // v1.352.0 re-review: an endpoint you added that is not on your network.
+  endpoint: {
+    text: "cloud",
+    cls: "text-zinc-500",
+    title: "Runs on a server outside your network, at an address you added on Connections. That service sets any charge.",
+  },
+};
+
+/** The words on the model chip: what it shows, the record behind it (the
+ *  chip's inner title) and whether it is the default. */
+export interface ModelTrigger {
+  text: string;
+  raw: string;
+  isDefault: boolean;
+}
+
+/**
+ * v1.300.0: the trigger says the picker's label ("Opus 5.5") for a pick
+ * whose catalog row carries one; every other case is the plain label.
+ * v1.314.0 (composer-footer-jargon): the DEFAULT gets the same lookup, read
+ * as "Default: Claude Opus 4.8" — the raw id only when the catalog has no
+ * label for it (nothing invented). A default on the scripted demo model is
+ * named as that, never as the model id it pretends to be. The raw id the
+ * turn will run on stays in `raw` (the trigger's inner title).
+ * v1.329.0 (calm chat F7): the chip SHOWS only the name ("Opus 4.8");
+ * "Default:" stays in the words a screen reader hears (an sr-only span,
+ * `isDefault`) and in the title.
+ */
+export function modelTriggerOf(
+  choice: string,
+  models: readonly ModelOption[],
+  defaultProviderId: string,
+  defaultModelName: string,
+): ModelTrigger {
+  let label: string;
+  if (!choice) {
+    label = defaultModelName ? `default · ${defaultModelName}` : "default model";
+  } else {
+    const { model } = splitChoice(choice);
+    label = model || choice.replace("::", " · ");
+  }
+  let text: string;
+  if (!choice) {
+    if (!defaultModelName) text = label;
+    else if (defaultProviderId === "mock") text = providerDisplay("mock");
+    else {
+      const row = models.find((m) => m.provider === defaultProviderId && m.model === defaultModelName);
+      // v1.359.0 (lane 9B): the menu row's own words (modelText), so the
+      // chip never says "subscription" for the row that read "Your Claude
+      // plan"; a default the catalog does not list is named the same way.
+      text = modelText(row ?? { provider: defaultProviderId, model: defaultModelName }, models);
+    }
+  } else {
+    const { provider, model } = splitChoice(choice);
+    const row = models.find((m) => m.provider === provider && m.model === model);
+    // v1.329.0: no label → the name people say ("Opus 4.8"), derived only
+    // from what the id spells; an id it cannot read stays as it is.
+    // v1.359.0 integrate (lane 9B review): a pick /models does not list (yet:
+    // a restored thread while the catalog loads, or an endpoint since
+    // removed) reads in the menu's words too, never "subscription".
+    if (row) text = modelText(row, models);
+    else text = provider && model ? modelText({ provider, model }, models) : friendlyModelName(label);
+  }
+  const raw = !choice
+    ? defaultModelName
+      ? [defaultProviderId, defaultModelName].filter(Boolean).join(" · ")
+      : ""
+    : choice.replace("::", " · ");
+  return { text, raw, isDefault: !choice && !!defaultModelName };
+}
+
+/**
+ * The reasoning level chip (v1.263.0), ONLY for a model that offers one (the
+ * daemon's catalog says which; the caller draws nothing otherwise).
+ * v1.330.0: the chip's WORDS are this span; the native select lies invisibly
+ * over it (same box), so its menu can say "Default (Medium)" while the chip
+ * says "Medium". The select keeps its name, value, keyboard and phone picker.
+ */
+export function ReasoningChip({
+  levels,
+  value,
+  def,
+  disabled = false,
+  onChange,
+}: {
+  /** The levels the model offers (never empty: the caller checks). */
+  levels: readonly string[];
+  /** The picked level ("" = send nothing; the model's default). */
+  value: string;
+  /** The model's own default level ("" = unknown). */
+  def: string;
+  disabled?: boolean;
+  onChange: (level: string) => void;
+}) {
+  const picked = levels.includes(value) ? value : "";
+  return (
+    <span
+      className={`relative inline-flex h-[30px] shrink-0 items-center rounded-lg pl-2 pr-6 text-[13px] text-zinc-400 transition-colors has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-accent/50 ${
+        disabled ? "opacity-40" : "hover:bg-white/[0.06] hover:text-zinc-200"
+      }`}
+    >
+      <span aria-hidden data-testid="reasoning-chip-words" className="max-w-[10rem] truncate whitespace-nowrap">
+        {reasoningChipLabel(picked, def)}
+      </span>
+      <select
+        aria-label="Reasoning level"
+        data-testid="reasoning-level"
+        value={picked}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        title={reasoningTitle(def)}
+        className="absolute inset-0 h-full w-full cursor-pointer appearance-none rounded-lg border-0 bg-transparent text-[13px] opacity-0 focus-visible:outline-none disabled:cursor-default"
+      >
+        {/* v1.326.0: short words for a chip beside the model ("High"); the
+            select's name says what they measure. v1.330.0: the "send
+            nothing" row names the model's own default when the daemon knows
+            it ("Default (Medium)"; it leads with "Default" so it never reads
+            as a twin of the explicit "Medium" row). */}
+        <option value="" className="bg-ink-900 text-zinc-200">
+          {reasoningDefaultOption(def)}
+        </option>
+        {levels.map((lvl) => (
+          <option key={lvl} value={lvl} className="bg-ink-900 text-zinc-200">
+            {lvl.charAt(0).toUpperCase() + lvl.slice(1)}
+          </option>
+        ))}
+      </select>
+      <ChevronDown size={12} aria-hidden className="pointer-events-none absolute right-2 text-zinc-500" />
+    </span>
+  );
+}
+
+/** The model chip and its menu. */
+export function ModelMenu({
+  open,
+  onOpenChange,
+  choice,
+  models,
+  trigger,
+  onPick,
+  disabled = false,
+  disabledTitle = "Start a new chat to switch models",
+  localOnlyLine,
+  onMakeDefault,
+  defaultNote = "",
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The current pick ("provider::model", "" = the default). */
+  choice: string;
+  /** The catalog (lib/useModels — the whole list, unavailable rows greyed). */
+  models: ModelOption[];
+  trigger: ModelTrigger;
+  /** A row was picked ("" = the default model). The menu closes itself. */
+  onPick: (value: string) => void;
+  disabled?: boolean;
+  disabledTitle?: string;
+  /** v1.332.0: the one line a "local only" conversation adds to the menu. */
+  localOnlyLine?: string | null;
+  /** "Make this my default": the caller saves it (absent = not offered). */
+  onMakeDefault?: () => void;
+  /** What the last "Make this my default" said. */
+  defaultNote?: string;
+}) {
+  const popRef = useRef<HTMLDivElement>(null);
+  const [sub, setSub] = useState<string | null>(null);
+  // v1.277.0: FIND A MODEL BY TYPING, AND THE LAST PICKS FIRST. The tree below
+  // is 12 providers deep on the daily driver; a typed word lists every model
+  // whose id, provider or name contains it (Enter picks the first), and an
+  // empty box opens on the last three picks. Both are read when the menu
+  // opens, never per keystroke of the composer (S-05).
+  const [filter, setFilter] = useState("");
+  const [recent, setRecent] = useState<string[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    setFilter("");
+    setSub(null);
+    setRecent(readRecentModels());
+  }, [open]);
+  const matches = useMemo(() => matchModels(models, filter, MODEL_FILTER_MAX), [models, filter]);
+  const providers = useMemo(() => modelProvidersOf(models), [models]);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!popRef.current?.contains(e.target as Node)) {
+        onOpenChange(false);
+        setSub(null);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open, onOpenChange]);
+
+  /** The ONE way a menu row picks: the caller's choice, the menu, the memory. */
+  function pick(v: string) {
+    onPick(v);
+    onOpenChange(false);
+    setSub(null);
+    if (v) setRecent(rememberRecentModel(v));
+  }
+
+  return (
+    <div ref={popRef} className="relative">
+      <button
+        type="button"
+        onClick={() => {
+          onOpenChange(!open);
+          setSub(null);
+        }}
+        disabled={disabled}
+        aria-expanded={open}
+        aria-haspopup="true"
+        title={disabled ? disabledTitle : "Switch model"}
+        className={`${composerChipClass(false)} max-w-[11rem] sm:max-w-[16rem]`}
+      >
+        <span
+          data-testid="model-chip-words"
+          className="min-w-0 truncate"
+          title={trigger.raw ? (trigger.isDefault ? `The default model: ${trigger.raw}` : trigger.raw) : undefined}
+        >
+          {trigger.isDefault && <span className="sr-only">Default: </span>}
+          {trigger.text}
+        </span>
+        <ChevronDown size={12} className="shrink-0 opacity-70" />
+      </button>
+      {open && (
+        <div
+          data-testid="model-menu"
+          className="absolute bottom-full right-0 z-20 mb-1.5 w-60 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
+        >
+          {/* v1.332.0: the one line a "local only" chat adds here. */}
+          {localOnlyLine && (
+            <p data-testid="model-menu-local-only" className="px-2.5 pb-1 pt-0.5 text-[12px] text-zinc-500">
+              {localOnlyLine}
+            </p>
+          )}
+          {/* v1.277.0: type to find a model across every provider. */}
+          <input
+            data-testid="model-filter"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && matches[0]) {
+                e.preventDefault();
+                pick(`${matches[0].provider}::${matches[0].model}`);
+              } else if (e.key === "Escape") {
+                onOpenChange(false);
+                setSub(null);
+              }
+            }}
+            placeholder="Type to find a model…"
+            aria-label="Find a model"
+            autoFocus
+            className="mb-1 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent/40"
+          />
+          {filter.trim() ? (
+            matches.length === 0 ? (
+              <p className="px-2.5 py-1.5 text-[12px] text-zinc-500">No model matches.</p>
+            ) : (
+              matches.map((m) => {
+                const v = `${m.provider}::${m.model}`;
+                return (
+                  <button
+                    key={`match-${v}`}
+                    type="button"
+                    data-testid="model-match"
+                    onClick={() => pick(v)}
+                    disabled={m.available === false}
+                    title={m.available === false ? `${modelGroupName(m)} isn't connected` : undefined}
+                    className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
+                      choice === v ? "text-accent-soft" : "text-zinc-300"
+                    }`}
+                  >
+                    <span className="min-w-0 truncate" title={modelTitle(m, models)}>
+                      {modelText(m, models)}
+                    </span>
+                    <ModelRowChips m={m} />
+                    <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">{modelGroupName(m)}</span>
+                  </button>
+                );
+              })
+            )
+          ) : (
+            <>
+              {recent.length > 0 && (
+                <div data-testid="model-recent" className="mb-1 border-b border-white/[0.06] pb-1">
+                  <p className="px-2.5 pb-0.5 text-[10px] uppercase tracking-wide text-zinc-600">Recent</p>
+                  {recent.map((v) => {
+                    const { provider, model } = splitChoice(v);
+                    const row = models.find((m) => m.provider === provider && m.model === model);
+                    if (!row) return null;
+                    return (
+                      <button
+                        key={`recent-${v}`}
+                        type="button"
+                        onClick={() => pick(v)}
+                        disabled={row.available === false}
+                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
+                          choice === v ? "text-accent-soft" : "text-zinc-300"
+                        }`}
+                      >
+                        <span className="min-w-0 truncate" title={modelTitle(row, models)}>
+                          {modelText(row, models)}
+                        </span>
+                        <ModelRowChips m={row} />
+                        <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">{modelGroupName(row)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => pick("")}
+                className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] ${
+                  !choice ? "text-accent-soft" : "text-zinc-300"
+                }`}
+              >
+                default model
+              </button>
+              {providers.map((p) => (
+                <div key={p.id} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setSub(sub === p.id ? null : p.id)}
+                    disabled={!p.available}
+                    title={p.available ? undefined : `${p.label} isn't connected. Set it up on Connections.`}
+                    aria-expanded={sub === p.id}
+                    className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent ${
+                      splitChoice(choice).provider === p.id ? "text-accent-soft" : "text-zinc-300"
+                    }`}
+                  >
+                    <span className="min-w-0 truncate">{p.label}</span>
+                    {/* Where it runs — the whole point of the reorder: a list
+                        you can act on without knowing which of your
+                        providers costs money. */}
+                    <span
+                      data-testid="model-kind-badge"
+                      title={p.available ? (KIND_BADGE[p.kind] ?? KIND_BADGE.api).title : undefined}
+                      className={`shrink-0 text-[10px] ${(KIND_BADGE[p.kind] ?? KIND_BADGE.api).cls}`}
+                    >
+                      {p.available ? (KIND_BADGE[p.kind] ?? KIND_BADGE.api).text : "offline"}
+                    </span>
+                    <ChevronRight size={12} className="ml-auto shrink-0 text-zinc-500" />
+                  </button>
+                  {sub === p.id && (
+                    /* Anchored to the BOTTOM so a long catalog (OpenRouter)
+                       grows UPWARD over the chat area instead of being
+                       clipped at the card edge — and v1.350.1: never past
+                       the WINDOW's top (FitPanel caps it to the room above,
+                       or opens it downward when a row sits high). */
+                    <FitPanel
+                      testId="model-sub"
+                      className="absolute right-full z-30 mr-1 w-56 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
+                    >
+                      {models
+                        .filter((m) => m.provider === p.id)
+                        .map((m) => {
+                          const v = `${m.provider}::${m.model}`;
+                          return (
+                            <button
+                              key={v}
+                              type="button"
+                              onClick={() => pick(v)}
+                              className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] ${
+                                choice === v ? "text-accent-soft" : "text-zinc-300"
+                              }`}
+                            >
+                              <span className="min-w-0 truncate" title={modelTitle(m, models)}>
+                                {modelText(m, models)}
+                              </span>
+                              <span className="ml-1.5 inline-flex shrink-0 items-center gap-1">
+                                <ModelRowChips m={m} />
+                              </span>
+                              {choice === v && <Check size={11} className="ml-auto shrink-0" />}
+                            </button>
+                          );
+                        })}
+                    </FitPanel>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
+          {onMakeDefault && splitChoice(choice).provider && (
+            <div className="mt-1 border-t border-white/[0.06] pt-1">
+              <button
+                type="button"
+                data-testid="model-make-default"
+                onClick={() => onMakeDefault()}
+                className="w-full rounded-lg px-2.5 py-1.5 text-left text-[12px] text-zinc-300 hover:bg-white/[0.06]"
+              >
+                Make this my default
+              </button>
+              {defaultNote && (
+                <p role="status" className="px-2.5 pb-1 text-[11px] text-zinc-500">
+                  {defaultNote}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
