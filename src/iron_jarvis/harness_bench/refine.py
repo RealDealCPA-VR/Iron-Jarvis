@@ -867,6 +867,10 @@ async def run_refine(
             result.adopted = await asyncio.to_thread(
                 _adopt, folder, composition, baseline, mine, theirs, n,
             )
+    if result.adopted is None:
+        # A rerun that adopts nothing never leaves an earlier run's adopted
+        # layer behind to read as this run's result.
+        await asyncio.to_thread(_clear_adopted, folder)
     result.composition = comp_view
 
     problems = ledger.problems()
@@ -939,6 +943,13 @@ async def _candidate(
     if layer_base.exists():
         await asyncio.to_thread(shutil.rmtree, layer_base)
     return {"view": view, "layer_base": None, "changed": [], "summary": ""}
+
+
+def _clear_adopted(folder: Path) -> None:
+    if (folder / "adopted").exists():
+        shutil.rmtree(folder / "adopted")
+    with contextlib.suppress(FileNotFoundError):
+        (folder / "adopted.json").unlink()
 
 
 def _adopt(folder: Path, composition: Probed, baseline: Probed, mine: int, theirs: int, n: int) -> dict[str, Any]:

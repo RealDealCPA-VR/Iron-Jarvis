@@ -258,6 +258,26 @@ def test_a_proposal_the_prompt_guard_flags_is_refused(tmp_path):
     assert "prompt guard" in problem
 
 
+def test_a_proposal_may_write_only_the_text_files_and_the_rules(tmp_path):
+    """A skill would pass Phase 3's validator, but a refine proposal may write
+    only the four text files and plugins.toml — refused by name, with the
+    list of what it may write."""
+    skill = "---\ndescription: Use when testing.\n---\nRun the tests.\n"
+    _, _, problem = R.validate_candidate({}, {"skills/t/SKILL.md": skill}, tmp_path / "layer", [], None)
+    assert "is not a harness file it may write" in problem and "tool_guidance.md" in problem
+
+
+async def test_a_rerun_that_adopts_nothing_clears_an_earlier_adopted_layer(tmp_path, monkeypatch):
+    platform, _ = _setup(tmp_path, monkeypatch, {0: _proposal_moves(BREAK)})
+    settings = R.RefineSettings(provider="scripted", model="s1", rounds=8, tasks=tuple(NAMES), k=1)
+    folder = platform.config.home / "harness-bench" / settings.folder_name
+    R.write_layer(folder / "adopted", {"memory.md": "stale\n"})
+    (folder / "adopted.json").write_text("{}", encoding="utf-8")
+    res = await R.run_refine(platform=platform, home=platform.config.home, settings=settings, seed=0)
+    assert res.adopted is None
+    assert not (folder / "adopted").exists() and not (folder / "adopted.json").exists()
+
+
 def test_validate_candidate_inherits_what_it_omits(tmp_path):
     base = {"tool_guidance.md": "old guidance\n", "memory.md": "kept notes\n"}
     files, changed, problem = R.validate_candidate(
