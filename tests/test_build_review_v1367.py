@@ -265,3 +265,83 @@ async def test_a_lane_that_raises_leaves_an_error_line_not_a_bare_question(app, 
     assert msgs, "the session ended on the question with no reply line"
     assert "internal error (RuntimeError)" in msgs[-1].get("error", ""), msgs[-1]
     assert msgs[-1]["turnId"] == "rv-boom"
+
+
+# --------------------------------------------------------------------------- #
+# 7. an out-of-range build_round_budget is clamped, never a 400 on every turn
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("value, used", [(500, 200), (-3, 1), (0, 60)])
+async def test_a_hand_edited_round_budget_is_clamped_not_refused(app, work, monkeypatch, value, used):
+    """The settings writer checks 1..200, a hand-edited config.toml does not:
+    ``int(... or 60)`` handed 500 (or -3) to the lane, whose eager check
+    raised — every turn of every session answered 400."""
+    from iron_jarvis.daemon.routes import build as build_routes
+
+    seen: list[int] = []
+    real = build_routes.stream_chat_turn
+
+    async def spy(platform, personas, body, **kw):
+        seen.append(kw["round_budget"])
+        return await real(platform, personas, body, **kw)
+
+    monkeypatch.setattr(build_routes, "stream_chat_turn", spy)
+    app.state.platform.config.build_round_budget = value
+    wire(app, Script(["Hello."]))
+    sid = new_session(app, work)["id"]
+    status, raw = await open_turn(app, sid, {"text": "hi", "turn_id": f"rv-budget-{value}"})
+    assert status == 200, raw
+    assert seen == [used]
+
+
+# --------------------------------------------------------------------------- #
+# 8. nothing blocking on the loop; the turn registry read safely off it
+# --------------------------------------------------------------------------- #
+
+
+async def test_the_sessions_transcript_is_parsed_off_the_event_loop(app, work, monkeypatch):
+    """Up to 200 transcript lines (replies carry steps and thinking) were
+    JSON-parsed ON the loop for every turn — the v1.153.1 rule."""
+    import threading
+
+    loop_thread = threading.current_thread()
+    where: list[bool] = []
+    real = S.history
+
+    def spy(row):
+        where.append(threading.current_thread() is loop_thread)
+        return real(row)
+
+    monkeypatch.setattr(S, "history", spy)
+    wire(app, Script(["Hello."]))
+    sid = new_session(app, work)["id"]
+    status, _ = await open_turn(app, sid, {"text": "hi", "turn_id": "rv-offloop"})
+    assert status == 200
+    assert where == [False], "the transcript was parsed on the event loop"
+
+
+def test_running_reads_a_snapshot_so_an_insert_from_another_thread_cannot_break_it():
+    """``TurnLogs.running()`` is read from FastAPI's threadpool by Build's
+    sync routes while the loop starts turns. A comprehension straight over
+    the dict raises "dictionary changed size during iteration" when an insert
+    lands between two items — FORCED here: reading a log's status inserts."""
+    from iron_jarvis.daemon.durable_turns import TurnLog, TurnLogs
+
+    logs = TurnLogs(engine=None)
+
+    class Racy(TurnLog):
+        @property
+        def status(self):  # the other thread's insert, at the worst moment
+            logs._logs.setdefault("late", TurnLog("late", "t2"))
+            return "running"
+
+        @status.setter
+        def status(self, value):
+            pass
+
+    logs._logs["a"] = Racy("a", "t1")
+    logs._logs["b"] = TurnLog("b", "t1")
+    got = logs.running()
+    assert [lg.turn_id for lg in got] == ["a", "b"]
+

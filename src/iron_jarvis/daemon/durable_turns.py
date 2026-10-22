@@ -286,7 +286,12 @@ class TurnLogs:
         return self._links.get(turn_id, "")
 
     def running(self) -> list[TurnLog]:
-        return [lg for lg in self._logs.values() if lg.status == "running"]
+        # SNAPSHOT first (v1.367.0 review): Build's sync routes read this from
+        # FastAPI's threadpool while the loop starts turns; a comprehension
+        # straight over the dict can meet an insert between two items
+        # ("dictionary changed size during iteration"). ``list()`` copies the
+        # values in C, with no Python code between items to switch threads.
+        return [lg for lg in list(self._logs.values()) if lg.status == "running"]
 
     def _evict(self) -> None:
         now = time.monotonic()

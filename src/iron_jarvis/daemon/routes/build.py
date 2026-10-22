@@ -170,6 +170,21 @@ async def _replay_once(text: str):
         yield text
 
 
+def build_round_budget(config: Any) -> int:
+    """The ``build_round_budget`` setting as a turn can use it: a whole number
+    from 1 to ``chat_turn.MAX_TURN_ROUNDS`` (the lane's own bounds). The
+    settings writer checks the range, but a hand-edited ``config.toml`` does
+    not — an out-of-range value is CLAMPED, never a 400 on every turn of every
+    session (Phase 4 review)."""
+    from ..chat_turn import MAX_TURN_ROUNDS
+
+    try:
+        value = int(getattr(config, "build_round_budget", 60) or 60)  # unset / 0 = the default
+    except (TypeError, ValueError):
+        value = 60
+    return max(1, min(MAX_TURN_ROUNDS, value))
+
+
 def _clean_answer(answer: Any) -> Any:
     """A string, a list of strings, or ``{key: str | [str]}`` — 422 for
     anything else or anything too large."""
@@ -597,7 +612,9 @@ def register(app: FastAPI, d: Any) -> None:
             from ...projects.locate import project_for_path
 
             project = await asyncio.to_thread(project_for_path, platform.engine, folder)
-            history = [ChatMessageBody(**m) for m in S.history(row)]
+            # The transcript is up to 200 lines of JSON (replies with steps
+            # and thinking): parsed OFF the loop, like every other read here.
+            history = [ChatMessageBody(**m) for m in await asyncio.to_thread(S.history, row)]
             chat_body = ChatBody(
                 messages=[*history, ChatMessageBody(role="user", content=text)],
                 provider=str(setup.get("provider") or ""),
@@ -624,7 +641,7 @@ def register(app: FastAPI, d: Any) -> None:
                     should_stop=_durable.stop_predicate(lambda: holder.get("log")),
                     suggest_preferences=False,
                     harness="auto",
-                    round_budget=int(getattr(platform.config, "build_round_budget", 60) or 60),
+                    round_budget=build_round_budget(platform.config),
                     stay_in_chat=True,
                     session_id=S.session_id_for(thread_id),
                     plan_mode=S.mode_of(row) == S.MODE_PLAN,
