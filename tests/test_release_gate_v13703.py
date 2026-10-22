@@ -219,3 +219,17 @@ def test_the_installer_check_refuses_an_installer_latest_yml_does_not_describe(t
     (rel / "Iron Jarvis Setup 1.2.3.exe").write_bytes(b"some other build")
     proc = _run_check(tmp_path)
     assert proc.returncode != 0 and "sha512 is not this installer" in proc.stdout + proc.stderr
+
+
+def test_every_release_shard_builds_the_addon_before_its_tests():
+    """Three Python tests skip where extensions/chrome has no node_modules or no
+    built dist/. The one-job gate built the add-on before pytest, so they ran
+    (v1.369.1: 30 skipped in Release vs 33 in Tests); a shard that does not
+    build it quietly drops them from the gate."""
+    steps = _wf()["jobs"]["python"]["steps"]
+    runs = [(str(s.get("working-directory", "")), str(s.get("run", ""))) for s in steps]
+    install = next(i for i, (wd, r) in enumerate(runs) if wd == "extensions/chrome" and "pnpm install" in r)
+    build = next(i for i, (wd, r) in enumerate(runs) if wd == "extensions/chrome" and "node scripts/build.mjs" in r)
+    shard = next(i for i, (_, r) in enumerate(runs) if "uv run pytest -q" in r)
+    assert install < build < shard
+    assert not any("if" in s for s in steps[install:build + 1]), "every shard builds it, not one"

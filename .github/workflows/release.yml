@@ -220,6 +220,21 @@ jobs:
         working-directory: dashboard
         run: pnpm install --frozen-lockfile
 
+      # The add-on is built HERE too, as the one-job gate did before v1.370.3:
+      # three Python tests SKIP where extensions/chrome has no node_modules or
+      # no built dist/ (test_browser_packaging_v1239's build test and the
+      # built-folder checks in test_browser_sidepanel_v1242 and
+      # test_browser_mic_page_v1272). Measured: v1.369.1's release gate ran
+      # 15525 passed / 30 skipped, Tests (no add-on) 15522 / 33 — and the
+      # first sharded dry run skipped 33.
+      - name: Install browser add-on deps
+        working-directory: extensions/chrome
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the browser add-on (three Python tests read the built folder)
+        working-directory: extensions/chrome
+        run: node scripts/build.mjs
+
       - name: Every test file pytest collects is in a shard
         if: matrix.shard == 1
         shell: bash
