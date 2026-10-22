@@ -4815,10 +4815,16 @@ def _harness_model(platform, provider: str, model: str) -> tuple[str, str]:
 async def _build_harness(
     d, body, requested: str, *, provider: str, model: str, resolved_proj, grounding,
     stream: bool, low_trust: bool, tool_ceiling=None, approval_mode: str = "",
-    text_only: bool = False,
+    text_only: bool = False, plan_mode: bool = False, ask_user: bool = False,
 ):
     """``(HarnessTurn, rule_files_section)`` for a harness turn — built ONCE,
     before the planner, from the turn's choice of model and its folder.
+
+    ``plan_mode`` / ``ask_user`` (v1.367.0, a Build session's turn): the
+    session is in plan mode (read-only tools + the exit door); the stream
+    lane's client draws the question card (``ask_user`` is armed). MIRROR
+    NOTE (lock-step): both lanes pass ``plan_mode``; only the stream lane
+    can pass ``ask_user`` True.
 
     The folder is the turn's bound ``workspace_dir``, else the grounded
     project's root. Its ``.ironjarvis/harness/`` layer is read OFF THE LOOP
@@ -4877,8 +4883,35 @@ async def _build_harness(
         tool_ceiling=frozenset() if text_only else tool_ceiling,
         extra=list(getattr(grounding, "conn_tools", None) or []),
         approval_mode=approval_mode,
+        plan_mode=bool(plan_mode),
+        ask_user=bool(ask_user) and stream,
     )
     return turn, rules_section
+
+
+def turn_session_id(session_id: "str | None") -> str:
+    """The session id a chat turn's TOOL CALLS run under (v1.367.0): "chat"
+    (every chat turn, unchanged) unless the caller names a Build session's
+    own ``build:<thread id>``. Anything else is a caller's mistake —
+    ``ValueError`` before the turn starts. MIRROR NOTE (lock-step): both
+    lanes check it eagerly and put it on their ``ToolContext``."""
+    if session_id is None or session_id == "" or session_id == "chat":
+        return "chat"
+    from ..harness.sessions import thread_of
+
+    sid = str(session_id)
+    if not thread_of(sid) or len(sid) > 120:
+        raise ValueError(f"session_id must be 'chat' or 'build:<thread id>'; got {session_id!r}")
+    return sid
+
+
+def turn_plan_mode(plan_mode: Any, harness: "str | None") -> bool:
+    """``plan_mode`` is a harness-mode knob (v1.367.0): True needs
+    ``harness=``. ``ValueError`` otherwise, before the turn starts."""
+    on = bool(plan_mode)
+    if on and harness is None:
+        raise ValueError("plan_mode needs harness mode")
+    return on
 
 
 def harness_check_runner(d, ctx, overrides: dict[str, str], grants, gate, trust_state):
@@ -6190,6 +6223,7 @@ def _persist_chat_usage(
     d, *, provider: str, model: str, state: AgentState,
     completions: int, usage_in: int, usage_out: int,
     started_at=None, cost_usd: float = 0.0, thread_id: str = "",
+    tool_session: str = "",
 ) -> None:
     """USAGE LEDGER: direct chat turns must count like agent runs, or the Usage
     page under-reports the user's main surface. Persist a run row (session_id
@@ -6236,9 +6270,14 @@ def _persist_chat_usage(
     # pass, and the run row just written is what names the turn — scan its
     # tool calls on a daemon thread (never waited on, never raises).
     try:
-        from ..detections.bell import schedule_chat_turn_scan
+        from ..detections.bell import schedule_chat_turn_scan, schedule_scan
 
-        schedule_chat_turn_scan(d.platform, run_id)
+        if tool_session and tool_session != "chat":
+            # v1.367.0: a Build session's tool rows live under its own
+            # session id ("build:<id>"), not "chat" — scan those.
+            schedule_scan(d.platform, tool_session)
+        else:
+            schedule_chat_turn_scan(d.platform, run_id)
     except Exception:  # noqa: BLE001 — a detection must never touch a reply
         pass
 
@@ -6881,8 +6920,19 @@ async def run_chat_turn(
     round_budget: "int | None" = None,
     stay_in_chat: bool = False,
     harness: "bool | str | None" = None,
+    session_id: "str | None" = None,
+    plan_mode: bool = False,
 ) -> dict[str, Any]:
     """One conversational turn: full history in → one reply out.
+
+    ``session_id`` / ``plan_mode`` (v1.367.0, IJ harness Phase 4): a Build
+    session's turn runs its tool calls under the session's OWN id
+    (``build:<thread id>`` — the ledger rows, the process tools,
+    ``procs.owned_by``) instead of "chat"; ``plan_mode`` (harness only) arms
+    the read-only tools and renders the tree's plan-mode text. This lane can
+    ask nobody, so it never arms ``ask_user`` or ``exit_plan_mode``. Keyword
+    only; omitted, byte-identical. MIRROR NOTE (lock-step):
+    ``routes/chat.stream_chat_turn`` takes both.
 
     ``harness`` (v1.366.0, IJ harness Phase 3): ``True`` / ``"auto"`` runs
     the turn in HARNESS MODE (``harness/mode.py``) — the coding tool set past
@@ -6940,6 +6990,10 @@ async def run_chat_turn(
     # MIRROR NOTE (lock-step): routes/chat.stream_chat_turn does the same.
     harness = turn_harness(harness)
     round_budget, stay_in_chat = harness_turn_knobs(harness, round_budget, stay_in_chat)
+    # v1.367.0: the Build session's own tool session id and its plan mode,
+    # checked before anything runs. MIRROR NOTE (lock-step): stream_chat_turn.
+    _tool_session = turn_session_id(session_id)
+    plan_mode = turn_plan_mode(plan_mode, harness)
 
     # ONE retrieval query for the whole turn (v1.141.0): project knowledge,
     # the memory fabric, and toggled connector memory all key off this —
@@ -7065,6 +7119,8 @@ async def run_chat_turn(
             d, body, harness, provider=provider_choice, model=model_choice,
             resolved_proj=resolved_proj, grounding=_grounding, stream=False,
             low_trust=normalize_trust(trust) == TRUST_LOW, text_only=text_only_pick,
+            # v1.367.0 (lock-step): a Build session's plan mode.
+            plan_mode=plan_mode,
         )
         system = _harness.system_without_exits(system, _ENV_EXIT_LINES)
         _grounding.harness = True
@@ -7471,7 +7527,10 @@ async def run_chat_turn(
                 (resolved_proj.root or "") if resolved_proj is not None else "",
             )
         ctx = ToolContext(
-            workspace=tool_ws, session_id="chat", agent_run_id="chat",
+            # v1.367.0: "chat", or a Build session's own "build:<id>" (its
+            # ledger rows, process tools and kept programs). MIRROR NOTE
+            # (lock-step): stream copy in routes/chat.py.
+            workspace=tool_ws, session_id=_tool_session, agent_run_id=_tool_session,
             # v1.276.0 — lock-step: the sidebar's turn id, for the risk door's
             # resolver; "" for the chat page (the ask stays a queue row).
             turn_id=str(getattr(body, "turn_id", "") or ""),
@@ -8101,6 +8160,7 @@ async def run_chat_turn(
                 usage_in=usage_in, usage_out=usage_out,
                 started_at=turn_started, cost_usd=_tally.cost_usd,
                 thread_id=getattr(body, "thread_id", ""),
+                tool_session=_tool_session,  # v1.367.0 (lock-step)
             )
         # LOCAL ONLY (v1.332.0): a refusal leaves as itself, so the app's
         # handler answers the 409 {detail, code, provider, model} shape the
@@ -8184,6 +8244,7 @@ async def run_chat_turn(
         usage_in=usage_in, usage_out=usage_out,
         started_at=turn_started, cost_usd=_tally.cost_usd,
         thread_id=getattr(body, "thread_id", ""),
+        tool_session=_tool_session,  # v1.367.0 (lock-step)
     )
     # Reply honesty: if the model returned no final text but tools DID run
     # with output, synthesize a short summary from the last result rather

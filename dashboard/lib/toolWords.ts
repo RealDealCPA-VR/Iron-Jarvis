@@ -86,6 +86,9 @@ const WORDS: Record<string, string> = {
   multi_edit: "change a file",
   apply_patch: "change files with a patch",
   notebook_edit: "change a notebook",
+  // v1.367.0 (IJ harness Phase 4): a Build session's plan door — its
+  // once-only card asks to start working on the plan it shows.
+  exit_plan_mode: "start working on this plan",
 };
 
 // The 14 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

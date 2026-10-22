@@ -558,6 +558,33 @@ class ComponentTree:
     scripts: tuple[str, ...] = ()
     plugins: Plugins = Plugins()
     layers: tuple[str, ...] = ("default",)
+    #: v1.367.0 (Phase 4): the session's MODE text ("" = act mode, which
+    #: renders nothing — the tree is then byte-identical to v1.366.0).
+    mode: str = ""
+
+
+def plan_mode_text(*, exit_name: str, plan_name: str) -> str:
+    """The MODE component of a Build session in plan mode (v1.367.0), naming
+    the tools as the model was shown them. ``exit_name`` "" = this turn has
+    no exit tool (the POST lane): the plan is presented in the reply."""
+    keep = f" Keep your step list with {plan_name}." if plan_name else ""
+    if exit_name:
+        done = (
+            f" When the plan is ready, write it out in your reply and call {exit_name}: "
+            "the user approves it on a card before anything changes, and the session works "
+            "in act mode from their next message. If they decline, revise the plan with them."
+        )
+    else:
+        done = (
+            " When the plan is ready, present it in your reply; the user switches the "
+            "session to act mode when they approve it."
+        )
+    return (
+        "Plan only: propose, do not change files. This session is in plan mode, so "
+        "your tools can read and search but cannot edit a file or run a command. "
+        "Read what you need, then write a concrete plan: what you will change, in "
+        "which files, and how you will check it." + keep + done
+    )
 
 
 def compose(
@@ -566,11 +593,13 @@ def compose(
     dialect_id: str,
     project: ProjectLayer = EMPTY_LAYER,
     rule_files: Iterable[str] = (),
+    mode: str = "",
 ) -> ComponentTree:
     """Layer the default, the family (its ``dialect_section``) and the
     project. Omitted-is-inherited: a project text file replaces its
     component; the guardrail floor and the dialect section are never
-    replaced; memory is additive."""
+    replaced; memory is additive. ``mode`` (v1.367.0) is the session's
+    plan-mode text (:func:`plan_mode_text`); "" renders nothing."""
     texts = project.texts if project.used else {}
     system_prompt = texts.get("system_prompt", "").strip() or DEFAULT_SYSTEM_PROMPT
     guardrails = list(DEFAULT_GUARDRAILS)
@@ -603,6 +632,7 @@ def compose(
         scripts=tuple(project.scripts) if project.used else (),
         plugins=project.plugins if project.used else Plugins(),
         layers=tuple(layers),
+        mode=str(mode or "").strip(),
     )
 
 
@@ -626,6 +656,9 @@ def render(tree: ComponentTree) -> str:
     """The tree as one system-prompt section. Deterministic: the same tree
     renders the same bytes."""
     parts: list[str] = ["# IJ harness", "## How you work\n" + tree.system_prompt]
+    if tree.mode:
+        # v1.367.0: right after "how you work", before anything it limits.
+        parts.append("## Mode\n" + tree.mode)
     parts.append("## Guardrails\n" + "\n".join(f"- {g}" for g in tree.guardrails))
     if tree.memory:
         parts.append("## Memory\n" + tree.memory)

@@ -327,8 +327,11 @@ async def test_the_check_runs_off_the_event_loop(ws, monkeypatch):
 
 
 def test_a_big_file_is_not_checked(ws):
-    (ws / "big.py").write_bytes(b"#" * (verify.MAX_CHECK_BYTES + 1))
-    assert verify.check_file(ws / "big.py") == "Check: skipped — the file is over 2 MB"
+    # v1.367.0 (moved on purpose): a PYTHON file now stops at
+    # MAX_PY_CHECK_BYTES with no line at all (tests/test_build_sessions_v1367
+    # pins it); the 2 MB line is every other checked type's.
+    (ws / "big.json").write_bytes(b" " * (verify.MAX_CHECK_BYTES + 1))
+    assert verify.check_file(ws / "big.json") == "Check: skipped — the file is over 2 MB"
     assert verify.check_file(ws / "x.txt") is None
 
 

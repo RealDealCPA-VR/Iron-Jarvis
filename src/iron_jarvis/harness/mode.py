@@ -63,6 +63,28 @@ CODING_TOOLS: tuple[str, ...] = (
 )
 _MCP_RESOURCE_TOOLS = frozenset({"mcp_list_resources", "mcp_read_resource"})
 
+#: v1.367.0 (Phase 4): a Build session in PLAN mode arms ONLY these — tools
+#: that change nothing on this PC (they read files, search, look at an image
+#: or the web, read the output of a program the session already started, or
+#: keep the step list) — plus ``exit_plan_mode`` (the stream lane: the user
+#: approves the plan on its card) and ``ask_user`` (a client that draws the
+#: cards). No editor, no command, no app tool: those wait for the user's
+#: approval of the plan.
+PLAN_MODE_TOOLS: tuple[str, ...] = (
+    "read_file", "glob", "grep", "list_files",
+    "process_read", "plan_update", "view_image",
+    "web_fetch", "web_search",
+    "mcp_list_resources", "mcp_read_resource",
+)
+#: The plan-mode door and the question tool (harness/session_tools).
+EXIT_PLAN_TOOL = "exit_plan_mode"
+ASK_USER_TOOL = "ask_user"
+#: Tools the stream lane cards ONCE-ONLY in every posture (auto-approve
+#: included): Allow once / Deny, no "for this chat", no "Always", and no
+#: grant of any width skips the card — the v1.350.0 approve_plan rules. The
+#: plan is the user's to approve, every time.
+ONCE_ONLY_TOOLS: frozenset[str] = frozenset({EXIT_PLAN_TOOL})
+
 #: A harness turn's tool rounds when the caller set none — the plan's Phase 4
 #: decision (60), measured by the Phase 0 benchmark.
 HARNESS_DEFAULT_ROUNDS = 60
@@ -148,17 +170,32 @@ def plan_tools(
     tool_ceiling: "Iterable[str] | None" = None,
     extra: Iterable[str] = (),
     plugins: _components.Plugins = _components.Plugins(),
+    plan_mode: bool = False,
+    ask_user: bool = False,
 ) -> ToolPlan:
     """The harness turn's tools. Every filter the lanes apply later (the
     ceiling, low trust, Local only) is applied here too, so what the system
     prompt names is exactly what the model can call; the lanes' own filters
-    then find nothing more to drop."""
+    then find nothing more to drop.
+
+    ``plan_mode`` (v1.367.0): only :data:`PLAN_MODE_TOOLS` (no app tool from
+    ``extra`` — an app's tool may change things), plus ``exit_plan_mode`` in
+    the stream lane. ``ask_user``: the stream lane's client draws the
+    question card, so ``ask_user`` joins. The POST lane (``stream`` False)
+    gets neither: it can ask nobody."""
     from ..core.trust import LOW_TRUST_DENY
     from ..providers import egress
 
     have_apps = _has_app_tools(registry)
     candidates: list[str] = []
-    for name in [*CODING_TOOLS, *extra]:
+    base: list[str] = list(PLAN_MODE_TOOLS if plan_mode else CODING_TOOLS)
+    if plan_mode and stream:
+        base.append(EXIT_PLAN_TOOL)
+    if ask_user and stream:
+        base.append(ASK_USER_TOOL)
+    if plan_mode:
+        extra = ()
+    for name in [*base, *extra]:
         if name in candidates or registry.get(name) is None:
             continue
         if name in _MCP_RESOURCE_TOOLS and not have_apps:
@@ -181,7 +218,7 @@ def plan_tools(
     candidates = [n for n in candidates if n not in denied]
     allow: list[str] = []
     ask: list[str] = []
-    consented = set(extra) - set(CODING_TOOLS)
+    consented = set(extra) - set(CODING_TOOLS) - set(base)
     for name in candidates:
         tool = registry.get(name)
         key = tool.perm_key() if tool is not None else name
@@ -270,10 +307,18 @@ def ask_sentence(plan: ToolPlan, *, approval_mode: str, local_only: bool, regist
     if not shown:
         return ""
     if approval_mode == "yolo" and not local_only:
-        return (
-            "The user chose auto-approve, so " + ", ".join(shown)
-            + " run without pausing."
-        )
+        # v1.367.0: a once-only tool (the plan door) waits for the user even
+        # under auto-approve — the sentence must not promise otherwise.
+        once = set(ONCE_ONLY_TOOLS)
+        always = [t.name for t in plan.dialect_tools if t.targets and t.targets[0] in once and t.name in shown]
+        always += [n for n in plan.passthrough if n in once and n in shown]
+        free = [n for n in shown if n not in always]
+        parts = []
+        if free:
+            parts.append("The user chose auto-approve, so " + ", ".join(free) + " run without pausing.")
+        if always:
+            parts.append(", ".join(always) + " always waits for the user's approval.")
+        return " ".join(parts)
     return (
         "Calls to " + ", ".join(shown) + " pause while the user approves them; if they "
         "decline, do not repeat the same call."
@@ -340,6 +385,8 @@ class HarnessTurn:
         self.rendered = rendered
         self.fingerprint = _components.fingerprint(rendered, plan.dialect.id)
         self.today = today
+        #: v1.367.0: a Build session's plan-mode turn (set by :func:`build`).
+        self.plan_mode = False
         self.nudged = False
         self.text_call_kind = ""
         #: call id -> the name the model used, for calls that were translated
@@ -517,6 +564,9 @@ class HarnessTurn:
         }
         if self.layer.note:
             out["note"] = self.layer.note
+        if self.plan_mode:
+            # v1.367.0 (additive, only in plan mode): the turn ran read-only.
+            out["mode"] = "plan"
         return out
 
 
@@ -536,29 +586,54 @@ def build(
     extra: Iterable[str] = (),
     approval_mode: str = "",
     today: "str | None" = None,
+    plan_mode: bool = False,
+    ask_user: bool = False,
 ) -> HarnessTurn:
     """Plan the tools, compose the tree and render it. Pure apart from the
     registry / permission reads (no I/O): the project layer is read by the
-    caller, off the loop (:func:`components.read_project_layer`)."""
+    caller, off the loop (:func:`components.read_project_layer`).
+
+    ``plan_mode`` / ``ask_user`` (v1.367.0, a Build session's turn): see
+    :func:`plan_tools`; plan mode also renders the tree's MODE component
+    ("plan only: propose, do not change files"), naming the tools in the
+    model's own dialect."""
     family, dialect = _dialects.resolve(requested, provider, model)
     plugins = layer.plugins if layer.used else _components.Plugins()
     plan = plan_tools(
         registry, permissions, dialect, family=family, stream=stream,
         low_trust=low_trust, local_only=local_only, tool_ceiling=tool_ceiling,
-        extra=extra, plugins=plugins,
+        extra=extra, plugins=plugins, plan_mode=plan_mode, ask_user=ask_user,
     )
     section = dialect_section(plan, ask_words=ask_sentence(
         plan, approval_mode=approval_mode, local_only=local_only, registry=registry,
     ) if stream else "")
+    mode_text = ""
+    if plan_mode:
+        mode_text = _components.plan_mode_text(
+            exit_name=_shown_name(plan, EXIT_PLAN_TOOL),
+            plan_name=_shown_name(plan, "plan_update"),
+        )
     tree = _components.compose(
         dialect_section=section, dialect_id=dialect.id, project=layer, rule_files=rule_files,
+        mode=mode_text,
     )
     rendered = _components.render(tree)
     if today is None:
         today = _dt.date.today().isoformat()
-    return HarnessTurn(
+    turn = HarnessTurn(
         requested=requested, plan=plan, layer=layer, tree=tree, rendered=rendered, today=today,
     )
+    turn.plan_mode = bool(plan_mode)
+    return turn
+
+
+def _shown_name(plan: ToolPlan, real: str) -> str:
+    """The name the model is SHOWN for the real tool ``real`` this turn
+    (its dialect's, or its own), or "" when the turn does not offer it."""
+    for tool in plan.dialect_tools:
+        if tool.targets and tool.targets[0] == real:
+            return tool.name
+    return real if real in plan.passthrough else ""
 
 
 def dumps_specs(specs: list[dict[str, Any]]) -> str:

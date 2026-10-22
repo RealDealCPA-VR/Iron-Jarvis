@@ -144,6 +144,8 @@ def _next_stamp(prev: datetime | None) -> datetime:
 def _index(db: Any, engine: Any, record: ChatThreadRecord, msgs: list) -> None:
     """Re-index for history search in the caller's session — best-effort, as
     the PUT route and the comm store do. Never raises."""
+    if str(getattr(record, "surface", "") or "") == "build":
+        return  # v1.367.0: a Build session is never in Chat's history search
     try:
         from ..core.db import search_index  # lazy: keeps the import graph flat
 

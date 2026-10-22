@@ -96,8 +96,11 @@ def test_the_plans_named_capabilities_are_served_by_the_new_tools():
     assert cx["apply_patch"].jarvis == ("apply_patch",)
     assert set(cx["write_stdin"].jarvis) == {"process_write", "process_read"}
     assert cc["ReadMcpResourceTool"].jarvis == ("mcp_read_resource",)
-    assert cc["AskUserQuestion"].verdict == parity.LATER and "Phase 4" in cc["AskUserQuestion"].reason
-    assert cc["EnterPlanMode"].verdict == parity.LATER
+    # v1.367.0 (Phase 4, moved on purpose): the LATER rows are served now.
+    assert cc["AskUserQuestion"].jarvis == ("ask_user",) and cx["request_user_input"].jarvis == ("ask_user",)
+    assert cc["ExitPlanMode"].jarvis == ("exit_plan_mode",)
+    assert cc["EnterPlanMode"].verdict == parity.SERVED
+    assert not [n for rows in parity.table().values() for n, r in rows.items() if r.verdict == parity.LATER]
 
 
 # --------------------------------------------------------------------------- #

@@ -138,10 +138,14 @@ def test_the_exemption_names_exactly_the_sub_agent_tools(tmp_path):
         name for name in p.registry.names()
         if getattr(p.registry.get(name), "deadline_exempt", False)
     }
-    assert exempt == {"delegate", "spawn_agent"}
+    # v1.367.0 (moved on purpose): ask_user waits for a PERSON in a Build
+    # session (the attended-ask rule, v1.247.0) — a per-call deadline would
+    # turn "the user is reading the question" into a failure. It is NOT
+    # headless-safe: with nobody present it refuses at once.
+    assert exempt == {"delegate", "spawn_agent", "ask_user"}
     # v1.296.0: assign_work is headless-safe (it only queues a row) but runs
     # no sub-agent, so it is NOT exempt from the deadline.
-    assert set(SAFE_HEADLESS_TOOLS) == exempt | {"assign_work"}
+    assert set(SAFE_HEADLESS_TOOLS) == (exempt - {"ask_user"}) | {"assign_work"}
 
 
 def test_a_real_parent_cancel_still_cancels_the_child_as_the_user(tmp_path):

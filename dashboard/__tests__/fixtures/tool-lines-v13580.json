@@ -20,6 +20,10 @@
       "ok": "applied a patch",
       "failed": "tried a patch and it failed"
     },
+    "ask_user": {
+      "ok": "asked you a question",
+      "failed": "tried a question and it failed"
+    },
     "assign_work": {
       "ok": "queued a task for a teammate",
       "failed": "tried a queued task and it failed"
@@ -183,6 +187,10 @@
     "excel_sheet_spec": {
       "ok": "captured a sheet's layout",
       "failed": "tried a sheet layout capture and it failed"
+    },
+    "exit_plan_mode": {
+      "ok": "presented its plan for approval",
+      "failed": "tried a plan for approval and it failed"
     },
     "generate_media": {
       "ok": "made an image, video or sound",

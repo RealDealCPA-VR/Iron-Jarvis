@@ -55,14 +55,18 @@ def _no(reason: str) -> Parity:
     return Parity(NOT_NEEDED, (), reason)
 
 
+#: v1.367.0 (Phase 4): plan mode is a Build SESSION mode (``harness/sessions``,
+#: ``PATCH /build/sessions/{id} {mode}``): in it a turn arms only the
+#: read-only tools, plan_update and exit_plan_mode, whose once-only card is
+#: how the user lets the session act.
 _PLAN_MODE = (
-    "Phase 4: plan mode is a SESSION mode (read-only tools until the plan is "
-    "approved), built with the build session; agent runs already have "
-    "approve_plan (v1.350.0)"
+    "plan mode is the Build session's mode (PATCH /build/sessions/{id} mode=plan): in it a "
+    "turn arms only read-only tools and plan_update, and exit_plan_mode presents the plan on "
+    "a once-only approval card; Allow switches the session to act mode"
 )
 _ASK_USER = (
-    "Phase 4: an ask shown as a DockAsk in the build conversation needs the "
-    "build lane's durable turn (a turn that waits for the user's answer)"
+    "ask_user shows the question in the Build conversation (the same side channel as an "
+    "app's question) and the turn waits, with no clock, for POST /build/sessions/{id}/answer"
 )
 _NO_TOOL_SEARCH = (
     "Jarvis arms tools by the sentence (tools/autoselect) and by the session's "
@@ -98,9 +102,13 @@ CLAUDE_CODE: dict[str, Parity] = {
     "TaskUpdate": _served("plan_update", reason="one whole-list plan tool covers the four task tools"),
     "TaskGet": _served("plan_update", reason="the plan is in the conversation: every plan_update returns the whole list"),
     "TaskList": _served("plan_update", reason="the plan is in the conversation: every plan_update returns the whole list"),
-    "AskUserQuestion": _later(_ASK_USER),
-    "EnterPlanMode": _later(_PLAN_MODE),
-    "ExitPlanMode": _later(_PLAN_MODE),
+    "AskUserQuestion": _served("ask_user", reason=_ASK_USER),
+    "EnterPlanMode": _served(
+        "exit_plan_mode", "plan_update",
+        reason="the USER puts a Build session in plan mode (the session's mode switch), as Claude "
+        "Code's own shift+tab does; " + _PLAN_MODE,
+    ),
+    "ExitPlanMode": _served("exit_plan_mode", reason=_PLAN_MODE),
     "Agent": _served("delegate", "spawn_agent"),
     "SendMessage": _served("message_agent"),
     "ListAgents": _served("list_agents"),
@@ -152,7 +160,7 @@ CODEX: dict[str, Parity] = {
     "read_mcp_resource": _served("mcp_read_resource"),
     "mcp__<server>__<tool>": _served(APP_TOOL_PATTERN, reason="a connected app's tools register under the same naming"),
     "tool_search": _no(_NO_TOOL_SEARCH),
-    "request_user_input": _later(_ASK_USER),
+    "request_user_input": _served("ask_user", reason=_ASK_USER),
     "request_permissions": _no("Jarvis asks on the approval card for every ask-tier call; a model never grants itself permissions"),
     "exec (code mode)": _no("code mode wraps Codex's own tools in a script; Jarvis offers the tools directly, and repl for scripted work over stored results"),
     "wait (code mode)": _no("code mode wraps Codex's own tools in a script; Jarvis offers the tools directly"),
@@ -174,7 +182,11 @@ CODEX: dict[str, Parity] = {
     ),
     "clock.sleep": _no("a model waits on a program with process_read's wait_ms; there is no bare sleep"),
     "send_message_to_user_async": _no("the reply streams to the user as it is written"),
-    "request_user_input_async": _later(_ASK_USER),
+    "request_user_input_async": _served(
+        "ask_user",
+        reason="the build turn is attended, so the question is asked and waited for in the "
+        "conversation (" + _ASK_USER + ")",
+    ),
     "get_context_remaining": _no("Jarvis budgets the transcript to the model's window itself (context.plan_history, compaction)"),
     "new_context": _no("Jarvis compacts an overflowing transcript itself (context/compaction)"),
     "wait_for_environment": _no("there is no remote environment to wait for; the session runs on this PC"),
@@ -197,6 +209,10 @@ CODEX: dict[str, Parity] = {
         "blackboard_post", "blackboard_read", "message_agent",
     ),
 }
+
+#: Every Jarvis tool Phase 4 added (v1.367.0) — on no roster, armed only by a
+#: Build session's turn (harness/mode.plan_tools).
+PHASE_4_TOOLS: tuple[str, ...] = ("ask_user", "exit_plan_mode")
 
 #: Every Jarvis tool Phase 1 added (v1.364.0) — none is on an agent roster
 #: or auto-armed in chat; the IJ harness session arms them by name.

@@ -106,6 +106,11 @@ class ChatChangesBody(BaseModel):
     since: datetime
     until: datetime | None = None
     paths: list[str] = Field(default_factory=list, max_length=200)
+    #: v1.367.0 (IJ harness Phase 4): whose journal to read — "" / "chat" =
+    #: the chat lanes' (every chat turn, unchanged), or a Build session's own
+    #: "build:<thread id>" (a build turn's writes are journaled under it).
+    #: Anything else is a 422.
+    session_id: str = ""
 
 
 def _naive_utc(dt: datetime) -> datetime:
@@ -210,7 +215,7 @@ def _read_capped(path: Path) -> tuple[bytes | None, bool]:
         return None, False
 
 
-def _journal_rows(engine, lo: datetime, hi: datetime) -> list[dict[str, Any]]:
+def _journal_rows(engine, lo: datetime, hi: datetime, session: str = CHAT_SESSION) -> list[dict[str, Any]]:
     """The window's successful chat file-write rows, oldest first, as plain
     values (SQLModel attributes expire after the session closes)."""
     out: list[dict[str, Any]] = []
@@ -218,7 +223,7 @@ def _journal_rows(engine, lo: datetime, hi: datetime) -> list[dict[str, Any]]:
         rows = db.exec(
             select(UndoJournal, ToolInvocation)
             .where(UndoJournal.action_id == ToolInvocation.id)
-            .where(UndoJournal.session_id == CHAT_SESSION)
+            .where(UndoJournal.session_id == session)
             .where(ToolInvocation.created_at >= lo)
             .where(ToolInvocation.created_at <= hi)
             .order_by(ToolInvocation.created_at, _ROWID)  # type: ignore[arg-type]
@@ -240,8 +245,22 @@ def _journal_rows(engine, lo: datetime, hi: datetime) -> list[dict[str, Any]]:
     return out
 
 
+def changes_session(session_id: str) -> str:
+    """The journal session ``POST /chat/changes`` reads (v1.367.0): "chat",
+    or a Build session's "build:<thread id>". 422 for anything else."""
+    from ...harness.sessions import thread_of
+
+    sid = str(session_id or "").strip()
+    if not sid or sid == CHAT_SESSION:
+        return CHAT_SESSION
+    if thread_of(sid) and len(sid) <= 120:
+        return sid
+    raise HTTPException(status_code=422, detail="session_id must be 'chat' or a Build session's id")
+
+
 def collect_changes(
-    engine, home: str | Path, since: datetime, until: datetime | None, paths: list[str]
+    engine, home: str | Path, since: datetime, until: datetime | None, paths: list[str],
+    session: str = CHAT_SESSION,
 ) -> dict[str, Any]:
     """THE body of ``POST /chat/changes`` (sync; the route offloads it)."""
     lo = _naive_utc(since) - TURN_SLACK
@@ -253,7 +272,7 @@ def collect_changes(
     # Group the rows by resolved target, keeping first + last per file.
     files: dict[str, dict[str, Any]] = {}
     order: list[str] = []
-    for row in _journal_rows(engine, lo, hi):
+    for row in _journal_rows(engine, lo, hi, session):
         meta = read_envelope(row)
         ws = meta.get("workspace")
         if not isinstance(ws, str) or not ws:
@@ -390,6 +409,7 @@ def register(app: FastAPI, d) -> None:
         """What the chat turn between ``since`` and ``until`` changed on disk,
         one row per file with its unified diff. Read-only; journal-sourced."""
         platform = d.platform
+        session = changes_session(body.session_id)
         return await asyncio.to_thread(
             collect_changes,
             platform.engine,
@@ -397,4 +417,5 @@ def register(app: FastAPI, d) -> None:
             body.since,
             body.until,
             list(body.paths),
+            session,
         )

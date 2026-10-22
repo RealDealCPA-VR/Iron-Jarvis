@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from typing import Any
 
 from sqlmodel import Field, SQLModel
 
 from .ids import new_id, utcnow
+
+#: ``ChatThreadRecord.surface`` values (v1.367.0, IJ harness Phase 4).
+CHAT_SURFACE = "chat"
+BUILD_SURFACE = "build"
 
 
 class AgentType(str, enum.Enum):
@@ -500,6 +505,47 @@ class ChatThreadRecord(SQLModel, table=True):
     #: ``PUT /chat/threads/{id}/queue`` (which leaves ``updated_at`` alone, so
     #: it can never make a message save 409). "" = nothing waiting.
     queued_json: str = ""
+    #: WHERE this conversation lives (v1.367.0, IJ harness Phase 4): "chat"
+    #: = the Chat list (every thread before this field existed reads NULL,
+    #: which is "chat"); "build" = an IJ harness session in Build. Written
+    #: ONCE, by ``POST /build/sessions`` — no route changes it afterwards, so
+    #: a chat can never become a build session or back. Every chat list
+    #: (``GET /chat/threads``, the "@" menu, the history index, the Guide's
+    #: search, the Status map) reads only :func:`chat_surface_only` rows, and
+    #: Build reads only "build" rows. Additive column (auto-reconciled).
+    surface: str | None = Field(default=CHAT_SURFACE)
+
+
+def chat_surface_only(column: Any = None) -> Any:
+    """The SQL clause "this thread lives in Chat" (v1.367.0): NULL (every
+    thread saved before ``surface`` existed) or anything but "build". ``column``
+    defaults to ``ChatThreadRecord.surface``. ``!=`` alone would drop the NULL
+    rows (SQL's NULL compares as unknown), so the IS NULL arm is load-bearing."""
+    from sqlalchemy import or_
+
+    col = ChatThreadRecord.surface if column is None else column
+    return or_(col.is_(None), col != BUILD_SURFACE)  # type: ignore[union-attr]
+
+
+def is_build_thread(row: Any) -> bool:
+    """True for an IJ harness session's row (``surface == "build"``)."""
+    return str(getattr(row, "surface", "") or "") == BUILD_SURFACE
+
+
+class BuildFolderRecord(SQLModel, table=True):
+    """The DISPLAY NAME of a folder in Build's session list (v1.367.0, IJ
+    harness Phase 4) — ONE store for "this folder shows as X". The folder on
+    disk is never renamed. When the folder is a Jarvis project's root, the
+    project's own name is the display name (renaming the group renames the
+    project) and no row here is used — one name, never two.
+
+    ``key`` is the folder normalised the way ``projects/locate`` compares
+    roots (both separators folded, no trailing slash, case-folded)."""
+
+    key: str = Field(primary_key=True)
+    path: str = ""
+    name: str = ""
+    updated_at: datetime = Field(default_factory=utcnow)
 
 
 class SavedPromptRecord(SQLModel, table=True):

@@ -174,6 +174,9 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   process_stop: { did: "Stopped a running program", noun: "program stop" },
   mcp_list_resources: { did: "Listed an app's resources", noun: "resource listing" },
   mcp_read_resource: { did: "Read an app's resource", noun: "resource read" },
+  // v1.367.0 (IJ harness Phase 4): a Build session's question and plan door.
+  ask_user: { did: "Asked you a question", noun: "question" },
+  exit_plan_mode: { did: "Presented its plan for approval", noun: "plan for approval" },
 };
 
 /** One failed call of a KNOWN step kind (lib/stepWords), as a noun. A kind

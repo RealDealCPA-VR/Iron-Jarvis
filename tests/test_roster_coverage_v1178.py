@@ -231,6 +231,11 @@ _OFF_ROSTER_BY_DESIGN = {
     "multi_edit", "apply_patch", "glob", "plan_update", "notebook_edit",
     "mcp_list_resources", "mcp_read_resource",
     "process_start", "process_read", "process_write", "process_stop",
+    # IJ HARNESS SESSIONS (v1.367.0, Phase 4): a question for the user and
+    # the plan-mode door. Both need a PERSON watching a Build session's turn
+    # (harness/mode.plan_tools arms them only there); an agent run at 3am has
+    # nobody to answer. Pinned by tests/test_build_sessions_v1367.py.
+    "ask_user", "exit_plan_mode",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

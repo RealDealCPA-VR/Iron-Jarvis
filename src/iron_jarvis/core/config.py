@@ -68,6 +68,12 @@ def default_permissions() -> dict[str, str]:
         "process_write": "ask",
         "process_read": "allow",
         "process_stop": "allow",
+        # IJ HARNESS SESSIONS (v1.367.0, Phase 4). ask_user only ASKS (the
+        # question itself is the consent surface; it changes nothing).
+        # exit_plan_mode is the plan-mode door: ASK, and the stream lane cards
+        # it once-only in every posture (harness/mode.ONCE_ONLY_TOOLS).
+        "ask_user": "allow",
+        "exit_plan_mode": "ask",
         "search_codebase": "deny",  # no tool yet — fail-closed (use grep/file_search)
         "shell": "ask",
         # The session namespace (v1.159.0). Same gate as shell and for a
@@ -426,6 +432,10 @@ class Config(BaseModel):
     #: working at once rings the bell once and asks whether to queue the
     #: extras. 0 = never. Never rings while ``max_concurrent_sessions`` > 0.
     busy_runs_notice_at: int = 4
+    #: v1.367.0 (IJ harness Phase 4): how many tool rounds ONE Build session
+    #: turn may take before it ends in its own conversation with an answer
+    #: (it never hands the work to an agent run). 1..200; the plan's 60.
+    build_round_budget: int = 60
     #: OCR (v1.174.0) — scanned documents are transcribed by a VISION model
     #: (there is no tesseract in this app); off means a scan honestly reports
     #: "no text layer" instead of costing vision calls. `ocr_max_pages` bounds

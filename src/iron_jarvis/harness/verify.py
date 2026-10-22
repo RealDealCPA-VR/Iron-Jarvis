@@ -12,6 +12,7 @@ and ONE line rides the tool output:
 
 Rules: never on the event loop (callers run :func:`check_file` in a worker
 thread), bounded (a file over :data:`MAX_CHECK_BYTES` is skipped and says so;
+a Python file over :data:`MAX_PY_CHECK_BYTES` gets no line at all;
 ``node --check`` goes through ``core.procs`` with a timeout), and NEVER fails
 the write — a check that cannot run says nothing or says it was skipped.
 
@@ -30,6 +31,12 @@ from pathlib import Path
 
 #: A bigger file is not checked (a generated bundle, a data dump).
 MAX_CHECK_BYTES = 2_000_000
+#: A bigger PYTHON file is not checked and gets NO line (v1.367.0, the Phase 1
+#: review): ``compile`` holds the GIL for its whole run — ~0.5 s on a 1.6 MB
+#: file, which stalls the daemon's event loop for every request while it runs.
+#: 256 KB compiles in a few tens of milliseconds; a hand-written module is
+#: far below it, a generated one is not worth the stall.
+MAX_PY_CHECK_BYTES = 256 * 1024
 #: ``node --check`` is given this long.
 NODE_TIMEOUT_S = 10.0
 #: The message part of a failing line is cut to this.
@@ -121,6 +128,8 @@ def check_file(path: str | Path) -> str | None:
         return None
     try:
         size = p.stat().st_size
+        if suffix in PYTHON_SUFFIXES and size > MAX_PY_CHECK_BYTES:
+            return None  # v1.367.0: no compile, and no line about it
         if size > MAX_CHECK_BYTES:
             return f"Check: skipped — the file is over {MAX_CHECK_BYTES // 1_000_000} MB"
         if suffix in JS_SUFFIXES:
