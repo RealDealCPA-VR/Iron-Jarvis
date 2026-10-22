@@ -405,6 +405,67 @@ async def test_a_session_without_an_account_takes_the_default_and_keeps_it(app, 
     _only_pinned(fake, "c-work")
 
 
+async def test_iron_proxy_on_with_no_account_for_the_vendor_is_exactly_phase_4(app, fake, work, monkeypatch):
+    """Only Codex accounts: a Claude session has none, its turn is unpinned
+    and runs on this PC's own login (Iron-Proxy answers NO_PROFILE)."""
+    for pid in ("c-work", "c-spare", "c-gone"):
+        del fake.profiles[pid]
+        fake.states.pop(pid, None)
+    await enable(app)
+    beh = wire_doubles(app, monkeypatch, Behaviour(["mine"]))
+    sid = await _session(app, work)
+    assert "account" not in setup_of(app, sid)
+    frames = await _turn(app, sid, "hi", "acc-none")
+    assert beh.leases == [("claude-cli", None)] and beh.pins == [None]
+    assert "account" not in dict(frames)["done"]["route"]
+    assert all("pinned" not in p for p in picks(fake))
+
+
+async def test_a_turn_the_account_finished_clears_the_card_and_the_wait(app, fake, work, monkeypatch):
+    """The user carried on themselves after arming "Resume when ready": the
+    finished turn ends the wait, so no continuation answers a question nobody
+    asked later."""
+    beh, sid, card, view = await _limit_then_arm(app, fake, work, monkeypatch, park_s=1.0)
+    await asyncio.sleep(1.2)
+    beh.moves = ["I am back."]
+    frames = await _turn(app, sid, "are you there?", "acc-manual")
+    assert frames[-1][0] == "done"
+    setup = setup_of(app, sid)
+    assert "account_wait" not in setup and "account_limit" not in setup
+    assert await build_routes.resume_due(app.state.d) == []
+
+
+async def test_a_pinned_turn_is_held_on_its_provider_through_a_transient_failure(
+    app, fake, work, monkeypatch,
+):
+    """An OVERLOAD (529 — the provider's, not an account's) would fail an
+    ordinary explicit pick over to the default provider. A pinned turn is
+    HELD: the error is the turn's, and the default provider is never called
+    (its account would be one nobody picked)."""
+    from iron_jarvis.providers import router as router_mod
+
+    monkeypatch.setattr(router_mod.random, "uniform", lambda a, b: 0.0)  # no backoff waits
+    await enable(app)
+    app.state.platform.config.default_provider = "codex-cli"
+    beh = wire_doubles(app, monkeypatch, Behaviour(["never"]))
+    beh.overload["claude-cli"] = 10
+    sid = await _session(app, work)
+    frames = await _turn(app, sid, "hi", "acc-held")
+    assert frames[-1][0] == "error"
+    assert set(beh.attempts) == {"claude-cli"}, beh.attempts
+    # The SAME failure without a pin (an ordinary chat-shaped call) moves on.
+    beh.attempts.clear()
+    beh.overload["claude-cli"] = 10
+    from iron_jarvis.providers.adapters.base import LLMMessage
+
+    async for _f in app.state.platform.router.stream(
+        provider="claude-cli", model="claude-sonnet-4-5", system="",
+        messages=[LLMMessage(role="user", content="x")], tools=[],
+    ):
+        pass
+    assert "codex-cli" in beh.attempts, "unpinned, the default provider is tried (control)"
+
+
 async def test_no_failover_ever_moves_a_pinned_turn(app, fake, work, monkeypatch):
     """The router HOLDS a pinned turn: an account refusal on claude-cli never
     reaches codex-cli (or the default provider), even though both are up."""

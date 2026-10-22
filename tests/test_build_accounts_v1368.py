@@ -161,6 +161,10 @@ class Behaviour:
         self.rate_limits: dict[str, Any] | None = None
         self.drop_thinking = False
         self.pins: list[Any] = []
+        #: Every provider the router CALLED (before any lease).
+        self.attempts: list[str] = []
+        #: provider -> how many next calls fail as an overload (529).
+        self.overload: dict[str, int] = {}
 
 
 class AccountDouble(LLMAdapter):
@@ -181,6 +185,11 @@ class AccountDouble(LLMAdapter):
         return final
 
     async def stream(self, *, system, messages, tools, **kw):
+        self.beh.attempts.append(self.provider)
+        if self.beh.overload.get(self.provider):
+            self.beh.overload[self.provider] -= 1
+            # The PROVIDER is busy (not one account): transient, no lease.
+            raise ProviderError(f"{self.provider}: overloaded", status_code=529)
         lease = await asyncio.to_thread(accounts.lease, self.provider)
         pid = lease.profile_id if lease is not None else None
         self.beh.leases.append((self.provider, pid))

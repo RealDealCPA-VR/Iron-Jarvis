@@ -314,8 +314,11 @@ def turn_account(platform: Any, thread_id: str, setup: dict[str, Any]) -> "tuple
         if not vendor:
             return None, ""
         if BA.snapshot(svc) is None:
+            # Not read yet (a turn right after boot, before the watch loop's
+            # first cycle): locate Iron-Proxy and read its accounts once, so
+            # the session gets its Default instead of an unpinned "first free".
             with contextlib.suppress(Exception):
-                if svc.running():
+                if svc.check():
                     svc.refresh_accounts()
         row = BA.default_for(svc, vendor)
         if row is None:
@@ -687,9 +690,15 @@ async def _note_account_limit(platform: Any, thread_id: str, turn_id: str,
                     "resets_at": limit.get("resets_at"),
                 }, session_id=S.session_id_for(thread_id))
         elif done:
+            # The account served a whole turn: the card goes, and so does a
+            # "Resume when ready" wait (the user carried on themselves — a
+            # later continuation would answer a question nobody asked).
             row = await asyncio.to_thread(S.get_row, engine, thread_id)
-            if row is not None and _setup_of(row).get("account_limit"):
-                await asyncio.to_thread(S.update, engine, thread_id, setup={"account_limit": None})
+            setup = _setup_of(row) if row is not None else {}
+            if setup.get("account_limit") or setup.get("account_wait"):
+                await asyncio.to_thread(S.update, engine, thread_id, setup={
+                    "account_limit": None, "account_wait": None,
+                })
     except Exception:  # noqa: BLE001 — the turn never fails on its session record
         log.warning("recording build session %s's account limit failed", thread_id, exc_info=True)
 

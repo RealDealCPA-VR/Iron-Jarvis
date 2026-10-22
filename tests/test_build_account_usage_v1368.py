@@ -294,6 +294,44 @@ def test_without_native_blocks_keeps_every_turn_and_drops_only_carriers():
 # --------------------------------------------------------------------------- #
 
 
+async def test_a_parked_codex_session_on_another_account_is_never_resumed_under_a_pin(tmp_path, monkeypatch):
+    """A Codex turn parks its app-server on the tool calls it handed back.
+    When the Build session then moves to ANOTHER account, the next call must
+    not resume that process (it runs as the old account's CODEX_HOME): it is
+    stopped, and a new one starts as the session's account."""
+    from tests.test_codex_native_v1365 import TOOLS, Fake, _after
+
+    homes = _homes(tmp_path, "X", "Y")
+    fake = _proxy(tmp_path, homes, provider="openai")
+    first = {"steps": [{"text": "Checking."}, {"call": {"tool_index": 0, "args": {"q": "x"}}}, {"text": "never"}]}
+    second = {"steps": [{"text": "Picked up on Y."}]}
+    try:
+        codex = Fake(tmp_path, monkeypatch, [first, second])
+        adapter = codex.adapter()
+        msgs = [_user("question")]
+        r1 = await _run_tools(adapter, msgs, _pinned("X", "codex-cli"), TOOLS)
+        assert r1.tool_calls
+        r2 = await _run_tools(adapter, _after(msgs, r1, {"lookup_fake": "R"}), _pinned("Y", "codex-cli"), TOOLS)
+        assert r2.text == "Picked up on Y."
+        assert [s["env"].get("CODEX_HOME") for s in codex.starts()] == [homes["X"], homes["Y"]]
+        assert [p["profileId"] for p in picks(fake)] == ["X", "Y"]
+    finally:
+        from iron_jarvis.providers.adapters.codex_native import session as CS
+
+        for s in CS.POOL.live():
+            CS.POOL.forget(s)
+            s.kill()
+        fake.stop()
+
+
+async def _run_tools(adapter, messages, pin, tools) -> object:
+    token = P.set_pin(pin)
+    try:
+        return await adapter.complete(system="", messages=messages, tools=tools)
+    finally:
+        P.reset_pin(token)
+
+
 def test_the_codex_snapshot_is_sent_in_iron_proxys_shape():
     snap = {"planType": "plus", "limitId": "codex", "rateLimitReachedType": None,
             "primary": {"usedPercent": 7, "windowDurationMins": 300, "resetsAt": 1900001000},
