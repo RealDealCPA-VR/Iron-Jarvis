@@ -368,3 +368,28 @@ def test_the_cut_refuses_when_the_conversation_moved(tmp_path):
     out = S.cut_transcript(eng, sid, "b", 0, "2026-01-01T00:00:00+00:00")
     assert out["ok"] is False and "changed" in out["reason"]
     assert len(json.loads(thread_row(app, sid).messages_json)) == 2
+
+
+async def test_a_rewind_drops_the_library_proposals_of_the_turns_it_rewound(app, work):
+    """The experience library's half: a PROPOSAL made from a rewound turn
+    describes work that is no longer there, so it goes; an ACCEPTED lesson
+    was the user's decision and stays; a proposal from a kept turn stays."""
+    from iron_jarvis.harness import library as L
+    from iron_jarvis.harness.library_models import HarnessLibraryRecord
+
+    sid = await _session_with_two_turns(app, work)
+    eng = app.state.platform.engine
+    key = L.folder_key(work)
+
+    def row(turn, status, text):
+        return L._mint(eng, HarnessLibraryRecord(folder_key=key, folder=str(work), kind="lesson", text=text,
+                                                 status=status, signature=text, thread_id=sid, turn_id=turn))
+
+    gone = row("t2", "proposed", "from turn two, waiting")
+    kept = row("t2", "accepted", "from turn two, kept by the user")
+    other = row("t1", "proposed", "from turn one, waiting")
+    status, out = await asgi(app, "POST", f"/build/sessions/{sid}/rewind", {"to": "t2"})
+    assert status == 200, out
+    assert out["library_dropped"] == 1
+    assert L.get(eng, gone.id) is None
+    assert L.get(eng, kept.id) is not None and L.get(eng, other.id) is not None

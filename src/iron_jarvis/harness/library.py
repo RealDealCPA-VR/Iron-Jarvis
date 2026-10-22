@@ -116,6 +116,7 @@ REASON_FULL = f"{OPEN_LIMIT} suggestions for this folder are already waiting for
 REASON_MODEL_FAILED = "the reflection call failed"
 REASON_NOTHING = "nothing the record supports was left to keep"
 REASON_ACCOUNT = "the session's account could not be used for the reflection"
+REASON_REWOUND = "the turn was rewound while it was being reflected on"
 
 STALE_SENTENCE = "The file changed since this was suggested, so it was not written. Ask again after your next turn."
 INVALID_SENTENCE = "With this edit the folder's harness files would not be valid ({note}), so nothing was written."
@@ -614,6 +615,60 @@ def _mint(engine: Any, row: HarnessLibraryRecord) -> HarnessLibraryRecord:
     return row
 
 
+def _turn_present(engine: Any, thread_id: str, turn_id: str) -> bool:
+    """Does the session's transcript still hold ``turn_id``'s reply?"""
+    from ..core.models import ChatThreadRecord, is_build_thread
+
+    with session_scope(engine) as db:
+        row = db.get(ChatThreadRecord, str(thread_id or ""))
+        if row is None or not is_build_thread(row):
+            return False
+        try:
+            messages = json.loads(row.messages_json or "[]")
+        except (TypeError, ValueError):
+            return False
+    return any(
+        isinstance(m, dict) and m.get("role") == "assistant" and m.get("turnId") == turn_id
+        for m in (messages if isinstance(messages, list) else [])
+    )
+
+
+def _mint_for_turn(engine: Any, row: HarnessLibraryRecord) -> HarnessLibraryRecord | None:
+    """Mint ``row`` only while its turn is still in the session — checked and
+    inserted under the ONE conversation lock a rewind's cut takes, so a turn
+    rewound during the reflection never gets a proposal (a mint that landed
+    BEFORE the cut is removed by the rewind, :func:`forget_turns`). None =
+    the turn is gone. BLOCKING."""
+    from ..core.db import CONVERSATION_WRITE_LOCK
+
+    with CONVERSATION_WRITE_LOCK:
+        if not _turn_present(engine, row.thread_id, row.turn_id):
+            return None
+        return _mint(engine, row)
+
+
+def forget_turns(engine: Any, thread_id: str, turn_ids: Any) -> int:
+    """A REWIND's library half: the PROPOSALS made from the rewound turns go
+    (they describe work that is no longer there). Accepted lessons and edits
+    were the user's decision and stay. Returns how many went. BLOCKING."""
+    from sqlmodel import select
+
+    turns = [str(t) for t in (turn_ids or []) if t]
+    if not turns:
+        return 0
+    with session_scope(engine) as db:
+        rows = list(db.exec(
+            select(HarnessLibraryRecord)
+            .where(HarnessLibraryRecord.thread_id == str(thread_id or ""))
+            .where(HarnessLibraryRecord.turn_id.in_(turns))  # type: ignore[attr-defined]
+            .where(HarnessLibraryRecord.status == PROPOSED)
+        ))
+        for r in rows:
+            db.delete(r)
+        db.commit()
+    return len(rows)
+
+
 # --------------------------------------------------------------------------- #
 # the reflector
 # --------------------------------------------------------------------------- #
@@ -808,11 +863,15 @@ async def _reflect(platform: Any, thread_id: str, turn_id: str, out: Reflection)
         if kept_lesson and (ev["paths"] or ev["quotes"]):
             sig = signature(key, KIND_LESSON, "", kept_lesson)
             if not await asyncio.to_thread(_suppressed, engine, sig):
-                out.minted.append(await asyncio.to_thread(_mint, engine, HarnessLibraryRecord(
+                minted = await asyncio.to_thread(_mint_for_turn, engine, HarnessLibraryRecord(
                     folder_key=key, folder=evidence.folder, kind=KIND_LESSON, text=kept_lesson,
                     evidence_json=json.dumps(ev), signature=sig, thread_id=thread_id,
                     turn_id=turn_id, provider=provider, model=model,
-                )))
+                ))
+                if minted is None:
+                    out.reason = REASON_REWOUND
+                    return out
+                out.minted.append(minted)
         else:
             kept_lesson = ""
 
@@ -841,14 +900,16 @@ async def _reflect(platform: Any, thread_id: str, turn_id: str, out: Reflection)
                 why_line = _one_line(edit.get("why"))[:200] or f"Keep this lesson in {name}."
                 sig = signature(key, KIND_LAYER_EDIT, name, after_checked)
                 if invalid is None and not await asyncio.to_thread(_suppressed, engine, sig):
-                    out.minted.append(await asyncio.to_thread(_mint, engine, HarnessLibraryRecord(
+                    minted = await asyncio.to_thread(_mint_for_turn, engine, HarnessLibraryRecord(
                         folder_key=key, folder=evidence.folder, kind=KIND_LAYER_EDIT,
                         text=why_line, file=name, before=before, after=after_checked,
                         evidence_json=json.dumps(ev), signature=sig, thread_id=thread_id,
                         turn_id=turn_id, provider=provider, model=model,
-                    )))
+                    ))
+                    if minted is not None:
+                        out.minted.append(minted)
     if not out.minted:
-        out.reason = REASON_NOTHING
+        out.reason = out.reason or REASON_NOTHING
     for row in out.minted:
         await _publish(platform, row)
     return out
@@ -880,6 +941,8 @@ AUTO_REFLECT = True
 #: and so tests and the shutdown can wait for them).
 _PENDING: set[asyncio.Task] = set()
 _RUNNING_KEYS: set[str] = set()
+#: "thread:turn" -> its running reflection (so a rewind can stop it).
+_TASKS: dict[str, asyncio.Task] = {}
 
 
 def schedule(platform: Any, thread_id: str, turn_id: str) -> "asyncio.Task | None":
@@ -897,13 +960,28 @@ def schedule(platform: Any, thread_id: str, turn_id: str) -> "asyncio.Task | Non
         _RUNNING_KEYS.discard(key)
         return None
     _PENDING.add(task)
+    _TASKS[key] = task
 
     def _done(t: asyncio.Task) -> None:
         _PENDING.discard(t)
         _RUNNING_KEYS.discard(key)
+        if _TASKS.get(key) is t:
+            _TASKS.pop(key, None)
 
     task.add_done_callback(_done)
     return task
+
+
+def cancel_reflections(thread_id: str, turn_ids: Any) -> int:
+    """Stop the background reflections of these turns (a rewind took them
+    away). Returns how many were stopped. Call on the loop."""
+    stopped = 0
+    for turn_id in turn_ids or []:
+        task = _TASKS.get(f"{thread_id}:{turn_id}")
+        if task is not None and not task.done():
+            task.cancel()
+            stopped += 1
+    return stopped
 
 
 async def drain(timeout: float = 30.0) -> None:

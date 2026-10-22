@@ -56,6 +56,8 @@ class LibScript(Script):
         self.reflection = reflection
         self.reflect_as = reflect_as or who
         self.reflections: list[dict] = []
+        #: Runs while the reflection call is "thinking" (a rewind lands then).
+        self.on_reflect = None
 
     async def complete(self, *, provider=None, model=None, system="", messages=(), tools=None,
                        task_class=None, pin=False, **kw):
@@ -64,6 +66,8 @@ class LibScript(Script):
                 "provider": provider, "model": model, "pin": pin, "tools": tools,
                 "prompt": messages[0].content,
             })
+            if self.on_reflect is not None:
+                self.on_reflect()
             text = self.reflection if isinstance(self.reflection, str) else json.dumps(self.reflection)
             return RouteResult(LLMResponse(text=text, usage={"input_tokens": 7, "output_tokens": 3}),
                                self.reflect_as[0], self.reflect_as[1])
@@ -386,12 +390,23 @@ async def test_an_edit_whose_file_moved_is_stale_and_writes_nothing(app, work):
 
 
 async def test_an_edit_that_would_make_the_layer_invalid_is_never_proposed(app, work):
-    bad = {"lesson": "add() lives in calc.py.", "edit": {
-        "file": "guardrails.md",
-        "text": "Run .ironjarvis/harness/scripts/check.sh after calc.py changes.\n"}}
-    sid, _ = await _worked(app, work, bad)
+    """An edit that passes the ledger check and the coach's size rule but
+    would make the folder's layer INVALID (here: memory.md over Phase 3's
+    16,000-character cap) is checked as a layer and never proposed."""
+    hdir = work / ".ironjarvis" / "harness"
+    hdir.mkdir(parents=True)
+    big = "note\n" * 3190  # 15,950 characters: a valid memory.md
+    (hdir / "memory.md").write_text(big, encoding="utf-8")
+    edit = {"lesson": "add() lives in calc.py.", "edit": {
+        "file": "memory.md", "text": big + "add() lives in calc.py.\n" * 3}}
+    sid, _ = await _worked(app, work, edit)
     out = await L.reflect(app.state.platform, sid, _TURN[sid])
     assert [r.kind for r in out.minted] == ["lesson"]
+    # The same edit on a small file IS proposed (the cap is what refused it).
+    assert L.layer_with_edit_problem(app.state.platform.config.home, str(work), "memory.md",
+                                     big + "add() lives in calc.py.\n" * 3) is not None
+    assert L.layer_with_edit_problem(app.state.platform.config.home, str(work), "memory.md",
+                                     "add() lives in calc.py.\n") is None
 
 
 async def test_an_edits_added_lines_are_ledger_checked(app, work):
@@ -437,3 +452,23 @@ async def test_the_reflect_route_answers_what_and_why(app, work):
     assert status == 200 and out["turn_id"] == _TURN[sid] and [m["kind"] for m in out["minted"]] == ["lesson"]
     status, out = await asgi(app, "POST", f"/build/sessions/{sid}/reflect", {})
     assert status == 200 and out["minted"] == [] and out["reason"]
+
+
+async def test_a_turn_rewound_during_its_reflection_gets_no_proposal(app, work):
+    """The rewind's cut and the library's mint take the ONE conversation
+    lock: a turn rewound while its reflection is waiting on the model is
+    gone when the reflection would mint, so nothing is minted."""
+    from iron_jarvis.harness import sessions as S
+
+    sid, script = await _worked(app, work, GOOD)
+    eng = app.state.platform.engine
+    turn = _TURN[sid]
+
+    def rewind_now():
+        msgs = json.loads(S.get_row(eng, sid).messages_json)
+        assert S.cut_transcript(eng, sid, turn, 0, msgs[0]["at"])["ok"] is True
+
+    script.on_reflect = rewind_now
+    out = await L.reflect(app.state.platform, sid, turn)
+    assert out.minted == [] and out.reason == L.REASON_REWOUND
+    assert _rows(app) == []

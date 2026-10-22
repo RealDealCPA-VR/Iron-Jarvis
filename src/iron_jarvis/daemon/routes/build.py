@@ -1182,6 +1182,14 @@ async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
                 "rewound": False, "partial": True,
                 "restored": [f["rel"] for f in plan.files], **plan.view(),
             })
+        # The experience library's half: a reflection still running on a
+        # rewound turn stops, and the PROPOSALS made from rewound turns go —
+        # they describe work that is no longer there (an accepted lesson was
+        # the user's decision and stays).
+        from ...harness import library as _library
+
+        _library.cancel_reflections(thread_id, plan.turns)
+        dropped = await asyncio.to_thread(_library.forget_turns, platform.engine, thread_id, plan.turns)
         bus = getattr(platform, "event_bus", None)
         if bus is not None:
             with contextlib.suppress(Exception):
@@ -1194,6 +1202,7 @@ async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
             "note": R.commands_note(plan.commands),
             "messages": cut.get("count", 0),
             "mode": cut.get("mode", S.MODE_ACT),
+            "library_dropped": dropped,
             "updated_at": cut.get("updated_at"),
         }
     finally:
