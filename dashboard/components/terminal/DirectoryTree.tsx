@@ -4,7 +4,7 @@
 // and pick a project directory to use as a terminal's cwd. Each folder is listed
 // lazily (`GET /fs/list?dirs_only=true`) the first time it is expanded.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Briefcase,
   ChevronRight,
@@ -126,7 +126,9 @@ function DirNode({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [children, setChildren] = useState<DirNodeData[] | null>(null);
-  const [loading, setLoading] = useState(false);
+  // A root that opens on its own starts in "Loading…" (its first paint, as
+  // before the load moved out of render — see the effect below).
+  const [loading, setLoading] = useState(defaultOpen);
   const [error, setError] = useState<string | null>(null);
   const active = selectedPath === node.path;
 
@@ -152,10 +154,17 @@ function DirNode({
     }
   }
 
-  // Auto-load the root node the first time it mounts open.
-  if (defaultOpen && open && children === null && !loading && !error) {
-    void load();
-  }
+  // Auto-load the root node the first time it mounts open — in an effect,
+  // never during render: a load started by a render that React then threw
+  // away (StrictMode's second render, a transition restarted) set state on a
+  // fiber that never mounted — React's "state update on a component that
+  // hasn't mounted yet" on every cold Build load — and fetched the root
+  // twice (v1.369.0 review; the code dates from v1.0).
+  const autoLoad = defaultOpen;
+  useEffect(() => {
+    if (autoLoad) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function onRowClick() {
     onSelect(node.path);
