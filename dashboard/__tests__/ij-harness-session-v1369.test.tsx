@@ -241,6 +241,41 @@ describe("a message is a turn on the session's own route", () => {
   });
 });
 
+describe("a message sent while the last turn's lines are still being read (v1.369.0 review)", () => {
+  it("keeps the new question on screen: the old turn's settle does not clear it", async () => {
+    renderSession();
+    await screen.findByTestId("harness-empty");
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const second = controlledStream();
+    let turns = 0;
+    fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+      turns += 1;
+      if (turns === 1) {
+        const id = JSON.parse(String(init.body)).turn_id;
+        // The session read after turn one is held until the second is sent.
+        api.gets["/build/sessions/s1"] = () =>
+          held.then(() => view({ messages: [userLine("First", id), replyLine("Did the first.", id)] }));
+        return sse([["done", { reply: "Did the first." }]]);
+      }
+      return second.response;
+    });
+    await send("First");
+    // Turn one is over (the box is free again); its re-read is still out.
+    await waitFor(() => expect(screen.queryByTestId("harness-stop")).toBeNull());
+    await waitFor(() => expect(api.calls.filter((c) => c.path === "/build/sessions/s1").length).toBe(2));
+    await send("Second");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      release();
+      await held;
+    });
+    await waitFor(() => expect(screen.getAllByTestId("harness-reply").at(-1)).toHaveTextContent("Did the first."));
+    expect(screen.getAllByTestId("harness-user-bubble").map((b) => b.textContent)).toEqual(["First", "Second"]);
+    second.end();
+  });
+});
+
 describe("the model's own question takes the composer's place", () => {
   it("answers through the session's answer route, and goes when the turn says it is settled", async () => {
     const s = controlledStream();

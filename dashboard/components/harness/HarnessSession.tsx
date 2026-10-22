@@ -350,9 +350,14 @@ export function HarnessSession({
       // A turn that ended on a limit changed what the account list says:
       // read it again, so the chip says so without opening the list.
       if (limitSeenRef.current) void refreshAccounts();
-      setPending(null);
-      setSteerNotes([]);
-      setQuestions((prev) => prev.map((q) => (q.outcome ? q : { ...q, outcome: "stopped" })));
+      // The user may have sent the NEXT message while this read was out (the
+      // composer is free the moment the turn ends): its question bubble,
+      // notes and questions belong to that turn and stay (v1.369.0 review).
+      if (turnRef.current === null) {
+        setPending(null);
+        setSteerNotes([]);
+        setQuestions((prev) => prev.map((q) => (q.outcome ? q : { ...q, outcome: "stopped" })));
+      }
       const sent = readSentSteers(threadId);
       const back = unreadSteersFor(sent, finished, v?.messages ?? [], unread);
       writeSentSteers(
