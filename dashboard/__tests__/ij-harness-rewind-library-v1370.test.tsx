@@ -78,6 +78,7 @@ import { LibraryCards } from "@/components/harness/LibraryCards";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { toActivity } from "@/components/NotificationBell";
 import { LIBRARY_DUE_GRACE_MS, LIBRARY_REREAD_MS, LIBRARY_RUNNING_MS, nextLibraryRead } from "@/lib/buildLibrary";
+import { rewindFileWords } from "@/lib/buildRewind";
 
 const PREVIEW_PATH = "/build/sessions/s1/rewind?to=t1";
 const REWIND_PATH = "POST /build/sessions/s1/rewind";
@@ -178,6 +179,11 @@ describe("Rewind to here: two presses, the refusal in words", () => {
     expect(screen.getByTestId("rewind-problems")).toHaveTextContent("the saved copy of notes.md is gone");
     expect(onRewound).not.toHaveBeenCalled();
     expect(onTouched).toHaveBeenCalled();
+  });
+
+  it("a file the session made that is already gone is said so (v1.370.0 review)", () => {
+    expect(rewindFileWords({ path: "C:/w/notes.md", rel: "notes.md", change: "already gone" }))
+      .toBe("notes.md is already gone (this session made it)");
   });
 
   it("waits while a reply runs", () => {

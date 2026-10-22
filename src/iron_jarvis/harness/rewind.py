@@ -53,12 +53,17 @@ WHAT_CHARS = 160
 
 #: Journal kinds that name files (``routes/chat_changes``' set + renames).
 _FILE_KINDS = frozenset({"file_restore", "file_delete", "files_delete", "files_patch", "file_rename"})
+#: Kinds ``routes/undo.perform_undo`` reverses WITHOUT asking the tool's
+#: permission (it restores what the user had).
+_NO_TOOL_KINDS = frozenset({"setting_restore", "secret_restore", "record_restore"})
 
 #: ``apply_patch``'s own words for a patch that changed nothing (its capture
 #: returns no copy then, and there is nothing to put back).
 NO_CHANGE_NOTE = "(the patch left every file as it was)"
 
 NOT_A_TURN = "That point is not one of this session's turns."
+#: A file a rewound turn made that is already gone: nothing to put back.
+ALREADY_GONE = "already gone"
 NO_TIME = "Iron Jarvis cannot tell when that turn started, so it cannot rewind to it."
 
 
@@ -385,6 +390,13 @@ def _simulate(row: dict[str, Any], disk: _Disk, home: Any) -> tuple[list[dict[st
         return files, problems
 
     mode = str(meta.get("mode") or "raw")
+    if kind == "file_delete" and disk.get(target) is None:
+        # A file this session MADE that is already gone (the user deleted
+        # it): it is already as it was before the turn. Nothing to put back
+        # — and the revert would refuse it as "changed since" (review,
+        # v1.370.0: that used to refuse the whole rewind).
+        files.append({"path": str(target), "rel": rel.replace("\\", "/"), "change": ALREADY_GONE})
+        return files, problems
     if guard_unchanged(_hash(disk.get(target), mode), desc.get("post_sha256")) is not None:
         problems.append({"path": str(target), "reason": _changed_since(rel)})
         return files, problems
@@ -416,10 +428,14 @@ def _simulate(row: dict[str, Any], disk: _Disk, home: Any) -> tuple[list[dict[st
 # --------------------------------------------------------------------------- #
 
 
-def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str) -> RewindPlan:
+def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str,
+         permissions: Any = None) -> RewindPlan:
     """What rewinding the session to before turn ``to`` would do. Reads only;
     raises :class:`RewindError` (404) for a session or turn that is not
-    there. BLOCKING."""
+    there. ``permissions``: the permission engine ``POST /undo`` asks before
+    each revert — a tool it would refuse is NAMED here, so the rewind is
+    refused before anything is touched (review, v1.370.0: it used to stop
+    part way). BLOCKING."""
     from ..core.db import session_scope
     from ..core.models import ChatThreadRecord, is_build_thread
     from ..tools.base import Reversibility
@@ -439,12 +455,34 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str) -> Rewi
     if cut_at is None:
         raise RewindError(NO_TIME)
     turns = [m["turnId"] for i, m in starts if i >= index]
+    # The line before the question (the previous turn's reply): a row stamped
+    # at or before it is the previous turn's work, even when a coarse clock
+    # gave it the question's very tick (review, v1.370.0).
+    prev_at = _naive_utc(messages[index - 1].get("at")) if index > 0 else None
     out = RewindPlan(
         to=to, question=str(question.get("content") or ""), turns=turns, keep=index, cut_at=cut_at,
     )
     disk = _Disk()
     seen_files: dict[str, dict[str, Any]] = {}
+    allowed: dict[str, str] = {}
+
+    def refused(tool_name: str) -> str:
+        """Why ``POST /undo`` would refuse to revert this tool ("" = it would
+        not)."""
+        if permissions is None or registry is None:
+            return ""
+        if tool_name not in allowed:
+            tool = registry.get(tool_name)
+            try:
+                decision = permissions.authorize(tool.perm_key(), {}) if tool is not None else None
+                allowed[tool_name] = "" if decision is None or decision.allowed else str(decision.reason or "")
+            except Exception:  # noqa: BLE001 — the revert will say so itself
+                allowed[tool_name] = ""
+        return allowed[tool_name]
+
     for led in _rows_since(engine, session_id_for(thread_id), cut_at):
+        if prev_at is not None and led["created_at"] is not None and led["created_at"] <= prev_at:
+            continue
         if led["undo_of"]:
             continue  # an Undo the user pressed: the row that made it is skipped too
         if led["undone"]:
@@ -478,11 +516,23 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str) -> Rewi
                 "reason": f"the tool that made this change ({led['tool']}) is no longer available",
             })
             continue
+        # (a settings / secret / record restore is reversed without the tool's
+        # permission — perform_undo's own rule.)
+        why = "" if desc["kind"] in _NO_TOOL_KINDS else refused(led["tool"])
+        if why:
+            out.problems.append({
+                "path": _what(led),
+                "reason": ("putting this back needs " + led["tool"]
+                           + ", and your permissions do not allow it (" + why + ")"),
+            })
+            continue
         if desc["kind"] in _FILE_KINDS:
             files, problems = _simulate(led, disk, home)
             out.problems += problems
             for f in files:
                 seen_files[_key(Path(f["path"]))] = f  # the OLDEST action's word wins
+            if files and not problems and all(f["change"] == ALREADY_GONE for f in files):
+                continue  # nothing to put back, and its revert would refuse
             out.action_files[led["id"]] = [f["rel"] for f in files]
         out.actions.append(led["id"])
     out.files = sorted(seen_files.values(), key=lambda f: f["rel"].lower())
@@ -548,7 +598,7 @@ def checkpoints(engine: Any, thread_id: str) -> list[dict[str, Any]]:
     if not starts:
         return []
     points: list[dict[str, Any]] = []
-    for _i, m in starts:
+    for i, m in starts:
         points.append({
             "turn_id": m["turnId"],
             "question": " ".join(str(m.get("content") or "").split())[:200],
@@ -557,6 +607,7 @@ def checkpoints(engine: Any, thread_id: str) -> list[dict[str, Any]]:
             "files": 0,
             "commands": 0,
             "_since": _naive_utc(m.get("at")),
+            "_prev": _naive_utc(messages[i - 1].get("at")) if i > 0 else None,
         })
     first = next((p["_since"] for p in points if p["_since"] is not None), None)
     rows = _rows_since(engine, session_id_for(thread_id), first) if first is not None else []
@@ -566,7 +617,9 @@ def checkpoints(engine: Any, thread_id: str) -> list[dict[str, Any]]:
         at = led["created_at"]
         owner = None
         for p in points:
-            if p["_since"] is not None and at is not None and at >= p["_since"]:
+            if p["_since"] is not None and at is not None and at >= p["_since"] and (
+                p["_prev"] is None or at > p["_prev"]
+            ):
                 owner = p
         if owner is None:
             continue
@@ -577,6 +630,7 @@ def checkpoints(engine: Any, thread_id: str) -> list[dict[str, Any]]:
             owner["commands"] += 1
     for p in points:
         p.pop("_since", None)
+        p.pop("_prev", None)
     return points
 
 

@@ -1206,6 +1206,7 @@ async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
         try:
             plan = await asyncio.to_thread(
                 R.plan, platform.engine, platform.config.home, platform.registry, thread_id, to,
+                getattr(platform, "permissions", None),
             )
         except R.RewindError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from None
@@ -1539,6 +1540,7 @@ def register(app: FastAPI, d: Any) -> None:
             if to:
                 plan = await asyncio.to_thread(
                     R.plan, platform.engine, platform.config.home, platform.registry, thread_id, to,
+                    getattr(platform, "permissions", None),
                 )
                 return {**plan.view(), "note": R.commands_note(plan.commands),
                         "detail": R.problems_sentence(plan.problems) if plan.problems else ""}

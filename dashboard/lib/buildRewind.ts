@@ -18,7 +18,7 @@ import { ApiError, get, post } from "@/lib/api";
 export interface RewindFile {
   path: string;
   rel: string;
-  /** "put back" | "removed" | "renamed back" (the daemon's words). */
+  /** "put back" | "removed" | "renamed back" | "already gone" (the daemon's words). */
   change: string;
 }
 
@@ -136,6 +136,7 @@ export async function rewindTo(threadId: string, turnId: string): Promise<Rewind
 export function rewindFileWords(f: RewindFile): string {
   const name = f.rel || f.path;
   if (f.change === "removed") return `${name} is removed (this session made it)`;
+  if (f.change === "already gone") return `${name} is already gone (this session made it)`;
   if (f.change === "renamed back") return `${name} gets its old name back`;
   return `${name} goes back to how it was`;
 }
