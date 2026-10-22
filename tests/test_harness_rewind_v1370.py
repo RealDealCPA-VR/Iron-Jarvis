@@ -192,7 +192,30 @@ async def test_a_text_write_then_a_raw_edit_of_one_file_rewind_together(app, wor
     await _turn(app, sid, "edit", "w2")
     status, out = await asgi(app, "POST", f"/build/sessions/{sid}/rewind", {"to": "w1"})
     assert status == 200, out
-    assert (work / "data.txt").read_bytes().replace(b"\r\n", b"\n") == b"one\ntwo\n"
+    # EXACTLY the bytes it had (v1.370.0: write_file keeps its prior copy
+    # exact — the old text-mode copy came back with the OS's line endings).
+    assert (work / "data.txt").read_bytes() == b"one\ntwo\n"
+
+
+async def test_a_raw_edit_then_a_text_write_of_one_file_rewind_together(app, work):
+    """The other order: an EDIT (raw journal) in turn one, then a WRITE over
+    the same file in turn two. Undoing the write must leave the bytes the
+    edit left, exactly — else the edit's own "changed since" check refused
+    the rewind of a file nobody else had touched."""
+    (work / "lf.txt").write_bytes(b"alpha\nbeta\n")
+    sid = new_session(app, work)["id"]
+    wire(app, Script([
+        [ToolCall(id="e", name="Edit", arguments={
+            "file_path": "lf.txt", "old_string": "beta", "new_string": "gamma"})],
+        "Edited it.",
+        [ToolCall(id="w", name="Write", arguments={"file_path": "lf.txt", "content": "replaced\n"})],
+        "Rewrote it.",
+    ]))
+    await _turn(app, sid, "edit", "x1")
+    await _turn(app, sid, "rewrite", "x2")
+    status, out = await asgi(app, "POST", f"/build/sessions/{sid}/rewind", {"to": "x1"})
+    assert status == 200, out
+    assert (work / "lf.txt").read_bytes() == b"alpha\nbeta\n"
 
 
 # --------------------------------------------------------------------------- #

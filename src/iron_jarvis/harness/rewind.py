@@ -276,10 +276,11 @@ def _hash(data: bytes | None, mode: str) -> str | None:
     return sha256_bytes(data)
 
 
-def _written(prior: bytes, mode: str) -> bytes:
-    """The bytes a ``file_restore`` revert leaves: ``text`` mode writes the
-    decoded text with ``write_text`` (newlines become the OS's)."""
-    if mode == "text":
+def _written(prior: bytes, mode: str, exact: bool = False) -> bytes:
+    """The bytes a ``file_restore`` revert leaves: the saved bytes as they
+    are (raw mode, or an ``exact`` text copy — v1.370.0); an older ``text``
+    copy is written with ``write_text`` (newlines become the OS's)."""
+    if mode == "text" and not exact:
         return prior.decode("utf-8").replace("\n", os.linesep).encode("utf-8")
     return prior
 
@@ -400,7 +401,7 @@ def _simulate(row: dict[str, Any], disk: _Disk, home: Any) -> tuple[list[dict[st
             problems.append({"path": str(target), "reason": f"the saved copy of {rel} is gone"})
             return files, problems
         try:
-            disk.set(target, _written(prior, mode))
+            disk.set(target, _written(prior, mode, bool(meta.get("exact"))))
         except UnicodeDecodeError:
             problems.append({"path": str(target), "reason": f"the saved copy of {rel} could not be read"})
             return files, problems

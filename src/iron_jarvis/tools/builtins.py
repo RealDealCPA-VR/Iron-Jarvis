@@ -614,9 +614,17 @@ class WriteFileTool(Tool):
         def _capture() -> "dict[str, Any] | None":
             post = _text_sha(args["content"])
             if target.is_file():
+                # v1.370.0: the prior bytes are kept EXACTLY as they were
+                # (``exact``), not read back through universal newlines —
+                # an Undo (and a Build session's rewind) used to put an LF
+                # file back with the OS's line endings, so the file was not
+                # the one the user had, and an older raw edit of it then
+                # read as "changed since". The hash stays newline-invariant.
+                exact = False
                 try:
-                    prior = target.read_text(encoding="utf-8").encode("utf-8")
-                    mode = "text"
+                    prior = target.read_bytes()
+                    prior.decode("utf-8")
+                    mode, exact = "text", True
                 except (UnicodeDecodeError, OSError):
                     prior = target.read_bytes()
                     mode, post_ = "raw", None  # can't predict text bytes for binary
@@ -630,6 +638,7 @@ class WriteFileTool(Tool):
                     prior_bytes=prior,
                     pre_sha256=sha256_bytes(prior),
                     post_sha256=post_,
+                    exact=exact,
                 )
             return make_file_descriptor(
                 ctx.config.home,
