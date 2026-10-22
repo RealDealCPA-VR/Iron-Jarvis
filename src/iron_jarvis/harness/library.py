@@ -1380,6 +1380,32 @@ def decline(engine: Any, item_id: str) -> HarnessLibraryRecord:
     return _decide(engine, item_id, DECLINED)
 
 
+LINK_SENTENCE = (
+    "The folder's .ironjarvis/harness/{name} leads outside the folder (a link), so nothing was "
+    "written. Move the link away first."
+)
+
+
+def _link_problem(folder: str, name: str) -> str:
+    """Why writing ``<folder>/.ironjarvis/harness/<name>`` would land
+    OUTSIDE the folder ("" = it would not): the harness folder must resolve
+    inside the folder, and the file must not be a link."""
+    from .components import _inside
+
+    try:
+        root = Path(folder).resolve()
+    except OSError:
+        return LINK_SENTENCE.format(name=name)
+    hdir = _harness_dir(folder)
+    path = hdir / name
+    for part in (hdir.parent, hdir):
+        if part.is_symlink() or (part.exists() and not _inside(part, root)):
+            return LINK_SENTENCE.format(name=name)
+    if path.is_symlink() or (path.exists() and not _inside(path, root)):
+        return LINK_SENTENCE.format(name=name)
+    return ""
+
+
 def _atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.ij-{new_id('w')}")
@@ -1409,6 +1435,14 @@ def accept(engine: Any, item_id: str, *, known_tools: Any = None) -> HarnessLibr
     problem = folder_problem(row.folder)
     if problem:
         raise LibraryRefused(f"The folder cannot be written now: {problem}", 409)
+    # WRITES ONLY INSIDE THE FOLDER (review, v1.370.0): a `.ironjarvis` or
+    # `harness` junction / link, or a harness file that is itself a link,
+    # would carry the write somewhere else — refused before anything is
+    # written (the validator run after the write could void the layer, never
+    # take the write back).
+    link = _link_problem(row.folder, row.file)
+    if link:
+        raise LibraryRefused(link, 409)
     current = read_layer_file(row.folder, row.file)
     if current is None or current != row.before:
         _decide(engine, item_id, STALE)

@@ -417,3 +417,78 @@ async def test_a_tool_row_stamped_with_the_next_questions_time_stays_in_its_own_
     ev = L.stretch_evidence(eng, sid, [f"{sid}-b"])
     assert all(s["tool"] != "edit_file" for s in ev.steps), ev.steps
     assert not any("calc.py" in f for f in ev.changed_files)
+
+
+# --------------------------------------------------------------------------- #
+# Accept writes only inside the folder, and only there
+# --------------------------------------------------------------------------- #
+
+
+def _proposed_edit(app, folder, before=""):
+    from iron_jarvis.harness.library_models import HarnessLibraryRecord
+
+    return L._mint(app.state.platform.engine, HarnessLibraryRecord(
+        folder_key=L.folder_key(folder), folder=str(folder), kind="layer_edit", text="why",
+        file="memory.md", before=before, after="add() lives in calc.py.\n", signature="edit-sig",
+        thread_id="t", turn_id="x"))
+
+
+def _spy_writes(monkeypatch) -> list:
+    seen: list = []
+    real = L._atomic_write
+
+    def spy(path, text):
+        seen.append(path)
+        return real(path, text)
+
+    monkeypatch.setattr(L, "_atomic_write", spy)
+    return seen
+
+
+async def test_accept_never_writes_through_a_harness_folder_that_leads_outside(app, work, tmp_path, monkeypatch):
+    import os
+
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    try:
+        import _winapi as w
+
+        w.CreateJunction(str(outside), str(work / ".ironjarvis"))
+    except (ImportError, OSError):
+        try:
+            os.symlink(outside, work / ".ironjarvis", target_is_directory=True)
+        except OSError:
+            pytest.skip("no junction or symlink can be made here")
+    row = _proposed_edit(app, work)
+    seen = _spy_writes(monkeypatch)
+    status, body = await asgi(app, "POST", f"/build/library/{row.id}/accept")
+    assert status == 409 and "leads outside the folder" in body["detail"], body
+    assert seen == [] and list(outside.rglob("*")) == []
+    assert L.get(app.state.platform.engine, row.id).status == "proposed"
+
+
+async def test_accept_never_writes_through_a_harness_file_that_is_a_link(app, work, tmp_path, monkeypatch):
+    import os
+
+    hdir = work / ".ironjarvis" / "harness"
+    hdir.mkdir(parents=True)
+    away = tmp_path / "away.md"
+    try:
+        os.symlink(away, hdir / "memory.md")  # dangling: exists() is False
+    except OSError:
+        pytest.skip("no symlink can be made here")
+    row = _proposed_edit(app, work)
+    seen = _spy_writes(monkeypatch)
+    status, body = await asgi(app, "POST", f"/build/library/{row.id}/accept")
+    assert status == 409 and "leads outside the folder" in body["detail"], body
+    assert seen == [] and not away.exists()
+
+
+async def test_accept_of_an_edit_for_a_folder_that_is_gone_says_so(app, tmp_path):
+    gone = tmp_path / "moved-away"
+    gone.mkdir()
+    row = _proposed_edit(app, gone)
+    gone.rmdir()
+    status, body = await asgi(app, "POST", f"/build/library/{row.id}/accept")
+    assert status == 409 and body["detail"].startswith("The folder cannot be written now"), body
+    assert not gone.exists()
