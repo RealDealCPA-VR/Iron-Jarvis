@@ -16,6 +16,7 @@ IJ harness view the same way:
 | Test | What it proves |
 |---|---|
 | Session | Build → IJ harness → New session in a scratch folder → a reply whose one step writes `RESULT.md` (the demo model's scripted step) → Undo removes the file from disk |
+| Rewind (v1.370.0) | on the demo model: a second message writes `RESULT.md`; **Rewind to here** first says what goes back (the file is still there), then removes it, puts the message back in the box and drops the reply; the demo model leaves no library suggestion |
 | Terminal | the session's Terminal tab opens a normal Build terminal; the left pane's Terminals group opens it in the Terminals view, focused, and IJ harness comes back to the same session |
 | Account limit | the Phase 5 account routes STUBBED in the browser (`page.route`, Phase 5's own shapes): the limit card's words, Resume when ready surviving a reload, Cancel, and the daemon's resume (the page rejoins the resumed turn and the card goes) |
 | 390 px | the IJ harness and Terminals views never pan sideways |

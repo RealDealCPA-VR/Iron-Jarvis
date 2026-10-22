@@ -78,6 +78,8 @@ import {
 } from "@/components/terminal/paneChatLook";
 import { HarnessPanes, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { AccountChip, AccountLimitCard, AccountList } from "@/components/harness/HarnessAccounts";
+import { RewindControl } from "@/components/harness/RewindControl";
+import { LibraryCards } from "@/components/harness/LibraryCards";
 import {
   armResumeWhenReady,
   cancelResumeWhenReady,
@@ -214,6 +216,9 @@ export function HarnessSession({
   const turnRef = useRef<string | null>(null);
   const [turnId, setTurnId] = useState<string | null>(null);
   const [turnsEnded, setTurnsEnded] = useState(0);
+  // v1.370.0 (Phase 7): rewinds done here — the panes and the library read
+  // again after one, like after a reply.
+  const [rewinds, setRewinds] = useState(0);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -310,6 +315,22 @@ export function HarnessSession({
   useEffect(() => {
     if (view?.messages.some((m) => m.documents?.length)) void refreshUndo();
   }, [view?.messages, refreshUndo]);
+
+  /** A rewind landed (v1.370.0): the DAEMON cut the transcript and put the
+   *  files back, so read the session again; the message rewound to goes back
+   *  in the box (unless the box already holds words), and the panes, the Undo
+   *  rows and the library read again. */
+  const onRewound = useCallback(
+    async (question: string) => {
+      await load();
+      if (question) setInput((cur) => (cur.trim() ? cur : question));
+      setUndone(new Set());
+      void refreshUndo();
+      setRewinds((n) => n + 1);
+      onChanged();
+    },
+    [load, refreshUndo, onChanged],
+  );
 
   // ----------------------------------------------------------- the turn
   const onFrame = useCallback((event: string, data: Record<string, unknown>) => {
@@ -944,10 +965,22 @@ export function HarnessSession({
                   </p>
                 </div>
               ) : (
-                <div key={i} className="flex justify-end">
+                <div key={i} className="group flex flex-col items-end gap-1">
                   <div data-testid="harness-user-bubble" className={PANE_USER_BUBBLE}>
                     {m.content}
                   </div>
+                  {/* v1.370.0: rewind to before this message (two presses;
+                      a refusal is listed in words). Only a message the
+                      daemon wrote has a turn to rewind to. */}
+                  {m.turnId && m !== pending ? (
+                    <RewindControl
+                      threadId={threadId}
+                      turnId={m.turnId}
+                      disabled={busy || view.archived}
+                      onRewound={(q) => void onRewound(q)}
+                      onTouched={() => void onRewound("")}
+                    />
+                  ) : null}
                 </div>
               )
             ) : (
@@ -1065,6 +1098,9 @@ export function HarnessSession({
               }
             />
           ) : null}
+          {/* v1.370.0: the experience library's suggestions for this folder
+              (Accept / Decline), never while a reply runs. */}
+          {!busy ? <LibraryCards threadId={threadId} refreshKey={turnsEnded + rewinds} /> : null}
           {error ? <ErrorNote>{error}</ErrorNote> : null}
         </div>
 
@@ -1221,7 +1257,7 @@ export function HarnessSession({
           view={view}
           livePlan={livePlan}
           terminal={terminal}
-          refreshKey={turnsEnded}
+          refreshKey={turnsEnded + rewinds}
           undoFor={undoFor}
           onUndo={onUndo}
         />

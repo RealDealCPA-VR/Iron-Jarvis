@@ -3553,6 +3553,80 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **Rewind is ALL OR NOTHING through the undo journal; the library PROPOSES
+  and the user accepts; the refine loop ADOPTS only into its own folder**
+  (v1.370.0, Phase 7 of `docs/IJ-HARNESS-PLAN.md`; Harness² principles 6–9).
+  REWIND (`harness/rewind.py`, `routes/build.rewind_session`): `GET
+  /build/sessions/{id}/rewind` (checkpoints, or `?to=` a preview), `POST …
+  /rewind {to}`. A turn's changes are the session's ledger rows recorded at
+  or after its question's `at` (one turn runs at a time; rewinding TO a turn
+  takes every later one). `plan()` SIMULATES the newest-first replay over the
+  files' current bytes with each journal row's OWN "changed since" rule (its
+  hash mode; a `text` row's revert re-writes newlines unless the envelope is
+  `exact`) — any file that cannot go back is NAMED and nothing is touched
+  (409 `problems`); only then is each action reverted through
+  `routes/undo.perform_undo` (never a second copy of revert). A refusal
+  between plan and revert stops at once and says what went back, leaving the
+  conversation. Commands (no journal) are listed, never claimed undone. The
+  rewind holds the session in `_STARTING` (no turn can start during it) and
+  `sessions.cut_transcript` cuts under the conversation lock, refuses when
+  the line at the cut moved, restores plan mode when the plan was approved
+  in a rewound turn, and clears an account card/wait. SAME RELEASE:
+  `write_file` keeps its prior copy EXACT (`make_file_descriptor(exact=)`;
+  the revert writes bytes) — the old text-mode copy came back with the OS's
+  line endings and made an older raw edit read as "changed since".
+  LIBRARY (`harness/library.py`, `harness/library_models.HarnessLibraryRecord`
+  — a late model, `routes/build_library.py`): after a build turn that FINISHED
+  having changed a file or run a command (read off the ledger), ONE pinned
+  router call on the turn's own model + account + Local only scope, billed to
+  the thread, may mint ONE `lesson` and ONE `layer_edit` (a text file of
+  `.ironjarvis/harness/`), both `proposed`. LEDGER-CHECKED (`check_lines`):
+  every path must be in the SESSION's ledger (journal targets, path args,
+  paths inside a command), every `"…"`/`` `…` `` span verbatim in the turn's
+  transcript (question, reply, steps, the turn's ledger args + outputs); an
+  unsupported line is removed; a lesson with no verified claim is not stored.
+  HONEST MOCK both ways. An edit passes `validate_edit` (the coach's rules,
+  +20% or +400 chars, never/always lines kept) AND Phase 3's validator on a
+  scratch copy of the folder's layer; Accept stale-checks, writes atomically,
+  re-validates the folder's layer and puts the file back if it is invalid.
+  Only ACCEPTED lessons ride `components.compose(library=)` (its own section,
+  promptguard-scanned, ≤ 10 / 2,500 chars, layers gain "library"), read in
+  `chat_turn._build_harness` — before the planner. Mints go through
+  `_mint_for_turn` UNDER `CONVERSATION_WRITE_LOCK` (a turn the rewind cut
+  gets nothing) and a rewind deletes the PROPOSED rows of its turns
+  (`forget_turns`) and cancels their reflections. Setting `build_reflect`;
+  open limit 3; a decline suppresses 14 days; event `library.proposal`
+  (folder NAME only). The suite turns the background reflection off for bare
+  tests (`library.AUTO_REFLECT`, conftest) — a library pin turns it on.
+  REFINE (`harness_bench/refine.py`, `bench-harness run --refine --k K --mode
+  parallel|sequential`, `bench-harness adopt --from … --folder …`): a
+  candidate is a layer folder read through `components.LAYER_SOURCE` (a
+  ContextVar `_build_harness` consults; None everywhere but a probe), so the
+  task copy and the hidden check are the baseline's byte for byte;
+  `JarvisRunner(layer_dir=)` adds `layer_sha256` to its identity ONLY when
+  set (every earlier configuration keeps its key) and records a TRAJECTORY
+  (`trajectory.json`, written after the outside-folder snapshot). Evidence is
+  FILES (README pointer, task.md, per-harness trajectories with the check's
+  verdict + one-line reason — never the check or its output); proposals may
+  write the four text files + `plugins.toml` [[rules]] only ([[checks]] run
+  commands: refused), are validated by Phase 3's validator + the tripwire +
+  promptguard, retried once. Winners pass ≥ the current harness on the tasks
+  BOTH scored; parallel composes per file (`compose_files`), sequential takes
+  the best; adoption writes `<refine>/adopted/` only. `RefineLedger` checks
+  every stage's records against its rollouts, the grand totals and the
+  planned budget, writes `ledger.json`, then raises. SCREEN:
+  `components/harness/RewindControl.tsx` ("Rewind to here" on a message the
+  daemon wrote: press one GETs the preview and says it in words, press two
+  POSTs; a refusal — preview or POST 409 — is listed in the daemon's words;
+  never while a reply runs; after it the session is RE-READ and the question
+  goes back in the box), `LibraryCards.tsx` (Accept / Decline cards, kept
+  lessons with a two-press Forget; read on open, after a reply and at
+  `LIBRARY_REREAD_MS` only — never polled forever), `lib/buildRewind.ts`,
+  `lib/buildLibrary.ts`; the bell maps `library.proposal` to a QUIET row
+  that opens the session; e2e step "Rewind to here" on the demo model. Pins:
+  `tests/test_harness_{rewind,library,refine}_v1370.py`,
+  `dashboard/__tests__/ij-harness-rewind-library-v1370.test.tsx`.
+
 - **The IJ harness is a VIEW of Build built from the chat's own pieces; the
   daemon writes the transcript, and a turn's end is on the record BEFORE its
   last frame** (v1.369.0, Phase 6 of `docs/IJ-HARNESS-PLAN.md`). The canvas

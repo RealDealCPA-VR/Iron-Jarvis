@@ -1957,12 +1957,16 @@ v1.370.0); this section is the whole picture in one place.
 
 **Rewind (v1.370.0)**
 
-- You can rewind a session to before any of its replies. The files its
+- You can rewind a session to before any of its replies: point at a message
+  you sent and press **Rewind to here**. The first press only shows what
+  would happen; the second rewinds. The files its
   replies changed from that point on go back to how they were, newest change
   first, through the same Undo the activity log uses — files the session
   created are removed, files it changed get their earlier content back. The
-  conversation is cut back to before your question, so you can ask again
-  differently. Rewinding to an earlier reply rewinds every later one too.
+  conversation is cut back to before your question, and the question goes
+  back in your message box, so you can ask again differently. Rewinding to
+  an earlier reply rewinds every later one too, and a suggestion from the
+  library (below) that came from a rewound reply goes with it.
 - **All or nothing.** If a file changed after the session changed it (you
   edited it yourself, say), or the saved copy of a file is gone, the rewind
   names the file and nothing is touched — neither the files nor the
@@ -1987,6 +1991,8 @@ v1.370.0); this section is the whole picture in one place.
   what was asked, said or shown in that reply. A line that is not supported
   is removed; a lesson with nothing left, or nothing it can show, is not
   suggested. The demo model never writes a lesson.
+- A suggestion shows as a card in the session, with **Accept** and
+  **Decline**, and the bell tells you when one is made.
 - **Nothing is kept until you accept it.** An accepted lesson is read by
   every later session in that folder, as its own short section of the
   harness. An accepted edit is written into the folder's file at that moment
