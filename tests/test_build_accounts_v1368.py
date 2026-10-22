@@ -415,6 +415,27 @@ async def test_a_limit_after_text_streamed_keeps_its_words_and_still_parks(tmp_p
     assert pin.limit is not None and pin.limit["kind"] == "rate"
 
 
+def test_a_pinned_refusal_never_carries_iron_proxys_hint(tmp_path, fake):
+    """Iron-Proxy 1b1ea71 answers a parked CHOSEN account with a hint to
+    "pick without a profile id" — take the next account. Inside a Build
+    session the user chooses; the refusal is Iron Jarvis's own sentence. The
+    fake answers with the vendored bundle's hint (checked present there)."""
+    bundle = (Path(__file__).resolve().parents[1] / "desktop" / "vendor" / "iron-proxy"
+              / "iron-proxy.mjs").read_text(encoding="utf-8")
+    assert "or pick without a profile id so the next ready ${profile.provider} account is used." in bundle
+    _client_for(fake)
+    fake.states["c-work"].update({"status": "parked", "parkedUntil": iso(600),
+                                  "parkedReason": {"kind": "rate-limit"}})
+    token = P.set_pin(P.AccountPin(profile_id="c-work", ij_provider="claude-cli", title="Work Max"))
+    try:
+        with pytest.raises(ProviderError) as info:
+            accounts.lease("claude-cli")
+    finally:
+        P.reset_pin(token)
+    words = str(info.value)
+    assert "profile id" not in words and "next ready" not in words and "is at its request limit" in words
+
+
 # --------------------------------------------------------------------------- #
 # 2. GET /build/accounts
 # --------------------------------------------------------------------------- #

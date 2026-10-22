@@ -589,10 +589,13 @@ def main(argv: list[str]) -> int:
     delay = float(os.environ.get("FAKE_IRON_PROXY_START_DELAY") or 0)
     if delay:
         time.sleep(delay)
+    # v1.368.0: FAKE_IRON_PROXY_FEATURES (comma list) — a spawned fake that
+    # advertises e.g. Iron-Proxy 1b1ea71's "pick-pinned,plan-usage".
+    listed = [f for f in os.environ.get("FAKE_IRON_PROXY_FEATURES", "").split(",") if f.strip()]
     fake = FakeIronProxy(
         data_dir,
         health_version=os.environ.get("FAKE_IRON_PROXY_HEALTH_VERSION"),
-        features=None if os.environ.get("FAKE_IRON_PROXY_OLD") else ["executor-v1"],
+        features=None if os.environ.get("FAKE_IRON_PROXY_OLD") else (listed or ["executor-v1"]),
     )
     fake.start(port)
     # Prove which env the child got (ELECTRON_RUN_AS_NODE, data dir) — tests read it.
