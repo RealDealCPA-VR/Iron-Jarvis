@@ -3626,6 +3626,38 @@ does not need a bump, stop and bump it.
   that opens the session; e2e step "Rewind to here" on the demo model. Pins:
   `tests/test_harness_{rewind,library,refine}_v1370.py`,
   `dashboard/__tests__/ij-harness-rewind-library-v1370.test.tsx`.
+  REVIEW (v1.370.0), supersedes the "after a build turn" wording above:
+  THE REFLECTION IS RATIONED — on a Claude Code or Codex plan it spends the
+  user's own limits. A finished turn is only NOTED (`note_turn_finished`);
+  the session is reflected on ONCE it has been idle `REFLECT_IDLE_S` (600 s;
+  `note_turn_started` from `start_build_turn` stops the wait) or when it is
+  archived (`flush`) — ONE call over every noted turn (≤ 8,
+  `stretch_evidence`; proposals carry the NEWEST turn, so a rewind to any of
+  them drops it). `account_refusal` (cached reads only) skips while the
+  session has a limit card / wait or Iron-Proxy says parked / signed out /
+  off / ≥ `ACCOUNT_BUSY_PERCENT` (70) of a window — that stretch is KEPT for
+  a later idle period. A stretch with a low-trust turn is never learned
+  from; a demo turn is left out. Prompt ≤ `PROMPT_CHARS` with the notes
+  first and WHOLE (`notes_shown`): an edit only for a file shown whole (a
+  cut copy written back deleted the user's notes); call ≤
+  `REFLECT_TIMEOUT_S`. `GET …/library` carries `reflection {due_at,
+  running, turns}` and `LibraryCards` reads again only then
+  (`nextLibraryRead`). The lifespan calls `library.shutdown()`. Accept
+  refuses a harness folder or file that is a link (`_link_problem`) before
+  any write. REWIND: the plan asks `POST /undo`'s permission engine per tool
+  (a denied revert used to stop the rewind PART WAY); a row at or before
+  the line before the question stays with the earlier turn (a coarse clock
+  gave the previous turn's last row the question's tick); a file a rewound
+  turn made that the user deleted is `already gone`, not a refusal.
+  `write_file`'s `exact` copy: new rows give LF/CRLF back byte for byte,
+  old rows keep the OS-newline write (`test_undo_exact_copy_v1370.py`).
+  REFINE: a rubric failure says only "the answer is wrong"
+  (`evidence_grade_reason`), trajectories are scrubbed of hidden-check text
+  (`grader_marks`/`scrub`) and the tree goes through the tripwire
+  (`HiddenCheckLeak`); a probe's budget mismatch writes the ledger first;
+  reports say one run is a small sample and that "parallel" runs one at a
+  time; `adopt` refuses links and missing folders. Pins:
+  `tests/test_harness_{library,rewind,refine}_review_v1370.py`.
 
 - **The IJ harness is a VIEW of Build built from the chat's own pieces; the
   daemon writes the transcript, and a turn's end is on the record BEFORE its
