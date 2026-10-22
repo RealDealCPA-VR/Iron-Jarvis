@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.368.0 (2026-10-21).*
+holds itself to. Current as of v1.369.0 (2026-10-21).*
 
 ---
 
@@ -1944,8 +1944,8 @@ Step six of the coding screen: you can use it now. Open **Build** and choose
 ## Each coding session runs on the account you picked (v1.368.0)
 
 Step five of the coding screen: accounts. It needs Iron-Proxy turned on
-(Connections → Iron-Proxy) with your Claude Code or Codex accounts in it. The
-screen that shows this arrives in the next release.
+(Connections → Iron-Proxy) with your Claude Code or Codex accounts in it.
+Since v1.369.0, Build's IJ harness view shows it.
 
 - **One account per session.** A new coding session starts on the account
   your list marks **Default**. You can pick another one for that session.
@@ -1971,8 +1971,8 @@ screen that shows this arrives in the next release.
 
 ## Coding sessions keep going without you (v1.367.0)
 
-Step four of the coding screen: the sessions it will show. The screen itself
-arrives in a later release; nothing new appears in Chat.
+Step four of the coding screen: the sessions it shows (Build's IJ harness
+view, since v1.369.0). Nothing new appears in Chat.
 
 - **A coding session belongs to a folder.** It keeps its own conversation,
   its model and its approval setting. It never shows up in your chat list,
@@ -1993,8 +1993,8 @@ arrives in a later release; nothing new appears in Chat.
 
 ## The coding harness speaks each model's language (v1.366.0)
 
-Step three of the coding screen: the engine it will run on. Nothing new
-appears in Chat yet. The screen arrives in a later release.
+Step three of the coding screen: the engine it runs on. Nothing new
+appears in Chat. Build's IJ harness view uses it since v1.369.0.
 
 - **One harness, many models.** For a coding session Jarvis gives the model
   its coding tools (reading, exact edits, patches, search, programs that keep
