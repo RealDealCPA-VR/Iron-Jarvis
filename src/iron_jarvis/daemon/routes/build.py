@@ -130,6 +130,13 @@ class BuildTurnBody(BaseModel):
     attachments: list[str] = Field(default_factory=list, max_length=20)
 
 
+class BuildRewindBody(BaseModel):
+    """``POST /build/sessions/{id}/rewind`` (v1.370.0): rewind TO before the
+    turn ``to`` (that turn and every later one)."""
+
+    to: str = Field(min_length=1, max_length=80)
+
+
 class BuildAnswerBody(BaseModel):
     ask_id: str = Field(min_length=1, max_length=80)
     answer: Any = None
@@ -1093,6 +1100,98 @@ async def account_wait_loop(d: Any, on_tick: Any) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# rewind (v1.370.0, IJ harness Phase 7)
+# --------------------------------------------------------------------------- #
+
+REWIND_RUNNING = "This session is still answering. Stop it before you rewind it."
+
+
+async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
+    """Rewind the session TO before turn ``to`` (``harness/rewind``): every
+    file its turns changed from there on is put back through the undo journal
+    — newest first, each through ``POST /undo``'s own code — and the
+    conversation is cut back to before that turn's question. ALL OR NOTHING:
+    a file that cannot be put back (changed since, no saved copy) is named
+    and NOTHING is touched (409 ``problems``). Refused while a turn runs or
+    starts (the session is held for the rewind, so none can start during it).
+    Returns the answer dict, or a ``JSONResponse`` for a refusal that carries
+    more than a sentence."""
+    from ...core.events import EventType
+    from ...harness import rewind as R
+    from .undo import perform_undo
+
+    platform = d.platform
+    if thread_id in _STARTING or _running_turn(d, thread_id):
+        return JSONResponse(status_code=409, content={"detail": REWIND_RUNNING})
+    _STARTING.add(thread_id)
+    try:
+        row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such Build session")
+        if getattr(row, "archived_at", None) is not None:
+            raise HTTPException(status_code=409, detail=ARCHIVED_SENTENCE)
+        try:
+            plan = await asyncio.to_thread(
+                R.plan, platform.engine, platform.config.home, platform.registry, thread_id, to,
+            )
+        except R.RewindError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+        if plan.problems:
+            return JSONResponse(status_code=409, content={
+                "detail": R.problems_sentence(plan.problems), "rewound": False, **plan.view(),
+            })
+        restored: list[str] = []
+        for action_id in plan.actions:
+            try:
+                await perform_undo(d, action_id)
+            except HTTPException as exc:
+                # The disk moved between the plan and this revert (a window
+                # of milliseconds). Stop HERE and say what already went back;
+                # the conversation is left as it was.
+                files = ", ".join(plan.action_files.get(action_id) or []) or "a change"
+                done = sorted({f for a in restored for f in plan.action_files.get(a) or []})
+                return JSONResponse(status_code=409, content={
+                    "detail": (
+                        f"Rewinding stopped part way: {files} could not be put back ({exc.detail}). "
+                        + (f"Already put back: {', '.join(done)}. " if done else "Nothing was put back. ")
+                        + "The conversation was not changed."
+                    ),
+                    "rewound": False, "partial": bool(restored),
+                    "restored": done, "not_restored": plan.action_files.get(action_id) or [],
+                    **{k: v for k, v in plan.view().items() if k not in ("files",)},
+                })
+            restored.append(action_id)
+        cut = await asyncio.to_thread(
+            S.cut_transcript, platform.engine, thread_id, to, plan.keep, plan.cut_at,
+        )
+        if not cut.get("ok"):
+            return JSONResponse(status_code=409, content={
+                "detail": (
+                    "The files were put back, but the conversation could not be cut back: "
+                    f"{cut.get('reason') or 'it could not be saved'}."
+                ),
+                "rewound": False, "partial": True,
+                "restored": [f["rel"] for f in plan.files], **plan.view(),
+            })
+        bus = getattr(platform, "event_bus", None)
+        if bus is not None:
+            with contextlib.suppress(Exception):
+                await bus.publish(EventType.BUILD_REWOUND, {
+                    "thread_id": thread_id, "to": to, "turns": len(plan.turns),
+                    "files": len(plan.files),
+                }, session_id=S.session_id_for(thread_id))
+        return {
+            "rewound": True, **plan.view(),
+            "note": R.commands_note(plan.commands),
+            "messages": cut.get("count", 0),
+            "mode": cut.get("mode", S.MODE_ACT),
+            "updated_at": cut.get("updated_at"),
+        }
+    finally:
+        _STARTING.discard(thread_id)
+
+
+# --------------------------------------------------------------------------- #
 # routes
 # --------------------------------------------------------------------------- #
 
@@ -1337,6 +1436,34 @@ def register(app: FastAPI, d: Any) -> None:
             return S.rename_folder(engine_of(), S.resolved_folder(body.path), body.name)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    @app.get("/build/sessions/{thread_id}/rewind")
+    async def build_rewind_points(thread_id: str, to: str = "") -> dict[str, Any]:
+        """v1.370.0: without ``to``, every turn of the session as a point it
+        can be rewound to (``{checkpoints: [{turn_id, question, at,
+        continuation, files, commands}]}``, oldest first); with ``to``, what
+        rewinding there would do (files, problems, commands) — nothing is
+        touched."""
+        from ...harness import rewind as R
+
+        platform = d.platform
+        try:
+            if to:
+                plan = await asyncio.to_thread(
+                    R.plan, platform.engine, platform.config.home, platform.registry, thread_id, to,
+                )
+                return {**plan.view(), "note": R.commands_note(plan.commands),
+                        "detail": R.problems_sentence(plan.problems) if plan.problems else ""}
+            points = await asyncio.to_thread(R.checkpoints, platform.engine, thread_id)
+        except R.RewindError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+        return {"checkpoints": points}
+
+    @app.post("/build/sessions/{thread_id}/rewind")
+    async def build_rewind(thread_id: str, body: BuildRewindBody) -> Any:
+        """Rewind the session to before turn ``to`` — files and conversation
+        (:func:`rewind_session`)."""
+        return await rewind_session(d, thread_id, body.to.strip())
 
     @app.post("/build/sessions/{thread_id}/turn")
     async def build_turn(thread_id: str, body: BuildTurnBody):

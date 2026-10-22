@@ -209,6 +209,15 @@ class EventType:
     # resumed. session_id = "build:<thread id>". Names only, never an e-mail.
     BUILD_ACCOUNT_LIMIT = "build.account_limit"
     BUILD_RESUMED = "build.resumed"
+    # IJ harness Phase 7 (v1.370.0). A Build session was REWOUND to before
+    # one of its turns: {thread_id, to, turns, files} (counts only).
+    BUILD_REWOUND = "build.rewound"
+    # The experience library proposed something for a project folder — a
+    # lesson to keep, or an edit to the folder's harness files — that waits
+    # for the user's Accept: {id, kind, folder_name, thread_id, summary}
+    # (summary = the lesson's first line or the file the edit changes; never
+    # the folder's full path). session_id = "build:<thread id>".
+    LIBRARY_PROPOSAL = "library.proposal"
     # Live round-tables (v1.140.0): the agent-thread store persisted one round
     # entry — the user's turn or one participant's answer — so an open
     # Agents-page thread can render the round AS it unfolds (agents/threads.py

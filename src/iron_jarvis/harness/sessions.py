@@ -381,6 +381,69 @@ def append_lines(engine: Any, thread_id: str, lines: list[dict[str, Any]], *,
         return {"ok": False, "updated_at": None, "count": 0}
 
 
+def cut_transcript(engine: Any, thread_id: str, turn_id: str, keep: int, cut_at: Any) -> dict[str, Any]:
+    """REWIND's conversation half (v1.370.0): cut the transcript back to the
+    ``keep`` lines before turn ``turn_id``'s question, in ONE write under the
+    conversation lock. Refuses (``ok`` False, ``reason``) when the line at
+    ``keep`` is no longer that question — the transcript moved since the
+    rewind was planned, and cutting a guessed place would lose the wrong
+    lines.
+
+    The session's own state follows the cut: a plan APPROVED in a rewound
+    turn (``setup.plan.approved_at`` at or after ``cut_at``) goes, and the
+    session is back in plan mode (the only mode its plan door was offered
+    in); an account-limit card and a "Resume when ready" wait go (a
+    continuation would carry on work that was just rewound). A session cut
+    back to nothing is called :data:`NEW_SESSION_TITLE` again, so its next
+    question names it. BLOCKING; never raises."""
+    from ..daemon.routes.chat import _clean_setup
+    from .rewind import _naive_utc
+
+    try:
+        with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+            row = db.get(ChatThreadRecord, str(thread_id or ""))
+            if row is None or not is_build_thread(row):
+                return {"ok": False, "reason": "no such Build session"}
+            msgs = _messages(row)
+            here = msgs[keep] if 0 <= keep < len(msgs) else None
+            if (
+                here is None or here.get("turnId") != turn_id or here.get("role") != "user"
+                or here.get("steer")
+            ):
+                return {"ok": False, "reason": "the conversation changed while it was being rewound"}
+            removed = len(msgs) - keep
+            row.messages_json = json.dumps(msgs[:keep])
+            if keep == 0:
+                row.title = NEW_SESSION_TITLE
+            setup = _setup(row)
+            plan = setup.get("plan")
+            approved = _naive_utc(plan.get("approved_at")) if isinstance(plan, dict) else None
+            cut = _naive_utc(cut_at)
+            changed_setup = False
+            if approved is not None and cut is not None and approved >= cut:
+                setup.pop("plan", None)
+                setup["mode"] = MODE_PLAN
+                changed_setup = True
+            for key in ("account_limit", "account_wait"):
+                if key in setup:
+                    setup.pop(key, None)
+                    changed_setup = True
+            if changed_setup:
+                row.setup_json = _clean_setup(setup)
+            row.updated_at = _next_stamp(row.updated_at)
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            return {
+                "ok": True, "removed": removed, "count": keep,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "mode": MODE_PLAN if _setup(row).get("mode") == MODE_PLAN else MODE_ACT,
+            }
+    except Exception:  # noqa: BLE001 — the route reports it in words
+        log.warning("cutting build session %s's transcript failed", thread_id, exc_info=True)
+        return {"ok": False, "reason": "the conversation could not be saved"}
+
+
 def history(row: Any) -> list[dict[str, str]]:
     """What the next turn's model is shown of the conversation: the user's
     questions (steer notes included) and the replies, role + content only —
