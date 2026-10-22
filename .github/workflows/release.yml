@@ -384,6 +384,13 @@ jobs:
     if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.dry_run == 'false'
     permissions:
       contents: write # the tag, the release, its assets, the updates branch
+    # ONE publish per version at a time (review of v1.370.3). A tag pushed while
+    # the master-push run is still going, or a re-run, can bring two runs here
+    # for the same version; the second waits for the first, then finds the
+    # release public (the step below) and leaves its files alone.
+    concurrency:
+      group: release-publish-v${{ needs.plan.outputs.version }}
+      cancel-in-progress: false
     runs-on: windows-latest
     timeout-minutes: 30
     # v1.353.0 (G37): THE RELEASE PAGE SAYS WHICH FILE TO TAKE AND WHAT TO
@@ -420,11 +427,42 @@ jobs:
           name: installer
           path: installer
 
+      # RE-CHECKED HERE, not only in plan (review of v1.370.3). The plan looked
+      # ~15 minutes earlier, and never looks on a tag run; meanwhile another run
+      # may have published this version. Its files are never overwritten with a
+      # different build: an already-public release skips the tag, the upload
+      # and the publish below, and only the update manifest is written again
+      # (from the release's OWN latest.yml, so it always matches its files). A
+      # leftover DRAFT is not public and is finished as before. An answer that
+      # is neither "public", "draft" nor "not found" stops the job: when it
+      # cannot tell, it does not upload.
+      - name: Is this version already public?
+        id: state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="${{ needs.plan.outputs.version }}"
+          if out="$(gh release view "v$ver" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>&1)"; then
+            if [[ "$out" == "false" ]]; then
+              echo "Release v$ver is already public; another run published it. Its files stay as they are."
+              echo "public=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "public=false" >> "$GITHUB_OUTPUT"
+            fi
+          elif grep -qi "not found" <<< "$out"; then
+            echo "public=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::could not tell whether v$ver is already public: $out"
+            exit 1
+          fi
+
       # Pre-create BOTH the tag and the release, as a DRAFT, before any asset
       # goes up. The release goes public only after every asset is attached.
       # Safe: pushes made with the workflow's GITHUB_TOKEN never trigger new
       # workflow runs.
       - name: Ensure the release tag + release exist
+        if: steps.state.outputs.public == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -444,6 +482,7 @@ jobs:
               --notes "$notes"
 
       - name: Attach the installer files to the draft release
+        if: steps.state.outputs.public == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -463,6 +502,7 @@ jobs:
       # Only NOW does the release go public — with every asset attached. The
       # updater's `latest` therefore always resolves to a COMPLETE release.
       - name: Publish the release (assets are fully uploaded)
+        if: steps.state.outputs.public == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

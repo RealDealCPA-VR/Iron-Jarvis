@@ -80,13 +80,15 @@ def test_the_test_jobs_and_the_build_all_start_from_the_plan():
 def test_the_release_goes_public_only_after_every_asset_is_on_it():
     steps = [s["name"] for s in _wf()["jobs"]["publish"]["steps"] if "name" in s]
     order = [
+        "Is this version already public?",
         "Ensure the release tag + release exist",
         "Attach the installer files to the draft release",
         "Publish the release (assets are fully uploaded)",
         "Publish the update manifest to the updates branch",
     ]
     assert [n for n in steps if n in order] == order
-    attach = next(s for s in _wf()["jobs"]["publish"]["steps"] if s.get("name") == order[1])["run"]
+    attach = next(s for s in _wf()["jobs"]["publish"]["steps"]
+                  if s.get("name") == "Attach the installer files to the draft release")["run"]
     assert "is not on the release" in attach
 
 
@@ -247,3 +249,89 @@ def test_only_the_publish_job_holds_a_token_that_can_write():
             assert perms == {"contents": "write"}
         else:
             assert perms is None or "write" not in str(perms), f"{name} can write: {perms}"
+
+
+# ------------------- publish never overwrites a release that is already public
+
+
+_GUARDED = (
+    "Ensure the release tag + release exist",
+    "Attach the installer files to the draft release",
+    "Publish the release (assets are fully uploaded)",
+)
+
+
+def test_publish_re_checks_before_it_touches_a_release():
+    """The plan looked ~15 minutes earlier (and never on a tag run). A second run
+    for the same version must not replace a public release's files with another
+    build: the check runs first, and the tag, upload and publish steps are
+    skipped when the release is already public."""
+    pub = _wf()["jobs"]["publish"]
+    names = [s.get("name") for s in pub["steps"]]
+    check = names.index("Is this version already public?")
+    for n in _GUARDED:
+        step = pub["steps"][names.index(n)]
+        assert names.index(n) > check, n
+        assert step.get("if") == "steps.state.outputs.public == 'false'", n
+    # The manifest is still written (from the release's OWN latest.yml).
+    manifest = pub["steps"][names.index("Publish the update manifest to the updates branch")]
+    assert "if" not in manifest
+    assert "gh release download" in manifest["run"]
+
+
+def test_one_publish_per_version_at_a_time():
+    conc = _wf()["jobs"]["publish"]["concurrency"]
+    assert "needs.plan.outputs.version" in conc["group"]
+    assert conc["cancel-in-progress"] is False
+
+
+def _state_script() -> str:
+    step = next(s for s in _wf()["jobs"]["publish"]["steps"] if s.get("id") == "state")
+    return step["run"].replace("${{ needs.plan.outputs.version }}", "1.2.3")
+
+
+def _run_state(tmp_path: Path, gh_body: str) -> dict:
+    fake = tmp_path / "bin"
+    fake.mkdir(parents=True)
+    (fake / "gh").write_text(f"#!/usr/bin/env bash\n{gh_body}\n", encoding="utf-8")
+    os.chmod(fake / "gh", 0o755)
+    out = tmp_path / "out.txt"
+    out.write_text("", encoding="utf-8")
+    env = {
+        **os.environ,
+        "PATH": f"{fake}{os.pathsep}{os.environ.get('PATH', '')}",
+        "GITHUB_OUTPUT": str(out),
+        "GITHUB_REPOSITORY": "owner/repo",
+        "LC_ALL": "C.UTF-8",
+    }
+    proc = subprocess.run([_bash(), "-eo", "pipefail", "-c", _state_script()], cwd=tmp_path, env=env,
+                          capture_output=True, text=True, timeout=60)
+    got = dict(line.split("=", 1) for line in out.read_text(encoding="utf-8").splitlines() if "=" in line)
+    got["_code"] = proc.returncode
+    got["_err"] = proc.stdout + proc.stderr
+    return got
+
+
+@needs_bash
+def test_state_a_public_release_is_left_alone(tmp_path):
+    g = _run_state(tmp_path, 'echo "false"')
+    assert g["_code"] == 0 and g["public"] == "true", g["_err"]
+
+
+@needs_bash
+def test_state_a_leftover_draft_is_finished(tmp_path):
+    g = _run_state(tmp_path, 'echo "true"')
+    assert g["_code"] == 0 and g["public"] == "false", g["_err"]
+
+
+@needs_bash
+def test_state_no_release_yet_publishes(tmp_path):
+    g = _run_state(tmp_path, 'echo "release not found" >&2; exit 1')
+    assert g["_code"] == 0 and g["public"] == "false", g["_err"]
+
+
+@needs_bash
+def test_state_an_unreadable_answer_stops_rather_than_uploads(tmp_path):
+    g = _run_state(tmp_path, 'echo "HTTP 502: Bad Gateway" >&2; exit 1')
+    assert g["_code"] != 0 and "could not tell" in g["_err"]
+    assert "public" not in g
