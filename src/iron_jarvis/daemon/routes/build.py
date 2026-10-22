@@ -144,6 +144,32 @@ def _running_turn(d: Any, thread_id: str) -> str:
     return "running" if state.get("running") else ""
 
 
+def _turn_record(engine: Any, turn_id: str) -> "tuple[str, str] | None":
+    """``(thread_id, sse_text)`` of a turn's RECORD (``ChatTurnRecord``), or
+    None when it was never recorded. BLOCKING: call it off the loop."""
+    from ...core.db import session_scope
+    from ...core.models import ChatTurnRecord
+
+    with session_scope(engine) as db:
+        row = db.get(ChatTurnRecord, turn_id)
+        if row is None:
+            return None
+        try:
+            frames = json.loads(row.frames_json or "[]")
+        except ValueError:
+            frames = []
+        text = "".join(
+            _durable.sse(f[0], f[1]) for f in frames
+            if isinstance(f, list) and len(f) == 2
+        )
+        return str(row.thread_id or ""), text
+
+
+async def _replay_once(text: str):
+    if text:
+        yield text
+
+
 def _clean_answer(answer: Any) -> Any:
     """A string, a list of strings, or ``{key: str | [str]}`` — 422 for
     anything else or anything too large."""
@@ -518,6 +544,22 @@ def register(app: FastAPI, d: Any) -> None:
         logs = _turn_logs(d)
         if turn_id:
             existing = logs.get(turn_id)
+            if existing is None:
+                # NEVER RUN TWICE (Phase 4 review): this process forgets a
+                # finished turn after FINISHED_KEEP_S, and a restart forgets
+                # every one — but the RECORD stays (7 days). A turn id that is
+                # on disk was already run: its frames are replayed (the
+                # rejoin route's answer), never a second run that would apply
+                # the same edits and commands again and append the question
+                # twice. Off the loop.
+                recorded = await asyncio.to_thread(_turn_record, platform.engine, turn_id)
+                # A twin request may have started it during that read.
+                existing = logs.get(turn_id)
+                if existing is None and recorded is not None:
+                    rec_thread, text = recorded
+                    if rec_thread != thread_id:
+                        raise HTTPException(status_code=409, detail="That turn belongs to another conversation.")
+                    return _follow_response(_replay_once(text))
             if existing is not None:
                 if existing.thread_id != thread_id:
                     raise HTTPException(status_code=409, detail="That turn belongs to another conversation.")

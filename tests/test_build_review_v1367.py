@@ -37,6 +37,12 @@ from tests.test_build_sessions_v1367 import (
 )
 
 
+def _record_status(app, turn_id: str) -> str:
+    with session_scope(app.state.platform.engine) as db:
+        row = db.get(ChatTurnRecord, turn_id)
+        return row.status if row is not None else ""
+
+
 @pytest.fixture()
 def app(tmp_path):
     return create_app(str(tmp_path / "home"))
@@ -85,3 +91,45 @@ async def test_ask_user_armed_by_name_in_a_chat_turn_refuses_instead_of_hanging(
     tool_msgs = [m for m in script.calls[1]["messages"] if m.role == "tool"]
     assert tool_msgs and tool_msgs[0].content.startswith(T.NOBODY_TO_ASK[:40]), tool_msgs
     assert mcp_turn.PENDING == {} or all(a.kind != "ask_user" for a in mcp_turn.PENDING.values())
+
+
+# --------------------------------------------------------------------------- #
+# 2. a turn id already RUN is never run again — after the in-memory window
+#    or a restart, its record answers
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_turn_id_this_process_forgot_is_replayed_from_its_record_never_run_twice(app, work):
+    """``TurnLogs`` keeps a finished turn ``FINISHED_KEEP_S`` (10 min) and a
+    restart keeps none — before the review, the same ``turn_id`` POSTed after
+    that (a screen resending a request it lost) RAN THE TURN AGAIN: the same
+    edits and commands a second time and the question twice in the
+    transcript. The record (7 days) now answers it."""
+    sid = new_session(app, work)["id"]
+    other = new_session(app, work)["id"]
+    script = wire(app, Script([
+        [ToolCall(id="c1", name="Write", arguments={"file_path": "made.py", "content": "y = 1\n"})],
+        "Made it.",
+    ]))
+    status, raw = await open_turn(app, sid, {"text": "make made.py", "turn_id": "rv-once"})
+    assert status == 200 and frames_of(raw)[-1][0] == "done"
+    calls_after_first = len(script.calls)
+    lg = await until(lambda: turn_log(app, "rv-once"))
+    await until(lambda: lg.status != "running")
+    await until(lambda: any(m.get("role") == "assistant" for m in messages_of(app, sid)))
+    await until(lambda: _record_status(app, "rv-once") == "done")
+    # The process forgets it (the 10-minute window passed, or a restart).
+    app.state.platform.turn_logs._logs.pop("rv-once")
+    (work / "made.py").unlink()
+
+    status, raw = await open_turn(app, sid, {"text": "make made.py", "turn_id": "rv-once"})
+    assert status == 200
+    frames = frames_of(raw)
+    assert frames and frames[-1][0] == "done", "the record's frames are replayed"
+    assert len(script.calls) == calls_after_first, "the model was asked again: the turn RAN TWICE"
+    assert not (work / "made.py").exists(), "the turn's edit was applied a second time"
+    questions = [m for m in messages_of(app, sid) if m.get("role") == "user" and m.get("turnId") == "rv-once"]
+    assert len(questions) == 1, "the question was appended twice"
+    # Another session cannot claim that turn id.
+    status, body = await open_turn(app, other, {"text": "x", "turn_id": "rv-once"})
+    assert status == 409, body
