@@ -95,6 +95,7 @@ import sys
 import tempfile
 import threading
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -404,6 +405,7 @@ def _new_work() -> Path:
     default = work / "profile" / "Default"
     default.mkdir(parents=True, exist_ok=True)
     (work / "downloads").mkdir(exist_ok=True)
+    (work / "tmp").mkdir(exist_ok=True)  # the driver's and Edge's temp folder
     (default / "Preferences").write_text(
         json.dumps({"download": {
             "default_directory": str(work / "downloads"),
@@ -490,6 +492,40 @@ def _local_only_now() -> bool:
         return bool(current_scope().on)
     except Exception:  # noqa: BLE001
         return True
+
+
+#: The temp folder the NEXT Playwright driver started in this context gets
+#: (:func:`_driver_env_hook`); "" = the daemon's own.
+_DRIVER_TEMP: ContextVar[str] = ContextVar("ij_page_driver_temp", default="")
+
+
+def _driver_env_hook() -> None:
+    """v1.376.0 review: Playwright's driver makes a ``playwright-artifacts-*``
+    folder in ITS temp folder for each browser, and a browser that crashed or
+    a daemon that was killed left it in the PC's temp folder for good. The
+    driver's environment is Playwright's ``get_driver_env()`` (a copy of the
+    daemon's), so it is wrapped ONCE to give the driver — and so Edge — the
+    browser's own throwaway folder as TEMP/TMP while :data:`_DRIVER_TEMP` is
+    set (only around this module's start; computer use's Playwright and
+    every other caller see Playwright's own environment unchanged). Never
+    the daemon's ``os.environ``: other threads start children from it."""
+    try:
+        from playwright._impl import _transport  # noqa: PLC0415 — lazy
+    except Exception:  # noqa: BLE001 — no Playwright: nothing starts anyway
+        return
+    current = _transport.get_driver_env
+    if getattr(current, "_ij_temp", False):
+        return
+
+    def get_driver_env() -> dict:
+        env = current()
+        temp = _DRIVER_TEMP.get()
+        if temp:
+            env["TEMP"] = env["TMP"] = temp
+        return env
+
+    get_driver_env._ij_temp = True  # type: ignore[attr-defined]
+    _transport.get_driver_env = get_driver_env
 
 
 def idle_close_s() -> float:
@@ -669,8 +705,13 @@ class EdgeBackend:
     async def start(self) -> None:
         from playwright.async_api import async_playwright  # noqa: PLC0415 — lazy
 
-        self._cm = async_playwright()
-        self._pw = await self._cm.start()
+        _driver_env_hook()
+        token = _DRIVER_TEMP.set(str(self._work / "tmp"))
+        try:
+            self._cm = async_playwright()
+            self._pw = await self._cm.start()
+        finally:
+            _DRIVER_TEMP.reset(token)
         self._driver = _driver_pid(self._cm)
         if self._driver:
             # BEFORE the driver is asked to launch anything: every process it

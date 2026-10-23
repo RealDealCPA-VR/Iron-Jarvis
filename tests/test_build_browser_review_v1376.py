@@ -9,10 +9,12 @@ fake browser of ``tests/test_build_browser_v1376.py``.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import http.server
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -506,3 +508,57 @@ async def test_real_edge_no_job_for_the_driver_means_no_browser(monkeypatch):
     finally:
         b.shutdown()
         site.close()
+
+
+# --------------------------------------------------------------------------- #
+# Playwright's own temp folder lives inside the browser's throwaway folder
+# --------------------------------------------------------------------------- #
+
+
+@REAL
+@pytest.mark.timeout(120)
+async def test_real_edge_playwrights_artifacts_folder_never_lands_in_the_pcs_temp_folder():
+    """Item 4 (review): Playwright's driver makes a ``playwright-artifacts-*``
+    folder in ITS temp folder for every browser; a browser that crashed or a
+    daemon that was killed left it in the PC's temp folder for good (nothing
+    swept it; measured three such leftovers during this review). The driver
+    (and so Edge) now gets the browser's throwaway folder as its temp
+    folder, so the leftover goes with the throwaway folder (and the stale
+    sweep) — never into the PC's temp folder."""
+    import glob
+    import os
+    import tempfile
+
+    import psutil
+
+    site = Site({"/": "<title>Shop</title>shop"})
+    pattern = os.path.join(tempfile.gettempdir(), "playwright-artifacts-*")
+    before = set(glob.glob(pattern))
+    b = _browsers()
+    key = "build:artifacts"
+    work = None
+    killed = False
+    try:
+        await b.open(key, site.base, preview=site.base)
+        backend = b._sessions[key].backend
+        work = b._sessions[key].work
+        env = psutil.Process(backend._driver).environ()
+        assert Path(env["TEMP"]).resolve().is_relative_to(work.resolve()), env.get("TEMP")
+        assert list(work.glob("**/playwright-artifacts-*")), "the driver's folder is in the throwaway one"
+        # What a KILLED daemon does: the job's only handle closes, no clean-up.
+        pids = b.pids(key)
+        backend._job.close()
+        killed = True
+        end = time.monotonic() + 15
+        while time.monotonic() < end and any(psutil.pid_exists(p) for p in pids):
+            await asyncio.sleep(0.2)
+        assert set(glob.glob(pattern)) == before
+    finally:
+        if killed:  # nothing of it runs: forget it rather than "close" it
+            b._sessions.pop(key, None)
+            b._kills.pop(key, None)
+        b.shutdown()
+        site.close()
+        if work is not None:
+            with contextlib.suppress(Exception):
+                PB._remove_work(work)
