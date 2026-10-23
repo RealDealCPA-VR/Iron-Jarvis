@@ -164,6 +164,15 @@ NOT_LOCAL = (
 )
 NO_PAGE = "No page is open in the agent's browser. Call page_open with the page's address first."
 STOPPED = "Stopped: you pressed Stop, so the agent's browser was closed."
+#: v1.376.0 review: Edge closed under the agent (by the user, a crash).
+DIED = (
+    "The agent's browser had stopped (Edge was closed or crashed), so it was closed. "
+    "Call page_open to start a fresh one."
+)
+FRESH_AFTER_DIED = (
+    "The agent's browser had stopped (Edge was closed or crashed), so a fresh one was "
+    "opened: what the page held before (typed text, a sign-in) is gone."
+)
 BUSY = (
     "The agent's browser is still busy with another action in this session; "
     f"it did not free up within {LOCK_WAIT_S:g} s. Try again."
@@ -475,16 +484,35 @@ _WORDS_OF_ELEMENTS = """
 }
 """
 
+#: The facts of the field typing will REALLY reach. Playwright's fill() does
+#: not type into the element it was given when that is not a field: it
+#: follows it (``retarget(node, 'follow-label')`` in Playwright's injected
+#: script) — from inside a button-like element to it, and from a <label>, or
+#: anything inside one, to the label's control. v1.376.0 review: the facts were
+#: read off the element GIVEN, so a target naming the <label> of a password
+#: field (or a span inside it) read as "no type, no words" and the password
+#: was typed. The same walk is made here, and the words of both elements are
+#: kept.
 _FIELD_FACTS = """
 (el) => {
-  const words = [el.getAttribute('aria-label'),
-    el.labels && el.labels[0] && el.labels[0].innerText,
-    el.getAttribute('placeholder'), el.getAttribute('name'), el.id, el.getAttribute('title')]
-    .filter(Boolean).join(' ');
+  let t = el;
+  if (!t.matches('input, textarea, select') && !t.isContentEditable) {
+    t = t.closest('button, [role=button], [role=checkbox], [role=radio]') || t;
+  }
+  if (!t.matches('a, input, textarea, button, select, [role=link], [role=button], [role=checkbox], [role=switch], [role=radio]')
+      && !t.isContentEditable) {
+    const lab = t.closest('label');
+    if (lab && lab.control) t = lab.control;
+  }
+  const wordsOf = (e) => [e.getAttribute('aria-label'),
+    e.labels && e.labels[0] && e.labels[0].innerText,
+    e.getAttribute('placeholder'), e.getAttribute('name'), e.id, e.getAttribute('title')];
+  const words = [...wordsOf(t), ...(t === el ? [] : wordsOf(el))].filter(Boolean).join(' ');
+  const kind = (t.getAttribute('type') || (t.tagName === 'INPUT' ? t.type : '') || '').toLowerCase();
   return {
-    tag: el.tagName.toLowerCase(),
-    type: (el.getAttribute('type') || '').toLowerCase(),
-    autocomplete: (el.getAttribute('autocomplete') || '').toLowerCase(),
+    tag: t.tagName.toLowerCase(),
+    type: kind,
+    autocomplete: (t.getAttribute('autocomplete') || '').toLowerCase(),
     words: words.toLowerCase(),
   };
 }
@@ -554,6 +582,9 @@ class EdgeBackend:
         #: Pages being sent away by the rules (``_leave``), awaited by
         #: :meth:`quiet` before the return to the last allowed page.
         self._leaving: set[asyncio.Task] = set()
+        #: The context closed on its own (Edge exited: the user closed it, a
+        #: crash) — v1.376.0 review: the browser is then replaced, never used.
+        self._ctx_closed = False
 
     # -- life ----------------------------------------------------------------
     async def start(self) -> None:
@@ -582,6 +613,7 @@ class EdgeBackend:
             timeout=START_TIMEOUT_S * 1000,
         )
         await self._ctx.route("**/*", self._route)
+        self._ctx.on("close", lambda *_a: setattr(self, "_ctx_closed", True))
         self._ctx.on("page", self._adopt_page)
         for page in list(self._ctx.pages):
             self._adopt_page(page)
@@ -649,6 +681,19 @@ class EdgeBackend:
 
     def pids(self) -> list[int]:
         return sorted(set(self._members()) | self._known)
+
+    def alive(self) -> bool:
+        """False once Edge or the driver has gone (closed by the user, a
+        crash): the manager then replaces this browser (v1.376.0 review)."""
+        if self._killed or self._ctx is None or self._ctx_closed:
+            return False
+        proc = self._procs.get(self._driver)
+        if proc is not None:
+            try:
+                return bool(proc.is_running())
+            except Exception:  # noqa: BLE001
+                return False
+        return True
 
     # -- events --------------------------------------------------------------
     def _adopt_page(self, page: Any) -> None:
@@ -733,10 +778,29 @@ class EdgeBackend:
             pass
 
     async def _on_dialog(self, dialog: Any) -> None:
+        """Who answers a page's dialog (v1.376.0 review DECISION): never the
+        user's yes. A confirm or a prompt is answered Cancel, an alert is
+        closed — and a page that asks before it is LEFT (``beforeunload``,
+        unsaved changes) is left: only a navigation the agent's own action
+        started (or the rules' return to an allowed page) raises it, and
+        answering "stay" cancelled that navigation — page_open then failed
+        with words about a download and the agent could not leave the page.
+        Each one is listed for page_read, in words."""
+        kind = str(getattr(dialog, "type", "") or "")
+        message = str(getattr(dialog, "message", "") or "")
+        if kind == "beforeunload":
+            words = "the page asked before leaving it (unsaved changes?); the agent's browser left it"
+        elif kind == "alert":
+            words = f"alert: {message} (closed)"
+        else:
+            words = f"{kind or 'dialog'}: {message} (answered Cancel: the agent's browser never says yes for you)"
         with contextlib.suppress(Exception):
-            self._note("dialog", f"{dialog.type}: {dialog.message} (dismissed)")
+            self._note("dialog", words)
         with contextlib.suppress(Exception):
-            await dialog.dismiss()
+            if kind == "beforeunload":
+                await dialog.accept()
+            else:
+                await dialog.dismiss()
 
     def _on_navigated(self, page: Any, frame: Any) -> None:
         """A page that ARRIVED somewhere the rules would not open (a server
@@ -808,13 +872,13 @@ class EdgeBackend:
         return ""
 
     async def goto(self, url: str, timeout_s: float) -> None:
-        page = self._page
-        if page is None or page.is_closed():
-            # Every page closed (a popup that closed itself and the page that
-            # opened it): opening an address makes a fresh one.
-            page = await self._ctx.new_page()
-            self._adopt_page(page)
         try:
+            page = self._page
+            if page is None or page.is_closed():
+                # Every page closed (a popup that closed itself and the page
+                # that opened it): opening an address makes a fresh one.
+                page = await self._ctx.new_page()
+                self._adopt_page(page)
             await page.goto(url, wait_until="load", timeout=timeout_s * 1000)
         except Exception as exc:  # noqa: BLE001
             raise BrowserProblem(playwright_words(exc, what=f"Opening {where(url)}", limit_s=timeout_s)) from None
@@ -938,6 +1002,18 @@ class EdgeBackend:
         return await page.screenshot(type="png", timeout=10_000)
 
 
+def _alive(backend: Any) -> bool:
+    """Whether a session's browser still works (a backend with no ``alive``
+    — a test's fake — always does)."""
+    probe = getattr(backend, "alive", None)
+    if probe is None:
+        return True
+    try:
+        return bool(probe())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _tree_of(pid: int) -> list[int]:
     if not pid:
         return []
@@ -1043,6 +1119,9 @@ class _Session:
     dropped: dict[str, int] = field(default_factory=lambda: {"console": 0, "failed": 0, "dialog": 0})
     #: Navigations the rules stopped since the last action result.
     blocked: list[str] = field(default_factory=list)
+    #: Sentences the NEXT action result opens with, once (a browser started
+    #: fresh after Edge died) — v1.376.0 review.
+    notes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1284,6 +1363,18 @@ class AgentBrowsers:
 
     async def _session(self, key: str, *, create: bool, background: bool) -> "_Session | None":
         sess = self._sessions.get(key)
+        if sess is not None and not sess.lock.locked() and not _alive(sess.backend):
+            # v1.376.0 review: Edge went away under the agent (closed by the
+            # user, a crash). Its job, its folder and its entry go — never a
+            # browser that fails every call until the idle timer — and the
+            # next page_open starts a fresh one, saying so.
+            await self._close(key, "crashed")
+            if not create:
+                raise BrowserProblem(DIED)
+            fresh = await self._session(key, create=True, background=background)
+            if fresh is not None:
+                fresh.notes.append(FRESH_AFTER_DIED)
+            return fresh
         if sess is not None or not create:
             return sess
         gate = self._starting.setdefault(key, asyncio.Lock())
@@ -1327,6 +1418,20 @@ class AgentBrowsers:
                 raise BrowserProblem(
                     f"The agent's browser did not answer within {limit + HARD_BOUND_EXTRA_S:g} s, "
                     "so it was closed. Call page_open to start a fresh one."
+                ) from None
+            except BrowserProblem:
+                raise
+            except Exception as exc:  # noqa: BLE001 — v1.376.0 review: always words
+                # A Playwright error outside an action's own words (Edge went
+                # away mid-action: "Target page, context or browser has been
+                # closed"). A dead browser is closed so the next page_open
+                # starts a fresh one; anything else is its first line.
+                if not _alive(sess.backend):
+                    with contextlib.suppress(Exception):
+                        await asyncio.shield(asyncio.ensure_future(self._close(key, "crashed")))
+                    raise BrowserProblem(DIED) from None
+                raise BrowserProblem(
+                    playwright_words(exc, what="The agent's browser", limit_s=limit)
                 ) from None
         finally:
             sess.last_used = time.monotonic()
@@ -1421,7 +1526,8 @@ class AgentBrowsers:
             sess.last_good = url
         out.url = url
         out.title = await b.title()
-        out.blocked = list(sess.blocked)
+        out.blocked = [*sess.notes, *sess.blocked]
+        sess.notes.clear()
         out.new_console = len(sess.console)
         out.new_failed = len(sess.failed)
         picture = b""
