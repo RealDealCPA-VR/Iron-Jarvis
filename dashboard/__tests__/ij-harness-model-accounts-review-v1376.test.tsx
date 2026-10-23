@@ -310,6 +310,30 @@ describe("the session's own account is listed even when its vendor's list is emp
   });
 });
 
+/* ------------------------------------------------- 4. over 100% used */
+
+describe("a window over its limit", () => {
+  it("never reads 'Near its limit'", () => {
+    const view = decodeAccounts({
+      claude: [acct({ id: "o", name: "Over", status: "usage", usage: { percent: 112, window: "5 hours", window_mins: 300, resets_at: null } })],
+      codex: [],
+      iron_proxy: PROXY_ON,
+    });
+    const s = accountMenuState(view!.groups.claude[0]);
+    expect(s.text).not.toMatch(/near/i);
+    // The decoder caps the vendor's percent at 100.
+    expect(s.text).toBe("At its limit · 100% used · 5 hours");
+    expect(s.warn).toBe(true);
+    // 99% is still near.
+    const near = decodeAccounts({
+      claude: [acct({ id: "n", name: "N", status: "usage", usage: { percent: 99, window: "5 hours", window_mins: 300, resets_at: null } })],
+      codex: [],
+      iron_proxy: PROXY_ON,
+    });
+    expect(accountMenuState(near!.groups.claude[0]).text).toBe("Near its limit · 99% used · 5 hours");
+  });
+});
+
 /* ------------------------------------------------- the 5 s re-read */
 
 describe("the account list is re-read only while the menu is open", () => {

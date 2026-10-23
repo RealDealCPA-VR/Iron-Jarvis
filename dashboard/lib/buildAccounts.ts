@@ -360,6 +360,13 @@ export function accountMenuState(a: BuildAccount, now: Date = new Date()): Accou
   if (line.kind === "usage" && typeof line.percent === "number") {
     const pct = Math.round(line.percent);
     const used = a.usage?.window ? `${pct}% used · ${a.usage.window}` : `${pct}% used`;
+    // Review: a window the vendor says is all used is AT its limit, not near
+    // it (the decoder caps a percent at 100). Iron-Proxy has not parked the
+    // account yet, so it is still pickable; the words say what the next turn
+    // will most likely meet.
+    if (line.percent >= 100) {
+      return { kind: "limit", text: `At its limit · ${used}`, percent: line.percent, warn: true };
+    }
     return line.percent >= NEAR_LIMIT_PERCENT
       ? { kind: "near", text: `Near its limit · ${used}`, percent: line.percent, warn: true }
       : { kind: "usage", text: used, percent: line.percent, warn: false };
