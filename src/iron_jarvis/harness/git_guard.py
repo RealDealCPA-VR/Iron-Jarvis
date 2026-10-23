@@ -12,7 +12,9 @@ exec_command map onto them), so while a turn works on a branch
   EVERY posture (auto-approve included) and past every grant — and so does
   git that THROWS AWAY work not committed yet (``reset --hard``, ``clean
   -f``, ``checkout -- <paths>``, ``restore``, ``stash drop|clear``, ``switch
-  --discard-changes``) — each tool's ``spend_check`` answers
+  --discard-changes``) and ``git config`` that WRITES a setting (a
+  worktree's repository config is the one the user's checkout reads) — each
+  tool's ``spend_check`` answers
   ``SpendCheck(ask=True, once_only=True)``: the stream lane's card offers
   "Allow once" and Deny only, and the POST lane, which cannot show a card,
   refuses (``chat_turn.spend_not_asked_invoke_kwargs``, lock-step);
@@ -67,7 +69,7 @@ class GitAct:
     """One git action found in a command. CARDED (asks every time):
     ``commit`` | ``push`` | ``pr`` (gh pr create / merge) | ``gh`` (another
     gh command that changes something) | ``discard`` (throws away work not
-    committed). REFUSED: ``force`` (a force push) | ``delete_remote`` (a
+    committed) | ``config`` (``git config`` that writes a setting). REFUSED: ``force`` (a force push) | ``delete_remote`` (a
     push that deletes a remote branch) | ``rewrite`` (a history rewrite) |
     ``delete_branch`` (deleting or force-moving a branch or tag) |
     ``worktree`` (``worktree remove|prune|move``) | ``delete_repo``."""
@@ -179,6 +181,40 @@ def _reset_act(args: list[str]) -> "str | None":
     return None
 
 
+_CONFIG_WRITES = frozenset({"--unset", "--unset-all", "--add", "--replace-all", "--rename-section",
+                            "--remove-section", "--edit", "-e"})
+_CONFIG_READS = frozenset({"--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l",
+                           "--get-color", "--get-colorbool"})
+_CONFIG_VALUED = frozenset({"-f", "--file", "--blob", "--type", "--default", "--comment", "--value"})
+
+
+def _config_writes(args: list[str]) -> bool:
+    """``git config`` that WRITES a setting (``<name> <value>``, ``set``,
+    ``--unset``, …) rather than reading one. A worktree's repository config
+    is the one the user's own checkout reads (their name, their remotes)."""
+    low = [a.lower() for a in args]
+    if any(a in _CONFIG_WRITES for a in low):
+        return True
+    if any(a in _CONFIG_READS for a in low):
+        return False
+    words: list[str] = []
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a.lower() in _CONFIG_VALUED:
+            skip = True
+            continue
+        if not a.startswith("-"):
+            words.append(a)
+    if words and words[0].lower() in ("set", "unset", "rename-section", "remove-section", "edit"):
+        return True
+    if words and words[0].lower() in ("get", "list"):
+        return False
+    return len(words) >= 2
+
+
 def _git_act(sub: str, args: list[str]) -> "GitAct | None":
     low = [a.lower() for a in args]
     short = _short_flags(args)
@@ -227,6 +263,8 @@ def _git_act(sub: str, args: list[str]) -> "GitAct | None":
         return None if staged_only else GitAct("discard")
     if sub == "stash" and args and low[0] in ("drop", "clear"):
         return GitAct("discard")
+    if sub == "config" and _config_writes(args):
+        return GitAct("config")
     return None
 
 
@@ -335,6 +373,9 @@ def card_words(acts: list[GitAct]) -> str:
     if "discard" in kinds:
         return (f"This throws away changes on {branch} that are not committed yet. It asks you "
                 "every time.")
+    if "config" in kinds:
+        return ("This changes a git setting (the repository's, which your own checkout reads too, "
+                "or yours). It asks you every time.")
     return f"This makes a commit on {branch}. Every commit asks you first."
 
 
@@ -358,7 +399,7 @@ force_refusal = refusal
 def guard_check(command: Any) -> Any:
     """``SpendCheck`` for a command tool's call while the turn works on a
     branch: ask once, every time, for a commit / push / pull request /
-    GitHub change / discarding work; ``ask=False`` for a command the tool
+    GitHub change / discarding work / a git setting; ``ask=False`` for a command the tool
     REFUSES (so no lane shows a card for a call that will not run — the
     tool's ``execute`` refuses it before anything runs); None for anything
     else and whenever the turn has no branch."""

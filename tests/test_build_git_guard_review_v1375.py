@@ -122,6 +122,16 @@ def _count(wt: Path) -> int:
     # GitHub changes (carded)
     ("gh pr close 7", ["gh"]),
     ("gh api -X DELETE repos/a/b/git/refs/heads/x", ["gh"]),
+    # a git setting the user's checkout shares (carded)
+    ("git config user.email agent@example.com", ["config"]),
+    ("git config --global user.name Agent", ["config"]),
+    ("git config --unset user.email", ["config"]),
+    ("git config set core.autocrlf false", ["config"]),
+    ("git config -f other.cfg x.y z", ["config"]),
+    ("git config user.email", []),
+    ("git config --get user.email", []),
+    ("git config -l", []),
+    ("git config get user.name", []),
     # left alone
     ("git status && git log --oneline", []),
     ("git checkout main", []),
@@ -341,3 +351,17 @@ async def test_a_helpers_commit_asks_once_and_its_rewrite_is_refused_with_no_ask
     # The helper is told it works on the session's branch, like the session.
     helper_prompt = next(c["system"] for c in model.calls if not c["main"])
     assert f"own git branch, {view['git']['branch']}" in helper_prompt
+
+
+async def test_a_git_setting_the_users_checkout_shares_cards_once_and_denied_changes_nothing(app, repo):
+    view = await new_branch_session(app, repo, approval_mode="yolo")
+    sid = view["id"]
+    wire(app, Script([[ToolCall(id="g1", name="Bash",
+                                arguments={"command": f"{GITX} config user.email agent@example.com"})], "Done."]))
+    drop, task = await _start(app, sid, "set my email", "gr-config")
+    card = (await until(lambda: [d for e, d in turn_frames(app, "gr-config") if e == "approval"]))[0]
+    assert card["once_only"] is True and "git setting" in card["cost_note"]
+    assert (await _asgi_post(app, f"/chat/approvals/{card['id']}", {"decision": "deny"}))[0] == 200
+    await _finish(app, "gr-config", drop, task)
+    # The worktree shares the repository's config with the user's checkout.
+    assert git("config", "--get", "user.email", cwd=repo) == "dev@example.com"
