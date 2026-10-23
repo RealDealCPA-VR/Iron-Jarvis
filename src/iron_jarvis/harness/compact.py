@@ -578,9 +578,12 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
             said = limit_words(pin.limit)
             if said:
                 raise CompactRefused(f"{said} {NOTHING_SUMMARIZED}", 409)
-        from ..providers.failure_words import friendly_error
+        from ..providers.failure_words import SURFACE_BUILD, friendly_error
 
-        words = friendly_error(err, provider=provider)
+        # v1.378.0 review: read OUTSIDE the turn's Build surface, so it is
+        # named here — a refusal's way out in a session is Rewind / a new
+        # session, never the chat's "edit an earlier message".
+        words = friendly_error(err, provider=provider, surface=SURFACE_BUILD)
         said = ". ".join(
             p.strip().rstrip(".") for p in (words.get("title", ""), words.get("fix", "")) if p.strip()
         )

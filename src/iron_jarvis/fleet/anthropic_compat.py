@@ -54,6 +54,7 @@ from ..providers.adapters.base import (
     LLMMessage,
     LLMResponse,
     ProviderError,
+    ProviderRefusal,
     ToolCall,
     provider_error_from_response,
 )
@@ -168,6 +169,26 @@ def _finish(stop_reason: Any) -> str:
     if stop_reason in ("max_tokens", "model_context_window_exceeded"):
         return "max_tokens"
     return "stop"
+
+
+def _refusal(
+    provider: str, stop_details: Any, *, partial: bool
+) -> ProviderRefusal:
+    """The typed refusal for a Messages answer whose ``stop_reason`` is
+    ``"refusal"`` (v1.378.0 review). A LiteLLM proxy passes Anthropic's own
+    answer through for a Claude model, so the shape arrives here unchanged:
+    ``stop_details`` (``{type, category, explanation}``, category may be null)
+    is read as Anthropic sends it, never guessed. NOT claimed to judge the
+    whole conversation: what stands behind a proxy is not known here, so the
+    words say "may decline" (``whole_conversation`` False)."""
+    details = stop_details if isinstance(stop_details, dict) else {}
+    category = details.get("category") if isinstance(details.get("category"), str) else ""
+    explanation = details.get("explanation") if isinstance(details.get("explanation"), str) else ""
+    said = f"{provider}: the endpoint's safety check declined to answer (stop_reason refusal"
+    said += f", category {category})" if category else ")"
+    return ProviderRefusal(
+        said, provider=provider, category=category, explanation=explanation, partial=partial,
+    )
 
 
 def _int(value: Any) -> int:
@@ -484,6 +505,10 @@ class AnthropicFleetAdapter(LLMAdapter):
                         arguments=_tool_input(block.get("input")),
                     )
                 )
+        if data.get("stop_reason") == "refusal":
+            # v1.378.0 review: never an empty reply. MIRROR NOTE (lock-step):
+            # stream() below.
+            raise _refusal(self.provider, data.get("stop_details"), partial=bool("".join(text).strip()))
         finish = _finish(data.get("stop_reason"))
         if calls and finish == "stop":
             finish = "tool_use"
@@ -564,6 +589,7 @@ class AnthropicFleetAdapter(LLMAdapter):
             blocks: dict[int, dict[str, Any]] = {}
             usage: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0}
             stop_reason: Any = None
+            stop_details: Any = None
             saw_sse = False
             finished = False
             raw_tail: list[str] = []
@@ -639,6 +665,8 @@ class AnthropicFleetAdapter(LLMAdapter):
                     delta = event.get("delta") or {}
                     if isinstance(delta, dict) and delta.get("stop_reason"):
                         stop_reason = delta.get("stop_reason")
+                    if isinstance(delta, dict) and delta.get("stop_details") is not None:
+                        stop_details = delta.get("stop_details")
                     usage = _usage(event.get("usage"), usage)
                 elif kind == "message_stop":
                     finished = True
@@ -664,6 +692,10 @@ class AnthropicFleetAdapter(LLMAdapter):
                     f"{self.provider} stopped sending before the reply was finished"
                 )
 
+        if stop_reason == "refusal":
+            # v1.378.0 review: the streamed words stay the user's (`partial`).
+            # MIRROR NOTE (lock-step): _parse above.
+            raise _refusal(self.provider, stop_details, partial=bool("".join(text).strip()))
         calls: list[ToolCall] = []
         for idx in sorted(blocks):
             slot = blocks[idx]

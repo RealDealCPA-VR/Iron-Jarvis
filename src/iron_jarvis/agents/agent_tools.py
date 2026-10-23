@@ -551,8 +551,15 @@ class SpawnAgentTool(Tool):
                     pass
                 raise  # the caller's cancellation keeps propagating
             except Exception as exc:  # noqa: BLE001
+                from ..providers.failure_words import refusal_reason
+
+                # v1.378.0 review: a REFUSED child tells its parent so in the
+                # run's words (MIRROR NOTE, lock-step: delegate_tool).
+                refused = refusal_reason(exc)
                 error = (
-                    f"spawned agent '{agent_name}' crashed: "
+                    f"spawned agent '{agent_name}' could not finish: {refused}"
+                    if refused
+                    else f"spawned agent '{agent_name}' crashed: "
                     f"{type(exc).__name__}: {exc}"
                 )
                 await orch._finalize_failed(child_session, exc)

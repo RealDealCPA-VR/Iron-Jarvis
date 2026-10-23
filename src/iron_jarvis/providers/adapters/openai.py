@@ -29,6 +29,7 @@ from .base import (
     LLMMessage,
     LLMResponse,
     ProviderError,
+    ProviderRefusal,
     ToolCall,
     provider_error_from_response,
 )
@@ -147,6 +148,45 @@ def _reasoning_of(part: Any) -> str:
 _RESPONSES_REASONING_DELTAS = frozenset(
     {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}
 )
+
+
+def _content_refusal(
+    *, finish: Any = None, refusal: Any = None, text: str = "", calls: bool = False,
+    incomplete_reason: Any = None,
+) -> ProviderRefusal | None:
+    """The typed refusal for an OpenAI-shaped answer the provider declined
+    (v1.378.0), read off the fields OpenAI documents — never guessed:
+
+    * Chat Completions ``finish_reason == "content_filter"`` ("content was
+      omitted due to a flag from our content filters") — any text that came
+      first is kept (``partial``);
+    * a ``refusal`` string on the message (Chat Completions) or a
+      ``{"type": "refusal"}`` output part (Responses) with NO answer text and
+      no tool call — the model declined; its words ride ``explanation`` (the
+      technical fold only);
+    * Responses ``incomplete_details.reason == "content_filter"``.
+
+    No category: OpenAI sends none on these fields. Never the whole
+    conversation (``whole_conversation`` False — it declined THIS answer).
+    None otherwise. Never raises."""
+    try:
+        words = refusal.strip() if isinstance(refusal, str) else ""
+        if finish == "content_filter" or incomplete_reason == "content_filter":
+            why = (
+                "finish_reason content_filter" if finish == "content_filter"
+                else "incomplete_details.reason content_filter"
+            )
+        elif words and not (text or "").strip() and not calls:
+            why = "the message carries a refusal"
+        else:
+            return None
+        return ProviderRefusal(
+            f"the provider's safety check declined to answer ({why})",
+            explanation=words,
+            partial=bool((text or "").strip()),
+        )
+    except Exception:  # noqa: BLE001 — a malformed field is read as no refusal
+        return None
 
 
 def _incomplete_for_tokens(response: Any) -> bool:
@@ -316,6 +356,15 @@ class OpenAIAdapter(LLMAdapter):
         # v1.323.0: "length" is the server stopping the answer for running out
         # of output tokens — `max_tokens`, so the chat lanes can say so.
         raw_finish = choice.get("finish_reason")
+        # v1.378.0: a content filter / a refusal is a typed error, never an
+        # empty (or silently cut) reply. Shared by complete() and the stream
+        # (which rebuilds its message through here).
+        refused = _content_refusal(
+            finish=raw_finish, refusal=message.get("refusal"),
+            text=text if isinstance(text, str) else "", calls=bool(tool_calls),
+        )
+        if refused is not None:
+            raise refused
         if raw_finish == "tool_calls":
             finish = "tool_use"
         elif raw_finish == "length":
@@ -420,6 +469,10 @@ class OpenAIAdapter(LLMAdapter):
         event is equivalent to accumulating every delta.
         """
         completed: dict[str, Any] | None = None
+        #: v1.378.0: why a `response.incomplete` that is not about tokens
+        #: ended (a content filter is a typed refusal below).
+        incomplete_reason: Any = None
+        incomplete_text = ""
         for line in raw.splitlines():
             line = line.strip()
             if not line.startswith("data:"):
@@ -442,6 +495,22 @@ class OpenAIAdapter(LLMAdapter):
                 resp_obj = event.get("response") or {}
                 if _incomplete_for_tokens(resp_obj):
                     completed = resp_obj
+                elif isinstance(resp_obj, dict):
+                    details = resp_obj.get("incomplete_details") or {}
+                    if isinstance(details, dict):
+                        incomplete_reason = details.get("reason")
+                    incomplete_text = "".join(
+                        str(part.get("text") or "")
+                        for item in (resp_obj.get("output") or []) if isinstance(item, dict)
+                        for part in (item.get("content") or [])
+                        if isinstance(part, dict) and part.get("type") == "output_text"
+                    )
+        if completed is None and incomplete_reason == "content_filter":
+            # v1.378.0: the backend's content filter stopped the answer (any
+            # text it had written first stays the user's: `partial`).
+            refused = _content_refusal(incomplete_reason=incomplete_reason, text=incomplete_text)
+            if refused is not None:
+                raise refused
         if completed is None:
             raise RuntimeError(
                 "openai (ChatGPT backend): stream ended without response.completed: "
@@ -449,6 +518,7 @@ class OpenAIAdapter(LLMAdapter):
             )
         text_parts: list[str] = []
         thinking_parts: list[str] = []
+        refusal_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         for item in completed.get("output") or []:
             kind = item.get("type")
@@ -467,6 +537,9 @@ class OpenAIAdapter(LLMAdapter):
                 for part in item.get("content") or []:
                     if part.get("type") == "output_text":
                         text_parts.append(part.get("text") or "")
+                    elif part.get("type") == "refusal" and isinstance(part.get("refusal"), str):
+                        # v1.378.0: the model declined (read below).
+                        refusal_parts.append(part["refusal"])
             elif kind == "function_call":
                 args_str = item.get("arguments") or ""
                 try:
@@ -489,6 +562,11 @@ class OpenAIAdapter(LLMAdapter):
                         arguments=args,
                     )
                 )
+        refused = _content_refusal(
+            refusal="\n".join(refusal_parts), text="".join(text_parts), calls=bool(tool_calls),
+        )
+        if refused is not None:
+            raise refused
         usage = completed.get("usage") or {}
         if tool_calls:
             finish = "tool_use"
@@ -852,6 +930,9 @@ class OpenAIAdapter(LLMAdapter):
         """
         text_parts: list[str] = []
         thinking_parts: list[str] = []
+        #: v1.378.0: a streamed `refusal` (the model declined) — rebuilt onto
+        #: the message so _parse raises the typed refusal like complete().
+        refusal_parts: list[str] = []
         tool_accum: dict[int, dict[str, str]] = {}
         finish_reason: str | None = None
         usage: dict[str, Any] = {}
@@ -890,6 +971,8 @@ class OpenAIAdapter(LLMAdapter):
             if content:
                 text_parts.append(content)
                 yield {"type": "text", "text": content}
+            if isinstance(delta.get("refusal"), str) and delta["refusal"]:
+                refusal_parts.append(delta["refusal"])
             for tc in delta.get("tool_calls") or []:
                 idx = tc.get("index", 0)
                 slot = tool_accum.setdefault(idx, {"id": "", "name": "", "args": ""})
@@ -922,6 +1005,8 @@ class OpenAIAdapter(LLMAdapter):
         # Reconstruct the aggregate message and route it through _parse so text,
         # tool calls, usage, and the finish-reason mapping match complete().
         message: dict[str, Any] = {"content": "".join(text_parts)}
+        if refusal_parts:
+            message["refusal"] = "".join(refusal_parts)
         if thinking_parts:
             message["reasoning_content"] = "".join(thinking_parts)
         if tool_accum:

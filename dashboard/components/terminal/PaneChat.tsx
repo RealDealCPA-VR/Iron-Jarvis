@@ -55,7 +55,7 @@ import { answeredModelName } from "@/lib/answeredModel";
 import { useChatStream, StreamError } from "@/lib/useChatStream";
 import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
 import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
-import { DETAILS_WORDS } from "@/lib/failureActions";
+import { DETAILS_WORDS, failureFacts, isRefusal } from "@/lib/failureActions";
 import { TurnClock } from "@/components/chat/TurnClock";
 import { ErrorNote, OfflineHint } from "@/components/ui";
 // v1.329.0: the ONE markdown renderer (CLAUDE.md, v1.230.0) — remote images
@@ -292,6 +292,9 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
   const [failedTurn, setFailedTurn] = useState<{
     history: PaneMessage[];
     atts: PaneAttachment[];
+    /** v1.378.0: the provider's SAFETY CHECK declined it (`fix_kind`
+     *  "refusal") — no Retry: the same conversation is declined again. */
+    refused?: boolean;
   } | null>(null);
   const [attachments, setAttachments] = useState<PaneAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -973,7 +976,12 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
       // the question goes back in an empty box for an edit (the chat page's
       // restoreComposerDraft rule; anything typed meanwhile is kept).
       const asked = lastUserOf(history);
-      setFailedTurn({ history, atts: atts.length ? atts : attachmentsOf(asked) });
+      setFailedTurn({
+        history,
+        atts: atts.length ? atts : attachmentsOf(asked),
+        // v1.378.0: read from the typed fix_kind only (lib/failureActions).
+        refused: isRefusal(failureFacts(e)),
+      });
       if (asked) setInput((cur) => (cur.trim() ? cur : asked.content));
     } finally {
       notePaneTurn(paneId, null);
@@ -1299,8 +1307,11 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
           </div>
         ) : null}
         {/* v1.353.0 (G51): a failed turn can be re-sent where it failed —
-            the chat page's Retry, at pane scale (a quiet ghost press). */}
-        {failedTurn && !busy ? (
+            the chat page's Retry, at pane scale (a quiet ghost press).
+            v1.378.0: never after a SAFETY REFUSAL — the provider judges the
+            whole conversation, so a re-send is declined again; the line's
+            sentence says the way out. */}
+        {failedTurn && !busy && !failedTurn.refused ? (
           <div className="flex">
             <button
               type="button"

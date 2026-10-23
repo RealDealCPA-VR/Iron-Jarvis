@@ -49,6 +49,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from ..providers import egress as _egress
+from ..providers.adapters.base import refusal_of
 from ..providers.reasoning import normalize_level
 from ..media.registry import ACCOUNTS_AND_KEYS as _MEDIA_KEYS_PLACE
 from ..core.db import session_scope
@@ -588,6 +589,12 @@ def is_context_overflow(exc: BaseException) -> bool:
     """True when ``exc`` is a provider refusing a request as too long for
     the model's window. Never raises."""
     try:
+        # v1.378.0 review: a SAFETY REFUSAL is never "too long", whatever its
+        # words say (the vendor's explanation rides its message) — reading it
+        # so sent the declined conversation again, shrunk, and learned a
+        # smaller window for every later turn of that model.
+        if refusal_of(exc) is not None:
+            return False
         return bool(_OVERFLOW_RE.search(_error_text_chain(exc)))
     except Exception:  # noqa: BLE001
         return False
@@ -2143,8 +2150,14 @@ async def _final_answer_after_tools(
                 tools=[],
                 task_class="chat",
             )
-    except Exception:  # noqa: BLE001 — the fallback below is still honest
+    except Exception as exc:  # noqa: BLE001 — the fallback below is still honest
         log.warning("final-answer completion failed", exc_info=True)
+        # v1.378.0: a SAFETY REFUSAL of the nudge is handed back, so the
+        # fallback says what happened instead of "Press Retry" (the same
+        # conversation would be declined again). MIRROR NOTE (lock-step):
+        # the stream lane's streamed nudge keeps it the same way.
+        if outcome is not None and refusal_of(exc) is not None:
+            outcome["refusal"] = exc
         return ("", 0, 0, 0)
     usage = route.response.usage or {}
     if tally is not None:  # v1.300.0 — see _enforce_language
@@ -3175,10 +3188,44 @@ def _joined_thinking(parts: list[str]) -> str:
     return "\n\n".join(p for p in parts if p)[:THINKING_CAP]
 
 
-def _no_text_reply(tools_used: list[str], last_tool_output: str) -> str:
+def surface_for(body) -> "str | None":
+    """Where a chat turn's failure words are read (v1.378.0 review): a Build
+    PANE's chat (the body names its pane) gets the pane's way out; every
+    other turn reads the surface it runs in (None: the chat's, the phone's, a
+    Build session's — ``failure_words.current_surface``). Never raises.
+    MIRROR NOTE (lock-step): ``error_payload`` and both lanes' nudge reply."""
+    try:
+        from ..providers.failure_words import SURFACE_PANE
+
+        return SURFACE_PANE if str(getattr(body, "pane_id", "") or "").strip() else None
+    except Exception:  # noqa: BLE001 — wording only
+        return None
+
+
+def _no_text_reply(
+    tools_used: list[str], last_tool_output: str, refusal=None, *, surface: "str | None" = None,
+) -> str:
     """The reply when the model wrote nothing even after being asked once.
     Says what happened in plain words; never an empty bubble.
+
+    v1.378.0: *refusal* — the nudge itself was DECLINED by the provider's
+    safety check (``adapters.base.ProviderRefusal``): the reply says so in the
+    refusal's own sentence (``failure_words``), never "Press Retry" — the same
+    conversation would be declined again. v1.378.0 review: worded for the
+    turn's *surface* (:func:`surface_for` — a pane's way out in a pane), and
+    never "The reply above is incomplete": this reply IS the whole reply and
+    holds none of the declined answer, even when the streamed nudge showed a
+    few words first.
     MIRROR NOTE (lock-step): both chat lanes call this."""
+    if refusal is not None:
+        try:
+            declined = refusal_of(refusal)
+            if declined is not None:
+                declined.partial = False
+        except Exception:  # noqa: BLE001 — wording only
+            pass
+        words = friendly_error(refusal, surface=surface)
+        return f"{words['title']}. {words['fix']}"
     if last_tool_output.strip():
         snippet = last_tool_output.strip()[:600]
         ran = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
@@ -3206,7 +3253,9 @@ def _error_detail(exc: Exception) -> str:
     return f"{type(exc).__name__}: {failure_reason(exc)}"
 
 
-def friendly_error(exc: Exception, *, provider: str = "", manager=None) -> dict[str, str]:
+def friendly_error(
+    exc: Exception, *, provider: str = "", manager=None, surface: "str | None" = None,
+) -> dict[str, str]:
     """``{title, fix, technical}`` for a failed chat turn (v1.354.0, G28):
     a plain headline ("OpenRouter refused your key"), what to do next, and
     the original detail (``_error_detail``, masked) for whoever wants it.
@@ -3224,7 +3273,9 @@ def friendly_error(exc: Exception, *, provider: str = "", manager=None) -> dict[
         technical = _error_detail(exc)
     except Exception:  # noqa: BLE001 - a hostile __str__ is no new failure
         technical = type(exc).__name__
-    return _words(exc, provider=provider, manager=manager, technical=technical)
+    # *surface* (v1.378.0 review): where the words are read — None reads the
+    # surface the turn runs in (the chat's, the phone's, a Build session's).
+    return _words(exc, provider=provider, manager=manager, technical=technical, surface=surface)
 
 
 def error_payload(d, body, exc: Exception, *, detail: "str | None" = None) -> dict[str, str]:
@@ -3241,7 +3292,10 @@ def error_payload(d, body, exc: Exception, *, detail: "str | None" = None) -> di
         if not hint and platform is not None:
             hint = str(getattr(getattr(platform, "config", None), "default_provider", "") or "")
         manager = getattr(platform, "providers", None) if platform is not None else None
-        words = friendly_error(exc, provider=hint, manager=manager)
+        # v1.378.0 review: a Build PANE's chat (one conversation per
+        # terminal) gets a way out it can take; every other turn reads the
+        # surface it runs in (the chat's, the phone's, a Build session's).
+        words = friendly_error(exc, provider=hint, manager=manager, surface=surface_for(body))
     except Exception:  # noqa: BLE001 - the error must still be answered
         log.debug("friendly words for a chat error failed", exc_info=True)
         return {"detail": base}
@@ -3254,7 +3308,9 @@ def fix_action(exc: BaseException | None, *, provider: str = "") -> dict[str, st
     never a string guess: ``{"fix_kind": "sign_in", "fix_provider":
     "claude-cli"}`` when a subscription CLI is not signed in (or refused the
     sign-in), ``{"fix_kind": "key", "fix_provider": <provider>}`` when a
-    provider refused the key (401/403), else ``{}``. The chat's failure line
+    provider refused the key (401/403), ``{"fix_kind": "refusal", ...}``
+    (v1.378.0) when its safety check declined the conversation (no Retry: a
+    new chat / Rewind is the way out), else ``{}``. The chat's failure line
     puts the Sign in press / the key link beside the headline from it.
     Provider IDS only (no secret, no server text). Never raises."""
     try:
@@ -3262,6 +3318,11 @@ def fix_action(exc: BaseException | None, *, provider: str = "") -> dict[str, st
 
         f = failure_facts(exc)
         who = (f.provider or str(provider or "")).strip()
+        if f.kind == "refusal":
+            # v1.378.0: a safety refusal — Retry can never help (the same
+            # conversation is judged again). The page offers the way out
+            # instead (a new chat; Rewind in a Build session) and no Retry.
+            return {"fix_kind": "refusal", **({"fix_provider": who} if who else {})}
         if f.kind == "signed_out":
             cli = (f.cli or who).strip()
             if cli in SIGN_IN_CLIS:
@@ -8632,6 +8693,8 @@ async def run_chat_turn(
     _send, _send_system = _fit_turn_transcript(
         d, msgs, system, provider_choice, model_choice, head=_head
     )
+    # v1.378.0: the nudge's safety refusal, when it had one (see below).
+    _f_refusal = None
     if _cut_office or _wants_final_answer(
         model_text, workflow_draft, escalate, completions,
     ):
@@ -8652,6 +8715,7 @@ async def run_chat_turn(
             # v1.323.0: the nudge was the final answering call.
             _thinking_parts.append(_thinking_of(_f_outcome["response"]))
             _truncated = _truncated_by(_f_outcome["response"])
+        _f_refusal = _f_outcome.get("refusal")
         model_text = _f_text or model_text
         usage_in += _f_in
         usage_out += _f_out
@@ -8697,6 +8761,8 @@ async def run_chat_turn(
     if workflow_draft is not None and resolved_proj is not None and pid:
         workflow_draft["project_id"] = pid
     reply = model_text
+    # v1.378.0 review: the reply IS a declined nudge's sentence (see below).
+    _declined_reply = False
     if workflow_draft is not None:
         # A draft exit SUCCEEDED by proposing — the card is the reply. No
         # "(no reply)" placeholder (the client captions the card), and no
@@ -8708,7 +8774,11 @@ async def run_chat_turn(
     else:
         if not reply.strip():
             # v1.246.0: said in plain words — never the bare "(no reply)".
-            reply = _no_text_reply(tools_used, last_tool_output)
+            # v1.378.0: a nudge the safety check declined says so (lock-step).
+            reply = _no_text_reply(
+                tools_used, last_tool_output, _f_refusal, surface=surface_for(body),
+            )
+            _declined_reply = _f_refusal is not None
         reply += refusal_footnotes(refused_tools)
         if stopped_note:
             reply += f"\n\n_Note: {stopped_note}._"
@@ -8847,6 +8917,12 @@ async def run_chat_turn(
         # stopped for running out of output tokens — ALWAYS present. MIRROR
         # NOTE (lock-step): the stream done-frame carries the identical key.
         "truncated": bool(_truncated),
+        # REFUSED (v1.378.0 review): the reply is the sentence of a nudge the
+        # provider's safety check DECLINED — the page offers no Regenerate
+        # under it (the same conversation is declined again). Present ONLY
+        # then, so every other turn's key set is unchanged. MIRROR NOTE
+        # (lock-step): the stream done-frame carries the identical key.
+        **({"refused": True} if _declined_reply else {}),
         # REMEMBERED (v1.282.0): the preference sentences this turn kept —
         # ALWAYS present (possibly empty), like doors, so clients never branch
         # on absence. MIRROR NOTE (lock-step): the stream done-frame carries
