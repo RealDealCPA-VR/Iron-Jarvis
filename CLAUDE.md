@@ -3610,6 +3610,13 @@ does not need a bump, stop and bump it.
   `tests/test_step_target_v1378.py`, `tests/test_chat_changes_whole_path_v1378.py`,
   `dashboard/__tests__/{ij-harness-new-folder,ij-harness-changes-branch-default,
   ij-harness-phase7-review}-v1378.test.tsx`, `step-target-twin-v1378.test.ts`.
+  SAME RELEASE (test-only): the merged full suite failed three
+  `test_iron_proxy_service_v1301` tests that start the Python stand-in
+  ("Iron-Proxy is on but not answering", `owned` False) and passed alone; an
+  11 s simulated start (`FAKE_IRON_PROXY_START_DELAY`) reproduces all three
+  on the old shape. `_use_fake_bundle` now sets `START_TIMEOUT_S` = 60 for
+  every stand-in start in that file (a hang detector, the v1.374.1 rule),
+  the lease wait 90 s, the crash-orphan test's own timeout 240 s.
 
 - **A provider's safety REFUSAL is a typed error with a way out — never an
   empty reply, never retried, never moved to another provider** (v1.378.0;

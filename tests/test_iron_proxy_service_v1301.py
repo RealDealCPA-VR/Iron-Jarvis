@@ -68,6 +68,12 @@ def _cfg(tmp_path, enabled=True):
 def _use_fake_bundle(monkeypatch):
     monkeypatch.setenv("IRONJARVIS_IRON_PROXY_NODE", sys.executable)
     monkeypatch.setenv("IRONJARVIS_IRON_PROXY_BUNDLE", str(FIXTURE))
+    # v1.378.0: the app's 10 s START_TIMEOUT_S is a bar on the MACHINE when
+    # the stand-in is a fresh Python process. On the loaded full suite three
+    # of these tests failed ("Iron-Proxy is on but not answering", "owned" False)
+    # and passed alone; an 11 s simulated start reproduces all three on the old
+    # shape. 60 s is a hang detector, not a speed bar (the v1.374.1 rule).
+    monkeypatch.setattr(svc_mod, "START_TIMEOUT_S", 60.0)
 
 
 @pytest.fixture
@@ -519,11 +525,11 @@ def test_lease_client_waits_for_a_start_in_progress(tmp_path, monkeypatch):
     t.start()
     try:
         assert started.wait(5)
-        c = s.lease_client(timeout_s=15.0)
+        c = s.lease_client(timeout_s=90.0)
         assert c is not None and c.health()["ok"] is True
         assert s.status()["owned"] is True
     finally:
-        t.join(15)
+        t.join(90)
         s.stop()
 
 
@@ -652,7 +658,7 @@ def test_status_reads_no_disk_on_the_loop(tmp_path, monkeypatch):
     assert st["bundled"] is False
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(240)
 def test_a_crash_orphan_is_still_ours_to_stop(tmp_path, monkeypatch):
     """The daemon that started Iron-Proxy crashed; the next one finds it by the
     recorded pid + create time and stops it on disable (MUTATION: ignore the
