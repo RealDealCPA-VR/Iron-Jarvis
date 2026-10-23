@@ -169,8 +169,35 @@ def _pin_armed() -> bool:
         return False
 
 
+def _refusal_http(exc: Exception, provider: str = "", manager: Any = None) -> HTTPException | None:
+    """A one-shot utility's answer to a provider's SAFETY REFUSAL (v1.378.0
+    review), or None when *exc* is not one: 502 with the refusal's ONE plain
+    sentence, worded as a task (``failure_words.plain_reason`` — the one-shot
+    is a single request, so "change it, then run it again" is the way out),
+    never the vendor's raw words ("stop_reason refusal"), never Retry. The
+    caller raises it BEFORE the local-endpoint refusal (a refusal is an
+    answer, not an outage) and never hands the request to another provider.
+    Nothing reached the user (``partial`` False). Never raises."""
+    try:
+        from ..providers.adapters.base import refusal_of
+        from ..providers.failure_words import plain_reason
+
+        refused = refusal_of(exc)
+        if refused is None:
+            return None
+        refused.partial = False
+        if provider and not getattr(refused, "failed_provider", ""):
+            refused.failed_provider = provider
+        return HTTPException(status_code=502, detail=plain_reason(exc, manager=manager))
+    except Exception:  # noqa: BLE001 — wording only
+        return None
+
+
 def _provider_error_http(exc: Exception) -> HTTPException:
     """Map a provider failure to an honest, human-readable HTTP error."""
+    refused = _refusal_http(exc)
+    if refused is not None:
+        return refused
     if _is_transient_provider_error(exc):
         return HTTPException(
             status_code=429,
@@ -2631,6 +2658,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # identically.
             router = platform.router
             primary = getattr(adapter, "provider", "") or provider
+            # v1.378.0 review: a SAFETY REFUSAL is an answer, not an outage —
+            # its own sentence, BEFORE the local-endpoint refusal below (which
+            # read a local proxy's content filter as "answered with an error"
+            # and raised the not-connected banner), and never another provider.
+            refused = _refusal_http(exc, primary, platform.providers)
+            if refused is not None:
+                raise refused from exc
             refusal = router._refuses_failover(primary, exc)
             if refusal:
                 await router._publish_not_connected(primary, None, kind=refusal)
@@ -2657,7 +2691,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
                         alt, system=system, messages=messages, tools=[]
                     )
                     return resp, alt_provider, getattr(alt, "model", None)
-                except Exception:  # noqa: BLE001 — try the next candidate
+                except Exception as aexc:  # noqa: BLE001 — try the next candidate
+                    # v1.378.0 review: a candidate that DECLINES ends it —
+                    # the request is never handed on until one accepts.
+                    # MIRROR NOTE (lock-step): the router's (A)/(B).
+                    declined = _refusal_http(
+                        aexc, getattr(alt, "provider", "") or alt_provider, platform.providers,
+                    )
+                    if declined is not None:
+                        raise declined from aexc
                     continue
             # Every connected provider is rate-limited: surface the ORIGINAL error.
             raise _provider_error_http(exc)

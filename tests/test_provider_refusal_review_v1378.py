@@ -135,3 +135,165 @@ async def test_a_sideways_candidate_that_declines_is_raised_never_handed_on(lane
     assert info.value.failed_provider == "codex-cli"
     assert router.health._fails.get("codex-cli", 0) == 0, "no breaker strike: the provider answered"
     assert [p for p in bus.of(EventType.PROVIDER_FAILED) if p["provider"] == "codex-cli"][-1]["kind"] == "refusal"
+
+
+# =========================================================================== #
+# 3. a refusal is never read as "too long" — the refit retry is a retry
+# =========================================================================== #
+def _long_history(n: int = 8) -> list[dict]:
+    words = "the quarterly ledger reconciliation notes " * 60
+    out = []
+    for k in range(n):
+        out.append({"role": "user" if k % 2 == 0 else "assistant", "content": f"{k}: {words}"})
+    if out[-1]["role"] != "user":
+        out.append({"role": "user", "content": "Say hello"})
+    return out
+
+
+def _too_long_refusal() -> ProviderRefusal:
+    """A refusal whose own words happen to contain an overflow phrase (the
+    vendor's explanation rides the message)."""
+    return ProviderRefusal(
+        "claude-cli: Anthropic's safety check declined to answer (stop_reason refusal, "
+        "category cyber): prompt is too long for this policy",
+        provider="claude-cli", category="cyber", whole_conversation=True,
+    )
+
+
+@pytest.mark.parametrize("lane", ["post", "stream"])
+def test_a_refusal_is_never_shrunk_and_sent_again_as_too_long(tmp_path, monkeypatch, lane):
+    """The overflow refit retries ONCE with older messages left out, and
+    LEARNS a smaller window for the model. A refusal whose words match an
+    overflow phrase was read as "too long": the declined conversation was sent
+    again (a retry of a refusal) and every later turn of that model was
+    shrunk. Both lanes (lock-step)."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon import chat_turn
+    from iron_jarvis.daemon.app import create_app
+
+    client = TestClient(create_app(str(tmp_path)))
+    platform = client.app.state.platform
+    calls = {"n": 0}
+
+    async def fake_complete(**kw):
+        calls["n"] += 1
+        raise _too_long_refusal()
+
+    async def fake_stream(**kw):
+        calls["n"] += 1
+        raise _too_long_refusal()
+        yield  # pragma: no cover — a generator
+
+    monkeypatch.setattr(platform.router, "complete", fake_complete)
+    monkeypatch.setattr(platform.router, "stream", fake_stream)
+    learned_before = dict(chat_turn._LEARNED_WINDOWS)
+    body = {"messages": _long_history()}
+    if lane == "post":
+        r = client.post("/chat", json=body)
+        assert r.status_code == 502, r.text
+        title = r.json()["title"]
+    else:
+        r = client.post("/chat/stream", json=body)
+        from tests.test_provider_refusal_v1378 import _sse_frames
+
+        [err] = [d for ev, d in _sse_frames(r.text) if ev == "error"]
+        title = err["title"]
+    assert calls["n"] == 1, "a declined conversation is never sent again"
+    assert chat_turn._LEARNED_WINDOWS == learned_before, "no window learned from a refusal"
+    assert title == "Claude Code declined to answer this conversation"
+
+
+# =========================================================================== #
+# 4. one-shot utilities: the refusal's sentence, never a "not connected"
+# =========================================================================== #
+class _OneShotRefuses:
+    def __init__(self, provider: str, exc: Exception):
+        self.provider, self.model, self.exc, self.calls = provider, "m", exc, 0
+
+    async def complete(self, *, system, messages, tools, **kw):
+        self.calls += 1
+        raise self.exc
+
+
+def _skill_app(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.app import create_app
+
+    sd = tmp_path / ".ironjarvis" / "skills" / "note-taker"
+    sd.mkdir(parents=True)
+    (sd / "SKILL.md").write_text(
+        "---\nname: note-taker\ndescription: takes notes\n---\nWrite tidy notes.", encoding="utf-8",
+    )
+    return TestClient(create_app(str(tmp_path)))
+
+
+@pytest.mark.parametrize(
+    "provider, exc",
+    [
+        # A local endpoint (a LiteLLM proxy passing on a content filter).
+        ("ollama", ProviderRefusal("the provider's safety check declined to answer (finish_reason content_filter)")),
+        # A cloud subscription (Anthropic's classifier) — `partial` as
+        # claude-cli's complete() reports it when text streamed to nobody.
+        ("claude-cli", _refusal(partial=True)),
+    ],
+)
+def test_a_one_shot_utility_answers_a_refusal_with_its_sentence(tmp_path, monkeypatch, provider, exc):
+    """The one-shot utilities (skill apply, terminal assist, the workflow
+    builder, share/compact, …) call the adapter directly. A refusal there
+    answered the vendor's raw words ("stop_reason refusal") — and from a LOCAL
+    endpoint it read as an "answered with an error" outage and raised the
+    "not connected" banner. Now: the run's refusal sentence, no banner, no
+    other provider tried."""
+    client = _skill_app(tmp_path)
+    platform = client.app.state.platform
+    refusing = _OneShotRefuses(provider, exc)
+    others: list[str] = []
+
+    def get(name, model=None):
+        if name == provider:
+            return refusing
+        others.append(name)
+        return _Healthy(name)
+
+    banners: list[tuple] = []
+
+    async def not_connected(*a, **kw):
+        banners.append((a, kw))
+
+    monkeypatch.setattr(platform.providers, "get", get)
+    monkeypatch.setattr(platform.router, "_publish_not_connected", not_connected)
+    r = client.post("/skills/note-taker/apply", json={"request": "notes on the plan", "provider": provider})
+    assert r.status_code == 502, r.text
+    detail = r.json()["detail"]
+    assert "declined to do this task" in detail, detail
+    assert "stop_reason" not in detail and "content_filter" not in detail
+    assert banners == [], "a refusal is not an outage"
+    assert refusing.calls == 1 and others == [], "never retried, never sent elsewhere"
+
+
+def test_a_one_shot_candidate_that_declines_ends_it(tmp_path, monkeypatch):
+    """The one-shot failover chain (a busy primary): a candidate that DECLINES
+    ends the call with its sentence — the next connected provider is never
+    tried (the router's (A)/(B) rule, lock-step)."""
+    from iron_jarvis.daemon import app as app_mod
+
+    client = _skill_app(tmp_path)
+    platform = client.app.state.platform
+    busy = _OneShotRefuses("anthropic", ProviderError("anthropic API error 503: overloaded", status_code=503))
+    declines = _OneShotRefuses("codex-cli", ProviderRefusal("codex-cli: OpenAI's policy check declined the turn"))
+    later = _Healthy("google")
+    adapters = {"anthropic": busy, "codex-cli": declines, "google": later}
+    real_retry = app_mod._complete_with_retry
+
+    async def once(adapter, **kw):  # no backoff sleeps in a test
+        return await real_retry(adapter, attempts=1, **kw)
+
+    monkeypatch.setattr(app_mod, "_complete_with_retry", once)
+    monkeypatch.setattr(platform.providers, "available", lambda name: name in adapters)
+    monkeypatch.setattr(platform.providers, "get", lambda name, model=None: adapters[name])
+    r = client.post("/skills/note-taker/apply", json={"request": "notes", "provider": "anthropic"})
+    assert r.status_code == 502, r.text
+    assert r.json()["detail"].startswith("Codex declined to do this task"), r.text
+    assert declines.calls == 1 and later.calls == 0

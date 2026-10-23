@@ -589,6 +589,12 @@ def is_context_overflow(exc: BaseException) -> bool:
     """True when ``exc`` is a provider refusing a request as too long for
     the model's window. Never raises."""
     try:
+        # v1.378.0 review: a SAFETY REFUSAL is never "too long", whatever its
+        # words say (the vendor's explanation rides its message) — reading it
+        # so sent the declined conversation again, shrunk, and learned a
+        # smaller window for every later turn of that model.
+        if refusal_of(exc) is not None:
+            return False
         return bool(_OVERFLOW_RE.search(_error_text_chain(exc)))
     except Exception:  # noqa: BLE001
         return False
