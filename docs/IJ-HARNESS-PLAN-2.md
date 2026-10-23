@@ -365,9 +365,18 @@ Decisions made in this phase (each pinned by a test):
   screen. A doctor row says when `gh` is missing (developer rows, not the
   first-run card).
 
+Tests: 63 in `tests/test_build_git{,_agent,_pr}_v1375.py` (real git in a
+temp folder with a local bare remote; a fake `gh` on PATH for signed in,
+signed out and missing) and 24 in
+`dashboard/__tests__/ij-harness-git-v1375.test.tsx`; 39 Python and 19
+dashboard mutations, each red. The e2e (`e2e/ij-harness-git.spec.ts`) and
+the 10 earlier IJ harness e2e steps pass on Edge.
+
 Not done here: the real GitHub was not driven (a fake `gh` in the tests);
 the packaged app was not built (git and gh are found with `shutil.which`
-on the PATH the desktop app hands the daemon).
+on the PATH the desktop app hands the daemon). A helper agent started by a
+branch session works in the worktree and its commit / push asks the same
+way, but its own prompt does not carry the branch paragraph.
 
 ## Phase 5 — A browser the agent can drive (target v1.376.0)
 
