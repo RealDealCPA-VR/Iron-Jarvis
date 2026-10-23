@@ -227,6 +227,40 @@ lighter. Not driven live: the finish notice (a turn longer than a minute) —
 proven against the real route with a stand-in clock, the real bell and the
 desktop app's tray code under node.
 
+**Review.** Found and fixed, each red first and mutation-checked:
+
+| Defect | Fix |
+|---|---|
+| The summary's file paths were checked against every call the session ever made — a REWOUND turn's rows (its lines gone) and a turn after the coverage (never shown to the summarizer) corroborated a path, so a summary every later turn reads as fact could name work the conversation no longer holds | only the covered turns' own calls may back it (`compact.turn_windows`: each turn's first line to its last) |
+| Compact parsed the transcript (up to 200 lines with steps and thinking), hashed it and wrote the usage row on the event loop | off the loop, like every other transcript read in the build routes |
+| A parked or signed-out account answered "Claude Code couldn't finish this answer Press Retry. If it happens again, pick another model for this chat." | the account's own sentence (the turn's limit card's words), 409; other failures in whole sentences |
+| The meter called the app's own 32,000 safe size "what this model can read at once" for any model whose window nobody knows (a Codex or API-key session reads 95% of a window it does not have) | the reading carries `window_known`; the meter says "of what Iron Jarvis sends this model at once ... its own limit is not known"; compaction turned off in Settings shows the number with no Compact |
+| At 390 px with a model that offers reasoning levels, "Summarizing earlier turns…" / "Earlier turns summarized" pushed Send ~60 px out of the box (the percent and Compact 4–15 px) — measured in a real browser | the box's right-hand group wraps, right-aligned, bounded by its row; re-measured live |
+| A finish the user watched end was counted again by "While you were away" after a reload or a close to the tray | the watched ids are kept beside the "looking" note and left out of the replay |
+| A settled Build reply folded its plan with the chat's run rule: steps it did not reach read "Not attempted" | decided: a Build plan carries over to the next turn — the step it was on is not ticked off (failed with a failed turn), the rest "not started" |
+
+Pinned (a mutation used to pass): the summary's prompt-guard scan, Compact's
+refusal while a turn runs, Local only and the held model on the REAL router,
+the session's one Iron-Proxy account (and nothing else when it is parked), a
+refused rewind keeps the summary, no door but Compact writes one. Decided and
+pinned: a session whose turn was lowered may compact (no tools, the
+summarizer never reads a tool's output, and the draft is scanned before it is
+kept); a helper's own end raises no notice (the turn's covers it).
+
+Re-driven live on a scratch daemon (custom / glm-5.3-flash, a 3,000-token
+window pinned, the real screen at 390 px): 72% offered Compact; the press
+summarized 10 messages (0 removed, billed: 9 turns on the usage line); the
+next turn answered the codename and port from the summary; a second Compact
+covered 14 with the first fed in; with the pin removed the meter read 6% "of
+what Iron Jarvis sends this model ... not known"; a 69 s turn (a shell
+command that slept) raised ONE `build.turn_finished` and the bell's row
+"Your Build session finished — review drive · took 1 min 9 s". Still open:
+Build turns also run the chat's own automatic compaction at 92% (content-
+addressed, transcript-checked only), so two summaries can stack; the chat
+page's own gauge still calls an unknown window the model's; a return to a
+session mid-Compact shows no "Summarizing…" (a send is refused in words and
+the words go back in the box).
+
 ## Phase 4 — Git: a branch per session, commit, PR, merge (target v1.375.0)
 
 **What you see.** New session in a git folder starts on its own branch
