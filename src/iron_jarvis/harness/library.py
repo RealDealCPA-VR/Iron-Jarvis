@@ -328,6 +328,11 @@ class Evidence:
     turns: list[dict[str, Any]] = field(default_factory=list)
     #: A turn's trust was lowered (it read something flagged).
     low_trust: bool = False
+    #: v1.375.0 review: where the session's harness LAYER is read from
+    #: (``sessions.layer_folder_of`` — on a branch, the worktree when it
+    #: carries a tracked layer, else the folder the user picked). An edit is
+    #: proposed for, and accepted into, THAT copy; "" = ``folder``.
+    layer_folder: str = ""
     #: Every turn asked for was answered by the demo model.
     mock_only: bool = False
 
@@ -411,7 +416,7 @@ def stretch_evidence(engine: Any, thread_id: str, turn_ids: Any) -> Evidence | N
 
     from ..core.models import ChatThreadRecord, ToolInvocation, UndoJournal, is_build_thread
     from .rewind import _naive_utc
-    from .sessions import checkout_of, session_id_for
+    from .sessions import checkout_of, layer_folder_of, session_id_for
 
     with session_scope(engine) as db:
         row = db.get(ChatThreadRecord, str(thread_id or ""))
@@ -421,9 +426,14 @@ def stretch_evidence(engine: Any, thread_id: str, turn_ids: Any) -> Evidence | N
             messages = json.loads(row.messages_json or "[]")
         except (TypeError, ValueError):
             messages = []
-        # v1.375.0: a session on its own branch keeps its lessons and edits
-        # with the folder the user picked (its worktree is one of many).
+        # v1.375.0: a session on its own branch keeps its lessons with the
+        # folder the user picked (its worktree is one of many). Review: its
+        # layer EDITS go to the copy of the layer the session reads — a
+        # tracked layer is the worktree's, and an accepted edit written into
+        # the main checkout's copy left the user's checkout changed (which
+        # then blocked Merge) while the session never read it.
         folder = checkout_of(row)
+        layer_folder = layer_folder_of(row)
     messages = [m for m in messages if isinstance(m, dict)] if isinstance(messages, list) else []
     wanted = list(dict.fromkeys(str(t) for t in (turn_ids or []) if t))
     kept: list[dict[str, Any]] = []
@@ -530,7 +540,7 @@ def stretch_evidence(engine: Any, thread_id: str, turn_ids: Any) -> Evidence | N
         paths={p for p in paths if p}, changed_files=changed, commands=commands,
         steps=steps[-PROMPT_STEPS:],
         turns=[{"turn_id": t["turn_id"], "question": t["question"], "reply": t["reply"]} for t in kept],
-        low_trust=low_trust,
+        low_trust=low_trust, layer_folder=layer_folder,
     )
 
 
@@ -1031,9 +1041,10 @@ async def _reflect(platform: Any, thread_id: str, turn_ids: list[str], out: Refl
     if refusal:
         out.reason = refusal
         return out
+    layer_at = evidence.layer_folder or evidence.folder
     layer_files = {}
     for name in EDIT_FILES:
-        layer_files[name] = await asyncio.to_thread(read_layer_file, evidence.folder, name) or ""
+        layer_files[name] = await asyncio.to_thread(read_layer_file, layer_at, name) or ""
     _notes, shown_full = notes_shown(layer_files)
     route, why = await _complete(platform, evidence, reflect_prompt(evidence, layer_files), setup)
     if route is None:
@@ -1077,7 +1088,7 @@ async def _reflect(platform: Any, thread_id: str, turn_ids: list[str], out: Refl
     if (kept_lesson and isinstance(edit, dict) and str(edit.get("file") or "") in EDIT_FILES
             and str(edit.get("file")) in shown_full):
         name = str(edit["file"])
-        before = await asyncio.to_thread(read_layer_file, evidence.folder, name)
+        before = await asyncio.to_thread(read_layer_file, layer_at, name)
         after = str(edit.get("text") or "").replace("\r\n", "\n").replace("\r", "\n")
         if before is not None and after.strip():
             if not after.endswith("\n"):
@@ -1093,13 +1104,13 @@ async def _reflect(platform: Any, thread_id: str, turn_ids: list[str], out: Refl
                 except Exception:  # noqa: BLE001
                     known = None
                 invalid = await asyncio.to_thread(
-                    layer_with_edit_problem, platform.config.home, evidence.folder, name, after_checked, known,
+                    layer_with_edit_problem, platform.config.home, layer_at, name, after_checked, known,
                 )
                 why_line = _one_line(edit.get("why"))[:200] or f"Keep this lesson in {name}."
                 sig = signature(key, KIND_LAYER_EDIT, name, after_checked)
                 if invalid is None and not await asyncio.to_thread(_suppressed, engine, sig):
                     minted = await asyncio.to_thread(_mint_for_turn, engine, HarnessLibraryRecord(
-                        folder_key=key, folder=evidence.folder, kind=KIND_LAYER_EDIT,
+                        folder_key=key, folder=layer_at, kind=KIND_LAYER_EDIT,
                         text=why_line, file=name, before=before, after=after_checked,
                         evidence_json=json.dumps({**ev, "turns": evidence.turn_ids}), signature=sig,
                         thread_id=thread_id,

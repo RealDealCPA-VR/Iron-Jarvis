@@ -431,3 +431,46 @@ async def test_an_action_records_onto_the_facts_as_stored_now(app, repo, monkeyp
     assert status == 200, got
     facts = setup_of(app, sid)["git"]
     assert facts.get("merged_at") and facts.get("pr_url") == "https://github.com/a/b/pull/7"
+
+
+# --------------------------------------------------------------------------- #
+# the experience library writes where the session reads
+# --------------------------------------------------------------------------- #
+
+
+async def test_an_accepted_layer_edit_lands_in_the_worktrees_tracked_layer_not_the_main_checkout(app, tmp_path):
+    from iron_jarvis.harness import library as L
+    from tests.test_build_git_v1375 import new_branch_session
+    from tests.test_build_sessions_v1367 import asgi, open_turn, frames_of
+    from tests.test_harness_library_v1370 import EDIT, WORK_MOVES, LibScript
+    from tests.test_build_sessions_v1367 import wire as wire_script
+
+    L.shutdown()
+    repo = make_repo(tmp_path / "proj")
+    (repo / "calc.py").write_bytes(b"def add(a, b):\n    return a - b\n")
+    layer = repo / ".ironjarvis" / "harness"
+    layer.mkdir(parents=True)
+    (layer / "memory.md").write_bytes(b"Notes:\n")
+    git("add", "-A", cwd=repo)
+    git("commit", "-q", "-m", "a tracked harness layer", cwd=repo)
+    view = await new_branch_session(app, repo, approval_mode="yolo")
+    sid, wt = view["id"], Path(view["git"]["worktree"])
+    # The branch's copy of the layer already differs from the main checkout's.
+    (wt / ".ironjarvis" / "harness" / "memory.md").write_bytes(b"Notes:\nOn this branch.\n")
+    script = wire_script(app, LibScript(list(WORK_MOVES), EDIT))
+    status, raw = await open_turn(app, sid, {"text": "fix add", "turn_id": "lib-1"})
+    assert status == 200 and frames_of(raw)[-1][0] == "done"
+    out = await L.reflect(app.state.platform, sid, "lib-1")
+    edit = next((r for r in out.minted if r.kind == "layer_edit"), None)
+    assert edit is not None, out.reason
+    assert "On this branch." in script.reflections[0]["prompt"], "the reflector is shown the copy the session reads"
+    assert edit.before == "Notes:\nOn this branch.\n", "the edit is measured against the copy the session reads"
+    status, done = await asgi(app, "POST", f"/build/library/{edit.id}/accept")
+    assert status == 200 and done["status"] == "accepted", done
+    assert "add() lives in calc.py." in (wt / ".ironjarvis" / "harness" / "memory.md").read_text(encoding="utf-8")
+    assert (layer / "memory.md").read_bytes() == b"Notes:\n", "the user's main checkout was changed"
+    assert git("status", "--porcelain", cwd=repo) == ""
+    # The lesson itself stays with the folder the user picked.
+    lesson = next(r for r in out.minted if r.kind == "lesson")
+    assert lesson.folder == str(repo)
+    L.shutdown()
