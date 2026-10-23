@@ -69,6 +69,8 @@ export function sessionCommands(mode: BuildMode, opts: { hasFolder?: boolean } =
       id: "compact",
       name: "compact",
       description: "Summarize the earlier turns so the conversation stays light (the full conversation is kept)",
+      // v1.379.0 review: Claude Code's "/compact <instructions>".
+      argumentHint: "[what to keep in view]",
     },
     {
       id: "rewind",
@@ -76,7 +78,7 @@ export function sessionCommands(mode: BuildMode, opts: { hasFolder?: boolean } =
       description: "Go back to before one of your messages",
       aliases: ["checkpoint", "undo"],
     },
-    { id: "model", name: "model", description: "Choose the model this session uses" },
+    { id: "model", name: "model", description: "Choose the model this session uses", argumentHint: "[model]" },
     {
       id: "clear",
       name: "clear",

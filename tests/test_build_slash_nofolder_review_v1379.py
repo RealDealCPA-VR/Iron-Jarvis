@@ -596,3 +596,30 @@ async def test_a_session_with_no_folder_is_never_reflected_on(app, work, chat_fi
     S.append_lines(eng, nf_sid, lines)
     assert L.stretch_evidence(eng, folder_sid, ["t1"]) is not None
     assert L.stretch_evidence(eng, nf_sid, ["t1"]) is None
+
+
+async def test_a_chat_files_folder_that_cannot_hold_a_folder_is_said_and_nothing_starts(app, tmp_path):
+    blocker = tmp_path / "not-a-folder.txt"
+    blocker.write_text("x", encoding="utf-8")
+    app.state.platform.config.chat_files_root = str(blocker)
+    sid = _new(app)["id"]
+    wire(app, Script(["ok"]))
+    status, out = await asgi(app, "POST", f"/build/sessions/{sid}/turn", {"text": "go"})
+    assert status == 409, out
+    assert out["detail"].startswith(f"This session's own folder could not be made in {blocker}:")
+    assert messages_of(app, sid) == [] and S.folder_of(S.get_row(app.state.platform.engine, sid)) == ""
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="a junction is a Windows folder link")
+def test_a_link_inside_the_chat_files_folder_pointing_out_is_never_removed(app, chat_files, tmp_path):
+    import _winapi
+
+    target = tmp_path / "users-real-folder"
+    target.mkdir()
+    chat_files.mkdir(parents=True, exist_ok=True)
+    link = chat_files / "2026-10-23 looks like ours"
+    _winapi.CreateJunction(str(target), str(link))
+    sid = _new(app)["id"]
+    S.set_work_folder(app.state.platform.engine, sid, str(link))
+    assert build_routes.drop_empty_work_folder(app.state.platform, sid) is False
+    assert link.exists() and target.is_dir()
