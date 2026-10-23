@@ -238,9 +238,16 @@ export async function makeDefaultAccount(id: string): Promise<AccountsView | nul
 }
 
 /** The session moves to `account` (from the next turn). Answers the session
- *  (raw — lib/buildSessions decodes it). */
-export function setSessionAccount(sessionId: string, account: string): Promise<unknown> {
-  return patch<unknown>(`/build/sessions/${encodeURIComponent(sessionId)}`, { account });
+ *  (raw — lib/buildSessions decodes it).
+ *  v1.376.0: with `model`, the account AND the model in ONE request — a pick
+ *  under an account in the model menu. The daemon sets both or, refusing the
+ *  account, neither (routes/build `patch_build_session`: the account decides
+ *  the vendor, the user's model wins over the vendor's default). */
+export function setSessionAccount(sessionId: string, account: string, model?: string): Promise<unknown> {
+  return patch<unknown>(
+    `/build/sessions/${encodeURIComponent(sessionId)}`,
+    model === undefined ? { account } : { account, model },
+  );
 }
 
 /** "Choose account" on the limit card: set it and continue at once.
@@ -329,6 +336,57 @@ export function accountStatusLine(a: BuildAccount, now: Date = new Date()): Acco
   }
   if (a.status === "ready" || a.status === "usage") return { kind: "ready", text: "Ready" };
   return { kind: "unknown", text: "" };
+}
+
+/** From this percent used, a window is NEAR its limit: the card's bar turns
+ *  to the warning tone, and the model menu says "Near its limit". */
+export const NEAR_LIMIT_PERCENT = 90;
+
+/** An account's state as the IJ harness's MODEL MENU says it (v1.376.0): the
+ *  card's own words (`accountStatusLine`), with "used" after a percent (the
+ *  menu draws no meter label) and "Near its limit" from NEAR_LIMIT_PERCENT.
+ *  `warn` = the state asks the user to act; the menu draws a mark beside the
+ *  words then, so no state is told by colour alone. */
+export interface AccountMenuState {
+  kind: "ready" | "usage" | "near" | "limit" | "sign_in" | "off" | "missing" | "unknown";
+  text: string;
+  /** The vendor's percent used, only when it sent one. */
+  percent?: number;
+  warn: boolean;
+}
+
+export function accountMenuState(a: BuildAccount, now: Date = new Date()): AccountMenuState {
+  const line = accountStatusLine(a, now);
+  if (line.kind === "usage" && typeof line.percent === "number") {
+    const pct = Math.round(line.percent);
+    const used = a.usage?.window ? `${pct}% used · ${a.usage.window}` : `${pct}% used`;
+    // Review: a window the vendor says is all used is AT its limit, not near
+    // it (the decoder caps a percent at 100). Iron-Proxy has not parked the
+    // account yet, so it is still pickable; the words say what the next turn
+    // will most likely meet.
+    if (line.percent >= 100) {
+      return { kind: "limit", text: `At its limit · ${used}`, percent: line.percent, warn: true };
+    }
+    return line.percent >= NEAR_LIMIT_PERCENT
+      ? { kind: "near", text: `Near its limit · ${used}`, percent: line.percent, warn: true }
+      : { kind: "usage", text: used, percent: line.percent, warn: false };
+  }
+  return { kind: line.kind, text: line.text, warn: warnsKind(line.kind) };
+}
+
+function warnsKind(kind: AccountStatusLine["kind"]): boolean {
+  return kind === "limit" || kind === "sign_in" || kind === "off" || kind === "missing";
+}
+
+/** Why an account cannot be switched to, in words ("" = it can). Signed out,
+ *  turned off and removed cannot serve a turn at all; an account AT its limit
+ *  can be chosen (the chip's list allows it, and the daemon too: the next
+ *  turn then shows the limit card, with Resume when ready). */
+export function accountBlockedReason(a: BuildAccount): string {
+  if (a.status === "needs_sign_in") return "Sign it in again on the Connections page to use it.";
+  if (a.status === "off") return "Turn it on in Connections to use it.";
+  if (a.status === "missing") return "Iron-Proxy no longer has this account. Choose another one.";
+  return "";
 }
 
 /** "Claude Code · Max" (the plan only when Iron-Proxy read one). */

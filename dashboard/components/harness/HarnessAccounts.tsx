@@ -29,6 +29,7 @@ import {
   ACCOUNT_VENDORS,
   CHOOSE_ACCOUNT,
   GROUP_TITLES,
+  NEAR_LIMIT_PERCENT,
   RESUME_WHEN_READY,
   accountStatusLine,
   limitCardLine,
@@ -124,7 +125,7 @@ export function AccountCard({
                 className="h-1.5 w-24 shrink-0 overflow-hidden rounded-full bg-white/[0.08]"
               >
                 <div
-                  className={`h-full rounded-full ${line.percent >= 90 ? "bg-tone-warn" : "bg-accent"}`}
+                  className={`h-full rounded-full ${line.percent >= NEAR_LIMIT_PERCENT ? "bg-tone-warn" : "bg-accent"}`}
                   style={{ width: `${Math.max(2, Math.min(100, line.percent))}%` }}
                 />
               </div>

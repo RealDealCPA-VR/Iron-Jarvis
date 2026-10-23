@@ -1,0 +1,950 @@
+{
+  "models": [
+    {
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "id": "claude-opus-5-5",
+      "label": "Opus 5.5",
+      "description": "Opus 5.5 · Best for everyday, complex tasks",
+      "native": "claude-opus-5-5[1m]",
+      "context_window": 1000000,
+      "usage_credits": false,
+      "pinned": true,
+      "cli_default": true,
+      "available": true,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": "claude-cli",
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-fable-5-1",
+      "id": "claude-fable-5-1",
+      "label": "Fable 5.1",
+      "description": "Fable 5.1 · Most capable for your hardest and longest-running tasks",
+      "native": "claude-fable-5-1[1m]",
+      "context_window": 1000000,
+      "usage_credits": false,
+      "pinned": true,
+      "cli_default": false,
+      "available": true,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": "claude-cli",
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-sonnet-5-5",
+      "id": "claude-sonnet-5-5",
+      "label": "Sonnet 5.5",
+      "description": "Sonnet 5.5 · Efficient for routine tasks",
+      "native": "claude-sonnet-5-5[1m]",
+      "context_window": 1000000,
+      "usage_credits": false,
+      "pinned": true,
+      "cli_default": false,
+      "available": true,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": "claude-cli",
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5-20251001",
+      "id": "claude-haiku-4-5-20251001",
+      "label": "Haiku 4.5",
+      "description": "Haiku 4.5 · Fastest for quick answers",
+      "native": "claude-haiku-4-5-20251001",
+      "context_window": 200000,
+      "usage_credits": false,
+      "pinned": true,
+      "cli_default": false,
+      "aliases": [
+        "claude-haiku-4-5"
+      ],
+      "available": true,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": "claude-cli",
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "available": true,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": "claude-cli",
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "available": true,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": "claude-cli",
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-fable-5",
+      "available": true,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": "claude-cli",
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-4o",
+      "available": true,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": "codex-cli",
+      "reasoning": [],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-4o-mini",
+      "available": true,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": "codex-cli",
+      "reasoning": [],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "available": true,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": "codex-cli",
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "claude-cli",
+      "model": "subscription",
+      "available": true,
+      "kind": "cli",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "claude-cli",
+      "model": "claude-opus-5-5",
+      "id": "claude-opus-5-5",
+      "label": "Opus 5.5",
+      "description": "Opus 5.5 · Best for everyday, complex tasks",
+      "native": "claude-opus-5-5[1m]",
+      "context_window": 1000000,
+      "usage_credits": false,
+      "pinned": true,
+      "cli_default": true,
+      "available": true,
+      "kind": "cli",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "claude-cli",
+      "model": "claude-fable-5-1",
+      "id": "claude-fable-5-1",
+      "label": "Fable 5.1",
+      "description": "Fable 5.1 · Most capable for your hardest and longest-running tasks",
+      "native": "claude-fable-5-1[1m]",
+      "context_window": 1000000,
+      "usage_credits": false,
+      "pinned": true,
+      "cli_default": false,
+      "available": true,
+      "kind": "cli",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "claude-cli",
+      "model": "claude-sonnet-5-5",
+      "id": "claude-sonnet-5-5",
+      "label": "Sonnet 5.5",
+      "description": "Sonnet 5.5 · Efficient for routine tasks",
+      "native": "claude-sonnet-5-5[1m]",
+      "context_window": 1000000,
+      "usage_credits": false,
+      "pinned": true,
+      "cli_default": false,
+      "available": true,
+      "kind": "cli",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "claude-cli",
+      "model": "claude-haiku-4-5-20251001",
+      "id": "claude-haiku-4-5-20251001",
+      "label": "Haiku 4.5",
+      "description": "Haiku 4.5 · Fastest for quick answers",
+      "native": "claude-haiku-4-5-20251001",
+      "context_window": 200000,
+      "usage_credits": false,
+      "pinned": true,
+      "cli_default": false,
+      "available": true,
+      "kind": "cli",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "codex-cli",
+      "model": "subscription",
+      "available": true,
+      "kind": "cli",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "google",
+      "model": "gemini-3.8-flash",
+      "available": false,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": "medium"
+    },
+    {
+      "provider": "google",
+      "model": "gemini-3.5-flash-lite",
+      "available": false,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "xai",
+      "model": "grok-4",
+      "available": false,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "xai",
+      "model": "grok-4-1-fast",
+      "available": false,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "xai",
+      "model": "grok-code-fast-1",
+      "available": false,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "xai",
+      "model": "grok-build-0.1",
+      "available": false,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "openrouter",
+      "model": "openrouter/auto",
+      "available": false,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "openrouter",
+      "model": "x-ai/grok-code-fast-1",
+      "available": false,
+      "kind": "api",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "grok-cli",
+      "model": "grok-4.6",
+      "name": "grok-4.6",
+      "available": false,
+      "source": "cli",
+      "kind": "cli",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [],
+      "reasoning_default": ""
+    },
+    {
+      "provider": "grok-cli",
+      "model": "grok-4.5",
+      "name": "grok-4.5",
+      "available": false,
+      "source": "cli",
+      "kind": "cli",
+      "on_this_network": false,
+      "size_b": null,
+      "inherited_from": null,
+      "reasoning": [],
+      "reasoning_default": ""
+    }
+  ],
+  "accounts": {
+    "claude": [
+      {
+        "id": "c-work",
+        "name": "Work Max",
+        "vendor": "claude",
+        "vendor_label": "Claude Code",
+        "provider": "claude-cli",
+        "default": true,
+        "plan": "max",
+        "plan_label": "Max",
+        "status": "usage",
+        "usage": {
+          "percent": 38,
+          "window": "7 days",
+          "window_mins": 10080,
+          "resets_at": "2030-01-01T16:12:00Z"
+        }
+      },
+      {
+        "id": "c-spare",
+        "name": "Spare",
+        "vendor": "claude",
+        "vendor_label": "Claude Code",
+        "provider": "claude-cli",
+        "default": false,
+        "plan": null,
+        "plan_label": null,
+        "status": "ready"
+      },
+      {
+        "id": "c-gone",
+        "name": "Old login",
+        "vendor": "claude",
+        "vendor_label": "Claude Code",
+        "provider": "claude-cli",
+        "default": false,
+        "plan": null,
+        "plan_label": null,
+        "status": "needs_sign_in"
+      }
+    ],
+    "codex": [
+      {
+        "id": "x-plus",
+        "name": "Codex Plus",
+        "vendor": "codex",
+        "vendor_label": "Codex",
+        "provider": "codex-cli",
+        "default": true,
+        "plan": "plus",
+        "plan_label": "Plus",
+        "status": "usage",
+        "usage": {
+          "percent": 61,
+          "window": "5 hours",
+          "window_mins": 300,
+          "resets_at": "2030-01-01T16:12:00Z"
+        }
+      },
+      {
+        "id": "x-team",
+        "name": "Codex Team",
+        "vendor": "codex",
+        "vendor_label": "Codex",
+        "provider": "codex-cli",
+        "default": false,
+        "plan": null,
+        "plan_label": null,
+        "status": "ready"
+      }
+    ],
+    "iron_proxy": {
+      "enabled": true,
+      "running": true,
+      "needs_update": false,
+      "note": ""
+    }
+  },
+  "accounts_off": {
+    "claude": [],
+    "codex": [],
+    "iron_proxy": {
+      "enabled": false,
+      "running": false,
+      "needs_update": false,
+      "note": "Iron-Proxy is off; turn it on in Connections to run Build sessions on your accounts."
+    }
+  },
+  "session_on_work": {
+    "id": "s1",
+    "title": "Add a cart",
+    "updated_at": "2026-10-23T10:00:00",
+    "running": false,
+    "waiting": false,
+    "archived": false,
+    "folder": "C:\\work\\shop",
+    "folder_name": "shop",
+    "is_project": false,
+    "project_id": null,
+    "mode": "act",
+    "plan": null,
+    "setup": {
+      "provider": "claude-cli",
+      "model": "claude-opus-5-5",
+      "account": "c-work",
+      "account_name": "Work Max"
+    },
+    "messages": [],
+    "session_id": "build:s1",
+    "account_limit": null,
+    "account_wait": null,
+    "compaction": null,
+    "queued": [],
+    "turn_id": "",
+    "account": {
+      "id": "c-work",
+      "name": "Work Max",
+      "vendor": "claude",
+      "vendor_label": "Claude Code",
+      "provider": "claude-cli",
+      "default": true,
+      "plan": "max",
+      "plan_label": "Max",
+      "status": "usage",
+      "usage": {
+        "percent": 38,
+        "window": "7 days",
+        "window_mins": 10080,
+        "resets_at": "2030-01-01T16:12:00Z"
+      }
+    },
+    "account_vendor": "claude"
+  },
+  "session_plain": {
+    "id": "s1",
+    "title": "Add a cart",
+    "updated_at": "2026-10-23T10:00:00",
+    "running": false,
+    "waiting": false,
+    "archived": false,
+    "folder": "C:\\work\\shop",
+    "folder_name": "shop",
+    "is_project": false,
+    "project_id": null,
+    "mode": "act",
+    "plan": null,
+    "setup": {
+      "provider": "claude-cli",
+      "model": "claude-opus-5-5"
+    },
+    "messages": [],
+    "session_id": "build:s1",
+    "account_limit": null,
+    "account_wait": null,
+    "compaction": null,
+    "queued": [],
+    "turn_id": "",
+    "account": null,
+    "account_vendor": "claude"
+  },
+  "picks": [
+    {
+      "way": "claude-cli",
+      "account": "c-work",
+      "row": "Your Claude plan",
+      "model": "subscription",
+      "body": {
+        "provider": "claude-cli",
+        "model": "subscription"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-work",
+      "row": "Opus 5.5long docs",
+      "model": "claude-opus-5-5",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-opus-5-5"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-work",
+      "row": "Fable 5.1long docs",
+      "model": "claude-fable-5-1",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-fable-5-1"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-work",
+      "row": "Sonnet 5.5long docs",
+      "model": "claude-sonnet-5-5",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-sonnet-5-5"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-work",
+      "row": "Haiku 4.5",
+      "model": "claude-haiku-4-5-20251001",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-haiku-4-5-20251001"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-work",
+      "row": "Opus 4.8",
+      "model": "claude-opus-4-8",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-opus-4-8"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-work",
+      "row": "Sonnet 4.6",
+      "model": "claude-sonnet-4-6",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-sonnet-4-6"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-work",
+      "row": "claude-fable-5",
+      "model": "claude-fable-5",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-fable-5"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-spare",
+      "row": "Your Claude plan",
+      "model": "subscription",
+      "body": {
+        "account": "c-spare",
+        "model": "subscription"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-spare",
+      "row": "Opus 5.5long docs",
+      "model": "claude-opus-5-5",
+      "body": {
+        "account": "c-spare",
+        "model": "claude-opus-5-5"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-spare",
+      "row": "Fable 5.1long docs",
+      "model": "claude-fable-5-1",
+      "body": {
+        "account": "c-spare",
+        "model": "claude-fable-5-1"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-spare",
+      "row": "Sonnet 5.5long docs",
+      "model": "claude-sonnet-5-5",
+      "body": {
+        "account": "c-spare",
+        "model": "claude-sonnet-5-5"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-spare",
+      "row": "Haiku 4.5",
+      "model": "claude-haiku-4-5-20251001",
+      "body": {
+        "account": "c-spare",
+        "model": "claude-haiku-4-5-20251001"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-spare",
+      "row": "Opus 4.8",
+      "model": "claude-opus-4-8",
+      "body": {
+        "account": "c-spare",
+        "model": "claude-opus-4-8"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-spare",
+      "row": "Sonnet 4.6",
+      "model": "claude-sonnet-4-6",
+      "body": {
+        "account": "c-spare",
+        "model": "claude-sonnet-4-6"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-spare",
+      "row": "claude-fable-5",
+      "model": "claude-fable-5",
+      "body": {
+        "account": "c-spare",
+        "model": "claude-fable-5"
+      }
+    },
+    {
+      "way": "codex-cli",
+      "account": "x-plus",
+      "row": "Your ChatGPT plan",
+      "model": "subscription",
+      "body": {
+        "account": "x-plus",
+        "model": "subscription"
+      }
+    },
+    {
+      "way": "codex-cli",
+      "account": "x-plus",
+      "row": "gpt-4o",
+      "model": "gpt-4o",
+      "body": {
+        "account": "x-plus",
+        "model": "gpt-4o"
+      }
+    },
+    {
+      "way": "codex-cli",
+      "account": "x-plus",
+      "row": "gpt-4o-mini",
+      "model": "gpt-4o-mini",
+      "body": {
+        "account": "x-plus",
+        "model": "gpt-4o-mini"
+      }
+    },
+    {
+      "way": "codex-cli",
+      "account": "x-plus",
+      "row": "gpt-5.5",
+      "model": "gpt-5.5",
+      "body": {
+        "account": "x-plus",
+        "model": "gpt-5.5"
+      }
+    },
+    {
+      "way": "codex-cli",
+      "account": "x-team",
+      "row": "Your ChatGPT plan",
+      "model": "subscription",
+      "body": {
+        "account": "x-team",
+        "model": "subscription"
+      }
+    },
+    {
+      "way": "codex-cli",
+      "account": "x-team",
+      "row": "gpt-4o",
+      "model": "gpt-4o",
+      "body": {
+        "account": "x-team",
+        "model": "gpt-4o"
+      }
+    },
+    {
+      "way": "codex-cli",
+      "account": "x-team",
+      "row": "gpt-4o-mini",
+      "model": "gpt-4o-mini",
+      "body": {
+        "account": "x-team",
+        "model": "gpt-4o-mini"
+      }
+    },
+    {
+      "way": "codex-cli",
+      "account": "x-team",
+      "row": "gpt-5.5",
+      "model": "gpt-5.5",
+      "body": {
+        "account": "x-team",
+        "model": "gpt-5.5"
+      }
+    }
+  ],
+  "picks_off": [
+    {
+      "way": "claude-cli",
+      "account": null,
+      "row": "Your Claude plan",
+      "model": "subscription",
+      "body": {
+        "provider": "claude-cli",
+        "model": "subscription"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": null,
+      "row": "Opus 5.5long docs",
+      "model": "claude-opus-5-5",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-opus-5-5"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": null,
+      "row": "Fable 5.1long docs",
+      "model": "claude-fable-5-1",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-fable-5-1"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": null,
+      "row": "Sonnet 5.5long docs",
+      "model": "claude-sonnet-5-5",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-sonnet-5-5"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": null,
+      "row": "Haiku 4.5",
+      "model": "claude-haiku-4-5-20251001",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-haiku-4-5-20251001"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": null,
+      "row": "Opus 4.8",
+      "model": "claude-opus-4-8",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-opus-4-8"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": null,
+      "row": "Sonnet 4.6",
+      "model": "claude-sonnet-4-6",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-sonnet-4-6"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": null,
+      "row": "claude-fable-5",
+      "model": "claude-fable-5",
+      "body": {
+        "provider": "claude-cli",
+        "model": "claude-fable-5"
+      }
+    },
+    {
+      "way": "codex-cli",
+      "account": null,
+      "row": "Your ChatGPT plan",
+      "model": "subscription",
+      "body": {
+        "provider": "codex-cli",
+        "model": "subscription"
+      }
+    },
+    {
+      "way": "codex-cli",
+      "account": null,
+      "row": "gpt-4o",
+      "model": "gpt-4o",
+      "body": {
+        "provider": "codex-cli",
+        "model": "gpt-4o"
+      }
+    },
+    {
+      "way": "codex-cli",
+      "account": null,
+      "row": "gpt-4o-mini",
+      "model": "gpt-4o-mini",
+      "body": {
+        "provider": "codex-cli",
+        "model": "gpt-4o-mini"
+      }
+    },
+    {
+      "way": "codex-cli",
+      "account": null,
+      "row": "gpt-5.5",
+      "model": "gpt-5.5",
+      "body": {
+        "provider": "codex-cli",
+        "model": "gpt-5.5"
+      }
+    }
+  ]
+}
