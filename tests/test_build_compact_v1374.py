@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import timedelta
 
 import pytest
 from sqlmodel import select
@@ -89,21 +88,23 @@ TURNS = [
 
 def seed(app, sid: str) -> list[dict]:
     """Six finished turns, written the daemon's way (question, then reply),
-    and the session's ledger: it READ src/app.py (before any turn, so a
-    rewind has nothing to put back)."""
+    and the session's ledger: turn t2 READ config/timeouts.toml (a read, so a
+    rewind has nothing to put back). Review (v1.374.0): the row is stamped
+    INSIDE t2 — only the covered turns' own calls may back a summary."""
     engine = app.state.platform.engine
     for tid, q, a in TURNS:
         S.append_lines(engine, sid, [{"role": "user", "content": q, "turnId": tid}])
+        if tid == "t2":
+            with session_scope(engine) as db:
+                # A file the turn READ but no line ever names: only the ledger
+                # corroborates a summary line about it.
+                db.add(ToolInvocation(
+                    session_id=S.session_id_for(sid), agent_run_id="chat", tool="read_file",
+                    args_json=json.dumps({"path": "config/timeouts.toml"}), reversibility="readonly",
+                    created_at=utcnow(),
+                ))
+                db.commit()
         S.append_lines(engine, sid, [{"role": "assistant", "content": a, "turnId": tid}])
-    with session_scope(engine) as db:
-        # A file the turns READ but no line ever names: only the ledger
-        # corroborates a summary line about it.
-        db.add(ToolInvocation(
-            session_id=S.session_id_for(sid), agent_run_id="chat", tool="read_file",
-            args_json=json.dumps({"path": "config/timeouts.toml"}), reversibility="readonly",
-            created_at=utcnow() - timedelta(hours=1),
-        ))
-        db.commit()
     return messages_of(app, sid)
 
 

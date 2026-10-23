@@ -11,7 +11,9 @@ THE SAME VERIFICATION as chat and agent compaction
 (``context.compaction.compact_messages`` / ``verify``): every line of the
 model's draft that names a file must find it in the covered transcript or in
 THIS SESSION's ledger (its ``ToolInvocation`` rows' arguments and the undo
-journal's targets, ``build:<id>``), and every double-quoted span must appear
+journal's targets, ``build:<id>``) — the calls the COVERED turns made, never
+a rewound turn's or a later one's (:func:`turn_windows`, review) — and every
+double-quoted span must appear
 verbatim in the covered transcript; a line that fails is removed. A summary
 that survives nothing is not used — the press says so and keeps nothing.
 
@@ -375,33 +377,68 @@ def length_line(words: int) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def ledger_facts(engine: Any, thread_id: str) -> tuple[set[str], set[str]]:
+def turn_windows(lines: list[dict[str, Any]]) -> list[tuple[Any, Any]]:
+    """``[(start, end)]`` — when each turn in ``lines`` ran: from its first
+    line's stamp (the question, written as it started) to its last (the
+    reply, written as it ended), naive UTC. A line with no stamp adds
+    nothing. Review (v1.374.0): the ledger that may back a summary is THESE
+    turns' own — a rewound turn's rows outlive its lines, and a turn after
+    the coverage was never shown to the summarizer."""
+    from .rewind import _naive_utc
+
+    spans: dict[str, list[Any]] = {}
+    for m in lines:
+        tid = str(m.get("turnId") or "")
+        at = _naive_utc(m.get("at"))
+        if not tid or at is None:
+            continue
+        span = spans.setdefault(tid, [at, at])
+        span[0], span[1] = min(span[0], at), max(span[1], at)
+    return [(a, b) for a, b in spans.values()]
+
+
+def ledger_facts(engine: Any, thread_id: str,
+                 windows: "list[tuple[Any, Any]] | None" = None) -> tuple[set[str], set[str]]:
     """``(paths, tool names)`` this SESSION's ledger names: every path in its
     tool calls' arguments (``build:<id>``), the undo journal's targets, and
-    the tools it ran. BLOCKING; never raises (no ledger: the transcript alone
-    corroborates, the chat's rule)."""
+    the tools it ran — only the calls made inside ``windows``
+    (:func:`turn_windows` of the covered lines; None = every call). BLOCKING;
+    never raises (no ledger: the transcript alone corroborates, the chat's
+    rule)."""
     from sqlmodel import select
 
     from ..core.db import session_scope
     from ..core.models import ToolInvocation, UndoJournal
     from .library import _journal_targets, _norm_path, _path_tokens, _strings
+    from .rewind import _naive_utc
     from .sessions import session_id_for
 
     paths: set[str] = set()
     tools: set[str] = set()
+    if windows is not None and not windows:
+        return paths, tools
     try:
         with session_scope(engine) as db:
-            rows = db.exec(
+            stmt = (
                 select(ToolInvocation, UndoJournal)
                 .join(UndoJournal, UndoJournal.action_id == ToolInvocation.id, isouter=True)  # type: ignore[arg-type]
                 .where(ToolInvocation.session_id == session_id_for(thread_id))
-                .limit(5000)
-            ).all()
-            facts = [(inv.tool, inv.args_json, None if j is None else (j.kind, j.pre_inline)) for inv, j in rows]
+            )
+            if windows:
+                stmt = stmt.where(ToolInvocation.created_at >= min(a for a, _ in windows)).where(
+                    ToolInvocation.created_at <= max(b for _, b in windows)
+                )
+            rows = db.exec(stmt.limit(5000)).all()
+            facts = [
+                (inv.tool, inv.args_json, None if j is None else (j.kind, j.pre_inline), _naive_utc(inv.created_at))
+                for inv, j in rows
+            ]
     except Exception:  # noqa: BLE001 — verification must never break the press
         log.warning("reading build session %s's ledger failed", thread_id, exc_info=True)
         return set(), set()
-    for tool, args_json, journal in facts:
+    if windows:
+        facts = [f for f in facts if f[3] is not None and any(a <= f[3] <= b for a, b in windows)]
+    for tool, args_json, journal, _at in facts:
         if tool:
             tools.add(str(tool))
         try:
@@ -473,7 +510,8 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
         raise CompactRefused(NO_REAL_MODEL)
     window = _context_window(SimpleNamespace(platform=platform), provider, model) or DEFAULT_WINDOW
     pairs = fit_pairs(messages, end, prior, window)
-    paths, tools = await asyncio.to_thread(ledger_facts, engine, thread_id)
+    # Review (v1.374.0): only what the COVERED turns did may back the summary.
+    paths, tools = await asyncio.to_thread(ledger_facts, engine, thread_id, turn_windows(messages[:end]))
     # What the summary takes the place of in the next turn's prompt: it is
     # asked to be much shorter, and kept only when it is lighter.
     replaced_tokens, replaced_words = replaced(messages, end, prior)
