@@ -1123,3 +1123,32 @@ async def test_a_second_close_waits_for_the_first_to_end_the_browser(tmp_path):
         assert not inst.is_closing("build:c")
     finally:
         inst.shutdown()
+
+
+async def test_the_idle_timer_never_closes_a_browser_in_the_middle_of_an_action(tmp_path, monkeypatch):
+    """Strengthens the doer's idle pin (its "one that is acting right now is
+    never idle" rule survived its own mutation): an action longer than the
+    idle time finishes, and the browser closes only after it, idle."""
+    from tests.test_build_browser_v1376 import DEV, FakeBackend
+
+    monkeypatch.setenv(PB.IDLE_ENV, "2")
+    made: list[Any] = []
+
+    def factory(**kw):
+        backend = FakeBackend(**kw)
+        made.append(backend)
+        return backend
+
+    inst = PB.AgentBrowsers(backend_factory=factory)
+    try:
+        await inst.open("build:i", DEV, preview=DEV)
+        made[0].delay_s = 4.0  # longer than the idle time (2 s), checked every 0.5 s
+        res = await inst.click("build:i", "Log", preview=DEV)
+        assert res.did and not made[0].killed and inst.is_open("build:i")
+        for _ in range(200):
+            if made[0].killed:
+                break
+            await asyncio.sleep(0.05)
+        assert made[0].killed and inst.view("build:i")["closed_reason"] == "idle"
+    finally:
+        inst.shutdown()
