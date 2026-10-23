@@ -127,6 +127,23 @@ def _failure_words_for_phone(exc: HTTPException) -> str:
     return str(exc.detail)
 
 
+def _run_problem(exc: BaseException) -> str:
+    """What the phone hears after "I hit a problem: " when a job it started
+    FAILED (v1.378.0 review). A provider's SAFETY REFUSAL says the run's
+    plain sentence (``failure_words.plain_reason``) — never the class name and
+    the vendor's words ("ProviderRefusal: … stop_reason refusal …"). Any other
+    failure keeps its own text exactly as before. Never raises."""
+    try:
+        from ..providers.adapters.base import refusal_of
+        from ..providers.failure_words import plain_reason
+
+        if refusal_of(exc) is not None:
+            return plain_reason(exc)
+    except Exception:  # noqa: BLE001 — wording only
+        pass
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _words_beyond_mentions(text: str) -> bool:
     """True when the message says something besides "@name" tokens — the
     part Iron Jarvis should answer after a hand-back. Never raises."""
@@ -473,7 +490,7 @@ class InboundPoller:
             raise
         except Exception as exc:  # noqa: BLE001 — deliver, don't vanish
             log.exception("phone-started session %s failed on %r", session.id, name)
-            summary = f"I hit a problem: {type(exc).__name__}: {exc}"
+            summary = f"I hit a problem: {_run_problem(exc)}"
         async with self._identity_lock(name, msg.sender_id):
             if tid:
                 self._safe_append(
@@ -1161,9 +1178,15 @@ class InboundPoller:
         try:
             # LOW TRUST (v1.298.0): the lane drops its auto-armed memory
             # writers for a turn the phone started (``_chat_turn_kwargs``).
-            result = await self.chat_turn(
-                self.platform, self.personas, body, **self._chat_turn_kwargs(name)
-            )
+            # v1.378.0 review: a failure is worded for the PHONE (a safety
+            # refusal's way out here is "/new", never Edit or a new-chat
+            # press the phone does not have).
+            from ..providers.failure_words import phone_surface
+
+            with phone_surface():
+                result = await self.chat_turn(
+                    self.platform, self.personas, body, **self._chat_turn_kwargs(name)
+                )
         except HTTPException as exc:
             reply = f"I hit a problem: {_failure_words_for_phone(exc)}"
             if tid:

@@ -3227,7 +3227,9 @@ def _error_detail(exc: Exception) -> str:
     return f"{type(exc).__name__}: {failure_reason(exc)}"
 
 
-def friendly_error(exc: Exception, *, provider: str = "", manager=None) -> dict[str, str]:
+def friendly_error(
+    exc: Exception, *, provider: str = "", manager=None, surface: "str | None" = None,
+) -> dict[str, str]:
     """``{title, fix, technical}`` for a failed chat turn (v1.354.0, G28):
     a plain headline ("OpenRouter refused your key"), what to do next, and
     the original detail (``_error_detail``, masked) for whoever wants it.
@@ -3245,7 +3247,9 @@ def friendly_error(exc: Exception, *, provider: str = "", manager=None) -> dict[
         technical = _error_detail(exc)
     except Exception:  # noqa: BLE001 - a hostile __str__ is no new failure
         technical = type(exc).__name__
-    return _words(exc, provider=provider, manager=manager, technical=technical)
+    # *surface* (v1.378.0 review): where the words are read — None reads the
+    # surface the turn runs in (the chat's, the phone's, a Build session's).
+    return _words(exc, provider=provider, manager=manager, technical=technical, surface=surface)
 
 
 def error_payload(d, body, exc: Exception, *, detail: "str | None" = None) -> dict[str, str]:
@@ -3262,7 +3266,13 @@ def error_payload(d, body, exc: Exception, *, detail: "str | None" = None) -> di
         if not hint and platform is not None:
             hint = str(getattr(getattr(platform, "config", None), "default_provider", "") or "")
         manager = getattr(platform, "providers", None) if platform is not None else None
-        words = friendly_error(exc, provider=hint, manager=manager)
+        # v1.378.0 review: a Build PANE's chat (one conversation per
+        # terminal) gets a way out it can take; every other turn reads the
+        # surface it runs in (the chat's, the phone's, a Build session's).
+        from ..providers.failure_words import SURFACE_PANE
+
+        surface = SURFACE_PANE if str(getattr(body, "pane_id", "") or "").strip() else None
+        words = friendly_error(exc, provider=hint, manager=manager, surface=surface)
     except Exception:  # noqa: BLE001 - the error must still be answered
         log.debug("friendly words for a chat error failed", exc_info=True)
         return {"detail": base}

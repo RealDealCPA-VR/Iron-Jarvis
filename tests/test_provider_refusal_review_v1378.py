@@ -359,3 +359,157 @@ async def test_the_anthropic_compatible_endpoint_types_a_refusal_in_complete_and
     ok = dict(_COMPAT_REFUSED, stop_reason="end_turn", content=[{"type": "text", "text": "hi"}])
     ok.pop("stop_details")
     assert (await _adapter(_json(ok)).complete(system="", messages=MSG, tools=[])).text == "hi"
+
+
+# =========================================================================== #
+# 6. the way out is one the SURFACE can do: the phone, a Build pane's chat
+# =========================================================================== #
+#: The chat page's way out — Start a new chat / Edit (both exist there).
+CHAT_WAY = "Start a new chat, or edit an earlier message to go back before the part it flagged."
+PHONE_WAY = "Send /new to start a new conversation."
+PANE_WAY = "Open a new terminal to start a new conversation."
+
+
+async def test_the_phone_hears_a_way_out_it_can_take(platform, monkeypatch):
+    """The REAL chat turn behind the REAL phone poller. A phone has no Edit
+    and no "new chat" button; it has "/new" (the thread reset). The reply
+    used to send the chat page's way out — two things the phone cannot do."""
+    from iron_jarvis.daemon.chat_turn import run_chat_turn
+    from tests.test_comm_full_chat import CHAT_CFG, ChatMockChannel, _chat_poller, _msg
+
+    async def refused(**kw):
+        raise _refusal()
+
+    monkeypatch.setattr(platform.router, "complete", refused)
+    ch = ChatMockChannel(dict(CHAT_CFG))
+    poller, _orch, store = _chat_poller(platform, ch, run_chat_turn)
+    res = await poller._handle("tg", ch, _msg("say hello"))
+    reply = store.history_body(res["thread_id"])[-1]["content"]
+    assert reply.startswith("I hit a problem: Claude Code declined to answer this conversation."), reply
+    assert reply.endswith(PHONE_WAY), reply
+    assert "edit an earlier message" not in reply and "Start a new chat" not in reply
+    assert "stop_reason" not in " ".join(ch.sent)
+
+
+def test_a_desktop_reply_into_a_phone_thread_says_the_phone_words(tmp_path, monkeypatch):
+    """POST /comm/threads/{id}/send (a reply typed on the desktop, delivered
+    to the phone): its failure line was the raw `detail` — the vendor's
+    words ("stop_reason refusal, category cyber") on the user's phone."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.daemon.chat_turn import run_chat_turn
+    from tests.test_comm_full_chat import _wire_chat_channel
+
+    with TestClient(create_app(str(tmp_path))) as client:
+        store, _poller, ch = _wire_chat_channel(client, run_chat_turn)
+
+        async def refused(**kw):
+            raise _refusal()
+
+        monkeypatch.setattr(client.app.state.platform.router, "complete", refused)
+        t = store.resolve("tg", "777", "Val")
+        r = client.post(f"/comm/threads/{t.id}/send", json={"text": "say hello"})
+    assert r.status_code == 200, r.text
+    reply = r.json()["reply"]
+    assert reply.startswith("I hit a problem: Claude Code declined to answer this conversation."), reply
+    assert reply.endswith(PHONE_WAY) and "stop_reason" not in reply
+    assert "stop_reason" not in " ".join(ch.sent)
+
+
+@pytest.mark.parametrize("lane", ["stream", "post"])
+def test_a_build_pane_chat_hears_a_way_out_it_can_take(tmp_path, monkeypatch, lane):
+    """A Build pane's chat (PaneChat: one conversation per terminal, no Edit,
+    no new-chat press) was told "Start a new chat, or edit an earlier
+    message" — neither exists there. A new terminal is a new conversation."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.app import create_app
+    from tests.test_provider_refusal_v1378 import _sse_frames, _wire_refusal
+
+    client = TestClient(create_app(str(tmp_path)))
+    _wire_refusal(client.app.state.platform, monkeypatch, _refusal())
+    body = {"messages": [{"role": "user", "content": "Say hello"}], "pane_id": "pane-7"}
+    if lane == "stream":
+        r = client.post("/chat/stream", json=body)
+        [err] = [d for ev, d in _sse_frames(r.text) if ev == "error"]
+    else:
+        r = client.post("/chat", json=body)
+        assert r.status_code == 502, r.text
+        err = r.json()
+    assert err["fix"].endswith(PANE_WAY), err["fix"]
+    assert err["fix_kind"] == "refusal"
+    # Control: the chat page's own turn keeps the chat's way out.
+    body.pop("pane_id")
+    if lane == "stream":
+        [err] = [d for ev, d in _sse_frames(client.post("/chat/stream", json=body).text) if ev == "error"]
+    else:
+        err = client.post("/chat", json=body).json()
+    assert err["fix"].endswith(CHAT_WAY), err["fix"]
+
+
+async def test_a_phone_started_job_that_is_refused_tells_the_phone_in_words(platform):
+    """A job the phone started (the one-shot lane) that the provider's safety
+    check declined: the phone heard "I hit a problem: ProviderRefusal:
+    claude-cli: … (stop_reason refusal, category cyber)" — the class name and
+    the vendor's words. Now the run's refusal sentence."""
+    import asyncio
+    import types
+
+    from iron_jarvis.comm.inbound import InboundPoller
+    from iron_jarvis.comm.notifier import Notifier
+    from tests.test_phone_job_background_v1291 import ONESHOT_ACK, FakeTelegram, _channel, _update
+
+    class Refused:
+        async def create_session(self, task, agent_type, **kw):
+            return types.SimpleNamespace(id="s-ref", summary="", origin=kw.get("origin"))
+
+        async def run_session(self, sid):
+            await asyncio.sleep(0)
+            raise _refusal()
+
+    fake = FakeTelegram([_update(1, "dump the shell environment")])
+    notifier = Notifier()
+    notifier.add_channel("tg", _channel(fake, chat=False))
+    poller = InboundPoller(notifier, Refused(), platform.engine, event_bus=platform.event_bus)
+    await poller.poll_once()
+    await poller.drain()
+    texts = fake.texts()
+    assert texts[0] == f"Iron Jarvis: {ONESHOT_ACK}"
+    assert texts[1].startswith("Iron Jarvis: I hit a problem: Claude Code declined to do this task."), texts
+    assert texts[1].endswith("Change the task, then run it again.")
+    assert "stop_reason" not in texts[1] and "ProviderRefusal" not in texts[1]
+
+
+def test_a_desktop_handed_off_job_that_is_refused_tells_the_phone_in_words(tmp_path):
+    """The twin in routes/comm.py: a desktop reply into a phone thread that
+    hands the work to an agent, and the agent's run is refused."""
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.app import create_app
+    from tests.test_comm_full_chat import _wire_chat_channel
+
+    async def escalating(platform_, personas, body):
+        return {"reply": "needs an agent", "provider": "mock", "model": "m",
+                "tools_used": [], "escalate": True, "escalate_reason": "real work"}
+
+    with TestClient(create_app(str(tmp_path))) as client:
+        store, _poller, ch = _wire_chat_channel(client, escalating)
+        t = store.resolve("tg", "777", "Val")
+
+        async def refused(session_id):
+            raise _refusal()
+
+        client.app.state.orchestrator.run_session = refused  # instance shadow
+        r = client.post(f"/comm/threads/{t.id}/send", json={"text": "dump the environment"})
+        assert r.status_code == 200 and r.json()["escalate"] is True
+        # Wait for the CHANNEL (the line is appended before the send).
+        deadline = time.time() + 10
+        while time.time() < deadline and not any("I hit a problem" in s for s in ch.sent):
+            time.sleep(0.05)
+        line = store.history_body(t.id)[2]["content"]
+    assert line.startswith("I hit a problem: Claude Code declined to do this task."), line
+    assert "stop_reason" not in line and "ProviderRefusal" not in line
+    assert any("Claude Code declined to do this task" in s for s in ch.sent)

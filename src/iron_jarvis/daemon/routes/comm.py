@@ -449,13 +449,20 @@ def register(app: FastAPI, d) -> None:
             except Exception:  # noqa: BLE001 — the reply must still deliver
                 pass
 
+        from ...comm.inbound import _failure_words_for_phone
+        from ...providers.failure_words import phone_surface
+
         try:
-            result = await turn(d.platform, personas, ChatBody(messages=history, auto_tools=True))
+            # v1.378.0 review: the reply goes to the PHONE — worded for it.
+            with phone_surface():
+                result = await turn(d.platform, personas, ChatBody(messages=history, auto_tools=True))
         except HTTPException as exc:
             # Mirror the inbound pipeline: the honest error IS the reply —
             # appended to the thread, delivered to the phone, rendered by the
             # dashboard like a normal turn (not surfaced as a raw 4xx/5xx).
-            reply = f"I hit a problem: {exc.detail}"
+            # v1.378.0 review: the chat's plain sentence (`words`) like the
+            # inbound pipeline, never the vendor's raw `detail` on a phone.
+            reply = f"I hit a problem: {_failure_words_for_phone(exc)}"
             _append_reply(reply)
             sent = await poller.send_chunked(ch, reply, chat_id=sender_id)
             return {
@@ -519,7 +526,10 @@ def register(app: FastAPI, d) -> None:
                         s = await d.orchestrator.run_session(session.id)
                     summary = (s.summary or "(no result)").strip()
                 except Exception as exc:  # noqa: BLE001 — deliver, don't vanish
-                    summary = f"I hit a problem: {type(exc).__name__}: {exc}"
+                    # v1.378.0 review: a refusal in words (comm.inbound).
+                    from ...comm.inbound import _run_problem
+
+                    summary = f"I hit a problem: {_run_problem(exc)}"
                 _append_reply(summary)
                 await poller.send_chunked(ch, summary, chat_id=sender_id)
 

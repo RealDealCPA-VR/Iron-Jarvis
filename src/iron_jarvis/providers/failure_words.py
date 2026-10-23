@@ -63,6 +63,14 @@ SURFACE_RUN = "run"
 #: the chat's except the ONE whose way out differs: a safety refusal is undone
 #: in a session with Rewind, in a chat by editing an earlier message.
 SURFACE_BUILD = "build"
+#: v1.378.0 review: the PHONE (a messaging channel's chat lane, and a desktop
+#: reply delivered into a phone thread) and a Build PANE's chat (one
+#: conversation per terminal). Each reads as the chat's except a safety
+#: refusal's way out, which must be one that surface can take: the phone has
+#: "/new" and no Edit; a pane has neither a new-chat press nor Edit, and a
+#: new terminal IS a new conversation.
+SURFACE_PHONE = "phone"
+SURFACE_PANE = "pane"
 _SURFACE: ContextVar[str] = ContextVar("ij_failure_surface", default=SURFACE_CHAT)
 #: Where a run's model is chosen (the default model lives in Settings).
 RUN_MODEL_PLACE = "Settings"
@@ -73,6 +81,18 @@ def run_surface() -> Iterator[None]:
     """Word every failure inside this block for a RUN (see :data:`_SURFACE`).
     The context rides every task and worker thread the run makes."""
     token = _SURFACE.set(SURFACE_RUN)
+    try:
+        yield
+    finally:
+        _SURFACE.reset(token)
+
+
+@contextmanager
+def phone_surface() -> Iterator[None]:
+    """Word every failure inside this block for the PHONE (v1.378.0 review):
+    ``comm.inbound`` arms it around the phone's chat turn, and the desktop's
+    reply into a phone thread around its own."""
+    token = _SURFACE.set(SURFACE_PHONE)
     try:
         yield
     finally:
@@ -97,10 +117,11 @@ def reset_surface(token: Any) -> None:
 
 def current_surface() -> str:
     """"run" inside :func:`run_surface`, "build" inside a Build turn
-    (:func:`set_build_surface`), else "chat". Never raises."""
+    (:func:`set_build_surface`), "phone" inside :func:`phone_surface`, else
+    "chat". Never raises."""
     try:
         value = _SURFACE.get()
-        return value if value in (SURFACE_RUN, SURFACE_BUILD) else SURFACE_CHAT
+        return value if value in (SURFACE_RUN, SURFACE_BUILD, SURFACE_PHONE) else SURFACE_CHAT
     except Exception:  # noqa: BLE001
         return SURFACE_CHAT
 
@@ -169,6 +190,9 @@ REFUSAL_WAY_OUT: dict[str, str] = {
     SURFACE_CHAT: "Start a new chat, or edit an earlier message to go back before the part it flagged.",
     SURFACE_BUILD: "Rewind to before the message that set it off, or start a new session.",
     SURFACE_RUN: "Change the task, then run it again.",
+    # v1.378.0 review: a way out each surface can really take.
+    SURFACE_PHONE: "Send /new to start a new conversation.",
+    SURFACE_PANE: "Open a new terminal to start a new conversation.",
 }
 
 #: ``"<provider> API error <status>: <detail>"`` — the one message shape
