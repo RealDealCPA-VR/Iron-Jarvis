@@ -118,6 +118,14 @@ def wire(app, script: Script) -> Script:
     return script
 
 
+#: How long one in-process GET may take before the test says it hung. A
+#: Build session's branch status runs ~13 git children (v1.375.0); with
+#: every core running the suite, Windows process start-up stretched one
+#: read past the old 30 s on a correct daemon. This is a hang detector,
+#: not a speed bar: a correct request never waits for it.
+GET_TIMEOUT_S = 120.0
+
+
 async def asgi_get(app, path: str) -> tuple[int, Any]:
     sent = {"done": False}
 
@@ -139,7 +147,7 @@ async def asgi_get(app, path: str) -> tuple[int, Any]:
 
     p, _, q = path.partition("?")
     scope = {**_scope(p, b""), "method": "GET", "query_string": q.encode()}
-    await asyncio.wait_for(app(scope, receive, send), timeout=30)
+    await asyncio.wait_for(app(scope, receive, send), timeout=GET_TIMEOUT_S)
     raw = b"".join(chunks).decode("utf-8", "replace")
     try:
         return status, json.loads(raw or "{}")

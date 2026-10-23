@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.374.1 (2026-10-22).*
+holds itself to. Current as of v1.375.0 (2026-10-22).*
 
 ---
 
@@ -1896,6 +1896,55 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A branch of its own for each Build session (v1.375.0)
+
+**Your main checkout stays yours.** When you start a Build session in a
+folder that is part of a git repository, **Work on a new branch** is on by
+default: the session gets its own branch (for example `ij/session-3f2a`)
+in its own folder beside the repository, `<repository>.ij-worktrees\…`, so
+nothing it does touches the files or the branch you have checked out. Turn
+the switch off to work in the folder directly, as before. A folder that is
+not in a repository works exactly as before. If git is not installed, or the
+repository cannot take a branch (no commits yet, a submodule), New session
+says so.
+
+The session's header shows its branch and where it came from
+("ij/session-3f2a from main"). The session is listed under the folder you
+picked, and it reads that folder's project, rule files and notes.
+
+**The Branch view.** In the **Changes** panel, switch from **This session**
+to **Branch** to see everything the branch changed against where it started
+— committed and not — and finish it:
+
+- **Commit** — the session's model drafts a message from the changes; edit
+  it, then commit (as you, with your git name and e-mail).
+- **Push** — to the repository's remote, on the branch's own name. Never a
+  force push.
+- **Create PR** — when the GitHub CLI (`gh`) is installed and signed in, a
+  pull request with its checks shown while you look ("Check again" re-reads
+  them). Otherwise the Branch view offers **Open a pull request on GitHub**.
+- **Merge into main** (or whatever the base is) — two presses; a normal
+  merge, never a rewrite. It is refused, with nothing changed, when the
+  merge would conflict, when your checkout of main has changes you have not
+  committed, or when that checkout is in the middle of a rebase.
+- **Discard** — two presses; the second one says how many files are not
+  committed. The worktree folder moves to Iron Jarvis's trash (never
+  deleted) and the branch stays, with its commits, until you delete it
+  yourself. A folder still in use (a program or terminal open in it) is
+  refused with nothing moved. After a merge, **Remove the worktree** does
+  the same.
+
+**The agent and git.** On a branch, a commit or a push the agent runs in its
+terminal always asks you first — Allow once or Deny — even with
+auto-approve on, and so does git that would throw away work (a hard reset,
+a clean, discarding changes) or change the repository's settings. Some
+things the agent is never allowed to do on a branch, and it is told so
+without asking you: a force push, deleting a branch (here or on the remote),
+rewriting history (amend, rebase, a reset to another commit) and removing
+worktrees. If you want one of those, do it yourself. (This reads the
+commands the agent writes; it is a guardrail against a careless model, not a
+sandbox.)
 
 ## Watch the work in the IJ harness (v1.374.0)
 

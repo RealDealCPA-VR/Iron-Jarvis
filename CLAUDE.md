@@ -3569,6 +3569,94 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A Build session in a git folder works on ITS OWN BRANCH in a worktree
+  BESIDE the repository; the user's main checkout is touched by Merge only;
+  the agent's commit/push always asks and history is never rewritten**
+  (v1.375.0, IJ harness part 2 Phase 4 — `docs/IJ-HARNESS-PLAN-2.md`; the
+  user's decisions 1-3; a doer + a reviewer that found 12 real defects, some
+  of them able to lose the user's work, each red first and mutation-checked).
+  `harness/branches.py` (start, status, Branch diff vs the merge base,
+  commit, push, PR via `gh`, merge, `remove_worktree`), `harness/git_guard.py`
+  (the agent's git), `daemon/routes/build_git.py`, `HarnessBranch.tsx`,
+  `lib/buildGit.ts`. START: `ij/<slug>-<4 hex>` in
+  `<repo-parent>/<repo>` + `WORKTREES_SUFFIX` (`.ij-worktrees`); New
+  session's "Work on a new branch" switch (on by default, git folders only);
+  no repo / no git / no commits / bare / drive root / SUBMODULE (its worktree
+  landed inside the superproject's `.git`) say why; a refused start UNDOES
+  its branch (only while it still points where it was made) and worktree.
+  FACTS: `setup.git` (repo, checkout = the picked folder, main, worktree,
+  branch, base, base commit, name, later pushed/PR/merged/removed), its own
+  whitelist in `_clean_setup` (every thread — a chat thread's forged record
+  gets 404 from every git route and no reader trusts it), written ONLY by the
+  /build routes, records land on the facts AS STORED (a stale copy dropped a
+  PR link). The session's folder IS the worktree; it groups under the PICKED
+  folder, takes that folder's project (the worktree is outside every
+  project root; the prompt's project folder line names the worktree and a
+  paragraph says the main checkout is the user's — helpers get it too), and
+  reads the harness layer / rule files from the worktree's copy, else the
+  main checkout's (untracked files are not in a new worktree); the library's
+  edits go to the copy the session READS. EVERY git/gh child through
+  `git/integration.run_git` → `core/procs` (bounded, tree-killed, off the
+  loop, ONE git action per session at a time — a per-session lock taken off
+  the loop; the e2e found a Merge re-read holding the folder during Remove),
+  `git_env()` (GIT_TERMINAL_PROMPT=0, and DROPS `GIT_DIR`/`GIT_INDEX_FILE`/…
+  — git sets them for hooks and every Build call then acted on THAT repo),
+  reads with `GIT_OPTIONAL_LOCKS=0` (a status never rewrites the user's
+  index), output masked.
+  COMMIT/MERGE/PR refuse until the worktree's HEAD is back on ITS branch (a
+  `git switch main` in the worktree made Commit commit onto the user's
+  main). Commit's message is drafted by the session's own model (hold +
+  pin + Local only; the demo model drafts nothing). MERGE: a checked-out
+  base merges THERE with `git merge --no-ff` after `merge-tree --write-tree`
+  says no conflict and that checkout is clean (a hook stop → `merge
+  --abort`); a base checked out nowhere gets the same merge commit via
+  `commit-tree` + `update-ref <new> <old>` after a dry-run `git fetch .
+  <merge>:<base>` (git's own guard: a checkout mid-REBASE reads as
+  "detached" and moving the base broke the user's rebase). DISCARD /
+  Remove / Delete: the folder is RENAMED beside itself first (refused with
+  nothing moved while a file is held; ~5 s of retries), copied to
+  `<home>/trash/<stamp>/` across drives (renamed back if the copy fails),
+  then `git worktree remove <path>` (no `--force`) forgets ONLY this one —
+  `git worktree prune` forgot every worktree whose folder was missing (an
+  unplugged drive's). The branch always stays; Delete refuses in words if
+  the folder cannot move. PR: `gh` found by `shutil.which`, `gh auth status`
+  per host remembered 60 s, else the compare link; a title that would run
+  through cmd.exe when `gh` is a `.cmd`/`.bat` is refused before the push;
+  checks re-read every 60 s only while on screen; doctor row `check_gh`
+  (developer rows). THE AGENT (`git_guard`, through `tools/base.SpendCheck`
+  `once_only`/`reason` on `shell`, `process_start`, `process_write`):
+  ONLY on a branch — REFUSED with no card in any posture: force push,
+  deleting a remote branch, history rewrites (amend, rebase, pull
+  --rebase, reset to another commit, filter-branch, update-ref), deleting /
+  renaming / force-moving a branch or tag, `worktree remove/prune/move`,
+  `gh repo delete`; CARDED Allow-once-only in every posture past every
+  grant: commit, push, any `gh` change, git that throws work away (`reset
+  --hard`, `clean -f`, `checkout -- .`, `restore`, `stash drop`) and `git
+  config` writes; quotes stripped and `-c alias.x=` expanded (`cmd /c "git
+  push"`, `bash -lc 'git commit'` slipped through); the POST lane refuses;
+  proven on the REAL registry `invoke`, a helper run and the process tools.
+  It reads command TEXT: a guardrail, not a sandbox (the user's own git
+  aliases are not caught; `grep "git rebase"` reads as running it).
+  THE AGENT'S SHELL CANNOT RUN GIT IN THE PRODUCT — not this phase's, but
+  found by it: `sandbox.modify_env = "deny"` (the default) gives `shell` and
+  the process tools `native.scrubbed_env()` — PATH = the app's own folder +
+  System32 + Windows, no HOME/USERPROFILE — so `git`, `node`, `npm`,
+  `python` do not resolve (only `py.exe`), and a full-path git cannot read
+  the user's global identity or stored sign-in. The Branch buttons run in
+  the app's own environment and work. Changing that is the user's decision.
+  KNOWN: rewinding a committed turn puts its files back as uncommitted
+  changes and does not say so; "dubious ownership" reads as "not a
+  repository"; git < 2.38 cannot pre-check a merge; Local only shows the
+  shell's own card before a refused git command; not driven against the
+  real GitHub or in the packaged app. A branch status read runs ~13 git
+  children (0.45 s idle): under a full local `-n auto` run one passed the
+  shared test helper's old 30 s GET limit, now
+  `test_build_sessions_v1367.GET_TIMEOUT_S` = 120 s (a hang detector, not a
+  speed bar). Pins: `tests/test_build_git{,_agent,
+  _pr,_review,_guard_review}_v1375.py`,
+  `dashboard/__tests__/ij-harness-git-v1375.test.tsx`, e2e
+  `dashboard/e2e/ij-harness-git.spec.ts`.
+
 - **A Build session SHOWS its work: the plan under the reply, how full the
   conversation is, a session summary only Compact writes, and one notice for
   a long turn** (v1.374.0, IJ harness part 2 Phase 3 — `docs/IJ-HARNESS-
