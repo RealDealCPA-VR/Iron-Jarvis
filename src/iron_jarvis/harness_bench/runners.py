@@ -239,6 +239,22 @@ def _entry_from(provider: str, model: str, usage: Any, *, with_tools: bool, sour
 
 
 @contextlib.contextmanager
+def session_ended_on_escape(session_id: str):
+    """v1.378.0 review: end the turn's own session (``procs.end_session``)
+    when the block is left by ANY exception — a cancel (Stop, Ctrl+C) or a
+    runner bug. A run that finishes ends it itself, off the loop, after the
+    block. Each turn has a session of its own, so nothing later sweeps what a
+    cancelled turn left running; this is the one door it has. Synchronous on
+    purpose: a cancelled task must not await again before the programs stop."""
+    try:
+        yield
+    except BaseException:
+        with contextlib.suppress(Exception):
+            procs.end_session(session_id)
+        raise
+
+
+@contextlib.contextmanager
 def counting_router(platform: Any, rollout: Rollout, observed: dict[str, Any]):
     """Enter every model call the platform's router makes into ``rollout``
     while the block runs — ``stream()`` and ``complete()``, whatever the
@@ -496,8 +512,12 @@ class JarvisRunner:
         # a fresh ``build:`` session for its tool calls, and the model held
         # for the turn and its helpers — the pair a Build turn would run on.
         session = session_id_for(BENCH_SESSION_PREFIX + uuid4().hex[:12])
-        hold_token = set_hold(*_harness_model(self.platform, self.provider, self.model))
-        with counting_router(self.platform, rollout, observed), layer_source(self.layer_dir):
+        # (review: the session is ended however the block is left — a Stop
+        # included — and the hold is armed inside it, so nothing can leave
+        # it armed.)
+        with session_ended_on_escape(session), counting_router(self.platform, rollout, observed), \
+                layer_source(self.layer_dir):
+            hold_token = set_hold(*_harness_model(self.platform, self.provider, self.model))
             try:
                 gen = await stream_chat_turn(
                     self.platform, BUILTIN_PERSONAS, body,
