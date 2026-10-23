@@ -323,9 +323,9 @@ async def test_a_helpers_commit_asks_once_and_its_rewrite_is_refused_with_no_ask
                              arguments={"command": f"{GITX} -c alias.ci=commit ci -am helper"})]
         return "helper finished"
 
-    wire_model(app, Model(main=[[ToolCall(id="k1", name="Agent",
-                                          arguments={"description": "d", "prompt": "Tidy the branch."})],
-                                "ok"], helper=helper))
+    model = wire_model(app, Model(main=[[ToolCall(id="k1", name="Agent",
+                                                  arguments={"description": "d", "prompt": "Tidy the branch."})],
+                                        "ok"], helper=helper))
     task = asyncio.create_task(_run(app, sid, "go", "gr-helper"))
     waiting = await until(lambda: [d for e, d in turn_frames(app, "gr-helper")
                                    if e == "helper" and d.get("state") == "waiting"])
@@ -338,3 +338,6 @@ async def test_a_helpers_commit_asks_once_and_its_rewrite_is_refused_with_no_ask
     assert (wt / "README.md").read_bytes() == b"# changed\n"
     outputs = [r.output or "" for r in _ledger(app)]
     assert any("rewrites the branch's history" in o for o in outputs), outputs
+    # The helper is told it works on the session's branch, like the session.
+    helper_prompt = next(c["system"] for c in model.calls if not c["main"])
+    assert f"own git branch, {view['git']['branch']}" in helper_prompt

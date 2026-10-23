@@ -339,7 +339,13 @@ def helper_definition(parent: "HelperParent | None", definition: Any, *, custom:
             overrides[key] = "deny"
         elif mode == "ask" and overrides.get(key) != "deny":
             overrides[key] = "ask"
-    return replace(definition, tools=tools, permission_overrides=overrides)
+    # Review (v1.375.0): a helper of a session on its own git branch is told
+    # so, like the session itself (``branches.prompt_line`` — "" otherwise,
+    # so every other helper's prompt is exactly as before).
+    from .branches import prompt_line as branch_line
+
+    prompt = str(getattr(definition, "system_prompt", "") or "") + branch_line()
+    return replace(definition, tools=tools, permission_overrides=overrides, system_prompt=prompt)
 
 
 @contextlib.contextmanager
