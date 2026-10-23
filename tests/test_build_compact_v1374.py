@@ -70,11 +70,17 @@ def work(tmp_path):
     return folder
 
 
+#: Older turns long enough that a short summary is lighter than they are.
+_PADDING = (
+    " I went through the surrounding code, the notes and the earlier answers to make sure"
+    " nothing else depends on it, and everything I checked is consistent with that."
+) * 3
+
 TURNS = [
     ("t1", "What is the deploy codename?",
-     'The deploy codename is "CORAL-TELESCOPE-17", from docs/deploy-notes.md.'),
-    ("t2", "Add a --dry-run flag to src/app.py.", "Added the --dry-run flag to src/app.py."),
-    ("t3", "Which port does the dev server use?", "The dev server listens on port 5173."),
+     'The deploy codename is "CORAL-TELESCOPE-17", from docs/deploy-notes.md.' + _PADDING),
+    ("t2", "Add a --dry-run flag to src/app.py.", "Added the --dry-run flag to src/app.py." + _PADDING),
+    ("t3", "Which port does the dev server use?", "The dev server listens on port 5173." + _PADDING),
     ("t4", "Rename the cache folder.", "Renamed .cache to .build-cache."),
     ("t5", "Run the tests.", "All 42 tests passed."),
     ("t6", "Summarize what changed today.", "A flag, a renamed folder and a green test run."),
@@ -211,6 +217,9 @@ async def test_compact_is_ledger_checked_held_on_the_sessions_model_billed_and_k
     # It was shown the older turns — and not the newest six lines.
     assert "CORAL-TELESCOPE-17" in call["user"] and "port 5173" in call["user"]
     assert "Rename the cache folder" not in call["user"] and "42 tests" not in call["user"]
+    # ...and asked for a record much shorter than what it replaces.
+    assert "Keep the whole record under about" in call["system"]
+    assert "must be much shorter than what it replaces" in call["system"]
     # THE CHECK: the planted false path and the invented quote are gone; a
     # path the ledger names and a verbatim quote stay.
     assert body["stripped"] == 2
@@ -255,6 +264,36 @@ async def test_a_summary_that_survives_no_check_is_not_kept(app, work):
     status, body = await asgi(app, "POST", f"/build/sessions/{sid}/compact", {})
     assert status == 502 and body["detail"] == C.NOTHING_KEPT
     assert "compaction" not in setup_of(app, sid)
+
+
+async def test_a_summary_no_lighter_than_what_it_replaces_is_not_kept(app, work):
+    """Live finding (v1.374.0): on a 3,000-token window the model wrote a
+    summary as long as the three turns it covered, and the next prompt got
+    HEAVIER. A checked summary that is not lighter is not kept."""
+    sid = new_session(app, work)["id"]
+    engine = app.state.platform.engine
+    for tid, q, a in [(f"s{i}", f"Question {i}?", f"Short answer {i}.") for i in range(1, 7)]:
+        S.append_lines(engine, sid, [{"role": "user", "content": q, "turnId": tid},
+                                     {"role": "assistant", "content": a, "turnId": tid}])
+    verbose = "FACTS:\n" + "\n".join(f"Question {i} had the short answer number {i} and nothing else." for i in range(1, 4))
+    wire_writer(app, Writer(text=verbose))
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/compact", {})
+    assert status == 502 and body["detail"] == C.NOT_LIGHTER
+    assert "compaction" not in setup_of(app, sid)
+    # The model still ran: its use is on the session.
+    with session_scope(engine) as db:
+        assert len(list(db.exec(select(AgentRun).where(AgentRun.thread_id == sid)).all())) == 1
+
+
+def test_the_length_asked_for_is_a_third_of_what_it_replaces():
+    lines = _lines(6)
+    tokens, words = C.replaced(lines, 6, None)
+    assert words == 6 and tokens > 0  # q1 a1 q2 a2 q3 a3, one word each
+    assert "under about 40 words" in C.length_line(words)  # never below 40
+    assert "under about 300 words" in C.length_line(900)
+    # A standing summary counts toward what a new one replaces.
+    with_prior = C.replaced(_lines(8), 10, {"summary": "one two three", "through_turn": "t3"})
+    assert with_prior[1] > 4
 
 
 async def test_the_demo_model_writes_no_summary_before_or_after_a_call(app, work):

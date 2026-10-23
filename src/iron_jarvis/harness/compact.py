@@ -15,6 +15,13 @@ journal's targets, ``build:<id>``), and every double-quoted span must appear
 verbatim in the covered transcript; a line that fails is removed. A summary
 that survives nothing is not used — the press says so and keeps nothing.
 
+LIGHTER OR NOTHING: the summarizer is told how much it replaces and asked
+for a third of it (:func:`length_line`), and a verified summary that is not
+lighter than what it takes the place of in the next turn's prompt (the
+standing summary plus the history lines it now covers, :func:`replaced`) is
+not kept — a live run on a 3,000-token window wrote one as long as the three
+turns it covered, which made the next prompt heavier, not lighter.
+
 HONEST MOCK: no real model, no summary. The demo model's prose read back as
 an authoritative account of the conversation on every later turn would be
 worse than no summary at all; it is refused before any call (a session on
@@ -107,6 +114,10 @@ NOTHING_KEPT = (
     "the conversation does not have), so none of it was kept."
 )
 NO_SUMMARY = "The model wrote no summary, so nothing changed. Try again in a moment."
+NOT_LIGHTER = (
+    "The summary came out as long as the turns it would replace, so it was not kept and nothing changed. "
+    "Try again after a few more turns."
+)
 CHANGED = "The conversation changed while it was being summarized, so nothing was kept. Try again."
 
 
@@ -332,6 +343,32 @@ def fit_pairs(messages: list[dict[str, Any]], end: int, record: "dict[str, Any] 
     raise CompactRefused(TOO_LONG)
 
 
+def replaced(messages: list[dict[str, Any]], end: int, record: "dict[str, Any] | None") -> tuple[int, int]:
+    """``(tokens, words)`` a new summary would take the place of in the next
+    turn's prompt: the standing summary (when there is one) and the history
+    lines between its coverage and ``end`` — measured the planner's way
+    (``context.budget.estimate_tokens``, 4 per message). A summary is only
+    worth keeping when it is LIGHTER than this."""
+    from ..context.budget import estimate_tokens
+    from . import sessions as S
+
+    texts = [m["content"] for m in S.history_of(messages[boundary(messages, record):end])]
+    prior = render(record["summary"]) if record else ""
+    tokens = sum(estimate_tokens(t) + 4 for t in texts) + (estimate_tokens(prior) if prior else 0)
+    words = sum(len(t.split()) for t in texts) + len(prior.split())
+    return tokens, words
+
+
+def length_line(words: int) -> str:
+    """What the summarizer is told about length: a third of what it replaces
+    (at least 40 words) — the point of the summary is a lighter prompt."""
+    budget = max(40, words // 3)
+    return (
+        f"\n\nKeep the whole record under about {budget} words. It replaces about {words} words of "
+        "conversation and must be much shorter than what it replaces."
+    )
+
+
 # --------------------------------------------------------------------------- #
 # the session's ledger: what the summary may name
 # --------------------------------------------------------------------------- #
@@ -436,6 +473,9 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
     window = _context_window(SimpleNamespace(platform=platform), provider, model) or DEFAULT_WINDOW
     pairs = fit_pairs(messages, end, prior, window)
     paths, tools = await asyncio.to_thread(ledger_facts, engine, thread_id)
+    # What the summary takes the place of in the next turn's prompt: it is
+    # asked to be much shorter, and kept only when it is lighter.
+    replaced_tokens, replaced_words = replaced(messages, end, prior)
 
     router = platform.router
     got: dict[str, Any] = {}
@@ -443,7 +483,7 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
     async def _complete(system: str, user: str) -> tuple[str, str, str]:
         try:
             route = await router.complete(
-                provider=provider, model=model or None, system=system,
+                provider=provider, model=model or None, system=system + length_line(replaced_words),
                 messages=[LLMMessage(role="user", content=user)], tools=[],
                 session_id=None, pin=True,
             )
@@ -494,6 +534,12 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
     # The verified body (the header is added when a turn reads it), scanned
     # like every other text injected into a prompt.
     body = out.summary.split("\n", 1)[1].strip() if "\n" in out.summary else out.summary.strip()
+    from ..context.budget import estimate_tokens
+
+    if estimate_tokens(render(body)) >= replaced_tokens:
+        # A summary as long as what it replaces makes nothing lighter: the
+        # turns are better read as they were.
+        raise CompactRefused(NOT_LIGHTER, 502)
     scanned = await asyncio.to_thread(scan_context, body, source=SCAN_SOURCE, cap=MAX_SUMMARY_CHARS)
     if scanned.blocked:
         publish_blocked(getattr(platform, "event_bus", None), S.session_id_for(thread_id), scanned)
