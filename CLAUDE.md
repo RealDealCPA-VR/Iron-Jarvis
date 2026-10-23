@@ -3569,6 +3569,124 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **The IJ harness is MEASURED again: a benchmark turn runs AS a Build
+  session; the walkthrough's gaps are written down** (v1.378.0, IJ harness
+  part 2 Phase 7; a doer + a reviewer that found 5 real defects, each red
+  first and mutation-checked). BENCH: the Jarvis runner ran every task under
+  the chat lane's "chat" session, so v1.377.0's Build env (the user's PATH)
+  never reached a benchmark turn and nothing held the model; each task turn
+  now runs under its own `build:bench-<hex>` session with `providers.hold`
+  armed, `ask_user` off, and `session: "build"` in the Jarvis runner's
+  identity (a new config folder — no older record is reused).
+  `harness_bench/runners.session_ended_on_escape` ends that session on ANY
+  way out (a Ctrl+C/Stop used to leave the turn's programs alive under a
+  session nothing would end); the hold is armed inside it. The bench calls
+  the chat lane directly, so library reflection, the finish notice, Build
+  compaction and session-row writes (all in `routes/build.py`) never run for
+  it. RESULTS (in `docs/IJ-HARNESS-PLAN-2.md` Phase 7, read from the bench's
+  own `results.json`): Claude Code 30/30, Codex 30/30, Jarvis on Codex 30/30
+  (gained `hard-expression-evaluator`), Jarvis on Claude 29/30 and glm
+  28/30 — both lost `hard-expression-evaluator` in the full run and passed
+  it TWICE alone (variance); no part 2 tool was called in 90 Jarvis runs;
+  "is not recognized" fell to 0 on every setup. WALKTHROUGH
+  (`docs/IJ-HARNESS-WALKTHROUGH.md`, 21 JPEGs in `docs/walkthrough/`,
+  checked for e-mail/account/key/project content): every step possible;
+  presses IJ 11/9/11 vs Claude Code 6–9/4–7/8–14 (Claude Code counted from
+  its desktop page, estimated — the page does not say Manual is the default
+  and says local dev servers need no approval) — "no more presses" is NOT
+  met for tasks 1 and 2; gaps listed there. SCREEN FIXES: New session opens
+  on the folder of the session in front (an archived one falls back to the
+  old default); Changes opens on the Branch view only for a LIVE branch
+  (`branch_changes` covers committed + uncommitted + untracked; a removed
+  worktree or merged branch opens "This session"); after Commit the branch
+  is read BEFORE the "Committed" note, newest read wins (a sequence guard);
+  a Build reply line saves each step's target (`harness/step_target.py` is
+  the Python twin of `lib/workTarget.stepTarget`, held equal by the 70-case
+  fixture `dashboard/__tests__/fixtures/step-target-v1378.json` — change both
+  together; the table found the TS 60-char cut splitting an emoji); a file
+  named by its whole path is listed by its path inside the folder
+  (`routes/chat_changes.py`, chat and Build). Pins:
+  `tests/test_harness_bench_build_session{,_review}_v1378.py`,
+  `tests/test_step_target_v1378.py`, `tests/test_chat_changes_whole_path_v1378.py`,
+  `dashboard/__tests__/{ij-harness-new-folder,ij-harness-changes-branch-default,
+  ij-harness-phase7-review}-v1378.test.tsx`, `step-target-twin-v1378.test.ts`.
+  SAME RELEASE (test-only): the merged full suite failed three
+  `test_iron_proxy_service_v1301` tests that start the Python stand-in
+  ("Iron-Proxy is on but not answering", `owned` False) and passed alone; an
+  11 s simulated start (`FAKE_IRON_PROXY_START_DELAY`) reproduces all three
+  on the old shape. `_use_fake_bundle` now sets `START_TIMEOUT_S` = 60 for
+  every stand-in start in that file (a hang detector, the v1.374.1 rule),
+  the lease wait 90 s, the crash-orphan test's own timeout 240 s.
+
+- **A provider's safety REFUSAL is a typed error with a way out — never an
+  empty reply, never retried, never moved to another provider** (v1.378.0;
+  found by the Phase 6 review: Anthropic's classifier answers `stop_reason:
+  "refusal"` + `stop_details.category` with NO content and judges the WHOLE
+  conversation, so "Say hello" is refused too and Retry can never help; a
+  doer + a reviewer that found 13 more defects, each red first and
+  mutation-checked). TYPE: `providers/adapters/base.ProviderRefusal` (kind
+  "refusal", status 200, not transient, `no_failover`, category, explanation,
+  partial, whole_conversation) + `refusal_of()` (walks causes ≤ 6). RAISED BY
+  every adapter that can see one, from fields the vendor really sends:
+  claude-cli `claude_native/transport.refusal_error` (checked in `assemble`
+  BEFORE the native-error check; `handled` now means only an admission
+  denial), Anthropic `_refusal` (complete + stream), the fleet's
+  `anthropic_compat` (a LiteLLM proxy passes Claude's answer through;
+  `whole_conversation` False — what is behind a proxy is unknown), OpenAI
+  `_content_refusal` (`finish_reason: content_filter`, `message.refusal`,
+  stream `delta.refusal`, Responses `incomplete_details content_filter` +
+  `refusal` parts; not whole-conversation — no field says so), Gemini
+  (`promptFeedback.blockReason` = whole-conversation; `finishReason`
+  SAFETY/BLOCKLIST/PROHIBITED_CONTENT/SPII/IMAGE_SAFETY = this answer only;
+  RECITATION/LANGUAGE/OTHER keep the old error — a judgment on the OUTPUT,
+  a rephrase can pass), Codex app-server `_POLICY_VARIANTS` (cyberPolicy,
+  misalignmentPolicyViolation — read from 0.157.0's own schema; the `codex
+  exec` fallback does not type one). ROUTER: `partial` is the ROUTER's fact
+  (complete() → False; stream() → an answer frame reached the caller), never
+  the adapter's guess; `no_failover and (not auto_selected or
+  is_refusal(exc))` — AUTO NEVER MOVES A REFUSAL (moving declined content is
+  the user's privacy call); a fallback (A) or sideways (B) CANDIDATE that
+  refuses raises the refusal itself (`_candidate_refused`), never hands on to
+  the next provider; no breaker strike (committed too); `provider.failed`
+  carries `kind: "refusal"` + `category`; `is_context_overflow` never reads a
+  refusal as "too long" (both lanes re-sent the declined conversation
+  shrunk); one-shots go through `_refusal_http` (before the local-endpoint
+  check, no banner, no other provider). WORDS (`failure_words`, one sentence
+  per SURFACE): chat "… Start a new chat, or edit an earlier message to go
+  back before the part it flagged." (true: every user bubble has Edit and
+  resend), Build (`set_build_surface`, a ContextVar armed in
+  `start_build_turn`) "… Rewind to before the message that set it off, or
+  start a new session.", a Build terminal's chat (read from `pane_id`, both
+  lanes) "Open a new terminal…", the phone (`phone_surface()` around both
+  phone turns) "Send /new…", an agent run "declined to do this task … Change
+  the task, then run it again." — ONE `refusal_reason` rule shared by runs,
+  workflow steps (an `on_failure: retry` step is NOT re-sent), the phone and
+  a refused delegate/spawn child (its parent is told handing it out again
+  would be declined too). Category only when the vendor gives one, in plain
+  words (`REFUSAL_TOPICS`), never guessed. Both chat lanes' error frame / 502
+  carry `fix_kind: "refusal"` + `fix_provider` (MIRROR NOTE); a reply whose
+  rest was declined (and a declined final-answer nudge) is `refused: true`
+  — kept text, "The rest of this reply was declined.", no Continue and no
+  Regenerate. DASHBOARD: no Retry / Retry-with-default on a refusal anywhere
+  (chat, PaneChat, the harness); chat's **Start a new chat** MOVES the typed
+  words (`clearDraft`; attachments/chips/refs/page context cleared, the
+  declined chat kept); the harness's **Choose where to rewind** opens the
+  /rewind list (hidden on an archived session and when nothing can be
+  rewound to — the trigger is usually EARLIER than the last message); the
+  failure line is the next-message note (sending is never blocked); a Build
+  reply line carries `errorKind: "refusal"` and joins "title. fix"; the
+  run page and live step labels say "<Provider> declined to answer", never
+  the class name. NOTICES: a refusal skips the default `provider.failed`
+  alert (the ledger keeps it). OPEN: the run page's Rerun re-sends a refused
+  run as-is (Session rows carry no typed failure kind); a later schedule/goal
+  fire runs the same task again; the POST-fallback `refused` read has no
+  vitest; no vendor's refusal seen live through the product (the benign
+  trigger did not reproduce twice). Pins:
+  `tests/test_provider_refusal{,_review}_v1378.py` (claude-cli through the
+  REAL relay against a scripted refusing upstream),
+  `dashboard/__tests__/provider-refusal-{chat,harness,pane,review}-v1378.test.tsx`,
+  `provider-refusal-steplabel-v1378.test.ts`.
+
 - **A Build session's commands see the user's PATH and home, never a
   secret; the rest of the app stays scrubbed** (v1.377.0, IJ harness part 2
   Phase 6 — the user's decision of 2026-10-23 after the Phase 4 review found
@@ -3642,8 +3760,8 @@ does not need a bump, stop and bump it.
   Iron Jarvis turns it into an EMPTY reply + "Press Retry" — the classifier
   judges the whole conversation, so every later message in that session is
   refused (`claude_native/transport.assemble` treats it as handled since
-  v1.300.0; `adapters/anthropic._finish` maps it to "stop"); being fixed
-  next. KNOWN: commands can print a sign-in the user's own tools hold (`gh
+  v1.300.0; `adapters/anthropic._finish` maps it to "stop"); FIXED in
+  v1.378.0 (see that bullet). KNOWN: commands can print a sign-in the user's own tools hold (`gh
   auth token`, `git credential fill`); system-wide git aliases are not read;
   a restored `@` file deleted since is refused at send with a sentence.
   Pins: `tests/test_build_{env,env_review,phase6,phase6_review,git_aliases,

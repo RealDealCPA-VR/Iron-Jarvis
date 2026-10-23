@@ -640,6 +640,16 @@ class Notifier:
         etype = _event_field(event, "type")
         if etype not in self.event_types:
             return None
+        if etype == EventType.PROVIDER_FAILED:
+            # v1.378.0 review: a provider's SAFETY REFUSAL is not an outage —
+            # the turn or run that was declined already says so where it was
+            # asked (ONE notice, v1.360.0), and this alert's words ("couldn't
+            # answer. Press Retry … pick another model") were the Retry and
+            # the "send it elsewhere" the refusal rule forbids. The ledger
+            # keeps it (`kind: "refusal"`).
+            payload = _event_field(event, "payload", {}) or {}
+            if isinstance(payload, dict) and payload.get("kind") == "refusal":
+                return None
         # v1.118.0: fan out to EVERY channel whose per-registration config
         # allows this event type — not just the default. A channel config may
         # carry ``events: [...]`` to narrow what it receives (the Notifications

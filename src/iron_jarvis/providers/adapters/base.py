@@ -76,6 +76,80 @@ class ProviderError(RuntimeError):
         self.transient = bool(transient)
 
 
+#: The ``kind`` a provider's content refusal carries (v1.378.0) — read by
+#: ``providers.failure_words`` (the words), ``router`` (no failover, no
+#: breaker strike, the ledger's kind) and ``chat_turn.fix_action`` (the press).
+REFUSAL_KIND = "refusal"
+
+
+class ProviderRefusal(ProviderError):
+    """The provider's safety check DECLINED to answer (v1.378.0).
+
+    Anthropic answers ``stop_reason: "refusal"`` (with ``stop_details``) and no
+    content; Gemini a ``blockReason`` / a SAFETY-class ``finishReason``; OpenAI
+    ``finish_reason: "content_filter"`` or a ``refusal`` on the message; Codex
+    a ``cyberPolicy`` turn error. Each used to arrive as an EMPTY reply the
+    chat then offered to Retry — which can never help: Anthropic's classifier
+    judges the WHOLE conversation, so every later message in it is declined
+    too, until the user goes back to before what set it off.
+
+    Never transient and never moved to another provider (``no_failover``,
+    Auto included): a refusal is about the conversation, not the provider's
+    health, and sending the same conversation to a provider the user did not
+    pick to get past a safety check is the user's decision, never a routing
+    fallback (the v1.162.0 / v1.301.0 rule). ``status_code`` is 200 — the
+    provider ANSWERED (it is up; the breaker is never struck), so nothing reads
+    it as "never reached".
+
+    * ``category`` — the vendor's own category ("cyber"), "" when it gave none
+      (never guessed);
+    * ``explanation`` — the vendor's own words, bounded, for the technical
+      fold only (masked there);
+    * ``partial`` — some of the answer had already reached the user;
+    * ``whole_conversation`` — the vendor judges the whole conversation, so
+      every new message in it is declined too (Anthropic, a Gemini prompt
+      block). False: it declined this answer, and may decline the next.
+    """
+
+    kind = REFUSAL_KIND
+    no_failover = True
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str = "",
+        category: str = "",
+        explanation: str = "",
+        partial: bool = False,
+        whole_conversation: bool = False,
+    ) -> None:
+        super().__init__(message, status_code=200, transient=False)
+        self.kind = REFUSAL_KIND
+        self.no_failover = True
+        self.category = " ".join(str(category or "").split())[:60]
+        self.explanation = " ".join(str(explanation or "").split())[:500]
+        self.partial = bool(partial)
+        self.whole_conversation = bool(whole_conversation)
+        if provider:
+            self.failed_provider = provider
+
+
+def refusal_of(exc: BaseException | None) -> ProviderRefusal | None:
+    """The :class:`ProviderRefusal` *exc* is or was raised from (bounded walk
+    of ``__cause__`` / ``__context__``), else None. Never raises."""
+    cur, seen = exc, 0
+    while cur is not None and seen < 6:
+        if isinstance(cur, ProviderRefusal):
+            return cur
+        try:
+            cur = cur.__cause__ or cur.__context__
+        except Exception:  # noqa: BLE001
+            return None
+        seen += 1
+    return None
+
+
 def provider_error_from_response(provider: str, resp: Any, detail: str) -> ProviderError:
     """Build a :class:`ProviderError` from an httpx-style error ``resp``.
 

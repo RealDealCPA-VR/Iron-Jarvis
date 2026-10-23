@@ -149,8 +149,10 @@ import {
   DRAFT_BACK_WORDS,
   KEY_LINK_HREF,
   KEY_LINK_WORDS,
+  NEW_CHAT_WORDS,
   failureAction,
   failureFacts,
+  isRefusal,
   signInLabel,
 } from "@/lib/failureActions";
 import { codeParts, paneHref, useCliSignIn } from "@/lib/cliSignIn";
@@ -688,6 +690,12 @@ interface ChatMessage {
   /** This assistant reply was cut off mid-stream (Stop, or a committed failure)
    *  — shown with a subtle marker so a partial answer never looks complete. */
   interrupted?: boolean;
+  /** v1.378.0 review: the cut-off reply's rest was DECLINED by the provider's
+   *  safety check (`fix_kind` "refusal"). Continue and "Regenerate reply"
+   *  would send the same conversation to the same model, which declines it
+   *  again — neither is offered, and the note says the rest was declined.
+   *  Saved with the thread, so a reopened chat knows. */
+  refused?: boolean;
   /** The turn proposed a reusable workflow — rendered as a draft card
    *  (v1.120.0). Persists with the thread like every other field. */
   workflowDraft?: WorkflowDraft;
@@ -3254,12 +3262,16 @@ const MessageRow = memo(function MessageRow({
       {(m.interrupted || m.truncated) && (
         <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] italic text-tone-warn">
           <span data-testid="reply-cut-note">
-            {m.truncated
+            {m.refused
+              ? "The rest of this reply was declined."
+              : m.truncated
               ? "The reply ran out of room and stopped."
               : "The reply was cut off."}
           </span>
-          {/* v1.323.0: CONTINUE — only the newest plain chat reply, never mid-turn. */}
-          {isLast && !busy && !m.panelWho && !m.fromSession && !m.runResult && m.content.trim() && (
+          {/* v1.323.0: CONTINUE — only the newest plain chat reply, never mid-turn.
+              v1.378.0 review: never on a reply whose rest was DECLINED (it
+              would send the same conversation to be declined again). */}
+          {isLast && !busy && !m.refused && !m.panelWho && !m.fromSession && !m.runResult && m.content.trim() && (
             <button
               type="button"
               data-testid="continue-reply"
@@ -8454,6 +8466,8 @@ export default function ChatPage() {
             ? { thinkingSeconds: Math.max(1, Math.round(streamRes.thinkingMs / 1000)) }
             : {}),
           ...(streamRes.truncated ? { truncated: true } : {}),
+          // v1.378.0 review: a declined nudge's sentence — no Regenerate.
+          ...(streamRes.refused ? { refused: true } : {}),
           ...(turnSteps.length ? { steps: turnSteps } : {}),
           ...(streamRes.timing ? { timing: streamRes.timing } : {}),
           ...(streamRes.resources?.length ? { appResources: streamRes.resources } : {}),
@@ -8562,6 +8576,8 @@ export default function ChatPage() {
                   content: partial,
                   interrupted: true,
                   ...(sources.length ? { sources } : {}),
+                  // v1.378.0 review: the rest was declined (typed fix_kind).
+                  ...(isRefusal(failureFacts(e)) ? { refused: true } : {}),
                 },
               ]
             : history;
@@ -8643,6 +8659,8 @@ export default function ChatPage() {
         at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
         ...(thinkingPost ? { thinking: thinkingPost } : {}),
         ...((res as { truncated?: unknown }).truncated === true ? { truncated: true } : {}),
+        // v1.378.0 review: MIRROR NOTE — the stream lane's `refused` above.
+        ...((res as { refused?: unknown }).refused === true ? { refused: true } : {}),
         ...(res.route ? { route: res.route } : {}),
         ...(adaptedPost ? { adapted: adaptedPost } : {}),
         ...(deniedPost.length ? { deniedTools: deniedPost } : {}),
@@ -11946,6 +11964,9 @@ export default function ChatPage() {
                         i === messages.length - 1 &&
                         i > 0 &&
                         messages[i - 1].role === "user" &&
+                        // v1.378.0 review: a DECLINED reply is not regenerated
+                        // (the same conversation is declined again).
+                        !m.refused &&
                         !busy;
                       return (
                         // Calm chat W1-4: each message holds itself to the
@@ -12237,8 +12258,11 @@ export default function ChatPage() {
                           >
                             {/* v1.355.0 (G29): with a press beside it, the
                                 line is the headline alone — the press does
-                                what the fix sentence sent the user to do. */}
-                            {turnFix && errFacts?.title ? errFacts.title : error}
+                                what the fix sentence sent the user to do.
+                                v1.378.0: a safety refusal keeps the WHOLE
+                                sentence — its fix says why every new message
+                                here is declined too, and the edit way back. */}
+                            {turnFix && turnFix.kind !== "refusal" && errFacts?.title ? errFacts.title : error}
                           </p>
                         )}
                         {compactNote && (
@@ -12323,7 +12347,35 @@ export default function ChatPage() {
                             {KEY_LINK_WORDS}
                           </Link>
                         )}
-                        {failedTurn && !busy && !localRefusal && (
+                        {/* v1.378.0: A SAFETY REFUSAL. The provider's check
+                            judges the whole conversation, so Retry (and
+                            "Retry with the default model", which would send
+                            it elsewhere to get past the check) can never be
+                            the answer: the press starts a new chat with the
+                            message moved into its box. Editing an earlier
+                            message (the sentence says so) is the other way. */}
+                        {failedTurn && !busy && turnFix?.kind === "refusal" && (
+                          <button
+                            type="button"
+                            data-testid="chat-turn-new-chat"
+                            onClick={() => {
+                              const words = composer.get().text;
+                              const left = saveTargetRef.current.id;
+                              newChat();
+                              if (words.trim()) {
+                                composer.setText(words);
+                                // Moved, not copied: the declined chat keeps
+                                // no draft of it.
+                                if (left) clearDraft(left);
+                              }
+                            }}
+                            className={CALM_GHOST_BTN}
+                          >
+                            <Plus size={13} aria-hidden />
+                            {NEW_CHAT_WORDS}
+                          </button>
+                        )}
+                        {failedTurn && !busy && !localRefusal && turnFix?.kind !== "refusal" && (
                           <RetryTurnButton
                             cooldownS={trouble.cooldownS}
                             onRetry={() => retryTurn()}
@@ -12341,6 +12393,7 @@ export default function ChatPage() {
                             never a fallback the page makes (the v1.162.0 rule). */}
                         {failedTurn &&
                           !busy &&
+                          turnFix?.kind !== "refusal" &&
                           canRetryWithDefault(choice, health) &&
                           // v1.332.0: never offered when the default would
                           // leave this PC from a "local only" chat.

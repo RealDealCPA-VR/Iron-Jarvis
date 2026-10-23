@@ -93,7 +93,11 @@ LINE_KEYS: tuple[str, ...] = (
     "attachmentNames", "attachmentPaths", "steer",
     # the reply (the stream lane's done frame, renamed the page's way)
     "route", "toolsUsed", "documents", "deniedTools", "usage", "steps",
-    "thinking", "truncated", "interrupted", "error", "folderRules",
+    "thinking", "truncated", "interrupted", "error",
+    # v1.378.0: what the error WAS ("refusal": the provider's safety check
+    # declined the conversation — the screen offers Rewind, never Retry).
+    "errorKind",
+    "folderRules",
     "approved", "refit", "doors", "trust", "trustReason", "trustNote",
     "timing",
     # v1.368.0 (Phase 5): a continuation question the DAEMON wrote ("Resume

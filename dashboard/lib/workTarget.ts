@@ -167,7 +167,11 @@ function oneLine(s: string): string {
 }
 
 function cut(s: string): string {
-  return s.length > TARGET_MAX ? `${s.slice(0, TARGET_MAX - 1).trimEnd()}…` : s;
+  if (s.length <= TARGET_MAX) return s;
+  // v1.378.0 review: never half a character — a cut between the two halves
+  // of an emoji saved a lone surrogate (it draws as "�").
+  const head = s.slice(0, TARGET_MAX - 1).replace(/[\uD800-\uDBFF]$/, "");
+  return `${head.trimEnd()}…`;
 }
 
 /**

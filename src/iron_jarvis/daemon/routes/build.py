@@ -584,6 +584,15 @@ class _ReplyWatch:
                         "ok": bool(ok) if ok is not None else None,
                         "ms": int((time.time() - began[1]) * 1000) if began else None,
                     }
+                    # v1.378.0 review: what the step was done to ("cart.py",
+                    # "python"), from the frame's own arguments — the words
+                    # the live row shows (lib/workTarget's twin), saved
+                    # before the detail as the chat page saves them.
+                    from ...harness.step_target import step_target
+
+                    target = step_target(name, began[2] if began else None)
+                    if target:
+                        step["target"] = target
                     if isinstance(data.get("detail"), dict):
                         step["detail"] = data["detail"]
                     self.steps.append(step)
@@ -721,10 +730,20 @@ class _ReplyWatch:
                 line["trustNote"] = done.get("trust_note") or ""
         elif self.error is not None:
             err = self.error
-            words = " ".join(
-                p for p in (str(err.get("title") or "").strip(), str(err.get("fix") or "").strip()) if p
-            ) or str(err.get("detail") or "The reply failed.")
+            # `title. fix` — the join the chat's failure line makes
+            # (lib/failureLine.failureSentence; v1.378.0: it was joined with a
+            # bare space, "…declined to answer this conversation Its safety…").
+            title = str(err.get("title") or "").strip()
+            fix = str(err.get("fix") or "").strip()
+            if title and fix and title[-1] not in ".!?":
+                title += "."
+            words = " ".join(p for p in (title, fix) if p) or str(err.get("detail") or "The reply failed.")
             line.update({"content": partial, "error": words, "interrupted": bool(partial)})
+            # v1.378.0: a SAFETY REFUSAL is marked on the line, so the
+            # session offers Rewind (never Retry: the same conversation is
+            # declined again) — also after it is opened again.
+            if str(err.get("fix_kind") or "") == "refusal":
+                line["errorKind"] = "refusal"
         else:
             if not partial.strip() and not self.helpers:
                 return out  # stopped before a word: nothing to keep
@@ -1557,6 +1576,12 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         from ...harness import branches as _branches
 
         branch_token = _branches.set_turn_branch(_branches.facts_of(setup), folder)
+        # v1.378.0: a failure in this turn is worded for a Build session
+        # (`failure_words`: a safety refusal's way out is Rewind here, not a
+        # new chat). The driver task copies the context, like the pin.
+        from ...providers import failure_words as _failure_words
+
+        surface_token = _failure_words.set_build_surface()
         try:
             try:
                 gen = await stream_chat_turn(
@@ -1604,6 +1629,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             ))
             started = True
         finally:
+            _failure_words.reset_surface(surface_token)
             _branches.reset_turn_branch(branch_token)
             _compact.reset_summary(summary_token)
             reset_picked(picked_token)

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.377.0 (2026-10-22).*
+holds itself to. Current as of v1.378.0 (2026-10-23).*
 
 ---
 
@@ -1896,6 +1896,67 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The IJ harness, measured (v1.378.0)
+
+The IJ harness was measured against Claude Code and Codex on the same 30
+coding tasks, and walked through three everyday jobs side by side with the
+Claude Code desktop app. The numbers and the walkthrough are in
+`docs/IJ-HARNESS-PLAN-2.md` (Phase 7) and `docs/IJ-HARNESS-WALKTHROUGH.md`.
+Small changes the walkthrough led to:
+
+- **New session** opens on the folder of the session you are looking at, so
+  a second session in the same folder no longer means choosing the folder
+  again.
+- **Changes** opens on the branch view in a session working on its own
+  branch (it shows committed and not-yet-committed work alike). A session
+  whose branch was merged or removed opens on "This session".
+- **After Commit**, the branch line updates before the "Committed" note
+  appears, so Push is ready at once.
+- **A finished reply's steps** still say what they touched (the file read
+  or changed, the program run), as they did while the reply was running.
+- **Changed files** are listed by their place inside the folder
+  (`web/style.css`), not by their whole path.
+
+## When a model declines a conversation (v1.378.0)
+
+Sometimes a model's own safety check declines to answer. Claude does this
+for the whole conversation: once something earlier in a conversation has
+been flagged, every new message in that same conversation is declined too —
+even "Say hello" — so pressing Retry can never help. Iron Jarvis used to
+show that as an empty reply with "Press Retry". Now it says what happened
+and where the way out is:
+
+- **In chat:** "Claude Code declined to answer this conversation. Its safety
+  check on computer security flagged something in this conversation, so
+  every new message here will be declined too. Start a new chat, or edit an
+  earlier message to go back before the part it flagged." The reason ("on
+  computer security") appears only when the model gives one. There is no
+  Retry; a **Start a new chat** button moves what you had typed into a new
+  chat. The declined chat is kept, never deleted. Every message you sent has
+  **Edit and resend**, which takes the conversation back to before it.
+- **In a Build session (IJ harness):** the same sentence ends with "Rewind to
+  before the message that set it off, or start a new session", and **Choose
+  where to rewind** opens the Rewind list so you pick the message.
+- **In a Build terminal's chat:** "Open a new terminal to start a new
+  conversation."
+- **On your phone:** "Send /new to start a new conversation."
+- **An agent run or workflow step** ends as failed with "… declined to do this
+  task … Change the task, then run it again" and is not retried
+  automatically; an agent that handed the task to a helper is told that
+  handing it out again would be declined too.
+- **If part of the answer had already appeared**, it stays, marked "The rest
+  of this reply was declined", and that reply offers no Continue or
+  Regenerate (both would send the same conversation to the same model).
+
+A declined conversation is **never moved to another model or provider on its
+own**, not even under Auto: the refusal is about the conversation's content,
+and sending that content elsewhere is your decision. It does not count
+against the model's health either, and it does not send the "couldn't
+answer" alert to your phone or this PC. The same is done for refusals from
+OpenAI (including Codex), Google Gemini and a model server that passes
+Claude's answers through; where the service does not say whether it judged
+the whole conversation, the words say later messages "may" be declined too.
 
 ## Your tools in the agent's terminal, and smaller touches (v1.377.0)
 

@@ -226,6 +226,18 @@ def load_workflow_toml(path_or_str: str | Path) -> WorkflowDef:
 _TEMPLATE_RX = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 
 
+def _refusal_words(exc: BaseException) -> str:
+    """The run's plain sentence for a provider's SAFETY REFUSAL
+    (``failure_words.plain_reason``), or "" when *exc* is not one. Never
+    raises (v1.378.0 review)."""
+    try:
+        from ..providers.failure_words import refusal_reason
+
+        return refusal_reason(exc)
+    except Exception:  # noqa: BLE001 — wording only
+        return ""
+
+
 def render_template(text: str, outputs: dict[str, Any]) -> str:
     """Replace ``{{Step Name}}`` with that step's recorded summary/output.
 
@@ -980,6 +992,11 @@ class WorkflowEngine:
                     }
             if out.get("status") in ("completed", "cancelled"):
                 break  # never "retry" a CANCELLED attempt — the user said stop
+            if out.get("refused"):
+                # v1.378.0 review: never re-send a task the provider's safety
+                # check DECLINED — the same task to the same model is declined
+                # again (the router never retries one either).
+                break
         if out.get("status") == "failed" and step.on_failure == "skip":
             # The failure stays VISIBLE on the step, but the run continues.
             out["handled"] = "skipped"
@@ -1057,6 +1074,19 @@ class WorkflowEngine:
             # re-raises provider/DB blow-ups after finalizing the session, and
             # letting that escape the attempt loop skipped retries and
             # on_failure entirely, fired no step event, and halted the run.
+            refused = _refusal_words(exc)
+            if refused:
+                # v1.378.0 review: a SAFETY REFUSAL is said in the run's
+                # plain words (never "ProviderRefusal: … stop_reason …"), and
+                # marked so the attempt loop never re-sends it.
+                return {
+                    "session_id": session.id,
+                    "status": "failed",
+                    "summary": refused,
+                    "refused": True,
+                    "tool": step.tool,
+                    "kind": "agent",
+                }
             return {
                 "session_id": session.id,
                 "status": "failed",

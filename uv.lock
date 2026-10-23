@@ -708,7 +708,7 @@ wheels = [
 
 [[package]]
 name = "iron-jarvis"
-version = "1.377.0"
+version = "1.378.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
