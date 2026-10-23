@@ -3681,6 +3681,15 @@ does not need a bump, stop and bump it.
   bar. Pin: `test_a_slow_close_still_reports_the_processes_it_ended` (a
   7 s folder removal with the polite bound at 0.1 s: CI's exact `[]` on the
   old wait).
+  v1.376.3 (test-only; v1.376.2's Release gate red, Tests green):
+  `test_the_idle_timer_never_closes_a_browser_in_the_middle_of_an_action`
+  waited for the backend's `killed` and then read `view["closed_reason"]`,
+  but `_finish_close` kills FIRST, removes the throwaway folder, and records
+  the reason LAST — `KeyError: 'closed_reason'` on the loaded runner. It now
+  waits for the reason itself; a 0.5 s folder removal holds the gap open
+  (old wait: CI's exact KeyError on an idle machine). The waitFor rule, for
+  Python: wait for the field you assert, never for a step that lands
+  before it.
 
 - **A Build session in a git folder works on ITS OWN BRANCH in a worktree
   BESIDE the repository; the user's main checkout is touched by Merge only;
