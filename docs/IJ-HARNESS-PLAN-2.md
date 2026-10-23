@@ -797,6 +797,77 @@ branched question's "/" skill is not put back in the box. The branch
 name comes from the session title's first words. The account carried by a
 branch was not tried live with Iron-Proxy on.
 
+**Review.** Seven defects in the phase's code (and one v1.375.0 hole), each
+red first and mutation-checked
+(`tests/test_build_env_review_v1377.py`, `test_build_git_aliases_v1377.py`,
+`test_build_branch_point_v1377.py`, `test_build_phase6_review_v1377.py`,
+`dashboard/__tests__/ij-harness-keys-review-v1377.test.tsx`, the review
+block of `ij-harness-phase6-v1377.test.tsx`):
+
+- *Secrets read by name only.* A secret whose name has no secret word
+  reached the agent's commands (`DATABASE_URL` / `PIP_INDEX_URL` /
+  `HTTPS_PROXY` with a password, `DB_PASS`, `MYSQL_PWD`, a webhook address,
+  an Azure connection string, a JWT, npm / GitLab / Stripe / Google keys, a
+  bearer header in `NODE_OPTIONS` or `GIT_CONFIG_PARAMETERS`). Now: a URL's
+  `user:password@` is removed and the variable KEPT (a dropped
+  `PIP_INDEX_URL` would install from the public index instead); any other
+  value `redact.mask` would change, or a shape it does not know, drops the
+  variable; `PASS` / `PWD` parts, `WEBHOOK` and `JWT` are secret words; a
+  folder list (a name holding PATH) is never dropped by its value (an
+  `sk-learn-env` folder read as an `sk-` key); a value inside the app's own
+  bundle or venv goes (a frozen build's runtime hooks).
+- *Kept on purpose:* `SSH_AUTH_SOCK` and Git Credential Manager's `GCM_*`
+  (a socket path and a sign-in helper's settings; git push needs them),
+  and a cloud tool's ACCOUNT SELECTOR (`AWS_PROFILE`, `AWS_REGION`,
+  `GOOGLE_CLOUD_PROJECT`, `GOOGLE_APPLICATION_CREDENTIALS`, `GH_HOST`, …):
+  dropping one sent the agent's command to the user's DEFAULT account.
+- *git refused every command* (found live): `GIT_CONFIG_KEY_0` holds the
+  word KEY, so it was dropped while `GIT_CONFIG_COUNT` stayed. The pairs
+  are one unit now.
+- *The user's git aliases were live and unguarded:* with `pf = push
+  --force` in `~/.gitconfig`, `git pf` force-pushed with no card. The guard
+  reads the configs git would read and expands aliases (and a shell alias);
+  an alias never hides a git command, which also closed `git -c
+  alias.push=status push -f`.
+- *Branch from here* started the new branch from the BASE's tip, so its
+  code lacked the committed work its conversation described. It now starts
+  at the original branch's newest commit at or before the last line it
+  holds (else where that session started); work not committed is not
+  carried and the header says so ("Its code starts at abc1234 (“add a”) on
+  ij/…, the last commit before that message. Changes that were not
+  committed … were not carried over.").
+- *Esc stopped nothing* once any disclosure in the harness was open (a
+  reply's plan, its work line, its receipt): only a real popup counts now.
+  Ctrl+K is pinned against the REAL palette (title bar search, a dialog,
+  the Terminals view). The box's title names the keys, Ctrl+N only in the
+  desktop app (its menu claims no Ctrl+N; a browser tab keeps it).
+- The rewound / branched question's "/" skill goes back in the box
+  (`skillSource` on the question). Next step's account pin, Local only, a
+  model failure and a running turn are pinned.
+
+*The empty replies (item 4) are Anthropic's safety classifier, and predate
+this phase.* Replaying the doer's live conversation through the real
+claude-cli adapter answered `stop_reason: "refusal"`, `stop_details.category:
+"cyber"`, no content, 0 output tokens — the shape every empty turn had
+(output_tokens 0). The conversation asked, twice, for the shell's
+environment to be dumped; the classifier judges the whole conversation, and
+every later message resends it, so even "Say hello" was declined; a fresh
+session has no such history. Iron Jarvis turns the refusal into an empty
+reply (`claude_native/transport.assemble` treats `stop_reason == "refusal"`
+as handled and returns no text; `adapters/anthropic._finish` maps it to
+"stop"), and the lane then says "The model returned an empty answer … Press
+Retry", which cannot help. Fix (not made here, not this phase's code): raise
+a typed, non-transient, `no_failover` error for a refusal with no text and
+no calls, naming the category, with the way out (rewind to before the message
+that started it, or a new session).
+
+*Still open:* a Build session's commands can print a sign-in the user's own
+tools hold (`gh auth token`, `git credential fill`); the guard reads neither
+(and runs only on a branch). Dropped cloud KEYS (env credentials) make those
+tools fall back to the default profile. The system-wide git config's aliases
+are not read. The Handbook's v1.327.0 history line quotes the old "Ask first"
+words.
+
 ## Phase 7 — Measure the feel (target v1.378.0)
 
 - Rerun the 30-task benchmark for all five setups (Claude Code, Codex, Jarvis
