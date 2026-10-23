@@ -1897,6 +1897,46 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## When a model declines a conversation (v1.378.0)
+
+Sometimes a model's own safety check declines to answer. Claude does this
+for the whole conversation: once something earlier in a conversation has
+been flagged, every new message in that same conversation is declined too —
+even "Say hello" — so pressing Retry can never help. Iron Jarvis used to
+show that as an empty reply with "Press Retry". Now it says what happened
+and where the way out is:
+
+- **In chat:** "Claude Code declined to answer this conversation. Its safety
+  check on computer security flagged something in this conversation, so
+  every new message here will be declined too. Start a new chat, or edit an
+  earlier message to go back before the part it flagged." The reason ("on
+  computer security") appears only when the model gives one. There is no
+  Retry; a **Start a new chat** button moves what you had typed into a new
+  chat. The declined chat is kept, never deleted. Every message you sent has
+  **Edit and resend**, which takes the conversation back to before it.
+- **In a Build session (IJ harness):** the same sentence ends with "Rewind to
+  before the message that set it off, or start a new session", and **Choose
+  where to rewind** opens the Rewind list so you pick the message.
+- **In a Build terminal's chat:** "Open a new terminal to start a new
+  conversation."
+- **On your phone:** "Send /new to start a new conversation."
+- **An agent run or workflow step** ends as failed with "… declined to do this
+  task … Change the task, then run it again" and is not retried
+  automatically; an agent that handed the task to a helper is told that
+  handing it out again would be declined too.
+- **If part of the answer had already appeared**, it stays, marked "The rest
+  of this reply was declined", and that reply offers no Continue or
+  Regenerate (both would send the same conversation to the same model).
+
+A declined conversation is **never moved to another model or provider on its
+own**, not even under Auto: the refusal is about the conversation's content,
+and sending that content elsewhere is your decision. It does not count
+against the model's health either, and it does not send the "couldn't
+answer" alert to your phone or this PC. The same is done for refusals from
+OpenAI (including Codex), Google Gemini and a model server that passes
+Claude's answers through; where the service does not say whether it judged
+the whole conversation, the words say later messages "may" be declined too.
+
 ## Your tools in the agent's terminal, and smaller touches (v1.377.0)
 
 **The agent's terminal finds your tools.** In a Build session in the IJ
