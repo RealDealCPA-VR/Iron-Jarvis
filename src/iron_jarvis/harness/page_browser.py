@@ -126,6 +126,13 @@ HARD_BOUND_EXTRA_S = 10.0
 SETTLE_MAX_S = 5.0
 #: Closing the browser politely before its job is terminated.
 CLOSE_TIMEOUT_S = 8.0
+#: v1.376.1: how much longer than the polite close a caller of
+#: ``close_blocking`` waits for the WHOLE close (the kill and the throwaway
+#: folder's removal come after it) before it treats the browser thread as
+#: wedged. A hang detector, not a speed bar: 6 s was passed by a healthy
+#: close on a loaded runner, whose fallback then found the kill handle
+#: already taken and answered [] while the close went on.
+CLOSE_SLACK_S = 30.0
 #: An action waits this long for the one before it in the same session.
 LOCK_WAIT_S = 60.0
 #: The window the agent's pages are drawn at.
@@ -1637,7 +1644,7 @@ class AgentBrowsers:
             fut = asyncio.run_coroutine_threadsafe(
                 self._close_many(keys, reason), self._host.loop(),
             )
-            return list(fut.result(timeout=CLOSE_TIMEOUT_S + 6))
+            return list(fut.result(timeout=CLOSE_TIMEOUT_S + CLOSE_SLACK_S))
         except Exception:  # noqa: BLE001 — the thread is wedged: kill from here
             log.warning("agent browser close did not answer; terminating its job", exc_info=True)
             out: list[int] = []

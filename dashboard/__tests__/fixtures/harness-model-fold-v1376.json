@@ -394,32 +394,6 @@
       "inherited_from": null,
       "reasoning": [],
       "reasoning_default": ""
-    },
-    {
-      "provider": "grok-cli",
-      "model": "grok-4.6",
-      "name": "grok-4.6",
-      "available": false,
-      "source": "cli",
-      "kind": "cli",
-      "on_this_network": false,
-      "size_b": null,
-      "inherited_from": null,
-      "reasoning": [],
-      "reasoning_default": ""
-    },
-    {
-      "provider": "grok-cli",
-      "model": "grok-4.5",
-      "name": "grok-4.5",
-      "available": false,
-      "source": "cli",
-      "kind": "cli",
-      "on_this_network": false,
-      "size_b": null,
-      "inherited_from": null,
-      "reasoning": [],
-      "reasoning_default": ""
     }
   ],
   "accounts": {

@@ -3657,6 +3657,39 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/{ij-harness-browser,ij-harness-browser-review,
   ij-harness-model-accounts,ij-harness-model-accounts-review,
   ij-harness-model-fold,chat-model-menu-unchanged}-v1376.test.tsx`.
+  v1.376.1 (test-only; v1.376.0's Tests AND Release went red on
+  `test_harness_model_fold_v1376::test_regen_or_check_the_daemons_answers`
+  and nothing was published): the fixture was written on THIS PC, whose Grok
+  CLI is signed in, so its `GET /models` carried two `grok-cli` rows the CI
+  runner never has. grok-cli is found ON DISK (`GROK_HOME` / `~/.grok`,
+  `cli_detect.grok_session`) and by `cli_detect._grok_binary` — NOT through
+  `ProviderManager._cli_binary_present`, which the test already stubbed. The
+  test now points `GROK_HOME` at an empty folder and stubs `_grok_binary`;
+  the fixture was regenerated (only the two Grok rows went). RULE: a fixture
+  written from the REAL daemon's answers must pin every provider the catalog
+  can find on the machine (CLIs, on-disk logins, local servers), or it
+  records the developer's PC.
+  v1.376.2 (a wrong answer from a SLOW close; v1.376.1 was published, its
+  Tests gate red on the real-Edge pin `test_real_edge_reads_the_console_and_
+  failed_requests_and_leaves_nothing` — `assert closed`): `close_blocking`
+  waited `CLOSE_TIMEOUT_S + 6` s for the close it hands the browser thread;
+  on the loaded runner the polite close + kill + folder removal took longer,
+  the fallback ("did not answer; terminating its job" — in the CI log) found
+  the kill handle already taken by the close still in flight, and answered
+  [] while that close went on to end every process. The wait is now
+  `CLOSE_TIMEOUT_S + CLOSE_SLACK_S` (30 s) — a hang detector, not a speed
+  bar. Pin: `test_a_slow_close_still_reports_the_processes_it_ended` (a
+  7 s folder removal with the polite bound at 0.1 s: CI's exact `[]` on the
+  old wait).
+  v1.376.3 (test-only; v1.376.2's Release gate red, Tests green):
+  `test_the_idle_timer_never_closes_a_browser_in_the_middle_of_an_action`
+  waited for the backend's `killed` and then read `view["closed_reason"]`,
+  but `_finish_close` kills FIRST, removes the throwaway folder, and records
+  the reason LAST — `KeyError: 'closed_reason'` on the loaded runner. It now
+  waits for the reason itself; a 0.5 s folder removal holds the gap open
+  (old wait: CI's exact KeyError on an idle machine). The waitFor rule, for
+  Python: wait for the field you assert, never for a step that lands
+  before it.
 
 - **A Build session in a git folder works on ITS OWN BRANCH in a worktree
   BESIDE the repository; the user's main checkout is touched by Merge only;
