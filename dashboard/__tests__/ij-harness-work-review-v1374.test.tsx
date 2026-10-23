@@ -1,6 +1,6 @@
 /**
- * v1.374.0 review (IJ harness part 2, Phase 3) — the meter says only what is
- * true.
+ * v1.374.0 review (IJ harness part 2, Phase 3) — the meter and the folded
+ * task list say only what is true.
  *
  *  - A reading whose window NOBODY knows (no pin, measurement, catalog or
  *    probe: a Codex or an API-key model) is the app's own safe size — the
@@ -8,13 +8,17 @@
  *  - With compaction turned off in Settings the reading still shows, but no
  *    Compact is offered and nothing turns the warning tone (the chat's rule;
  *    the tone is never the only cue, so without the offer there is none).
+ *  - A Build reply's plan CARRIES OVER to the next turn: a step the turn did
+ *    not reach stays "not started" and the step it was on is not ticked off
+ *    (or failed with a failed turn) — "Not attempted" never appears.
  */
 import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 import { ContextMeter } from "@/components/harness/ContextMeter";
-import { decodeTurnContext, meterTitle, offersCompact } from "@/lib/buildContext";
+import { SettledPlan } from "@/components/harness/HarnessPlan";
+import { decodeTurnContext, meterTitle, offersCompact, replyPlan } from "@/lib/buildContext";
 
 afterEach(() => cleanup());
 
@@ -69,5 +73,38 @@ describe("whose window the meter measures by", () => {
     expect(screen.queryByTestId("harness-compact")).toBeNull();
     expect(offersCompact(decodeTurnContext(reading({ disabled: true })), false)).toBe(false);
     expect(meterTitle(decodeTurnContext(reading({ disabled: true }))!)).toMatch(/what this model can read/);
+  });
+});
+
+describe("a Build reply's plan carries over to the next turn", () => {
+  const saved = {
+    steps: [
+      { goal: "read the cart code", state: "done" },
+      { goal: "fix the total", state: "running" },
+      { goal: "add a test", state: "waiting" },
+    ],
+    total: 3,
+  };
+  const states = () => screen.getAllByTestId("plan-step").map((el) => el.getAttribute("data-state"));
+
+  it("a finished turn: the step it was on is not ticked off, the rest not started", () => {
+    expect(replyPlan(saved, false)!.steps.map((s) => s.state)).toEqual(["done", "waiting", "waiting"]);
+    render(<SettledPlan plan={replyPlan(saved, false)} />);
+    expect(screen.getByTestId("harness-reply-plan-count").textContent).toBe("1 of 3 done");
+    fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
+    expect(states()).toEqual(["done", "waiting", "waiting"]);
+    expect(screen.getByTestId("harness-reply-plan").textContent).not.toMatch(/Not attempted|Working on/);
+  });
+
+  it("a failed turn: the step it was on failed; the rest are still to come", () => {
+    expect(replyPlan(saved, true)!.steps.map((s) => s.state)).toEqual(["done", "failed", "waiting"]);
+    render(<SettledPlan plan={replyPlan(saved, true)} />);
+    fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
+    expect(screen.getByTestId("harness-reply-plan").textContent).not.toMatch(/Not attempted/);
+  });
+
+  it("junk is no plan", () => {
+    expect(replyPlan({ steps: "nope" }, false)).toBeNull();
+    expect(replyPlan(null, false)).toBeNull();
   });
 });

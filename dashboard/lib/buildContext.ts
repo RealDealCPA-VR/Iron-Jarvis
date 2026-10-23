@@ -21,7 +21,7 @@
  */
 
 import { post } from "@/lib/api";
-import { readSavedPlan, settlePlan, type PlanView } from "@/lib/planChecklist";
+import { readSavedPlan, type PlanView } from "@/lib/planChecklist";
 import type { CompactionInfo } from "@/components/chat/CompactionCard";
 
 /** The daemon's own offer threshold (context/compaction SUGGEST_AT), used
@@ -193,8 +193,20 @@ export async function compactSession(threadId: string): Promise<SessionCompactio
   return decodeCompaction(res);
 }
 
-/** A reply's own task list (its line's `plan`, the checklist's saved form),
- *  settled — the turn is over, so nothing is left working — or null. */
+/** A reply's own task list (its line's `plan`, the checklist's saved form)
+ *  as the turn left it, or null. Nothing is left working: the step it was on
+ *  failed with a turn that failed, else it is simply not ticked off yet.
+ *  Review (v1.374.0): a Build plan CARRIES OVER — the next turn picks it up
+ *  where this one stopped — so a step this turn did not reach stays "not
+ *  started", never "not attempted" (the chat's settle rule, right for a
+ *  helper's run that is over, read as a verdict on work still to come). */
 export function replyPlan(raw: unknown, failed: boolean): PlanView | null {
-  return settlePlan(readSavedPlan(raw), failed ? "failed" : "completed");
+  const view = readSavedPlan(raw);
+  if (!view || view.steps.length === 0) return null;
+  return {
+    total: view.total,
+    steps: view.steps.map((st) =>
+      st.state === "running" ? { ...st, state: failed ? "failed" : "waiting" } : st,
+    ),
+  };
 }

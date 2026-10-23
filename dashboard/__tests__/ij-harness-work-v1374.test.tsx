@@ -251,8 +251,10 @@ describe("the task list sits under the live reply and folds into the settled one
     expect(within(folded).getByTestId("harness-reply-plan-count").textContent).toBe("1 of 2 done");
     expect(within(folded).queryAllByTestId("plan-step")).toHaveLength(0);
     fireEvent.click(within(folded).getByRole("button", { name: /Plan/ }));
-    // Settled: nothing is left working once the turn is over.
-    expect(states(folded)).toEqual(["done", "skipped"]);
+    // Settled: nothing is left working once the turn is over — and the step
+    // it was on is not ticked off yet (a Build plan carries over to the next
+    // turn: never "not attempted", review v1.374.0).
+    expect(states(folded)).toEqual(["done", "waiting"]);
   });
 
   it("a reply with no plan folds nothing", async () => {
