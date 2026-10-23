@@ -1035,7 +1035,13 @@ async def test_real_edge_dies_with_a_daemon_that_is_killed(tmp_path):
 
         asyncio.run(main())
     """), encoding="utf-8")
-    child = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE, text=True)
+    # The child's temp folder is this test's: what a killed daemon leaves
+    # behind (its throwaway folder, Playwright's own artifacts folder) stays
+    # out of the PC's temp folder and goes with the test's.
+    scratch = tmp_path / "temp"
+    scratch.mkdir()
+    env = {**os.environ, "TEMP": str(scratch), "TMP": str(scratch)}
+    child = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE, text=True, env=env)
     work = None
     try:
         line = await asyncio.wait_for(asyncio.to_thread(child.stdout.readline), 90)
@@ -1047,7 +1053,7 @@ async def test_real_edge_dies_with_a_daemon_that_is_killed(tmp_path):
         assert await _wait_dead(pids, 20) == []
         # A killed daemon cannot clean up after itself: its throwaway folder
         # stays (unlocked now) until the next start's sweep of old ones.
-        assert work.exists()
+        assert work.exists() and scratch in work.parents
     finally:
         if child.poll() is None:
             child.kill()
