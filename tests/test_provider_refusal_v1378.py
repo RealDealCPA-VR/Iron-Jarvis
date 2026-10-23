@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import threading
 from contextlib import asynccontextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -183,9 +182,10 @@ def refusing():
         up.stop()
 
 
+@pytest.mark.usefixtures("_claude_env_guard")
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_claude_cli_refusal_is_a_typed_error_read_off_the_relay(
-    tmp_path, monkeypatch, refusing, _claude_env_guard, streaming
+    tmp_path, monkeypatch, refusing, streaming
 ):
     up = refusing()
     fake = Fake(tmp_path, monkeypatch, scenario="relay_refusal")
@@ -206,8 +206,9 @@ async def test_claude_cli_refusal_is_a_typed_error_read_off_the_relay(
     assert up.hits == 1, "one upstream request: the refusal is never re-sent"
 
 
+@pytest.mark.usefixtures("_claude_env_guard")
 async def test_claude_cli_refusal_after_streamed_text_keeps_the_text_and_is_partial(
-    tmp_path, monkeypatch, refusing, _claude_env_guard
+    tmp_path, monkeypatch, refusing
 ):
     up = refusing(text="Here is the ")
     fake = Fake(tmp_path, monkeypatch, scenario="relay_refusal", streamed="Here is the ")
