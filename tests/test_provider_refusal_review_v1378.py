@@ -727,3 +727,32 @@ async def test_a_refused_helper_tells_its_parent_not_to_send_it_again(tmp_path, 
     assert "Claude Code declined to do this task." in err, err
     assert "running it again as it is will be declined too" in err
     assert "stop_reason" not in err and "ProviderRefusal" not in err
+
+
+# =========================================================================== #
+# 11. ONE notice: a refusal is no "provider failed" alert (that said Retry)
+# =========================================================================== #
+def test_a_refusal_raises_no_provider_failed_alert_and_an_outage_still_does():
+    """`provider.failed` is a default alert on every destination (the phone,
+    this PC). For a refusal it said "Claude Code couldn't answer. Press Retry.
+    If it happens again, pick another model for this chat." — the Retry the
+    fix removes and the "send it elsewhere" it forbids — on top of the notice
+    the turn or run already gives where it was asked (v1.360.0: ONE notice).
+    A refusal is not an outage; the ledger keeps it (kind "refusal")."""
+    from iron_jarvis.comm.channels import MockChannel
+    from iron_jarvis.comm.notifier import Notifier
+
+    notifier = Notifier()
+    ch = MockChannel()
+    notifier.add_channel("phone", ch)
+    refused = {"type": EventType.PROVIDER_FAILED, "payload": {
+        "provider": "claude-cli", "kind": "refusal", "category": "cyber",
+        "error": "ProviderRefusal: claude-cli: Anthropic's safety check declined to answer "
+                 "(stop_reason refusal, category cyber)",
+    }}
+    assert not notifier.on_event(refused)
+    assert ch.sent == []
+    outage = {"type": EventType.PROVIDER_FAILED, "payload": {
+        "provider": "openrouter", "error": "ProviderError: openrouter API error 503: overloaded"}}
+    assert notifier.on_event(outage)
+    assert len(ch.sent) == 1

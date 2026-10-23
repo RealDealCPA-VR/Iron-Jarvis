@@ -27,6 +27,7 @@
 import type { IJEvent } from "@/lib/types";
 import { wordChange } from "@/components/chat/TurnReceipt";
 import { DEMO_ANSWER } from "@/lib/demoWords";
+import { providerDisplay } from "@/lib/onboarding";
 
 // A few agent states worth naming; anything else falls back to "Working…".
 const STATE_LABEL: Record<string, string> = {
@@ -133,6 +134,19 @@ export function stepLabel(e: IJEvent): string | null {
       return tool ? `Skipped ${tool} (not permitted)` : "Skipped a tool";
     }
     case "provider.failed": {
+      // v1.378.0 review: a SAFETY REFUSAL (the router ledgers it with
+      // `kind: "refusal"`) is the provider declining — said by its plain
+      // name, never the vendor's raw words ("stop_reason refusal").
+      if (p.kind === "refusal") {
+        const named = providerDisplay(typeof p.provider === "string" ? p.provider : "");
+        const first = named.split(" ")[0];
+        const who = !named
+          ? "The model"
+          : first === first.toLowerCase()
+          ? named.charAt(0).toUpperCase() + named.slice(1)
+          : named;
+        return p.partial === true ? `${who} declined to finish the answer` : `${who} declined to answer`;
+      }
       const who =
         typeof p.provider === "string" && p.provider ? `Provider ${p.provider}` : "A model";
       const why = String(p.error || "").slice(0, 120).trim();
