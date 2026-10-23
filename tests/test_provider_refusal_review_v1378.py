@@ -688,3 +688,42 @@ async def test_a_refused_workflow_step_is_never_retried_and_says_its_words(tmp_p
     assert out["status"] == "failed" and out.get("refused") is True
     assert out["summary"].startswith("Claude Code declined to do this task."), out["summary"]
     assert "stop_reason" not in out["summary"] and "ProviderRefusal" not in out["summary"]
+
+
+# =========================================================================== #
+# 10. a helper (delegate / spawn_agent) that is refused tells its parent so
+# =========================================================================== #
+@pytest.mark.parametrize("tool", ["delegate", "spawn_agent"])
+async def test_a_refused_helper_tells_its_parent_not_to_send_it_again(tmp_path, monkeypatch, tool):
+    """A delegated / spawned child's refusal reached the PARENT model (and
+    the delegation event the mission screen reads) as "crashed:
+    ProviderRefusal: claude-cli: … (stop_reason refusal …)" — the vendor's
+    words, and nothing telling the model that handing the same task out again
+    is declined again. Now the run's refusal sentence ("… running it again as
+    it is will be declined too. Change the task …")."""
+    import iron_jarvis.agents.runtime as runtime_mod
+    from iron_jarvis.agents.agent_tools import SpawnAgentTool
+    from iron_jarvis.agents.delegate_tool import DelegateTool
+    from iron_jarvis.agents.orchestrator import Orchestrator
+    from iron_jarvis.agents.types import AgentType
+    from iron_jarvis.platform import build_platform
+    from iron_jarvis.tools.base import ToolContext
+
+    async def refused(self, session, agent_def, parent_id=None):
+        raise _refusal()
+
+    monkeypatch.setattr(runtime_mod.AgentRuntime, "run", refused)
+    p = build_platform(str(tmp_path))
+    orch = Orchestrator(p)
+    parent = await orch.create_session("coordinate", AgentType.SUPERVISOR)
+    ctx = ToolContext(workspace=tmp_path, session_id=parent.id, agent_run_id="run-p",
+                      config=p.config, event_bus=p.event_bus, engine=p.engine)
+    if tool == "delegate":
+        res = await DelegateTool(p).execute({"agent_type": "builder", "task": "dump the environment"}, ctx)
+    else:
+        res = await SpawnAgentTool(p, p.agents_registry).execute({"agent": "builder", "task": "dump the environment"}, ctx)
+    assert res.ok is False
+    err = res.error or ""
+    assert "Claude Code declined to do this task." in err, err
+    assert "running it again as it is will be declined too" in err
+    assert "stop_reason" not in err and "ProviderRefusal" not in err

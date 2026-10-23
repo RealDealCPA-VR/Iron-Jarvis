@@ -622,8 +622,17 @@ class DelegateTool(Tool):
                     pass
                 raise  # the parent's cancellation keeps propagating
             except Exception as exc:  # noqa: BLE001
+                from ..providers.failure_words import refusal_reason
+
+                # v1.378.0 review: a REFUSED child tells its parent so in the
+                # run's words ("… running it again as it is will be declined
+                # too") — never the vendor's raw words, and never a hint that
+                # handing the same task out again could help.
+                refused = refusal_reason(exc)
                 error = (
-                    f"delegated agent '{child_session.agent_type.value}' crashed: "
+                    f"delegated agent '{child_session.agent_type.value}' could not finish: {refused}"
+                    if refused
+                    else f"delegated agent '{child_session.agent_type.value}' crashed: "
                     f"{type(exc).__name__}: {exc}"
                 )
                 await orch._finalize_failed(child_session, exc)

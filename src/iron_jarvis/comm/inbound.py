@@ -134,11 +134,11 @@ def _run_problem(exc: BaseException) -> str:
     the vendor's words ("ProviderRefusal: … stop_reason refusal …"). Any other
     failure keeps its own text exactly as before. Never raises."""
     try:
-        from ..providers.adapters.base import refusal_of
-        from ..providers.failure_words import plain_reason
+        from ..providers.failure_words import refusal_reason
 
-        if refusal_of(exc) is not None:
-            return plain_reason(exc)
+        refused = refusal_reason(exc)
+        if refused:
+            return refused
     except Exception:  # noqa: BLE001 — wording only
         pass
     return f"{type(exc).__name__}: {exc}"

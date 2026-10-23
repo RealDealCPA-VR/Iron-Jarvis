@@ -231,10 +231,9 @@ def _refusal_words(exc: BaseException) -> str:
     (``failure_words.plain_reason``), or "" when *exc* is not one. Never
     raises (v1.378.0 review)."""
     try:
-        from ..providers.adapters.base import refusal_of
-        from ..providers.failure_words import plain_reason
+        from ..providers.failure_words import refusal_reason
 
-        return plain_reason(exc) if refusal_of(exc) is not None else ""
+        return refusal_reason(exc)
     except Exception:  # noqa: BLE001 — wording only
         return ""
 

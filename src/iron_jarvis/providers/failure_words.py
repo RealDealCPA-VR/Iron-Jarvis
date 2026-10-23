@@ -482,6 +482,28 @@ def refusal_words(
     return (title, f"{lead}{flagged} {REFUSAL_WAY_OUT[where]}")
 
 
+def refusal_reason(exc: BaseException | None, *, manager: Any = None) -> str:
+    """The run's plain sentence (:func:`plain_reason`) when *exc* is — or was
+    raised from — a provider's SAFETY REFUSAL, else "" (v1.378.0 review).
+
+    The ONE rule for every place that used to print a failed run's exception
+    raw ("ProviderRefusal: claude-cli: … stop_reason refusal …"): a phone-
+    started job, a workflow's agent step, a delegated / spawned helper's
+    report to its parent. Nothing reached anyone, so ``partial`` is read as
+    False. Any other failure is the caller's to word, exactly as before.
+    Never raises."""
+    try:
+        from .adapters.base import refusal_of
+
+        refused = refusal_of(exc)
+        if refused is None:
+            return ""
+        refused.partial = False
+        return plain_reason(exc, manager=manager)
+    except Exception:  # noqa: BLE001 — wording only
+        return ""
+
+
 def classify(
     exc: BaseException | None,
     *,
