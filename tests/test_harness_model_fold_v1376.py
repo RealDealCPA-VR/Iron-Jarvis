@@ -35,6 +35,7 @@ in dashboard/.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -306,3 +307,44 @@ async def test_a_pair_stored_before_the_change_runs_exactly_as_its_folded_pick(t
         await _run(app, sid, f"stored-{n}")
         served.append([(c["provider"], c["model"]) for c in beh.calls])
     assert served[0] == served[1] == [(SERVED_BY[stored["provider"]], stored["model"])]
+
+
+async def test_an_account_at_its_limit_picked_from_the_menu_shows_the_limit_card_never_another_account(
+    tmp_path, work, fake, monkeypatch,
+):
+    """The menu lets the user pick an account AT its limit (the chip's list
+    does too). The pick is the menu's own body — the account and a model in
+    ONE request — and the next turn meets the limit card with Iron-Proxy's
+    real reset: nothing runs, nothing is leased from another account, no
+    other provider is asked (no silent failover)."""
+    from iron_jarvis.iron_proxy import accounts as acc
+    from tests.test_build_accounts_v1368 import iso
+
+    app = create_app(str(tmp_path / "home"))
+    await enable(app)
+    beh = wire_doubles(app, monkeypatch, Behaviour(["never sent"]))
+    until = iso(5400)
+    fake.states["c-spare"].update({"status": "parked", "parkedUntil": until,
+                                   "parkedReason": {"kind": "quota-exhausted"}})
+    # The list is the CACHED snapshot (the watch loop refreshes it); read it now.
+    await asyncio.to_thread(app.state.platform.iron_proxy.refresh_accounts)
+    _, listing = await asgi(app, "GET", "/build/accounts")
+    spare = next(a for a in listing["claude"] if a["id"] == "c-spare")
+    assert spare["status"] == "limit", spare  # the menu draws "Limit reached · resets …", pickable
+    sid = await _new_session(app, work, ON_WORK)
+    status, view = await asgi(app, "PATCH", f"/build/sessions/{sid}", {"account": "c-spare", "model": "claude-opus-4-8"})
+    assert status == 200, view
+    assert {k: setup_of(app, sid).get(k) for k in ("provider", "model", "account")} == {
+        "provider": "claude-cli", "model": "claude-opus-4-8", "account": "c-spare"}
+    fake.queries.clear()
+    status, raw = await open_turn(app, sid, {"text": "hi", "turn_id": "fold-limit"})
+    assert status == 200, raw
+    frames = frames_of(raw)
+    kinds = [e for e, _ in frames]
+    assert kinds[-2:] == ["account_limit", "error"], kinds[-4:]
+    card = dict(frames)["account_limit"]
+    assert card["account"] == "c-spare" and card["resets_at"] == acc.iso_utc(until) and card["resumable"] is True
+    # The router asked Claude Code alone; its pinned lease was refused, so no
+    # call ran and no other provider was tried.
+    assert beh.attempts == ["claude-cli"] and beh.calls == [] and beh.leases == [], beh.attempts
+    assert [q.get("profileId") for q in picks(fake)] == ["c-spare"], "no other account was asked"
