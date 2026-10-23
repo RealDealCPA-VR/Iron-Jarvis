@@ -1152,3 +1152,43 @@ async def test_the_idle_timer_never_closes_a_browser_in_the_middle_of_an_action(
         assert made[0].killed and inst.view("build:i")["closed_reason"] == "idle"
     finally:
         inst.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# ship step (v1.376.0): the packaged app ships no node.exe for Playwright's
+# driver; it runs on the app's Electron through two PRIVATE Playwright
+# functions this module wraps. A Playwright upgrade that renames them would
+# make `_driver_env_hook` return quietly and the packaged browser fail — so
+# their presence and the wrapper's effect are pinned here, where an upgrade
+# of the lock file is tested.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_driver_node_override_reaches_playwrights_own_driver_lookup():
+    import pytest as _pytest
+
+    transport = _pytest.importorskip("playwright._impl._transport")
+    from iron_jarvis.harness import page_browser as PB
+
+    assert callable(getattr(transport, "get_driver_env", None)), "Playwright renamed get_driver_env"
+    assert callable(getattr(transport, "compute_driver_executable", None)), (
+        "Playwright renamed compute_driver_executable"
+    )
+    PB._driver_env_hook()
+    PB._driver_env_hook()  # wrapped once, never twice
+    plain_node, plain_cli = transport.compute_driver_executable()
+    assert "ELECTRON_RUN_AS_NODE" not in transport.get_driver_env()
+    node_tok = PB._DRIVER_NODE.set(r"C:\Apps\Iron Jarvis\Iron Jarvis.exe")
+    temp_tok = PB._DRIVER_TEMP.set(r"C:\Temp\ij-agent-browser-x\tmp")
+    try:
+        node, cli = transport.compute_driver_executable()
+        env = transport.get_driver_env()
+    finally:
+        PB._DRIVER_TEMP.reset(temp_tok)
+        PB._DRIVER_NODE.reset(node_tok)
+    assert node == r"C:\Apps\Iron Jarvis\Iron Jarvis.exe" and cli == plain_cli
+    assert env["ELECTRON_RUN_AS_NODE"] == "1"
+    assert env["TEMP"] == env["TMP"] == r"C:\Temp\ij-agent-browser-x\tmp"
+    # Outside the browser's start nothing leaks into Playwright's own lookup.
+    assert transport.compute_driver_executable() == (plain_node, plain_cli)
+    assert "ELECTRON_RUN_AS_NODE" not in transport.get_driver_env()
