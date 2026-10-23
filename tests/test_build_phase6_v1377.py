@@ -202,6 +202,12 @@ async def test_a_branch_sessions_branch_gets_its_own_new_branch_from_the_same_ba
     (wt_old / "app.py").write_bytes(b"x = 2\n")  # uncommitted work in the old worktree
     _write_turns(app, sid, [("t1", "first", {})])
     before = thread_row(app, sid).setup_json
+    # The user's own checkout moved to another branch since: the new session
+    # still starts from the BASE (main), not from whatever is checked out.
+    git("switch", "-q", "-c", "elsewhere", cwd=repo)
+    (repo / "other.txt").write_bytes(b"elsewhere\n")
+    git("add", "-A", cwd=repo)
+    git("commit", "-q", "-m", "elsewhere", cwd=repo)
     status, view = await asgi(app, "POST", f"/build/sessions/{sid}/branch", {"turn_id": "t1"})
     assert status == 201, view
     ng = view["git"]

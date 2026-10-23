@@ -348,6 +348,57 @@ async def test_a_build_turns_model_is_told_the_users_tools_and_a_chat_harness_tu
     assert "user's own PATH" not in spec["description"]
 
 
+async def test_a_real_helper_of_a_build_turn_is_told_and_given_the_users_tools(app, tmp_path, planted):
+    """A helper started by a Build turn (Claude Code's ``Task`` → ``delegate``)
+    runs its OWN ``shell`` with the Build environment — read off the file its
+    real command wrote — and its model is told so in that tool's words."""
+    from iron_jarvis.providers.adapters.base import LLMResponse
+    from iron_jarvis.providers.router import RouteResult
+
+    work = tmp_path / "work"
+    work.mkdir()
+    sid = new_session(app, work, approval_mode="yolo", granted_tools=["shell"])["id"]
+    seen: list[dict] = []
+    main_moves = [[ToolCall(id="a1", name="Task", arguments={
+        "description": "dump env", "prompt": "Write the environment to helper-env.txt.",
+        "subagent_type": "general-purpose",
+    })], "The helper did it."]
+
+    async def _move(system, tools, messages):
+        main = "# IJ harness" in (system or "")
+        seen.append({"main": main, "specs": list(tools or [])})
+        if main:
+            return main_moves.pop(0) if (main_moves and tools) else "Done."
+        done = any(getattr(m, "role", "") == "tool" for m in messages or ())
+        if done:
+            return "dumped"
+        return [ToolCall(id="h1", name="shell", arguments={"command": _dump_cmd("helper-env.txt")})]
+
+    def _resp(move):
+        if isinstance(move, str):
+            return LLMResponse(text=move, usage={"input_tokens": 1, "output_tokens": 1})
+        return LLMResponse(text="", tool_calls=list(move), usage={"input_tokens": 1, "output_tokens": 1})
+
+    async def stream(*, provider=None, model=None, system="", messages=(), tools=None, **kw):
+        resp = _resp(await _move(system, tools, messages))
+        if resp.text:
+            yield {"type": "text", "text": resp.text}
+        yield {"type": "final", "response": resp, "provider": provider or "anthropic", "model": model or "m"}
+
+    async def complete(*, provider=None, model=None, system="", messages=(), tools=None, **kw):
+        return RouteResult(_resp(await _move(system, tools, messages)), provider or "anthropic", model or "m")
+
+    app.state.platform.router.stream = stream
+    app.state.platform.router.complete = complete
+    await turn(app, sid, "dump the environment with a helper", "env-helper-1")
+    names = _names(work / "helper-env.txt")
+    assert PLAIN in names and PLANTED not in names, "the helper's command did not get the Build environment"
+    helper_specs = [s for c in seen if not c["main"] for s in c["specs"] if s.get("name") == "shell"]
+    assert helper_specs, "the helper was not offered its shell"
+    assert "user's own PATH" in helper_specs[0]["description"]
+    assert "minimal scrubbed PATH" not in helper_specs[0]["description"]
+
+
 # --------------------------------------------------------------------------- #
 # REAL git by name in a Build session: the card, the user's identity
 # --------------------------------------------------------------------------- #
