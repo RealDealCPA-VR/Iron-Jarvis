@@ -3628,6 +3628,16 @@ does not need a bump, stop and bump it.
   `e2e/calm-ui.spec.ts` T3 still waited for the demo's pre-v1.359.0 "Done."
   opening (now `mock.DEMO_OPENING`, "This is the demo model: …"), so the
   e2e — not run in CI — failed T3 and skipped its other 41 steps.
+  v1.373.1 (test-only): v1.373.0's Release gate went red on
+  `test_a_helpers_ask_names_its_build_session_in_the_pending_listing` ("not
+  enough values to unpack") and nothing was published. A helper's row turns
+  "waiting" as soon as the runtime files the ask in the registry
+  (`HelperCall` reads `approvals.pending_for`), but `GET /chat/approvals/
+  pending` lists only an ask whose `approval.requested` EVENT ROW exists —
+  written by the event bus's handler hop, which runs after. Both listing
+  reads now wait for the row (`_listed_ask`); the test holds that hop back
+  0.5 s so the runner's order happens every run (old shape: CI's exact
+  error; new: green; a read-once `_listed_ask`: red).
 
 - **A Build session can start HELPERS, and a Build turn is HELD on its
   model, pinned account or not** (v1.372.0, IJ harness part 2 Phase 1 —

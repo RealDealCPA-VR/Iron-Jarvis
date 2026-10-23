@@ -24,6 +24,7 @@ from ``test_harness_helpers_v1372``).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 
 from iron_jarvis.harness import mode as M
@@ -35,6 +36,7 @@ from tests.test_harness_helpers_v1372 import (
     Model,
     _helper_children,
     _helper_frames,
+    _listed_ask,
     _run,
     new_session,
     wire,
@@ -223,8 +225,26 @@ async def test_the_post_lane_bounds_its_helper_to_the_turns_tools_too(app, work,
 # --------------------------------------------------------------------------- #
 
 
-async def test_a_helpers_ask_names_its_build_session_in_the_pending_listing(app, work):
-    from tests.test_build_sessions_v1367 import asgi_get
+async def test_a_helpers_ask_names_its_build_session_in_the_pending_listing(app, work, monkeypatch):
+    import time
+
+    from iron_jarvis.core.events import EventBus, EventType
+
+    # v1.373.1: the helper's row turns "waiting" as soon as the ask is in the
+    # registry (`HelperCall` reads `approvals.pending_for`), but the pending
+    # listing lists only an ask whose `approval.requested` event row has been
+    # written — by the event bus's handler hop, which runs AFTER the registry
+    # filed the ask. On a loaded runner that hop lagged and the listing was
+    # read too early (v1.373.0's Release gate: "not enough values to unpack").
+    # Hold the hop back here so the order the runner saw happens every run.
+    real_run_handlers = EventBus._run_handlers
+
+    def slow_run_handlers(handlers, event):
+        if event.type == EventType.APPROVAL_REQUESTED:
+            time.sleep(0.5)  # a worker thread: the loop keeps running
+        real_run_handlers(handlers, event)
+
+    monkeypatch.setattr(EventBus, "_run_handlers", staticmethod(slow_run_handlers))
 
     sid = new_session(app, work)  # the default posture: the helper's shell asks
 
@@ -240,12 +260,19 @@ async def test_a_helpers_ask_names_its_build_session_in_the_pending_listing(app,
     waiting = await until(lambda: [d for e, d in turn_frames(app, "hr-listing")
                                    if e == "helper" and d.get("state") == "waiting"], 20)
     ask_id = waiting[0]["ask"]["id"]
-    (kid,) = _helper_children(app)
-    assert json.loads(kid.options_json or "{}").get("build_session") == sid
-    status, listing = await asgi_get(app, "/chat/approvals/pending")
-    assert status == 200
-    (row,) = [r for r in listing["approvals"] if r.get("id") == ask_id]
-    assert row["build_session"] == sid and row["origin"] == "job:build-helper"
+    try:
+        (kid,) = _helper_children(app)
+        assert json.loads(kid.options_json or "{}").get("build_session") == sid
+        # Wait for the THING asserted — the listing's row — not for the frame
+        # that turns "waiting" earlier (the CLAUDE.md waitFor rule).
+        (row,) = await _listed_ask(app, ask_id)
+        assert row["build_session"] == sid and row["origin"] == "job:build-helper"
+    except BaseException:
+        # Answer the ask so the turn ends; the failure above is the report.
+        with contextlib.suppress(Exception):
+            await _asgi_post(app, f"/chat/approvals/{ask_id}", {"decision": "deny"})
+            await asyncio.wait_for(task, 30)
+        raise
     assert (await _asgi_post(app, f"/chat/approvals/{ask_id}", {"decision": "deny"}))[0] == 200
     await asyncio.wait_for(task, 30)
 

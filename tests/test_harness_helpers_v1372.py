@@ -187,6 +187,23 @@ def _helper_frames(frames) -> list[dict]:
     return [d for e, d in frames if e == "helper"]
 
 
+async def _listed_ask(app, ask_id: str, seconds: float = 15.0) -> list[dict]:
+    """The pending listing's rows for one ask, once it has one (v1.373.1).
+
+    A helper's row turns "waiting" as soon as the ask is in the registry, but
+    the listing lists only an ask whose ``approval.requested`` event row the
+    event bus has written — a later hop. Waiting on the frame and then reading
+    the listing once raced it on v1.373.0's Release gate; wait for the row."""
+    end = time.monotonic() + seconds
+    while True:
+        status, listing = await _asgi_get(app, "/chat/approvals/pending")
+        assert status == 200, listing
+        rows = [r for r in listing["approvals"] if r.get("id") == ask_id]
+        if rows or time.monotonic() >= end:
+            return rows
+        await asyncio.sleep(0.05)
+
+
 async def _run(app, sid: str, text: str, turn_id: str, *, stopped: bool = False) -> list[tuple[str, dict]]:
     status, raw = await open_turn(app, sid, {"text": text, "turn_id": turn_id})
     assert status == 200, raw
@@ -493,9 +510,8 @@ async def test_a_helpers_ask_reaches_the_build_screen_and_is_answered_there(app,
     (kid,) = _helper_children(app)
     assert kid.origin == H.HELPER_ORIGIN
     # The pending listing (the bell, the desktop) names the helper too.
-    status, listing = await _asgi_get(app, "/chat/approvals/pending")
-    assert any(r.get("id") == ask["id"] and r.get("origin") == H.HELPER_ORIGIN
-               for r in listing["approvals"]), listing
+    listed = await _listed_ask(app, ask["id"])
+    assert any(r.get("origin") == H.HELPER_ORIGIN for r in listed), listed
     assert (await _asgi_post(app, f"/chat/approvals/{ask['id']}", {"decision": "once"}))[0] == 200
     frames = await asyncio.wait_for(task, 30)
     end = [d for d in _helper_frames(frames) if d.get("ended")][-1]
