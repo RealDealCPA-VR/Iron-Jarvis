@@ -496,7 +496,7 @@ async def test_real_edge_no_job_for_the_driver_means_no_browser(monkeypatch):
     site = Site({"/": "<title>Shop</title>shop"})
     b = _browsers()
     try:
-        with pytest.raises(PB.BrowserProblem, match="could not hold"):
+        with pytest.raises(PB.BrowserProblem, match="would not let Iron Jarvis hold"):
             await b.open("build:nojob", site.base, preview=site.base)
         assert not b.is_open("build:nojob")
         assert drivers and drivers[0]

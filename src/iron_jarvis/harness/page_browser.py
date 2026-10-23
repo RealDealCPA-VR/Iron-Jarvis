@@ -199,9 +199,8 @@ NO_PAGE = "No page is open in the agent's browser. Call page_open with the page'
 #: v1.376.0 review: Windows would not let Iron Jarvis hold the browser's
 #: processes (a kill-on-close job), so none is started.
 NO_JOB = (
-    "The agent's browser was not started: Iron Jarvis could not hold its processes so that "
-    "they end when Iron Jarvis does (Windows refused a job object for them). Restart Iron "
-    "Jarvis and try again."
+    "The agent's browser was not started: Windows would not let Iron Jarvis hold its "
+    "processes so that they end when Iron Jarvis does. Restart Iron Jarvis and try again."
 )
 STOPPED = "Stopped: you pressed Stop, so the agent's browser was closed."
 #: v1.376.0 review: Edge closed under the agent (by the user, a crash).
@@ -1877,8 +1876,8 @@ class AgentBrowsers:
             if verdict.kind != "ok":
                 raise BrowserProblem(
                     "The agent's browser is on a page that is not an address it may act on "
-                    "(not the Browser pane's dev server or an address the user allowed). Call "
-                    "page_open with your dev server's address."
+                    "(not the page open in the session's Browser, or an address the user "
+                    "allowed). Call page_open with your dev server's address."
                 )
 
     async def _do(self, sess: _Session, op: str, limit: float, **kw: Any) -> ActResult:
