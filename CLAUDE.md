@@ -3569,6 +3569,78 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A Build session SHOWS its work: the plan under the reply, how full the
+  conversation is, a session summary only Compact writes, and one notice for
+  a long turn** (v1.374.0, IJ harness part 2 Phase 3 — `docs/IJ-HARNESS-
+  PLAN-2.md`; a doer + a reviewer that found 7 real defects, each red first
+  and mutation-checked). PLAN: the turn's `plan_update` steps (and a
+  decomposed helper's plan, re-read at turn end by `_with_helper_plans`)
+  draw under the live reply through the chat's `PlanChecklist`
+  (`components/harness/HarnessPlan.tsx`) and fold into the settled reply as
+  "Plan · N of M done"; the reply line saves `plan` and `context`
+  (`routes/build._ReplyWatch`; both keys in `chat_append.LINE_KEYS` AND the
+  dashboard decoder). A Build plan CARRIES OVER: an unreached step reads
+  "not started", the step it was on stays unticked (failed with a failed
+  turn) — never the chat run's "Not attempted". METER
+  (`components/harness/ContextMeter.tsx`, `lib/buildContext.ts`): numbers
+  ONLY from the daemon's `routes/build.context_receipt` (the shared
+  `chat_turn._apply_compaction`, so both chat lanes' `context` gain it too):
+  it shows `percent` (RAW demand against the window — the planned figure
+  can never pass 100%), offers Compact at the daemon's own `level` (≥
+  `SUGGEST_AT`), and `window_known: false` means `window` is the app's
+  `DEFAULT_WINDOW`, so the words say "of what Iron Jarvis sends this model
+  at once … its own limit is not known" — never the model's limit;
+  compaction off in Settings shows the number with no Compact. The right-hand
+  group of the box WRAPS (measured at 390 px: Send was pushed ~60 px out).
+  COMPACT (`harness/compact.py`, `POST /build/sessions/{id}/compact`,
+  `/compact`): coverage ends on a turn boundary keeping
+  `compaction.KEEP_RECENT` (6) lines; ONE `router.complete(pin=True)` on
+  `_turn_pair`'s model under `set_hold`, the session's Iron-Proxy pin
+  (`turn_account`) and `egress.local_only_scope`, bounded by
+  `COMPACT_TIMEOUT_S` (240 → 504 in words); `compaction.verify` against the
+  covered lines + `ledger_facts` limited to THE COVERED TURNS' OWN CALLS
+  (`turn_windows`: each turn's first line to its last — a rewound turn's
+  rows and a later turn's must never corroborate a path); the summarizer is
+  asked for a third and the summary is KEPT ONLY WHEN LIGHTER than what it
+  replaces; promptguard-scanned (`context.blocked`); billed to the session
+  (`library._bill`); stored in `setup.compaction` by `sessions.set_compaction`,
+  a locked write that re-checks the covered lines (`covered_key`) — a
+  conversation that changed answers 409 `CHANGED`. Every parse, hash, ledger
+  read and billing write is off the loop. A parked/signed-out account
+  answers its own limit sentence (`limit_words`, 409); the demo model never
+  writes one (before AND after the call). ONLY COMPACT WRITES THE SUMMARY:
+  PATCH ignores a forged one, a Build session cannot be PUT, and a chat
+  thread's forged record is never read (`_clean_setup` whitelists the key
+  for EVERY thread so a setup write does not drop it; no chat lane reads it)
+  — pinned. Later turns read
+  `compact.history_for_turn` (the lines after the coverage) and the summary
+  rides the harness block (`compact.set_summary` ContextVar, read in
+  `HarnessTurn.block()` BEFORE the planner; not in the fingerprint);
+  re-compaction feeds the old summary as `prior`; `sessions.cut_transcript`
+  drops it when a rewind cuts any covered line (`survives_cut`), a refused
+  rewind keeps it. A low-trust session may compact (no tools; the summarizer
+  reads questions, replies and masked step inputs, never a tool's output) —
+  decided and pinned. FINISH NOTICE: `build.turn_finished` (`EventType.
+  BUILD_TURN_FINISHED`: session id, title, duration, outcome) is published by
+  `recorded_turn` AFTER the reply line for a turn longer than
+  `FINISH_NOTICE_AFTER_S` (60, the daemon's clock from the turn's start)
+  that finished or failed — never for a Stop, a shutdown cut-off or an
+  account-limit card, and never for a helper's own end. The bell pings once
+  unless the user is LOOKING at that session (`lib/buildWatching`:
+  `ij.build.looking` in localStorage, fresh 20 s, shared by every window)
+  and a watched finish is not recounted after a reload (`ij.build.watched`);
+  a quiet pop-out only records (`quietWindow()`); main.js
+  `RUN_OUTCOME_AUDIT_TYPES` + `runOutcomeNotice` say it from the tray; the
+  notifier's `bell_pings` keeps "This PC" quiet (one-notice fixture
+  extended). KNOWN: Build turns still run the chat's own automatic
+  compaction at 92% (transcript-checked only), so two summaries can stack;
+  the CHAT page's gauge still calls an unknown window the model's; a return
+  to a session mid-Compact shows no "Summarizing…" (a send is refused in
+  words); turn windows rely on line stamps (a row on the same 15.6 ms tick
+  at a turn's edge can still count). Pins: `tests/test_build_{compact,
+  turn_finished,plan_lines}_v1374.py` (+ the review files),
+  `dashboard/__tests__/{ij-harness-work,build-finish-notice}-v1374.test.tsx`.
+
 - **`/` and `@` in a Build session's box; the app's font is SHIPPED; the
   harness reads like a document** (v1.373.0, IJ harness part 2 Phase 2 + the
   user's "I prefer the spacing and font of this UI" beside a screenshot of

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.373.1 (2026-10-22).*
+holds itself to. Current as of v1.374.0 (2026-10-22).*
 
 ---
 
@@ -1896,6 +1896,45 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Watch the work in the IJ harness (v1.374.0)
+
+**The task list sits under the reply.** When a Build session plans its work
+(the model's own to-do list), the steps show under the reply while it
+works and tick off as they finish. When the turn ends they fold into one
+line, for example "Plan · 1 of 3 done"; press it to see the list as the turn
+left it. A step the turn did not reach reads "not started" — the plan carries
+on with your next message. A helper agent that plans shows its plan in its
+own row. The side **Plan** panel is unchanged.
+
+**How full the conversation is.** A small ring and a percent beside the model
+name show how much of what the model can read at once this conversation
+fills. For a model whose own limit Iron Jarvis does not know, the number is
+measured against the safe size Iron Jarvis sends it, and the ring's tooltip
+says so. Past about 70% the ring turns amber and a **Compact** button
+appears (you can also type `/compact`).
+
+**Compact** asks the session's own model, on the session's own account, to
+write a summary of the earlier turns — never another model, and in a Local
+only session nothing leaves your network. Every file the summary names must be one those turns really
+read or changed, and every quote must appear word for word; anything else is
+removed before the summary is kept, and a summary is kept only when it is
+shorter than what it replaces. From then on the model reads the summary in
+place of those turns; **the conversation you see is never cut.** The box
+says "Earlier turns summarized" — press it (or ⋯ → Read the summary of
+earlier turns) to read exactly what the model now reads. The summary is
+billed to the session like any other turn. If nothing could be summarized
+(not enough conversation yet, the demo model, an account at its limit), the
+box says why in a sentence and nothing changes. **Rewind to here** to a
+message before the summary's turns drops the summary.
+
+**A notice when a long turn ends.** A Build turn that took longer than a
+minute tells you when it finishes (or could not finish): one bell row —
+"Your Build session finished", its title and how long it took — and one
+desktop notice that opens the session. You get nothing if you were looking
+at that session when it ended, nothing for a turn you stopped yourself, and
+never two notices for one turn (the same rules as every other notice: one
+window speaks for the app, and the tray says it when no window is open).
 
 ## Type `/` or `@` in the IJ harness (v1.373.0)
 
