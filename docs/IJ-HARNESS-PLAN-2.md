@@ -533,11 +533,12 @@ Decisions made in this phase (each pinned by a test):
   the tab opens, when a page step finishes and when a turn ends — never on a
   timer. `page_screenshot` with no address looks at the agent's page.
 
-Tests: 57 in `tests/test_build_browser_v1376.py` (a fake browser for the
+Tests: 58 in `tests/test_build_browser_v1376.py` (a fake browser for the
 fast pins; two against the real Edge and a local `http.server`, one of them a
 KILLED daemon), 16 in `dashboard/__tests__/ij-harness-browser-v1376.test.tsx`
 and `ij-harness-step-words-v1376.test.ts`, and an e2e step (the pane at 390 px,
-no sideways pan). 35 Python and 13 dashboard mutations, each red.
+no sideways pan). 36 mutations of the daemon's side and 14 of the
+dashboard's (its words, the pane, the low-trust families), each red.
 
 Not done here: the installed (NSIS) build was not made; no hand test of a
 page that opens a popup, a dialog-heavy page or a dev server on HTTPS; the
