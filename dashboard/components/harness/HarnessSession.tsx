@@ -1268,7 +1268,15 @@ export function HarnessSession({
   // that ("Your Claude plan"), never the app's default model.
   const ownDefault = view?.setup.provider && !view.setup.model ? view.setup.provider : "";
   const modelPart = ownDefault
-    ? { text: modelText({ provider: ownDefault, model: "" }, catalog.models), raw: ownDefault, isDefault: false }
+    ? {
+        // A provider no words table knows (a fleet node) by its group's name:
+        // the label its catalog rows carry.
+        text:
+          modelText({ provider: ownDefault, model: "" }, catalog.models) ||
+          modelGroupName(catalog.models.find((m) => m.provider === ownDefault) ?? { provider: ownDefault }),
+        raw: ownDefault,
+        isDefault: false,
+      }
     : modelTriggerOf(choice, catalog.models, defaultProvider, defaultModel);
   const trigger = currentAccount ? { ...modelPart, account: currentAccount.name } : modelPart;
   // v1.376.0: one group per company, and the Iron-Proxy accounts in it

@@ -608,6 +608,14 @@ describe("the model chip names the account", () => {
     expect(screen.getByTitle("Switch model").textContent).not.toContain("Demo");
   });
 
+  it("a provider no words table knows, left on its own default, reads by its label", async () => {
+    api.models = [...CLAUDE, { provider: "fleet-abc", model: "qwen3", name: "DGX Spark", available: true, kind: "local", on_this_network: true }];
+    api.gets["/build/accounts"] = { claude: [], codex: [], iron_proxy: PROXY_OFF };
+    api.gets["/build/sessions/s1"] = view({ setup: { provider: "fleet-abc" } });
+    renderSession();
+    await waitFor(() => expect(screen.getByTitle("Switch model").textContent).toBe("DGX Spark"));
+  });
+
   it("fits the box at 390 px: the chip keeps its width, the account is cut on its own, Send stays in the wrapping row", async () => {
     api.gets["/build/sessions/s1"] = onWork({
       setup: { provider: "claude-cli", model: "claude-opus-4-8", account: "work", account_name: "Work" },
