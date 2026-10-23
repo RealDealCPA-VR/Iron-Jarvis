@@ -121,6 +121,12 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         # v1.371.0: a screenshot of a local page goes to the model — flagged
         # content must not point it at another app's page on this network.
         "page_screenshot",
+        # v1.376.0: the agent's own browser — flagged content must not open,
+        # click or type in a page on this network, nor read one back.
+        "page_open",
+        "page_click",
+        "page_type",
+        "page_read",
     }
 )
 

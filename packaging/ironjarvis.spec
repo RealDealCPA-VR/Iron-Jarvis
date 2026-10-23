@@ -214,14 +214,29 @@ if os.name == "nt":
     except Exception as exc:  # noqa: BLE001
         print(f"[ironjarvis.spec] WARN could not bundle winpty helpers: {exc}")
 
+# --- Playwright: the IJ harness's AGENT BROWSER (v1.376.0) --------------------
+# harness/page_browser drives the installed Microsoft Edge through Playwright's
+# async API. Playwright is a Python package PLUS a driver it starts as a child:
+# playwright/driver/node.exe and playwright/driver/package/ (cli.js + lib, ~15
+# MB). Those are DATA files, which a bare import never pulls — the terminals
+# feature once shipped dead for exactly this shape (helpers PyInstaller did not
+# see). collect_all bundles the package, its submodules and the driver; pyee
+# and greenlet are its own imports. No browser is bundled: the agent's browser
+# is the user's installed Edge (`executable_path`), so PLAYWRIGHT_BROWSERS_PATH
+# (which Playwright sets to "0" when frozen) is never read. Check after a
+# build: `ironjarvis.exe page-browser-check http://127.0.0.1:<port>/` must
+# print "ok": true (daemon/cli.py).
+_collect("playwright")
+hiddenimports += ["pyee", "pyee.asyncio"]
+
 # --- Excludes: heavy OPTIONAL deps the daemon must boot WITHOUT --------------
 # All are imported lazily (only when a real key / opt-in feature is used), so
 # excluding them keeps the daemon booting offline on the mock provider.
-#   playwright -> computer-use only        docker -> docker sandbox only
+#   docker -> docker sandbox only
 #   anthropic / openai -> real LLM key only (mock is the default provider)
+# (playwright left this list in v1.376.0: the agent's browser, above.)
 # Re-include any of these by deleting it here and rebuilding.
 excludes = [
-    "playwright",
     "docker",
     "openai",
     # Dev / notebook / GUI toolchains never used by the daemon.

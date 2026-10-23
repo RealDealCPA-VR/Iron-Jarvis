@@ -62,6 +62,10 @@ CODING_TOOLS: tuple[str, ...] = (
     "mcp_list_resources", "mcp_read_resource",
     # v1.371.0: look at the user's dev server (harness/page_shot).
     "page_screenshot",
+    # v1.376.0 (part 2, Phase 5): the agent's own browser (harness/page_act,
+    # harness/page_browser) — open the dev server, click, type, read the
+    # console and the failed requests.
+    "page_open", "page_click", "page_type", "page_read",
     # v1.372.0 (part 2, Phase 1): helper agents and the user's skill library
     # (harness/helpers). Helpers inherit the session's folder, model, account,
     # Local only, trust and approval posture; at most 3 run at once.
@@ -95,6 +99,9 @@ PLAN_MODE_TOOLS: tuple[str, ...] = (
     "mcp_list_resources", "mcp_read_resource",
     # v1.371.0: looking at a page changes nothing on this PC.
     "page_screenshot",
+    # v1.376.0: opening and reading a page in the agent's browser look; a
+    # click or typing acts, so those wait for the plan's approval.
+    "page_open", "page_read",
     # v1.372.0: a skill is text to read. No helper in plan mode: a helper can
     # change files, and nothing may change before the plan is approved.
     "skill_search", "skill_load",

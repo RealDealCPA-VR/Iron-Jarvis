@@ -380,6 +380,30 @@
       "desktop": "take a screenshot of a page on your computer or network"
     },
     {
+      "tool": "page_open",
+      "kind": "table",
+      "card": "open a page on your computer or network in its browser",
+      "desktop": "open a page on your computer or network in its browser"
+    },
+    {
+      "tool": "page_click",
+      "kind": "table",
+      "card": "click on a page in its browser",
+      "desktop": "click on a page in its browser"
+    },
+    {
+      "tool": "page_type",
+      "kind": "table",
+      "card": "type into a page in its browser",
+      "desktop": "type into a page in its browser"
+    },
+    {
+      "tool": "page_read",
+      "kind": "table",
+      "card": "read the page in its browser",
+      "desktop": "read the page in its browser"
+    },
+    {
       "tool": "delegate",
       "kind": "table",
       "card": "hand part of the work to a helper agent",

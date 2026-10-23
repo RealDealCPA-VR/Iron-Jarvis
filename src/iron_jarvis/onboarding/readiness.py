@@ -26,7 +26,10 @@ from .doctor import CHECKS, REQUIRED, RECOMMENDED, _result
 #: v1.375.0: "gh" (the GitHub CLI, Build's Create PR) joins them — a
 #: developer's tool, offered where Build makes a pull request, not on the
 #: first-run card.
-DEV_TOOLCHAIN_CHECKS = frozenset({"python", "uv", "git", "gh", "node", "pnpm"})
+#: v1.376.0: "agent_browser" (Edge + Playwright's driver, the browser a
+#: Build session's agent drives) too — a developer's feature, said where
+#: Build runs, not on the first-run card.
+DEV_TOOLCHAIN_CHECKS = frozenset({"python", "uv", "git", "gh", "node", "pnpm", "agent_browser"})
 
 #: v1.310.0: the plain words for each remaining row, shown beside the mono
 #: name ("Reading old .doc and .xls files", not "old Office files" / a

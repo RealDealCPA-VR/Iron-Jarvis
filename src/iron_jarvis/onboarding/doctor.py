@@ -284,6 +284,34 @@ def check_browser() -> dict:
     )
 
 
+def check_agent_browser() -> dict:
+    """v1.376.0 (IJ harness part 2, Phase 5): the browser a Build session's
+    agent drives — the installed Microsoft Edge, through Playwright's driver
+    (bundled in the packaged app). Presence only: nothing is launched.
+    A developer's row (``readiness.DEV_TOOLCHAIN_CHECKS``), like ``gh``."""
+    from ..harness.page_browser import edge_executable, playwright_problem
+
+    edge = edge_executable()
+    problem = playwright_problem()
+    ok = bool(edge) and not problem
+    if ok:
+        detail = f"The agent's browser in Build can start: Microsoft Edge found ({edge})."
+        fix = ""
+    elif not edge:
+        detail = (
+            "Microsoft Edge was not found — a Build session's agent cannot open your dev server "
+            "in its own browser (page_open, page_click, page_type, page_read)."
+        )
+        fix = "Install Microsoft Edge: https://www.microsoft.com/edge"
+    else:
+        detail = problem
+        fix = (
+            "Reinstall dependencies (`uv sync --extra dev --extra voice`); if this is the packaged "
+            "app, Playwright's driver is missing from the build."
+        )
+    return _result("agent_browser", ok, detail, fix=fix, level=RECOMMENDED)
+
+
 def check_pdf_classifier() -> dict:
     """The per-page scan router (v1.176.0) is a NATIVE extension.
 
@@ -680,6 +708,7 @@ CHECKS = [
     check_node,
     check_pnpm,
     check_browser,
+    check_agent_browser,
     check_pdf_classifier,
     check_local_ocr,
     check_legacy_office,

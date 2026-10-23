@@ -304,6 +304,10 @@
       "ok": "checked your extensions",
       "failed": "tried an extension check and it failed"
     },
+    "page_read": {
+      "ok": "read the page in its browser",
+      "failed": "tried a page read and it failed"
+    },
     "page_screenshot": {
       "ok": "took a screenshot of a page",
       "failed": "tried a page screenshot and it failed"
@@ -580,6 +584,9 @@
     "memory_search",
     "message_agent",
     "notebook",
+    "page_click",
+    "page_open",
+    "page_type",
     "read_document",
     "read_file",
     "recall",

@@ -2808,6 +2808,10 @@ const TOOL_WORDS = {
   notebook_edit: "change a notebook",
   exit_plan_mode: "start working on this plan",
   page_screenshot: "take a screenshot of a page on your computer or network",
+  page_open: "open a page on your computer or network in its browser",
+  page_click: "click on a page in its browser",
+  page_type: "type into a page in its browser",
+  page_read: "read the page in its browser",
   delegate: "hand part of the work to a helper agent",
   spawn_agent: "start a helper agent",
 };

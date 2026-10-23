@@ -224,6 +224,12 @@ _TOOL_WORDS: dict[str, tuple[str, str]] = {
     # (the work line's "Called crm"; never its path, method, body or key).
     "web_fetch": ("read a web page", "could not read a web page"),
     "rest_call": ("called {s}", "could not call {s}"),
+    # v1.376.0 (IJ harness part 2, Phase 5): the agent's own browser, by the
+    # page's address (host and path only — harness/page_browser.where) and the
+    # words of what it clicked or typed into (never what it typed).
+    "page_open": ("opened {u} in its browser", "could not open {u} in its browser"),
+    "page_click": ("clicked “{t}” in its browser", "could not click “{t}” in its browser"),
+    "page_type": ("typed into “{t}” in its browser", "could not type into “{t}” in its browser"),
 }
 
 #: What an ASK wants to do, in the approval card's own words (v1.352.0, one
@@ -267,6 +273,13 @@ ASK_WORDS: dict[str, str] = {
     # v1.371.0: a screenshot of a local page that is NOT the one the Browser
     # pane shows asks first (harness/page_shot).
     "page_screenshot": "take a screenshot of a page on your computer or network",
+    # v1.376.0 (IJ harness part 2, Phase 5): the agent's own browser
+    # (harness/page_act) — opening a page that is not the Browser's asks, and
+    # a local-only session cards every open, click and typed entry.
+    "page_open": "open a page on your computer or network in its browser",
+    "page_click": "click on a page in its browser",
+    "page_type": "type into a page in its browser",
+    "page_read": "read the page in its browser",
     # v1.372.0 (IJ harness part 2, Phase 1): a Build session's helper agents
     # (harness/helpers) — both doors are ask-tier, so they card.
     "delegate": "hand part of the work to a helper agent",
@@ -444,6 +457,12 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "exit_plan_mode": ("presented its plan for approval", "plan for approval"),
     # v1.371.0: looking at the user's dev server (harness/page_shot).
     "page_screenshot": ("took a screenshot of a page", "page screenshot"),
+    # v1.376.0 (IJ harness part 2, Phase 5): the agent's own browser
+    # (harness/page_act). Twin: lib/runWords.ts AGENT_TOOLS.
+    "page_open": ("opened a page in its browser", "page opening"),
+    "page_click": ("clicked on a page in its browser", "page click"),
+    "page_type": ("typed into a page in its browser", "page entry"),
+    "page_read": ("read the page in its browser", "page read"),
 }
 
 #: browser/tools.py's 14 built-in browser tools, by EXACT name (the
@@ -473,6 +492,9 @@ _STEP_KIND: dict[str, str] = {
     "web_fetch": "page",
     **dict.fromkeys(("shell", "run_code", "repl", "process_start"), "command"),
     "rest_call": "service",
+    # v1.376.0: the agent's own browser (lib/workTarget's "site" kind).
+    **dict.fromkeys(
+        ("page_open", "page_click", "page_type", "page_read", "page_screenshot"), "site"),
 }
 
 #: lib/stepWords.ts STEP_WORDS[kind].count(1) + lib/runWords.ts KIND_NOUN.
@@ -487,6 +509,7 @@ _KIND_WORDS: dict[str, tuple[str, str]] = {
     "command": ("ran 1 command", "command"),
     "browser": ("used your browser", "browser step"),
     "service": ("called a web service", "web service call"),
+    "site": ("used its browser", "step in its browser"),
 }
 
 _APP_NAME_MAX = 40
@@ -647,6 +670,8 @@ _PRESENT: dict[str, str] = {
     "stopped": "stop",
     # v1.367.0 (IJ harness Phase 4).
     "presented": "present",
+    # v1.376.0 (IJ harness part 2, Phase 5).
+    "clicked": "click",
 }
 
 
@@ -713,6 +738,8 @@ def tool_line(tool: str, args: dict[str, Any], ok: bool) -> str:
     q = _short(args.get("query") or args.get("pattern") or args.get("q") or "", 60)
     a = _short(args.get("agent") or "a teammate", 40)
     sv = _service_name(args.get("service"))
+    u = _page_where(args.get("url"))
+    t = _short(_page_mask(args.get("target") or args.get("css") or ""), 60)
     text = words[0] if ok else words[1]
     if "{x}" in text and not x:
         text = text.replace(" {x}", " a file").replace("{x}", "a file")
@@ -720,7 +747,31 @@ def tool_line(tool: str, args: dict[str, Any], ok: bool) -> str:
         text = text.replace(" for “{q}”", "")
     if "{s}" in text and not sv:
         text = text.replace("{s}", "a web service")
-    return text.format(x=x, q=q, a=a, s=sv)
+    if "{u}" in text and not u:
+        text = text.replace("{u}", "a page")
+    if "{t}" in text and not t:
+        return fallback_line(tool, ok)  # "clicked on a page in its browser"
+    return text.format(x=x, q=q, a=a, s=sv, u=u, t=t)
+
+
+def _page_mask(text: Any) -> str:
+    try:
+        from ..detections.redact import mask
+
+        return mask(str(text or ""))
+    except Exception:  # noqa: BLE001
+        return str(text or "")
+
+
+def _page_where(url: Any) -> str:
+    """A page's address as the agent's browser says it ("localhost:5173/cart":
+    host and path, no query string — harness/page_browser.where)."""
+    try:
+        from ..harness.page_browser import where
+
+        return where(url)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def session_options(session: Any) -> dict[str, Any]:

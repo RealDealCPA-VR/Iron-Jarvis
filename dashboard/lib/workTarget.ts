@@ -49,6 +49,7 @@ export type WorkKind =
   | "command"
   | "service"
   | "browser"
+  | "site"
   | "app"
   | "tool";
 
@@ -93,6 +94,16 @@ const KIND_OF: Record<string, WorkKind> = {
   notebook_edit: "change",
   glob: "search",
   process_start: "command",
+  // v1.376.0 (IJ harness part 2, Phase 5): the agent's OWN browser
+  // (harness/page_act) — "site", never "browser" (that is the user's paired
+  // browser, "Used your browser"). Each tool leads its row with its own verb
+  // (lib/stepWords SITE_WORDS): "Opened localhost:5173", "Clicked "Add to
+  // cart"", "Read the page".
+  page_open: "site",
+  page_click: "site",
+  page_type: "site",
+  page_read: "site",
+  page_screenshot: "site",
 };
 
 /** The built-ins KIND_OF words (v1.358.0, integrate): read by
@@ -237,6 +248,23 @@ function hostOf(raw: string): string | null {
   return host ? cleanTarget(host) : null;
 }
 
+/** v1.376.0: a page as the agent's browser names it — host, port and path
+ *  ("localhost:5173/cart"), never the scheme, the query string or the
+ *  fragment (they can carry tokens). harness/page_browser.where is the
+ *  daemon's twin. Null for anything that is not an http(s) address. */
+export function pageWhere(raw: string): string | null {
+  let u: URL;
+  const text = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw.trim()) ? raw.trim() : `http://${raw.trim()}`;
+  try {
+    u = new URL(text);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  const path = u.pathname && u.pathname !== "/" ? u.pathname : "";
+  return cleanTarget(`${u.host}${path}`);
+}
+
 /** A command's program: the first word, its base name, no ".exe". Null for
  *  anything that is not a plain program name (an assignment, a quote, …). */
 function programOf(command: string): string | null {
@@ -270,6 +298,20 @@ export function stepTarget(name: string, args: Record<string, unknown> | null | 
     case "page": {
       const u = str(args, "url");
       return u ? hostOf(u) : null;
+    }
+    case "site": {
+      // v1.376.0: a page in the agent's own browser by its address (host,
+      // port and path — never the query string), and what a click or a
+      // typed entry was aimed at by its words (never what was typed).
+      if (name === "page_open" || name === "page_screenshot") {
+        const u = str(args, "url");
+        return u ? pageWhere(u) : null;
+      }
+      if (name === "page_click" || name === "page_type") {
+        const t = str(args, "target") ?? str(args, "css");
+        return t ? cleanTarget(t) : null;
+      }
+      return null;
     }
     case "service": {
       // v1.358.0 (lane 8C): the saved service's name ("crm"), as the user

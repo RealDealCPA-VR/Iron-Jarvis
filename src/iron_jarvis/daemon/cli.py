@@ -169,6 +169,27 @@ def claude_inert_mcp(
     raise typer.Exit(code=_inert_main([manifest]))
 
 
+@app.command("page-browser-check", hidden=True)
+def page_browser_check(
+    url: str = typer.Argument(..., help="A page on this PC, e.g. http://127.0.0.1:8000/"),
+) -> None:
+    """Open one local page in the agent's browser and read it (v1.376.0,
+    internal — the RELEASE CHECK for a packaged build: Playwright's driver is
+    bundled and drives the installed Edge from the frozen exe).
+
+    Prints one JSON object (``ok``, ``edge``, ``where``, ``title``, ``text``,
+    ``pids``, ``alive_after_close``, or ``error``); exits 0 only when the page
+    was read and no process of that browser outlived its close."""
+    import json as _json
+
+    from ..harness.page_browser import self_check
+
+    result = self_check(url)
+    sys.stdout.write(_json.dumps(result) + "\n")
+    sys.stdout.flush()
+    raise typer.Exit(code=0 if result.get("ok") else 1)
+
+
 @app.command()
 def init(path: str = typer.Argument(".", help="Project root to initialize.")) -> None:
     """Create .ironjarvis/ and a starter config for a project."""

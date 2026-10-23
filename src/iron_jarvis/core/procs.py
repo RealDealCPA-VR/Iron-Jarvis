@@ -628,6 +628,54 @@ def _job_of(proc: Any) -> "_Job | None":
     return getattr(proc, "_ij_job", None)
 
 
+#: OpenProcess rights :func:`adopt` needs to put a process in a job.
+_PROCESS_SET_QUOTA = 0x0100
+
+
+def adopt(pid: int, *, background: bool | None = None) -> "_Job | None":
+    """Put a child that a LIBRARY started (not this door) in its own
+    kill-on-close Job, and hand the job back (v1.376.0, the IJ harness's
+    agent browser). ``None`` off Windows or when the job cannot be made or
+    the process cannot be assigned — the caller then keeps its own kill path.
+
+    Only safe for a child that has not started anything yet: a process
+    assigned AFTER it ran keeps outside the job whatever it had already
+    started (assignment never adopts existing children — the v1.346.1
+    lesson). Playwright's driver is such a child: it starts nothing until it
+    is asked to launch the browser, and the caller adopts it before asking.
+    Everything it starts afterwards is born inside the job (measured with
+    Edge: the driver, the browser and its gpu, network, storage, renderer
+    and crash-reporter processes all members), so ``terminate()`` — or the
+    daemon dying for any reason, which closes the job's only handle — ends
+    the whole tree. The caller owns the job: ``terminate()`` then
+    ``close()``."""
+    k = _kernel()
+    if k is None or not pid:
+        return None
+    bg = in_background_lane() if background is None else bool(background)
+    job = _Job.create(kill_on_close=True, below_normal=bg)
+    if job is None:
+        return None
+    try:
+        handle = k.k32.OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, int(pid))
+    except Exception:  # noqa: BLE001
+        handle = None
+    if not handle:
+        job.close()
+        return None
+    try:
+        assigned = job.assign(int(handle))
+    finally:
+        try:
+            k.k32.CloseHandle(handle)
+        except Exception:  # noqa: BLE001
+            pass
+    if not assigned:
+        job.close()
+        return None
+    return job
+
+
 def spawn(
     argv: Sequence[str] | str,
     *,

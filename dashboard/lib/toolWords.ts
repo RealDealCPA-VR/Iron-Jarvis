@@ -92,6 +92,13 @@ const WORDS: Record<string, string> = {
   // v1.371.0: a screenshot of a local page other than the one the Browser
   // pane shows asks first (harness/page_shot).
   page_screenshot: "take a screenshot of a page on your computer or network",
+  // v1.376.0 (IJ harness part 2, Phase 5): the agent's own browser
+  // (harness/page_act). Opening a page that is not the Browser's asks; a
+  // local-only session cards every open, click and typed entry.
+  page_open: "open a page on your computer or network in its browser",
+  page_click: "click on a page in its browser",
+  page_type: "type into a page in its browser",
+  page_read: "read the page in its browser",
   // v1.372.0 (IJ harness part 2, Phase 1): a Build session starts helper
   // agents (harness/helpers); both doors are ask-tier, so their card says
   // what starting one does.

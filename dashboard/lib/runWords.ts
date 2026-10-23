@@ -179,6 +179,12 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   exit_plan_mode: { did: "Presented its plan for approval", noun: "plan for approval" },
   // v1.371.0: looking at the user's dev server (harness/page_shot).
   page_screenshot: { did: "Took a screenshot of a page", noun: "page screenshot" },
+  // v1.376.0 (IJ harness part 2, Phase 5): the agent's own browser
+  // (harness/page_act; agents/mission.py _RUN_TOOL_WORDS is the twin).
+  page_open: { did: "Opened a page in its browser", noun: "page opening" },
+  page_click: { did: "Clicked on a page in its browser", noun: "page click" },
+  page_type: { did: "Typed into a page in its browser", noun: "page entry", nouns: "page entries" },
+  page_read: { did: "Read the page in its browser", noun: "page read" },
 };
 
 /** One failed call of a KNOWN step kind (lib/stepWords), as a noun. A kind
@@ -196,6 +202,8 @@ const KIND_NOUN: Partial<Record<WorkKind, { noun: string; nouns?: string }>> = {
   // (they read "browser click call" / "rest call call" before).
   browser: { noun: "browser step" },
   service: { noun: "web service call" },
+  // v1.376.0: the agent's own browser (lib/workTarget "site").
+  site: { noun: "step in its browser" },
 };
 
 /** v1.358.0 (lane 8C): the agent-side built-ins this file words by exact

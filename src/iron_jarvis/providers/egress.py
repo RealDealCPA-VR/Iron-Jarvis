@@ -143,6 +143,12 @@ CALLS_YOUR_SERVICES_TOOLS: frozenset[str] = frozenset({
 #: call ("Allow once"), the Browser pane's own page included.
 OPENS_PAGES_TOOLS: frozenset[str] = frozenset({
     "page_screenshot",
+    # v1.376.0: the agent's own browser. Opening a page, and a click or a
+    # typed Enter that can take the page somewhere, card every call in a
+    # local-only turn; reading the page already loaded (page_read) does not.
+    "page_open",
+    "page_click",
+    "page_type",
 })
 
 #: The words a person knows each cloud provider by. Anything not here reads as

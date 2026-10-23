@@ -79,6 +79,16 @@ export const STEP_WORDS: Record<WorkKind, KindWords> = {
     doingOn: "Using your browser",
     count: (n) => `used your browser${times(n)}`,
   },
+  // v1.376.0 (IJ harness part 2, Phase 5): the agent's OWN browser
+  // (harness/page_act). Each tool leads its row with its own verb
+  // (SITE_WORDS below); these words are the count and the fallback.
+  site: {
+    done: "Used its browser",
+    doing: "Using its browser",
+    doneOn: "Used its browser on",
+    doingOn: "Using its browser on",
+    count: (n) => `used its browser${times(n)}`,
+  },
   // v1.352.0 (G22): a connected app. The row and the count name the app
   // itself (appStepWords / stepCounts below); these words are only the
   // fallback for an app id that names no app, which toolKind never returns.
@@ -95,6 +105,7 @@ export const KIND_ORDER: readonly WorkKind[] = [
   "page",
   "web",
   "browser",
+  "site",
   "change",
   "make",
   "service",
@@ -187,8 +198,31 @@ export function rowSubject(
     return { text: parts ? appToolNameWords(parts.tool) : name, file: false };
   }
   if (!target) return null;
+  // v1.376.0: what a click or a typed entry in the agent's browser was aimed
+  // at, in quotes — "Clicked "Add to cart"" (an address stays bare).
+  if (kind === "site" && (name === "page_click" || name === "page_type")) {
+    return { text: `"${target}"`, file: false };
+  }
   return { text: target, file: kind === "read" || kind === "make" || kind === "change" || kind === "folder" };
 }
+
+/** v1.376.0 (IJ harness part 2, Phase 5): the agent's own browser, each tool
+ *  by its own verb — with a subject ("Opened localhost:5173/cart",
+ *  "Clicked "Add to cart"", "Typed into "Email"") or without ("Read the
+ *  page", "Took a screenshot"). The daemon's twin is agents/mission.py
+ *  _TOOL_WORDS. */
+export const SITE_WORDS: Readonly<Record<string, { done: string; doing: string; doneOn: string; doingOn: string }>> = {
+  page_open: { done: "Opened a page", doing: "Opening a page", doneOn: "Opened", doingOn: "Opening" },
+  page_click: { done: "Clicked", doing: "Clicking", doneOn: "Clicked", doingOn: "Clicking" },
+  page_type: { done: "Typed into a field", doing: "Typing into a field", doneOn: "Typed into", doingOn: "Typing into" },
+  page_read: { done: "Read the page", doing: "Reading the page", doneOn: "Read", doingOn: "Reading" },
+  page_screenshot: {
+    done: "Took a screenshot",
+    doing: "Taking a screenshot",
+    doneOn: "Took a screenshot of",
+    doingOn: "Taking a screenshot of",
+  },
+};
 
 /**
  * The words that LEAD a row, done or running, with or without a subject.
@@ -201,7 +235,8 @@ export function kindWords(kind: WorkKind, name: string, opts: { subject: boolean
     const parts = appToolParts(name);
     if (parts) return `${appNameWords(parts.app)}:`;
   }
-  const w = STEP_WORDS[kind];
+  const w = (kind === "site" && Object.prototype.hasOwnProperty.call(SITE_WORDS, name) ? SITE_WORDS[name] : null) ??
+    STEP_WORDS[kind];
   if (opts.subject) return opts.running ? w.doingOn : w.doneOn;
   return opts.running ? w.doing : w.done;
 }
@@ -217,6 +252,8 @@ export function stepHint(kind: WorkKind, name: string): string {
   // v1.358.0 (lane 8C): a web-service call with no service named reads
   // "Called a web service" alone; its tool id stays in the hover title.
   if (kind === "service") return "";
+  // v1.376.0: the agent's browser's own verbs say it all ("Read the page").
+  if (kind === "site") return "";
   return name;
 }
 

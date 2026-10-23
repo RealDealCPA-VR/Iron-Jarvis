@@ -348,8 +348,12 @@ def test_a_dialect_hides_the_real_names_its_tools_cover():
     # v1.371.0: page_screenshot has no Claude Code twin, so it passes through.
     # v1.372.0: nor do list_agents and skill_search (Agent and Skill cover
     # delegate / spawn_agent / skill_load).
+    # v1.376.0: the agent's own browser has no Claude Code twin either
+    # (moved on purpose).
     assert passthrough == [
-        "apply_patch", "process_write", "page_screenshot", "list_agents", "skill_search",
+        "apply_patch", "process_write", "page_screenshot",
+        "page_open", "page_click", "page_type", "page_read",
+        "list_agents", "skill_search",
     ]
 
 
