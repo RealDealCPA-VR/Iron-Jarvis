@@ -154,6 +154,7 @@ import {
   decodeSkills,
   INIT_PROMPT,
   leadingSlash,
+  modelByName,
   pickedOf,
   queuedItemBody,
   queuedWords,
@@ -1050,11 +1051,18 @@ export function HarnessSession({
         void patchSetup({ mode: view.mode === "plan" ? "act" : "plan" });
       }
     } else if (id === "compact") {
-      void compact(); // v1.374.0: the meter's Compact
+      // v1.374.0: the meter's Compact. v1.379.0 review: Claude Code's
+      // "/compact <words>" — the words say what the summary keeps in view
+      // (they were dropped).
+      void compact(args);
     } else if (id === "rewind") {
       setRewindOpen(true);
     } else if (id === "model") {
-      setModelMenuOpen(true);
+      // v1.379.0 review: "/model <name>" picks that model when exactly one
+      // model in the menu is called so; anything else opens the menu.
+      const named = args ? modelByName(catalog.models, args, provider) : null;
+      if (named) void pickModel(named);
+      else setModelMenuOpen(true);
     } else if (id === "clear") {
       // Claude Code's /clear starts fresh: a NEW session on the same folder
       // (the folder the user picked, for a session on its own branch), or
@@ -1369,10 +1377,13 @@ export function HarnessSession({
    *  in their place. The conversation shown here is never cut. A refusal (not
    *  enough conversation yet, the demo model, nothing could be checked) is
    *  said in the daemon's words. */
-  async function compact() {
+  async function compact(focus = "") {
     if (compactingRef.current || !view) return;
     if (busy) {
       setError("Wait for the reply to finish, then compact.");
+      // v1.379.0 review: a typed "/compact <words>" goes back in the box
+      // (the box was emptied for it).
+      if (focus) setInput((cur) => cur || `/compact ${focus}`);
       return;
     }
     compactingRef.current = true;
@@ -1380,7 +1391,7 @@ export function HarnessSession({
     setCompactNote(null);
     setError(null);
     try {
-      const done = await compactSession(threadId);
+      const done = await compactSession(threadId, focus);
       await load();
       setCompactNote(done ? compactedNote(done.covers, done.stripped) : "Summarized the earlier turns.");
     } catch (e) {

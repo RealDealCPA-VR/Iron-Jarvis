@@ -23,6 +23,7 @@
  */
 
 import { matchProjectEntries, type ProjectListing } from "@/lib/atMenuFiles";
+import { modelRowName } from "@/lib/onboarding";
 import type { BuildMode } from "@/lib/buildSessions";
 
 /** The session's own "/" commands. v1.374.0 (part 2, Phase 3): "/compact"
@@ -237,12 +238,28 @@ export function slashRows(
   custom: readonly CustomCommand[] | null = null,
 ): SlashRow[] {
   const q = query.trim().toLowerCase();
+  // v1.379.0 review: a row whose NAME is exactly what was typed leads, so
+  // Enter on "/review" runs /review — not /review-pr, which sorted first and
+  // ran in its place.
+  const exact: SlashRow[] = [];
   const named: SlashRow[] = [];
   const described: SlashRow[] = [];
   const place = (row: SlashRow, names: readonly string[], description: string) => {
-    if (!q || names.some((n) => holds(n, q))) named.push(row);
+    if (q && names.some((n) => n.toLowerCase() === q)) exact.push(row);
+    else if (!q || names.some((n) => holds(n, q))) named.push(row);
     else if (holds(description, q)) described.push(row);
   };
+  // v1.379.0 review: a custom command that a skill (or one of the session's
+  // own commands) shares a name with is never reached by typing it — Claude
+  // Code's rule: "A skill and a file in .claude/commands/: The skill" — so
+  // it is not offered either (its row ran the command the typed name never
+  // would).
+  const yours = withPluginSkills(yourSkills ?? [], custom ?? []);
+  const taken = new Set<string>([
+    ...commands.flatMap((c) => [c.name, ...(c.aliases ?? [])]),
+    ...(folderSkills ?? []).map((s) => s.name),
+    ...yours.flatMap((s) => [s.name, ...(s.invoke ? [s.invoke] : [])]),
+  ].map((n) => n.toLowerCase()));
   for (const c of commands) {
     place({ kind: "command", key: `cmd:${c.id}`, command: c }, [c.name, ...(c.aliases ?? [])], c.description);
   }
@@ -253,15 +270,39 @@ export function slashRows(
     place({ kind: "skill", key: `skill:${s.source}:${s.name}`, skill: s }, [s.name], s.description);
   }
   for (const c of custom ?? []) {
-    if (c.kind !== "command") continue;
+    if (c.kind !== "command" || taken.has(c.name.toLowerCase())) continue;
     place({ kind: "custom", key: `custom:${c.name}`, command: c }, [c.name], c.description);
   }
-  for (const s of withPluginSkills(yourSkills ?? [], custom ?? [])) {
+  for (const s of yours) {
     const runs = s.invoke ?? s.name;
     if (picked && picked.name === runs && picked.source === s.source) continue;
     place({ kind: "skill", key: `skill:${s.source}:${s.name}`, skill: s }, [s.name], s.description);
   }
-  return [...named, ...described];
+  return [...exact, ...named, ...described];
+}
+
+/** v1.379.0 review: "/model <name>" — the one model in the menu called
+ *  `name` (its id, "provider::id", or the name the menu shows; any case),
+ *  as a choice ("provider::model"); null when none or more than one — then
+ *  the menu opens. Two rows of the same name: the one on the session's own
+ *  `provider` wins. Only a row that can answer now (`available`). */
+export function modelByName(
+  rows: readonly { provider: string; model: string; name?: string; label?: string; available?: boolean }[],
+  name: string,
+  provider = "",
+): string | null {
+  const q = name.trim().replace(/\s+/g, " ").toLowerCase();
+  if (!q) return null;
+  const hits = new Map<string, string>();
+  for (const r of rows) {
+    if (r.available === false || !r.provider || !r.model) continue;
+    const said = [r.model, `${r.provider}::${r.model}`, r.label ?? "", modelRowName(r, rows)]
+      .map((x) => x.trim().replace(/\s+/g, " ").toLowerCase());
+    if (said.includes(q)) hits.set(`${r.provider}::${r.model}`, r.provider);
+  }
+  if (hits.size === 1) return [...hits.keys()][0];
+  const own = [...hits].filter(([, p]) => p === provider);
+  return own.length === 1 ? own[0][0] : null;
 }
 
 /** A skills list (`GET /skills` or the session's own) by whitelist. */

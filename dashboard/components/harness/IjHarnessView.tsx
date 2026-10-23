@@ -158,10 +158,16 @@ export function IjHarnessView({
   // picked (a session on its own branch is grouped there too). The Terminals
   // view's folder was the default before, so a second session in the same
   // folder meant pasting the folder again. No session open: as before.
-  const sessionFolder = useMemo(
-    () => folders?.find((f) => f.sessions.some((s) => s.id === selected))?.path ?? null,
+  // v1.379.0 review (the merge with v1.378.0): the session in front has NO
+  // folder — New session opens the same way, with no folder (the box empty,
+  // the folder list closed: Start makes another session with no folder); it
+  // never falls back to the Terminals view's folder.
+  const frontGroup = useMemo(
+    () => folders?.find((f) => f.sessions.some((s) => s.id === selected)) ?? null,
     [folders, selected],
   );
+  const sessionFolder = frontGroup ? (frontGroup.noFolder ? "" : frontGroup.path) : null;
+  const frontHasNoFolder = frontGroup?.noFolder === true;
 
   // v1.377.0 (part 2, Phase 6): a session just BRANCHED from a question opens
   // with that question in its box (handed over once, for that session only).
@@ -219,6 +225,7 @@ export function IjHarnessView({
           onStart={start}
           onRename={rename}
           defaultFolder={sessionFolder ?? defaultFolder}
+          startWithNoFolder={frontHasNoFolder}
           terminals={terminals}
           onOpenTerminal={onOpenTerminal}
           newRequest={newRequest}

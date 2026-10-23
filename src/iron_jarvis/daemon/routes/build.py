@@ -194,6 +194,14 @@ class BuildTurnBody(BaseModel):
     command: str = Field(default="", max_length=200)
 
 
+class BuildCompactBody(BaseModel):
+    """``POST /build/sessions/{id}/compact`` (v1.379.0 review): Claude Code's
+    ``/compact [instructions]`` — what the summary should keep in view, in
+    the user's own words ("" = none, exactly the v1.374.0 summary)."""
+
+    focus: str = Field(default="", max_length=2000)
+
+
 class BuildRewindBody(BaseModel):
     """``POST /build/sessions/{id}/rewind`` (v1.370.0): rewind TO before the
     turn ``to`` (that turn and every later one)."""
@@ -2582,7 +2590,7 @@ def register(app: FastAPI, d: Any) -> None:
         return view
 
     @app.post("/build/sessions/{thread_id}/compact")
-    async def build_compact(thread_id: str) -> dict[str, Any]:
+    async def build_compact(thread_id: str, body: BuildCompactBody | None = None) -> dict[str, Any]:
         """COMPACT (v1.374.0, part 2 Phase 3): summarize the session's older
         turns with its OWN model and account, check the summary against the
         conversation and the session's ledger, and keep it on the session —
@@ -2592,7 +2600,10 @@ def register(app: FastAPI, d: Any) -> None:
         wait starts meanwhile). Answers the stored summary (what the card
         shows) plus ``window``; a refusal in words (400 nothing to summarize /
         no real model, 409 running / changed, 409 the local-only shape, 502
-        nothing could be checked / no summary / the model failed)."""
+        nothing could be checked / no summary / the model failed). v1.379.0
+        review: ``focus`` — "/compact keep the API decisions" — is what the
+        summary should keep in view (Claude Code's own words after
+        ``/compact``; they were dropped)."""
         from ...harness import compact as _compact
 
         if thread_id in _COMPACTING:
@@ -2602,6 +2613,9 @@ def register(app: FastAPI, d: Any) -> None:
         _STARTING.add(thread_id)
         _COMPACTING.add(thread_id)
         try:
+            focus = (body.focus if body is not None else "").strip()
+            if focus:
+                return await _compact.compact(d.platform, thread_id, focus=focus)
             return await _compact.compact(d.platform, thread_id)
         except _compact.CompactRefused as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from None

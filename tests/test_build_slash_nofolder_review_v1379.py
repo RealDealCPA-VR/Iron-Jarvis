@@ -503,3 +503,31 @@ def test_only_claude_codes_two_trash_folders_are_skipped(tmp_path, monkeypatch):
     assert reg.get("trash-cleanup") is not None and reg.get("tidy") is not None
     assert reg.get("aside") is None and reg.get("old") is None
 
+
+
+# --------------------------------------------------------------------------- #
+# 7. "/compact <words>" (Claude Code's instructions) reach the summary
+# --------------------------------------------------------------------------- #
+
+
+async def test_compact_words_reach_the_summary_and_none_changes_nothing(tmp_path, work):
+    from tests.test_build_compact_v1374 import WINDOW, Writer, seed, wire_writer
+
+    def fresh(name: str):
+        a = create_app(str(tmp_path / name))
+        a.state.platform.config.model_context_windows = {f"{CLAUDE[0]}::{CLAUDE[1]}": WINDOW}
+        return a
+
+    plain_app, focus_app = fresh("h1"), fresh("h2")
+    plain_sid = new_session(plain_app, work)["id"]
+    focus_sid = new_session(focus_app, work)["id"]
+    seed(plain_app, plain_sid)
+    seed(focus_app, focus_sid)
+    plain, focused = wire_writer(plain_app, Writer()), wire_writer(focus_app, Writer())
+    assert (await asgi(plain_app, "POST", f"/build/sessions/{plain_sid}/compact", {}))[0] == 200
+    status, body = await asgi(focus_app, "POST", f"/build/sessions/{focus_sid}/compact",
+                              {"focus": "keep the deploy   codename"})
+    assert status == 200, body
+    [p], [f] = plain.calls, focused.calls
+    assert "keep in view" not in p["system"]
+    assert f["system"] == p["system"] + "\n\nThe user asked this summary to keep in view: keep the deploy codename"

@@ -57,15 +57,19 @@ function NewSessionForm({
   onStart,
   onClose,
   workRoot,
+  startWithNoFolder = false,
 }: {
   defaultFolder: string | null;
+  /** v1.379.0 review: the session in front has no folder — the form opens
+   *  that way (no folder in the box, the folder list closed). */
+  startWithNoFolder?: boolean;
   onStart: (folder: string, extra?: StartExtra) => Promise<string | null>;
   onClose: () => void;
   /** v1.379.0: where a session with no folder keeps its files. */
   workRoot: string;
 }) {
   const [folder, setFolder] = useState(defaultFolder ?? "");
-  const [picking, setPicking] = useState(!defaultFolder);
+  const [picking, setPicking] = useState(!defaultFolder && !startWithNoFolder);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   // v1.375.0 (part 2, Phase 4): is the folder in a git repository? Then the
@@ -372,7 +376,11 @@ export function HarnessSidebar({
   newRequest = 0,
   searchRequest = 0,
   workRoot = "",
+  startWithNoFolder = false,
 }: {
+  /** v1.379.0 review: the session in front has no folder (New session opens
+   *  with none). */
+  startWithNoFolder?: boolean;
   /** v1.377.0: Ctrl+N — each change opens New session. */
   newRequest?: number;
   /** v1.379.0: "/resume" — each change puts the caret in the session search. */
@@ -422,7 +430,8 @@ export function HarnessSidebar({
     <nav aria-label="IJ harness sessions" data-testid="harness-sidebar" className="flex h-full min-h-0 flex-col gap-2">
       {creating ? (
         <NewSessionForm
-          defaultFolder={defaultFolder}
+          defaultFolder={startWithNoFolder ? "" : defaultFolder}
+          startWithNoFolder={startWithNoFolder}
           workRoot={workRoot}
           onStart={async (folder, extra) => {
             const err = await (extra ? onStart(folder, extra) : onStart(folder));
