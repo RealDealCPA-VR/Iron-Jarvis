@@ -70,6 +70,8 @@ import {
   splitChoice,
 } from "@/components/chat/ModelMenu";
 import { joinUndoByPath, normalizeFsPath, type UndoRowLike } from "@/components/chat/ArtifactsRail";
+import { modelText } from "@/components/ModelRowBits";
+import { companyMenu } from "@/lib/harnessModelMenu";
 import { paneTurnWindow, paneWorkInput } from "@/components/terminal/paneWork";
 import { PANE_COMPOSER_CARD, paneSendClass } from "@/components/terminal/paneChatLook";
 import { HarnessPanes, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
@@ -868,22 +870,53 @@ export function HarnessSession({
     if (v?.running && v.turnId && v.turnId !== "running" && !turnRef.current) void runTurn(null, v.turnId);
   }
 
-  /** A pick in the chip's list: the session moves to that account from its
-   *  next message. NEVER a continue — "carry on now" is offered only from the
-   *  limit card (lib/buildAccounts chooseAccountAndContinue). */
-  async function pickAccount(a: BuildAccount) {
+  /** THE ONE WAY a session moves to another account — the header chip's
+   *  list and the model menu (v1.376.0) both call it, so both show the same
+   *  result: the daemon's answer is adopted (the chip and the model chip read
+   *  the same view). With `model`, the account AND the model go in ONE
+   *  request: the daemon sets both, or refuses the account and changes
+   *  nothing. NEVER a continue — "carry on now" is offered only from the
+   *  limit card (lib/buildAccounts chooseAccountAndContinue). Answers the
+   *  daemon's own sentence when it refused, else null. */
+  async function switchAccount(id: string, model?: string): Promise<string | null> {
     setAccountBusy(true);
     setAccountNote(null);
     try {
-      const v = decodeSessionView(await setSessionAccount(threadId, a.id));
+      const v = decodeSessionView(await setSessionAccount(threadId, id, model));
       if (v) adopt(v);
       await rereadAndFollow();
       onChanged();
+      return null;
     } catch (e) {
-      setAccountNote(e instanceof Error ? e.message : String(e));
+      return e instanceof Error ? e.message : String(e);
     } finally {
       setAccountBusy(false);
     }
+  }
+
+  /** A pick in the chip's list: the session moves to that account from its
+   *  next message. A refusal is said under the list. */
+  async function pickAccount(a: BuildAccount) {
+    const problem = await switchAccount(a.id);
+    if (problem) setAccountNote(problem);
+  }
+
+  /** A pick in the model menu (v1.376.0). Under ANOTHER Iron-Proxy account:
+   *  that account and that model together (`switchAccount`), its refusal
+   *  said in the conversation with nothing changed. Anything else — the
+   *  session's own account, a way with no accounts, an API key, a local
+   *  model, the default — is the model alone, as before (the daemon keeps
+   *  the account for the same vendor, and moves another vendor's pick to
+   *  that vendor's Default account). */
+  async function pickModel(value: string, accountId?: string) {
+    const { provider: p, model: mo } = splitChoice(value);
+    if (accountId && accountId !== currentAccount?.id) {
+      setError(null);
+      const problem = await switchAccount(accountId, mo ?? "");
+      if (problem) setError(problem);
+      return;
+    }
+    void patchSetup({ provider: p ?? "", model: mo ?? "" });
   }
 
   async function makeDefault(a: BuildAccount) {
@@ -1221,7 +1254,22 @@ export function HarnessSession({
   const choice = view?.setup.provider && view?.setup.model ? `${view.setup.provider}::${view.setup.model}` : "";
   const levels = reasoningLevelsOf(reasoningRowFor(choice, catalog.models, defaultProvider, defaultModel));
   const reasoningDef = reasoningDefaultOf(reasoningRowFor(choice, catalog.models, defaultProvider, defaultModel));
-  const trigger = modelTriggerOf(choice, catalog.models, defaultProvider, defaultModel);
+  // v1.376.0: the chip names the session's ACCOUNT after the model ("Opus 4.8
+  // · Work"). A session on a provider with no model of its own (an account
+  // chosen from another vendor leaves the model to the vendor) runs that
+  // provider's own default — routes/build sends model "" — so the chip says
+  // that ("Your Claude plan"), never the app's default model.
+  const ownDefault = view?.setup.provider && !view.setup.model ? view.setup.provider : "";
+  const modelPart = ownDefault
+    ? { text: modelText({ provider: ownDefault, model: "" }, catalog.models), raw: ownDefault, isDefault: false }
+    : modelTriggerOf(choice, catalog.models, defaultProvider, defaultModel);
+  const trigger = currentAccount ? { ...modelPart, account: currentAccount.name } : modelPart;
+  // v1.376.0: one group per company, and the Iron-Proxy accounts in it
+  // (lib/harnessModelMenu); the chat's menu never gets this.
+  const companies = useMemo(
+    () => companyMenu(catalog.models, accounts, sessionAccount(view?.account, vendor, accounts ?? null), choice),
+    [catalog.models, accounts, view?.account, vendor, choice],
+  );
   const place = !vendor && !currentAccount ? placeWords(provider, model, catalog.models) : "";
   // v1.371.0: a picture alone is a message; one still going up is waited for.
   // v1.373.0: so is a file picked with "@".
@@ -1806,10 +1854,8 @@ export function HarnessSession({
                   choice={choice}
                   models={catalog.models}
                   trigger={trigger}
-                  onPick={(v) => {
-                    const { provider: p, model: mo } = splitChoice(v);
-                    void patchSetup({ provider: p ?? "", model: mo ?? "" });
-                  }}
+                  onPick={(v, account) => void pickModel(v, account)}
+                  companies={companies}
                 />
                 {busy ? (
                   <button

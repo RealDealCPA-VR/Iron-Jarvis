@@ -17,8 +17,11 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronRight } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CircleAlert } from "lucide-react";
 import { FitPanel } from "@/components/chat/FitPanel";
+// v1.376.0: the IJ harness's company groups and accounts — TYPES only, so
+// the chat page's menu never loads lib/harnessModelMenu.
+import type { CompanyMenu, MenuAccount, MenuMatch, MenuWay } from "@/lib/harnessModelMenu";
 import { ModelRowChips, modelText, modelTitle } from "@/components/ModelRowBits";
 import { composerChipClass } from "@/lib/composerChips";
 import { friendlyModelName } from "@/lib/friendlyModelName";
@@ -173,6 +176,9 @@ export interface ModelTrigger {
   text: string;
   raw: string;
   isDefault: boolean;
+  /** v1.376.0 (IJ harness): the Iron-Proxy account the session runs on,
+   *  shown after the model ("Opus 4.8 · Work"). Absent = no account part. */
+  account?: string;
 }
 
 /**
@@ -291,6 +297,48 @@ export function ReasoningChip({
   );
 }
 
+/** v1.376.0: an account's state in the IJ harness's menu — its words, and a
+ *  second cue beyond colour: a mark for a state that asks the user to act,
+ *  a small meter for a percent the vendor sent. */
+function AccountState({ state }: { state: MenuAccount["state"] }) {
+  if (!state.text) return null;
+  return (
+    <span
+      data-testid="model-account-state"
+      data-kind={state.kind}
+      className={`flex min-w-0 items-center gap-1 text-[11px] ${state.warn ? "text-tone-warn" : "text-zinc-500"}`}
+    >
+      {state.warn ? <CircleAlert size={11} aria-hidden data-testid="model-account-warn" className="shrink-0" /> : null}
+      {typeof state.percent === "number" ? (
+        <span aria-hidden data-testid="model-account-meter" className="h-1 w-6 shrink-0 overflow-hidden rounded-full bg-white/[0.08]">
+          <span
+            className={`block h-full rounded-full ${state.warn ? "bg-tone-warn" : "bg-accent"}`}
+            style={{ width: `${Math.max(2, Math.min(100, state.percent))}%` }}
+          />
+        </span>
+      ) : null}
+      {/* Wraps rather than cuts: "resets 4:12 PM" is the part that matters. */}
+      <span className="min-w-0 break-words">{state.text}</span>
+    </span>
+  );
+}
+
+/** A provider's model panel: beside its row. */
+const MODEL_PANEL =
+  "absolute right-full z-30 mr-1 w-56 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40";
+/** v1.376.0 (IJ harness): below `sm` the panel opens UNDER its row, inside
+ *  the menu — beside it, a phone's window has no room on the left (the
+ *  menu sits by Send at the right edge), so an account's models could not
+ *  be reached. */
+const MODEL_PANEL_PHONE_INLINE = "max-sm:static max-sm:mr-0 max-sm:mt-0.5 max-sm:w-full";
+
+/** Why a harness filter / Recent row cannot be picked ("" = it can). */
+function matchBlocked(m: MenuMatch): string {
+  if (m.row.available === false) return `${m.group} isn't connected`;
+  if (m.account && !m.account.pickable) return `${m.account.name}: ${m.account.state.text}. ${m.account.reason}`;
+  return "";
+}
+
 /** The model chip and its menu. */
 export function ModelMenu({
   open,
@@ -304,6 +352,7 @@ export function ModelMenu({
   localOnlyLine,
   onMakeDefault,
   defaultNote = "",
+  companies,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -312,8 +361,10 @@ export function ModelMenu({
   /** The catalog (lib/useModels — the whole list, unavailable rows greyed). */
   models: ModelOption[];
   trigger: ModelTrigger;
-  /** A row was picked ("" = the default model). The menu closes itself. */
-  onPick: (value: string) => void;
+  /** A row was picked ("" = the default model). The menu closes itself.
+   *  v1.376.0: `account` — the Iron-Proxy account the row was picked under
+   *  (the IJ harness's menu only; the chat's picks never carry one). */
+  onPick: (value: string, account?: string) => void;
   disabled?: boolean;
   disabledTitle?: string;
   /** v1.332.0: the one line a "local only" conversation adds to the menu. */
@@ -322,6 +373,10 @@ export function ModelMenu({
   onMakeDefault?: () => void;
   /** What the last "Make this my default" said. */
   defaultNote?: string;
+  /** v1.376.0 (IJ harness only): one group per COMPANY, the ways to reach
+   *  it, and the Iron-Proxy accounts (lib/harnessModelMenu). Absent = the
+   *  chat's menu, one row per provider, exactly as before. */
+  companies?: CompanyMenu;
 }) {
   const popRef = useRef<HTMLDivElement>(null);
   const [sub, setSub] = useState<string | null>(null);
@@ -340,6 +395,17 @@ export function ModelMenu({
   }, [open]);
   const matches = useMemo(() => matchModels(models, filter, MODEL_FILTER_MAX), [models, filter]);
   const providers = useMemo(() => modelProvidersOf(models), [models]);
+  // v1.376.0 (IJ harness): the rows listed (a keyless API folded into the
+  // CLI that serves it), the pick as that list spells it, and the filter and
+  // Recent rows, each on the account it runs on. The chat: its own catalog
+  // and pick, untouched.
+  const listed = companies ? companies.models : models;
+  const chosen = companies ? companies.choice : choice;
+  const companyMatches = useMemo(
+    () => (companies ? companies.match(filter, MODEL_FILTER_MAX) : []),
+    [companies, filter],
+  );
+  const companyRecent = useMemo(() => (companies ? companies.recent(recent) : []), [companies, recent]);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -352,13 +418,202 @@ export function ModelMenu({
     return () => document.removeEventListener("mousedown", onDown);
   }, [open, onOpenChange]);
 
-  /** The ONE way a menu row picks: the caller's choice, the menu, the memory. */
-  function pick(v: string) {
-    onPick(v);
+  /** The ONE way a menu row picks: the caller's choice, the menu, the memory.
+   *  v1.376.0: a row under an Iron-Proxy account names it (harness only). */
+  function pick(v: string, account?: string) {
+    if (account) onPick(v, account);
+    else onPick(v);
     onOpenChange(false);
     setSub(null);
     if (v) setRecent(rememberRecentModel(v));
   }
+
+  /** Where a provider runs, and how it is paid for (a provider row and, in
+   *  the harness, a way to reach a company). */
+  const kindBadge = (kind: string, available: boolean) => (
+    <span
+      data-testid="model-kind-badge"
+      title={available ? (KIND_BADGE[kind] ?? KIND_BADGE.api).title : undefined}
+      className={`shrink-0 text-[10px] ${(KIND_BADGE[kind] ?? KIND_BADGE.api).cls}`}
+    >
+      {available ? (KIND_BADGE[kind] ?? KIND_BADGE.api).text : "offline"}
+    </span>
+  );
+
+  /** A provider's models in its side panel. `account` (harness only): the
+   *  Iron-Proxy account they are listed under — a pick switches to it, and a
+   *  row is marked only under the account the session runs on. */
+  const modelRows = (provider: string, account?: MenuAccount) =>
+    listed
+      .filter((m) => m.provider === provider)
+      .map((m) => {
+        const v = `${m.provider}::${m.model}`;
+        const on = chosen === v && (!account || account.current);
+        return (
+          <button
+            key={v}
+            type="button"
+            onClick={() => pick(v, account?.id)}
+            className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] ${
+              on ? "text-accent-soft" : "text-zinc-300"
+            }`}
+          >
+            <span className="min-w-0 truncate" title={modelTitle(m, models)}>
+              {modelText(m, models)}
+            </span>
+            <span className="ml-1.5 inline-flex shrink-0 items-center gap-1">
+              <ModelRowChips m={m} />
+            </span>
+            {on && <Check size={11} className="ml-auto shrink-0" />}
+          </button>
+        );
+      });
+
+  /** A model's side panel, beside the row that opened it. */
+  const modelPanel = (provider: string, account?: MenuAccount) => (
+    /* Anchored to the BOTTOM so a long catalog (OpenRouter)
+       grows UPWARD over the chat area instead of being
+       clipped at the card edge — and v1.350.1: never past
+       the WINDOW's top (FitPanel caps it to the room above,
+       or opens it downward when a row sits high). */
+    <FitPanel testId="model-sub" className={companies ? `${MODEL_PANEL} ${MODEL_PANEL_PHONE_INLINE}` : MODEL_PANEL}>
+      {modelRows(provider, account)}
+    </FitPanel>
+  );
+
+  /** One provider's row and its panel (the chat's tree; in the harness every
+   *  provider that is not a company's). */
+  const providerRow = (p: ProviderRow) => (
+    <div key={p.id} className="relative">
+      <button
+        type="button"
+        onClick={() => setSub(sub === p.id ? null : p.id)}
+        disabled={!p.available}
+        title={p.available ? undefined : `${p.label} isn't connected. Set it up on Connections.`}
+        aria-expanded={sub === p.id}
+        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent ${
+          splitChoice(chosen).provider === p.id ? "text-accent-soft" : "text-zinc-300"
+        }`}
+      >
+        <span className="min-w-0 truncate">{p.label}</span>
+        {/* Where it runs — the whole point of the reorder: a list
+            you can act on without knowing which of your
+            providers costs money. */}
+        {kindBadge(p.kind, p.available)}
+        <ChevronRight size={12} className="ml-auto shrink-0 text-zinc-500" />
+      </button>
+      {sub === p.id && modelPanel(p.id)}
+    </div>
+  );
+
+  /** v1.376.0: a harness filter / Recent row — the model, and where it runs
+   *  (the way to the company, and the account when it has one). */
+  const matchRow = (m: MenuMatch, testId: string) => {
+    const blocked = matchBlocked(m);
+    const on = chosen === m.value && (!m.account || m.account.current);
+    return (
+      <button
+        key={`${testId}-${m.value}-${m.account?.id ?? ""}`}
+        type="button"
+        data-testid={testId}
+        data-account={m.account?.id}
+        onClick={() => pick(m.value, m.account?.id)}
+        disabled={!!blocked}
+        title={blocked || undefined}
+        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
+          on ? "text-accent-soft" : "text-zinc-300"
+        }`}
+      >
+        <span className="min-w-0 truncate" title={modelTitle(m.row, models)}>
+          {modelText(m.row, models)}
+        </span>
+        <ModelRowChips m={m.row} />
+        <span className="ml-auto flex min-w-0 shrink items-center gap-1 font-sans text-[10px] text-zinc-500">
+          <span className="min-w-0 truncate">{m.group}</span>
+          {m.account?.state.warn ? (
+            <CircleAlert size={10} aria-label={m.account.state.text} className="shrink-0 text-tone-warn" />
+          ) : null}
+        </span>
+      </button>
+    );
+  };
+
+  /** v1.376.0: a way to reach a company with no accounts — one row. */
+  const wayRow = (w: MenuWay) => (
+    <div key={w.provider} className="relative">
+      <button
+        type="button"
+        data-testid={`model-way-${w.provider}`}
+        onClick={() => setSub(sub === w.provider ? null : w.provider)}
+        disabled={!w.available}
+        title={w.available ? undefined : `${w.label} isn't connected. Set it up on Connections.`}
+        aria-expanded={sub === w.provider}
+        className={`flex w-full items-center gap-2 rounded-lg py-1.5 pl-5 pr-2.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent ${
+          splitChoice(chosen).provider === w.provider ? "text-accent-soft" : "text-zinc-300"
+        }`}
+      >
+        <span className="min-w-0 truncate">{w.label}</span>
+        {kindBadge(w.kind, w.available)}
+        <ChevronRight size={12} className="ml-auto shrink-0 text-zinc-500" />
+      </button>
+      {sub === w.provider && modelPanel(w.provider)}
+    </div>
+  );
+
+  /** v1.376.0: a way reached through Iron-Proxy accounts — its name and how
+   *  it is paid for, then ONE entry per account: name, plan, state in words,
+   *  the session's own marked; one that cannot serve is shown, not picked. */
+  const accountWay = (w: MenuWay, accounts: MenuAccount[]) => (
+    <div key={w.provider} data-testid={`model-way-${w.provider}`}>
+      <p className="flex items-center gap-2 py-1 pl-5 pr-2.5 text-[12px] text-zinc-400">
+        <span className="min-w-0 truncate">{w.label}</span>
+        {kindBadge(w.kind, w.available)}
+      </p>
+      {w.note ? <p className="pb-1 pl-5 pr-2.5 text-[11px] text-tone-warn">{w.note}</p> : null}
+      {accounts.map((a) => {
+        const key = `${w.provider}@${a.id}`;
+        const blocked = !w.available
+          ? `${w.label} isn't connected. Set it up on Connections.`
+          : a.pickable
+            ? ""
+            : `${a.state.text}. ${a.reason}`;
+        return (
+          <div key={key} className="relative">
+            <button
+              type="button"
+              data-testid={`model-account-${a.id}`}
+              data-current={a.current ? "true" : undefined}
+              onClick={() => setSub(sub === key ? null : key)}
+              disabled={!!blocked}
+              title={blocked || undefined}
+              aria-expanded={sub === key}
+              className={`flex w-full items-center gap-2 rounded-lg py-1.5 pl-7 pr-2.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent ${
+                a.current ? "text-accent-soft" : "text-zinc-300"
+              }`}
+            >
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="flex min-w-0 items-center gap-1">
+                  <span data-testid="model-account-name" className="min-w-0 truncate">
+                    {a.name}
+                  </span>
+                  {a.plan ? <span className="shrink-0 text-[11px] text-zinc-500">· {a.plan}</span> : null}
+                  {a.current ? (
+                    <>
+                      <Check size={11} aria-hidden data-testid="model-account-current" className="shrink-0" />
+                      <span className="sr-only"> (this session&apos;s account)</span>
+                    </>
+                  ) : null}
+                </span>
+                <AccountState state={a.state} />
+              </span>
+              <ChevronRight size={12} className="ml-auto shrink-0 text-zinc-500" />
+            </button>
+            {sub === key && modelPanel(w.provider, a)}
+          </div>
+        );
+      })}
+    </div>
+  );
 
   return (
     <div ref={popRef} className="relative">
@@ -382,6 +637,15 @@ export function ModelMenu({
           {trigger.isDefault && <span className="sr-only">Default: </span>}
           {trigger.text}
         </span>
+        {/* v1.376.0 (IJ harness): the session's account after the model
+            ("Opus 4.8 · Work"), cut on its own so a long model name never
+            hides it; the chip keeps its width, so Send stays in the box. */}
+        {trigger.account ? (
+          <span data-testid="model-chip-account" className="min-w-0 max-w-[6rem] shrink-0 truncate" title={trigger.account}>
+            {" · "}
+            {trigger.account}
+          </span>
+        ) : null}
         <ChevronDown size={12} className="shrink-0 opacity-70" />
       </button>
       {open && (
@@ -401,7 +665,15 @@ export function ModelMenu({
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && matches[0]) {
+              if (companies && e.key === "Enter") {
+                // v1.376.0: the harness's first row, on its account (a row
+                // that cannot be picked is not picked by Enter either).
+                const hit = companyMatches[0];
+                if (hit) {
+                  e.preventDefault();
+                  if (!matchBlocked(hit)) pick(hit.value, hit.account?.id);
+                }
+              } else if (e.key === "Enter" && matches[0]) {
                 e.preventDefault();
                 pick(`${matches[0].provider}::${matches[0].model}`);
               } else if (e.key === "Escape") {
@@ -414,7 +686,13 @@ export function ModelMenu({
             autoFocus
             className="mb-1 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent/40"
           />
-          {filter.trim() ? (
+          {filter.trim() && companies ? (
+            companyMatches.length === 0 ? (
+              <p className="px-2.5 py-1.5 text-[12px] text-zinc-500">No model matches.</p>
+            ) : (
+              companyMatches.map((m) => matchRow(m, "model-match"))
+            )
+          ) : filter.trim() ? (
             matches.length === 0 ? (
               <p className="px-2.5 py-1.5 text-[12px] text-zinc-500">No model matches.</p>
             ) : (
@@ -441,6 +719,46 @@ export function ModelMenu({
                 );
               })
             )
+          ) : companies ? (
+            /* v1.376.0 (IJ harness): Recent on its accounts, the default
+               model, then one group per COMPANY — the ways to reach it, and
+               its Iron-Proxy accounts — and every other provider as in the
+               chat. */
+            <>
+              {companyRecent.length > 0 && (
+                <div data-testid="model-recent" className="mb-1 border-b border-white/[0.06] pb-1">
+                  <p className="px-2.5 pb-0.5 text-[10px] uppercase tracking-wide text-zinc-600">Recent</p>
+                  {companyRecent.map((m) => matchRow(m, "model-recent-row"))}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => pick("")}
+                className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] ${
+                  !chosen ? "text-accent-soft" : "text-zinc-300"
+                }`}
+              >
+                default model
+              </button>
+              {companies.entries.map((entry) =>
+                entry.type === "provider" ? (
+                  providerRow(entry.row)
+                ) : (
+                  <div
+                    key={`company-${entry.id}`}
+                    role="group"
+                    aria-label={entry.label}
+                    data-testid="model-company"
+                    data-company={entry.id}
+                  >
+                    <p aria-hidden className="px-2.5 pb-0.5 pt-1.5 text-[11px] font-medium text-zinc-400">
+                      {entry.label}
+                    </p>
+                    {entry.ways.map((w) => (w.accounts ? accountWay(w, w.accounts) : wayRow(w)))}
+                  </div>
+                ),
+              )}
+            </>
           ) : (
             <>
               {recent.length > 0 && (
@@ -479,68 +797,7 @@ export function ModelMenu({
               >
                 default model
               </button>
-              {providers.map((p) => (
-                <div key={p.id} className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setSub(sub === p.id ? null : p.id)}
-                    disabled={!p.available}
-                    title={p.available ? undefined : `${p.label} isn't connected. Set it up on Connections.`}
-                    aria-expanded={sub === p.id}
-                    className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent ${
-                      splitChoice(choice).provider === p.id ? "text-accent-soft" : "text-zinc-300"
-                    }`}
-                  >
-                    <span className="min-w-0 truncate">{p.label}</span>
-                    {/* Where it runs — the whole point of the reorder: a list
-                        you can act on without knowing which of your
-                        providers costs money. */}
-                    <span
-                      data-testid="model-kind-badge"
-                      title={p.available ? (KIND_BADGE[p.kind] ?? KIND_BADGE.api).title : undefined}
-                      className={`shrink-0 text-[10px] ${(KIND_BADGE[p.kind] ?? KIND_BADGE.api).cls}`}
-                    >
-                      {p.available ? (KIND_BADGE[p.kind] ?? KIND_BADGE.api).text : "offline"}
-                    </span>
-                    <ChevronRight size={12} className="ml-auto shrink-0 text-zinc-500" />
-                  </button>
-                  {sub === p.id && (
-                    /* Anchored to the BOTTOM so a long catalog (OpenRouter)
-                       grows UPWARD over the chat area instead of being
-                       clipped at the card edge — and v1.350.1: never past
-                       the WINDOW's top (FitPanel caps it to the room above,
-                       or opens it downward when a row sits high). */
-                    <FitPanel
-                      testId="model-sub"
-                      className="absolute right-full z-30 mr-1 w-56 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
-                    >
-                      {models
-                        .filter((m) => m.provider === p.id)
-                        .map((m) => {
-                          const v = `${m.provider}::${m.model}`;
-                          return (
-                            <button
-                              key={v}
-                              type="button"
-                              onClick={() => pick(v)}
-                              className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] ${
-                                choice === v ? "text-accent-soft" : "text-zinc-300"
-                              }`}
-                            >
-                              <span className="min-w-0 truncate" title={modelTitle(m, models)}>
-                                {modelText(m, models)}
-                              </span>
-                              <span className="ml-1.5 inline-flex shrink-0 items-center gap-1">
-                                <ModelRowChips m={m} />
-                              </span>
-                              {choice === v && <Check size={11} className="ml-auto shrink-0" />}
-                            </button>
-                          );
-                        })}
-                    </FitPanel>
-                  )}
-                </div>
-              ))}
+              {providers.map((p) => providerRow(p))}
             </>
           )}
           {onMakeDefault && splitChoice(choice).provider && (
