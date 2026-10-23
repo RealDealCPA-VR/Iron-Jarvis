@@ -106,6 +106,11 @@ def _refused(exc: B.GitRefused) -> JSONResponse:
 #: thread, never on the loop), so a discard waits for a read in flight.
 _GIT_LOCKS: dict[str, threading.Lock] = {}
 _GIT_LOCKS_GUARD = threading.Lock()
+#: The sessions a git ACTION (Commit, Push, Create PR, Merge, Discard) is
+#: running for right now — on the loop thread only. Review (v1.375.0): a
+#: second press while one ran was refused as "still answering" (the turn's
+#: words), because both share ``_STARTING``; it says what is busy now.
+_GIT_ACTING: set[str] = set()
 #: How long an action waits for the session's lock before it says so.
 GIT_LOCK_WAIT_S = 120.0
 GIT_BUSY = "This session's branch is busy with another git action. Try again in a moment."
@@ -139,11 +144,18 @@ def register(app: FastAPI, d: Any) -> None:
 
     def _record(thread_id: str, facts: dict[str, str], **changes: Any) -> None:
         """Write what happened onto the session's facts (the /build routes'
-        own writer). BLOCKING."""
-        merged = {**facts, **{k: v for k, v in changes.items() if v is not None}}
+        own writer). BLOCKING. Review (v1.375.0): onto the facts AS STORED
+        NOW, not the copy this request read before it waited its turn — a
+        Merge recorded over a Create PR that landed meanwhile dropped its
+        ``pr_url`` (and a Discard a merge's ``merged_at``)."""
+        row = S.get_row(engine_of(), thread_id)
+        fresh = (B.facts_of(_setup_of(row)) if row is not None else None) or facts
+        merged = {**fresh, **{k: v for k, v in changes.items() if v is not None}}
         S.update(engine_of(), thread_id, setup={B.SETUP_KEY: merged})
 
     def _busy(thread_id: str) -> "JSONResponse | None":
+        if thread_id in _GIT_ACTING:
+            return JSONResponse(status_code=409, content={"detail": GIT_BUSY})
         if thread_id in _COMPACTING:
             return JSONResponse(status_code=409, content={"detail": COMPACTING_SENTENCE})
         if thread_id in _STARTING or _running_turn(d, thread_id):
@@ -158,11 +170,13 @@ def register(app: FastAPI, d: Any) -> None:
         if busy is not None:
             return busy
         _STARTING.add(thread_id)
+        _GIT_ACTING.add(thread_id)
         try:
             return await asyncio.to_thread(_locked, thread_id, fn)
         except B.GitRefused as exc:
             return _refused(exc)
         finally:
+            _GIT_ACTING.discard(thread_id)
             _STARTING.discard(thread_id)
 
     # ------------------------------------------------------------------ #

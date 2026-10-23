@@ -330,3 +330,76 @@ def test_a_batch_file_gh_is_never_handed_a_title_cmd_would_run(repo, tmp_path, m
     # An ordinary title goes through the same batch file.
     made = B.create_pr(facts, "Fix the greeting", "body")
     assert made["number"] == 7 and gh.read()["title"] == "Fix the greeting"
+
+
+# --------------------------------------------------------------------------- #
+# the routes: one git action at a time, said in words; facts never go stale
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture()
+def app(tmp_path):
+    from iron_jarvis.daemon.app import create_app
+
+    return create_app(str(tmp_path / "home"))
+
+
+async def test_a_second_press_while_a_git_action_runs_says_the_branch_is_busy(app, repo, monkeypatch):
+    import asyncio
+    import threading
+
+    from iron_jarvis.daemon.routes.build_git import GIT_BUSY, GIT_RUNNING
+    from tests.test_build_git_v1375 import new_branch_session
+    from tests.test_build_sessions_v1367 import asgi
+
+    view = await new_branch_session(app, repo)
+    sid, wt = view["id"], Path(view["git"]["worktree"])
+    (wt / "app.py").write_bytes(b"x = 2\n")
+    entered, gate = threading.Event(), threading.Event()
+    real = B.commit
+
+    def slow(facts, message):
+        entered.set()
+        gate.wait(20)
+        return real(facts, message)
+
+    monkeypatch.setattr(B, "commit", slow)
+    first = asyncio.create_task(asgi(app, "POST", f"/build/sessions/{sid}/git/commit", {"message": "one"}))
+    try:
+        assert await asyncio.to_thread(entered.wait, 20)
+        for path, body in (("git/commit", {"message": "two"}), ("git/push", {}), ("git/merge", {}),
+                           ("git/discard", {"confirm": True})):
+            status, got = await asgi(app, "POST", f"/build/sessions/{sid}/{path}", body)
+            assert status == 409 and got["detail"] == GIT_BUSY != GIT_RUNNING, (path, got)
+        status, got = await asgi(app, "DELETE", f"/build/sessions/{sid}")
+        assert status == 409 and got["detail"] == GIT_BUSY
+    finally:
+        gate.set()
+    status, done = await first
+    assert status == 200 and done["committed"] is True
+    assert wt.is_dir(), "nothing was discarded or deleted meanwhile"
+
+
+async def test_an_action_records_onto_the_facts_as_stored_now(app, repo, monkeypatch):
+    from iron_jarvis.harness import sessions as S
+    from tests.test_build_git_v1375 import new_branch_session
+    from tests.test_build_sessions_v1367 import asgi, setup_of
+
+    view = await new_branch_session(app, repo)
+    sid, wt = view["id"], Path(view["git"]["worktree"])
+    _commit_in(wt, "new.py", b"print('new')\n")
+    engine = app.state.platform.engine
+    real = B.merge
+
+    def merge_after_a_pr_landed(facts):
+        # A Create PR recorded its link after this request read its facts.
+        stored = S.git_of(S.get_row(engine, sid))
+        S.update(engine, sid, setup={B.SETUP_KEY: {**stored, "pr_url": "https://github.com/a/b/pull/7",
+                                                   "pr_number": "7"}})
+        return real(facts)
+
+    monkeypatch.setattr(B, "merge", merge_after_a_pr_landed)
+    status, got = await asgi(app, "POST", f"/build/sessions/{sid}/git/merge", {})
+    assert status == 200, got
+    facts = setup_of(app, sid)["git"]
+    assert facts.get("merged_at") and facts.get("pr_url") == "https://github.com/a/b/pull/7"

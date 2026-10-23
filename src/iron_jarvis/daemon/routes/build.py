@@ -1948,6 +1948,10 @@ def register(app: FastAPI, d: Any) -> None:
         from .chat import delete_thread
 
         row = _session_or_404(thread_id)
+        from .build_git import _GIT_ACTING, GIT_BUSY
+
+        if thread_id in _GIT_ACTING:
+            return JSONResponse(status_code=409, content={"detail": GIT_BUSY})
         if TURNS.thread_states().get(thread_id, {}).get("running") or thread_id in _STARTING:
             return JSONResponse(status_code=409, content={"detail": RUNNING_SENTENCE})
         # v1.375.0 (part 2, Phase 4) DECISION: deleting a session on its own
