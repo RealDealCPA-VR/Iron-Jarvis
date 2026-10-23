@@ -457,6 +457,92 @@ agent last saw and where ("The agent is on localhost:5173/cart").
   is bundled; checked on the installed build).
 - Stop, archive and the idle timer each leave no browser process behind.
 
+**Result (doer, before review).** Live on a scratch daemon (port 8817, this
+PC's own Claude Code and Codex logins, Iron-Proxy off), a scratch site served
+by `python -m http.server` whose `app.js` looked up `#cartCount` while the
+page's element is `#cart-count` (so Add to cart threw), the Browser pane's
+address sent with each message:
+
+| Check | Outcome |
+|---|---|
+| Claude session (claude-cli) | 22.8 s, no card: `page_open` → `page_click "Add to cart"` → `page_read` showed "Uncaught TypeError: Cannot set properties of null (setting 'textContent')" (quoted in the reply) → `edit_file` (`cartCount` → `cart-count`) → `page_open` → click → `page_read`: "Cart: 1 item", console clean. The pane's picture shows "Cart: 1 item" |
+| Codex session (codex-cli) | 28.6 s, no card: `page_open` → `page_click` (with `role: button`) → `page_read` (1 console error) → read both files → `apply_patch` → `page_open` → click → `page_read`: "Cart: 1 item" |
+| Archive | the session's driver and 8 Edge processes all gone; the pane says "closed" |
+| Stop while the model thought (after `page_open`) | the turn ended "stopped", the browser closed (`closed_reason: stopped`), no process left |
+| Stop during an action (`page_open` of a local address that never answers) | the call ended 0.2 s after Stop ("Stopped: you pressed Stop, so the agent's browser was closed."), no process left |
+| Idle (`IRONJARVIS_PAGE_BROWSER_IDLE_S=30`) | closed 37.7 s after the last action (30 s + the check), every process gone |
+| Daemon shutdown (`POST /shutdown`) | 11 browser processes gone 0.6 s after |
+| Daemon KILLED (TerminateProcess of the daemon alone) | 9 browser processes gone within 0.2 s (the job) |
+
+Frozen build (`pyinstaller packaging/ironjarvis.spec`, into the worktree's
+`packaging/dist`): `ironjarvis.exe page-browser-check http://127.0.0.1:<port>/`
+opened a local page in headless Edge, read its text and its console error,
+closed it and found none of its 8 processes alive (`"ok": true`); the same
+check on a build with v1.375.0's spec (Playwright excluded) says the driver is
+missing (`"ok": false`, in words). The frozen daemon boots and serves
+`/health`. Size: 298,236,152 → 408,555,153 bytes (+110,319,001, ~105 MiB;
+Playwright's driver is 103 MiB of it: `node.exe` 88 MiB + its package). The
+installed (NSIS) build was not made here.
+
+Decisions made in this phase (each pinned by a test):
+
+- **The browser**: the installed Edge (`executable_path` of the Edge the
+  doctor finds — Edge only, the user's decision names it), headless, a
+  throwaway profile and downloads folder in the SYSTEM temp
+  (`ij-agent-browser-*`; downloads are refused anyway), opened on the first
+  `page_open`, one per Build session — a helper agent uses its session's.
+- **Processes**: Playwright starts its own driver, so it is ADOPTED into a
+  kill-on-close Job right after it starts and before it launches anything
+  (`procs.adopt`); Edge and every process Edge starts are born in the job
+  (measured: all members). Close = the context, the driver, then the job.
+  `ALLOWED_RAW_SPAWNS` is unchanged (no file of ours spawns here). A killed
+  daemon leaves its throwaway folder (and Playwright's own empty
+  `playwright-artifacts-*` folder in the temp folder) behind; the next start
+  removes `ij-agent-browser-*` folders older than 6 hours.
+- **The thread**: Playwright's ASYNC API on one dedicated thread with its own
+  event loop for every session's browser; the daemon's loop only awaits a
+  future from it, and a cancel there cancels the action's task. One action at
+  a time per session; each has a time limit in words (open 45 s, click / type
+  / read 15 s), and a wedged driver past it closes the browser.
+- **Stop**: CLOSES the session's browser — at once when an action is under
+  way (the tool races its action against the turn's Stop; Playwright's driver
+  would otherwise finish a click or a page load on its own), and when the turn
+  ends stopped. The next turn opens a fresh one.
+- **The address rules on every navigation**: the Browser pane's dev server
+  and an address the user allowed for this browser open without a card;
+  another local address asks once (`page_open`'s spend check — allowed, it
+  stays allowed until the browser closes); a public site is refused. A
+  navigation the page starts (a link, a form, `location=`, a meta refresh, a
+  popup) is stopped by route interception BEFORE its request; a server
+  redirect is followed by Chromium without asking the route (measured), so
+  its hop is judged the moment the browser starts it and the page is sent
+  away (its request has left; the page is never read, shown or acted on),
+  with an arrival guard behind it; the browser returns to the last allowed
+  page and the result says where the page tried to go. Every action re-checks
+  its page.
+- **Typing**: a password field, a payment field (card number, security code,
+  bank details, `cc-*`), a file picker, or text that reads as a key —
+  REFUSED in words, never carded.
+- **Tiers**: `page_open` ask (its spend check lifts the pane's page);
+  `page_click`, `page_type`, `page_read` allow. Local only cards every open,
+  click and typed entry (`OPENS_PAGES_TOOLS`); low trust refuses all four.
+  Plan mode opens and reads, never clicks or types. No dialect renames them
+  (Claude Code and Codex have no local browser tool).
+- **The pane**: "The agent is on localhost:5173/cart" (host and path, never
+  the query string) and the picture taken after its last action, read when
+  the tab opens, when a page step finishes and when a turn ends — never on a
+  timer. `page_screenshot` with no address looks at the agent's page.
+
+Tests: 57 in `tests/test_build_browser_v1376.py` (a fake browser for the
+fast pins; two against the real Edge and a local `http.server`, one of them a
+KILLED daemon), 16 in `dashboard/__tests__/ij-harness-browser-v1376.test.tsx`
+and `ij-harness-step-words-v1376.test.ts`, and an e2e step (the pane at 390 px,
+no sideways pan). 35 Python and 13 dashboard mutations, each red.
+
+Not done here: the installed (NSIS) build was not made; no hand test of a
+page that opens a popup, a dialog-heavy page or a dev server on HTTPS; the
+throwaway folders a killed daemon leaves are swept only after 6 hours.
+
 ## Phase 6 — Smaller touches and loose ends (target v1.377.0)
 
 - **Next step:** after a turn, up to two suggested follow-ups as buttons
