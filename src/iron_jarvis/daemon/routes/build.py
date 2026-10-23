@@ -1040,6 +1040,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
 
     platform = d.platform
     logs = _turn_logs(d)
+    # v1.373.0 review: a blank entry is no upload (it was counted, saved on
+    # the question and silently skipped by the lane).
+    attachments = [str(a) for a in (attachments or []) if str(a or "").strip()]
     if thread_id in _STARTING or _running_turn(d, thread_id):
         raise SessionBusy(thread_id)
     _STARTING.add(thread_id)
@@ -1068,21 +1071,23 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 picked = await asyncio.to_thread(S.folder_files, folder, list(files))
             except S.FolderFileRefused as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from None
-            # The lane reads this many attachments per turn and drops the rest
-            # without a word (``chat_turn._MAX_ATTACHMENTS``). A file picked by
-            # name must be READ, or the saved question would claim it was sent:
-            # a message that would lose some is refused in words instead.
-            from ..chat_turn import _MAX_ATTACHMENTS
+        # The lane reads this many attachments per turn and drops the rest
+        # without a word (``chat_turn._MAX_ATTACHMENTS``). A file sent must be
+        # READ, or the saved question would claim it was sent: a message that
+        # would lose some is refused in words instead. v1.373.0 review: the
+        # uploads ALONE count too — five pictures and no "@" file used to
+        # pass, four were read and the question said five were sent.
+        from ..chat_turn import _MAX_ATTACHMENTS
 
-            total = len(attachments or []) + len(picked)
-            if total > _MAX_ATTACHMENTS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"One message reads at most {_MAX_ATTACHMENTS} files, and this one has {total}. "
-                        "Remove some, or send them over two messages."
-                    ),
-                )
+        total = len(attachments) + len(picked)
+        if total > _MAX_ATTACHMENTS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"One message reads at most {_MAX_ATTACHMENTS} files, and this one has {total}. "
+                    "Remove some, or send them over two messages."
+                ),
+            )
         # v1.373.0: a skill of the folder's own harness layer — its playbook,
         # read and scanned now, rides the harness block (``picked_skill``).
         folder_skill = str(folder_skill or "").strip()
@@ -1127,7 +1132,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # The Build screen draws the question cards: an app's question
             # and the model's own (ask_user).
             mcp_cards=True,
-            attachments=[*list(attachments or []), *picked],
+            attachments=[*attachments, *picked],
             local_only=setup.get("local_only") is True,
             skill=str(skill or "").strip(),
         )
@@ -1773,7 +1778,10 @@ def register(app: FastAPI, d: Any) -> None:
 
         platform = d.platform
         text = (body.text or "").strip()
-        if not text and not body.attachments and not body.files:
+        # v1.373.0 review: a blank entry is no file — `{"files": ["  "]}` used
+        # to pass this check and start a turn that sent the model nothing.
+        has_files = any(str(p or "").strip() for p in [*(body.attachments or []), *(body.files or [])])
+        if not text and not has_files:
             # v1.371.0: a picture alone is a message (the chat page's rule,
             # v1.275.0) — v1.373.0: so is a file picked with "@"; nothing at
             # all is not (a skill alone has nothing to work on).
