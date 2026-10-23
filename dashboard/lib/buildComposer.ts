@@ -23,22 +23,39 @@
  */
 
 import { matchProjectEntries, type ProjectListing } from "@/lib/atMenuFiles";
+import { modelRowName } from "@/lib/onboarding";
 import type { BuildMode } from "@/lib/buildSessions";
 
 /** The session's own "/" commands. v1.374.0 (part 2, Phase 3): "/compact"
  *  presses the same Compact the meter offers (it says in words when there is
- *  not enough conversation to summarize yet). */
-export type CommandId = "plan" | "compact" | "rewind" | "model";
+ *  not enough conversation to summarize yet). v1.379.0: Claude Code's own
+ *  built-in commands that have an IJ harness equivalent, under Claude Code's
+ *  names (and its aliases): /clear starts a new session on the same folder,
+ *  /resume opens the session search, /usage (/cost) says what the session
+ *  used, /init asks for a CLAUDE.md — each row says what it really does. */
+export type CommandId = "plan" | "compact" | "rewind" | "model" | "clear" | "resume" | "usage" | "init";
 
 export interface SessionCommand {
   id: CommandId;
   /** What follows the "/" ("plan"). */
   name: string;
   description: string;
+  /** Other names Claude Code knows it by ("cost" for /usage). */
+  aliases?: string[];
+  /** What may follow the name ("[what to plan]"). */
+  argumentHint?: string;
 }
 
-export function sessionCommands(mode: BuildMode): SessionCommand[] {
-  return [
+/** The message "/init" sends (an ordinary message: its writes ask as usual). */
+export const INIT_PROMPT =
+  "Look through this folder and write a CLAUDE.md that explains it to an AI assistant working here: " +
+  "what the project is, how it is laid out, how to build, run and test it, and the conventions to follow. " +
+  "If a CLAUDE.md or AGENTS.md already exists, improve that file instead of starting over. " +
+  "Keep it short and specific to this folder.";
+
+export function sessionCommands(mode: BuildMode, opts: { hasFolder?: boolean } = {}): SessionCommand[] {
+  const hasFolder = opts.hasFolder !== false;
+  const out: SessionCommand[] = [
     {
       id: "plan",
       name: "plan",
@@ -46,15 +63,51 @@ export function sessionCommands(mode: BuildMode): SessionCommand[] {
         mode === "plan"
           ? "Stop planning: let it make changes from your next message"
           : "Plan first: it reads and writes a plan for you to approve before it changes anything",
+      argumentHint: "[what to plan]",
     },
     {
       id: "compact",
       name: "compact",
       description: "Summarize the earlier turns so the conversation stays light (the full conversation is kept)",
+      // v1.379.0 review: Claude Code's "/compact <instructions>".
+      argumentHint: "[what to keep in view]",
     },
-    { id: "rewind", name: "rewind", description: "Go back to before one of your messages" },
-    { id: "model", name: "model", description: "Choose the model this session uses" },
+    {
+      id: "rewind",
+      name: "rewind",
+      description: "Go back to before one of your messages",
+      aliases: ["checkpoint", "undo"],
+    },
+    { id: "model", name: "model", description: "Choose the model this session uses", argumentHint: "[model]" },
+    {
+      id: "clear",
+      name: "clear",
+      description: hasFolder
+        ? "Start a new session on this folder (this one stays in the list)"
+        : "Start a new session with no folder (this one stays in the list)",
+      aliases: ["reset", "new"],
+    },
+    {
+      id: "resume",
+      name: "resume",
+      description: "Find another session to continue (the search above your sessions)",
+      aliases: ["continue"],
+    },
+    {
+      id: "usage",
+      name: "usage",
+      description: "What this session has used so far: tokens, and the cost when there is one",
+      aliases: ["cost", "stats"],
+    },
   ];
+  if (hasFolder) {
+    out.push({
+      id: "init",
+      name: "init",
+      description: "Ask it to write a CLAUDE.md that explains this folder (an ordinary message)",
+    });
+  }
+  return out;
 }
 
 /** Where a skill comes from: this session's folder, or the user's own. */
@@ -64,6 +117,13 @@ export interface SkillOption {
   name: string;
   description: string;
   source: SkillSource;
+  /** v1.379.0: where the app found one of YOUR skills (GET /skills `source`:
+   *  builtin, user, claude, codex, custom) — the row says it in words. */
+  origin?: string;
+  /** v1.379.0: a plugin's skill listed under Claude Code's
+   *  `<plugin>:<skill>` name — the app's own skill it runs, and its plugin. */
+  invoke?: string;
+  plugin?: string;
 }
 
 export interface PickedSkill {
@@ -71,12 +131,91 @@ export interface PickedSkill {
   source: SkillSource;
 }
 
+/** v1.379.0: one of Claude Code's own custom commands
+ *  (GET /build/sessions/{id}/commands) — a command file, or a plugin's
+ *  skill under Claude Code's name (`kind: "skill"`, run as `skill`). */
+export interface CustomCommand {
+  name: string;
+  description: string;
+  argumentHint: string;
+  source: "personal" | "project" | "plugin";
+  plugin: string;
+  kind: "command" | "skill";
+  skill: string;
+}
+
 export type SlashRow =
   | { kind: "command"; key: string; command: SessionCommand }
-  | { kind: "skill"; key: string; skill: SkillOption };
+  | { kind: "skill"; key: string; skill: SkillOption }
+  | { kind: "custom"; key: string; command: CustomCommand };
 
 function holds(text: string, q: string): boolean {
   return text.toLowerCase().includes(q);
+}
+
+/** The commands list, by whitelist (an older Iron Jarvis has none: []). */
+export function decodeCommands(raw: unknown): CustomCommand[] {
+  const list = raw && typeof raw === "object" ? (raw as { commands?: unknown }).commands : null;
+  if (!Array.isArray(list)) return [];
+  const out: CustomCommand[] = [];
+  for (const c of list.slice(0, 600)) {
+    if (!c || typeof c !== "object") continue;
+    const r = c as Record<string, unknown>;
+    const name = typeof r.name === "string" ? r.name.trim() : "";
+    if (!name || /\s/.test(name)) continue;
+    const source = r.source === "personal" || r.source === "project" || r.source === "plugin" ? r.source : null;
+    if (!source) continue;
+    const kind = r.kind === "skill" ? "skill" : "command";
+    const skill = typeof r.skill === "string" ? r.skill.trim() : "";
+    if (kind === "skill" && !skill) continue;
+    out.push({
+      name,
+      description: typeof r.description === "string" ? r.description.slice(0, 300) : "",
+      argumentHint: typeof r.argument_hint === "string" ? r.argument_hint.slice(0, 120) : "",
+      source,
+      plugin: typeof r.plugin === "string" ? r.plugin.slice(0, 80) : "",
+      kind,
+      skill,
+    });
+  }
+  return out;
+}
+
+/** Where a row comes from, in quiet words ("" = the session's own command). */
+export function sourceWords(row: SlashRow): string {
+  if (row.kind === "command") return "";
+  if (row.kind === "custom") {
+    const c = row.command;
+    if (c.source === "plugin") return c.plugin ? `from ${c.plugin}` : "from a plugin";
+    return c.source === "project" ? "this folder" : "from your commands";
+  }
+  const s = row.skill;
+  if (s.source === "folder") return "this folder";
+  if (s.plugin) return `from ${s.plugin}`;
+  switch (s.origin) {
+    case "claude":
+      return "from Claude Code";
+    case "codex":
+      return "from Codex";
+    case "builtin":
+      return "built in";
+    case "custom":
+      return "from your skill folders";
+    default:
+      return "yours";
+  }
+}
+
+/** The custom commands as "/" rows: command files as such; a plugin's skill
+ *  under Claude Code's name joins your skills in place of the app's own row
+ *  for it (one row per skill). */
+function withPluginSkills(yours: readonly SkillOption[], custom: readonly CustomCommand[]): SkillOption[] {
+  const aliasOf = new Map<string, CustomCommand>();
+  for (const c of custom) if (c.kind === "skill" && !aliasOf.has(c.skill)) aliasOf.set(c.skill, c);
+  return yours.map((s) => {
+    const alias = aliasOf.get(s.name);
+    return alias ? { ...s, name: alias.name, invoke: s.name, plugin: alias.plugin } : s;
+  });
 }
 
 /**
@@ -96,22 +235,76 @@ export function slashRows(
   folderSkills: readonly SkillOption[] | null,
   yourSkills: readonly SkillOption[] | null,
   picked: PickedSkill | null = null,
+  /** v1.379.0: Claude Code's own custom commands — offered only where
+   *  Claude Code recognizes one: at the START of the message. */
+  custom: readonly CustomCommand[] | null = null,
 ): SlashRow[] {
   const q = query.trim().toLowerCase();
+  // v1.379.0 review: a row whose NAME is exactly what was typed leads, so
+  // Enter on "/review" runs /review — not /review-pr, which sorted first and
+  // ran in its place.
+  const exact: SlashRow[] = [];
   const named: SlashRow[] = [];
   const described: SlashRow[] = [];
-  const place = (row: SlashRow, name: string, description: string) => {
-    if (!q || holds(name, q)) named.push(row);
+  const place = (row: SlashRow, names: readonly string[], description: string) => {
+    if (q && names.some((n) => n.toLowerCase() === q)) exact.push(row);
+    else if (!q || names.some((n) => holds(n, q))) named.push(row);
     else if (holds(description, q)) described.push(row);
   };
+  // v1.379.0 review: a custom command that a skill (or one of the session's
+  // own commands) shares a name with is never reached by typing it — Claude
+  // Code's rule: "A skill and a file in .claude/commands/: The skill" — so
+  // it is not offered either (its row ran the command the typed name never
+  // would).
+  const yours = withPluginSkills(yourSkills ?? [], custom ?? []);
+  const taken = new Set<string>([
+    ...commands.flatMap((c) => [c.name, ...(c.aliases ?? [])]),
+    ...(folderSkills ?? []).map((s) => s.name),
+    ...yours.flatMap((s) => [s.name, ...(s.invoke ? [s.invoke] : [])]),
+  ].map((n) => n.toLowerCase()));
   for (const c of commands) {
-    place({ kind: "command", key: `cmd:${c.id}`, command: c }, c.name, c.description);
+    place({ kind: "command", key: `cmd:${c.id}`, command: c }, [c.name, ...(c.aliases ?? [])], c.description);
   }
-  for (const s of [...(folderSkills ?? []), ...(yourSkills ?? [])]) {
+  // The order the "/" menu reads (v1.379.0): the session's commands, the
+  // folder's skills, Claude Code's custom commands, then your skills.
+  for (const s of folderSkills ?? []) {
     if (picked && picked.name === s.name && picked.source === s.source) continue;
-    place({ kind: "skill", key: `skill:${s.source}:${s.name}`, skill: s }, s.name, s.description);
+    place({ kind: "skill", key: `skill:${s.source}:${s.name}`, skill: s }, [s.name], s.description);
   }
-  return [...named, ...described];
+  for (const c of custom ?? []) {
+    if (c.kind !== "command" || taken.has(c.name.toLowerCase())) continue;
+    place({ kind: "custom", key: `custom:${c.name}`, command: c }, [c.name], c.description);
+  }
+  for (const s of yours) {
+    const runs = s.invoke ?? s.name;
+    if (picked && picked.name === runs && picked.source === s.source) continue;
+    place({ kind: "skill", key: `skill:${s.source}:${s.name}`, skill: s }, [s.name], s.description);
+  }
+  return [...exact, ...named, ...described];
+}
+
+/** v1.379.0 review: "/model <name>" — the one model in the menu called
+ *  `name` (its id, "provider::id", or the name the menu shows; any case),
+ *  as a choice ("provider::model"); null when none or more than one — then
+ *  the menu opens. Two rows of the same name: the one on the session's own
+ *  `provider` wins. Only a row that can answer now (`available`). */
+export function modelByName(
+  rows: readonly { provider: string; model: string; name?: string; label?: string; available?: boolean }[],
+  name: string,
+  provider = "",
+): string | null {
+  const q = name.trim().replace(/\s+/g, " ").toLowerCase();
+  if (!q) return null;
+  const hits = new Map<string, string>();
+  for (const r of rows) {
+    if (r.available === false || !r.provider || !r.model) continue;
+    const said = [r.model, `${r.provider}::${r.model}`, r.label ?? "", modelRowName(r, rows)]
+      .map((x) => x.trim().replace(/\s+/g, " ").toLowerCase());
+    if (said.includes(q)) hits.set(`${r.provider}::${r.model}`, r.provider);
+  }
+  if (hits.size === 1) return [...hits.keys()][0];
+  const own = [...hits].filter(([, p]) => p === provider);
+  return own.length === 1 ? own[0][0] : null;
 }
 
 /** A skills list (`GET /skills` or the session's own) by whitelist. */
@@ -121,11 +314,89 @@ export function decodeSkills(raw: unknown, source: SkillSource): SkillOption[] {
   const out: SkillOption[] = [];
   for (const s of list) {
     if (!s || typeof s !== "object") continue;
-    const { name, description } = s as { name?: unknown; description?: unknown };
+    const { name, description, source: origin } = s as { name?: unknown; description?: unknown; source?: unknown };
     if (typeof name !== "string" || !name.trim()) continue;
-    out.push({ name, description: typeof description === "string" ? description : "", source });
+    out.push({
+      name,
+      description: typeof description === "string" ? description : "",
+      source,
+      ...(source === "yours" && typeof origin === "string" && origin ? { origin } : {}),
+    });
   }
   return out;
+}
+
+/** The skill a pick or a typed name runs (a plugin's skill listed under
+ *  Claude Code's name runs the app's own skill of that name). */
+export function pickedOf(s: SkillOption): PickedSkill {
+  return { name: s.invoke ?? s.name, source: s.source };
+}
+
+// -------------------------------------------------- a typed "/name words"
+
+/** A message that STARTS with "/name" (Claude Code recognizes a command only
+ *  at the start of a message): the name, the words after it (its
+ *  arguments) and whether a space already follows the name. Null when the
+ *  message does not start with "/", or the "name" holds another "/" (a path
+ *  such as /etc/hosts is ordinary text). */
+export function leadingSlash(text: string): { name: string; args: string; hasSpace: boolean } | null {
+  const m = /^\s*\/([^\s/]+)(\s+([\s\S]*))?$/.exec(text);
+  if (!m) return null;
+  return { name: m[1], args: (m[3] ?? "").trim(), hasSpace: m[2] !== undefined };
+}
+
+export type TypedTarget =
+  | { kind: "command"; command: SessionCommand; args: string }
+  | { kind: "skill"; skill: SkillOption; args: string }
+  | { kind: "custom"; command: CustomCommand; args: string };
+
+/** What a typed "/name words" runs, by its EXACT name (case-insensitive):
+ *  the session's own commands (and Claude Code's aliases for them), then the
+ *  folder's skills, then your skills (a plugin's skill also by Claude Code's
+ *  `<plugin>:<skill>` name), then Claude Code's custom commands — a skill
+ *  wins over a command file of the same name, as in Claude Code. Null for an
+ *  unknown name: the message goes as ordinary text. */
+export function resolveTyped(
+  text: string,
+  commands: readonly SessionCommand[],
+  folderSkills: readonly SkillOption[] | null,
+  yourSkills: readonly SkillOption[] | null,
+  custom: readonly CustomCommand[] | null,
+): TypedTarget | null {
+  const lead = leadingSlash(text);
+  if (!lead) return null;
+  const name = lead.name.toLowerCase();
+  const args = lead.args;
+  const cmd = commands.find((c) => c.name === name || (c.aliases ?? []).includes(name));
+  if (cmd) return { kind: "command", command: cmd, args };
+  const folder = (folderSkills ?? []).find((s) => s.name.toLowerCase() === name);
+  if (folder) return { kind: "skill", skill: folder, args };
+  const yours = withPluginSkills(yourSkills ?? [], custom ?? []);
+  const skill =
+    yours.find((s) => s.name.toLowerCase() === name) ?? yours.find((s) => (s.invoke ?? "").toLowerCase() === name);
+  if (skill) return { kind: "skill", skill, args };
+  const own = (custom ?? []).find((c) => c.kind === "command" && c.name.toLowerCase() === name);
+  if (own) return { kind: "custom", command: own, args };
+  return null;
+}
+
+/** v1.379.0: "/usage" — what this session used, in words ("" = nothing yet).
+ *  A flat-subscription figure is a list-price equivalent and says so. */
+export function sessionUsageWords(u: unknown): string {
+  const r = u && typeof u === "object" ? (u as Record<string, unknown>) : null;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const turns = num(r?.turns);
+  if (!r || !(turns > 0)) return "This session has not used anything yet.";
+  const tokens = num(r.input_tokens) + num(r.output_tokens);
+  const dollars = (n: number) => (n < 0.01 ? "under $0.01" : `$${n.toFixed(2)}`);
+  const parts = [
+    `This session used ${tokens.toLocaleString("en-US")} tokens over ${turns === 1 ? "1 reply" : `${turns} replies`}`,
+  ];
+  if (num(r.cost_usd) > 0) parts.push(dollars(num(r.cost_usd)));
+  if (num(r.list_price_equivalent_usd) > 0) {
+    parts.push(`≈${dollars(num(r.list_price_equivalent_usd))} at list price (subscription)`);
+  }
+  return `${parts.join(" · ")}.`;
 }
 
 /** The turn body's fields for a picked skill (none when nothing is picked). */

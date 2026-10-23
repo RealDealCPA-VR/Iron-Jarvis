@@ -9,6 +9,7 @@ against each skill's name + description.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Callable
@@ -34,6 +35,19 @@ def builtin_dir() -> Path:
     return Path(__file__).resolve().parent / "builtin"
 
 
+def claude_dir(home: "Path | None" = None) -> Path:
+    """Claude Code's folder: ``<home>/.claude`` when a home is handed in (a
+    test's fake home), else ``CLAUDE_CONFIG_DIR`` when set, else
+    ``~/.claude`` — the rule every other reader of Claude Code's files here
+    follows (v1.379.0 review: the skill registry read ``~/.claude`` while the
+    harness's "/" commands honoured ``CLAUDE_CONFIG_DIR``; with it unset,
+    nothing changes)."""
+    if home is not None:
+        return home / ".claude"
+    raw = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    return Path(raw).expanduser() if raw else Path.home() / ".claude"
+
+
 def external_skill_roots() -> list[tuple[Path, str]]:
     """Well-known external skill locations to pull in, each with a source tag.
 
@@ -44,9 +58,10 @@ def external_skill_roots() -> list[tuple[Path, str]]:
     existing directories are returned.
     """
     home = Path.home()
+    claude = claude_dir()
     candidates = [
-        (home / ".claude" / "skills", "claude"),
-        (home / ".claude" / "plugins", "claude"),
+        (claude / "skills", "claude"),
+        (claude / "plugins", "claude"),
         (home / ".codex" / "skills", "codex"),
     ]
     return [(p, tag) for p, tag in candidates if p.is_dir()]
@@ -71,7 +86,7 @@ def marketplace_catalog_dirs(home: "Path | None" = None) -> list[Path]:
     missing or unreadable manifest. Genuinely installed plugins living ELSEWHERE
     under ``plugins/`` keep loading exactly as before.
     """
-    root = (home or Path.home()) / ".claude" / "plugins"
+    root = claude_dir(home) / "plugins"
     if not root.is_dir():
         return []
     found: list[Path] = []
@@ -98,6 +113,24 @@ def marketplace_catalog_dirs(home: "Path | None" = None) -> list[Path]:
             continue
         if rp not in out:
             out.append(rp)
+    return out
+
+
+def claude_trash_dirs(home: "Path | None" = None) -> list[Path]:
+    """Where Claude Code PUTS AWAY what is no longer installed (v1.379.0):
+    ``~/.claude/plugins/.trash`` (plugins the claude.ai sync removed) and
+    ``~/.claude/skills/.trash`` (skill folders it moved aside). Claude Code
+    does not load either, so neither may the app — the recursive scan walked
+    straight into a removed plugin's copy and, sorting first, served ITS
+    skill text over the installed copy of the same name."""
+    base = claude_dir(home)
+    out: list[Path] = []
+    for p in (base / "plugins" / ".trash", base / "skills" / ".trash"):
+        if p.is_dir():
+            try:
+                out.append(p.resolve())
+            except OSError:
+                out.append(p)
     return out
 
 
@@ -263,7 +296,7 @@ class SkillRegistry:
         # A cloned marketplace is a STORE to browse, not skills the user
         # installed — excluded so the catalog's sample/authoring plugins never
         # enter the registry (v1.98.0).
-        catalogs = marketplace_catalog_dirs()
+        catalogs = marketplace_catalog_dirs() + claude_trash_dirs()
         for root, tag in external_skill_roots():
             self.discover_recursive(root, source=tag, exclude=catalogs)
         for extra in extra_paths or []:

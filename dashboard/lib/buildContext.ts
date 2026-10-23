@@ -188,8 +188,15 @@ export function compactedNote(covers: number, stripped: number): string {
 
 /** Compact: the daemon summarizes, checks and keeps it; the answer is the
  *  stored summary (or a refusal in words, thrown as the ApiError). */
-export async function compactSession(threadId: string): Promise<SessionCompaction | null> {
-  const res = await post<unknown>(`/build/sessions/${encodeURIComponent(threadId)}/compact`, {});
+export async function compactSession(threadId: string, focus = ""): Promise<SessionCompaction | null> {
+  // v1.379.0 review: "/compact <words>" (Claude Code's instructions for the
+  // summary) — sent only when there are words, so a plain Compact is the
+  // same request as before.
+  const words = focus.trim();
+  const res = await post<unknown>(
+    `/build/sessions/${encodeURIComponent(threadId)}/compact`,
+    words ? { focus: words.slice(0, 2000) } : {},
+  );
   return decodeCompaction(res);
 }
 

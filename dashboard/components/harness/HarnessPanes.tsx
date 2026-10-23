@@ -145,8 +145,9 @@ function SessionTerminal({
     return (
       <div data-testid="pane-terminal-empty" className="space-y-2">
         <p className="text-[13px] text-zinc-400">
-          A terminal in {view.folderName}, beside the session. It is a normal Build terminal: it shows in the
-          Terminals view too.
+          {view.noFolder && !view.folder
+            ? "This session's folder is made with your first message; a terminal can open there after that."
+            : `A terminal in ${view.noFolder ? "this session's own folder" : view.folderName}, beside the session. It is a normal Build terminal: it shows in the Terminals view too.`}
         </p>
         <button
           type="button"
@@ -464,7 +465,11 @@ export function HarnessPanes({
             variant="calm"
             folder={view.folder || null}
             onOpenTerminal={() => choose("terminal")}
-            noFolderText="This session has no folder."
+            noFolderText={
+              view.noFolder
+                ? "This session's folder is made with your first message, so it has no files yet."
+                : "This session has no folder."
+            }
           />
         ) : null}
         {/* The terminal stays mounted once opened; behind another tab it is

@@ -5,7 +5,11 @@
  *
  *  - New session: in the folder last worked in, or one picked here (the
  *    Folders picker, or a pasted path). A folder Iron Jarvis cannot use is
- *    refused by the daemon in words, shown under the box.
+ *    refused by the daemon in words, shown under the box. v1.379.0: the
+ *    folder is OPTIONAL ("Start with no folder", or Start with the box
+ *    empty): such a session keeps its files in a folder of its own under the
+ *    chat files folder, made with its first message — one line says where.
+ *    All of them share one plain "No folder" group.
  *  - Sessions grouped by folder (GET /build/sessions, newest first). A group
  *    is named by its DISPLAY name; renaming it changes the display name only
  *    (a folder that is a Jarvis project's root shows and renames the
@@ -17,13 +21,13 @@
  */
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, FolderOpen, Loader2, Pencil, Plus, Search, SquareTerminal, X } from "lucide-react";
+import { Check, FolderOpen, FolderX, Loader2, Pencil, Plus, Search, SquareTerminal, X } from "lucide-react";
 import { filterFolders } from "@/lib/buildNext";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import { PaneDot, stateWord } from "@/components/terminal/PaneState";
 import type { RailPane } from "@/components/terminal/PaneRail";
 import { formatAge } from "@/lib/threadStatus";
-import type { BuildFolder } from "@/lib/buildSessions";
+import { noFolderLine, type BuildFolder } from "@/lib/buildSessions";
 import { fetchFolderGit, folderGitLine, type FolderGit } from "@/lib/buildGit";
 
 /** v1.375.0: what New session sends beside the folder. */
@@ -52,13 +56,20 @@ function NewSessionForm({
   defaultFolder,
   onStart,
   onClose,
+  workRoot,
+  startWithNoFolder = false,
 }: {
   defaultFolder: string | null;
+  /** v1.379.0 review: the session in front has no folder — the form opens
+   *  that way (no folder in the box, the folder list closed). */
+  startWithNoFolder?: boolean;
   onStart: (folder: string, extra?: StartExtra) => Promise<string | null>;
   onClose: () => void;
+  /** v1.379.0: where a session with no folder keeps its files. */
+  workRoot: string;
 }) {
   const [folder, setFolder] = useState(defaultFolder ?? "");
-  const [picking, setPicking] = useState(!defaultFolder);
+  const [picking, setPicking] = useState(!defaultFolder && !startWithNoFolder);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   // v1.375.0 (part 2, Phase 4): is the folder in a git repository? Then the
@@ -87,20 +98,20 @@ function NewSessionForm({
   const showSwitch = !!info && info.repo && info.canBranch;
   const gitLine = folderGitLine(info);
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    const f = folder.trim();
-    if (!f) {
-      setProblem("Pick or paste a folder first.");
-      return;
-    }
+  async function begin(f: string) {
     setBusy(true);
     setProblem(null);
     // `branch` rides only when the switch was shown for THIS folder; else the
-    // daemon decides (a branch when the folder can have one).
-    const err = await (showSwitch ? onStart(f, { branch: onBranch }) : onStart(f));
+    // daemon decides (a branch when the folder can have one). v1.379.0: an
+    // empty folder is a session with NO folder (no branch: no repository).
+    const err = await (f && showSwitch ? onStart(f, { branch: onBranch }) : onStart(f));
     setBusy(false);
     if (err) setProblem(err);
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    await begin(folder.trim());
   }
 
   return (
@@ -113,7 +124,7 @@ function NewSessionForm({
       className="space-y-2 rounded-xl bg-white/[0.03] p-2"
     >
       <label htmlFor="harness-new-folder" className="block text-[12px] text-zinc-500">
-        Folder to work in
+        Folder to work in (optional)
       </label>
       <input
         id="harness-new-folder"
@@ -148,6 +159,11 @@ function NewSessionForm({
           {gitLine}
         </p>
       ) : null}
+      {/* v1.379.0: a session needs no folder (Claude Code's own rule: attach
+          one, or not) — this line says where such a session keeps its files. */}
+      <p data-testid="harness-new-no-folder-line" className="break-words text-[11px] leading-snug text-zinc-500">
+        {noFolderLine(workRoot)}
+      </p>
       {problem ? (
         <p role="alert" className="text-[12px] text-tone-danger">
           {problem}
@@ -165,6 +181,15 @@ function NewSessionForm({
           className="rounded-md px-2 py-1 text-[12px] text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-100"
         >
           {picking ? "Hide folders" : "Choose a folder"}
+        </button>
+        <button
+          type="button"
+          data-testid="harness-new-no-folder"
+          disabled={busy}
+          onClick={() => void begin("")}
+          className="rounded-md px-2 py-1 text-[12px] text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-100 disabled:opacity-40"
+        >
+          Start with no folder
         </button>
         <button
           type="button"
@@ -220,9 +245,37 @@ function FolderGroup({
   }
 
   return (
-    <section data-testid="harness-folder-group" data-path={folder.path} className="space-y-0.5">
+    <section
+      data-testid="harness-folder-group"
+      data-path={folder.path}
+      data-no-folder={folder.noFolder ? "true" : undefined}
+      className="space-y-0.5"
+    >
       <div className="group/head flex min-w-0 items-center gap-1 px-1">
-        {renaming !== null ? (
+        {folder.noFolder ? (
+          // v1.379.0: the sessions started with no folder — one plain group,
+          // nothing to rename, and its "+" starts another one.
+          <>
+            <FolderX size={12} aria-hidden className="shrink-0 text-zinc-500" />
+            <span
+              data-testid="harness-folder-name"
+              title="Sessions with no folder: each keeps its files in a folder of its own"
+              className="min-w-0 flex-1 truncate text-[12px] font-medium text-zinc-400"
+            >
+              {folder.name}
+            </span>
+            <button
+              type="button"
+              data-testid="harness-folder-new"
+              aria-label="New session with no folder"
+              title="New session with no folder"
+              onClick={() => onNew("")}
+              className={GHOST}
+            >
+              <Plus size={13} />
+            </button>
+          </>
+        ) : renaming !== null ? (
           <>
             <input
               ref={inputRef}
@@ -321,9 +374,19 @@ export function HarnessSidebar({
   terminals,
   onOpenTerminal,
   newRequest = 0,
+  searchRequest = 0,
+  workRoot = "",
+  startWithNoFolder = false,
 }: {
+  /** v1.379.0 review: the session in front has no folder (New session opens
+   *  with none). */
+  startWithNoFolder?: boolean;
   /** v1.377.0: Ctrl+N — each change opens New session. */
   newRequest?: number;
+  /** v1.379.0: "/resume" — each change puts the caret in the session search. */
+  searchRequest?: number;
+  /** v1.379.0: where a session with no folder keeps its files. */
+  workRoot?: string;
   /** null while the first read is out. */
   folders: BuildFolder[] | null;
   listError: string | null;
@@ -347,6 +410,11 @@ export function HarnessSidebar({
   // v1.377.0: search the sessions by title and folder name (the chat list's
   // search as the model: a quiet box, Escape clears it first).
   const [query, setQuery] = useState("");
+  // v1.379.0: "/resume" (Claude Code's own name) — the caret in that box.
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (searchRequest > 0) searchRef.current?.focus();
+  }, [searchRequest]);
   const shown = folders ? filterFolders(folders, query) : null;
   const total = folders ? folders.reduce((n, f) => n + f.sessions.length, 0) : 0;
 
@@ -362,7 +430,9 @@ export function HarnessSidebar({
     <nav aria-label="IJ harness sessions" data-testid="harness-sidebar" className="flex h-full min-h-0 flex-col gap-2">
       {creating ? (
         <NewSessionForm
-          defaultFolder={defaultFolder}
+          defaultFolder={startWithNoFolder ? "" : defaultFolder}
+          startWithNoFolder={startWithNoFolder}
+          workRoot={workRoot}
           onStart={async (folder, extra) => {
             const err = await (extra ? onStart(folder, extra) : onStart(folder));
             if (!err) setCreating(false);
@@ -392,6 +462,7 @@ export function HarnessSidebar({
             className="pointer-events-none absolute left-2.5 top-1/2 z-[1] -translate-y-1/2 text-zinc-500"
           />
           <input
+            ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -420,7 +491,7 @@ export function HarnessSidebar({
           </p>
         ) : folders.length === 0 ? (
           <p data-testid="harness-no-sessions" className="px-2 text-[13px] text-zinc-500">
-            No sessions yet. Start one in a folder to build there.
+            No sessions yet. Start one in a folder to build there, or with no folder.
           </p>
         ) : shown.length === 0 ? (
           <p data-testid="harness-no-session-match" className="px-2 text-[12px] leading-relaxed text-zinc-500">
@@ -429,7 +500,7 @@ export function HarnessSidebar({
         ) : (
           shown.map((f) => (
             <FolderGroup
-              key={f.path}
+              key={f.noFolder ? "\u0000no-folder" : f.path}
               folder={f}
               selectedId={selectedId}
               onSelect={onSelect}

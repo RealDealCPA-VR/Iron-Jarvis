@@ -25,7 +25,7 @@ import { useHarnessKeys } from "@/lib/harnessKeys";
 import {
   LAST_SESSION_KEY,
   createSession,
-  listSessions,
+  listSessionsWithRoot,
   renameFolder,
   type BuildFolder,
 } from "@/lib/buildSessions";
@@ -81,6 +81,8 @@ export function IjHarnessView({
   terminal: SessionTerminalApi;
 }) {
   const [folders, setFolders] = useState<BuildFolder[] | null>(null);
+  // v1.379.0: where a session with no folder keeps its files (the list says).
+  const [workRoot, setWorkRoot] = useState("");
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   // The first pick (the address, else the session this window had open) is
@@ -92,8 +94,9 @@ export function IjHarnessView({
 
   const refresh = useCallback(async () => {
     try {
-      const list = await listSessions();
+      const { folders: list, workRoot: root } = await listSessionsWithRoot();
       setFolders(list);
+      setWorkRoot(root);
       setListError(null);
       return list;
     } catch (e) {
@@ -155,10 +158,16 @@ export function IjHarnessView({
   // picked (a session on its own branch is grouped there too). The Terminals
   // view's folder was the default before, so a second session in the same
   // folder meant pasting the folder again. No session open: as before.
-  const sessionFolder = useMemo(
-    () => folders?.find((f) => f.sessions.some((s) => s.id === selected))?.path ?? null,
+  // v1.379.0 review (the merge with v1.378.0): the session in front has NO
+  // folder — New session opens the same way, with no folder (the box empty,
+  // the folder list closed: Start makes another session with no folder); it
+  // never falls back to the Terminals view's folder.
+  const frontGroup = useMemo(
+    () => folders?.find((f) => f.sessions.some((s) => s.id === selected)) ?? null,
     [folders, selected],
   );
+  const sessionFolder = frontGroup ? (frontGroup.noFolder ? "" : frontGroup.path) : null;
+  const frontHasNoFolder = frontGroup?.noFolder === true;
 
   // v1.377.0 (part 2, Phase 6): a session just BRANCHED from a question opens
   // with that question in its box (handed over once, for that session only).
@@ -171,6 +180,8 @@ export function IjHarnessView({
   }
   // Ctrl+N (lib/harnessKeys): New session in the left pane.
   const [newRequest, setNewRequest] = useState(0);
+  // v1.379.0: "/resume" — the caret in the session search.
+  const [searchRequest, setSearchRequest] = useState(0);
   useHarnessKeys({ onNew: () => setNewRequest((n) => n + 1) }, () => ({ busy: false, asking: false }));
 
   async function start(folder: string, extra?: StartExtra): Promise<string | null> {
@@ -202,7 +213,10 @@ export function IjHarnessView({
       data-testid="ij-harness-view"
       className="flex flex-col gap-4 xl:h-[calc(100vh-12rem-var(--ij-strip-h,0px))] xl:min-h-[480px] xl:flex-row"
     >
-      <aside className="flex max-h-[22rem] w-full shrink-0 flex-col xl:max-h-none xl:w-56 2xl:w-64">
+      {/* v1.379.0: below xl the left pane is capped, and it SCROLLS — New
+          session with its folder list open is taller than the cap and was
+          drawn over the session below it at phone width (measured, 390 px). */}
+      <aside className="flex max-h-[22rem] w-full shrink-0 flex-col overflow-y-auto xl:max-h-none xl:w-56 xl:overflow-visible 2xl:w-64">
         <HarnessSidebar
           folders={folders}
           listError={listError}
@@ -211,9 +225,12 @@ export function IjHarnessView({
           onStart={start}
           onRename={rename}
           defaultFolder={sessionFolder ?? defaultFolder}
+          startWithNoFolder={frontHasNoFolder}
           terminals={terminals}
           onOpenTerminal={onOpenTerminal}
           newRequest={newRequest}
+          searchRequest={searchRequest}
+          workRoot={workRoot}
         />
       </aside>
       <div className="min-w-0 flex-1 xl:min-h-0">
@@ -234,6 +251,10 @@ export function IjHarnessView({
               pickedRef.current = true;
               setSelected(id);
             }}
+            // v1.379.0: "/clear" starts a new session on the same folder (or
+            // with no folder), "/resume" puts the caret in the search.
+            onNewSession={(folder) => start(folder)}
+            onFindSessions={() => setSearchRequest((n) => n + 1)}
           />
         ) : (
           <div
@@ -244,8 +265,9 @@ export function IjHarnessView({
               <MessageSquarePlus size={24} className="mx-auto text-zinc-600" aria-hidden />
               <p className="text-[14px] font-medium text-zinc-200">Start a session to build in a folder</p>
               <p className="text-[13px] text-zinc-500">
-                A session works in one folder with the coding tools, keeps going when you leave Build, and
-                shows its plan, its terminal and what it changed beside the conversation.
+                A session works in one folder (or in a folder of its own, when you start it with no folder)
+                with the coding tools, keeps going when you leave Build, and shows its plan, its terminal and
+                what it changed beside the conversation.
               </p>
             </div>
           </div>

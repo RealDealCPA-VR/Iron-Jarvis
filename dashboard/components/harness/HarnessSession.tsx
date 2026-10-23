@@ -26,6 +26,7 @@ import {
   CircleAlert,
   ListChecks,
   FolderOpen,
+  FolderX,
   GitBranch,
   GitFork,
   History,
@@ -136,23 +137,39 @@ import { harnessKeysHint, useHarnessKeys } from "@/lib/harnessKeys";
 import { isDesktopShell } from "@/lib/desktopShell";
 import type { RewindExtras } from "@/lib/buildRewind";
 import { finishedPageSteps } from "@/lib/agentBrowser";
-import { AtMenu, PickedChips, RewindList, SentPicks, SlashMenu } from "@/components/harness/HarnessComposerMenus";
+import {
+  AtMenu,
+  PickedChips,
+  RewindList,
+  SentPicks,
+  SlashInvoking,
+  SlashMenu,
+} from "@/components/harness/HarnessComposerMenus";
 import { slashTokenAt, spliceToken, tokenAt } from "@/lib/slash";
 import { atMenuOpen, slashMenuOpen } from "@/lib/composerMenus";
 import { useProjectFilesState } from "@/lib/atMenuFiles";
 import {
   atFileRows,
+  decodeCommands,
   decodeSkills,
+  INIT_PROMPT,
+  leadingSlash,
+  modelByName,
+  pickedOf,
   queuedItemBody,
   queuedWords,
   READ_LIMIT_WORDS,
   READ_PER_MESSAGE,
+  resolveTyped,
   sessionCommands,
+  sessionUsageWords,
   skillFields,
   slashRows,
   withFilesRestored,
   withMessageRestored,
   type AtFile,
+  type CommandId,
+  type CustomCommand,
   type PickedSkill,
   type QueuedItem,
   type SkillOption,
@@ -184,6 +201,8 @@ import {
   deleteSession,
   getSession,
   isMissing,
+  NO_FOLDER_NAME,
+  noFolderEmptyWords,
   patchSession,
   planFromCards,
   shownMessages,
@@ -215,6 +234,11 @@ interface TurnExtras {
   attachments: HarnessFile[];
   files: AtFile[];
   skill: PickedSkill | null;
+  /** v1.379.0: one of Claude Code's own commands, typed "/name words" (the
+   *  turn's `text` is then its words), and what was typed — what goes back
+   *  in the box when the message never starts. */
+  command?: string;
+  typed?: string;
 }
 
 /** The live reply: subscribed HERE, so the session does not re-render per token. */
@@ -313,6 +337,8 @@ export function HarnessSession({
   onBranched,
   initialDraft,
   onOpenSession,
+  onNewSession,
+  onFindSessions,
 }: {
   threadId: string;
   terminal: SessionTerminalApi;
@@ -330,6 +356,11 @@ export function HarnessSession({
   initialDraft?: BranchDraft | null;
   /** v1.377.0: open another session (the "Branched from" line). */
   onOpenSession?: (id: string) => void;
+  /** v1.379.0: "/clear" — start a new session on `folder` ("" = no folder);
+   *  resolves to the refusal in words, or null. */
+  onNewSession?: (folder: string) => Promise<string | null>;
+  /** v1.379.0: "/resume" — the caret in the session search. */
+  onFindSessions?: () => void;
 }) {
   const daemon = useDaemon();
   const catalog = useModels();
@@ -383,6 +414,59 @@ export function HarnessSession({
   const [yourSkills, setYourSkills] = useState<SkillOption[] | null>(null);
   const [folderSkills, setFolderSkills] = useState<SkillOption[] | null>(null);
   const [folderSkillNote, setFolderSkillNote] = useState("");
+  // v1.379.0: Claude Code's own custom commands for this session (GET
+  // /build/sessions/{id}/commands — an older Iron Jarvis has none: []).
+  const [customCommands, setCustomCommands] = useState<CustomCommand[] | null>(null);
+  const [commandsNote, setCommandsNote] = useState("");
+  // v1.379.0: "/usage" — what the session used, said in the conversation.
+  const [usageNote, setUsageNote] = useState<string | null>(null);
+  // v1.379.0: the three lists "/" reads, read ONCE per session — and awaited
+  // by a send that starts with "/name" (a waiting message sent after a reload
+  // never opened the menu that reads them, and would go as plain text).
+  const listsPromise = useRef<Promise<{
+    yours: SkillOption[];
+    folder: SkillOption[];
+    custom: CustomCommand[];
+  }> | null>(null);
+  function ensureSlashLists() {
+    if (!listsPromise.current) {
+      const id = encodeURIComponent(threadId);
+      const noteOf = (r: unknown) => {
+        const note = r && typeof r === "object" ? (r as { note?: unknown }).note : "";
+        return typeof note === "string" ? note : "";
+      };
+      listsPromise.current = Promise.all([
+        get<unknown>("/skills")
+          .then((r) => decodeSkills(r, "yours"))
+          .catch(() => [] as SkillOption[])
+          .then((s) => {
+            setYourSkills(s);
+            return s;
+          }),
+        get<unknown>(`/build/sessions/${id}/skills`)
+          .then((r) => {
+            setFolderSkillNote(noteOf(r));
+            return decodeSkills(r, "folder");
+          })
+          .catch(() => [] as SkillOption[])
+          .then((s) => {
+            setFolderSkills(s);
+            return s;
+          }),
+        get<unknown>(`/build/sessions/${id}/commands`)
+          .then((r) => {
+            setCommandsNote(noteOf(r));
+            return decodeCommands(r);
+          })
+          .catch(() => [] as CustomCommand[])
+          .then((c) => {
+            setCustomCommands(c);
+            return c;
+          }),
+      ]).then(([yours, folder, custom]) => ({ yours, folder, custom }));
+    }
+    return listsPromise.current;
+  }
   const [rewindOpen, setRewindOpen] = useState(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -645,7 +729,9 @@ export function HarnessSession({
   const restoreUploads = att.restore;
   const restoreToBox = useCallback(
     (text: string, extras?: TurnExtras) => {
-      if (text) setInput((cur) => withMessageRestored(cur, text));
+      // v1.379.0: a typed "/name words" goes back as it was typed.
+      const back = extras?.typed ?? text;
+      if (back) setInput((cur) => withMessageRestored(cur, back));
       if (!extras) return;
       if (extras.skill) {
         const back = extras.skill;
@@ -704,6 +790,9 @@ export function HarnessSession({
                 ...(ups.length ? { attachments: ups.map((f) => f.path) } : {}),
                 ...(picks.length ? { files: picks.map((f) => f.path) } : {}),
                 ...skillFields(extras?.skill),
+                // v1.379.0: one of Claude Code's own commands (the daemon
+                // expands it; `text` is its words).
+                ...(extras?.command ? { command: extras.command } : {}),
                 ...(preview ? { preview_url: preview } : {}),
               },
           undefined,
@@ -863,11 +952,54 @@ export function HarnessSession({
       }
       return;
     }
-    const text = (item ? item.text : (boxRef.current?.value ?? input)).trim();
+    const raw = (item ? item.text : (boxRef.current?.value ?? input)).trim();
     const files: HarnessFile[] = fromBox ? att.filesRef.current : (item.attachments ?? []);
     const picks: AtFile[] = fromBox ? atFilesRef.current : (item.files ?? []);
-    const picked: PickedSkill | null = fromBox ? skillRef.current : (item.skill ?? null);
-    if (!text && files.length === 0 && picks.length === 0) return;
+    const chip: PickedSkill | null = fromBox ? skillRef.current : (item.skill ?? null);
+    // v1.379.0: a message that STARTS with "/name" runs that command or skill
+    // (Claude Code's rule): the words after the name are its arguments. An
+    // unknown "/word" is ordinary text (a path such as /etc/hosts too).
+    const lists = leadingSlash(raw) ? await ensureSlashLists() : null;
+    const typed = lists ? resolveTyped(raw, commands, lists.folder, lists.yours, lists.custom) : null;
+    if (busy && typed) {
+      // Claude Code queues a command sent while it answers; the session's own
+      // quick ones (the model menu, the rewind list, …) just open.
+      const needsTurn =
+        typed.kind !== "command" || typed.command.id === "init" || (typed.command.id === "plan" && !!typed.args);
+      if (needsTurn) {
+        if (fromBox) queueMessage();
+        return;
+      }
+    }
+    if (typed?.kind === "command") {
+      if (fromBox) {
+        setInput("");
+        setCaret(0);
+      }
+      await runCommand(typed.command.id, typed.args);
+      return;
+    }
+    let text = raw;
+    let picked: PickedSkill | null = chip;
+    let command = "";
+    if (typed?.kind === "skill") {
+      const want = pickedOf(typed.skill);
+      if (chip && (chip.name !== want.name || chip.source !== want.source)) {
+        setError(`Send one skill per message: the box already holds ${chip.name}.`);
+        return;
+      }
+      picked = want;
+      text = typed.args;
+    } else if (typed?.kind === "custom") {
+      if (chip) {
+        setError(`Send one command or one skill per message: the box holds the skill ${chip.name}.`);
+        return;
+      }
+      command = typed.command.name;
+      text = typed.args;
+    }
+    // v1.379.0: a skill or a command alone is a message too.
+    if (!text && files.length === 0 && picks.length === 0 && !picked && !command) return;
     if (busy) {
       // A note while it works is words only; the files and the skill wait
       // in the box.
@@ -887,15 +1019,71 @@ export function HarnessSession({
       setAtFiles([]);
       setSkill(null);
     }
+    setUsageNote(null);
     setPending({
       role: "user",
-      content: text,
+      // A command shows as it was typed ("/review app.py"), like Claude Code.
+      content: command ? raw : text,
       at: new Date().toISOString(),
       ...(paths.length ? { attachmentPaths: paths } : {}),
       ...(filePaths.length ? { filePaths } : {}),
       ...(picked ? { skill: picked.name } : {}),
+      ...(command ? { command } : {}),
     });
-    await runTurn(text, undefined, { attachments: files, files: picks, skill: picked });
+    await runTurn(text, undefined, {
+      attachments: files,
+      files: picks,
+      skill: picked,
+      ...(command ? { command, typed: raw } : {}),
+    });
+  }
+
+  /** v1.379.0: the session's own "/" commands — picked from the menu or typed
+   *  ("/plan fix the login" plans first and sends the words). */
+  async function runCommand(id: CommandId, args: string) {
+    if (!view) return;
+    setSlashDismissed(false);
+    if (id === "plan") {
+      if (args) {
+        if (view.mode !== "plan") await patchSetup({ mode: "plan" });
+        await send({ text: args });
+      } else {
+        void patchSetup({ mode: view.mode === "plan" ? "act" : "plan" });
+      }
+    } else if (id === "compact") {
+      // v1.374.0: the meter's Compact. v1.379.0 review: Claude Code's
+      // "/compact <words>" — the words say what the summary keeps in view
+      // (they were dropped).
+      void compact(args);
+    } else if (id === "rewind") {
+      setRewindOpen(true);
+    } else if (id === "model") {
+      // v1.379.0 review: "/model <name>" picks that model when exactly one
+      // model in the menu is called so; anything else opens the menu.
+      const named = args ? modelByName(catalog.models, args, provider) : null;
+      if (named) void pickModel(named);
+      else setModelMenuOpen(true);
+    } else if (id === "clear") {
+      // Claude Code's /clear starts fresh: a NEW session on the same folder
+      // (the folder the user picked, for a session on its own branch), or
+      // with no folder. This session stays in the list.
+      const folder = view.noFolder ? "" : view.git?.checkout || view.folder;
+      const problem = onNewSession ? await onNewSession(folder) : null;
+      if (problem) setError(problem);
+    } else if (id === "resume") {
+      onFindSessions?.();
+    } else if (id === "usage") {
+      try {
+        const u = await get<unknown>(`/chat/threads/${encodeURIComponent(threadId)}/usage`);
+        setUsageNote(sessionUsageWords(u));
+      } catch (e) {
+        setUsageNote(
+          isMissing(e) ? "This version of Iron Jarvis cannot say what a session used." : e instanceof Error ? e.message : String(e),
+        );
+      }
+    } else if (id === "init") {
+      await send({ text: INIT_PROMPT });
+    }
   }
 
   async function steer(text: string) {
@@ -1189,10 +1377,13 @@ export function HarnessSession({
    *  in their place. The conversation shown here is never cut. A refusal (not
    *  enough conversation yet, the demo model, nothing could be checked) is
    *  said in the daemon's words. */
-  async function compact() {
+  async function compact(focus = "") {
     if (compactingRef.current || !view) return;
     if (busy) {
       setError("Wait for the reply to finish, then compact.");
+      // v1.379.0 review: a typed "/compact <words>" goes back in the box
+      // (the box was emptied for it).
+      if (focus) setInput((cur) => cur || `/compact ${focus}`);
       return;
     }
     compactingRef.current = true;
@@ -1200,7 +1391,7 @@ export function HarnessSession({
     setCompactNote(null);
     setError(null);
     try {
-      const done = await compactSession(threadId);
+      const done = await compactSession(threadId, focus);
       await load();
       setCompactNote(done ? compactedNote(done.covers, done.stripped) : "Summarized the earlier turns.");
     } catch (e) {
@@ -1212,6 +1403,16 @@ export function HarnessSession({
   }
 
   // ---------------------------------------------------- header actions
+  /** v1.379.0: a session with no folder — open its own folder. */
+  async function openWorkFolder() {
+    if (!view?.folder) return;
+    try {
+      await post("/documents/open", { path: view.folder });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function saveTitle() {
     const t = (renaming ?? "").trim();
     setRenaming(null);
@@ -1253,31 +1454,34 @@ export function HarnessSession({
   const atOpen = !!view && !offline && atMenuOpen(menuState, false);
   const slashToken = slashOpen ? slashTokenAt(input, caret) : null;
   const atToken = atOpen ? tokenAt(input, caret, "@") : null;
-  // The two skill lists, asked the first time "/" opens in this session (an
-  // older Iron Jarvis has no folder list: none, quietly).
+  // v1.379.0: a message that STARTS with "/name" (typed or pasted) needs the
+  // lists too — Enter runs it by its name.
+  const leading = view && !offline ? leadingSlash(input) : null;
+  const wantsLists = slashOpen || !!leading;
+  // The skill lists and Claude Code's own commands, asked the first time "/"
+  // opens in this session (an older Iron Jarvis has no folder list and no
+  // commands list: none, quietly).
   useEffect(() => {
-    if (!slashOpen) return;
-    if (yourSkills === null) {
-      get<unknown>("/skills")
-        .then((r) => setYourSkills(decodeSkills(r, "yours")))
-        .catch(() => setYourSkills([]));
-    }
-    if (folderSkills === null) {
-      get<unknown>(`/build/sessions/${encodeURIComponent(threadId)}/skills`)
-        .then((r) => {
-          setFolderSkills(decodeSkills(r, "folder"));
-          const note = r && typeof r === "object" ? (r as { note?: unknown }).note : "";
-          setFolderSkillNote(typeof note === "string" ? note : "");
-        })
-        .catch(() => setFolderSkills([]));
-    }
+    if (wantsLists) void ensureSlashLists();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slashOpen]);
-  const commands = useMemo(() => sessionCommands(view?.mode ?? "act"), [view?.mode]);
+  }, [wantsLists]);
+  const commands = useMemo(
+    () => sessionCommands(view?.mode ?? "act", { hasFolder: !view?.noFolder }),
+    [view?.mode, view?.noFolder],
+  );
+  // Claude Code recognizes its custom commands only at the START of a
+  // message, so they are offered only for a "/word" there.
+  const atStart = !!slashToken && !input.slice(0, slashToken.start).trim();
   const slashList: SlashRow[] = slashToken
-    ? slashRows(slashToken.query, commands, folderSkills, yourSkills, skill)
+    ? slashRows(slashToken.query, commands, folderSkills, yourSkills, skill, atStart ? customCommands : null)
     : [];
+  // After "/name " — what Enter will run, said above the box.
+  const invoking =
+    !slashToken && !atToken && leading?.hasSpace
+      ? resolveTyped(input, commands, folderSkills, yourSkills, customCommands)
+      : null;
   // The SESSION's folder only (GET /fs/files on it, the chat's own query).
+  // v1.379.0: a session with no folder lists its own folder once made.
   const folderFiles = useProjectFilesState(atOpen, view?.folder || null);
   const atList = atToken
     ? atFileRows(folderFiles.listing, atToken.query, atFiles.map((f) => f.path))
@@ -1288,8 +1492,10 @@ export function HarnessSession({
   const listId = slashToken ? `${menuIdBase}-slash` : atToken ? `${menuIdBase}-at` : undefined;
   const activeRowId = listId && menuRowCount > 0 ? `${listId}-row-${activeRow}` : undefined;
   // A list still being read (v1.373.0 review: Enter waits for it).
-  const slashLoading = yourSkills === null || folderSkills === null;
-  const atLoading = folderFiles.listing === null && !folderFiles.failed;
+  const slashLoading = yourSkills === null || folderSkills === null || customCommands === null;
+  // v1.379.0: a session with no folder has nothing to read before its first
+  // message (no folder yet) — not "still loading" (Enter must not wait).
+  const atLoading = !!view?.folder && folderFiles.listing === null && !folderFiles.failed;
   const menuLoading = slashToken ? slashLoading : atToken ? atLoading : false;
   // The highlighted row goes back to the top as the typed word changes.
   const menuWord = slashToken ? `/${slashToken.query}` : atToken ? `@${atToken.query}` : "";
@@ -1314,20 +1520,38 @@ export function HarnessSession({
     placeCaret(tok.start);
   }
 
-  function pickSlash(row: SlashRow) {
+  /** A row picked: Enter, Tab or a click. v1.379.0: one of Claude Code's own
+   *  custom commands RUNS on Enter (Claude Code's rule — the words after the
+   *  "/word" ride as its arguments); Tab or a click puts "/name " in the box
+   *  so its words can be typed first. */
+  function pickSlash(row: SlashRow, how: "enter" | "tab" | "click" = "click") {
     const tok = slashTokenAt(input, caret);
     if (!tok || !view) return;
     setSlashDismissed(false);
+    if (row.kind === "custom") {
+      const rest = input.slice(tok.end).trim();
+      if (how === "enter") {
+        const typed = `/${row.command.name}${rest ? ` ${rest}` : ""}`;
+        setInput(typed);
+        setCaret(typed.length);
+        if (boxRef.current) boxRef.current.value = typed;
+        void send();
+        return;
+      }
+      const next = `/${row.command.name} ${input.slice(tok.end).replace(/^\s+/, "")}`;
+      setInput(next);
+      const at = row.command.name.length + 2;
+      setCaret(at);
+      placeCaret(at);
+      return;
+    }
     consumeToken(tok);
     if (row.kind === "skill") {
-      setSkill({ name: row.skill.name, source: row.skill.source });
+      setSkill(pickedOf(row.skill));
       return;
     }
     // The session's commands call what the box already has.
-    if (row.command.id === "plan") void patchSetup({ mode: view.mode === "plan" ? "act" : "plan" });
-    else if (row.command.id === "compact") void compact(); // v1.374.0: the meter's Compact
-    else if (row.command.id === "rewind") setRewindOpen(true);
-    else setModelMenuOpen(true);
+    void runCommand(row.command.id, "");
   }
 
   function pickAt(f: AtFile) {
@@ -1378,7 +1602,7 @@ export function HarnessSession({
       const enter = e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey;
       if (enter || (e.key === "Tab" && !e.shiftKey)) {
         e.preventDefault();
-        if (slashToken) pickSlash(slashList[cur]);
+        if (slashToken) pickSlash(slashList[cur], enter ? "enter" : "tab");
         else pickAt(atList.rows[cur]);
         return true;
       }
@@ -1495,7 +1719,7 @@ export function HarnessSession({
   // v1.371.0: a picture alone is a message; one still going up is waited for.
   // v1.373.0: so is a file picked with "@".
   const sendReady =
-    (!!input.trim() || att.files.length > 0 || att.uploading || atFiles.length > 0) &&
+    (!!input.trim() || att.files.length > 0 || att.uploading || atFiles.length > 0 || !!skill) &&
     !!view &&
     !offline &&
     !compacting &&
@@ -1568,19 +1792,54 @@ export function HarnessSession({
                 <Pencil size={12} aria-hidden className="shrink-0 text-zinc-600 opacity-0 transition-opacity group-hover:opacity-100" />
               </button>
             )}
-            <p
-              data-testid="harness-folder"
-              className="flex min-w-0 items-center gap-1 truncate text-[12px] text-zinc-500"
-              title={view.folder}
-            >
-              <FolderOpen size={12} aria-hidden className="shrink-0" />
-              <span className="truncate">{view.folderName}</span>
-              {view.mode === "plan" ? (
-                <span data-testid="harness-mode-plan" className="ml-1 shrink-0 text-accent-soft">
-                  · planning
+            {view.noFolder ? (
+              // v1.379.0: a session with no folder says where its files are
+              // (its own folder, made with its first message) and opens it.
+              <p
+                data-testid="harness-folder"
+                data-no-folder="true"
+                className="flex min-w-0 items-center gap-1 text-[12px] text-zinc-500"
+                title={view.folder || view.workRoot}
+              >
+                <FolderX size={12} aria-hidden className="shrink-0" />
+                <span className="shrink-0">{NO_FOLDER_NAME}</span>
+                <span data-testid="harness-work-folder" className="min-w-0 truncate">
+                  {view.folder
+                    ? `· files in ${baseName(view.folder)}`
+                    : "· its files get a folder of their own with your first message"}
                 </span>
-              ) : null}
-            </p>
+                {view.folder ? (
+                  <button
+                    type="button"
+                    data-testid="harness-open-work-folder"
+                    onClick={() => void openWorkFolder()}
+                    title={`Open ${view.folder}`}
+                    className="shrink-0 rounded px-1 text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-100"
+                  >
+                    Open
+                  </button>
+                ) : null}
+                {view.mode === "plan" ? (
+                  <span data-testid="harness-mode-plan" className="ml-1 shrink-0 text-accent-soft">
+                    · planning
+                  </span>
+                ) : null}
+              </p>
+            ) : (
+              <p
+                data-testid="harness-folder"
+                className="flex min-w-0 items-center gap-1 truncate text-[12px] text-zinc-500"
+                title={view.folder}
+              >
+                <FolderOpen size={12} aria-hidden className="shrink-0" />
+                <span className="truncate">{view.folderName}</span>
+                {view.mode === "plan" ? (
+                  <span data-testid="harness-mode-plan" className="ml-1 shrink-0 text-accent-soft">
+                    · planning
+                  </span>
+                ) : null}
+              </p>
+            )}
             {view.git ? (
               // v1.375.0 (part 2, Phase 4): the session's own branch and its
               // base; the worktree it works in is the title.
@@ -1681,7 +1940,9 @@ export function HarnessSession({
                     title={
                       view.git && !view.git.removed
                         ? `Delete this session and its conversation. Its worktree goes to Iron Jarvis's trash; the branch ${view.git.branch} stays.`
-                        : "Delete this session and its conversation"
+                        : view.noFolder && view.folder
+                          ? "Delete this session and its conversation. Its own folder goes only if it is empty; files in it stay."
+                          : "Delete this session and its conversation"
                     }
                   />
                 </div>
@@ -1706,8 +1967,10 @@ export function HarnessSession({
         >
           {offline ? <OfflineHint /> : null}
           {shown.length === 0 && !busy ? (
-            <p data-testid="harness-empty" className="pt-6 text-center text-[13px] text-zinc-500">
-              Ask for something to build or change in {view.folderName}.
+            <p data-testid="harness-empty" className="break-words pt-6 text-center text-[13px] text-zinc-500">
+              {view.noFolder
+                ? noFolderEmptyWords(view.workRoot)
+                : `Ask for something to build or change in ${view.folderName}.`}
             </p>
           ) : null}
           {shown.map((m, i) =>
@@ -1942,6 +2205,12 @@ export function HarnessSession({
               {compactNote}
             </p>
           ) : null}
+          {usageNote ? (
+            // v1.379.0: "/usage" (Claude Code's /cost) — what this session used.
+            <p data-testid="harness-usage-note" role="status" className="text-[12px] text-zinc-400">
+              {usageNote}
+            </p>
+          ) : null}
           {rewindNote ? (
             // v1.377.0: a rewind of COMMITTED work — the commits stayed.
             <p data-testid="harness-rewind-commits" role="status" className="text-[12px] text-tone-warn">
@@ -2022,8 +2291,8 @@ export function HarnessSession({
                 rows={slashList}
                 active={activeRow}
                 loading={slashLoading}
-                note={folderSkillNote}
-                onPick={pickSlash}
+                note={[folderSkillNote, atStart ? commandsNote : ""].filter(Boolean).join(" ")}
+                onPick={(row) => pickSlash(row, "click")}
                 onHover={setMenuActive}
               />
             ) : atToken ? (
@@ -2036,7 +2305,11 @@ export function HarnessSession({
                 failed={folderFiles.failed}
                 onPick={pickAt}
                 onHover={setMenuActive}
+                noFolderYet={view.noFolder && !view.folder}
               />
+            ) : invoking && !rewindOpen ? (
+              // v1.379.0: "/name " typed — what Enter runs, with its hint.
+              <SlashInvoking target={invoking} />
             ) : rewindOpen ? (
               <RewindList
                 threadId={threadId}
@@ -2073,7 +2346,9 @@ export function HarnessSession({
               placeholder={
                 busy
                   ? "Add a note while it works (Enter), or Ctrl+Enter to send after it"
-                  : `Build in ${view.folderName}…  / for commands and skills, @ for files`
+                  : view.noFolder
+                    ? "Ask for anything…  / for commands and skills, @ for files"
+                    : `Build in ${view.folderName}…  / for commands and skills, @ for files`
               }
               value={input}
               rows={2}
@@ -2107,6 +2382,10 @@ export function HarnessSession({
                 }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
+                  // v1.379.0: "/name words" runs by its name — while the
+                  // lists are still being read, Enter waits (it would send
+                  // the words as plain text).
+                  if (leading && slashLoading) return;
                   void send();
                 }
               }}

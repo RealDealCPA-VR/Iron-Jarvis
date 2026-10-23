@@ -466,7 +466,17 @@ def _is_mock(provider: Any, reason: Any = "") -> bool:
     return str(provider or "").strip().lower() == "mock" or str(reason or "").strip().lower() == "mock"
 
 
-async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
+def focus_line(focus: str) -> str:
+    """v1.379.0 review: Claude Code's ``/compact [instructions]`` — the
+    user's own words about what the summary should keep in view ("" when
+    none: the prompt is exactly the v1.374.0 one)."""
+    words = " ".join(str(focus or "").split())[:2000]
+    if not words:
+        return ""
+    return f"\n\nThe user asked this summary to keep in view: {words}"
+
+
+async def compact(platform: Any, thread_id: str, *, focus: str = "") -> dict[str, Any]:
     """Summarize the session's older turns (see the module docstring) and keep
     the summary on the session. Returns the stored view plus ``window`` (what
     the model can read at once). Raises :class:`CompactRefused` in words, or
@@ -530,7 +540,8 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
     async def _complete(system: str, user: str) -> tuple[str, str, str]:
         try:
             route = await router.complete(
-                provider=provider, model=model or None, system=system + length_line(replaced_words),
+                provider=provider, model=model or None,
+                system=system + length_line(replaced_words) + focus_line(focus),
                 messages=[LLMMessage(role="user", content=user)], tools=[],
                 session_id=None, pin=True,
             )

@@ -91,6 +91,16 @@ class DiscardBody(BaseModel):
     after_merge: bool = False
 
 
+#: v1.379.0: the git buttons' refusal for a session started with no folder.
+NO_FOLDER_GIT = "This session has no folder of its own, so it is not in a repository and has no branch."
+
+
+def no_branch_words(row: Any) -> str:
+    """Why a session has no branch: it works in its folder directly, or
+    (v1.379.0) it was started with no folder at all."""
+    return NO_FOLDER_GIT if S.is_folderless(row) else B.NO_BRANCH
+
+
 def _refused(exc: B.GitRefused) -> JSONResponse:
     content: dict[str, Any] = {"detail": str(exc)}
     if exc.details:
@@ -139,7 +149,7 @@ def register(app: FastAPI, d: Any) -> None:
             raise HTTPException(status_code=404, detail="no such Build session")
         facts = B.facts_of(_setup_of(row))
         if facts is None:
-            raise HTTPException(status_code=409, detail=B.NO_BRANCH)
+            raise HTTPException(status_code=409, detail=no_branch_words(row))
         return row, facts
 
     def _record(thread_id: str, facts: dict[str, str], **changes: Any) -> None:
@@ -361,7 +371,7 @@ async def draft_message(d: Any, thread_id: str) -> Any:
     setup = S._setup(row)
     facts = B.facts_of(setup)
     if facts is None:
-        raise HTTPException(status_code=409, detail=B.NO_BRANCH)
+        raise HTTPException(status_code=409, detail=no_branch_words(row))
     try:
         material = await asyncio.to_thread(_locked, thread_id, lambda: B.draft_material(facts))
     except B.GitRefused as exc:

@@ -219,7 +219,11 @@ describe("“/” lists the session's commands and the skills", () => {
     const menu = await screen.findByTestId("harness-slash-menu");
     // v1.374.0 (moved on purpose): /compact exists now — it presses the
     // meter's Compact (ij-harness-work-v1374).
-    expect(rowNames("harness-slash-command")).toEqual(["plan", "compact", "rewind", "model"]);
+    // v1.379.0 (moved on purpose): Claude Code's own /clear, /resume, /usage
+    // and /init joined them (ij-harness-slash-commands-v1379).
+    expect(rowNames("harness-slash-command")).toEqual([
+      "plan", "compact", "rewind", "model", "clear", "resume", "usage", "init",
+    ]);
     expect(within(menu).getByText("/compact")).toBeTruthy();
     await waitFor(() => expect(rowNames("harness-slash-skill")).toEqual(["release-notes", "bulleteer", "pdf-tools"]), NET);
     expect(screen.getAllByTestId("harness-slash-skill")[0].getAttribute("data-source")).toBe("folder");
@@ -231,8 +235,12 @@ describe("“/” lists the session's commands and the skills", () => {
     expect(rowNames("harness-slash-command")).toEqual([]);
     // A description counts too: "re" is in /plan's "it reads" — listed
     // AFTER /rewind, whose NAME holds it (v1.373.0: name matches first).
+    // v1.379.0 (moved on purpose): /resume and /clear (its alias "reset")
+    // hold "re" by name too, /usage by its description ("there").
     type("/re");
-    await waitFor(() => expect(rowNames("harness-slash-command")).toEqual(["rewind", "plan"]));
+    await waitFor(() =>
+      expect(rowNames("harness-slash-command")).toEqual(["rewind", "clear", "resume", "plan", "usage"]),
+    );
     expect(rowNames("harness-slash-skill")).toEqual(["release-notes", "pdf-tools"]);
     type("/rew");
     await waitFor(() => expect(rowNames("harness-slash-command")).toEqual(["rewind"]));
@@ -277,13 +285,11 @@ describe("“/” lists the session's commands and the skills", () => {
     type("/");
     await waitFor(() => expect(rowNames("harness-slash-skill")).toEqual(["release-notes", "bulleteer", "pdf-tools"]), NET);
     // plan, compact, rewind, model, release-notes: four steps down (v1.374.0
-    // moved on purpose: /compact joined the commands).
-    key("ArrowDown");
-    key("ArrowDown");
-    key("ArrowDown");
-    key("ArrowDown");
+    // moved on purpose: /compact joined the commands). v1.379.0 (moved on
+    // purpose): /clear, /resume, /usage and /init too — eight steps down.
+    for (let i = 0; i < 8; i += 1) key("ArrowDown");
     const rows = screen.getAllByRole("option");
-    expect(rows[4].getAttribute("aria-selected")).toBe("true");
+    expect(rows[8].getAttribute("aria-selected")).toBe("true");
     key("Tab");
     const chip = await screen.findByTestId("harness-skill-chip");
     expect(chip.getAttribute("data-source")).toBe("folder");
@@ -326,7 +332,10 @@ describe("the session's commands call what the box already has", () => {
     api.gets["/build/sessions/s1"] = view({ mode: "plan" });
     await opened();
     type("/pla");
-    const row = await screen.findByTestId("harness-slash-command");
+    // v1.379.0 (moved on purpose): /init's description ("explains") holds
+    // "pla" too; /plan is still the first row (a NAME match).
+    const row = (await screen.findAllByTestId("harness-slash-command"))[0];
+    expect(row.getAttribute("data-name")).toBe("plan");
     expect(row).toHaveTextContent("Stop planning");
     key("Enter");
     await waitFor(() =>
@@ -654,8 +663,11 @@ describe("the rules on their own", () => {
     const cmds = sessionCommands("act");
     const folder = [{ name: "release-notes", description: "notes", source: "folder" as const }];
     const yours = [{ name: "bulleteer", description: "bullets", source: "yours" as const }];
+    // v1.379.0 (moved on purpose): Claude Code's own built-ins with an IJ
+    // harness equivalent joined the commands (/clear, /resume, /usage, /init).
     expect(slashRows("", cmds, folder, yours).map((r) => r.key)).toEqual([
-      "cmd:plan", "cmd:compact", "cmd:rewind", "cmd:model", "skill:folder:release-notes", "skill:yours:bulleteer",
+      "cmd:plan", "cmd:compact", "cmd:rewind", "cmd:model", "cmd:clear", "cmd:resume", "cmd:usage", "cmd:init",
+      "skill:folder:release-notes", "skill:yours:bulleteer",
     ]);
     expect(slashRows("", cmds, folder, yours, { name: "bulleteer", source: "yours" }).map((r) => r.key)).not.toContain(
       "skill:yours:bulleteer",

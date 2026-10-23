@@ -14,10 +14,24 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AtSign, Cpu, FileText, History, Layers, ListChecks, Loader2, Sparkles, X } from "lucide-react";
+import {
+  AtSign,
+  BarChart3,
+  Cpu,
+  FileText,
+  History,
+  Layers,
+  ListChecks,
+  Loader2,
+  MessageSquarePlus,
+  Search,
+  Sparkles,
+  SquareSlash,
+  X,
+} from "lucide-react";
 import { useAtMenuFit } from "@/lib/chatRefsMenuFit";
 import { listRewindPoints, type RewindExtras, type RewindPoint } from "@/lib/buildRewind";
-import type { AtFile, CommandId, PickedSkill, SlashRow } from "@/lib/buildComposer";
+import { sourceWords, type AtFile, type CommandId, type PickedSkill, type SlashRow, type TypedTarget } from "@/lib/buildComposer";
 import { RewindControl } from "@/components/harness/RewindControl";
 
 const PANEL =
@@ -65,7 +79,26 @@ const COMMAND_ICON: Record<CommandId, typeof ListChecks> = {
   compact: Layers,
   rewind: History,
   model: Cpu,
+  clear: MessageSquarePlus,
+  resume: Search,
+  usage: BarChart3,
+  init: FileText,
 };
+
+/** A row's quiet source words ("from your commands", "this folder"). */
+function Source({ row }: { row: SlashRow }) {
+  const words = sourceWords(row);
+  return words ? (
+    <span data-testid="harness-slash-source" className="shrink-0 text-[11px] text-zinc-500">
+      {words}
+    </span>
+  ) : null;
+}
+
+/** What may follow a name ("[file]"), quiet and monospaced. */
+function Hint2({ text }: { text: string }) {
+  return text ? <span className="shrink-0 font-mono text-[11px] text-zinc-500">{text}</span> : null;
+}
 
 /** A row keeps the box's focus when pressed (the caret and the "/word" stay). */
 const keepFocus = (e: React.MouseEvent) => e.preventDefault();
@@ -109,6 +142,7 @@ export function SlashMenu({
                 aria-selected={on}
                 data-testid="harness-slash-command"
                 data-name={row.command.name}
+                title={row.command.aliases?.length ? `Also /${row.command.aliases.join(", /")}` : undefined}
                 ref={(el) => {
                   if (on) el?.scrollIntoView?.({ block: "nearest" });
                 }}
@@ -120,6 +154,38 @@ export function SlashMenu({
                 <Icon size={12} aria-hidden className="shrink-0 text-accent-soft/70" />
                 <span className="shrink-0 font-mono text-[12px]">/{row.command.name}</span>
                 <span className="min-w-0 truncate text-[11px] text-zinc-500">{row.command.description}</span>
+              </button>
+            );
+          }
+          if (row.kind === "custom") {
+            // v1.379.0: one of Claude Code's own custom commands. Enter runs
+            // it now (Claude Code's rule); Tab or a click puts "/name " in the
+            // box so you can type its words first.
+            const c = row.command;
+            return (
+              <button
+                key={row.key}
+                id={`${listId}-row-${i}`}
+                type="button"
+                role="option"
+                aria-selected={on}
+                data-testid="harness-slash-custom"
+                data-name={c.name}
+                data-source={c.source}
+                title={c.description}
+                ref={(el) => {
+                  if (on) el?.scrollIntoView?.({ block: "nearest" });
+                }}
+                onMouseDown={keepFocus}
+                onMouseEnter={() => onHover(i)}
+                onClick={() => onPick(row)}
+                className={cls}
+              >
+                <SquareSlash size={12} aria-hidden className="shrink-0 text-accent-soft/70" />
+                <span className="min-w-0 max-w-[45%] shrink-0 truncate font-mono text-[12px]">/{c.name}</span>
+                <Hint2 text={c.argumentHint} />
+                <Source row={row} />
+                <span className="min-w-0 truncate text-[11px] text-zinc-500">{c.description}</span>
               </button>
             );
           }
@@ -145,9 +211,7 @@ export function SlashMenu({
             >
               <Sparkles size={12} aria-hidden className="shrink-0 text-accent-soft/70" />
               <span className="min-w-0 max-w-[45%] shrink-0 truncate font-mono text-[12px]">{s.name}</span>
-              {s.source === "folder" ? (
-                <span className="shrink-0 text-[11px] text-zinc-500">this folder</span>
-              ) : null}
+              <Source row={row} />
               <span className="min-w-0 truncate text-[11px] text-zinc-500">{s.description}</span>
             </button>
           );
@@ -162,6 +226,45 @@ export function SlashMenu({
         {note ? <p className="px-2.5 py-1 text-[11px] text-zinc-500">{note}</p> : null}
       </div>
     </AboveBox>
+  );
+}
+
+/** v1.379.0: while the words after a typed "/name " are written — what Enter
+ *  will run, its argument hint and where it comes from (Claude Code shows the
+ *  hint the same way). Never takes a key: Enter sends. */
+export function SlashInvoking({ target }: { target: TypedTarget }) {
+  let name = "";
+  let hint = "";
+  let what = "";
+  let from = "";
+  if (target.kind === "command") {
+    name = target.command.name;
+    hint = target.command.argumentHint ?? "";
+    what = target.command.description;
+  } else if (target.kind === "custom") {
+    name = target.command.name;
+    hint = target.command.argumentHint;
+    what = target.command.description;
+    from = sourceWords({ kind: "custom", key: "", command: target.command });
+  } else {
+    name = target.skill.name;
+    what = "Your words go with this skill";
+    from = sourceWords({ kind: "skill", key: "", skill: target.skill });
+  }
+  return (
+    <div
+      data-testid="harness-slash-invoking"
+      data-name={name}
+      data-kind={target.kind}
+      role="status"
+      className={`${PANEL} bottom-full mb-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-2 text-[12px] text-zinc-300`}
+    >
+      <span className="shrink-0 font-mono text-accent-soft">/{name}</span>
+      <Hint2 text={hint} />
+      {from ? <span className="shrink-0 text-[11px] text-zinc-500">{from}</span> : null}
+      {what ? <span className="min-w-0 truncate text-[11px] text-zinc-500">{what}</span> : null}
+      <span className="ml-auto shrink-0 text-[11px] text-zinc-600">Enter runs it</span>
+    </div>
   );
 }
 
@@ -181,6 +284,7 @@ export function AtMenu({
   failed,
   onPick,
   onHover,
+  noFolderYet = false,
 }: {
   /** The listbox's id; row i is `${listId}-row-${i}` (the box points at it). */
   listId: string;
@@ -191,7 +295,21 @@ export function AtMenu({
   failed: boolean;
   onPick: (f: AtFile) => void;
   onHover: (i: number) => void;
+  /** v1.379.0: a session with no folder before its first message: its own
+   *  folder does not exist yet, so there are no files to list. */
+  noFolderYet?: boolean;
 }) {
+  if (noFolderYet) {
+    return (
+      <AboveBox testId="harness-at-menu" fitKey="no-folder">
+        <div id={listId} role="listbox" aria-label="Files in this folder" className="p-1">
+          <p data-testid="harness-at-no-folder" className="px-2.5 py-1.5 text-[12px] text-zinc-500">
+            This session&apos;s folder is made with your first message, so it has no files yet.
+          </p>
+        </div>
+      </AboveBox>
+    );
+  }
   return (
     <AboveBox testId="harness-at-menu" fitKey={`${rows.length}|${more}|${loading}|${failed}`}>
       <div id={listId} role="listbox" aria-label="Files in this folder" className="p-1">
