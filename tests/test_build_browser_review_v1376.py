@@ -997,3 +997,129 @@ def test_odd_addresses_are_refused(url):
 ])
 def test_this_pcs_odd_spellings_are_judged_as_this_pc(url, kind):
     assert PB.judge(url, set(), "http://localhost:5173").kind == kind
+
+
+# --------------------------------------------------------------------------- #
+# the driver runs on the app's own Electron when Playwright's node.exe is gone
+# --------------------------------------------------------------------------- #
+
+
+def test_the_driver_runs_on_the_apps_electron_when_its_own_node_is_not_shipped(tmp_path, monkeypatch):
+    """DECISION (review item 8): the packaged daemon ships no node.exe of
+    Playwright's (88 MiB); the desktop app hands it its own Electron
+    (``IRONJARVIS_PLAYWRIGHT_NODE``) and the driver runs on that. Playwright's
+    own node.exe, when present (a source run), is still what runs; with
+    neither, the browser says so in words."""
+    node = tmp_path / "node.exe"
+    cli = tmp_path / "cli.js"
+    cli.write_text("", encoding="utf-8")
+    electron = tmp_path / "Iron Jarvis.exe"
+    electron.write_bytes(b"MZ")
+    monkeypatch.setattr(PB, "_bundled_driver", lambda: (str(node), str(cli)))
+    monkeypatch.delenv(PB.NODE_ENV, raising=False)
+    assert PB.driver_node() == ("", PB.NO_DRIVER_NODE)
+    assert PB.playwright_problem() == PB.NO_DRIVER_NODE
+    monkeypatch.setenv(PB.NODE_ENV, str(electron))
+    assert PB.driver_node() == (str(electron), "")
+    assert PB.playwright_problem() == ""
+    node.write_bytes(b"MZ")  # Playwright's own is there: it wins
+    assert PB.driver_node() == ("", "")
+
+
+def test_the_spec_ships_no_node_exe_and_the_app_hands_over_its_electron():
+    root = Path(__file__).resolve().parents[1]
+    spec = (root / "packaging" / "ironjarvis.spec").read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert 'n.endswith("playwright/driver/node.exe")' in spec
+    assert "a.datas = [e for e in a.datas if _not_playwright_node(e)]" in spec
+    assert "a.binaries = [e for e in a.binaries if _not_playwright_node(e)]" in spec
+    main = (root / "desktop" / "main.js").read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert "IRONJARVIS_PLAYWRIGHT_NODE: process.execPath" in main
+    assert main.count("...playwrightNodeEnv()") == 2  # the packaged and the dev daemon
+
+
+def _electron() -> str:
+    import os
+
+    for raw in (os.environ.get("IJ_TEST_ELECTRON", ""),
+                str(Path(__file__).resolve().parents[1] / "desktop" / "node_modules" / "electron" / "dist" / "electron.exe")):
+        if raw and Path(raw).is_file():
+            return raw
+    return ""
+
+
+@REAL
+@pytest.mark.skipif(not _electron(), reason="needs desktop/node_modules' Electron (or IJ_TEST_ELECTRON)")
+@pytest.mark.timeout(180)
+async def test_real_edge_driven_by_electrons_node(monkeypatch, tmp_path):
+    import psutil
+
+    electron = _electron()
+    real = PB._bundled_driver
+
+    def without_node():
+        node, cli = real()
+        return str(tmp_path / "no-node.exe"), cli
+
+    monkeypatch.setattr(PB, "_bundled_driver", without_node)
+    monkeypatch.setenv(PB.NODE_ENV, electron)
+    site = Site({"/": "<title>Shop</title><button onclick=\"document.title='added'\">Add</button>"
+                      "<script>console.error('boot error')</script>"})
+    b = _browsers()
+    key = "build:electron"
+    try:
+        opened = await b.open(key, site.base, preview=site.base)
+        assert opened.title == "Shop"
+        backend = b._sessions[key].backend
+        exe = Path(psutil.Process(backend._driver).exe()).name.lower()
+        assert exe == "electron.exe", exe
+        assert backend._driver in backend._job.member_pids()
+        clicked = await b.click(key, "Add", preview=site.base)
+        assert clicked.title == "added"
+        read = await b.read(key, preview=site.base)
+        assert any("boot error" in c for c in read.console)
+        pids = b.pids(key)
+        await b.close(key, "test")
+        end = time.monotonic() + 15
+        while time.monotonic() < end and any(psutil.pid_exists(p) for p in pids):
+            await asyncio.sleep(0.2)
+        assert not [p for p in pids if psutil.pid_exists(p)]
+    finally:
+        b.shutdown()
+        site.close()
+
+
+async def test_a_second_close_waits_for_the_first_to_end_the_browser(tmp_path):
+    """A Stop during an action closes twice (the cancelled action, and the
+    Stop race in run_action); the second found nothing open and returned AT
+    ONCE, before the first had ended a process — the doer's Stop pin saw a
+    live browser 1 run in 3. Made deterministic here with a slow polite
+    close: the second close returns only once the browser is killed."""
+    from tests.test_build_browser_v1376 import DEV, FakeBackend
+
+    class SlowClose(FakeBackend):
+        async def close(self):
+            await asyncio.sleep(0.6)
+            self.closed = True
+
+    made: list[Any] = []
+
+    def factory(**kw):
+        backend = SlowClose(**kw)
+        made.append(backend)
+        return backend
+
+    inst = PB.AgentBrowsers(backend_factory=factory)
+    try:
+        await inst.open("build:c", DEV, preview=DEV)
+        first = asyncio.ensure_future(inst.close("build:c", "stopped"))
+        for _ in range(100):
+            if inst.is_closing("build:c"):
+                break
+            await asyncio.sleep(0.01)
+        assert inst.is_closing("build:c") and not made[0].killed
+        await inst.close("build:c", "stopped")  # the second close
+        assert made[0].killed and made[0].closed
+        await first
+        assert not inst.is_closing("build:c")
+    finally:
+        inst.shutdown()

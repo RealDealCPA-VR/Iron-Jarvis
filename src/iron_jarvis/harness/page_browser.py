@@ -173,6 +173,23 @@ NO_PLAYWRIGHT = (
     "The agent's browser is missing from this install of Iron Jarvis (its browser driver, "
     "Playwright, is not there). Reinstall Iron Jarvis to bring it back."
 )
+#: v1.376.0 review (item 8): the packaged daemon ships no node.exe of
+#: Playwright's; its driver runs on the desktop app's own engine, which only
+#: the app hands over (:data:`NODE_ENV`).
+NO_DRIVER_NODE = (
+    "The agent's browser starts only inside the Iron Jarvis app (its driver runs on the app's own "
+    "engine), and this copy of Iron Jarvis was started without it. Open the Iron Jarvis app, or "
+    "restart it, and try again."
+)
+#: v1.376.0 review (item 8): the desktop app tells the daemon its own Electron
+#: executable (desktop/main.js). When Playwright's bundled node.exe is NOT
+#: there — the packaged app no longer ships it (88 MiB) — the driver runs on
+#: Electron's Node instead (``ELECTRON_RUN_AS_NODE=1``, the Iron-Proxy
+#: pattern). Measured: Electron 42.5.0 is Node 24.17.0 (Playwright 1.60's
+#: own node.exe is 24.15.0; it needs >= 18); the driver opens, clicks, reads
+#: and closes Edge on it, and is adopted into the job like node.exe. A source
+#: run keeps Playwright's own node.exe (it is there).
+NODE_ENV = "IRONJARVIS_PLAYWRIGHT_NODE"
 NOT_LOCAL = (
     "The agent's browser only opens pages on this PC or your own network "
     "(http://localhost:…, http://127.0.0.1:…, a 192.168.… or .local address). "
@@ -427,18 +444,37 @@ def edge_executable() -> str:
     return ""
 
 
-def playwright_problem() -> str:
-    """"" when Playwright and its driver are here, else why not (in words).
-    BLOCKING (file checks)."""
-    try:
-        from playwright._impl._driver import compute_driver_executable  # noqa: PLC0415
+def _bundled_driver() -> "tuple[str, str]":
+    """Playwright's own (node, cli.js) paths. BLOCKING (an import)."""
+    from playwright._impl._driver import compute_driver_executable  # noqa: PLC0415
 
-        node, cli = compute_driver_executable()
+    node, cli = compute_driver_executable()
+    return str(node), str(cli)
+
+
+def driver_node() -> "tuple[str, str]":
+    """``(node, problem)``: the executable the driver runs on — "" for
+    Playwright's own node.exe (it is there), else the app's Electron
+    (:data:`NODE_ENV`) when that exists — or the reason there is none, in
+    words. BLOCKING (file checks)."""
+    try:
+        node, cli = _bundled_driver()
     except Exception:  # noqa: BLE001
-        return NO_PLAYWRIGHT
-    if not os.path.isfile(cli) or not os.path.isfile(node):
-        return NO_PLAYWRIGHT
-    return ""
+        return "", NO_PLAYWRIGHT
+    if not os.path.isfile(cli):
+        return "", NO_PLAYWRIGHT
+    if os.path.isfile(node):
+        return "", ""
+    electron = os.environ.get(NODE_ENV, "").strip()
+    if electron and os.path.isfile(electron):
+        return electron, ""
+    return "", NO_DRIVER_NODE
+
+
+def playwright_problem() -> str:
+    """"" when Playwright and its driver (and something to run it on) are
+    here, else why not (in words). BLOCKING (file checks)."""
+    return driver_node()[1]
 
 
 def _new_work() -> Path:
@@ -544,6 +580,8 @@ def _local_only_now() -> bool:
 #: The temp folder the NEXT Playwright driver started in this context gets
 #: (:func:`_driver_env_hook`); "" = the daemon's own.
 _DRIVER_TEMP: ContextVar[str] = ContextVar("ij_page_driver_temp", default="")
+#: The executable the NEXT driver runs on ("" = Playwright's own node.exe).
+_DRIVER_NODE: ContextVar[str] = ContextVar("ij_page_driver_node", default="")
 
 
 def _driver_env_hook() -> None:
@@ -563,16 +601,25 @@ def _driver_env_hook() -> None:
     current = _transport.get_driver_env
     if getattr(current, "_ij_temp", False):
         return
+    current_exe = _transport.compute_driver_executable
 
     def get_driver_env() -> dict:
         env = current()
         temp = _DRIVER_TEMP.get()
         if temp:
             env["TEMP"] = env["TMP"] = temp
+        if _DRIVER_NODE.get():
+            env["ELECTRON_RUN_AS_NODE"] = "1"  # the app's Electron, as Node
         return env
+
+    def compute_driver_executable() -> "tuple[str, str]":
+        node, cli = current_exe()
+        override = _DRIVER_NODE.get()
+        return (override, cli) if override else (node, cli)
 
     get_driver_env._ij_temp = True  # type: ignore[attr-defined]
     _transport.get_driver_env = get_driver_env
+    _transport.compute_driver_executable = compute_driver_executable
 
 
 def idle_close_s() -> float:
@@ -767,12 +814,17 @@ class EdgeBackend:
     async def start(self) -> None:
         from playwright.async_api import async_playwright  # noqa: PLC0415 — lazy
 
+        node, problem = await asyncio.to_thread(driver_node)
+        if problem:
+            raise BrowserProblem(problem)
         _driver_env_hook()
         token = _DRIVER_TEMP.set(str(self._work / "tmp"))
+        node_token = _DRIVER_NODE.set(node)
         try:
             self._cm = async_playwright()
             self._pw = await self._cm.start()
         finally:
+            _DRIVER_NODE.reset(node_token)
             _DRIVER_TEMP.reset(token)
         self._driver = _driver_pid(self._cm)
         if self._driver:
@@ -1439,6 +1491,10 @@ class AgentBrowsers:
         self._pids: dict[str, Callable[[], list[int]]] = {}
         #: key -> the origins allowed for that browser (mirror, any thread).
         self._allowed: dict[str, set[str]] = {}
+        #: Browsers being closed: key -> the close (browser thread only), and
+        #: the keys (any thread) — a second close waits for the first.
+        self._closing: dict[str, "asyncio.Future[list[int]]"] = {}
+        self._closing_keys: set[str] = set()
         self._urls: dict[str, str] = {}
         self._views: "collections.OrderedDict[str, dict[str, Any]]" = collections.OrderedDict()
         self._swept = False
@@ -1457,6 +1513,10 @@ class AgentBrowsers:
     def open_keys(self) -> list[str]:
         with self._lock:
             return list(self._kills)
+
+    def is_closing(self, key: str) -> bool:
+        with self._lock:
+            return key in self._closing_keys
 
     def pids(self, key: str) -> list[int]:
         """The processes of ``key``'s open browser (the driver, Edge and what
@@ -1554,7 +1614,7 @@ class AgentBrowsers:
 
     async def close(self, key: str, reason: str = "") -> list[int]:
         """Close ``key``'s browser (nothing open: nothing to do)."""
-        if not self.is_open(key):
+        if not self.is_open(key) and not self.is_closing(key):
             return []
         return await asyncio.to_thread(self.close_blocking, key, reason)
 
@@ -1563,7 +1623,11 @@ class AgentBrowsers:
         (``None`` = every one). Bounded: when the browser thread does not
         answer in time, each job is terminated from here. Returns the pids
         ended. Never raises."""
-        keys = self.open_keys() if key is None else ([key] if self.is_open(key) else [])
+        if key is None:
+            with self._lock:
+                keys = list(dict.fromkeys([*self._kills, *self._closing_keys]))
+        else:
+            keys = [key] if self.is_open(key) or self.is_closing(key) else []
         if not keys:
             return []
         if self._host.on_thread():
@@ -1933,7 +1997,15 @@ class AgentBrowsers:
     async def _close(self, key: str, reason: str) -> list[int]:
         """Close ``key``'s browser: the context, then the driver, then the
         job (whatever is left of the tree), then the throwaway folder. An
-        action still running (Stop) fails on its own once its pages go."""
+        action still running (Stop) fails on its own once its pages go.
+
+        v1.376.0 review: ONE close per browser, and every caller waits for
+        it. A Stop during an action closes twice — the cancelled action
+        (``_act``) and the Stop race (``run_action``) — and the second found
+        nothing open and returned AT ONCE, before the first had ended a
+        single process (the doer's Stop pin then saw a live browser 1 run in
+        3). The browser is taken out synchronously here, before any await, so
+        a second caller always finds the close in flight and waits for it."""
         sess = self._sessions.pop(key, None)
         with self._lock:
             kill = self._kills.pop(key, None)
@@ -1943,7 +2015,26 @@ class AgentBrowsers:
             for gone in [k for k in self._checked if k[0] == key]:
                 self._checked.pop(gone, None)
         if sess is None and kill is None:
-            return []
+            running = self._closing.get(key)
+            if running is None:
+                return []
+            return list(await asyncio.shield(running))
+        task = asyncio.ensure_future(self._finish_close(key, reason, sess, kill))
+        self._closing[key] = task
+        with self._lock:
+            self._closing_keys.add(key)
+
+        def _done(done: "asyncio.Future[list[int]]", k: str = key) -> None:
+            if self._closing.get(k) is done:
+                self._closing.pop(k, None)
+                with self._lock:
+                    self._closing_keys.discard(k)
+
+        task.add_done_callback(_done)
+        return list(await asyncio.shield(task))
+
+    async def _finish_close(self, key: str, reason: str, sess: "_Session | None",
+                            kill: "Callable[[], list[int]] | None") -> list[int]:
         pids: list[int] = []
         if sess is not None:
             try:

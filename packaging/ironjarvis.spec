@@ -228,6 +228,23 @@ if os.name == "nt":
 # print "ok": true (daemon/cli.py).
 _collect("playwright")
 hiddenimports += ["pyee", "pyee.asyncio"]
+# v1.376.0 review (item 8): Playwright's own node.exe (88 MiB) is NOT
+# shipped. The desktop app hands the daemon its own Electron
+# (IRONJARVIS_PLAYWRIGHT_NODE, desktop/main.js) and harness/page_browser runs
+# the driver on it with ELECTRON_RUN_AS_NODE=1 — measured: Electron 42.5.0 is
+# Node 24.17.0 (the driver needs >= 18) and drives Edge exactly as node.exe
+# did. Check after a build, with that variable set to the app's exe:
+# `ironjarvis.exe page-browser-check http://127.0.0.1:<port>/` -> "ok": true.
+# It is taken out of the ANALYSED lists below (a.datas / a.binaries): the
+# package's own PyInstaller hook collects the driver as well, so filtering
+# the lists handed to Analysis left it in (measured: node.exe still shipped).
+
+
+def _not_playwright_node(entry) -> bool:
+    """False for Playwright's own node.exe, whatever list it rides in (an
+    Analysis TOC entry is (dest, src, kind); a collect_all one (src, dest))."""
+    names = [str(part).replace("\\", "/").lower() for part in entry[:2]]
+    return not any(n.endswith("playwright/driver/node.exe") for n in names)
 
 # --- Excludes: heavy OPTIONAL deps the daemon must boot WITHOUT --------------
 # All are imported lazily (only when a real key / opt-in feature is used), so
@@ -260,6 +277,10 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# v1.376.0 review (item 8): no node.exe of Playwright's (see above).
+a.datas = [e for e in a.datas if _not_playwright_node(e)]
+a.binaries = [e for e in a.binaries if _not_playwright_node(e)]
 
 pyz = PYZ(a.pure)
 
