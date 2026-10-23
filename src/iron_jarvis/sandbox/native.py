@@ -455,6 +455,43 @@ def _without_own(value: str, own: list[str]) -> "str | None":
     return os.pathsep.join(kept) if any(e.strip() for e in kept) else None
 
 
+_GIT_PAIR_RX = re.compile(r"^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+)$")
+
+
+def _git_config_pairs(source: Any) -> "tuple[dict[str, str], frozenset[str]]":
+    """git's ``GIT_CONFIG_COUNT`` / ``GIT_CONFIG_KEY_n`` / ``GIT_CONFIG_VALUE_n``
+    as ONE unit (v1.377.0 review): all kept when every pair is present and no
+    value (and no key) reads as a secret (:func:`secret_value` — an
+    ``http.extraheader`` with a bearer token, a URL with a password), else
+    none. ``(kept, every such name seen, upper-cased)`` — the caller never
+    judges those names one by one. Never logs a value."""
+    names = {str(k): str(v) for k, v in source.items() if _GIT_PAIR_RX.match(str(k).upper())}
+    seen = frozenset(k.upper() for k in names)
+    if not names:
+        return {}, seen
+    by_upper = {k.upper(): (k, v) for k, v in names.items()}
+    count_raw = by_upper.get("GIT_CONFIG_COUNT", ("", ""))[1]
+    try:
+        count = int(count_raw)
+    except ValueError:
+        return {}, seen
+    if count < 0 or count > 100:
+        return {}, seen
+    keep: dict[str, str] = {by_upper["GIT_CONFIG_COUNT"][0]: count_raw}
+    for i in range(count):
+        key = by_upper.get(f"GIT_CONFIG_KEY_{i}")
+        value = by_upper.get(f"GIT_CONFIG_VALUE_{i}")
+        if key is None or value is None:
+            return {}, seen
+        if secret_value(without_url_credentials(key[1])) or secret_value(value[1]):
+            return {}, seen
+        if without_url_credentials(value[1]) != value[1]:
+            return {}, seen
+        keep[key[0]] = key[1]
+        keep[value[0]] = value[1]
+    return keep, seen
+
+
 def _user_path(path: str) -> str:
     own = _own_bin_dirs()
     if not own:
@@ -489,7 +526,14 @@ def build_env(base: "dict[str, str] | None" = None) -> dict[str, str]:
     from ..git.integration import _ELSEWHERE_VARS
 
     source = os.environ if base is None else base
-    env = {str(k): str(v) for k, v in source.items() if not secret_name(str(k))}
+    # git's own configuration in the environment (GIT_CONFIG_COUNT + KEY_n /
+    # VALUE_n) is ONE unit, judged before the name rule: GIT_CONFIG_KEY_n
+    # holds the word KEY, and dropping it while COUNT stays makes git refuse
+    # EVERY command ("missing config key") — found by the review's live run.
+    git_pairs, git_names = _git_config_pairs(source)
+    env = {str(k): str(v) for k, v in source.items()
+           if str(k).upper() not in git_names and not secret_name(str(k))}
+    env.update(git_pairs)
     # v1.377.0 review: a secret in a VALUE whose name says nothing -- a URL's
     # sign-in removed (the address kept), any other credential shape drops
     # the variable -- and a value that points into this app's own folders

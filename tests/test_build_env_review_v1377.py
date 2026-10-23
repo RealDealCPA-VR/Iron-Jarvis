@@ -368,3 +368,39 @@ async def test_a_chat_harness_turns_helper_is_told_and_given_the_scrubbed_enviro
     assert helper_shell, "the helper was not offered its shell"
     assert "user's own PATH" not in helper_shell[0], "a chat helper was told it has the user's tools"
     assert "minimal scrubbed PATH" in helper_shell[0]
+
+
+# --------------------------------------------------------------------------- #
+# git's configuration in the environment: GIT_CONFIG_COUNT + KEY_n / VALUE_n
+# (found by the review's LIVE run: every git command failed)
+# --------------------------------------------------------------------------- #
+
+
+def test_git_config_pairs_in_the_environment_are_kept_together():
+    """``GIT_CONFIG_KEY_0`` holds the word KEY, so the doer's rule dropped it
+    and kept ``GIT_CONFIG_COUNT`` — and git then refuses EVERY command
+    ("missing config key GIT_CONFIG_KEY_0"). The pairs are one unit: all
+    kept, or (when any value is a secret) all dropped."""
+    pairs = {"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "alias.st", "GIT_CONFIG_VALUE_0": "status -sb",
+             "GIT_CONFIG_KEY_1": "core.editor", "GIT_CONFIG_VALUE_1": "code --wait"}
+    env = N.build_env(dict(pairs))
+    wrong = sorted(n for n, v in pairs.items() if env.get(n) != v)
+    assert wrong == [], f"git's own config pairs were broken (names only): {wrong}"
+    secret = {**pairs, "GIT_CONFIG_KEY_1": "http.extraheader", "GIT_CONFIG_VALUE_1": f"Authorization: Bearer {FAKE}"}
+    env = N.build_env(dict(secret))
+    left = sorted(n for n in secret if n in env)
+    assert left == [], f"a pair set holding a secret must go as a whole (names only): {left}"
+
+
+@pytest.mark.skipif(__import__("shutil").which("git") is None, reason="git is not installed")
+async def test_git_runs_in_a_build_session_whose_environment_sets_git_config_pairs(monkeypatch, tmp_path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=str(repo), check=True, capture_output=True)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "alias.st")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "status --short")
+    res = await SandboxedShellTool().execute({"command": "git st"}, _ctx(repo, "build:review-gitcfg"))
+    assert res.ok, "git failed in a Build session with git config pairs in the environment"
