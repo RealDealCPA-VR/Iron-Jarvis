@@ -1897,6 +1897,51 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Claude Code's `/` commands, and sessions with no folder (v1.379.0)
+
+**Type `/name` and your words, then press Enter**, in a Build session's box
+(IJ harness) — the way Claude Code works. `/pixio-skill draw a cat` runs that
+skill with "draw a cat"; a skill on its own (`/research`) is a message too.
+The `/` list offers:
+
+- **Your skills**, the ones Claude Code and Codex use on this PC (each row
+  says where it comes from: "from Claude Code", "from Codex", "yours", "from
+  <plugin>"), and the folder's own.
+- **Claude Code's custom commands** — your own (`~/.claude/commands`), the
+  project's (`.claude/commands` in the folder) and those of plugins you have
+  installed and switched on (never a plugin you only browsed). A command's
+  `$ARGUMENTS`, `$0`, `$1` … (`$0` is the first word, as in Claude Code) and
+  named arguments are filled from what you type; `@file` lines attach that
+  file when it is inside the session's folder. The app never runs a command's
+  shell lines by itself: the agent is asked to run them with its own terminal,
+  under your usual approval setting. A project's commands come from whatever
+  folder you opened, so they are checked for text that tries to steer the
+  agent, and you are told if anything was held back.
+- **Claude Code's own commands**, where the harness has the same thing:
+  `/compact` (words after it say what to keep), `/plan` (with words: plan
+  first, then those words), `/rewind`, `/model` (with a name: that model),
+  `/clear` (also `/new`: a new session on this folder; this one stays in the
+  list), `/resume` (find another session), `/usage` (also `/cost`: what this
+  session has used) and `/init` (asks the agent to write a CLAUDE.md for the
+  folder).
+
+Enter on a half-typed name picks the highlighted row (an exact name comes
+first); Tab puts the name in the box so you can type its words first. A
+`/word` that is not a command or skill — a path like `/etc/hosts` — is sent
+as ordinary text.
+
+**A session does not need a folder.** On New session the folder is
+optional: press **Start with no folder** (or Start with the box empty). The
+session keeps its files in a new folder of its own in your chat files folder
+(Documents\Iron Jarvis), named by the date and your first words and made
+only when you send the first message. The header shows that folder with
+**Open**; these sessions sit together under **No folder** in the left pane.
+Archiving or deleting the session removes its folder only when it is empty
+and no other session uses it — a folder holding files is kept. With no folder
+there is no repository, so the branch, commit and pull-request buttons are
+not offered. Attaching a folder to a session that started without one is not
+possible yet.
+
 ## The IJ harness, measured (v1.378.0)
 
 The IJ harness was measured against Claude Code and Codex on the same 30

@@ -3569,6 +3569,98 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **Claude Code's `/` in the IJ harness: a typed `/name words` RUNS it;
+  Claude Code's own command files are read, never executed; a Build session
+  needs NO folder** (v1.379.0; the user: "I want to be able to use the same
+  / commands i do here there in the IJ harness" and "it should not require
+  that I am in a specific folder"; a doer + a reviewer that found 16 more
+  defects, each red first and mutation-checked). WHY IT FAILED: the harness
+  read all of `GET /skills`, but `lib/slash.slashTokenAt` ends the token at
+  the first space, so `/pixio-skill draw a cat` + Enter went as plain text.
+  TYPED: a message STARTING with `/<known name>` invokes it (`BuildTurnBody`
+  `skill`/`folder_skill` + the words; a bare skill = "Follow the X skill.";
+  a custom command = `command` + words); an unknown `/word` (`/etc/hosts`)
+  is text; Enter on a half-typed name picks the highlighted row, an EXACT
+  name leads (`/review` once ran `review-pr`); Tab puts "/name "; a typed
+  command queued while a reply runs waits in the queue (never a note).
+  COMMANDS (`harness/claude_commands.py`, `GET /build/sessions/{id}/commands`
+  — name/description/argument-hint/source, NEVER a body): user
+  (`claude_dir()/commands`, honouring `CLAUDE_CONFIG_DIR` — and
+  `skills.framework.claude_dir()` now does too, unchanged when unset),
+  project (`.claude/commands` — a worktree session reads the worktree's
+  copy, then the picked folder's, like folder rules), installed+enabled
+  plugins and the claude.ai `plugins/synced/<org>_<account>` folder of the
+  SIGNED-IN account only (`signed_in_bucket` from `.claude.json`
+  `oauthAccount`; the `CLAUDE_CODE_*_UUID` env vars are IGNORED — in a daemon
+  started from a Claude Code session they are the parent's; no account →
+  every folder); marketplace catalogs never; Claude Code's own `.trash`
+  folders (`plugins/.trash`, `skills/.trash`) skipped by the SKILL registry
+  too (chat as well: the two cowork skills now resolve to the installed copy;
+  same 43 names). A command whose name a skill also has is NOT listed —
+  typing it runs the skill (Claude Code's rule). EXPANSION (Claude Code's
+  way, read from its docs AND binary): `$ARGUMENTS`, `$N` ZERO-based (`$0` =
+  first word; docs verbatim), `$ARGUMENTS[N]` (a missing one stays as
+  written), named arguments (missing → ""), `\$`, "ARGUMENTS: …" appended when
+  nothing was filled; the user's words are BRACKETED while filling, so a
+  typed `@secret.txt` or `` !`del` `` never attaches a file or adds the shell
+  sentence — only the command's own text names files (`@$0` still reads the
+  file the words name); `@path` (≤ 32 looked up) goes through
+  `sessions.folder_files`, which now REFUSES network spellings (`\\host\…`,
+  `//host/…`, `\\?\UNC\…`) and device paths other than `\\?\C:\` BEFORE
+  touching the disk — `fs_policy._canonical` on a UNC path opened an SMB
+  connection (a sign-in hash leak to that host from a repository's command
+  file) — shares allowed only when the session's own folder is on one;
+  `!`…`` / ```` ```! ```` lines are NEVER run by the app (spied: no
+  `core/procs` / `subprocess` call) — one sentence asks the model to run them
+  with its shell tool, under the session's posture; `allowed-tools` grants
+  nothing (proven through the real `invoke`), `model` is ignored (the hold);
+  project + plugin command text is promptguard-scanned BEFORE the words are
+  filled (a flagged one reaches the model as `[BLOCKED…]` + one
+  `context.blocked` naming the command), personal commands are the user's
+  words. Arguments split by `_split_args`: a backslash is a letter except
+  before a quote (POSIX `shlex` ate `C:\Users\x`) — a departure from Claude
+  Code's bash parse (`a\ b`). The question shows what was typed; later turns'
+  history reads the expansion (`commandText`). BUILT-INS under Claude Code's
+  names: `/compact [focus]` (`POST …/compact {focus}` → `compact.focus_line`;
+  no words = byte-identical prompt), `/plan [words]`, `/rewind`, `/model
+  [name]` (`modelByName`: the one available model by that name, the
+  session's provider breaks a tie, else the menu), `/clear` (`/reset`,
+  `/new`: a new session on the same folder), `/resume` (`/continue`),
+  `/usage` (`/cost`, `/stats`), `/init` (folder sessions only, an ordinary
+  message). The harness's own commands still win over a user's skill of the
+  same name (app controls). NO FOLDER: `POST /build/sessions` takes no
+  folder (`setup.no_folder`, `_clean_setup` keeps it); at the FIRST turn the
+  session gets `<chat_files_root>/<YYYY-MM-DD> <first words>` (a command's
+  first message: "<command> <words>") through `documents/workfolder.
+  make_chat_workfolder` + `folder_title` (strips `<>:"/\|?*`, controls,
+  trailing dots/spaces, ≤ 60; same name → "(2)"; a race → the next free
+  name); a first message that never starts takes it back while empty; a
+  folder the user deleted is made AGAIN at the same place (`_make_again`)
+  unless its parent is gone (an unplugged drive is refused in words); archive
+  / delete remove it only when empty (a hidden file or subfolder keeps it),
+  inside the chat files folder (a junction pointing out is never followed)
+  and no other session — archived ones count — uses it (`kept_folder`);
+  Branch from here SHARES the origin's folder; git routes answer "This
+  session has no folder of its own, so it is not in a repository and has no
+  branch."; library reflection is skipped (a paid call on the plan); `@`
+  lists that folder. New session in front of a folderless session opens
+  folderless (never the Terminals folder). Left pane: one "No folder" group
+  with its own +; below xl the pane scrolls (the New session form drew over
+  the next session at 390 px). OPEN: a repository command's shell lines run
+  WITHOUT a card under approve-for-me / yolo (the model runs them under the
+  posture — a product decision for the user); managed-settings
+  `enabledPlugins` (HKLM policy / Program Files drop-ins) not read; attaching
+  a folder later; `/clear <name>` ignores the name; Rewind restores a
+  command's own @files as chips; a parent Claude Code session's
+  `CLAUDE_CODE_ORGANIZATION_UUID`/`_ACCOUNT_UUID` are not in
+  `claude_markers` (a dev daemon passes them to panes); not driven in the
+  packaged app. Pins: `tests/test_build_slash_commands_v1379.py`,
+  `tests/test_build_no_folder_v1379.py`,
+  `tests/test_build_slash_nofolder_review_v1379.py`,
+  `dashboard/__tests__/ij-harness-{slash-commands,no-folder,
+  slash-nofolder-review,new-folder-nofolder-review}-v1379.test.tsx`; four
+  `ij-harness-slash-at-v1373` pins moved on purpose (new command rows).
+
 - **The IJ harness is MEASURED again: a benchmark turn runs AS a Build
   session; the walkthrough's gaps are written down** (v1.378.0, IJ harness
   part 2 Phase 7; a doer + a reviewer that found 5 real defects, each red
