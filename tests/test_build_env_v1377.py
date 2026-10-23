@@ -348,6 +348,38 @@ async def test_a_build_turns_model_is_told_the_users_tools_and_a_chat_harness_tu
     assert "user's own PATH" not in spec["description"]
 
 
+async def test_local_only_still_cards_every_command_in_a_build_session(app, tmp_path, planted):
+    """Local only keeps its always-ask for the shell and the program tools in
+    a Build session — the user's PATH does not change who is asked: in YOLO a
+    local-only turn's ``shell`` and ``process_start`` each card ("Allow once"
+    only), and a denied one never runs."""
+    from tests.test_build_plan_ask_v1367 import _finish, _start
+    from tests.test_build_sessions_v1367 import turn_frames, until
+    from tests.test_chat_turn_stop_v1241 import _asgi_post
+
+    work = tmp_path / "work"
+    work.mkdir()
+    sid = new_session(app, work, provider="mock", model="mock", approval_mode="yolo", local_only=True)["id"]
+    wire(app, Script([
+        [ToolCall(id="s1", name="shell", arguments={"command": _dump_cmd("lo-shell.txt")})],
+        [ToolCall(id="p1", name="process_start", arguments={"command": _dump_cmd("lo-proc.txt"),
+                                                            "until_exit": True})],
+        "Done.",
+    ], who=("mock", "mock")))
+    drop, task = await _start(app, sid, "dump the environment", "env-lo-1")
+    cards = []
+    for n in (1, 2):
+        got = await until(lambda: [d for e, d in turn_frames(app, "env-lo-1") if e == "approval"][n - 1:n])
+        assert got, f"card {n} never came"
+        card = got[0]
+        cards.append(card)
+        assert (await _asgi_post(app, f"/chat/approvals/{card['id']}", {"decision": "deny"}))[0] == 200
+    await _finish(app, "env-lo-1", drop, task)
+    assert [c["tool"] for c in cards] == ["shell", "process_start"]
+    assert all(c["once_only"] is True for c in cards), "Local only offers Allow once only"
+    assert not (work / "lo-shell.txt").exists() and not (work / "lo-proc.txt").exists()
+
+
 async def test_a_real_helper_of_a_build_turn_is_told_and_given_the_users_tools(app, tmp_path, planted):
     """A helper started by a Build turn (Claude Code's ``Task`` → ``delegate``)
     runs its OWN ``shell`` with the Build environment — read off the file its

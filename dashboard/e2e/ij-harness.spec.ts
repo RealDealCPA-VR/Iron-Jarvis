@@ -29,10 +29,17 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  *  9. on the demo model, a folder skill picked with "/" and a file picked
  *     with "@" ride a real turn: the question the daemon saves names both.
  * 10. (v1.376.0) the model menu with Iron-Proxy accounts (stubbed): one
- *     group per company, one entry per account, a signed-out one not
- *     pickable; at 390 px (a sheet) and at 1280 px it stays in the window,
- *     and a pick under another account sends the account and the model in
- *     one request — both chips then name it.
+ *     group per company, one entry per account, a turned-off one not
+ *     pickable (v1.377.0: a signed-out one IS pickable — the chip's rule and
+ *     the daemon's); at 390 px (a sheet) and at 1280 px it stays in the
+ *     window, and a pick under another account sends the account and the
+ *     model in one request — both chips then name it.
+ * 11. (v1.377.0, part 2 Phase 6) in the real browser with the app's real
+ *     palette mounted: Ctrl+K in the harness opens the MODEL menu and never
+ *     the palette; with the focus on the app's own controls it is the
+ *     palette's; Ctrl+L puts the cursor in the box; Ctrl+N opens New
+ *     session; the left pane's search narrows the list; Branch from here
+ *     opens a new session holding the conversation up to that reply.
  */
 
 const DAEMON = "http://127.0.0.1:8807";
@@ -340,6 +347,9 @@ async function modelMenuAccounts(page: Page, phone: boolean) {
     usage: { percent: 38, window: "7 days", window_mins: 10080, resets_at: "2030-01-01T16:12:00Z" },
   });
   const SIDE = acct({ id: "side", name: "Side", plan: "pro", plan_label: "Pro", status: "needs_sign_in" });
+  // v1.377.0: a TURNED-OFF account is the one the menu cannot pick (the
+  // daemon refuses it); a signed-out one can be picked, as in the chip.
+  const SHUT = acct({ id: "shut", name: "Shut", status: "off" });
   const models = [
     { provider: "claude-cli", model: "subscription", available: true, kind: "cli", inherited_from: null },
     { provider: "claude-cli", model: "claude-opus-4-8", label: "Opus 4.8", available: true, kind: "cli", inherited_from: null },
@@ -355,7 +365,7 @@ async function modelMenuAccounts(page: Page, phone: boolean) {
   await page.route(`${DAEMON}/build/accounts`, (route) =>
     stub(route, () => ({
       body: JSON.stringify({
-        claude: [WORK, PERSONAL, SIDE],
+        claude: [WORK, PERSONAL, SIDE, SHUT],
         codex: [],
         iron_proxy: { enabled: true, running: true, needs_update: false, note: "" },
       }),
@@ -413,7 +423,8 @@ async function modelMenuAccounts(page: Page, phone: boolean) {
   const menu = page.getByTestId("model-menu");
   await expect(menu.getByTestId("model-account-personal")).toBeVisible({ timeout: 20_000 });
   await expect(menu.locator('[data-company="claude"]')).toContainText("Claude (Anthropic)");
-  await expect(menu.getByTestId("model-account-side")).toBeDisabled();
+  await expect(menu.getByTestId("model-account-side")).toBeEnabled();
+  await expect(menu.getByTestId("model-account-shut")).toBeDisabled();
   await expect(menu.getByTestId("model-account-work")).toHaveAttribute("data-current", "true");
   // Review: Escape on a row (a phone's sheet is all rows) closes the menu
   // and hands focus back to the chip; the chip opens it again.
@@ -699,4 +710,68 @@ test("/ and @ ride a real turn: the saved question names the folder skill and th
   await expect(page.getByTestId("harness-sent-file").last()).toContainText("notes-for-at.md");
   await expect(page.getByTestId("harness-skill-chip")).toHaveCount(0);
   await expect(page.getByTestId("harness-at-chip")).toHaveCount(0);
+});
+
+// v1.377.0 (part 2, Phase 6) in the real browser, with the app's own command
+// palette mounted: the harness keys work INSIDE the IJ harness only, the left
+// pane's search narrows the list, and Branch from here opens a new session.
+test("Phase 6: the keys inside the harness only, the search, and Branch from here", async ({ page }) => {
+  test.skip(!sessionId, "needs the session from the first test");
+  await page.goto(`/terminals?session=${sessionId}`);
+  await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByTestId("harness-reply").first()).toBeVisible({ timeout: 30_000 });
+  const box = page.getByTestId("harness-input");
+  const palette = page.getByPlaceholder("Search anything — pages, skills, chats, or just ask…");
+
+  // Ctrl+K in the box: the MODEL menu, never the palette.
+  await box.click();
+  await page.keyboard.press("Control+k");
+  await expect(page.getByTestId("model-filter")).toBeVisible({ timeout: 10_000 });
+  await expect(palette).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("model-filter")).toHaveCount(0);
+
+  // Ctrl+K with the focus on the app's own control (the title bar's search):
+  // the palette's, as everywhere else in the app.
+  await page.getByLabel("Search Iron Jarvis (Ctrl K)").focus();
+  await page.keyboard.press("Control+k");
+  await expect(palette).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId("model-filter")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(palette).toHaveCount(0);
+
+  // Ctrl+L from the session's title: the cursor goes to the box.
+  await page.getByTestId("harness-title").focus();
+  await page.keyboard.press("Control+l");
+  await expect(box).toBeFocused();
+
+  // The search narrows the list by the session's title; Escape clears it.
+  const search = page.getByTestId("harness-session-search");
+  await expect(search).toBeVisible();
+  await search.fill("zzz-no-such-session");
+  await expect(page.getByTestId("harness-no-session-match")).toBeVisible();
+  await search.press("Escape");
+  await expect(page.getByTestId(`harness-session-row-${sessionId}`)).toBeVisible();
+
+  // Branch from the first reply: a NEW session opens with the conversation up
+  // to it; this session is untouched.
+  const before = await page.getByTestId("harness-reply").count();
+  const first = page.getByTestId("harness-reply").first();
+  await first.hover();
+  await first.getByTestId("harness-branch-reply").click();
+  await expect(page.getByTestId("harness-branched-from")).toBeVisible({ timeout: 30_000 });
+  const branched = (await page.getByTestId("harness-session").getAttribute("data-session")) ?? "";
+  expect(branched).not.toBe(sessionId);
+  await expect(page.getByTestId("harness-reply")).toHaveCount(1);
+  await expect(page).toHaveURL(new RegExp(`session=${branched}`));
+  // Back to the original from the "Branched from" line: all its replies.
+  await page.getByTestId("harness-branched-from").click();
+  await expect(page.getByTestId("harness-session")).toHaveAttribute("data-session", sessionId, { timeout: 30_000 });
+  await expect(page.getByTestId("harness-reply")).toHaveCount(before, { timeout: 30_000 });
+
+  // Ctrl+N with the focus in the harness: New session opens, ready to type.
+  await box.click();
+  await page.keyboard.press("Control+n");
+  await expect(page.getByTestId("harness-new-session-form")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId("harness-new-folder")).toBeFocused();
 });
