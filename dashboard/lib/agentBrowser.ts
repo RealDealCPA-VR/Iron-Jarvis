@@ -89,6 +89,13 @@ export function closedWords(v: AgentBrowserView): string {
       return "Its browser closed when Iron Jarvis stopped.";
     case "timed out":
       return "Its browser stopped answering, so it was closed.";
+    // v1.376.0 review: Edge went away under it; the cap of four; Local only.
+    case "crashed":
+      return "Its browser stopped on its own (Edge was closed or crashed).";
+    case "room":
+      return "Its browser closed to make room for another session's (at most four are open at once).";
+    case "local only changed":
+      return "Its browser closed when Local only changed.";
     default:
       return "Its browser is closed.";
   }

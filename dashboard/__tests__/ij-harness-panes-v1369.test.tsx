@@ -17,7 +17,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const api = vi.hoisted(() => {
   class ApiError extends Error {
@@ -27,14 +27,16 @@ const api = vi.hoisted(() => {
       this.status = status;
     }
   }
-  return { ApiError, gets: {} as Record<string, unknown>, posts: [] as [string, unknown][] };
+  return { ApiError, gets: {} as Record<string, unknown>, posts: [] as [string, unknown][], calls: [] as string[] };
 });
 vi.mock("@/lib/api", () => ({
   ApiError: api.ApiError,
   API_BASE: "http://d",
   ijToken: () => "",
-  get: (p: string) =>
-    p in api.gets ? Promise.resolve(api.gets[p]) : Promise.reject(new api.ApiError(`unmocked ${p}`, 404)),
+  get: (p: string) => {
+    api.calls.push(p);
+    return p in api.gets ? Promise.resolve(api.gets[p]) : Promise.reject(new api.ApiError(`unmocked ${p}`, 404));
+  },
   post: (p: string, b?: unknown) => {
     api.posts.push([p, b]);
     if (p === "/chat/changes") return Promise.resolve(api.gets["POST /chat/changes"] ?? { changes: [] });
@@ -127,6 +129,7 @@ function renderPanes(v: BuildSessionView, t = terminalApi(), extra: Partial<Reac
 beforeEach(() => {
   api.gets = { "/browser/status": { paired: false } };
   api.posts = [];
+  api.calls = [];
   localStorage.clear();
 });
 afterEach(() => cleanup());
@@ -270,8 +273,13 @@ describe("the browser pane", () => {
     expect(screen.queryByTestId("preview-frame")).toBeNull();
     fireEvent.click(screen.getByTestId("preview-seen"));
     expect(screen.getByTestId("preview-frame")).toHaveAttribute("src", "http://localhost:5173/");
-    // Not paired: said, with the way to set it up.
-    expect(await screen.findByTestId("preview-browser")).toHaveTextContent("No browser is paired");
+    // Not paired: nothing to say (v1.376.0 review: a Build session never uses
+    // the paired browser, so there is nothing to set up for it).
+    await waitFor(() => expect(api.calls.some((c) => c.includes("/browser/status"))).toBe(true));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30)); // the answer lands and renders
+    });
+    expect(screen.queryByTestId("preview-browser")).toBeNull();
   });
 
   it("opens only a page on this PC or the user's network, and names a paired browser", async () => {
@@ -285,7 +293,11 @@ describe("the browser pane", () => {
     fireEvent.change(screen.getByTestId("preview-address"), { target: { value: "http://192.168.1.20:8080" } });
     fireEvent.click(screen.getByTestId("preview-open"));
     expect(screen.getByTestId("preview-frame")).toHaveAttribute("src", "http://192.168.1.20:8080");
-    expect(await screen.findByTestId("preview-browser")).toHaveTextContent("Microsoft Edge 153");
+    const paired = await screen.findByTestId("preview-browser");
+    expect(paired).toHaveTextContent("Microsoft Edge 153");
+    // v1.376.0 review: what is TRUE in a Build session — it does not use it.
+    expect(paired).toHaveTextContent("A Build session does not use it");
+    expect(paired).not.toHaveTextContent("browse the web");
   });
 });
 

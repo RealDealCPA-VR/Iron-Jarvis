@@ -14,11 +14,17 @@
  * address on this PC or the user's own network opens here (isPreviewAddress);
  * a page that refuses to be framed shows blank, so "Open in a new tab" is
  * always beside it. The paired browser is read from GET /browser/status (a
- * route documented never to fail); when nothing is paired it says so.
+ * route documented never to fail).
+ *
+ * v1.376.0 review: a Build session NEVER uses the paired browser (its tools
+ * are not armed in a harness turn — the agent works in its own invisible
+ * Edge, shown above). The old line said a paired browser let "the session
+ * browse the web with it", and that an unpaired one meant it could not —
+ * both untrue here. A paired browser is still named, with what is true;
+ * nothing is said when none is paired (there is nothing to set up for Build).
  */
 
 import { useEffect, useState, type FormEvent } from "react";
-import Link from "next/link";
 import { ExternalLink, Globe, MousePointerClick, RefreshCw } from "lucide-react";
 import { get } from "@/lib/api";
 import { isPreviewAddress } from "@/lib/buildSessions";
@@ -300,21 +306,13 @@ export function BrowserPreview({
           ) : null}
         </div>
       )}
-      {browser ? (
+      {browser?.paired ? (
         <p data-testid="preview-browser" className="flex items-center gap-1.5 border-t hairline pt-2 text-[12px] text-zinc-500">
           <Globe size={12} aria-hidden className="shrink-0" />
-          {browser.paired ? (
-            <span>
-              Your browser{browser.name ? ` (${browser.name})` : ""} is paired: the session can browse the web with it.
-            </span>
-          ) : (
-            <span>
-              No browser is paired, so the session cannot browse the web.{" "}
-              <Link href="/computeruse" className="text-accent-soft hover:underline">
-                Set up Your browser
-              </Link>
-            </span>
-          )}
+          <span className="min-w-0">
+            Your browser{browser.name ? ` (${browser.name})` : ""} is paired with Iron Jarvis. A Build session does
+            not use it: the agent opens your dev server in its own browser.
+          </span>
         </p>
       ) : null}
     </div>
