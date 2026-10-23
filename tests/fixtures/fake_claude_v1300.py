@@ -14,7 +14,9 @@ a loopback fake upstream, or at an https URL behind a loopback fake proxy)
 exactly like native does.
 
 Scenarios: text (default), tools, thinking, auth, api_error, hang, silent,
-mismatch, unknown_tool, no_ack, relay, relay_error, max_tokens, budget.
+mismatch, unknown_tool, no_ack, relay, relay_error, max_tokens, budget,
+relay_refusal (v1.378.0: the relay's upstream declined; native says so in
+its own error words, FAKE_CLAUDE_STREAMED as for relay_error).
 Knobs: FAKE_CLAUDE_CALLS (JSON [[native_name, input], ...] for ``tools``),
 FAKE_CLAUDE_COST ("none" | "nan" | a number), FAKE_CLAUDE_PIDS (a path: the
 fake writes "<pid> <grandchild pid>" there in ``hang``), FAKE_CLAUDE_AUTH_TEXT
@@ -170,7 +172,7 @@ def main() -> int:
               "result": "Reached the --max-budget-usd ceiling"})
         return 1
     scenario = SCENARIO
-    if SCENARIO in ("relay", "relay_error", "relay_auto"):
+    if SCENARIO in ("relay", "relay_error", "relay_auto", "relay_refusal"):
         url = os.environ["ANTHROPIC_BASE_URL"] + "/v1/messages"
         statuses = []
         headers = {"Content-Type": "application/json"}
@@ -197,6 +199,21 @@ def main() -> int:
         text = os.environ.get("FAKE_CLAUDE_NATIVE_TEXT") or "API Error: Connection error."
         emit({"type": "assistant", "error": os.environ.get("FAKE_CLAUDE_NATIVE_ERROR") or "unknown",
               "is_api_error_message": True,
+              "message": {"role": "assistant", "model": "<synthetic>",
+                          "content": [{"type": "text", "text": text}], "stop_reason": "stop_sequence"}})
+        emit({"type": "result", "subtype": "success", "is_error": True, "num_turns": 1, "result": text})
+        return 1
+    if scenario == "relay_refusal":
+        # v1.378.0: the upstream (the test's fake Anthropic) answered a 200
+        # whose stop_reason is "refusal". Native renders it as an error of its
+        # own; Iron Jarvis must read the RELAY's capture (stop_reason,
+        # stop_details), never these words. FAKE_CLAUDE_STREAMED: the text
+        # native had streamed before the refusal (default none).
+        streamed = os.environ.get("FAKE_CLAUDE_STREAMED", "")
+        if streamed:
+            emit(delta("text_delta", "text", streamed))
+        text = "API Error: Claude Code is unable to respond to this request."
+        emit({"type": "assistant", "error": "unknown", "is_api_error_message": True,
               "message": {"role": "assistant", "model": "<synthetic>",
                           "content": [{"type": "text", "text": text}], "stop_reason": "stop_sequence"}})
         emit({"type": "result", "subtype": "success", "is_error": True, "num_turns": 1, "result": text})

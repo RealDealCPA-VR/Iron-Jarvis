@@ -41,7 +41,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..base import ProviderError
+from ..base import ProviderError, ProviderRefusal
 
 PROVIDER = "codex-cli"
 BINARY = "codex"
@@ -613,6 +613,15 @@ def typed(err: ProviderError, kind: str, *, partial: bool = False) -> ProviderEr
     return err
 
 
+#: v1.378.0: the CodexErrorInfo variants that are OpenAI's POLICY CHECK
+#: declining the turn (Codex 0.157.0's schema), and the topic each names
+#: ("" = none given — never guessed).
+_POLICY_VARIANTS: dict[str, str] = {
+    "cyberPolicy": "cyber",
+    "misalignmentPolicyViolation": "",
+}
+
+
 def _error_info(error: Any) -> tuple[str, int | None]:
     """``(variant, http status)`` of a ``TurnError.codexErrorInfo``."""
     info = error.get("codexErrorInfo") if isinstance(error, dict) else None
@@ -686,6 +695,19 @@ def turn_failure(
             ),
             signal={"status": 429, "text": said},
         )
+    if variant in _POLICY_VARIANTS:
+        # v1.378.0: OpenAI's policy check declined the turn — a typed refusal
+        # (never retried, never moved to another provider), not "Codex could
+        # not finish". The two variants are Codex 0.157.0's own
+        # (`codex app-server generate-json-schema`, CodexErrorInfo); only
+        # cyberPolicy names a topic.
+        return TurnFailure(ProviderRefusal(
+            f"{PROVIDER}: OpenAI's policy check declined the turn ({variant}). Codex said: {said}",
+            provider=PROVIDER,
+            category=_POLICY_VARIANTS[variant],
+            explanation=_said(error),
+            partial=emitted,
+        ))
     if variant == "contextWindowExceeded":
         return TurnFailure(ProviderError(
             f"{PROVIDER}: the conversation exceeds the model's context window. Codex said: {said}",

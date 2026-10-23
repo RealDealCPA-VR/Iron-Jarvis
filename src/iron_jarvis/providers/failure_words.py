@@ -59,6 +59,10 @@ from typing import Any
 #: it and keeps the chat's sentence byte for byte.
 SURFACE_CHAT = "chat"
 SURFACE_RUN = "run"
+#: v1.378.0: a Build session's turn (the IJ harness). Every sentence reads as
+#: the chat's except the ONE whose way out differs: a safety refusal is undone
+#: in a session with Rewind, in a chat by editing an earlier message.
+SURFACE_BUILD = "build"
 _SURFACE: ContextVar[str] = ContextVar("ij_failure_surface", default=SURFACE_CHAT)
 #: Where a run's model is chosen (the default model lives in Settings).
 RUN_MODEL_PLACE = "Settings"
@@ -75,10 +79,28 @@ def run_surface() -> Iterator[None]:
         _SURFACE.reset(token)
 
 
-def current_surface() -> str:
-    """"run" inside :func:`run_surface`, else "chat". Never raises."""
+def set_build_surface() -> Any:
+    """Word failures as a Build session's from here (v1.378.0); returns the
+    token for :func:`reset_surface`. ``routes/build.start_build_turn`` arms it
+    while the turn's driver task is created (the task copies the context,
+    like the account pin)."""
+    return _SURFACE.set(SURFACE_BUILD)
+
+
+def reset_surface(token: Any) -> None:
+    """Undo :func:`set_build_surface`. Never raises."""
     try:
-        return SURFACE_RUN if _SURFACE.get() == SURFACE_RUN else SURFACE_CHAT
+        _SURFACE.reset(token)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def current_surface() -> str:
+    """"run" inside :func:`run_surface`, "build" inside a Build turn
+    (:func:`set_build_surface`), else "chat". Never raises."""
+    try:
+        value = _SURFACE.get()
+        return value if value in (SURFACE_RUN, SURFACE_BUILD) else SURFACE_CHAT
     except Exception:  # noqa: BLE001
         return SURFACE_CHAT
 
@@ -123,10 +145,31 @@ SIGN_IN_CLIS: frozenset[str] = frozenset({"claude-cli", "codex-cli"})
 #: The words when the provider is unknown.
 _SOMEONE = "the AI service"
 
-#: The kinds ``ModelRouter._unavailable_error`` stamps on its refusals.
+#: The kinds ``ModelRouter._unavailable_error`` stamps on its refusals — and
+#: (v1.378.0) ``"refusal"``, a provider's safety check declining the
+#: conversation (``adapters.base.ProviderRefusal``).
 REFUSAL_KINDS: frozenset[str] = frozenset(
-    {"signed_out", "answered_error", "unreachable", "timeout", "interrupted", "cooldown"}
+    {"signed_out", "answered_error", "unreachable", "timeout", "interrupted", "cooldown", "refusal"}
 )
+
+#: v1.378.0: a vendor's refusal CATEGORY in plain words, for the ones whose
+#: meaning is plain (Anthropic's ``stop_details.category``, Codex's
+#: ``cyberPolicy``). Any other category — or none — is left out of the
+#: sentence (it stays in the technical fold); a topic is never guessed.
+REFUSAL_TOPICS: dict[str, str] = {
+    "cyber": "computer security",
+    "bio": "biology",
+    "military_weapons": "weapons",
+    "general_harms": "harmful content",
+}
+
+#: The way out of a declined conversation, per surface (v1.378.0). Retry can
+#: never help (the same conversation is judged again), so none says "Retry".
+REFUSAL_WAY_OUT: dict[str, str] = {
+    SURFACE_CHAT: "Start a new chat, or edit an earlier message to go back before the part it flagged.",
+    SURFACE_BUILD: "Rewind to before the message that set it off, or start a new session.",
+    SURFACE_RUN: "Change the task, then run it again.",
+}
 
 #: ``"<provider> API error <status>: <detail>"`` — the one message shape
 #: ``adapters.base.provider_error_from_response`` builds. The provider may
@@ -367,6 +410,54 @@ def _is_local(provider: str) -> bool:
         return False
 
 
+def refusal_words(
+    exc: BaseException | None, *, name: str = "", surface: str | None = None
+) -> "tuple[str, str]":
+    """``(title, fix)`` for a provider's SAFETY REFUSAL (v1.378.0,
+    ``adapters.base.ProviderRefusal``) — one sentence the user can act on,
+    never "Press Retry" (the same conversation is judged again). Read off the
+    refusal's typed fields: ``partial`` (some of the answer arrived),
+    ``whole_conversation`` (the vendor judges the whole conversation — every
+    new message in it is declined too) and ``category`` (said in plain words
+    only when :data:`REFUSAL_TOPICS` knows it). The way out depends on WHERE
+    it is read (:data:`REFUSAL_WAY_OUT`). Never raises."""
+    try:
+        from .adapters.base import refusal_of
+
+        refused = refusal_of(exc)
+    except Exception:  # noqa: BLE001 — wording only
+        refused = None
+    where = surface or current_surface()
+    if where not in REFUSAL_WAY_OUT:
+        where = SURFACE_CHAT
+    run = where == SURFACE_RUN
+    Name = heading(name or _SOMEONE)
+    partial = bool(getattr(refused, "partial", False))
+    whole = bool(getattr(refused, "whole_conversation", False))
+    topic = REFUSAL_TOPICS.get(str(getattr(refused, "category", "") or "").strip().lower(), "")
+    check = f"Its safety check on {topic}" if topic else "Its safety check"
+    if run:
+        title = f"{Name} declined to finish this task" if partial else f"{Name} declined to do this task"
+        flagged = (
+            f"{check} flagged something in this task, so running it again as it is will be declined too."
+            if whole
+            else f"{check} declined this answer and may decline it again."
+        )
+        lead = "Its answer is incomplete. " if partial else ""
+    else:
+        title = (
+            f"{Name} declined to finish this answer" if partial
+            else f"{Name} declined to answer this conversation"
+        )
+        flagged = (
+            f"{check} flagged something in this conversation, so every new message here will be declined too."
+            if whole
+            else f"{check} declined this answer and may decline new messages in this conversation too."
+        )
+        lead = "The reply above is incomplete. " if partial else ""
+    return (title, f"{lead}{flagged} {REFUSAL_WAY_OUT[where]}")
+
+
 def classify(
     exc: BaseException | None,
     *,
@@ -393,6 +484,8 @@ def classify(
     )
     again = "run it again" if run else "retry"
 
+    if kind == "refusal":
+        return refusal_words(exc, name=name, surface=surface)
     if kind == "signed_out":
         cli = f.cli or who
         cname = plain_name(cli, manager) or name

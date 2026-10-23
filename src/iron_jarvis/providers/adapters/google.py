@@ -20,6 +20,7 @@ from .base import (
     LLMMessage,
     LLMResponse,
     ProviderError,
+    ProviderRefusal,
     ToolCall,
     provider_error_from_response,
 )
@@ -43,6 +44,34 @@ _REFUSAL_FINISH_REASONS: frozenset[str] = frozenset(
         "OTHER",
     }
 )
+
+
+#: v1.378.0: the ``promptFeedback.blockReason`` values that are Google's
+#: SAFETY CHECK declining the prompt — the whole conversation as sent, so a
+#: new message in it is blocked too (``whole_conversation``).
+_SAFETY_BLOCK_REASONS: frozenset[str] = frozenset(
+    {"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "IMAGE_SAFETY"}
+)
+#: …and the candidate ``finishReason`` values that are the safety check
+#: stopping THIS answer (it may answer the next message). RECITATION,
+#: LANGUAGE, MALFORMED_FUNCTION_CALL and OTHER are not a safety refusal: they
+#: keep the plain "no usable content" error.
+_SAFETY_FINISH_REASONS: frozenset[str] = frozenset(
+    {"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"}
+)
+
+
+def _safety_refusal(why: str, *, whole: bool, partial: bool = False) -> ProviderRefusal:
+    """The typed refusal for a Gemini safety block (v1.378.0). No category:
+    Google's block reason names the filter, not a topic — never guessed."""
+    err = ProviderRefusal(
+        f"google returned no usable content ({why})" if not partial
+        else f"google's safety check stopped the answer ({why})",
+        partial=partial,
+        whole_conversation=whole,
+    )
+    err.blocked = True  # type: ignore[attr-defined] — never re-spent on the non-streaming path
+    return err
 
 
 def _thinking_config(body: dict[str, Any], reasoning: str) -> None:
@@ -337,6 +366,11 @@ class GoogleAdapter(LLMAdapter):
             note = str(fb.get("blockReasonMessage") or "").strip()
             if note:
                 why = f"{why}: {note[:200]}"
+            if block.upper() in _SAFETY_BLOCK_REASONS:
+                # v1.378.0: the safety check declined the prompt itself.
+                return _safety_refusal(why, whole=True)
+        elif finish.upper() in _SAFETY_FINISH_REASONS:
+            return _safety_refusal(f"finishReason={finish}", whole=False)
         elif finish.upper() in _REFUSAL_FINISH_REASONS:
             why = f"finishReason={finish}"
         elif not cands:
@@ -382,6 +416,13 @@ class GoogleAdapter(LLMAdapter):
             err = GoogleAdapter._no_content_error(candidates, data.get("promptFeedback"))
             if err is not None:
                 raise err
+        elif str(candidate.get("finishReason") or "").upper() in _SAFETY_FINISH_REASONS:
+            # v1.378.0: the safety check stopped the answer after it began —
+            # the text written first is kept (`partial`), the rest declined.
+            # MIRROR NOTE (lock-step): _stream_sse.
+            raise _safety_refusal(
+                f"finishReason={candidate.get('finishReason')}", whole=False, partial=bool(text),
+            )
         finish = _finish(candidate.get("finishReason"), bool(tool_calls))
         meta = data.get("usageMetadata") or {}
         usage_dict = {
@@ -622,6 +663,13 @@ class GoogleAdapter(LLMAdapter):
             err = self._no_content_error(last_candidates, prompt_feedback)
             if err is not None:
                 raise err
+        elif str(last_finish or "").upper() in _SAFETY_FINISH_REASONS:
+            # v1.378.0: the safety check stopped the answer mid-stream — the
+            # streamed text stays on the user's screen. MIRROR NOTE
+            # (lock-step): _parse.
+            raise _safety_refusal(
+                f"finishReason={last_finish}", whole=False, partial=bool(text),
+            )
 
         yield {
             "type": "final",

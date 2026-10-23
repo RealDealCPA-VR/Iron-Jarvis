@@ -44,6 +44,7 @@ from ...core.turns import CHAT_INFLIGHT, TURNS, thread_key
 from ...tools.reversible import reversible_flag as _reversible_flag
 from ...eval.pricing import UsageTally
 from ...providers import egress as _egress
+from ...providers.adapters.base import refusal_of as _refusal_of
 from ...providers.reasoning import normalize_level
 from ...providers.failure_words import is_generic_title as _is_generic_title
 from ..doors import (
@@ -5600,6 +5601,10 @@ async def chat_stream(
         # MIRROR NOTE (lock-step): chat_turn — same rules via the shared
         # `_final_answer_messages` / `_language_leak` / `_rewrite_messages` /
         # `_rewrite_verdict`.
+        # v1.378.0: the nudge's safety refusal, when it had one — the reply
+        # says so instead of "Press Retry". MIRROR NOTE (lock-step):
+        # chat_turn's `_f_refusal`.
+        _f_refusal = None
         try:
             # Both post-loop completions send the transcript FITTED (v1.287.0,
             # lock-step).
@@ -5653,9 +5658,11 @@ async def chat_stream(
                                 _f_route = (
                                     frame.get("provider") or "", frame.get("model") or "",
                                 )
-                except Exception:  # noqa: BLE001 — the fallback below is still honest
+                except Exception as _f_exc:  # noqa: BLE001 — the fallback below is still honest
                     log.warning("final-answer completion failed", exc_info=True)
                     _f_resp = None
+                    if _refusal_of(_f_exc) is not None:
+                        _f_refusal = _f_exc
                 if _f_resp is not None:
                     _fu = _f_resp.usage or {}
                     usage_in += int(_fu.get("input_tokens", 0) or 0)
@@ -5760,8 +5767,9 @@ async def chat_stream(
             reply += refusal_footnotes(refused_tools)
         else:
             if not reply.strip():
-                # v1.246.0 — lock-step with chat_turn.
-                reply = _no_text_reply(tools_used, last_tool_output)
+                # v1.246.0 — lock-step with chat_turn (v1.378.0: a declined
+                # nudge says so).
+                reply = _no_text_reply(tools_used, last_tool_output, _f_refusal)
             reply += refusal_footnotes(refused_tools)
             if stopped_note:
                 reply += f"\n\n_Note: {stopped_note}._"

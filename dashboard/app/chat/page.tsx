@@ -149,6 +149,7 @@ import {
   DRAFT_BACK_WORDS,
   KEY_LINK_HREF,
   KEY_LINK_WORDS,
+  NEW_CHAT_WORDS,
   failureAction,
   failureFacts,
   signInLabel,
@@ -12237,8 +12238,11 @@ export default function ChatPage() {
                           >
                             {/* v1.355.0 (G29): with a press beside it, the
                                 line is the headline alone — the press does
-                                what the fix sentence sent the user to do. */}
-                            {turnFix && errFacts?.title ? errFacts.title : error}
+                                what the fix sentence sent the user to do.
+                                v1.378.0: a safety refusal keeps the WHOLE
+                                sentence — its fix says why every new message
+                                here is declined too, and the edit way back. */}
+                            {turnFix && turnFix.kind !== "refusal" && errFacts?.title ? errFacts.title : error}
                           </p>
                         )}
                         {compactNote && (
@@ -12323,7 +12327,35 @@ export default function ChatPage() {
                             {KEY_LINK_WORDS}
                           </Link>
                         )}
-                        {failedTurn && !busy && !localRefusal && (
+                        {/* v1.378.0: A SAFETY REFUSAL. The provider's check
+                            judges the whole conversation, so Retry (and
+                            "Retry with the default model", which would send
+                            it elsewhere to get past the check) can never be
+                            the answer: the press starts a new chat with the
+                            message moved into its box. Editing an earlier
+                            message (the sentence says so) is the other way. */}
+                        {failedTurn && !busy && turnFix?.kind === "refusal" && (
+                          <button
+                            type="button"
+                            data-testid="chat-turn-new-chat"
+                            onClick={() => {
+                              const words = composer.get().text;
+                              const left = saveTargetRef.current.id;
+                              newChat();
+                              if (words.trim()) {
+                                composer.setText(words);
+                                // Moved, not copied: the declined chat keeps
+                                // no draft of it.
+                                if (left) clearDraft(left);
+                              }
+                            }}
+                            className={CALM_GHOST_BTN}
+                          >
+                            <Plus size={13} aria-hidden />
+                            {NEW_CHAT_WORDS}
+                          </button>
+                        )}
+                        {failedTurn && !busy && !localRefusal && turnFix?.kind !== "refusal" && (
                           <RetryTurnButton
                             cooldownS={trouble.cooldownS}
                             onRetry={() => retryTurn()}
@@ -12341,6 +12373,7 @@ export default function ChatPage() {
                             never a fallback the page makes (the v1.162.0 rule). */}
                         {failedTurn &&
                           !busy &&
+                          turnFix?.kind !== "refusal" &&
                           canRetryWithDefault(choice, health) &&
                           // v1.332.0: never offered when the default would
                           // leave this PC from a "local only" chat.

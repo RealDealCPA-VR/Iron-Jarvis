@@ -27,10 +27,21 @@
 import type { Health } from "@/lib/types";
 import { healthRow, SUBSCRIPTION_CLIS, type SubscriptionCli } from "@/lib/onboarding";
 
-/** What fixes the failure: sign in to a subscription CLI, or update a key. */
+/** What fixes the failure: sign in to a subscription CLI, update a key, or
+ *  (v1.378.0) leave a conversation the provider's safety check declined —
+ *  a new chat here, Rewind in a Build session. A refusal offers NO Retry:
+ *  the same conversation is judged again, so a Retry is declined too. */
 export type FailureAction =
   | { kind: "sign_in"; cli: SubscriptionCli }
-  | { kind: "key"; provider: string };
+  | { kind: "key"; provider: string }
+  | { kind: "refusal" };
+
+/** v1.378.0: the chat's press after a safety refusal (the failure line's
+ *  sentence says why; the press does what it says). */
+export const NEW_CHAT_WORDS = "Start a new chat";
+/** v1.378.0: the Build session's press after a safety refusal — opens the
+ *  "/rewind" list of the session's own messages. */
+export const REWIND_PICK_WORDS = "Choose where to rewind";
 
 /** The link a refused key gets (Settings › Connections, where keys live). */
 export const KEY_LINK_WORDS = "Update the key in Connections";
@@ -55,6 +66,13 @@ export interface FailureActionFields {
 
 function text(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
+}
+
+/** v1.378.0: is this failed turn a provider's SAFETY REFUSAL? Read from the
+ *  daemon's typed `fix_kind` only (chat_turn.fix_action) — never guessed
+ *  from the words. A refusal offers no Retry. */
+export function isRefusal(err: FailureActionFields | null | undefined): boolean {
+  return text(err?.fixKind) === "refusal";
 }
 
 /** What the failure line keeps of a failed turn's error, read by shape (a
@@ -103,6 +121,9 @@ export function failureAction(
 ): FailureAction | null {
   const kind = text(err?.fixKind);
   const provider = text(err?.fixProvider);
+  // v1.378.0: a safety refusal is answered by leaving the conversation (or
+  // going back before what set it off), never by signing in or retrying.
+  if (kind === "refusal") return { kind: "refusal" };
   if (kind === "sign_in") {
     const cli = cliOf(provider) ?? signedOutCliFor(health, turnProvider);
     if (cli) return { kind: "sign_in", cli };

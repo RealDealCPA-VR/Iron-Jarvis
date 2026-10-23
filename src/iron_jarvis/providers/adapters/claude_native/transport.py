@@ -64,7 +64,14 @@ from ...cli_auth import (
     is_sign_in_refusal,
     note_cli_failure,
 )
-from ..base import TRANSIENT_STATUS, LLMResponse, ProviderError, ToolCall, parse_retry_after
+from ..base import (
+    TRANSIENT_STATUS,
+    LLMResponse,
+    ProviderError,
+    ProviderRefusal,
+    ToolCall,
+    parse_retry_after,
+)
 from . import frames as F
 from .admission import CONSUMED_MESSAGE, Admission
 from .inert_mcp import inert_mcp_command
@@ -859,6 +866,44 @@ def upstream_failure(got: Collected, admission: Any, *, probe: bool = True) -> E
     return _typed(ProviderError(DROPPED, transient=True), "interrupted")
 
 
+def refusal_error(assistants: list[dict], *, emitted: str = "") -> ProviderRefusal | None:
+    """The typed refusal for an answer Anthropic's safety check declined, or
+    None (v1.378.0). Read off the Messages API's own fields only:
+    ``stop_reason == "refusal"`` and, when present, ``stop_details``
+    (``{type: "refusal", category, explanation}`` — ``category`` may be
+    null). ``partial`` when any of the answer had reached the user (streamed,
+    or text in the declined message itself). Never raises."""
+    try:
+        refused = next(
+            (a for a in assistants if isinstance(a, dict) and a.get("stop_reason") == "refusal"),
+            None,
+        )
+        if refused is None:
+            return None
+        details = refused.get("stop_details") if isinstance(refused.get("stop_details"), dict) else {}
+        category = details.get("category") if isinstance(details.get("category"), str) else ""
+        explanation = details.get("explanation") if isinstance(details.get("explanation"), str) else ""
+        text = "".join(
+            str(b.get("text", ""))
+            for a in assistants if isinstance(a, dict)
+            for b in (a.get("content") or []) if isinstance(b, dict) and b.get("type") == "text"
+        )
+        said = f"{PROVIDER}: Anthropic's safety check declined to answer (stop_reason refusal"
+        said += f", category {category})" if category else ")"
+        if explanation:
+            said += f": {explanation[:300]}"
+        return ProviderRefusal(
+            said,
+            provider=PROVIDER,
+            category=category,
+            explanation=explanation,
+            partial=bool(emitted or text.strip()),
+            whole_conversation=True,
+        )
+    except Exception:  # noqa: BLE001 — a malformed message is read as no refusal
+        return None
+
+
 def assemble(
     got: Collected,
     *,
@@ -879,9 +924,17 @@ def assemble(
             raise upstream_failure(got, admission, probe=probe)
         assistants = [capture.message]
         stopped = True
-    handled = bool(admission is not None and getattr(admission, "denied", 0)) or (
-        used and assistants[0].get("stop_reason") == "refusal"
-    )
+    # v1.378.0: A SAFETY REFUSAL IS AN ERROR THE USER CAN ACT ON, never an
+    # empty reply. Anthropic answers `stop_reason: "refusal"` (with
+    # `stop_details`) and no content; since v1.300.0 this treated it as
+    # handled and returned text="", so the chat said "Press Retry" — and the
+    # classifier judges the whole conversation, so every Retry (even "Say
+    # hello") was declined too. Read BEFORE the CLI's own error: native
+    # renders the refusal as an error message of its own.
+    refusal = refusal_error(assistants, emitted=got.emitted)
+    if refusal is not None:
+        raise refusal
+    handled = bool(admission is not None and getattr(admission, "denied", 0))
     if got.native_error and not handled:
         if got.native_error_code == "authentication_failed" and not used:
             # No usable login: native refuses before any upstream request.

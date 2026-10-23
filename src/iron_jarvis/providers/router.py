@@ -57,6 +57,7 @@ from .adapters.base import (
     LLMResponse,
     ProviderError,
     TRANSIENT_STATUS,
+    refusal_of,
 )
 from .adapters.prompted_tools import PromptedToolsAdapter
 from .reasoning import normalize_level, supports
@@ -136,6 +137,34 @@ def is_no_failover(exc: BaseException) -> bool:
     The ONE exception is an AUTO turn (the user delegated the choice): there
     the router may substitute, and discloses it."""
     return bool(getattr(exc, "no_failover", False))
+
+
+def is_refusal(exc: BaseException) -> bool:
+    """True for a provider's SAFETY REFUSAL (v1.378.0,
+    :class:`~.adapters.base.ProviderRefusal`). Stricter than
+    :func:`is_no_failover`: not even an AUTO turn may move a refused
+    conversation to another provider — the refusal is about the
+    conversation, not the provider's health, and sending it elsewhere to get
+    past a safety check is the user's decision, never a routing fallback. The
+    breaker is never struck (the provider answered)."""
+    return refusal_of(exc) is not None
+
+
+def _failed_payload(provider: str, exc: BaseException, **extra: Any) -> dict[str, Any]:
+    """The ``provider.failed`` payload: ``{provider, error}`` exactly as
+    before, plus — for a safety refusal only (v1.378.0) — ``kind: "refusal"``
+    and the vendor's ``category`` (when it gave one), so the ledger says what
+    the failure WAS. Never raises."""
+    payload: dict[str, Any] = {"provider": provider, "error": f"{type(exc).__name__}: {exc}", **extra}
+    try:
+        refused = refusal_of(exc)
+        if refused is not None:
+            payload["kind"] = refused.kind
+            if refused.category:
+                payload["category"] = refused.category
+    except Exception:  # noqa: BLE001 — the ledger's words never fail a call
+        pass
+    return payload
 
 
 def _account_held(provider: str | None) -> bool:
@@ -1517,7 +1546,19 @@ class ModelRouter:
         ``ReadError`` mid-answer and the page showed "stream error" under
         half a reply. Any transport-shaped death now gets the incomplete-
         reply wording. WORDING ONLY: nothing is swapped (the no-swap rule
-        stands), and the endpoint banner stays local-only."""
+        stands), and the endpoint banner stays local-only.
+
+        v1.378.0: a SAFETY REFUSAL after the first words is not a death —
+        the provider answered and declined the rest. It is ledgered
+        (``partial``, ``kind: "refusal"``) and raised as itself, with NO
+        breaker strike."""
+        if is_refusal(exc):
+            await self.event_bus.publish(
+                EventType.PROVIDER_FAILED,
+                _failed_payload(adapter.provider, exc, partial=True),
+                session_id=session_id,
+            )
+            return None
         self.health.record_failure(adapter.provider)
         self._forget_answered(adapter)  # v1.332.0: a death mid-answer is a failure
         await self.event_bus.publish(
@@ -2028,11 +2069,15 @@ class ModelRouter:
             # accounts are parked). AUTO is the user's one opted-in exception:
             # an Auto turn may substitute (the sideways candidates below), and
             # says so on the receipt. MIRROR NOTE (lock-step): stream().
+            # A SAFETY REFUSAL (v1.378.0) is raised as it is EVEN UNDER AUTO:
+            # the conversation was declined, not the provider; no fallback,
+            # no failover, no retry, no breaker strike — and the ledger row
+            # says `kind: "refusal"`. MIRROR NOTE (lock-step): stream().
             no_failover = is_no_failover(exc)
-            if no_failover and not auto_selected:
+            if no_failover and (not auto_selected or is_refusal(exc)):
                 await self.event_bus.publish(
                     EventType.PROVIDER_FAILED,
-                    {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}"},
+                    _failed_payload(adapter.provider, exc),
                     session_id=session_id,
                 )
                 raise
@@ -2520,12 +2565,13 @@ class ModelRouter:
             # IRON-PROXY ACCOUNTS (v1.301.0): never fallback (A) or failover (B)
             # on an account sentence, no breaker strike — except on an AUTO
             # turn (the user's one opted-in exception). MIRROR NOTE
-            # (lock-step): complete().
+            # (lock-step): complete(). A SAFETY REFUSAL (v1.378.0) is raised
+            # as it is even under Auto — see complete().
             no_failover = is_no_failover(exc)
-            if no_failover and not auto_selected:
+            if no_failover and (not auto_selected or is_refusal(exc)):
                 await self.event_bus.publish(
                     EventType.PROVIDER_FAILED,
-                    {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}"},
+                    _failed_payload(adapter.provider, exc),
                     session_id=session_id,
                 )
                 raise

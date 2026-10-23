@@ -19,6 +19,7 @@ from .base import (
     LLMMessage,
     LLMResponse,
     ProviderError,
+    ProviderRefusal,
     ToolCall,
     parse_retry_after,
 )
@@ -83,6 +84,40 @@ def _finish(stop_reason: Any) -> str:
     if stop_reason in ("max_tokens", "model_context_window_exceeded"):
         return "max_tokens"
     return "stop"
+
+
+def _refusal(message: Any, *, provider: str, emitted: bool = False) -> ProviderRefusal | None:
+    """The typed refusal for a Messages API answer whose ``stop_reason`` is
+    ``"refusal"`` (v1.378.0), else None. ``stop_details`` (``{type, category,
+    explanation}``, ``category`` may be null) is read as the SDK hands it —
+    an object or a dict. ``partial`` when text had already streamed or the
+    declined message carries some. Shared by complete() and stream()."""
+    if getattr(message, "stop_reason", None) != "refusal":
+        return None
+    details = getattr(message, "stop_details", None)
+
+    def field(name: str) -> str:
+        value = details.get(name) if isinstance(details, dict) else getattr(details, name, None)
+        return value if isinstance(value, str) else ""
+
+    category, explanation = field("category"), field("explanation")
+    text = "".join(
+        str(getattr(b, "text", "") or "")
+        for b in (getattr(message, "content", None) or [])
+        if getattr(b, "type", None) == "text"
+    )
+    said = f"{provider}: Anthropic's safety check declined to answer (stop_reason refusal"
+    said += f", category {category})" if category else ")"
+    if explanation:
+        said += f": {explanation[:300]}"
+    return ProviderRefusal(
+        said,
+        provider=provider,
+        category=category,
+        explanation=explanation,
+        partial=bool(emitted or text.strip()),
+        whole_conversation=True,
+    )
 
 
 def _thinking_text(content: Any) -> str:
@@ -364,6 +399,11 @@ class AnthropicAdapter(LLMAdapter):
             )
         except Exception as exc:  # noqa: BLE001 — typed for the router's classifier
             raise _anthropic_provider_error(exc) from exc
+        # v1.378.0: a safety refusal is a typed error, never an empty reply.
+        # MIRROR NOTE (lock-step): stream() below.
+        refused = _refusal(resp, provider=self.provider)
+        if refused is not None:
+            raise refused
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         for block in resp.content:
@@ -499,6 +539,7 @@ class AnthropicAdapter(LLMAdapter):
             # reaches the reply. `get_final_message()` returns the SAME Message
             # object messages.create() would have — so the aggregate below is
             # identical to complete().
+            streamed = False
             async with client.messages.stream(
                 model=self.model,
                 max_tokens=max_tokens,
@@ -515,6 +556,7 @@ class AnthropicAdapter(LLMAdapter):
                     if kind == "text_delta":
                         piece = getattr(delta, "text", "")
                         if piece:
+                            streamed = True
                             yield {"type": "text", "text": piece}
                     elif kind == "thinking_delta":
                         piece = getattr(delta, "thinking", "")
@@ -523,6 +565,12 @@ class AnthropicAdapter(LLMAdapter):
                 final = await s.get_final_message()
         except Exception as exc:  # noqa: BLE001 — typed for the router's classifier
             raise _anthropic_provider_error(exc) from exc
+        # v1.378.0: a safety refusal is a typed error — after text streamed it
+        # is `partial` (the text stays on the user's screen). MIRROR NOTE
+        # (lock-step): complete() above.
+        refused = _refusal(final, provider=self.provider, emitted=streamed)
+        if refused is not None:
+            raise refused
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         for block in final.content:

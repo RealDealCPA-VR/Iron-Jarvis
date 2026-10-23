@@ -49,6 +49,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from ..providers import egress as _egress
+from ..providers.adapters.base import refusal_of
 from ..providers.reasoning import normalize_level
 from ..media.registry import ACCOUNTS_AND_KEYS as _MEDIA_KEYS_PLACE
 from ..core.db import session_scope
@@ -2143,8 +2144,14 @@ async def _final_answer_after_tools(
                 tools=[],
                 task_class="chat",
             )
-    except Exception:  # noqa: BLE001 — the fallback below is still honest
+    except Exception as exc:  # noqa: BLE001 — the fallback below is still honest
         log.warning("final-answer completion failed", exc_info=True)
+        # v1.378.0: a SAFETY REFUSAL of the nudge is handed back, so the
+        # fallback says what happened instead of "Press Retry" (the same
+        # conversation would be declined again). MIRROR NOTE (lock-step):
+        # the stream lane's streamed nudge keeps it the same way.
+        if outcome is not None and refusal_of(exc) is not None:
+            outcome["refusal"] = exc
         return ("", 0, 0, 0)
     usage = route.response.usage or {}
     if tally is not None:  # v1.300.0 — see _enforce_language
@@ -3175,10 +3182,18 @@ def _joined_thinking(parts: list[str]) -> str:
     return "\n\n".join(p for p in parts if p)[:THINKING_CAP]
 
 
-def _no_text_reply(tools_used: list[str], last_tool_output: str) -> str:
+def _no_text_reply(tools_used: list[str], last_tool_output: str, refusal=None) -> str:
     """The reply when the model wrote nothing even after being asked once.
     Says what happened in plain words; never an empty bubble.
+
+    v1.378.0: *refusal* — the nudge itself was DECLINED by the provider's
+    safety check (``adapters.base.ProviderRefusal``): the reply says so in the
+    refusal's own sentence (``failure_words``), never "Press Retry" — the same
+    conversation would be declined again.
     MIRROR NOTE (lock-step): both chat lanes call this."""
+    if refusal is not None:
+        words = friendly_error(refusal)
+        return f"{words['title']}. {words['fix']}"
     if last_tool_output.strip():
         snippet = last_tool_output.strip()[:600]
         ran = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
@@ -3254,7 +3269,9 @@ def fix_action(exc: BaseException | None, *, provider: str = "") -> dict[str, st
     never a string guess: ``{"fix_kind": "sign_in", "fix_provider":
     "claude-cli"}`` when a subscription CLI is not signed in (or refused the
     sign-in), ``{"fix_kind": "key", "fix_provider": <provider>}`` when a
-    provider refused the key (401/403), else ``{}``. The chat's failure line
+    provider refused the key (401/403), ``{"fix_kind": "refusal", ...}``
+    (v1.378.0) when its safety check declined the conversation (no Retry: a
+    new chat / Rewind is the way out), else ``{}``. The chat's failure line
     puts the Sign in press / the key link beside the headline from it.
     Provider IDS only (no secret, no server text). Never raises."""
     try:
@@ -3262,6 +3279,11 @@ def fix_action(exc: BaseException | None, *, provider: str = "") -> dict[str, st
 
         f = failure_facts(exc)
         who = (f.provider or str(provider or "")).strip()
+        if f.kind == "refusal":
+            # v1.378.0: a safety refusal — Retry can never help (the same
+            # conversation is judged again). The page offers the way out
+            # instead (a new chat; Rewind in a Build session) and no Retry.
+            return {"fix_kind": "refusal", **({"fix_provider": who} if who else {})}
         if f.kind == "signed_out":
             cli = (f.cli or who).strip()
             if cli in SIGN_IN_CLIS:
@@ -8632,6 +8654,8 @@ async def run_chat_turn(
     _send, _send_system = _fit_turn_transcript(
         d, msgs, system, provider_choice, model_choice, head=_head
     )
+    # v1.378.0: the nudge's safety refusal, when it had one (see below).
+    _f_refusal = None
     if _cut_office or _wants_final_answer(
         model_text, workflow_draft, escalate, completions,
     ):
@@ -8652,6 +8676,7 @@ async def run_chat_turn(
             # v1.323.0: the nudge was the final answering call.
             _thinking_parts.append(_thinking_of(_f_outcome["response"]))
             _truncated = _truncated_by(_f_outcome["response"])
+        _f_refusal = _f_outcome.get("refusal")
         model_text = _f_text or model_text
         usage_in += _f_in
         usage_out += _f_out
@@ -8708,7 +8733,8 @@ async def run_chat_turn(
     else:
         if not reply.strip():
             # v1.246.0: said in plain words — never the bare "(no reply)".
-            reply = _no_text_reply(tools_used, last_tool_output)
+            # v1.378.0: a nudge the safety check declined says so (lock-step).
+            reply = _no_text_reply(tools_used, last_tool_output, _f_refusal)
         reply += refusal_footnotes(refused_tools)
         if stopped_note:
             reply += f"\n\n_Note: {stopped_note}._"

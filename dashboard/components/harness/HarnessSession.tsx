@@ -28,12 +28,14 @@ import {
   FolderOpen,
   GitBranch,
   GitFork,
+  History,
   Loader2,
   MoreHorizontal,
   Pencil,
   Square,
 } from "lucide-react";
 import { branchLine } from "@/lib/buildGit";
+import { REWIND_PICK_WORDS } from "@/lib/failureActions";
 import { ApiError, get, post, put } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
 import { useModels } from "@/lib/useModels";
@@ -1441,6 +1443,9 @@ export function HarnessSession({
   const summarized = !!compaction && beforeSummary;
   const offerCompact = offersCompact(reading?.context ?? null, beforeSummary);
   const lastReply = [...shown].reverse().find((m) => m.role === "assistant");
+  // v1.378.0: a message the daemon wrote can be rewound to (the refusal's
+  // press opens the "/rewind" list only when there is one).
+  const canRewindHere = !view?.archived && shown.some((m) => m.role === "user" && !m.steer && !!m.turnId);
   const choice = view?.setup.provider && view?.setup.model ? `${view.setup.provider}::${view.setup.model}` : "";
   // v1.376.0: the chip names the session's ACCOUNT after the model ("Opus 4.8
   // · Work"). A session on a provider with no model of its own (an account
@@ -1777,9 +1782,28 @@ export function HarnessSession({
                   ) : null;
                 })()}
                 {m.error && !m.accountLimit ? (
-                  <p data-testid="harness-reply-error" className="mt-1 flex items-start gap-1.5 text-[12px] text-tone-danger">
-                    <CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden /> {m.error}
-                  </p>
+                  <>
+                    <p data-testid="harness-reply-error" className="mt-1 flex items-start gap-1.5 text-[12px] text-tone-danger">
+                      <CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden /> {m.error}
+                    </p>
+                    {/* v1.378.0: A SAFETY REFUSAL on the newest reply. The
+                        provider judges the whole conversation, so the way out
+                        is back to before the message that set it off: the
+                        press opens the "/rewind" list (the session's own
+                        messages, each with its two-press Rewind). Never a
+                        Retry — the same conversation is declined again. */}
+                    {m === lastReply && m.errorKind === "refusal" && !busy && canRewindHere ? (
+                      <button
+                        type="button"
+                        data-testid="harness-refusal-rewind"
+                        onClick={() => setRewindOpen(true)}
+                        className="mt-1 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+                      >
+                        <History size={12} aria-hidden />
+                        {REWIND_PICK_WORDS}
+                      </button>
+                    ) : null}
+                  </>
                 ) : m.interrupted ? (
                   <p className="mt-1 flex items-center gap-1.5 text-[12px] text-tone-warn">
                     <CircleAlert size={12} aria-hidden /> This answer is incomplete.

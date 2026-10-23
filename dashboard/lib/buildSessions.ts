@@ -192,6 +192,10 @@ export type BuildMessage = PaneMessage & {
    *  list as it last stood (raw, the checklist's saved form; replyPlan). */
   context?: unknown;
   plan?: unknown;
+  /** v1.378.0: on a failed reply, what the error WAS — "refusal" when the
+   *  provider's safety check declined the conversation (the screen offers
+   *  Rewind, never Retry). */
+  errorKind?: string;
 };
 
 /** The keys a line may carry (the daemon's LINE_KEYS). Anything else dies. */
@@ -213,6 +217,8 @@ const LINE_KEYS = [
   "truncated",
   "interrupted",
   "error",
+  // v1.378.0: what the error WAS ("refusal": a provider's safety check).
+  "errorKind",
   "folderRules",
   "approved",
   "refit",
