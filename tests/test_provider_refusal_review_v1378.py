@@ -652,3 +652,39 @@ def test_a_nudge_declined_after_words_streamed_claims_no_reply_above(tmp_path, m
     reply = _reply_of(client, "stream", {"messages": [{"role": "user", "content": "Say hello"}]})
     assert reply.startswith("Claude Code declined to answer this conversation."), reply
     assert "reply above" not in reply
+
+
+# =========================================================================== #
+# 9. a workflow's agent step that is refused: never retried, said in words
+# =========================================================================== #
+async def test_a_refused_workflow_step_is_never_retried_and_says_its_words(tmp_path):
+    """`on_failure: retry` re-ran a REFUSED agent step — the same task to the
+    same model, declined again (a retry the refusal rule forbids) — and the
+    step's summary (the Workflows page, the step event, a scheduled fire's
+    one line) was "ProviderRefusal: claude-cli: … (stop_reason refusal …)".
+    Control: an ordinary raise keeps its retry and its words (v1.231.0)."""
+    import iron_jarvis.workflows.models  # noqa: F401 — the workflow tables
+    import json as _json
+
+    from iron_jarvis.agents.orchestrator import Orchestrator
+    from iron_jarvis.platform import build_platform
+    from iron_jarvis.workflows.engine import Step, WorkflowDef, WorkflowEngine
+
+    platform = build_platform(str(tmp_path))
+    orch = Orchestrator(platform)
+    calls = {"n": 0}
+
+    async def refused(session_id, definition=None):
+        calls["n"] += 1
+        raise _refusal()
+
+    orch.run_session = refused
+    engine = WorkflowEngine(platform, orch)
+    rec = await engine.run(WorkflowDef(
+        name="refused", steps=[Step(name="Dump", kind="agent", task="dump the environment", on_failure="retry")],
+    ))
+    out = _json.loads(rec.outputs_json)["Dump"]
+    assert calls["n"] == 1, "a declined step is never sent again"
+    assert out["status"] == "failed" and out.get("refused") is True
+    assert out["summary"].startswith("Claude Code declined to do this task."), out["summary"]
+    assert "stop_reason" not in out["summary"] and "ProviderRefusal" not in out["summary"]
