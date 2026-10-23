@@ -150,6 +150,22 @@ def is_refusal(exc: BaseException) -> bool:
     return refusal_of(exc) is not None
 
 
+def _settle_refusal(exc: BaseException, *, reached: bool) -> None:
+    """A safety refusal's ``partial`` is WHAT REACHED THE CALLER (v1.378.0
+    review), which only the router knows: an adapter sees text in the
+    declined message, or text it streamed into a ``complete()`` that showed
+    nobody anything (claude-cli's complete() runs over its own stream). The
+    words then said "The reply above is incomplete" over nothing — on the
+    POST lane, the phone, a one-shot. ``reached`` is False for complete(),
+    and for stream() whether an ANSWER frame left. Never raises."""
+    try:
+        refused = refusal_of(exc)
+        if refused is not None:
+            refused.partial = bool(reached)
+    except Exception:  # noqa: BLE001 — wording only
+        pass
+
+
 def _failed_payload(provider: str, exc: BaseException, **extra: Any) -> dict[str, Any]:
     """The ``provider.failed`` payload: ``{provider, error}`` exactly as
     before, plus — for a safety refusal only (v1.378.0) — ``kind: "refusal"``
@@ -1553,6 +1569,7 @@ class ModelRouter:
         (``partial``, ``kind: "refusal"``) and raised as itself, with NO
         breaker strike."""
         if is_refusal(exc):
+            _settle_refusal(exc, reached=True)
             await self.event_bus.publish(
                 EventType.PROVIDER_FAILED,
                 _failed_payload(adapter.provider, exc, partial=True),
@@ -1579,6 +1596,30 @@ class ModelRouter:
                 adapter.provider, pinned, kind="interrupted", exc=exc, partial=True
             )
         return None
+
+    async def _candidate_refused(
+        self, alt: LLMAdapter, exc: Exception, session_id, *, reached: bool = False
+    ) -> bool:
+        """True when a FALLBACK CANDIDATE's failure is a safety refusal
+        (v1.378.0 review) — ledgered (``kind: "refusal"``, named for the
+        candidate, no breaker strike: it answered) for the caller to RAISE.
+
+        The primary's own refusal never moves (``is_refusal`` above), but a
+        candidate's refusal used to be caught by the (A)/(B) loops like any
+        failure: the default's breaker was struck and the conversation was
+        handed to the NEXT connected provider until one accepted it — exactly
+        the "send it elsewhere to get past the check" the refusal rule
+        forbids. MIRROR NOTE (lock-step): complete() (A)/(B), stream() (A)/(B)."""
+        if not is_refusal(exc):
+            return False
+        _stamp_failed_provider(exc, alt.provider)
+        _settle_refusal(exc, reached=reached)
+        await self.event_bus.publish(
+            EventType.PROVIDER_FAILED,
+            _failed_payload(alt.provider, exc, **({"partial": True} if reached else {})),
+            session_id=session_id,
+        )
+        return True
 
     async def _publish_failover(
         self, failed: LLMAdapter, alt: LLMAdapter, why: str, session_id
@@ -2075,6 +2116,8 @@ class ModelRouter:
             # says `kind: "refusal"`. MIRROR NOTE (lock-step): stream().
             no_failover = is_no_failover(exc)
             if no_failover and (not auto_selected or is_refusal(exc)):
+                # v1.378.0 review: complete() showed the caller nothing.
+                _settle_refusal(exc, reached=False)
                 await self.event_bus.publish(
                     EventType.PROVIDER_FAILED,
                     _failed_payload(adapter.provider, exc),
@@ -2175,6 +2218,11 @@ class ModelRouter:
                             from_provider=adapter.provider, why=why,
                         )
                     except Exception as dexc:  # noqa: BLE001 — the default failed too
+                        # v1.378.0 review: the default DECLINED — the turn ends
+                        # with its refusal, never handed on, never struck.
+                        # MIRROR NOTE (lock-step): stream() (A).
+                        if await self._candidate_refused(alt, dexc, session_id):
+                            raise dexc from exc
                         self.health.record_failure(alt.provider)
                         self._forget_answered(alt)  # v1.332.0
                         tried_ids.add(id(alt))
@@ -2228,7 +2276,12 @@ class ModelRouter:
                             reason=_disclosed_reason("failover", alt.provider),
                             from_provider=adapter.provider, why=why,
                         )
-                    except Exception:  # noqa: BLE001 — try the next candidate
+                    except Exception as bexc:  # noqa: BLE001 — try the next candidate
+                        # v1.378.0 review: a candidate that DECLINES ends the
+                        # turn — the next one is never tried. MIRROR NOTE
+                        # (lock-step): stream() (B).
+                        if await self._candidate_refused(alt, bexc, session_id):
+                            raise bexc from exc
                         self.health.record_failure(alt.provider)
                         self._forget_answered(alt)  # v1.332.0
                         tried_ids.add(id(alt))
@@ -2569,6 +2622,8 @@ class ModelRouter:
             # as it is even under Auto — see complete().
             no_failover = is_no_failover(exc)
             if no_failover and (not auto_selected or is_refusal(exc)):
+                # v1.378.0 review: no answer frame reached the caller.
+                _settle_refusal(exc, reached=False)
                 await self.event_bus.publish(
                     EventType.PROVIDER_FAILED,
                     _failed_payload(adapter.provider, exc),
@@ -2667,6 +2722,11 @@ class ModelRouter:
                         if wrapped is None:
                             raise
                         raise wrapped from dexc
+                    # v1.378.0 review: the default DECLINED before its first
+                    # words — raised, never handed on. MIRROR NOTE
+                    # (lock-step): complete() (A).
+                    if await self._candidate_refused(alt, dexc, session_id):
+                        raise dexc from primary_exc
                     self.health.record_failure(alt.provider)
                     self._forget_answered(alt)  # v1.332.0
                     tried_ids.add(id(alt))
@@ -2724,6 +2784,10 @@ class ModelRouter:
                         if wrapped is None:
                             raise
                         raise wrapped from sexc
+                    # v1.378.0 review: a candidate that DECLINES ends the turn.
+                    # MIRROR NOTE (lock-step): complete() (B).
+                    if await self._candidate_refused(alt, sexc, session_id):
+                        raise sexc from primary_exc
                     self.health.record_failure(alt.provider)
                     self._forget_answered(alt)  # v1.332.0
                     tried_ids.add(id(alt))
