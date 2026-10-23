@@ -378,6 +378,58 @@ on the PATH the desktop app hands the daemon). A helper agent started by a
 branch session works in the worktree and its commit / push asks the same
 way, but its own prompt does not carry the branch paragraph.
 
+**Review.** Each defect below was shown red on the phase's code first,
+fixed, and mutation-checked (every mutation red); real git in a temp folder
+with a local bare remote, a fake `gh`, never the real GitHub.
+
+| Found | What it did | Now |
+|---|---|---|
+| The worktree's HEAD was trusted as the session's branch | a `git switch main` in the worktree (git allows it while the user's checkout is on another branch) made **Commit commit onto the user's main** | Commit, Merge and Create PR refuse in words until it is switched back |
+| Discard ran `git worktree prune` | it forgot EVERY worktree whose folder was missing at that moment: a user's own worktree on an unplugged drive lost its index and HEAD ("not a git repository" once plugged back) | `git worktree remove <path>` (no `--force`) forgets only this one |
+| Discard with the trash on another drive copied, then deleted | a file held open (a dev server's log) was met part of the way through: the worktree was left with only that file, its `.git` gone, and every later Discard and Delete refused it | renamed beside itself first (one step, refused with nothing moved while a file is held), copied, put back if the copy fails |
+| Merge into a base "checked out nowhere" | a checkout in the middle of a rebase of the base reads as detached: the base moved under it and the user's rebase failed at its end | a dry-run `git fetch . <merge>:<base>` asks git's own guard first; nothing is written |
+| Merge with the base in a folder that is not there | a 500 | said in words; an untracked file the merge would overwrite is named too |
+| A start git refused | a failing `post-checkout` hook (Git LFS's own, with git-lfs missing) or a path past MAX_PATH left a stray `ij/` branch (and a whole worktree) per try | the just-made worktree and branch are undone (the branch only while it still points where it was made) |
+| A folder inside a submodule | its worktree landed inside the superproject's `.git` | a submodule cannot branch (words on New session) |
+| `gh` resolved to a batch file | a pull request title `x" & echo owned>PWNED.txt & rem "` RAN through cmd.exe | refused before the push |
+| `GIT_DIR` / `GIT_INDEX_FILE` in the app's environment (git sets them for hooks) | every Build git call acted on THAT repository | `git_env()` drops them |
+| The agent's git guard | `cmd /c "git push"`, `bash -lc 'git commit'`, `git -c alias.ci=commit ci` ran on Auto-approve with no card; `reset --hard HEAD~1`, `rebase`, `branch -D`, `worktree prune` ran; `push origin :branch` and `commit --amend` were carded as an ordinary push / commit; a refused force push showed the shell card first | stray quotes stripped, `-c alias` expanded; REFUSED with no card in any posture: force push, deleting a remote branch, history rewrites, deleting / renaming / force-moving a branch or tag, `worktree remove/prune/move`, `gh repo delete`; CARDED once-only: also git that throws work away (`reset --hard`, `clean -f`, `checkout -- .`, `restore`, `stash drop`), `git config` writes (the repository config is the one the user's checkout reads) and any other gh change |
+| The library | a branch whose worktree carries a TRACKED harness layer: an accepted edit was written into the MAIN checkout's copy (leaving the user's checkout changed, which then blocked Merge) and the session never read it | edits target the copy the session reads; lessons stay with the picked folder |
+| Two presses | a second git press while one ran said "still answering"; a record was written onto the facts read before the wait (a Merge dropped a pull request's link) | "busy with another git action"; records land on the facts as stored now |
+| The screen | Merge stayed until the re-read; Discard's second press said nothing of uncommitted work | Merge hides when it answers; "Confirm: 2 uncommitted files go to the trash" |
+| Leftover | a helper's prompt lacked the branch paragraph | it carries it |
+
+Four of nine sampled phase pins survived their mutation (reads taking
+optional locks in the user's checkout, `update-ref` without the old value,
+Delete without the git lock, the facts whitelist); each has a pin now.
+
+**The agent's shell and git, in the product.** The shell and the program
+tools run on the scrubbed environment (`sandbox.modify_env = "deny"`, the
+default): PATH is the app's own folder, System32 and Windows, and there is no
+HOME / USERPROFILE. So `git` does not resolve by name (nor node, npm or
+python; only `py.exe`), and git named by its full path cannot read the
+user's global config: a commit the user allows on the card fails with
+"Author identity unknown" unless the repository names someone, and a push
+cannot reach the user's stored credentials. The Commit and Push buttons run
+with the app's own environment and work. Not changed here (it is the shell's
+environment for every session, not this phase's); it limits what the agent
+can do in a coding session and needs its own decision.
+
+Live, on a scratch daemon (8817, custom / glm-5.3-flash, the repository and
+its bare remote on D:, the app's home on C:): the agent edited in the worktree;
+`reset --hard HEAD~1` and `push origin :main` were refused with no card on
+Auto-approve, `cmd /c ""…git.exe" push"` carded once-only (denied, twice);
+the drafted Commit, Push, a refused Commit on a detached worktree, Merge into
+main in the main checkout (clean after), Discard refused with a file held
+open (worktree whole) and then moved D: → C: trash with nothing left behind,
+the worktree forgotten and the branch kept.
+
+Still open: rewinding a committed turn puts its files back as changes not
+committed (the commit stays on the branch) and the rewind does not say so; a
+repository git refuses for "dubious ownership" reads as "not a repository";
+on git older than 2.38 Merge says only that it could not check the merge;
+Local only still shows the shell's own card before a refused git command.
+
 ## Phase 5 — A browser the agent can drive (target v1.376.0)
 
 **What you see.** The agent can open your dev server, click, type, read the
