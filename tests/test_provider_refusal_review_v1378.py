@@ -756,3 +756,44 @@ def test_a_refusal_raises_no_provider_failed_alert_and_an_outage_still_does():
         "provider": "openrouter", "error": "ProviderError: openrouter API error 503: overloaded"}}
     assert notifier.on_event(outage)
     assert len(ch.sent) == 1
+
+
+@pytest.mark.parametrize("lane", ["stream", "post"])
+def test_a_declined_nudge_reply_is_marked_refused_and_an_ordinary_one_is_not(tmp_path, monkeypatch, lane):
+    """The declined-nudge reply is an ordinary REPLY bubble (not an error
+    line), so the chat page offered "Regenerate reply" under it — the same
+    conversation to the same model, declined again. The done frame / POST
+    response now says `refused: true` for it (absent otherwise, so no
+    client's key set moves), and the page marks the reply refused."""
+    from tests.test_provider_refusal_v1378 import _sse_frames
+
+    def declined(stream: bool):
+        if stream:
+            async def gen():
+                raise _refusal()
+                yield  # pragma: no cover
+            return gen()
+
+        async def boom():
+            raise _refusal()
+        return boom()
+
+    def broken(stream: bool):
+        if stream:
+            async def gen():
+                raise ProviderError("claude-cli API error 500: oops", status_code=500)
+                yield  # pragma: no cover
+            return gen()
+
+        async def boom():
+            raise ProviderError("claude-cli API error 500: oops", status_code=500)
+        return boom()
+
+    body = {"messages": [{"role": "user", "content": "Say hello"}]}
+    for second, want in ((declined, True), (broken, None)):
+        client, _calls = _nudge_app(tmp_path / str(want), monkeypatch, second)
+        if lane == "stream":
+            [done] = [d for ev, d in _sse_frames(client.post("/chat/stream", json=body).text) if ev == "done"]
+        else:
+            done = client.post("/chat", json=body).json()
+        assert done.get("refused") is want, (want, done.get("reply"))

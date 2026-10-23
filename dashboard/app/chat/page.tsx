@@ -8466,6 +8466,8 @@ export default function ChatPage() {
             ? { thinkingSeconds: Math.max(1, Math.round(streamRes.thinkingMs / 1000)) }
             : {}),
           ...(streamRes.truncated ? { truncated: true } : {}),
+          // v1.378.0 review: a declined nudge's sentence — no Regenerate.
+          ...(streamRes.refused ? { refused: true } : {}),
           ...(turnSteps.length ? { steps: turnSteps } : {}),
           ...(streamRes.timing ? { timing: streamRes.timing } : {}),
           ...(streamRes.resources?.length ? { appResources: streamRes.resources } : {}),
@@ -8657,6 +8659,8 @@ export default function ChatPage() {
         at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
         ...(thinkingPost ? { thinking: thinkingPost } : {}),
         ...((res as { truncated?: unknown }).truncated === true ? { truncated: true } : {}),
+        // v1.378.0 review: MIRROR NOTE — the stream lane's `refused` above.
+        ...((res as { refused?: unknown }).refused === true ? { refused: true } : {}),
         ...(res.route ? { route: res.route } : {}),
         ...(adaptedPost ? { adapted: adaptedPost } : {}),
         ...(deniedPost.length ? { deniedTools: deniedPost } : {}),

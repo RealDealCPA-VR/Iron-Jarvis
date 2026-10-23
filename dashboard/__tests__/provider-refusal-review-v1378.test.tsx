@@ -404,3 +404,29 @@ describe("v1.378.0 review: the words MOVE to the new chat (never copied)", () =>
     expect(Object.values(drafts).some((d) => (d.text ?? "").includes("again"))).toBe(false);
   });
 });
+
+describe("v1.378.0 review: a declined nudge's reply (the done frame's `refused`)", () => {
+  const SENTENCE = `${REFUSAL.title}. ${REFUSAL.fix}`;
+
+  it("offers no Regenerate under it, and is saved as refused", async () => {
+    render(<ChatPage />);
+    await startTurn("hello there");
+    act(() => H.stream.release({ reply: SENTENCE, refused: true, provider: "claude-cli", model: "m" }));
+    expect(await screen.findByText(SENTENCE)).toBeInTheDocument();
+    await waitFor(() => {
+      const saved = lastSaved();
+      expect(saved[saved.length - 1]?.refused).toBe(true);
+    });
+    expect(screen.queryAllByRole("button", { name: /Regenerate reply/ })).toHaveLength(0);
+  });
+
+  it("control: an ordinary reply keeps its Regenerate", async () => {
+    render(<ChatPage />);
+    await startTurn("hello there");
+    act(() => H.stream.release({ reply: "Hello!", provider: "claude-cli", model: "m" }));
+    expect(await screen.findByText("Hello!")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /Regenerate reply/ }).length).toBeGreaterThan(0));
+    const saved = lastSaved();
+    expect(saved[saved.length - 1]?.refused).toBeUndefined();
+  });
+});

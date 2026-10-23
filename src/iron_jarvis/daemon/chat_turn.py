@@ -8761,6 +8761,8 @@ async def run_chat_turn(
     if workflow_draft is not None and resolved_proj is not None and pid:
         workflow_draft["project_id"] = pid
     reply = model_text
+    # v1.378.0 review: the reply IS a declined nudge's sentence (see below).
+    _declined_reply = False
     if workflow_draft is not None:
         # A draft exit SUCCEEDED by proposing — the card is the reply. No
         # "(no reply)" placeholder (the client captions the card), and no
@@ -8776,6 +8778,7 @@ async def run_chat_turn(
             reply = _no_text_reply(
                 tools_used, last_tool_output, _f_refusal, surface=surface_for(body),
             )
+            _declined_reply = _f_refusal is not None
         reply += refusal_footnotes(refused_tools)
         if stopped_note:
             reply += f"\n\n_Note: {stopped_note}._"
@@ -8914,6 +8917,12 @@ async def run_chat_turn(
         # stopped for running out of output tokens — ALWAYS present. MIRROR
         # NOTE (lock-step): the stream done-frame carries the identical key.
         "truncated": bool(_truncated),
+        # REFUSED (v1.378.0 review): the reply is the sentence of a nudge the
+        # provider's safety check DECLINED — the page offers no Regenerate
+        # under it (the same conversation is declined again). Present ONLY
+        # then, so every other turn's key set is unchanged. MIRROR NOTE
+        # (lock-step): the stream done-frame carries the identical key.
+        **({"refused": True} if _declined_reply else {}),
         # REMEMBERED (v1.282.0): the preference sentences this turn kept —
         # ALWAYS present (possibly empty), like doors, so clients never branch
         # on absence. MIRROR NOTE (lock-step): the stream done-frame carries

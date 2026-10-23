@@ -41,3 +41,13 @@ describe("v1.378.0 review: a refusal on a run's timeline", () => {
     expect(stepLabel(ev("provider.failed", { provider: "openai", error: "boom" }))).toBe("Provider openai failed: boom");
   });
 });
+
+describe("v1.378.0 review: the done frame's `refused` is decoded (whitelisted)", () => {
+  it("a real true decodes; anything else leaves the key absent", async () => {
+    const { decodeSSE } = await import("@/lib/useChatStream");
+    const yes = decodeSSE("done", JSON.stringify({ reply: "x", refused: true })) as { refused?: boolean };
+    expect(yes?.refused).toBe(true);
+    const no = decodeSSE("done", JSON.stringify({ reply: "x", refused: "yes" })) as { refused?: boolean };
+    expect(no && "refused" in no).toBe(false);
+  });
+});

@@ -211,6 +211,10 @@ export type SSEEvent =
       /** v1.323.0: the answer stopped because it ran out of output tokens.
        *  Only a real `true` decodes; anything else leaves the key absent. */
       truncated?: boolean;
+      /** v1.378.0 review: the reply is the sentence of a "write your answer"
+       *  nudge the provider's safety check DECLINED — no Regenerate under it.
+       *  Only a real `true` decodes (the daemon sends the key only then). */
+      refused?: boolean;
       /** v1.324.0: the app resources attached to this turn, as read — the
        *  daemon sends the key on every turn (possibly []). */
       resources?: ResourceReceipt[];
@@ -376,6 +380,9 @@ export function stepsFromTools(cards: ToolCard[]): TurnStep[] {
  *  frame) and falls back to the accumulated token text if the stream dropped. */
 export interface ChatStreamResult {
   reply: string;
+  /** v1.378.0 review: the reply is a declined nudge's sentence (the done
+   *  frame's `refused`) — the page offers no Regenerate under it. */
+  refused?: boolean;
   tools_used?: string[];
   /** Armed tools the engine refused this turn. Decoded from the frame since
    *  v1.148.0 but DROPPED here until v1.165.0 — the page could never show a
@@ -759,6 +766,8 @@ export function sseEventFrom(
       }
       // v1.323.0: whitelisted — only a real boolean true says "cut short".
       if (data.truncated === true) ev.truncated = true;
+      // v1.378.0 review: whitelisted the same way — a declined nudge's reply.
+      if (data.refused === true) ev.refused = true;
       // v1.324.0: the attached app resources' receipt — whitelisted per row
       // (lib/mcpInteract); kept even when empty, so "none" is a fact.
       if (Array.isArray(data.resources)) ev.resources = decodeResourceReceipts(data.resources);
@@ -1717,6 +1726,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 ...(ev.prior_tool_results?.length
                   ? { priorToolResults: ev.prior_tool_results }
                   : {}),
+                ...(ev.refused ? { refused: true } : {}),
               };
               break;
             case "error":

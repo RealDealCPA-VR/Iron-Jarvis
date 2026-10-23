@@ -5759,6 +5759,9 @@ async def chat_stream(
         if workflow_draft is not None and resolved_proj is not None and pid:
             workflow_draft["project_id"] = pid
         reply = reply_text or ""
+        # v1.378.0 review: the reply IS a declined nudge's sentence (lock-step
+        # with chat_turn).
+        _declined_reply = False
         if workflow_draft is not None:
             # Mirrors chat_complete: a draft exit is a success — no
             # placeholder, no creation-honesty note.
@@ -5773,6 +5776,7 @@ async def chat_stream(
                 reply = _no_text_reply(
                     tools_used, last_tool_output, _f_refusal, surface=_surface_for(body),
                 )
+                _declined_reply = _f_refusal is not None
             reply += refusal_footnotes(refused_tools)
             if stopped_note:
                 reply += f"\n\n_Note: {stopped_note}._"
@@ -5903,6 +5907,9 @@ async def chat_stream(
             # counts) — ALWAYS present. MIRROR NOTE (lock-step): chat_turn.py's
             # response carries the identical key — edit both or neither.
             "truncated": bool(_truncated),
+            # REFUSED (v1.378.0 review) — present only for a declined nudge's
+            # reply. MIRROR NOTE (lock-step): chat_turn.py's response.
+            **({"refused": True} if _declined_reply else {}),
             # REMEMBERED (v1.282.0) — MIRROR NOTE (lock-step): chat_turn.py's
             # response carries the identical key — edit both or neither.
             "remembered": remembered,
