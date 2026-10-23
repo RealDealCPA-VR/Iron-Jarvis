@@ -61,7 +61,9 @@ test("T3 — a fresh profile opens to chat with no blocking modal, and the mock 
   await composer(page).press("Enter");
   await expect(page.getByText("Hello — are you there?").first()).toBeVisible();
   // The offline mock's scripted answer: a real round trip through the daemon.
-  await expect(page.getByText(/Done\./).first()).toBeVisible({ timeout: 90_000 });
+  // v1.373.0: since v1.359.0 every demo reply opens with `mock.DEMO_OPENING`
+  // ("This is the demo model: …"); the old "Done." opening is gone.
+  await expect(page.getByText(/This is the demo model/).first()).toBeVisible({ timeout: 90_000 });
 });
 
 test("T1 — home is a chat: ≤ 4 sidebar items, no dashboard or grid, the composer focused", async ({ page }) => {

@@ -69,16 +69,18 @@ import {
 } from "@/components/chat/ModelMenu";
 import { joinUndoByPath, normalizeFsPath, type UndoRowLike } from "@/components/chat/ArtifactsRail";
 import { paneTurnWindow, paneWorkInput } from "@/components/terminal/paneWork";
-import {
-  PANE_COMPOSER_BOX,
-  PANE_COMPOSER_CARD,
-  PANE_REPLY_PROSE,
-  PANE_USER_BUBBLE,
-  paneSendClass,
-} from "@/components/terminal/paneChatLook";
+import { PANE_COMPOSER_CARD, paneSendClass } from "@/components/terminal/paneChatLook";
 import { HarnessPanes, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { AccountChip, AccountLimitCard, AccountList } from "@/components/harness/HarnessAccounts";
 import { RewindControl } from "@/components/harness/RewindControl";
+// v1.373.0: the conversation's own reading look (a centred column, 15 px).
+import {
+  HARNESS_COLUMN,
+  HARNESS_COMPOSER_BOX,
+  HARNESS_REPLY_PROSE,
+  HARNESS_TRANSCRIPT_ROWS,
+  HARNESS_USER_BUBBLE,
+} from "@/components/harness/harnessLook";
 import { LibraryCards } from "@/components/harness/LibraryCards";
 import { LiveHelperRows, SavedHelperRows } from "@/components/harness/HarnessHelpers";
 import { applyHelperFrame, helperCallIds, type HelperView } from "@/lib/buildHelpers";
@@ -178,7 +180,7 @@ function LiveText({ stream }: { stream: ReturnType<typeof useChatStream> }) {
     <>
       {thinking ? <ThinkingDisclosure text={thinking} live /> : null}
       {text ? (
-        <div data-testid="harness-live-text" className={PANE_REPLY_PROSE}>
+        <div data-testid="harness-live-text" className={HARNESS_REPLY_PROSE}>
           <Markdown content={text} />
         </div>
       ) : null}
@@ -1281,7 +1283,7 @@ export function HarnessSession({
         <div
           ref={transcriptRef}
           data-testid="harness-transcript"
-          className="min-h-0 flex-1 space-y-4 overflow-y-auto px-1 py-3"
+          className={`min-h-0 flex-1 space-y-6 overflow-y-auto px-1 py-3 ${HARNESS_TRANSCRIPT_ROWS}`}
         >
           {offline ? <OfflineHint /> : null}
           {shown.length === 0 && !busy ? (
@@ -1300,7 +1302,7 @@ export function HarnessSession({
               ) : (
                 <div key={i} className="group flex flex-col items-end gap-1">
                   {m.content ? (
-                    <div data-testid="harness-user-bubble" className={PANE_USER_BUBBLE}>
+                    <div data-testid="harness-user-bubble" className={HARNESS_USER_BUBBLE}>
                       {m.content}
                     </div>
                   ) : null}
@@ -1332,7 +1334,7 @@ export function HarnessSession({
                 {/* v1.372.0: the helper agents this reply's turn started. */}
                 <SavedHelperRows raw={m.helpers} />
                 {m.content ? (
-                  <div className={PANE_REPLY_PROSE}>
+                  <div className={HARNESS_REPLY_PROSE}>
                     <MemoMarkdown content={m.content} />
                   </div>
                 ) : null}
@@ -1454,7 +1456,7 @@ export function HarnessSession({
         </div>
 
         {/* --------------------------------------------- the dock + composer */}
-        <div className="shrink-0 px-1 pb-1">
+        <div className={`shrink-0 px-1 pb-1 ${HARNESS_COLUMN}`}>
           {asking ? (
             <DockAsk
               asks={asks}
@@ -1606,7 +1608,7 @@ export function HarnessSession({
                   void send();
                 }
               }}
-              className={PANE_COMPOSER_BOX}
+              className={HARNESS_COMPOSER_BOX}
             />
             <div className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-2">
               <AttachButton onPick={(picked) => void att.add(picked)} disabled={offline} />

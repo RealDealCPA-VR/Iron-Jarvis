@@ -229,9 +229,10 @@ describe("“/” lists the session's commands and the skills", () => {
     type("/bul");
     await waitFor(() => expect(rowNames("harness-slash-skill")).toEqual(["bulleteer"]), NET);
     expect(rowNames("harness-slash-command")).toEqual([]);
-    // A description counts too: "re" is in /plan's "it reads".
+    // A description counts too: "re" is in /plan's "it reads" — listed
+    // AFTER /rewind, whose NAME holds it (v1.373.0: name matches first).
     type("/re");
-    await waitFor(() => expect(rowNames("harness-slash-command")).toEqual(["plan", "rewind"]));
+    await waitFor(() => expect(rowNames("harness-slash-command")).toEqual(["rewind", "plan"]));
     expect(rowNames("harness-slash-skill")).toEqual(["release-notes", "pdf-tools"]);
     type("/rew");
     await waitFor(() => expect(rowNames("harness-slash-command")).toEqual(["rewind"]));
@@ -659,6 +660,20 @@ describe("the rules on their own", () => {
     );
     expect(slashRows("bullets", cmds, folder, yours).map((r) => r.key)).toEqual(["skill:yours:bulleteer"]);
     expect(cmds.map((c) => c.name)).not.toContain("compact");
+  });
+
+  it("slashRows: a NAME match ranks above a row that matches only by its description", () => {
+    // v1.373.0 review item b: "/b" + Enter used to switch Plan first on
+    // (its description holds a "b") while a skill NAMED with a "b" sat below.
+    const cmds = sessionCommands("act");
+    const yours = [{ name: "bulleteer", description: "bullets", source: "yours" as const }];
+    const rows = slashRows("b", cmds, [], yours).map((r) => r.key);
+    expect(rows[0]).toBe("skill:yours:bulleteer");
+    // Description-only matches are still offered, after the name matches.
+    expect(rows.slice(1).every((k) => k.startsWith("cmd:"))).toBe(true);
+    expect(rows.length).toBeGreaterThan(1);
+    // A name match keeps its place among names: "/plan" leads with the command.
+    expect(slashRows("plan", cmds, [], yours)[0].key).toBe("cmd:plan");
   });
 
   it("atFileRows: files only, best match first, loose matches after exact ones, picked ones left out", () => {

@@ -77,6 +77,11 @@ function holds(text: string, q: string): boolean {
  * case): the commands, then the folder's skills, then the user's — each kept
  * when its name or description holds the query (the chat's filter). A
  * picked skill is not offered again.
+ *
+ * NAME matches come first, then rows that match only by their description,
+ * each group in that same order (v1.373.0): the commands always led, so a
+ * one-letter "/b" + Enter switched Plan first on because its description
+ * holds a "b", while a skill NAMED with a "b" sat below it.
  */
 export function slashRows(
   query: string,
@@ -86,17 +91,20 @@ export function slashRows(
   picked: PickedSkill | null = null,
 ): SlashRow[] {
   const q = query.trim().toLowerCase();
-  const rows: SlashRow[] = [];
+  const named: SlashRow[] = [];
+  const described: SlashRow[] = [];
+  const place = (row: SlashRow, name: string, description: string) => {
+    if (!q || holds(name, q)) named.push(row);
+    else if (holds(description, q)) described.push(row);
+  };
   for (const c of commands) {
-    if (!q || holds(c.name, q) || holds(c.description, q)) rows.push({ kind: "command", key: `cmd:${c.id}`, command: c });
+    place({ kind: "command", key: `cmd:${c.id}`, command: c }, c.name, c.description);
   }
   for (const s of [...(folderSkills ?? []), ...(yourSkills ?? [])]) {
     if (picked && picked.name === s.name && picked.source === s.source) continue;
-    if (!q || holds(s.name, q) || holds(s.description, q)) {
-      rows.push({ kind: "skill", key: `skill:${s.source}:${s.name}`, skill: s });
-    }
+    place({ kind: "skill", key: `skill:${s.source}:${s.name}`, skill: s }, s.name, s.description);
   }
-  return rows;
+  return [...named, ...described];
 }
 
 /** A skills list (`GET /skills` or the session's own) by whitelist. */

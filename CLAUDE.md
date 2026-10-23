@@ -3569,6 +3569,66 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **`/` and `@` in a Build session's box; the app's font is SHIPPED; the
+  harness reads like a document** (v1.373.0, IJ harness part 2 Phase 2 + the
+  user's "I prefer the spacing and font of this UI" beside a screenshot of
+  Claude's own app). `/` (`components/harness/HarnessComposerMenus.tsx`,
+  `lib/buildComposer.ts`): `/plan` (the existing mode switch; "Stop
+  planning" when planning), `/rewind` (`buildRewind.listRewindPoints`: the
+  user's messages newest first, the count of file changes SUMMED to the
+  newest turn — a rewind to an earlier message undoes every later turn — and
+  the existing two-press Rewind), `/model`, the folder's own harness skills
+  (`GET /build/sessions/{id}/skills`; an invalid layer offers none and says
+  why) then the user's (`GET /skills`); NAME matches rank above
+  description-only matches (`slashRows` — a one-letter "/b" + Enter used to
+  switch Plan first on); no `/compact` until Phase 3. A picked skill is a
+  chip for ONE message: `BuildTurnBody.skill` → `ChatBody.skill` (the chat's
+  /skill playbook, its eager 404) or `folder_skill` →
+  `harness/picked_skill.py` (the validated layer only, `[a-z0-9_-]` name,
+  `_inside` + `fs_read_ok`, ≤ 8,000 chars, promptguard, a header-only
+  SKILL.md is a 400 in words, NOT the 404) added to the harness block for
+  that message (not the fingerprint). `@` lists the SESSION folder's files
+  (`lib/atMenuFiles` with an opt-in `fuzzy`; the chat keeps exact matching,
+  pinned); `BuildTurnBody.files` → `harness/sessions.folder_files` (OFF the
+  loop: joined to the folder, RESOLVED — links, junctions, `..`, 8.3 names —,
+  inside the resolved folder, a file, `fs_read_ok`; one bad entry refuses the
+  whole message with a 400 sentence and nothing starts; blank entries are not
+  files); the saved question gains `filePaths` + `skill`. THE READ LIMIT:
+  the lane reads `chat_turn._MAX_ATTACHMENTS` (4) files, so uploads + `@`
+  files over 4 are refused at the route (uploads alone too — they used to
+  start a turn that silently read four) and the box stops the 5th with
+  `READ_LIMIT_WORDS`, counting pending uploads. Enter waits while a list is
+  still LOADING (it used to send the half-typed "@notes"); a message that
+  never started MERGES its words and chips back into the box (old words
+  first); the lists open above the card unless not even one row fits
+  (`chatRefsMenuFit` `preferAbove`), never over the box; the box carries
+  `aria-autocomplete` / `aria-controls` / `aria-activedescendant`. KNOWN:
+  Rewind puts back the words only (not the chips or uploads); a "Resume when
+  ready" continuation re-reads neither the files nor the skill; skill lists
+  are read once per session mount. FONT: `@fontsource-variable/inter` (OFL,
+  pinned exactly) is imported by `app/layout.tsx` (upright + `wght-italic`,
+  before `globals.css`) and "Inter Variable" leads the theme's sans stack —
+  the theme named Inter since the start but no file ever shipped, so
+  Windows drew Segoe UI under Inter's own tracking and features
+  (`cv11`/`ss01`). Self-hosted: no network at run time; each script's file
+  loads only when a page uses it. LOOK: `components/harness/harnessLook.ts`
+  — the transcript's rows and the bottom area (questions, queue, box) sit in
+  ONE centred column, the chat page's 760 px (`HARNESS_COLUMN` is 768 =
+  760 + the wrapper's 4 px padding either side, so the box lines up with the
+  replies — measured), replies/your messages/the box at 15 px, and the
+  Markdown renderer's compact spacing out-ranked inside a reply only
+  (`[&_p]:my-3`, `[&_p]:leading-[1.7]`, `[&_ul]:space-y-1.5` …). The narrow
+  Build PANE chat keeps `paneChatLook` (14 px, compact) — pinned. Pins:
+  `tests/test_build_slash_at{,_review}_v1373.py`,
+  `dashboard/__tests__/ij-harness-slash-at{,-review}-v1373.test.tsx`,
+  `dashboard/__tests__/reading-look-v1373.test.ts`, e2e
+  `dashboard/e2e/ij-harness.spec.ts` (the 390 px `/` and `@` step; its
+  Rewind step now waits for the reply COUNT to grow — it read the first
+  test's identical reply and skipped every later step). SAME RELEASE:
+  `e2e/calm-ui.spec.ts` T3 still waited for the demo's pre-v1.359.0 "Done."
+  opening (now `mock.DEMO_OPENING`, "This is the demo model: …"), so the
+  e2e — not run in CI — failed T3 and skipped its other 41 steps.
+
 - **A Build session can start HELPERS, and a Build turn is HELD on its
   model, pinned account or not** (v1.372.0, IJ harness part 2 Phase 1 —
   `docs/IJ-HARNESS-PLAN-2.md`; the user's decision 4: "at most 3 at a time,

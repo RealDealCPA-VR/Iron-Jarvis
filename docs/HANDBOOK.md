@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.372.0 (2026-10-22).*
+holds itself to. Current as of v1.373.0 (2026-10-22).*
 
 ---
 
@@ -1896,6 +1896,41 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Type `/` or `@` in the IJ harness (v1.373.0)
+
+**`/` opens a list** above the message box in a Build session:
+
+- **/plan** switches the session to planning (or back, when it is planning
+  already).
+- **/rewind** lists your earlier messages, newest first, with how many files
+  each would put back; pick one and press **Rewind to here** twice, as on the
+  message itself.
+- **/model** opens the model menu.
+- Then the skills: the project folder's own skills (marked "this folder"),
+  then your skill library. A picked skill shows as a chip in the box and is
+  used for that one message only.
+
+**`@` lists the files in the session's folder** as you type (letters in
+order are enough: `@dpn` finds `deploy-notes.md`). A picked file shows as a
+chip and the session reads it with your message, the way an attached file
+is read. Only files inside the session's folder are offered or accepted.
+
+- Type to filter, ↑ ↓ to move, Enter or Tab to pick, Esc to close the list
+  without sending (your words stay in the box).
+- One message reads at most **4 files** in all (attached and picked with
+  `@`); the box says so before you send.
+- Ctrl+Enter (queue a message while a reply runs) keeps the chips with the
+  message. If a message cannot start (say its file was deleted), its words
+  and chips come back into the box.
+- **Rewind to here** puts the message's words back in the box, not its
+  chips or attached files; pick them again if you need them.
+
+**Easier to read.** A Build session's conversation now sits in one centred
+column with its message box, in larger type with more room between lines,
+paragraphs and list items — the narrow chat inside a Build terminal keeps its
+compact look. The whole app now uses the **Inter** font, shipped with the
+app (it was always the intended font, but Windows showed Segoe UI instead).
 
 ## Helper agents and skills in the IJ harness (v1.372.0)
 

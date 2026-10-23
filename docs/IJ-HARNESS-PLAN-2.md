@@ -160,6 +160,26 @@ picking one adds it to the message the way an attached file is.
   could not have found by name alone.
 - The menus never cover the box on a phone-width window (390 px check).
 
+**Result (v1.373.0, 2026-10-22).** Doer + reviewer (10 findings fixed, each
+pinned red-first; the worst: five uploads started a turn that silently read
+four, and Enter while a list was loading sent the half-typed "@notes").
+- Screen tests: the `/` and `@` lists, picks, Escape, the queue and the read
+  limit — 34 in the two Phase 2 files, all passing.
+- e2e on Edge: 10 of 10, including the 390 px step (both lists above the box,
+  inside the window, no sideways pan) and a real turn that carried a folder
+  skill and an `@` file.
+- Live, on a scratch daemon with Claude: given only `@docs/deploy-notes.md`,
+  the session answered "The deploy codename is CORAL-TELESCOPE-17, according
+  to docs/deploy-notes.md"; the saved question records the file.
+
+Same release, from the user's comparison with Claude's own app: the
+conversation sits in one centred 760 px column with its box, in 15 px type
+with roomier lines, and Inter now ships with the app.
+
+Left open: Rewind restores the words, not the chips; a "Resume when ready"
+continuation does not re-read the files or the skill; skill lists are read
+once per session.
+
 ## Phase 3 — The conversation shows the work (target v1.374.0)
 
 **What you see.**

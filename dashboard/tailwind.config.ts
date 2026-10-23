@@ -88,6 +88,8 @@ const config: Config = {
       },
       fontFamily: {
         sans: [
+          // v1.373.0: the bundled face (app/layout.tsx imports it).
+          "Inter Variable",
           "Inter",
           "ui-sans-serif",
           "system-ui",

@@ -1,4 +1,12 @@
 import type { Metadata, Viewport } from "next";
+// v1.373.0: the app's font, shipped WITH the app. The theme named Inter from
+// the start but no font file was ever bundled, so Windows drew Segoe UI and
+// the IJ harness read cramped beside Claude's own app (the user's report).
+// Self-hosted from the package (OFL-1.1): no network at run time, packaged
+// app included. The upright and the italic axis; each script's file loads
+// only when a page uses that script.
+import "@fontsource-variable/inter";
+import "@fontsource-variable/inter/wght-italic.css";
 import "./globals.css";
 import { DesktopNotifyBridge } from "@/components/DesktopNotifyBridge";
 import { RouteVisitBeacon } from "@/components/RouteVisitBeacon";
