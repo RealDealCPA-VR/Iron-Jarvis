@@ -567,6 +567,15 @@ class _ReplyWatch:
                         "ok": bool(ok) if ok is not None else None,
                         "ms": int((time.time() - began[1]) * 1000) if began else None,
                     }
+                    # v1.378.0 review: what the step was done to ("cart.py",
+                    # "python"), from the frame's own arguments — the words
+                    # the live row shows (lib/workTarget's twin), saved
+                    # before the detail as the chat page saves them.
+                    from ...harness.step_target import step_target
+
+                    target = step_target(name, began[2] if began else None)
+                    if target:
+                        step["target"] = target
                     if isinstance(data.get("detail"), dict):
                         step["detail"] = data["detail"]
                     self.steps.append(step)
