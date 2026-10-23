@@ -405,10 +405,22 @@ class ProcessStartTool(Tool):
         "required": ["command"],
     }
 
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> Any:
+        """v1.375.0 (``harness/git_guard``): a commit / push / pull request
+        started this way asks first, every time, on a session's branch."""
+        from .git_guard import guard_check
+
+        return guard_check(args.get("command") if isinstance(args, dict) else "")
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         command = str(args.get("command") or "").strip()
         if not command:
             return ToolResult(ok=False, error="`command` is empty")
+        from .git_guard import force_refusal
+
+        refused = force_refusal(command)
+        if refused:
+            return ToolResult(ok=False, error=refused)
         try:
             wait_ms = _wait_ms(args, DEFAULT_START_WAIT_MS)
         except ValueError as exc:
@@ -586,9 +598,22 @@ class ProcessWriteTool(Tool):
         "required": ["id"],
     }
 
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> Any:
+        """v1.375.0 (``harness/git_guard``): a commit / push / pull request
+        TYPED into a running shell asks first, every time, on a session's
+        branch."""
+        from .git_guard import guard_check
+
+        return guard_check(args.get("input") if isinstance(args, dict) else "")
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from ..tools.builtins import _bool_arg
 
+        from .git_guard import force_refusal
+
+        refused = force_refusal(args.get("input") if isinstance(args, dict) else "")
+        if refused:
+            return ToolResult(ok=False, error=refused)
         mp, err = _lookup(args, ctx)
         if mp is None:
             return ToolResult(ok=False, error=err)

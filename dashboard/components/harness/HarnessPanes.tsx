@@ -28,6 +28,7 @@ import { PlanChecklist } from "@/components/chat/PlanChecklist";
 import { ChangedFiles, fetchTurnChangeSet, type ChangeUndoState, type FileChange } from "@/components/chat/ChangedFiles";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { BrowserPreview } from "@/components/harness/BrowserPreview";
+import { BranchView } from "@/components/harness/HarnessBranch";
 import { ConfirmButton } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
 import type { PlanView } from "@/lib/planChecklist";
@@ -193,16 +194,90 @@ function SessionTerminal({
   );
 }
 
+/** v1.375.0: a session on its own branch shows two views of its changes —
+ *  what this session changed (the undo journal, with Undo) and the whole
+ *  BRANCH against its base, committed and not, with its buttons. */
+function ChangesScope({
+  scope,
+  onScope,
+}: {
+  scope: "session" | "branch";
+  onScope: (s: "session" | "branch") => void;
+}) {
+  const opt = (value: "session" | "branch", label: string) => (
+    <button
+      type="button"
+      data-testid={`changes-scope-${value}`}
+      aria-pressed={scope === value}
+      onClick={() => onScope(value)}
+      className={`rounded-md px-1.5 py-0.5 text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
+        scope === value ? "font-medium text-zinc-100" : "text-zinc-500 hover:text-zinc-200"
+      }`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div data-testid="changes-scope" className="flex items-center gap-1">
+      {opt("session", "This session")}
+      {opt("branch", "Branch")}
+    </div>
+  );
+}
+
 function ChangesPane({
   view,
   refreshKey,
   undoFor,
   onUndo,
+  onSessionChanged,
+  onSessionGone,
 }: {
   view: BuildSessionView;
   refreshKey: number;
   undoFor: (path: string) => ChangeUndoState | null;
   onUndo: (actionId: string, path: string) => Promise<void>;
+  onSessionChanged?: () => void;
+  onSessionGone?: () => void;
+}) {
+  const [scope, setScope] = useState<"session" | "branch">("session");
+  if (view.git && scope === "branch") {
+    return (
+      <div data-testid="pane-changes" className="space-y-2">
+        <ChangesScope scope={scope} onScope={setScope} />
+        <BranchView
+          sessionId={view.id}
+          git={view.git}
+          refreshKey={refreshKey}
+          onChanged={onSessionChanged}
+          onArchived={onSessionGone}
+        />
+      </div>
+    );
+  }
+  return (
+    <SessionChanges
+      view={view}
+      refreshKey={refreshKey}
+      undoFor={undoFor}
+      onUndo={onUndo}
+      scopeBar={view.git ? <ChangesScope scope={scope} onScope={setScope} /> : null}
+    />
+  );
+}
+
+function SessionChanges({
+  view,
+  refreshKey,
+  undoFor,
+  onUndo,
+  scopeBar,
+}: {
+  view: BuildSessionView;
+  refreshKey: number;
+  undoFor: (path: string) => ChangeUndoState | null;
+  onUndo: (actionId: string, path: string) => Promise<void>;
+  scopeBar: ReactNode;
 }) {
   const [changes, setChanges] = useState<FileChange[] | null>(null);
   const [more, setMore] = useState(false);
@@ -233,6 +308,7 @@ function ChangesPane({
 
   return (
     <div data-testid="pane-changes" className="space-y-2">
+      {scopeBar}
       <div className="flex items-center gap-2">
         <p className="min-w-0 flex-1 text-[12px] text-zinc-500">What this session changed on disk.</p>
         <button
@@ -277,6 +353,8 @@ export function HarnessPanes({
   refreshKey,
   undoFor,
   onUndo,
+  onSessionChanged,
+  onSessionGone,
 }: {
   view: BuildSessionView;
   livePlan: PlanView | null;
@@ -285,6 +363,10 @@ export function HarnessPanes({
   refreshKey: number;
   undoFor: (path: string) => ChangeUndoState | null;
   onUndo: (actionId: string, path: string) => Promise<void>;
+  /** v1.375.0: the Branch view changed the session (merged, pushed). */
+  onSessionChanged?: () => void;
+  /** v1.375.0: the Branch view removed the worktree (the session is archived). */
+  onSessionGone?: () => void;
 }) {
   const [tab, setTab] = useState<PaneTab>("plan");
   const [terminalOpened, setTerminalOpened] = useState(false);
@@ -351,7 +433,14 @@ export function HarnessPanes({
       >
         {tab === "plan" ? <PlanPane view={view} livePlan={livePlan} /> : null}
         {tab === "changes" ? (
-          <ChangesPane view={view} refreshKey={refreshKey} undoFor={undoFor} onUndo={onUndo} />
+          <ChangesPane
+            view={view}
+            refreshKey={refreshKey}
+            undoFor={undoFor}
+            onUndo={onUndo}
+            onSessionChanged={onSessionChanged}
+            onSessionGone={onSessionGone}
+          />
         ) : null}
         {tab === "browser" ? <BrowserPreview threadId={view.id} seen={seen} /> : null}
         {tab === "files" ? (

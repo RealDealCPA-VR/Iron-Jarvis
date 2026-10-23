@@ -504,7 +504,9 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
         pin, account_provider = await asyncio.to_thread(turn_account, platform, thread_id, setup)
     except Exception as exc:  # noqa: BLE001 — the account's own words (an HTTPException)
         raise CompactRefused(str(getattr(exc, "detail", "") or exc), 409) from None
-    project = await asyncio.to_thread(project_for_path, engine, S.folder_of(row))
+    # v1.375.0: a session on its own branch belongs to the project of the
+    # folder the user picked (S.checkout_of — its worktree is outside it).
+    project = await asyncio.to_thread(project_for_path, engine, S.checkout_of(row))
     asked = SimpleNamespace(
         provider=account_provider or str(setup.get("provider") or ""), model=str(setup.get("model") or ""),
     )

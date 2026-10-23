@@ -204,7 +204,23 @@ class SandboxedShellTool(Tool):
             self._advised_sessions.popitem(last=False)
         return f"[warning] {_NO_CONFINEMENT_WARNING}" if first else _COMPACT_ADVISORY
 
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> Any:
+        """v1.375.0: while a Build turn works on its own branch, a ``git
+        commit`` / ``git push`` / ``gh pr create`` asks first in every
+        posture, once per call (``harness/git_guard``); None otherwise — the
+        ordinary permission verdict decides, exactly as before."""
+        from ..harness.git_guard import guard_check
+
+        return guard_check(args.get("command") if isinstance(args, dict) else "")
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        # v1.375.0: a force push from a session's branch is refused before
+        # anything runs, whatever the posture or a card's answer.
+        from ..harness.git_guard import force_refusal
+
+        refused = force_refusal(args.get("command") if isinstance(args, dict) else "")
+        if refused:
+            return ToolResult(ok=False, output="", error=refused)
         policy = SandboxPolicy.from_config(getattr(ctx.config, "sandbox", {}))
         # Honor an optional runtime hint on config without depending on it.
         prefer = getattr(ctx.config, "sandbox_runtime", "native") or "native"

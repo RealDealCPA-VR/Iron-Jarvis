@@ -291,8 +291,12 @@ export function ChangedFiles({
   undoFor,
   onUndo,
   onUndone,
+  defaultOpen = false,
 }: {
   changes: FileChange[];
+  /** v1.375.0: start with the files listed (a Build session's Branch view,
+   *  a pane that exists to show them). Omitted: the one quiet line. */
+  defaultOpen?: boolean;
   /** Open a file's diff. Omitted: this component opens `DiffView` itself. */
   onOpen?: (path: string) => void;
   /** The daemon listed only the first files (`truncated_files`). */
@@ -307,7 +311,7 @@ export function ChangedFiles({
    *  the turn's changes again. */
   onUndone?: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [viewing, setViewing] = useState<string | null>(null);
   const [undoing, setUndoing] = useState<string | null>(null);
   const [undoErr, setUndoErr] = useState<string | null>(null);

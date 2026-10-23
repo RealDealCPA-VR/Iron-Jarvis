@@ -18,6 +18,7 @@ import { BUILD_SESSION_PREFIX } from "@/lib/buildLinks";
 import type { PlanStepState, PlanView } from "@/lib/planChecklist";
 import type { PaneMessage } from "@/components/terminal/paneWork";
 import { decodeQueuedItem, type QueuedItem } from "@/lib/buildComposer";
+import { decodeSessionGit, type SessionGit } from "@/lib/buildGit";
 
 // Where a Build session opens lives in the import-free lib/buildLinks (the
 // bell and the Activity rows read it); re-exported here for the screen.
@@ -38,6 +39,8 @@ export interface BuildSessionRow {
   running: boolean;
   waiting: boolean;
   archived: boolean;
+  /** v1.375.0: the session's own git branch ("" = it works in its folder). */
+  branch: string;
 }
 
 export interface BuildFolder {
@@ -67,6 +70,7 @@ function decodeRow(raw: unknown): BuildSessionRow | null {
     running: r.running === true,
     waiting: r.waiting === true,
     archived: r.archived === true,
+    branch: str(r.branch, 300),
   };
 }
 
@@ -151,6 +155,9 @@ export interface BuildSessionView extends BuildSessionRow {
   /** v1.374.0: the summary standing in for the older turns (Compact) — raw,
    *  lib/buildContext decodeCompaction; null = none. */
   compaction: unknown;
+  /** v1.375.0: the session's own git branch (lib/buildGit); null = it works
+   *  in its folder directly. */
+  git: SessionGit | null;
 }
 
 /** A transcript line: the chat page's own message shape (the daemon keeps
@@ -299,6 +306,7 @@ export function decodeSessionView(raw: unknown): BuildSessionView | null {
     accountWait: r.account_wait ?? null,
     knowsAccounts: "account_limit" in r || "account_wait" in r || "account" in r,
     compaction: r.compaction ?? null,
+    git: decodeSessionGit(r.git),
   };
 }
 

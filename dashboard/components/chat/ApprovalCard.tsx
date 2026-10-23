@@ -353,12 +353,17 @@ export function ApprovalCard({
       </p>
 
       {/* Only a local-only chat's card says so: a plan ask is once-only for
-          its own reason (the line above). */}
-      {onceOnly && !planAsk && !buildPlanAsk && (
+          its own reason (the line above). v1.375.0: so is a commit or push
+          on a Build session's own branch, which says ITS reason. */}
+      {onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "git" ? (
+        <p data-testid="approval-git-once" className="text-[11px] leading-relaxed text-zinc-400">
+          A commit or push on this session&apos;s branch asks you every time.
+        </p>
+      ) : onceOnly && !planAsk && !buildPlanAsk ? (
         <p data-testid="approval-local-only" className="text-[11px] leading-relaxed text-zinc-400">
           This chat is local only, so this asks every time.
         </p>
-      )}
+      ) : null}
 
       {browserAction && (
         <p data-testid="approval-tab-note" className="text-[11px] leading-relaxed text-zinc-400">

@@ -411,7 +411,7 @@ def stretch_evidence(engine: Any, thread_id: str, turn_ids: Any) -> Evidence | N
 
     from ..core.models import ChatThreadRecord, ToolInvocation, UndoJournal, is_build_thread
     from .rewind import _naive_utc
-    from .sessions import folder_of, session_id_for
+    from .sessions import checkout_of, session_id_for
 
     with session_scope(engine) as db:
         row = db.get(ChatThreadRecord, str(thread_id or ""))
@@ -421,7 +421,9 @@ def stretch_evidence(engine: Any, thread_id: str, turn_ids: Any) -> Evidence | N
             messages = json.loads(row.messages_json or "[]")
         except (TypeError, ValueError):
             messages = []
-        folder = folder_of(row)
+        # v1.375.0: a session on its own branch keeps its lessons and edits
+        # with the folder the user picked (its worktree is one of many).
+        folder = checkout_of(row)
     messages = [m for m in messages if isinstance(m, dict)] if isinstance(messages, list) else []
     wanted = list(dict.fromkeys(str(t) for t in (turn_ids or []) if t))
     kept: list[dict[str, Any]] = []

@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageSquarePlus } from "lucide-react";
-import { HarnessSidebar } from "@/components/harness/HarnessSidebar";
+import { HarnessSidebar, type StartExtra } from "@/components/harness/HarnessSidebar";
 import { HarnessSession } from "@/components/harness/HarnessSession";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import type { RailPane } from "@/components/terminal/PaneRail";
@@ -149,9 +149,10 @@ export function IjHarnessView({
     [folders, selected],
   );
 
-  async function start(folder: string): Promise<string | null> {
+  async function start(folder: string, extra?: StartExtra): Promise<string | null> {
     try {
-      const made = await createSession(folder);
+      // v1.375.0: New session's branch switch rides only when it was shown.
+      const made = await (extra ? createSession(folder, { ...extra }) : createSession(folder));
       if (!made) return "The session could not be started.";
       pickedRef.current = true;
       setSelected(made.id);

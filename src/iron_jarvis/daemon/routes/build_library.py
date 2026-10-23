@@ -67,7 +67,8 @@ def register(app: FastAPI, d: Any) -> None:
         if row is None:
             raise HTTPException(status_code=404, detail="no such Build session")
         try:
-            return {**L.view(engine_of(), S.folder_of(row)), "reflection": L.status_of(thread_id)}
+            # v1.375.0: a branch's library is the picked folder's (S.checkout_of).
+            return {**L.view(engine_of(), S.checkout_of(row)), "reflection": L.status_of(thread_id)}
         except L.LibraryRefused as exc:
             raise _refused(exc) from None
 

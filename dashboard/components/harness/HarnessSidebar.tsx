@@ -23,6 +23,14 @@ import { PaneDot, stateWord } from "@/components/terminal/PaneState";
 import type { RailPane } from "@/components/terminal/PaneRail";
 import { formatAge } from "@/lib/threadStatus";
 import type { BuildFolder } from "@/lib/buildSessions";
+import { fetchFolderGit, folderGitLine, type FolderGit } from "@/lib/buildGit";
+
+/** v1.375.0: what New session sends beside the folder. */
+export interface StartExtra {
+  /** Work on a new branch in its own worktree (true) or in the folder
+   *  directly (false). Absent: the daemon decides (a branch when it can). */
+  branch?: boolean;
+}
 
 const ROW =
   "flex w-full min-w-0 items-center gap-2 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60";
@@ -35,19 +43,48 @@ function SessionDot({ running, waiting }: { running: boolean; waiting: boolean }
   return <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${cls}`} />;
 }
 
+/** How long New session waits after the folder changes before it asks the
+ *  daemon whether the folder is in a git repository. */
+export const FOLDER_GIT_DEBOUNCE_MS = 300;
+
 function NewSessionForm({
   defaultFolder,
   onStart,
   onClose,
 }: {
   defaultFolder: string | null;
-  onStart: (folder: string) => Promise<string | null>;
+  onStart: (folder: string, extra?: StartExtra) => Promise<string | null>;
   onClose: () => void;
 }) {
   const [folder, setFolder] = useState(defaultFolder ?? "");
   const [picking, setPicking] = useState(!defaultFolder);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // v1.375.0 (part 2, Phase 4): is the folder in a git repository? Then the
+  // session works on its own branch by default — the switch says so and
+  // turns it off ("work in the folder directly").
+  const [gitInfo, setGitInfo] = useState<{ folder: string; info: FolderGit | null } | null>(null);
+  const [onBranch, setOnBranch] = useState(true);
+  useEffect(() => {
+    const f = folder.trim();
+    if (!f) {
+      setGitInfo(null);
+      return;
+    }
+    let live = true;
+    const t = setTimeout(() => {
+      void fetchFolderGit(f).then((info) => {
+        if (live) setGitInfo({ folder: f, info });
+      });
+    }, FOLDER_GIT_DEBOUNCE_MS);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [folder]);
+  const info = gitInfo && gitInfo.folder === folder.trim() ? gitInfo.info : null;
+  const showSwitch = !!info && info.repo && info.canBranch;
+  const gitLine = folderGitLine(info);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -58,7 +95,9 @@ function NewSessionForm({
     }
     setBusy(true);
     setProblem(null);
-    const err = await onStart(f);
+    // `branch` rides only when the switch was shown for THIS folder; else the
+    // daemon decides (a branch when the folder can have one).
+    const err = await (showSwitch ? onStart(f, { branch: onBranch }) : onStart(f));
     setBusy(false);
     if (err) setProblem(err);
   }
@@ -83,6 +122,29 @@ function NewSessionForm({
         placeholder="Paste a folder path"
         className="w-full rounded-lg border hairline bg-transparent px-2 py-1.5 font-mono text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent/50"
       />
+      {showSwitch ? (
+        <label data-testid="harness-new-branch" className="flex items-start gap-2 text-[12px] text-zinc-300">
+          <input
+            type="checkbox"
+            data-testid="harness-new-branch-switch"
+            checked={onBranch}
+            onChange={(e) => setOnBranch(e.target.checked)}
+            className="mt-0.5 accent-accent"
+          />
+          <span className="min-w-0">
+            Work on a new branch
+            <span className="block text-[11px] text-zinc-500">
+              {onBranch
+                ? `A worktree beside the repository, on its own ij/ branch from ${info?.branch || "the current commit"}. Your checkout is not touched.`
+                : "Off: the session works in the folder directly, on the branch checked out there."}
+            </span>
+          </span>
+        </label>
+      ) : gitLine ? (
+        <p data-testid="harness-new-git-note" className="text-[11px] text-zinc-500">
+          {gitLine}
+        </p>
+      ) : null}
       {problem ? (
         <p role="alert" className="text-[12px] text-tone-danger">
           {problem}
@@ -227,6 +289,7 @@ function FolderGroup({
                 type="button"
                 data-testid={`harness-session-row-${s.id}`}
                 aria-current={current ? "true" : undefined}
+                title={s.branch ? `On its own branch, ${s.branch}` : undefined}
                 onClick={() => onSelect(s.id)}
                 className={`${ROW} ${current ? "bg-white/[0.07] text-zinc-100" : "text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100"}`}
               >
@@ -260,8 +323,9 @@ export function HarnessSidebar({
   listError: string | null;
   selectedId: string | null;
   onSelect: (id: string) => void;
-  /** Start a session in `folder`; resolves to the daemon's refusal, or null. */
-  onStart: (folder: string) => Promise<string | null>;
+  /** Start a session in `folder`; resolves to the daemon's refusal, or null.
+   *  v1.375.0: `extra.branch` — New session's branch switch, when shown. */
+  onStart: (folder: string, extra?: StartExtra) => Promise<string | null>;
   onRename: (path: string, name: string) => Promise<string | null>;
   defaultFolder: string | null;
   terminals: RailPane[];
@@ -284,8 +348,8 @@ export function HarnessSidebar({
       {creating ? (
         <NewSessionForm
           defaultFolder={defaultFolder}
-          onStart={async (folder) => {
-            const err = await onStart(folder);
+          onStart={async (folder, extra) => {
+            const err = await (extra ? onStart(folder, extra) : onStart(folder));
             if (!err) setCreating(false);
             return err;
           }}

@@ -96,6 +96,14 @@ def _ask_timeout_for(origin: str) -> float | None:
     return SESSION_APPROVAL_TIMEOUT_S
 
 
+def _once_spend(spend: object) -> bool:
+    """A spend check that asks ONCE, every time (v1.375.0 — a commit / push
+    on a Build session's own branch, ``harness/git_guard``): paused about
+    alone, "Allow once" and Deny only. MIRROR NOTE: routes/chat.py's
+    ``_spend_once``."""
+    return bool(spend is not None and getattr(spend, "ask", False) and getattr(spend, "once_only", False))
+
+
 #: THE PLAN ASK (v1.350.0). With ``config.plan_approval`` on, a planned-steps
 #: run that a person is watching shows its plan and waits for Approve before
 #: any step runs. The ask is an ORDINARY pause (``_pause_for_approval``: the
@@ -2613,6 +2621,14 @@ class AgentRuntime:
             # v1.350.0: a plan is approved or declined, nothing wider — the
             # card's "Allow once" + "Deny" (the chat lane's local-only flag).
             requested["once_only"] = True
+        if _once_spend(spend):
+            # v1.375.0: a commit / push on a Build session's branch asks every
+            # time (harness/git_guard) — "Allow once" and Deny only; a wider
+            # answer is read as once below. MIRROR NOTE: the stream lane.
+            requested["once_only"] = True
+            requested["can_always"] = False
+            if getattr(spend, "reason", ""):
+                requested["once_reason"] = spend.reason
         if spend is not None:
             # v1.346.0: what this call would spend, in the service's words —
             # the card's one quiet line (lock-step with the chat lane's frame).
@@ -2655,6 +2671,9 @@ class AgentRuntime:
             self._inflight_state.add(restore)
             restore.add_done_callback(self._inflight_state.discard)
             await asyncio.shield(restore)
+        if _once_spend(spend) and decision in ("conversation", "always", "tab"):
+            # v1.375.0: approving one commit / push never approves the next.
+            decision = "once"
         await self.p.event_bus.publish(
             EventType.APPROVAL_RESOLVED,
             {"approval_id": approval_id, "tool": tc.name, "decision": decision},
@@ -3167,6 +3186,10 @@ class AgentRuntime:
                     if _c.name not in armed_names:
                         continue
                     if broken_calls.get(call_signature(_c.name, _c.arguments), ""):
+                        continue
+                    if _once_spend(spend_by_call.get(id(_c))):
+                        # v1.375.0: asked about alone, every time — never in
+                        # a batch (MIRROR NOTE: the stream lane's per-call key).
                         continue
                     _perm = self._pause_needed(
                         session, _c, agent_def, session_allow,

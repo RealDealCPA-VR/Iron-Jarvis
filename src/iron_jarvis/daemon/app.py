@@ -3371,6 +3371,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build_library as _build_library_routes
 
     _build_library_routes.register(app, d)
+    # A Build session's own git branch (v1.375.0, part 2 Phase 4): the
+    # Branch view, Commit (a drafted message), Push, Create PR, Merge into
+    # the base, Discard — each a person's action.
+    from .routes import build_git as _build_git_routes
+
+    _build_git_routes.register(app, d)
     # Share my profile with Build (v1.306.0): the per-CLI switches on the
     # Memory page's "What Jarvis knows about you" card.
     from .routes import profile_share as _profile_share_routes

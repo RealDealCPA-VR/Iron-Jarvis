@@ -131,11 +131,34 @@ def check_git() -> dict:
         ok,
         f"git found at {path}."
         if ok
-        else "git is not on PATH — needed for git-native sessions and review/approve.",
+        else "git is not on PATH — Build sessions then work in their folder directly, with "
+        "no branch of their own (and git-native review is off).",
         fix=""
         if ok
         else "Install Git: https://git-scm.com/downloads (optional unless you "
-        "want git-native review).",
+        "want Build sessions on their own branch, or git-native review).",
+        level=RECOMMENDED,
+    )
+
+
+def check_gh() -> dict:
+    """v1.375.0 (IJ harness part 2, Phase 4): the GitHub CLI, which a Build
+    session's Create PR uses (and its checks). Without it Create PR opens
+    GitHub's own page instead. Presence only: whether it is signed in is a
+    network call, asked when the user opens a branch's pull request."""
+    path = _which("gh")
+    ok = path is not None
+    return _result(
+        "gh",
+        ok,
+        f"GitHub CLI (gh) found at {path}."
+        if ok
+        else "The GitHub CLI (gh) is not on PATH — a Build session's Create PR opens "
+        "GitHub's own page instead.",
+        fix=""
+        if ok
+        else "Install the GitHub CLI: https://cli.github.com, then sign in with gh auth login "
+        "(optional unless you want pull requests made from Build).",
         level=RECOMMENDED,
     )
 
@@ -653,6 +676,7 @@ CHECKS = [
     check_python,
     check_uv,
     check_git,
+    check_gh,
     check_node,
     check_pnpm,
     check_browser,

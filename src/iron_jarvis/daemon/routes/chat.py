@@ -1046,6 +1046,17 @@ def _clean_setup(raw: Any) -> str:
     compaction = _clean_compaction(raw.get("compaction"))
     if compaction:
         out["compaction"] = compaction
+    # IJ HARNESS BRANCHES (v1.375.0, part 2 Phase 4) — a Build session's own
+    # git branch and worktree (repository, the folder the user picked, the
+    # branch, its base and base commit, then what happened: pushed, the pull
+    # request, merged, removed), by its own whitelist. ONLY the /build routes
+    # write it (create, and the git actions); a session PATCH has no field
+    # for it and a chat PUT refuses a session.
+    from ...harness.branches import clean_git_record as _clean_git
+
+    git_facts = _clean_git(raw.get("git"))
+    if git_facts:
+        out["git"] = git_facts
     return json.dumps(out, separators=(",", ":")) if out else ""
 
 
@@ -4632,19 +4643,30 @@ async def chat_stream(
                     d.platform.registry, calls, ctx, {*armed, *ask_armed}
                 )
 
+                def _spend_once(_c) -> bool:
+                    # v1.375.0: a spend check that asks ONCE, every time (a
+                    # commit / push / pull request on a Build session's own
+                    # branch — harness/git_guard): carded like the plan door,
+                    # alone, "Allow once" and Deny only. MIRROR NOTE: the
+                    # per-call branch and the agent runtime read it the same.
+                    _s = _spend.get(id(_c))
+                    return bool(_s is not None and _s.ask and getattr(_s, "once_only", False))
+
                 def _would_card(_c) -> str:
                     # A PROTECTED setting is carded even in Auto-approve
                     # (redesign S3, ALWAYS_CARD_TOOLS). MIRROR NOTE: the
                     # per-call branch below repeats this rule.
                     if _c.name not in {*armed, *ask_armed}:
                         return ""
-                    if _c.name in _ONCE_ONLY:
+                    if _c.name in _ONCE_ONLY or _spend_once(_c):
                         # v1.367.0: the plan door cards in EVERY posture, by
                         # itself (never batched with another call). The
                         # per-call branch below is what DECIDES (pinned); this
                         # mirror keeps the two predicates agreeing (the
                         # v1.247.0 rule) — its per-call key joins no batch, so
-                        # it changes no grouping by itself.
+                        # it changes no grouping by itself. v1.375.0: so does
+                        # a once-only spend check (a commit / push on a Build
+                        # session's branch, harness/git_guard).
                         _ct = d.platform.registry.get(_c.name)
                         _cp = _ct.perm_key() if _ct is not None else _c.name
                         if d.platform.permissions.mode_for(_cp, overrides) is PermissionMode.DENY:
@@ -4804,7 +4826,7 @@ async def chat_stream(
                     # the v1.350.0 approve_plan rules. MIRROR NOTE:
                     # `_would_card` reads it the same way.
                     _once_only = (
-                        not _unarmed and tc.name in _ONCE_ONLY
+                        not _unarmed and (tc.name in _ONCE_ONLY or _spend_once(tc))
                         and _mode is not PermissionMode.DENY
                     )
                     _card_key = (
@@ -4922,6 +4944,11 @@ async def chat_stream(
                                 # read as once below. v1.367.0: the plan
                                 # door's card too.
                                 _frame["once_only"] = True
+                                if _sc is not None and getattr(_sc, "reason", "") and not _local_ask:
+                                    # v1.375.0: WHY it asks every time (the
+                                    # card says so in its own words — "git":
+                                    # a commit / push on a session's branch).
+                                    _frame["once_reason"] = _sc.reason
                             if _count > 1:
                                 _examples = [
                                     _redacted(_c) for _c in _group[:3]

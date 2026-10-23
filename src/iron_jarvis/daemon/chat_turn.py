@@ -2366,10 +2366,17 @@ def spend_not_asked_invoke_kwargs(check: Any) -> dict[str, Any]:
     if check is None or not bool(getattr(check, "ask", False)):
         return {}
     words = str(getattr(check, "words", "") or "").strip() or "this call would spend money"
+    # v1.375.0: a once-only verdict (a commit / push on a Build session's own
+    # branch, harness/git_guard) is not about money — no "free" way round it.
+    tail = ONCE_NOT_ASKED_TAIL if getattr(check, "once_only", False) else SPEND_NOT_ASKED_TAIL
     return {
-        "deny_reason": f"{words} — {SPEND_NOT_ASKED_TAIL}",
+        "deny_reason": f"{words} — {tail}",
         "deny_label": SPEND_NOT_ASKED_LABEL,
     }
+
+
+#: v1.375.0: the POST lane's refusal tail for a call that asks every time.
+ONCE_NOT_ASKED_TAIL = "this lane cannot ask for approval; use the chat page (POST /chat/stream)."
 
 
 #: v1.344.0 (M3) — the refusal labels a chat turn footnotes, mapped to the
@@ -2397,7 +2404,9 @@ def refusal_label(error: str) -> str:
         return "not armed"
     if text.startswith("low trust:"):
         return "low trust"
-    if text.startswith(f"{SPEND_NOT_ASKED_LABEL}:") and SPEND_NOT_ASKED_TAIL in text:
+    if text.startswith(f"{SPEND_NOT_ASKED_LABEL}:") and (
+        SPEND_NOT_ASKED_TAIL in text or ONCE_NOT_ASKED_TAIL in text
+    ):
         # v1.346.0: the POST lane's spend refusal — the breaker's own
         # ``NOT RUN:`` sentence (no tail) keeps reading as "" below.
         return SPEND_NOT_ASKED_FOOTNOTE
@@ -4937,6 +4946,15 @@ async def _build_harness(
     folder = (getattr(body, "workspace_dir", "") or "").strip() or (
         str(getattr(resolved_proj, "root", "") or "").strip() if resolved_proj is not None else ""
     )
+    # v1.375.0 (part 2, Phase 4): a Build session on its own git branch works
+    # in a WORKTREE; the folder the user picked (in the main checkout) is
+    # where an untracked rule file, an untracked harness layer and the
+    # folder's experience library live (harness/branches). None for every
+    # other turn — exactly as before.
+    from ..harness.branches import current as _branch_now
+
+    _branch = _branch_now()
+    home_folder = _branch.checkout if _branch is not None and _branch.checkout else folder
     bus = getattr(d.platform, "event_bus", None)
     rules_section = ""
     rule_files = list(getattr(grounding, "folder_rules_used", None) or [])
@@ -4944,8 +4962,9 @@ async def _build_harness(
         folder and not rule_files
         and chat_folder_rules_enabled(getattr(d.platform, "config", None))
     ):
+        _rules_kw = {"fallback_root": home_folder} if home_folder != folder else {}
         rules_section, rule_files = await asyncio.to_thread(
-            chat_folder_rules_block, folder, event_bus=bus, session_id="chat",
+            chat_folder_rules_block, folder, event_bus=bus, session_id="chat", **_rules_kw,
         )
         if rule_files and grounding is not None:
             grounding.folder_rules_used = list(grounding.folder_rules_used) + [
@@ -4966,14 +4985,22 @@ async def _build_harness(
             _components.read_project_layer, source if source is not None else folder,
             known_tools=known, event_bus=bus, session_id="chat",
         )
+        # v1.375.0: on a branch, a worktree with NO layer of its own reads the
+        # main checkout's (an untracked layer is not in a new worktree).
+        if source is None and home_folder != folder and not layer.present:
+            layer = await asyncio.to_thread(
+                _components.read_project_layer, home_folder,
+                known_tools=known, event_bus=bus, session_id="chat",
+            )
         # v1.370.0 (Phase 7): the folder's EXPERIENCE LIBRARY — the lessons
         # the user accepted for it — read off the loop and rendered as its
         # own component, so it rides the prompt BEFORE the history planner.
-        # Never raises ([] on any failure); [] renders nothing.
+        # Never raises ([] on any failure); [] renders nothing. v1.375.0: a
+        # branch's lessons are the folder the user picked's.
         from ..harness.library import library_lines
 
         library = await asyncio.to_thread(
-            library_lines, getattr(d.platform, "engine", None), folder,
+            library_lines, getattr(d.platform, "engine", None), home_folder,
             event_bus=bus, session_id="chat",
         )
     prov, mod = _harness_model(d.platform, provider, model)
@@ -6969,6 +6996,14 @@ async def _gather_grounding(
         str(getattr(resolved_proj, "root", "") or "").strip()
         if resolved_proj is not None else ""
     )
+    # v1.375.0 (part 2, Phase 4): a Build session on its own git branch sees
+    # its repository THROUGH ITS WORKTREE — the project's folder is the
+    # worktree's copy of it (the main checkout is the user's, never the
+    # session's to change), and a rule file the worktree lacks (untracked) is
+    # read from the main checkout. Unchanged for every other turn.
+    from ..harness.branches import in_worktree as _in_worktree
+
+    _proj_seen = _in_worktree(_proj_root) if _proj_root else ""
 
     def _folder_rules() -> tuple[str, list[str]]:
         # PROJECT FOLDER INSTRUCTIONS (v1.326.0): the grounded project's own
@@ -6978,6 +7013,9 @@ async def _gather_grounding(
         # the loop like every hop here; never raises.
         from ..projects.folder_rules import chat_folder_rules_block
 
+        if _proj_seen != _proj_root:
+            return chat_folder_rules_block(_proj_seen, event_bus=bus, session_id="chat",
+                                           fallback_root=_proj_root)
         return chat_folder_rules_block(_proj_root, event_bus=bus, session_id="chat")
 
     hops: list[tuple[str, Any]] = []
@@ -7016,7 +7054,12 @@ async def _gather_grounding(
         # PROJECT PARITY (v1.141.0): the ROOT line + recent-activity recap
         # agent sessions have always had (agents/runtime.py _project_context).
         if (resolved_proj.root or "").strip():
-            block += f"\n\nProject folder: {resolved_proj.root.strip()}"
+            if _proj_seen and _proj_seen != _proj_root:
+                # v1.375.0: on a branch, the project's folder as this session
+                # holds it (its worktree) — never the main checkout.
+                block += f"\n\nProject folder (this session's worktree of it): {_proj_seen}"
+            else:
+                block += f"\n\nProject folder: {resolved_proj.root.strip()}"
         if got["knowledge"]:
             block += f"\n\nProject knowledge (reference):\n{got['knowledge']}"
         if recent:

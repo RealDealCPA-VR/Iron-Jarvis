@@ -36,38 +36,96 @@ class GitError(RuntimeError):
     """Raised when an invoked ``git`` command exits non-zero."""
 
 
-def _git(args: list[str], cwd: Path) -> str:
+@dataclass
+class GitRun:
+    """One finished ``git`` call (:func:`run_git`): exit code, decoded output,
+    and whether it ran out of time (its tree was killed)."""
+
+    code: int
+    out: str
+    err: str
+    timed_out: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return self.code == 0 and not self.timed_out
+
+
+def git_env(extra: "dict[str, str] | None" = None) -> dict[str, str]:
+    """The environment a Build session's git calls run with (v1.375.0): this
+    process's own (the frozen app inherits the desktop's PATH) plus
+    ``GIT_TERMINAL_PROMPT=0`` — git never waits on a password typed into a
+    terminal nobody sees. A credential WINDOW the user's own git opens is
+    allowed; the caller's time bound covers it."""
+    import os
+
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    if extra:
+        env.update(extra)
+    return env
+
+
+def run_git(
+    args: list[str],
+    cwd: Path,
+    *,
+    timeout: float = GIT_TIMEOUT_S,
+    env: "dict[str, str] | None" = None,
+    identity: bool = True,
+    input: "bytes | None" = None,
+    encoding: "str | None" = None,
+) -> GitRun:
+    """THE ONE place git is spawned (``core.procs``: its own Job, bounded, the
+    tree killed on a timeout). ``identity`` injects the defaults so a commit
+    succeeds in a fresh repository (the original behaviour); a Build session
+    passes False and borrows them only when the user's git names no one
+    (:func:`has_identity`). ``env`` None = this process's own environment;
+    ``encoding`` None = the locale's (the original decoding) — a Build
+    session reads paths and diffs as UTF-8. BLOCKING: a caller on the event
+    loop hops it off."""
+    cmd = ["git"]
+    if identity:
+        cmd += default_identity()
+    cmd += list(args)
+    res = procs.run(cmd, cwd=cwd, timeout=timeout, env=env, input=input)
+    return GitRun(
+        code=-1 if res.timed_out else res.returncode,
+        out=procs.text(res.stdout, encoding),
+        err=procs.text(res.stderr, encoding),
+        timed_out=bool(res.timed_out),
+    )
+
+
+def default_identity() -> list[str]:
+    """The ``-c`` pair that lets a commit succeed when git names no one."""
+    return ["-c", f"user.email={_DEFAULT_EMAIL}", "-c", f"user.name={_DEFAULT_NAME}"]
+
+
+def has_identity(cwd: Path, env: "dict[str, str] | None" = None) -> bool:
+    """Does the user's own git config name a committer here (``user.name``
+    AND ``user.email``)? A Build session commits as the user when it does."""
+    for key in ("user.name", "user.email"):
+        got = run_git(["config", "--get", key], cwd, timeout=30.0, env=env, identity=False)
+        if not got.ok or not got.out.strip():
+            return False
+    return True
+
+
+def _git(args: list[str], cwd: Path, *, env: "dict[str, str] | None" = None) -> str:
     """Run ``git`` in *cwd*, return stdout, raise :class:`GitError` on failure."""
-    cmd = [
-        "git",
-        "-c",
-        f"user.email={_DEFAULT_EMAIL}",
-        "-c",
-        f"user.name={_DEFAULT_NAME}",
-        *args,
-    ]
-    res = procs.run(cmd, cwd=cwd, timeout=GIT_TIMEOUT_S)
+    res = run_git(args, cwd, env=env)
     if res.timed_out:
         raise GitError(f"git {' '.join(args)} did not finish within {GIT_TIMEOUT_S:.0f} s")
-    stdout, stderr = procs.text(res.stdout), procs.text(res.stderr)
-    if res.returncode != 0:
-        detail = (stderr or stdout or "").strip()
-        raise GitError(f"git {' '.join(args)} failed ({res.returncode}): {detail}")
-    return stdout
+    if res.code != 0:
+        detail = (res.err or res.out or "").strip()
+        raise GitError(f"git {' '.join(args)} failed ({res.code}): {detail}")
+    return res.out
 
 
-def _git_code(args: list[str], cwd: Path) -> int:
+def _git_code(args: list[str], cwd: Path, *, env: "dict[str, str] | None" = None) -> int:
     """Run ``git`` and return its exit code (never raises on non-zero)."""
-    cmd = [
-        "git",
-        "-c",
-        f"user.email={_DEFAULT_EMAIL}",
-        "-c",
-        f"user.name={_DEFAULT_NAME}",
-        *args,
-    ]
-    res = procs.run(cmd, cwd=cwd, timeout=GIT_TIMEOUT_S)
-    return -1 if res.timed_out else res.returncode
+    return run_git(args, cwd, env=env).code
 
 
 def _slugify(value: str) -> str:
@@ -125,17 +183,22 @@ class GitSession:
     # --- lifecycle --------------------------------------------------------
 
     @classmethod
-    def start(cls, repo: Path, workspace: Path, slug: str) -> "GitSession":
+    def start(cls, repo: Path, workspace: Path, slug: str, *, branch: "str | None" = None,
+              env: "dict[str, str] | None" = None) -> "GitSession":
         """Create a new branch + linked worktree at *workspace*.
 
         Uses ``git worktree add -b <branch> <workspace> HEAD``. The main repo's
         checkout (and its ``base`` branch) is left untouched. *workspace* must
         not already exist with content (git refuses a non-empty target).
+        ``branch`` and ``env`` (v1.375.0, a Build session): the new branch's
+        name (``ij/<name>``) and the environment (:func:`git_env` — no
+        terminal prompt); omitted = :func:`branch_name` and this process's own,
+        the review system's original call.
         """
         repo = Path(repo)
         workspace = Path(workspace)
 
-        if not (repo / ".git").exists() and _git_code(["rev-parse", "--git-dir"], repo) != 0:
+        if not (repo / ".git").exists() and _git_code(["rev-parse", "--git-dir"], repo, env=env) != 0:
             raise GitError(f"{repo} is not a git repository")
 
         if workspace.exists():
@@ -144,12 +207,13 @@ class GitSession:
             # An empty dir trips up `git worktree add`; let git create it.
             workspace.rmdir()
 
-        base = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo).strip()
-        branch = branch_name(slug)
+        base = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo, env=env).strip()
+        branch = branch or branch_name(slug)
 
         _git(
             ["worktree", "add", "-b", branch, str(workspace), "HEAD"],
             cwd=repo,
+            env=env,
         )
         return cls(repo=repo, workspace=workspace, branch=branch, base=base)
 

@@ -159,18 +159,22 @@ def read_rule_files(
     first_only: bool = False,
     event_bus: Any = None,
     session_id: str | None = None,
+    fallback_root: Any = None,
 ) -> list[RuleFile]:
     """The rule files in ``root`` that may be injected, in ``names`` order.
 
     ``first_only`` stops at the first file that EXISTS (the schedule knob's
     rule: its first file wins even when it is blank). Otherwise every file is
     read, blank ones skipped and same-content ones read once. ``total_cap`` is
-    shared by every file kept (see the module docstring). BLOCKING; never
-    raises (an unexpected fault reads as "no files")."""
+    shared by every file kept (see the module docstring). ``fallback_root``
+    (v1.375.0): a file missing from ``root`` is read from there (a Build
+    session's worktree, then the folder in the main checkout). BLOCKING;
+    never raises (an unexpected fault reads as "no files")."""
     try:
         return _read_rule_files(
             root, names, total_cap=total_cap, source_prefix=source_prefix,
             first_only=first_only, event_bus=event_bus, session_id=session_id,
+            fallback_root=fallback_root,
         )
     except Exception:  # noqa: BLE001 — the rules must never break a turn
         log.warning("folder rules could not be read; continuing without them", exc_info=True)
@@ -186,16 +190,23 @@ def _read_rule_files(
     first_only: bool,
     event_bus: Any,
     session_id: str | None,
+    fallback_root: Any = None,
 ) -> list[RuleFile]:
     from ..core.promptguard import publish_blocked, scan_context
 
     folder = _usable_folder(root)
-    if folder is None:
+    # v1.375.0: a Build session on its own branch reads each file from its
+    # WORKTREE, else from the folder in the main checkout — an untracked
+    # AGENTS.local.md is not in a new worktree. None = one folder, as before.
+    spare = _usable_folder(fallback_root) if fallback_root else None
+    if folder is None and spare is None:
         return []
     found: list[tuple[str, str]] = []
     seen: set[str] = set()
     for name in names:
-        raw = _read_one(folder / name)
+        raw = _read_one(folder / name) if folder is not None else None
+        if raw is None and spare is not None:
+            raw = _read_one(spare / name)
         if raw is None:
             continue
         if first_only:
@@ -252,15 +263,18 @@ def render_chat_section(files: list[RuleFile]) -> str:
 
 
 def chat_folder_rules_block(
-    root: Any, *, event_bus: Any = None, session_id: str | None = "chat"
+    root: Any, *, event_bus: Any = None, session_id: str | None = "chat",
+    fallback_root: Any = None,
 ) -> tuple[str, list[str]]:
     """``(section, used)`` for a chat turn grounded in a project whose folder
     is ``root``: the fenced sections ("" when nothing was usable) and the file
-    names actually injected (``[]`` when none). BLOCKING; never raises."""
+    names actually injected (``[]`` when none). ``fallback_root`` (v1.375.0):
+    see :func:`read_rule_files`. BLOCKING; never raises."""
     try:
         files = read_rule_files(
             root, CHAT_RULE_FILES, total_cap=CHAT_RULES_CAP,
             source_prefix=CHAT_SOURCE_PREFIX, event_bus=event_bus, session_id=session_id,
+            fallback_root=fallback_root,
         )
         return render_chat_section(files), [f.name for f in files]
     except Exception:  # noqa: BLE001 — the rules must never break a turn

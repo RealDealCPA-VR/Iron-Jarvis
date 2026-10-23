@@ -437,10 +437,14 @@ class HarnessTurn:
         # session's older turns (harness/compact — Compact), which the turn's
         # history then leaves out. Per message, so not in the fingerprint.
         from .compact import prompt_section as summary_section
+        # v1.375.0 (part 2, Phase 4): the session's own git branch and
+        # worktree (harness/branches) — "" for a session that works in its
+        # folder directly, so its prompt is exactly as before.
+        from .branches import prompt_line as branch_line
 
         return (
             "\n\n" + self.rendered + date + prompt_line(self.plan.gate) + prompt_section()
-            + summary_section()
+            + summary_section() + branch_line()
         )
 
     @staticmethod

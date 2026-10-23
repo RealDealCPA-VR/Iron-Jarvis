@@ -107,6 +107,13 @@ class BuildSessionCreate(BaseModel):
     mode: str = ""
     #: v1.368.0: the Iron-Proxy account to run on; "" = the vendor's Default.
     account: str = Field(default="", max_length=200)
+    #: v1.375.0 (part 2, Phase 4): work on a NEW BRANCH in its own worktree
+    #: beside the repository (``harness/branches``). True = a branch, or a
+    #: refusal in words when the folder cannot have one; False = work in the
+    #: folder directly (exactly the old behaviour); None (omitted, an older
+    #: screen or an API caller) = a branch when the folder can have one, else
+    #: the folder directly.
+    branch: bool | None = None
 
 
 class BuildSessionPatch(BaseModel):
@@ -1242,8 +1249,11 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 known = set(platform.registry.names())
             except Exception:  # noqa: BLE001 — the validator then skips tool names
                 known = None
+            # v1.375.0: the layer of a session on its own branch is its
+            # worktree's, else the main checkout's (S.layer_folder_of).
+            layer_folder = await asyncio.to_thread(S.layer_folder_of, row)
             got = await asyncio.to_thread(
-                read_playbook, folder, folder_skill, known_tools=known,
+                read_playbook, layer_folder, folder_skill, known_tools=known,
                 event_bus=getattr(platform, "event_bus", None), session_id=S.session_id_for(thread_id),
             )
             if got is None:
@@ -1260,7 +1270,11 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         pin, account_provider = await asyncio.to_thread(turn_account, platform, thread_id, setup)
         from ...projects.locate import project_for_path
 
-        project = await asyncio.to_thread(project_for_path, platform.engine, folder)
+        # v1.375.0 (part 2, Phase 4) DECISION: a session on its own branch
+        # belongs to the project of the folder the user PICKED — its worktree
+        # sits beside the repository, outside every project's root
+        # (S.checkout_of; the session's folder otherwise, as before).
+        project = await asyncio.to_thread(project_for_path, platform.engine, S.checkout_of(row))
         # The transcript is up to 200 lines of JSON (replies with steps
         # and thinking): parsed OFF the loop, like every other read here.
         # Role + content only: no native carrier (no thinking, no signature)
@@ -1311,6 +1325,14 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
 
         picked_token = set_picked(folder_skill, playbook)
         summary_token = _compact.set_summary(_summary)
+        # v1.375.0 (part 2, Phase 4): the session's own git branch, for the
+        # turn and its helpers (the driver task copies it, like the pin): the
+        # prompt names it, the main checkout stays the user's, and a commit
+        # or push the agent runs asks first (harness/git_guard). None for a
+        # session that works in its folder directly.
+        from ...harness import branches as _branches
+
+        branch_token = _branches.set_turn_branch(_branches.facts_of(setup), folder)
         try:
             try:
                 gen = await stream_chat_turn(
@@ -1354,6 +1376,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
             ))
         finally:
+            _branches.reset_turn_branch(branch_token)
             _compact.reset_summary(summary_token)
             reset_picked(picked_token)
             reset_hold(hold_token)
@@ -1629,6 +1652,61 @@ async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
 
 
 # --------------------------------------------------------------------------- #
+# a new session on its own git branch (v1.375.0, part 2 Phase 4)
+# --------------------------------------------------------------------------- #
+
+
+async def _create_on_branch(d: Any, folder: str, body: Any, setup: dict[str, Any],
+                            engine_of: Any, full_view: Any) -> Any:
+    """A NEW session in ``folder`` on its own branch ``ij/<name>`` in a
+    worktree beside the repository (``harness/branches.start`` — the user's
+    decisions 1 and 2). A folder that is not in a repository (or git not
+    installed) is a session in the folder, exactly as before. ``body.branch``
+    True: a folder that cannot have a branch is refused in words; None: it
+    works in the folder and the answer says why (``branch_note``). Every git
+    call is off the loop."""
+    from ...harness import branches as B
+
+    info = await asyncio.to_thread(B.inspect_folder, folder)
+    if not info["repo"]:
+        if body.branch is True:
+            raise HTTPException(status_code=400, detail=info["note"] or B.NOT_A_REPO)
+        row = await asyncio.to_thread(S.create, engine_of(), folder, body.title, setup)
+        return await asyncio.to_thread(full_view, row)
+    if not info["can_branch"]:
+        if body.branch is True:
+            raise HTTPException(status_code=400, detail=info["note"])
+        row = await asyncio.to_thread(S.create, engine_of(), folder, body.title, setup)
+        view = await asyncio.to_thread(full_view, row)
+        view["branch_note"] = info["note"]
+        return view
+    try:
+        started = await asyncio.to_thread(B.start, folder, title=body.title)
+    except B.GitRefused as exc:
+        content: dict[str, Any] = {"detail": str(exc)}
+        if exc.details:
+            content["details"] = exc.details
+        return JSONResponse(status_code=exc.status, content=content)
+    work = started.pop("folder")
+    problem = await asyncio.to_thread(S.folder_problem, work)
+    if problem:
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(B.remove_worktree, d.platform.config.home, started)
+        raise HTTPException(status_code=400, detail=f"The session's worktree cannot be used: {problem}")
+    try:
+        row = await asyncio.to_thread(
+            S.create, engine_of(), work, body.title, {**setup, B.SETUP_KEY: started},
+        )
+    except Exception:
+        # The session could not be saved: its worktree goes to the trash (the
+        # branch stays), never left behind with no session that knows it.
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(B.remove_worktree, d.platform.config.home, started)
+        raise
+    return await asyncio.to_thread(full_view, row)
+
+
+# --------------------------------------------------------------------------- #
 # routes
 # --------------------------------------------------------------------------- #
 
@@ -1643,7 +1721,9 @@ def register(app: FastAPI, d: Any) -> None:
         return row
 
     def _full_view(row: Any) -> dict[str, Any]:
-        folder = S.folder_of(row)
+        # v1.375.0: a session on its own branch is named by the folder the
+        # user picked (S.checkout_of — the session's folder otherwise).
+        folder = S.checkout_of(row)
         names = S.folder_names(engine_of(), [folder]) if folder else {}
         view = S.session_view(row, states=TURNS.thread_states(), names=names, full=True)
         try:
@@ -1774,8 +1854,12 @@ def register(app: FastAPI, d: Any) -> None:
         # or an API key: none (exactly Phase 4). Off the loop: the vendor of a
         # keyless API provider is read through provider availability.
         setup = await asyncio.to_thread(_with_initial_account, d.platform, setup, body.account.strip())
-        row = await asyncio.to_thread(S.create, engine_of(), folder, body.title, setup)
-        return await asyncio.to_thread(_full_view, row)
+        if body.branch is False:
+            # v1.375.0: "work in the folder directly" — exactly the old path,
+            # no git call at all.
+            row = await asyncio.to_thread(S.create, engine_of(), folder, body.title, setup)
+            return await asyncio.to_thread(_full_view, row)
+        return await _create_on_branch(d, folder, body, setup, engine_of, _full_view)
 
     @app.get("/build/sessions/{thread_id}")
     def get_build_session(thread_id: str) -> dict[str, Any]:
@@ -1863,12 +1947,36 @@ def register(app: FastAPI, d: Any) -> None:
         session still answering is refused: stop it first."""
         from .chat import delete_thread
 
-        _session_or_404(thread_id)
-        if TURNS.thread_states().get(thread_id, {}).get("running"):
+        row = _session_or_404(thread_id)
+        if TURNS.thread_states().get(thread_id, {}).get("running") or thread_id in _STARTING:
             return JSONResponse(status_code=409, content={"detail": RUNNING_SENTENCE})
+        # v1.375.0 (part 2, Phase 4) DECISION: deleting a session on its own
+        # branch never silently destroys work that is not merged — its
+        # worktree MOVES to the trash first (the Discard path) and the BRANCH
+        # STAYS (its commits are kept until the user deletes the branch). A
+        # worktree that cannot be moved (a program or a terminal open in it)
+        # refuses the delete in words, with nothing deleted.
+        from ...harness import branches as B
+
+        facts = B.facts_of(_setup_of(row))
+        moved: dict[str, Any] | None = None
+        if facts and not facts.get("removed_at"):
+            S.end_session_programs(thread_id)
+            try:
+                moved = B.remove_worktree(d.platform.config.home, facts)
+            except B.GitRefused as exc:
+                content: dict[str, Any] = {
+                    "detail": f"{exc} The session was not deleted.",
+                }
+                if exc.details:
+                    content["details"] = exc.details
+                return JSONResponse(status_code=exc.status, content=content)
         if not delete_thread(engine_of(), thread_id):
             raise HTTPException(status_code=404, detail="no such Build session")
-        return {"deleted": thread_id}
+        out: dict[str, Any] = {"deleted": thread_id}
+        if moved is not None:
+            out["worktree"] = {**moved, "branch": facts.get("branch", "")}
+        return out
 
     @app.post("/build/folders/rename")
     def rename_build_folder(body: BuildFolderRename) -> dict[str, Any]:
@@ -1919,7 +2027,9 @@ def register(app: FastAPI, d: Any) -> None:
             known = set(d.platform.registry.names())
         except Exception:  # noqa: BLE001 — the validator then skips tool names
             known = None
-        skills, note = folder_skills(S.folder_of(row), known_tools=known)
+        # v1.375.0: a branch's layer is its worktree's, else the main
+        # checkout's (S.layer_folder_of — the session's folder otherwise).
+        skills, note = folder_skills(S.layer_folder_of(row), known_tools=known)
         return {"skills": skills, "note": note}
 
     @app.post("/build/sessions/{thread_id}/rewind")

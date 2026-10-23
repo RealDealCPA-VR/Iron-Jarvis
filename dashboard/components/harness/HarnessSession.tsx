@@ -26,11 +26,13 @@ import {
   CircleAlert,
   ListChecks,
   FolderOpen,
+  GitBranch,
   Loader2,
   MoreHorizontal,
   Pencil,
   Square,
 } from "lucide-react";
+import { branchLine } from "@/lib/buildGit";
 import { ApiError, get, post, put } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
 import { useModels } from "@/lib/useModels";
@@ -1309,6 +1311,18 @@ export function HarnessSession({
                 </span>
               ) : null}
             </p>
+            {view.git ? (
+              // v1.375.0 (part 2, Phase 4): the session's own branch and its
+              // base; the worktree it works in is the title.
+              <p
+                data-testid="harness-branch"
+                className="flex min-w-0 items-center gap-1 truncate text-[12px] text-zinc-500"
+                title={`Works in ${view.git.worktree}; your checkout at ${view.git.checkout} is not touched.`}
+              >
+                <GitBranch size={12} aria-hidden className="shrink-0" />
+                <span className="truncate">{branchLine(view.git)}</span>
+              </p>
+            ) : null}
           </div>
           {accounts && (vendor || currentAccount) ? (
             <AccountChip
@@ -1380,7 +1394,11 @@ export function HarnessSession({
                     onConfirm={() => void remove()}
                     label="Delete"
                     confirmLabel="Delete for good"
-                    title="Delete this session and its conversation"
+                    title={
+                      view.git && !view.git.removed
+                        ? `Delete this session and its conversation. Its worktree goes to Iron Jarvis's trash; the branch ${view.git.branch} stays.`
+                        : "Delete this session and its conversation"
+                    }
                   />
                 </div>
               </div>
@@ -1832,6 +1850,8 @@ export function HarnessSession({
           refreshKey={turnsEnded + rewinds}
           undoFor={undoFor}
           onUndo={onUndo}
+          onSessionChanged={() => void load()}
+          onSessionGone={onGone}
         />
       </aside>
     </div>

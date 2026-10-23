@@ -114,6 +114,9 @@ export type SSEEvent =
       /** v1.332.0: a "local only" chat's card for a tool that reaches past
        *  this PC. It offers "Allow once" and "Deny" only. */
       once_only?: boolean;
+      /** v1.375.0: WHY a card asks every time — "git": a commit or push on a
+       *  Build session's own branch. Absent for a local-only card. */
+      once_reason?: string;
       /** v1.346.0: what the call would SPEND, in the daemon's words ("Generate
        *  1 image on Pixio for 12 credits (your price)"). Sent only when the
        *  tool quoted a price; the card shows it as one quiet line. */
@@ -623,6 +626,8 @@ export function sseEventFrom(
       // v1.332.0: whitelisted too, a real `true` only, or a local-only card
       // would quietly offer the wider answers again.
       if (data.once_only === true) ev.once_only = true;
+      // v1.375.0: the one reason the daemon names ("git"), whitelisted.
+      if (data.once_reason === "git") ev.once_reason = "git";
       // v1.346.0: the spend words, whitelisted like every field here — a
       // non-empty string only, or the card would quietly say nothing about
       // money on a call that costs some.
@@ -1234,6 +1239,9 @@ export interface PendingApproval {
   argsHash?: string;
   /** v1.332.0: a "local only" chat's card; "Allow once" and "Deny" only. */
   onceOnly?: boolean;
+  /** v1.375.0: why it asks every time — "git" (a commit or push on a Build
+   *  session's own branch); absent = a local-only chat's card. */
+  onceReason?: "git";
   /** v1.346.0: what the call would spend, in the daemon's words; present
    *  only when the tool quoted a price (media generation). */
   costNote?: string;
@@ -1607,6 +1615,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 canAlways: ev.can_always === true,
                 argsHash: ev.args_hash,
                 ...(ev.once_only === true ? { onceOnly: true } : {}),
+                ...(ev.once_reason === "git" ? { onceReason: "git" as const } : {}),
                 ...(ev.cost_note ? { costNote: ev.cost_note } : {}),
                 ...(typeof ev.reversible === "boolean" ? { reversible: ev.reversible } : {}),
               });

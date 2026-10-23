@@ -265,8 +265,51 @@ def _messages(row: Any) -> list[dict[str, Any]]:
 
 
 def folder_of(row: Any) -> str:
-    """A session's working folder (its setup's ``workspace_dir``)."""
+    """A session's working folder (its setup's ``workspace_dir``). v1.375.0:
+    for a session on its own git branch this is its WORKTREE (or the
+    worktree's copy of the folder the user picked)."""
     return str(_setup(row).get("workspace_dir") or "").strip()
+
+
+def git_of(row: Any) -> "dict[str, str] | None":
+    """The session's git branch facts (``harness/branches``), or None for a
+    session that works in its folder directly (every session before
+    v1.375.0)."""
+    from .branches import facts_of
+
+    return facts_of(_setup(row))
+
+
+def checkout_of(row: Any) -> str:
+    """The folder the user PICKED for the session (v1.375.0): the folder in
+    their main checkout for a session on its own branch, else the session's
+    working folder. THE folder a session belongs to: its group in the list,
+    its project (a worktree sits outside the project's root), its experience
+    library and its display name."""
+    facts = git_of(row)
+    if facts and facts.get("checkout"):
+        return facts["checkout"]
+    return folder_of(row)
+
+
+def layer_folder_of(row: Any) -> str:
+    """Where the session's ``.ironjarvis/harness/`` layer is read from
+    (v1.375.0 decision): its working folder when that holds a layer (a
+    tracked one comes with the branch), else — on a branch — the folder in
+    the main checkout (an UNTRACKED layer is not in a new worktree). BLOCKING
+    (one stat)."""
+    folder = folder_of(row)
+    checkout = checkout_of(row)
+    if checkout == folder or not checkout:
+        return folder
+    from .components import HARNESS_PARTS
+
+    try:
+        if Path(folder).joinpath(*HARNESS_PARTS).exists():
+            return folder
+    except OSError:
+        pass
+    return checkout
 
 
 def mode_of(row: Any) -> str:
@@ -567,10 +610,21 @@ def session_view(row: Any, *, states: "dict[str, dict[str, bool]] | None" = None
         "waiting": bool(state.get("waiting")),
         "archived": getattr(row, "archived_at", None) is not None,
     }
+    from .branches import facts_of
+    from .branches import view as _git_view
+
+    git = facts_of(setup)
+    if git and not full:
+        # v1.375.0: the list row names the session's branch (only on a
+        # session that has one — every other row is exactly as before).
+        out["branch"] = git.get("branch", "")
     if not full:
         return out
-    info = (names or {}).get(folder_key(folder)) or {
-        "path": folder, "name": _base_name(folder), "is_project": False, "project_id": None,
+    # v1.375.0: a session on its own branch is NAMED by the folder the user
+    # picked (its worktree's own folder name is a short name nobody chose).
+    shown = (git or {}).get("checkout") or folder
+    info = (names or {}).get(folder_key(shown)) or {
+        "path": shown, "name": _base_name(shown), "is_project": False, "project_id": None,
     }
     out.update({
         "folder": folder,
@@ -597,6 +651,11 @@ def session_view(row: Any, *, states: "dict[str, dict[str, bool]] | None" = None
     from .compact import view as _compaction_view
 
     out["compaction"] = _compaction_view(setup)
+    if git:
+        # v1.375.0 (part 2, Phase 4): the session's branch, its base and
+        # where it works — only on a session that has one, so every other
+        # session's view is exactly as before.
+        out["git"] = _git_view(git)
     return out
 
 
@@ -630,7 +689,10 @@ def list_grouped(engine: Any, *, include_archived: bool = False,
     order: list[str] = []
     paths: dict[str, str] = {}
     for r in rows:
-        folder = folder_of(r)
+        # v1.375.0: a session on its own branch is grouped under the folder
+        # the user PICKED (its repository's), never under a stray
+        # "<repo>.ij-worktrees" group of its own.
+        folder = checkout_of(r)
         key = folder_key(folder) or ""
         if key not in groups:
             groups[key] = {"sessions": []}

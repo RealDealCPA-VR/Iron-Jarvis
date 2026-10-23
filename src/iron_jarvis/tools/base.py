@@ -67,11 +67,19 @@ class SpendCheck:
     card shows (``Generate 1 image on Pixio for 12 credits (your price)``);
     ``cost_note`` the short form the tool output, the ledger row and the bell
     carry (``free (Maker: 4 left today)``). Never carries a key.
+
+    ``once_only`` (v1.375.0, a Build session's branch — ``harness/git_guard``):
+    with ``ask``, the card offers "Allow once" and Deny only, every time — a
+    wider answer is read as once and no grant is recorded, so approving one
+    ``git push`` never approves the next. ``reason`` names why for the card
+    (``"git"``); "" for a spend.
     """
 
     ask: bool
     words: str = ""
     cost_note: str = ""
+    once_only: bool = False
+    reason: str = ""
 
 
 @dataclass

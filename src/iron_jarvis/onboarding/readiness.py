@@ -23,7 +23,10 @@ from .doctor import CHECKS, REQUIRED, RECOMMENDED, _result
 #: four amber "not found" rows and hand the user an ``irm ... | iex`` to paste
 #: into PowerShell. They stay in ``doctor.CHECKS`` -- the ``ironjarvis doctor``
 #: CLI and source installs legitimately want them; only /onboarding drops them.
-DEV_TOOLCHAIN_CHECKS = frozenset({"python", "uv", "git", "node", "pnpm"})
+#: v1.375.0: "gh" (the GitHub CLI, Build's Create PR) joins them — a
+#: developer's tool, offered where Build makes a pull request, not on the
+#: first-run card.
+DEV_TOOLCHAIN_CHECKS = frozenset({"python", "uv", "git", "gh", "node", "pnpm"})
 
 #: v1.310.0: the plain words for each remaining row, shown beside the mono
 #: name ("Reading old .doc and .xls files", not "old Office files" / a
