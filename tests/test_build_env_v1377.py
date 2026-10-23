@@ -62,6 +62,10 @@ KEEP = [
     "SSL_CERT_FILE", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "CHOCOLATEYINSTALL",
     # the user's own CLI settings (not secrets, not a parent's markers)
     "CLAUDE_CONFIG_DIR", "CODEX_HOME", PLAIN,
+    # moved on purpose (the v1.377.0 review): the ssh agent's socket path and
+    # Git Credential Manager's settings are not secrets, and git push needs
+    # them (tests/test_build_env_review_v1377.py holds the decision).
+    "SSH_AUTH_SOCK", "GCM_CREDENTIAL_STORE",
 ]
 
 #: What is DROPPED: secrets by name, vendors', this app's own, a parent's.
@@ -72,7 +76,7 @@ DROP = [
     "HUGGING_FACE_HUB_TOKEN", "NPM_TOKEN", "NPM_CONFIG__AUTH", "NPM_CONFIG_//REGISTRY.NPMJS.ORG/:_AUTHTOKEN",
     "DATABASE_PASSWORD", "MY_SECRET", "SESSION_COOKIE", "PRIVATE_KEY_PATH", "SENTRY_DSN",
     "SENTRY-TRACE", "BAGGAGE", "AZURE_DEVOPS_EXT_PAT", "STRIPE_SECRET", "OAUTH_CLIENT",
-    "SOME_AUTHENTICATION", "BASIC_AUTH", "GIT_AUTHORIZATION", "SSH_AUTH_SOCK", "GIT_ASKPASS",
+    "SOME_AUTHENTICATION", "BASIC_AUTH", "GIT_AUTHORIZATION", "GIT_ASKPASS",
     "SSH_ASKPASS", "DB_PASSWD", "MY_CREDENTIALS_FILE", "SESSIONNAME",
     # this app's own (the desktop's spawn env names — see the next test)
     "IRONJARVIS_TOKEN", "IRONJARVIS_HOME", "IRONJARVIS_ROOT", "IRONJARVIS_HOST_ALLOWLIST",

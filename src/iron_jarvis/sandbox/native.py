@@ -289,6 +289,9 @@ def scrubbed_env() -> dict[str, str]:
 SECRET_NAME_WORDS: tuple[str, ...] = (
     "KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASSPHRASE", "CREDENTIAL",
     "SESSION", "COOKIE", "PRIVATE", "ASKPASS",
+    # v1.377.0 review: a webhook address IS its secret (anyone holding it can
+    # post); a JWT is a bearer credential.
+    "WEBHOOK", "JWT",
 )
 #: ``AUTH`` anywhere in a name (``OAUTH``, ``AUTHENTICATION``,
 #: ``AUTHORIZATION``, ``SSH_AUTH_SOCK``, ``NPM_CONFIG__AUTH``) — but never
@@ -297,7 +300,26 @@ SECRET_NAME_WORDS: tuple[str, ...] = (
 _AUTH_RX = re.compile(r"AUTH(?!OR(?:S|ED)?(?:_|$))")
 #: A whole ``_``-separated part that is a secret's name: a personal access
 #: token (``AZURE_DEVOPS_EXT_PAT``), a DSN (it carries a key).
-SECRET_NAME_PARTS: frozenset[str] = frozenset({"PAT", "DSN"})
+SECRET_NAME_PARTS: frozenset[str] = frozenset({
+    "PAT", "DSN",
+    # v1.377.0 review: ``DB_PASS``, ``SMTP_PASS``, ``MYSQL_PWD`` (MySQL reads
+    # its password from it), ``DB_PWD`` -- never the whole name ``PWD``, the
+    # current folder (:data:`KEEP_NAMES`; ``OLDPWD`` is one part of its own).
+    "PASS", "PWD",
+})
+#: v1.377.0 review: names a secret WORD would drop that are not secrets and
+#: that the user's own tools need exactly as in their terminal. ``PWD``: the
+#: current folder. ``SSH_AUTH_SOCK`` (the AUTH word): the path to the user's
+#: ssh agent -- no key passes through it, and ``git push`` over ssh in Git
+#: Bash / with KeeAgent / gpg4win finds the agent only by it (the push itself
+#: is carded by the git guard). Its value is still judged
+#: (:func:`secret_value`).
+KEEP_NAMES: frozenset[str] = frozenset({"PWD", "SSH_AUTH_SOCK"})
+#: Git Credential Manager's own settings (``GCM_CREDENTIAL_STORE``,
+#: ``GCM_AUTHORITY``, ``GCM_INTERACTIVE``...): where its sign-ins live and how
+#: it asks -- never a credential, and on a store other than the default
+#: dropping them made ``git push`` find no sign-in. Values still judged.
+KEEP_PREFIXES: tuple[str, ...] = ("GCM_",)
 #: Every variable of these families is dropped: model and cloud vendors'
 #: keys and endpoints, the forges' tokens, this app's own internals (its
 #: install token among them), Iron-Proxy's, Playwright's (the app's own
@@ -327,9 +349,55 @@ def secret_name(name: str) -> bool:
         return True
     if up in DROP_NAMES or any(up.startswith(p) for p in DROP_PREFIXES):
         return True
+    if up in KEEP_NAMES or any(up.startswith(p) for p in KEEP_PREFIXES):
+        return False
     if any(word in up for word in SECRET_NAME_WORDS) or _AUTH_RX.search(up):
         return True
     return any(part in SECRET_NAME_PARTS for part in re.split(r"[^A-Z0-9]+", up))
+
+
+#: v1.377.0 review -- A SECRET IN A VALUE whose name carries no secret word.
+#: A URL's ``user:password@`` (``DATABASE_URL``, ``PIP_INDEX_URL``,
+#: ``HTTPS_PROXY``, a token-as-username ``https://<token>:x-oauth-basic@``):
+#: the WHOLE userinfo is removed and the variable KEPT, so the address still
+#: points where the user set it -- a dropped ``PIP_INDEX_URL`` would make pip
+#: install from the PUBLIC index instead (dependency confusion), a dropped
+#: ``DATABASE_URL`` could fall back to another database; without the sign-in
+#: the tool fails to sign in, which is the honest failure.
+_URL_USERINFO_RX = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@?#]*:[^/\s@?#]*@")
+#: Credential shapes ``detections.redact.mask`` does not know, read in an
+#: environment VALUE: an Azure storage key / SAS signature, a webhook address
+#: (anyone holding it can post), a PEM private key, a JWT, and the npm /
+#: GitLab / Stripe / Google / Hugging Face key formats.
+_VALUE_SECRET_RX = re.compile(
+    r"(?i:accountkey\s*=|sharedaccesssignature\s*=|[?&]sig=)"
+    r"|(?i:hooks\.slack\.com/(?:services|workflows|triggers)/|discord(?:app)?\.com/api/webhooks/"
+    r"|webhook\.office\.com/|outlook\.office(?:365)?\.com/webhook)"
+    r"|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"
+    r"|\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+    r"|\bnpm_[A-Za-z0-9]{30,}|\bglpat-[A-Za-z0-9_-]{16,}|\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}"
+    r"|\bAIza[0-9A-Za-z_-]{30,}|\bhf_[A-Za-z0-9]{30,}"
+)
+
+
+def without_url_credentials(value: str) -> str:
+    """``value`` with every URL's ``user:password@`` removed (the address
+    kept). Never logs."""
+    return _URL_USERINFO_RX.sub(r"\1", str(value or ""))
+
+
+def secret_value(value: str) -> bool:
+    """Does an environment ``value`` carry a secret (after its URLs' sign-ins
+    are removed)? Anything ``detections.redact.mask`` would mask
+    (``Authorization: Bearer ...``, ``token=...`` / ``password=...`` pairs,
+    ``-u user:pass``, ``ghp_`` / ``sk-`` / ``xox?-`` / ``AKIA``) or a shape of
+    :data:`_VALUE_SECRET_RX`. Judged, never logged or returned."""
+    from ..detections.redact import mask
+
+    text = str(value or "")
+    if not text:
+        return False
+    return mask(text) != text or bool(_VALUE_SECRET_RX.search(text))
 
 
 def _own_bin_dirs() -> list[str]:
@@ -349,6 +417,42 @@ def _own_bin_dirs() -> list[str]:
     except Exception:  # noqa: BLE001 — nothing of ours named: PATH as it is
         return []
     return out
+
+
+def _own_roots() -> list[str]:
+    """v1.377.0 review: THIS APP's own folders, for judging a VALUE -- a
+    frozen daemon's install folder (``_MEIPASS`` lies inside it; a runtime
+    hook may point ``OPENSSL_MODULES`` / ``TCL_LIBRARY`` into it), a dev
+    daemon's whole virtual environment. Normalised; [] when unknown."""
+    out: list[str] = []
+    try:
+        if getattr(sys, "frozen", False):
+            for raw in (getattr(sys, "_MEIPASS", ""), os.path.dirname(sys.executable or "")):
+                if raw:
+                    out.append(os.path.normcase(os.path.normpath(raw)))
+        elif sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+            out.append(os.path.normcase(os.path.normpath(sys.prefix)))
+    except Exception:  # noqa: BLE001
+        return []
+    return out
+
+
+def _is_own(entry: str, own: list[str]) -> bool:
+    raw = entry.strip().strip('"')
+    norm = os.path.normcase(os.path.normpath(raw)) if raw else ""
+    return bool(norm) and any(norm == o or norm.startswith(o.rstrip("\\/") + os.sep) for o in own)
+
+
+def _without_own(value: str, own: list[str]) -> "str | None":
+    """``value`` minus the list entries that point into this app's own
+    folders; None when nothing of the user's is left (the variable goes)."""
+    if not own:
+        return value
+    entries = str(value or "").split(os.pathsep)
+    if not any(_is_own(e, own) for e in entries):
+        return value
+    kept = [e for e in entries if not _is_own(e, own)]
+    return os.pathsep.join(kept) if any(e.strip() for e in kept) else None
 
 
 def _user_path(path: str) -> str:
@@ -386,6 +490,23 @@ def build_env(base: "dict[str, str] | None" = None) -> dict[str, str]:
 
     source = os.environ if base is None else base
     env = {str(k): str(v) for k, v in source.items() if not secret_name(str(k))}
+    # v1.377.0 review: a secret in a VALUE whose name says nothing -- a URL's
+    # sign-in removed (the address kept), any other credential shape drops
+    # the variable -- and a value that points into this app's own folders
+    # (PATH is cleaned entry by entry below). Judged here, never logged.
+    own = _own_roots()
+    for name in list(env):
+        value = without_url_credentials(env[name])
+        if secret_value(value):
+            env.pop(name, None)
+            continue
+        if name.upper() != "PATH":
+            kept = _without_own(value, own)
+            if kept is None:
+                env.pop(name, None)
+                continue
+            value = kept
+        env[name] = value
     drop_claude_session_markers(env)
     elsewhere = {v.upper() for v in _ELSEWHERE_VARS}
     for name in [k for k in env if k.upper() in elsewhere]:
