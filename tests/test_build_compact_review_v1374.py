@@ -427,3 +427,43 @@ async def test_a_rewind_that_is_refused_keeps_the_summary(app, work):
     assert status == 409, refused
     assert setup_of(app, sid)["compaction"]["through_turn"] == "t3"
     assert any(m.get("turnId") == "t2" for m in messages_of(app, sid))
+
+
+# --------------------------------------------------------------------------- #
+# the meter's reading: whose window, and whether Compact is on
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_window_no_one_knows_is_said_to_be_the_apps_own_and_compaction_off_is_kept(app, work):
+    """When no pin, measurement, catalog or probe knows the model's window,
+    the planner plans against the app's own safe size (32,000) — the room the
+    app gives the conversation, NOT the model's limit (a Codex or an API-key
+    model reads "95%" of a window it does not have). The reading says so, and
+    the meter words it that way; a reading taken with compaction turned off
+    says that too (no Compact offer — the chat's rule)."""
+    from iron_jarvis.context.budget import DEFAULT_WINDOW
+    from iron_jarvis.daemon.routes import build as build_routes
+    from tests.test_build_sessions_v1367 import Script, frames_of, open_turn, wire
+
+    async def reading(sid: str, turn_id: str) -> tuple[dict, dict]:
+        wire(app, Script(["ok"]))
+        status, raw = await open_turn(app, sid, {"text": "hello", "turn_id": turn_id})
+        assert status == 200, raw
+        done = dict(frames_of(raw))["done"]
+        line = [m for m in messages_of(app, sid) if m.get("turnId") == turn_id and m["role"] == "assistant"][-1]
+        return done["context"], line["context"]
+
+    unknown = new_session(app, work, provider="openai", model="gpt-unpinned")["id"]
+    frame, kept = await reading(unknown, "bt-unknown")
+    assert frame["window"] == DEFAULT_WINDOW and frame["window_known"] is False
+    assert kept["window"] == DEFAULT_WINDOW and kept["window_known"] is False
+    pinned = new_session(app, work)["id"]
+    frame, kept = await reading(pinned, "bt-pinned")
+    assert frame["window"] == WINDOW and frame["window_known"] is True
+    assert "window_known" not in kept and "disabled" not in kept
+    app.state.platform.config.context_compaction = {"enabled": False}
+    frame, kept = await reading(pinned, "bt-off")
+    assert frame["disabled"] is True and kept["disabled"] is True
+    assert build_routes.context_receipt({"window": 9000, "percent": 80, "window_known": True}) == {
+        "window": 9000, "percent": 80,
+    }

@@ -281,7 +281,8 @@ async def _apply_compaction(
     from ..context.budget import estimate_tokens
 
     msgs = list(body.messages or [])
-    window = _context_window(d, provider, model) or _C_DEFAULT_WINDOW()
+    known = _context_window(d, provider, model)
+    window = known or _C_DEFAULT_WINDOW()
 
     def _measure(sys_text: str, items) -> tuple[int, float]:
         raw = estimate_tokens(sys_text) + sum(
@@ -299,6 +300,11 @@ async def _apply_compaction(
         "suggest_at": round(suggest_at * 100),
         "auto_at": round(auto_at * 100),
         "compacted": False,
+        # v1.374.0 review: False when no pin, measurement, catalog or probe
+        # knows this model's window and ``window`` is the app's own safe size
+        # (``DEFAULT_WINDOW``) — the room the planner gives the conversation,
+        # not the model's limit. A gauge must not call it the model's.
+        "window_known": bool(known),
     }
     if not _compaction_enabled(d):
         # The REAL fill level still goes out. Turning compaction off disables

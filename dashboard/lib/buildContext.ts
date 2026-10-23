@@ -36,6 +36,14 @@ export interface TurnContext {
   percent: number;
   level: "ok" | "suggest" | "auto";
   suggestAt: number;
+  /** Review (v1.374.0): no pin, measurement, catalog or probe knows this
+   *  model's window, so `window` is the app's own safe size — the room the
+   *  conversation is given, not the model's limit (the daemon's
+   *  `window_known: false`). */
+  appSized: boolean;
+  /** Compaction is turned off in Settings: the reading is still true, but
+   *  there is no Compact to offer (the chat's own rule). */
+  compactionOff: boolean;
 }
 
 const rec = (v: unknown): Record<string, unknown> | null =>
@@ -62,7 +70,15 @@ export function decodeTurnContext(raw: unknown): TurnContext | null {
       : percent >= suggestAt
         ? "suggest"
         : "ok";
-  return { window: Math.round(window), used: used !== null ? Math.round(used) : null, percent, level, suggestAt };
+  return {
+    window: Math.round(window),
+    used: used !== null ? Math.round(used) : null,
+    percent,
+    level,
+    suggestAt,
+    appSized: r.window_known === false,
+    compactionOff: r.disabled === true,
+  };
 }
 
 /** The newest reading in a session's transcript and the line it came from. */
@@ -142,14 +158,24 @@ export function readingIsBeforeSummary(readingAt: string | null, compaction: Ses
 }
 
 /** Offer Compact? Only on the daemon's word ("suggest" or "auto" — past
- *  70 %), and never for a reading the standing summary already answered. */
+ *  70 %), never for a reading the standing summary already answered, and
+ *  never while compaction is turned off in Settings (the chat's rule). */
 export function offersCompact(reading: TurnContext | null, beforeSummary: boolean): boolean {
-  return !!reading && !beforeSummary && (reading.level === "suggest" || reading.level === "auto");
+  return (
+    !!reading &&
+    !beforeSummary &&
+    !reading.compactionOff &&
+    (reading.level === "suggest" || reading.level === "auto")
+  );
 }
 
-/** The meter's words, in plain language (no "tokens"). */
+/** The meter's words, in plain language (no "tokens"). Review (v1.374.0): a
+ *  window nobody knows is the app's own safe size, and is called that —
+ *  never "what this model can read". */
 export function meterTitle(reading: TurnContext): string {
-  return `This conversation fills about ${reading.percent}% of what this model can read at once.`;
+  return reading.appSized
+    ? `This conversation fills about ${reading.percent}% of what Iron Jarvis sends this model at once. This model's own limit is not known, so a safe size is used.`
+    : `This conversation fills about ${reading.percent}% of what this model can read at once.`;
 }
 
 /** What a press that worked says. */

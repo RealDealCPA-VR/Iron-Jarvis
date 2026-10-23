@@ -748,6 +748,15 @@ def context_receipt(ctx: Any) -> "dict[str, Any] | None":
         out["level"] = ctx["level"]
     if ctx.get("compacted") is True:
         out["compacted"] = True
+    # Review (v1.374.0): the planner's window was the app's own safe size (no
+    # pin, measurement, catalog or probe knows this model's) — the meter says
+    # so instead of calling it the model's limit; and compaction turned OFF
+    # in Settings (the remedy off, the reading still true) — no Compact offer,
+    # the chat's own rule.
+    if ctx.get("window_known") is False:
+        out["window_known"] = False
+    if ctx.get("disabled") is True:
+        out["disabled"] = True
     return out
 
 
