@@ -94,6 +94,17 @@ def _isolated(tmp_path, monkeypatch):
     for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(ProviderManager, "_cli_binary_present", staticmethod(lambda b: b in ("claude", "codex")))
+    # v1.376.1: grok-cli is not found through `_cli_binary_present` but on
+    # disk (~/.grok via GROK_HOME, `cli_detect.grok_session`) and through its
+    # own binary lookup — the fixture was written on a PC with the Grok CLI
+    # signed in, so it carried two grok-cli rows the CI runner (no Grok) never
+    # has, and v1.376.0's gates went red. No Grok here, whatever the PC has.
+    from iron_jarvis.providers import cli_detect
+
+    no_grok = tmp_path / "no-grok-home"
+    no_grok.mkdir()
+    monkeypatch.setenv("GROK_HOME", str(no_grok))
+    monkeypatch.setattr(cli_detect, "_grok_binary", lambda: None)
     cm.reset()
     cm.set_home(None)
     monkeypatch.setattr(cm, "_run_handshake", _handshake)

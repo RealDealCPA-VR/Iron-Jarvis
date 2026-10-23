@@ -3657,6 +3657,18 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/{ij-harness-browser,ij-harness-browser-review,
   ij-harness-model-accounts,ij-harness-model-accounts-review,
   ij-harness-model-fold,chat-model-menu-unchanged}-v1376.test.tsx`.
+  v1.376.1 (test-only; v1.376.0's Tests AND Release went red on
+  `test_harness_model_fold_v1376::test_regen_or_check_the_daemons_answers`
+  and nothing was published): the fixture was written on THIS PC, whose Grok
+  CLI is signed in, so its `GET /models` carried two `grok-cli` rows the CI
+  runner never has. grok-cli is found ON DISK (`GROK_HOME` / `~/.grok`,
+  `cli_detect.grok_session`) and by `cli_detect._grok_binary` — NOT through
+  `ProviderManager._cli_binary_present`, which the test already stubbed. The
+  test now points `GROK_HOME` at an empty folder and stubs `_grok_binary`;
+  the fixture was regenerated (only the two Grok rows went). RULE: a fixture
+  written from the REAL daemon's answers must pin every provider the catalog
+  can find on the machine (CLIs, on-disk logins, local servers), or it
+  records the developer's PC.
 
 - **A Build session in a git folder works on ITS OWN BRANCH in a worktree
   BESIDE the repository; the user's main checkout is touched by Merge only;
