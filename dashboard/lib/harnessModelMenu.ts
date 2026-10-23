@@ -217,6 +217,11 @@ export function companyMenu(
   }
   const alias: Record<string, string> = {};
   const listed: ModelOption[] = [];
+  /** Review: the rows a fold ADDS to a CLI, placed after the CLI's own (its
+   *  plan row and its live picker first, as the chat lists the CLI). The
+   *  daemon lists a keyless API's block BEFORE the CLI's, so folding in
+   *  catalog order put Opus 4.8 above "Your Claude plan". */
+  const added = new Map<string, ModelOption[]>();
   for (const m of models) {
     const co = COMPANY_OF[m.provider];
     const served = co && m.provider === co.api && m.inherited_from === co.cli && cliModels.has(co.cli);
@@ -235,7 +240,8 @@ export function companyMenu(
     // first cut also lost the chip for every folded pick: the composer looked
     // the pick up in the unfolded catalog, where claude-cli never lists it).
     const own = cliFirst.get(co.cli);
-    listed.push({
+    const rows = added.get(co.cli) ?? [];
+    rows.push({
       ...m,
       provider: co.cli,
       inherited_from: null,
@@ -243,6 +249,14 @@ export function companyMenu(
       reasoning: own?.reasoning ?? m.reasoning,
       reasoning_default: own?.reasoning_default ?? "",
     });
+    added.set(co.cli, rows);
+  }
+  for (const [cli, rows] of added) {
+    let last = -1;
+    listed.forEach((m, i) => {
+      if (m.provider === cli) last = i;
+    });
+    listed.splice(last + 1, 0, ...rows);
   }
 
   // ---- the accounts of each CLI way
