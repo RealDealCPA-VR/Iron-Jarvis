@@ -114,6 +114,7 @@ NOTHING_KEPT = (
     "the conversation does not have), so none of it was kept."
 )
 NO_SUMMARY = "The model wrote no summary, so nothing changed. Try again in a moment."
+TOO_SLOW = "The model took too long to write the summary, so nothing changed. Try again in a moment."
 NOT_LIGHTER = (
     "The summary came out as long as the turns it would replace, so it was not kept and nothing changed. "
     "Try again after a few more turns."
@@ -508,7 +509,7 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
                     trigger="manual", prior=(prior or {}).get("summary", ""),
                 )
     except TimeoutError:
-        raise CompactRefused(NO_SUMMARY, 504) from None
+        raise CompactRefused(TOO_SLOW, 504) from None
     finally:
         reset_hold(hold_token)
         if pin_token is not None:

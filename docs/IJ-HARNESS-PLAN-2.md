@@ -209,6 +209,24 @@ once per session.
   answers a question about the summarised part.
 - A long turn finished in the background raises exactly one notice.
 
+**Result (doer, before review).** Live on a scratch daemon with the local
+model (glm-5.3-flash through the LiteLLM proxy) and a 3,000-token window
+pinned in the scratch config, driven through the real IJ harness screen:
+
+| Check | Outcome |
+|---|---|
+| Meter | 35% after the first turn, rising each turn; the sixth turn read 73% and the box offered **Compact** (the daemon's own `level: suggest`) |
+| Compact | 6 earlier messages summarized on custom / glm-5.3-flash, 0 claims removed (the model named only files the conversation and the ledger hold), billed to the session (the usage shows the extra call); the 12 lines of the conversation were all still there |
+| The summarized part | "what were the codename and the port from the start?" was answered correctly (CORAL-TELESCOPE-17, 6431) while the next turn's history held no line from the turns that carried them; the same after a second and a third Compact (`/compact` from the box) |
+| Task list | a turn that called the plan tool showed the checklist under the live reply; the settled reply folded it to "Plan · 1 of 3 done" |
+
+Found by the live run and fixed in the same phase: the first summary was as
+long as the three turns it covered, so the next prompt got heavier. Compact
+now asks for a third of what it replaces and keeps a summary only when it is
+lighter. Not driven live: the finish notice (a turn longer than a minute) —
+proven against the real route with a stand-in clock, the real bell and the
+desktop app's tray code under node.
+
 ## Phase 4 — Git: a branch per session, commit, PR, merge (target v1.375.0)
 
 **What you see.** New session in a git folder starts on its own branch

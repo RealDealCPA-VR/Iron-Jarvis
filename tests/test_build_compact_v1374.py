@@ -336,6 +336,17 @@ async def test_local_only_is_the_scope_of_the_call_and_its_refusal_is_the_409_sh
     assert "compaction" not in setup_of(app, sid)
 
 
+async def test_a_summary_that_takes_too_long_is_said_and_frees_the_session(app, work, monkeypatch):
+    sid = new_session(app, work)["id"]
+    seed(app, sid)
+    monkeypatch.setattr(C, "COMPACT_TIMEOUT_S", 0.05)
+    wire_writer(app, Writer(gate=asyncio.Event()))  # never answers
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/compact", {})
+    assert status == 504 and body["detail"] == C.TOO_SLOW
+    assert "compaction" not in setup_of(app, sid)
+    assert sid not in build_routes._COMPACTING and sid not in build_routes._STARTING
+
+
 async def test_while_compact_runs_a_message_is_refused_in_its_own_words(app, work):
     sid = new_session(app, work)["id"]
     seed(app, sid)
