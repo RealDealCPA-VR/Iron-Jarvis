@@ -346,6 +346,24 @@ describe("the meter shows the daemon's own numbers", () => {
   });
 });
 
+describe("the meter never pushes Send out of the box (review, v1.374.0)", () => {
+  it("the box's actions wrap right-aligned and never grow past the row", async () => {
+    // Measured in a real browser at 390 px with a model that offers reasoning
+    // levels: "Summarizing earlier turns…" pushed Send ~60 px out of the box
+    // and the percent + Compact ~4-15 px. jsdom cannot measure, so the rule
+    // that makes it fit is pinned: the group wraps and is bounded by the row.
+    api.gets["/build/sessions/s1"] = view({ messages: turn("t1", "a", "b", { context: reading(81, "suggest") }) });
+    renderSession();
+    await screen.findByTestId("harness-compact", undefined, NET);
+    const group = screen.getByTestId("harness-box-actions");
+    expect(group.contains(screen.getByTestId("harness-context-meter"))).toBe(true);
+    expect(group.contains(screen.getByTestId("harness-send"))).toBe(true);
+    const cls = group.className.split(/\s+/);
+    expect(cls).toEqual(expect.arrayContaining(["flex-wrap", "max-w-full", "min-w-0", "justify-end"]));
+    expect(cls).not.toContain("shrink-0");
+  });
+});
+
 /* ------------------------------------------------------------------- compact */
 
 const SUMMARY = {

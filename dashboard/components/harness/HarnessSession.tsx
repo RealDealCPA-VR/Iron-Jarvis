@@ -1753,7 +1753,16 @@ export function HarnessSession({
                 <ListChecks size={14} aria-hidden className="shrink-0" />
                 <span>{view.mode === "plan" ? "Planning" : "Plan first"}</span>
               </button>
-              <div className="ml-auto flex shrink-0 items-center gap-1">
+              {/* Review (v1.374.0): this group may WRAP, right-aligned, and
+                  never grows past the row. With the meter added, a model that
+                  offers reasoning levels pushed Send out of the box at 390 px
+                  ("Summarizing earlier turns…" / "Earlier turns summarized"
+                  by ~60 px, the percent and Compact by ~4-15 px — measured in
+                  a real browser); a row that fits is unchanged. */}
+              <div
+                data-testid="harness-box-actions"
+                className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1"
+              >
                 {/* v1.374.0: how full the conversation is for this model
                     (the daemon's reading of the newest reply), and Compact
                     past the daemon's threshold. */}
