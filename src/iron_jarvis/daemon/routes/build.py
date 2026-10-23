@@ -1098,6 +1098,20 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
         # ("interrupted") keeps the wait (v1.368.0 review, `_turn_served`).
         with contextlib.suppress(BaseException):
             await asyncio.shield(end(status))
+        # v1.376.0 (part 2, Phase 5) DECISION: a Stop CLOSES the session's
+        # agent browser (harness/page_browser) — a Stop never leaves an action
+        # running or a browser process behind, also when it lands while the
+        # model is thinking (an action under way was already closed by the
+        # tool itself). The next turn opens a fresh one; the pane keeps the
+        # last view. Off the loop; a no-op when no browser is open.
+        if status == "stopped":
+            from ...harness import page_browser as _page_browser
+
+            if _page_browser.BROWSERS.is_open(S.session_id_for(thread_id)):
+                with contextlib.suppress(BaseException):
+                    await asyncio.shield(asyncio.to_thread(
+                        _page_browser.close_for_stop, S.session_id_for(thread_id),
+                    ))
         # The news (snapshot refresh + the bell) after the frame: Iron-Proxy
         # is never waited on before the user sees the turn end.
         if pin is not None and platform is not None and watch.account_limit:
@@ -1867,6 +1881,35 @@ def register(app: FastAPI, d: Any) -> None:
         setup, transcript, queue, and the running turn's id (to rejoin with
         ``GET /chat/turns/{id}/stream``)."""
         return _full_view(_session_or_404(thread_id))
+
+    @app.get("/build/sessions/{thread_id}/browser")
+    def build_agent_browser(thread_id: str) -> dict[str, Any]:
+        """v1.376.0 (part 2, Phase 5): what the session's AGENT'S BROWSER
+        last saw, for the Browser pane — ``{view: null}`` when it has not
+        opened a page, else ``{view: {open, where, blank, title, at, shot,
+        shot_at, note, closed_reason?}}`` (``where``: host and path, never
+        the raw address — a query string can carry a token; ``blank``: a
+        blank page; ``shot``: whether ``…/browser/shot`` has a
+        picture). In memory, never a browser call: the pane reads it on
+        open, when a page tool of the session finishes and when a turn ends."""
+        from ...harness.page_browser import BROWSERS
+
+        _session_or_404(thread_id)
+        return {"view": BROWSERS.view(S.session_id_for(thread_id))}
+
+    @app.get("/build/sessions/{thread_id}/browser/shot")
+    def build_agent_browser_shot(thread_id: str) -> Any:
+        """The picture behind ``…/browser`` (a JPEG of what the agent's
+        browser showed after its last action); 404 when there is none."""
+        from fastapi.responses import Response
+
+        from ...harness.page_browser import BROWSERS
+
+        _session_or_404(thread_id)
+        data = BROWSERS.shot(S.session_id_for(thread_id))
+        if not data:
+            raise HTTPException(status_code=404, detail="The agent's browser has no picture yet.")
+        return Response(content=data, media_type="image/jpeg")
 
     @app.patch("/build/sessions/{thread_id}")
     def patch_build_session(thread_id: str, body: BuildSessionPatch) -> dict[str, Any]:

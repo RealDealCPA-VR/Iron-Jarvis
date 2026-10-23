@@ -103,6 +103,20 @@ def prompt_line(armed: "set[str] | frozenset[str]") -> str:
         local_only = bool(current_scope().on)
     except Exception:  # noqa: BLE001 — unknown reads as the stricter words
         local_only = True
+    if "page_open" in armed:
+        # v1.376.0: the agent's own browser (harness/page_act).
+        ask = (
+            "in this session every page opened, click and typed entry asks the user first."
+            if local_only else
+            "you can work on that dev server without asking. Any other address on this PC or "
+            "network asks the user first."
+        )
+        return (
+            f"\n\nThe user's Browser pane is showing {shown}. To check your work there, open it in "
+            "your own browser with page_open, then use page_click, page_type and page_read (the "
+            "visible text, console errors and failed requests) and page_screenshot to look; "
+            + ask
+        )
     if local_only:
         # v1.371.0 review: a local-only turn cards EVERY page_screenshot
         # (egress.OPENS_PAGES_TOOLS) — the line must not promise otherwise.

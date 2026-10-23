@@ -60,6 +60,8 @@ const KIND_DOES: Partial<Record<WorkKind, string>> = {
   page: "Read web pages",
   command: "Run commands",
   browser: "Use your browser",
+  // v1.376.0: the agent's own browser (a Build session's dev server).
+  site: "Use its own browser",
 };
 
 function capFirst(s: string): string {

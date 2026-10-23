@@ -239,6 +239,8 @@ _OFF_ROSTER_BY_DESIGN = {
     # v1.371.0: looking at the user's dev server — armed by an IJ harness
     # turn only (harness/mode.CODING_TOOLS), like the coding tools above.
     "page_screenshot",
+    # v1.376.0: the agent's own browser (harness/page_act) — the same rule.
+    "page_open", "page_click", "page_type", "page_read",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

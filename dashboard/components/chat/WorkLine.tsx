@@ -78,6 +78,7 @@ import {
   Folder,
   Globe,
   Loader2,
+  MousePointerClick,
   Plug,
   Search,
   SquareTerminal,
@@ -127,6 +128,8 @@ const ICON: Record<WorkKind, LucideIcon> = {
   service: Webhook,
   // v1.352.0 (G22): the browser the user connected, and a connected app.
   browser: AppWindow,
+  // v1.376.0: the agent's OWN browser (open, click, type, read a page).
+  site: MousePointerClick,
   app: Plug,
   tool: Wrench,
 };

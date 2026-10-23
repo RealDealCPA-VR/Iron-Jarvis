@@ -14,14 +14,28 @@
  * address on this PC or the user's own network opens here (isPreviewAddress);
  * a page that refuses to be framed shows blank, so "Open in a new tab" is
  * always beside it. The paired browser is read from GET /browser/status (a
- * route documented never to fail); when nothing is paired it says so.
+ * route documented never to fail).
+ *
+ * v1.376.0 review: a Build session NEVER uses the paired browser (its tools
+ * are not armed in a harness turn — the agent works in its own invisible
+ * Edge, shown above). The old line said a paired browser let "the session
+ * browse the web with it", and that an unpaired one meant it could not —
+ * both untrue here. A paired browser is still named, with what is true;
+ * nothing is said when none is paired (there is nothing to set up for Build).
  */
 
 import { useEffect, useState, type FormEvent } from "react";
-import Link from "next/link";
-import { ExternalLink, Globe, RefreshCw } from "lucide-react";
+import { ExternalLink, Globe, MousePointerClick, RefreshCw } from "lucide-react";
 import { get } from "@/lib/api";
 import { isPreviewAddress } from "@/lib/buildSessions";
+import {
+  agentHeadline,
+  agentShotSrc,
+  closedWords,
+  decodeAgentBrowserView,
+  viewTime,
+  type AgentBrowserView,
+} from "@/lib/agentBrowser";
 
 const PREVIEW_PREFIX = "ij.build.preview.";
 
@@ -61,7 +75,102 @@ interface PairedBrowser {
   name: string;
 }
 
-export function BrowserPreview({ threadId, seen }: { threadId: string; seen: readonly string[] }) {
+/**
+ * v1.376.0 (IJ harness part 2, Phase 5): WHAT THE AGENT LAST SAW. The agent
+ * drives its own invisible Edge (harness/page_browser); this block says where
+ * it is ("The agent is on localhost:5173/cart") and shows the picture taken
+ * after its last action. Read when the pane opens, when one of the session's
+ * page steps finishes (`pageSteps` grows) and when a turn ends (`refreshKey`)
+ * — never on a timer. An older daemon (no such route) shows nothing.
+ */
+export function AgentBrowserView({
+  threadId,
+  refreshKey = 0,
+  pageSteps = 0,
+}: {
+  threadId: string;
+  refreshKey?: number;
+  pageSteps?: number;
+}) {
+  // undefined: not read yet (nothing shown); null: never opened a page.
+  const [view, setView] = useState<AgentBrowserView | null | undefined>(undefined);
+  const [gone, setGone] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    get<unknown>(`/build/sessions/${encodeURIComponent(threadId)}/browser`)
+      .then((raw) => {
+        if (!live) return;
+        setGone(false);
+        setView(decodeAgentBrowserView(raw));
+      })
+      .catch(() => {
+        // An older daemon, a deleted session: say nothing rather than guess.
+        if (live) setGone(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [threadId, refreshKey, pageSteps]);
+
+  if (gone || view === undefined) return null;
+  if (view === null) {
+    return (
+      <p data-testid="agent-browser-empty" className="flex items-center gap-1.5 text-[12px] text-zinc-500">
+        <MousePointerClick size={12} aria-hidden className="shrink-0" />
+        The agent has not opened a page in its own browser in this session.
+      </p>
+    );
+  }
+  const head = agentHeadline(view);
+  const closed = closedWords(view);
+  const time = viewTime(view.at);
+  return (
+    <section
+      data-testid="agent-browser"
+      data-open={view.open ? "true" : "false"}
+      aria-label="The agent's browser"
+      className="min-w-0 space-y-1.5 border-b hairline pb-3"
+    >
+      <p data-testid="agent-browser-where" className="flex min-w-0 items-center gap-1.5 text-[13px] text-zinc-300">
+        <MousePointerClick size={13} aria-hidden className="shrink-0 text-zinc-500" />
+        <span className="min-w-0 truncate">
+          {head.lead}{" "}
+          <span className={view.where ? "font-mono text-zinc-100" : "text-zinc-100"}>{head.place}</span>
+        </span>
+      </p>
+      {view.note ? (
+        <p data-testid="agent-browser-note" className="text-[12px] text-tone-warn">
+          {view.note}
+        </p>
+      ) : null}
+      {view.shot ? (
+        // eslint-disable-next-line @next/next/no-img-element -- a picture the daemon serves, never optimised
+        <img
+          data-testid="agent-browser-shot"
+          src={agentShotSrc(threadId, view.shotAt)}
+          alt={`What the agent's browser showed${view.where ? ` on ${view.where}` : ""}`}
+          className="h-auto w-full rounded-lg border hairline"
+        />
+      ) : null}
+      <p data-testid="agent-browser-when" className="text-[12px] text-zinc-500">
+        {closed || (time ? `Updated at ${time}.` : "")}
+      </p>
+    </section>
+  );
+}
+
+export function BrowserPreview({
+  threadId,
+  seen,
+  refreshKey = 0,
+  pageSteps = 0,
+}: {
+  threadId: string;
+  seen: readonly string[];
+  refreshKey?: number;
+  pageSteps?: number;
+}) {
   const [address, setAddress] = useState("");
   const [draft, setDraft] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
@@ -117,6 +226,7 @@ export function BrowserPreview({ threadId, seen }: { threadId: string; seen: rea
 
   return (
     <div data-testid="browser-preview" className="flex h-full min-h-0 flex-col gap-2">
+      <AgentBrowserView threadId={threadId} refreshKey={refreshKey} pageSteps={pageSteps} />
       <form onSubmit={onSubmit} className="flex min-w-0 items-center gap-1.5">
         <label htmlFor={`preview-address-${threadId}`} className="sr-only">
           Address to preview
@@ -196,21 +306,13 @@ export function BrowserPreview({ threadId, seen }: { threadId: string; seen: rea
           ) : null}
         </div>
       )}
-      {browser ? (
+      {browser?.paired ? (
         <p data-testid="preview-browser" className="flex items-center gap-1.5 border-t hairline pt-2 text-[12px] text-zinc-500">
           <Globe size={12} aria-hidden className="shrink-0" />
-          {browser.paired ? (
-            <span>
-              Your browser{browser.name ? ` (${browser.name})` : ""} is paired: the session can browse the web with it.
-            </span>
-          ) : (
-            <span>
-              No browser is paired, so the session cannot browse the web.{" "}
-              <Link href="/computeruse" className="text-accent-soft hover:underline">
-                Set up Your browser
-              </Link>
-            </span>
-          )}
+          <span className="min-w-0">
+            Your browser{browser.name ? ` (${browser.name})` : ""} is paired with Iron Jarvis. A Build session does
+            not use it: the agent opens your dev server in its own browser.
+          </span>
         </p>
       ) : null}
     </div>

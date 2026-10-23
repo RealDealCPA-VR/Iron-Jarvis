@@ -63,6 +63,9 @@ PLAN_TOOLS_CLAUDE = [
     # v1.371.0: looking at the dev server changes nothing on this PC, so plan
     # mode has it too (it passes through every dialect) - moved on purpose.
     "page_screenshot",
+    # v1.376.0: opening and reading a page in the agent's own browser look;
+    # a click or typing acts and waits for the plan - moved on purpose.
+    "page_open", "page_read",
     "skill_search",
 ]
 EDITORS = {"Write", "Edit", "MultiEdit", "Bash", "TaskStop", "NotebookEdit", "apply_patch", "process_write"}
@@ -260,9 +263,11 @@ async def test_the_post_lane_has_no_door_and_no_question_in_plan_mode(tmp_path, 
     else:
         await run_chat_turn(platform, BUILTIN_PERSONAS, body, **kw)
         tools = script.calls[0]["tools"]
-        # The POST lane arms no ask-tier tool (page_screenshot is one, v1.371.0).
+        # The POST lane arms no ask-tier tool (page_screenshot is one, v1.371.0;
+        # page_open too, v1.376.0).
         assert tools == [
-            t for t in PLAN_TOOLS_CLAUDE if t not in ("AskUserQuestion", "ExitPlanMode", "page_screenshot")
+            t for t in PLAN_TOOLS_CLAUDE
+            if t not in ("AskUserQuestion", "ExitPlanMode", "page_screenshot", "page_open")
         ]
         assert "present it in your reply" in script.calls[0]["system"]
 

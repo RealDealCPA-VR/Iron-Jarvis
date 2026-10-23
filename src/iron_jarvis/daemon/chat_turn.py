@@ -5395,6 +5395,10 @@ STRICT_ASK_TOOLS = (
     # let a patch, a multi-edit or a notebook edit change files uncarded.
     | {"multi_edit", "apply_patch", "notebook_edit"}
     | {"web_search", "web_fetch"}
+    # v1.376.0 review (IJ harness part 2, Phase 5): a click or a typed entry
+    # in the agent's browser can change what the dev server stores, so "Ask
+    # first" cards them; opening and reading a page only look.
+    | {"page_click", "page_type"}
 )
 
 #: Every tool whose SUCCESS changes a file on disk (v1.351.0, G06) — the set

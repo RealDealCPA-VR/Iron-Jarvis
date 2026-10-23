@@ -8,8 +8,9 @@
  * for what it really does, read off the gate in `routes/chat.py`:
  *
  *   always_ask      cards the engine's ask tier (shell, code, connectors) AND
- *                   every file-writing tool AND the two web tools
- *                   (`STRICT_ASK_TOOLS`);
+ *                   every file-writing tool AND the two web tools AND
+ *                   (v1.376.0 review) a click or a typed entry in a Build
+ *                   session's own browser (`STRICT_ASK_TOOLS`);
  *   approve_for_me  cards the engine's ask tier only. File edits and web
  *                   lookups are `allow` by default, so they go ahead. The
  *                   default, and what an unknown value falls back to;

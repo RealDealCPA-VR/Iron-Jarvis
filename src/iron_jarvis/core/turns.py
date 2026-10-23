@@ -254,6 +254,16 @@ class TurnRegistry:
             self._turns[str(turn_id)] = handle
         return handle
 
+    def handle(self, turn_id: str) -> TurnHandle | None:
+        """The running turn's handle, or None (v1.376.0): a tool whose action
+        the turn's Stop must end AT ONCE — the agent's browser — races the
+        action against :meth:`TurnHandle.wait_stopped` (the lane only reads
+        Stop between rounds)."""
+        if not turn_id:
+            return None
+        with self._lock:
+            return self._turns.get(str(turn_id))
+
     def stop(self, turn_id: str) -> bool:
         """Ask a running turn to stop. False = unknown or already finished."""
         with self._lock:

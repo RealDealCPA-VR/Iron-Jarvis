@@ -253,12 +253,31 @@ async def _capture(binary: str, url: str, folder: Path, width: int, height: int,
     return kept, problem
 
 
+def _session_page(args: dict[str, Any], ctx: Any) -> str:
+    """v1.376.0: the browser key whose OPEN agent browser this call looks at
+    — no ``url`` (the page it is on), or the very page it is on — else ""
+    (today's one-shot of ``url``)."""
+    from . import page_browser as PB
+
+    key = PB.browser_key(ctx)
+    current = PB.BROWSERS.current_url(key)
+    if not current:
+        return ""
+    raw = str((args or {}).get("url") or "").strip()
+    if not raw:
+        return key
+    want = local_address(PB.normalize(raw)).split("#", 1)[0].rstrip("/")
+    have = local_address(current).split("#", 1)[0].rstrip("/")
+    return key if want and want == have else ""
+
+
 class PageScreenshotTool(Tool):
     name = TOOL_NAME
     description = (
-        "See how a web page on this PC or the user's own network looks: it opens the "
-        "page in a private, invisible browser window and returns a screenshot you can "
-        "look at. Use it for the user's dev server (for example http://localhost:5173) "
+        "See how a web page on this PC or the user's own network looks: a screenshot you can "
+        "look at. With your browser open (page_open), leave out url to see the page it is on "
+        "right now. Otherwise give url: the page opens in a private, invisible browser window "
+        "of its own. Use it for the user's dev server (for example http://localhost:5173) "
         "after you change something, or when the user asks how a page looks. Not for "
         "public websites. `width`/`height` set the window (default 1280×800); "
         "`wait_ms` lets the page finish loading first (default 1500)."
@@ -268,22 +287,32 @@ class PageScreenshotTool(Tool):
     input_schema = {
         "type": "object",
         "properties": {
-            "url": {"type": "string", "description": "The page address, e.g. http://localhost:5173/settings"},
+            "url": {
+                "type": "string",
+                "description": "The page address, e.g. http://localhost:5173/settings. Leave it "
+                "out to see the page your browser (page_open) is on.",
+            },
             "width": {"type": "integer", "minimum": MIN_WIDTH, "maximum": MAX_WIDTH},
             "height": {"type": "integer", "minimum": MIN_HEIGHT, "maximum": MAX_HEIGHT},
             "wait_ms": {"type": "integer", "minimum": 0, "maximum": MAX_WAIT_MS},
         },
-        "required": ["url"],
+        "required": [],
     }
 
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> "SpendCheck | None":
         """The page the user's Browser pane shows runs without a card; any
         other local page asks; a non-local address has no opinion (execute
-        refuses it in words)."""
+        refuses it in words). v1.376.0: the page the agent's own browser is
+        on, and an address the user allowed for that browser, need no card
+        either (the user already allowed it)."""
+        if _session_page(args, ctx):
+            return SpendCheck(ask=False)
         url = local_address(str((args or {}).get("url") or ""))
         if not url:
             return None
-        if is_preview_page(url):
+        from . import page_browser as PB
+
+        if is_preview_page(url) or PB.BROWSERS.allowed(PB.browser_key(ctx), url):
             return SpendCheck(ask=False)
         return SpendCheck(
             ask=True,
@@ -297,7 +326,15 @@ class PageScreenshotTool(Tool):
         )
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        url = local_address(str((args or {}).get("url") or ""))
+        if _session_page(args, ctx):
+            return await self._from_session_browser(ctx)
+        raw = str((args or {}).get("url") or "").strip()
+        if not raw:
+            return ToolResult(
+                ok=False,
+                error="Give the page's address (url), or open it with page_open first.",
+            )
+        url = local_address(raw)
         if not url:
             return ToolResult(ok=False, error=NOT_LOCAL)
         width = _clamp(args.get("width"), MIN_WIDTH, MAX_WIDTH, DEFAULT_WIDTH)
@@ -341,5 +378,60 @@ class PageScreenshotTool(Tool):
         )
 
 
+    async def _from_session_browser(self, ctx: ToolContext) -> ToolResult:
+        """v1.376.0: the page the agent's own browser is on, as it is right
+        now (after the clicks and the typing), at that browser's window size.
+        Saved in ``<home>/page-screenshots`` like every screenshot."""
+        from . import page_browser as PB
+        from .page_act import run_action
+
+        out = await run_action(ctx, lambda key, preview: PB.BROWSERS.picture(key, preview=preview))
+        if isinstance(out, ToolResult):
+            return out
+        if not out.picture:
+            return ToolResult(ok=False, error="The agent's browser could not take a screenshot of its page.")
+        url = out.url
+        folder = Path(ctx.config.home) / "page-screenshots"
+        path = await asyncio.to_thread(_save_picture, out.picture, folder, url)
+        data, media = await asyncio.to_thread(_fit, out.picture)
+        width, height = PB.VIEWPORT["width"], PB.VIEWPORT["height"]
+        shown = PB.where(url) or "its page"
+        data_out = {"url": url, "file": str(path), "width": width, "height": height,
+                    "bytes": len(out.picture), "browser": "agent"}
+        if len(data) > HARD_IMAGE_BYTES:
+            return ToolResult(
+                ok=True,
+                output=(
+                    f"Screenshot of {shown} (the page the agent's browser is on) saved at {path}, "
+                    "but it is too large to attach here. Call view_image with that path."
+                ),
+                data={**data_out, "attached": False},
+            )
+        return ToolResult(
+            ok=True,
+            output=(
+                f"Screenshot of {shown}, the page the agent's browser is on, at {width}×{height}; "
+                f"the picture is attached to this result. Saved at {path}. If you cannot see a "
+                "picture here, call view_image with that path."
+            ),
+            data=data_out,
+            images=[{"media_type": media, "data_b64": base64.b64encode(data).decode("ascii")}],
+        )
+
+
+def _save_picture(data: bytes, folder: Path, url: str) -> Path:
+    """BLOCKING: a picture taken in memory, into ``<home>/page-screenshots``
+    (the newest :data:`KEEP_SHOTS` kept)."""
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = folder / _shot_name(url)
+    dest.write_bytes(data)
+    _prune(folder)
+    return dest
+
+
 def page_tools() -> list[Tool]:
-    return [PageScreenshotTool()]
+    """Every page tool: the screenshot (v1.371.0) and the agent's browser
+    (v1.376.0, ``harness/page_act``)."""
+    from .page_act import page_act_tools
+
+    return [PageScreenshotTool(), *page_act_tools()]

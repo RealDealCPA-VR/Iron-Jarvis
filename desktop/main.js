@@ -99,6 +99,15 @@ const IRON_PROXY_BUNDLE = IS_PACKAGED
   ? path.join(RES_DIR, "iron-proxy", "iron-proxy.mjs")
   : path.join(REPO_ROOT, "desktop", "vendor", "iron-proxy", "iron-proxy.mjs");
 
+/** v1.376.0 review (IJ harness part 2, Phase 5): the packaged daemon ships
+ *  no node.exe for Playwright's driver (88 MiB): the agent's browser runs
+ *  that driver on THIS Electron, as Node (ELECTRON_RUN_AS_NODE, set by the
+ *  daemon for the driver alone — harness/page_browser NODE_ENV). A source
+ *  run keeps Playwright's own node.exe, which is there. */
+function playwrightNodeEnv() {
+  return { IRONJARVIS_PLAYWRIGHT_NODE: process.execPath };
+}
+
 /** The daemon's env for running the bundled Iron-Proxy, or {} when absent. */
 function ironProxyEnv() {
   if (!fs.existsSync(IRON_PROXY_BUNDLE)) return {};
@@ -2808,6 +2817,10 @@ const TOOL_WORDS = {
   notebook_edit: "change a notebook",
   exit_plan_mode: "start working on this plan",
   page_screenshot: "take a screenshot of a page on your computer or network",
+  page_open: "open a page on your computer or network in its browser",
+  page_click: "click on a page in its browser",
+  page_type: "type into a page in its browser",
+  page_read: "read the page in its browser",
   delegate: "hand part of the work to a helper agent",
   spawn_agent: "start a helper agent",
 };
@@ -4133,7 +4146,7 @@ async function startup() {
       fs.existsSync(path.join(voskModelDir, "am"))
         ? { IRONJARVIS_VOSK_MODEL: voskModelDir }
         : {};
-    const resourceEnv = { ...voskEnv, ...addonEnv, ...ironProxyEnv() };
+    const resourceEnv = { ...voskEnv, ...addonEnv, ...ironProxyEnv(), ...playwrightNodeEnv() };
     // 1) Frozen daemon. Must serve on 8787 to match the build-time-baked client URL.
     // v1.358.0 (G61): where it listens is read from the "Let other computers
     // on my network reach this Iron Jarvis" setting at EVERY spawn (the
@@ -4202,7 +4215,7 @@ async function startup() {
         "uv",
         ["run", "ironjarvis", ...daemonServeArgs(net, DAEMON_PORT, REPO_ROOT)],
         REPO_ROOT,
-        { IRONJARVIS_TOKEN: authToken, ...ironProxyEnv(), ...net.env }
+        { IRONJARVIS_TOKEN: authToken, ...ironProxyEnv(), ...playwrightNodeEnv(), ...net.env }
       );
     });
     // 2) Next.js dashboard. `next start` honours the PORT env var.

@@ -111,6 +111,7 @@ import {
   type HarnessFile,
 } from "@/components/harness/HarnessAttachments";
 import { previewAddressFor } from "@/components/harness/BrowserPreview";
+import { finishedPageSteps } from "@/lib/agentBrowser";
 import { AtMenu, PickedChips, RewindList, SentPicks, SlashMenu } from "@/components/harness/HarnessComposerMenus";
 import { slashTokenAt, spliceToken, tokenAt } from "@/lib/slash";
 import { atMenuOpen, slashMenuOpen } from "@/lib/composerMenus";
@@ -1848,6 +1849,7 @@ export function HarnessSession({
           livePlan={livePlan}
           terminal={terminal}
           refreshKey={turnsEnded + rewinds}
+          pageSteps={finishedPageSteps(stream.tools)}
           undoFor={undoFor}
           onUndo={onUndo}
           onSessionChanged={() => void load()}

@@ -186,6 +186,9 @@ async def test_the_stream_lane_arms_the_coding_set_in_claudes_dialect_past_the_c
         "apply_patch", "process_write",
         # v1.371.0: no Claude Code tool looks at a page, so it passes through.
         "page_screenshot",
+        # v1.376.0: nor drives one — the agent's own browser passes through
+        # under its own names (moved on purpose).
+        "page_open", "page_click", "page_type", "page_read",
         "skill_search", "list_agents",
     ]
     assert len(tools) > chat_turn._MAX_ARMED_TOOLS

@@ -178,16 +178,7 @@ class PlaywrightBrowser:
 
     # -- DOM/a11y-first locator selection -----------------------------------
     def _locator(self, page: Any, selector: Selector) -> Any:
-        if selector.css:
-            return page.locator(selector.css)
-        if selector.role and selector.name:
-            return page.get_by_role(selector.role, name=selector.name)
-        if selector.name:
-            # Prefer an accessible label, then visible text.
-            return page.get_by_label(selector.name)
-        if selector.text:
-            return page.get_by_text(selector.text)
-        raise UnknownSelector("empty selector")
+        return locator_for(page, selector)
 
     async def _snapshot(self, page: Any) -> Page:
         try:
@@ -296,6 +287,24 @@ class PlaywrightBrowser:
         if self._pw is not None:
             await self._pw.stop()
         self._pw = self._browser = self._context = self._page = None
+
+
+def locator_for(page: Any, selector: Selector) -> Any:
+    """THE DOM/a11y-first target rule: css, else role + accessible name,
+    else an accessible label, else visible text. Lifted out of
+    :class:`PlaywrightBrowser` (v1.376.0) so the IJ harness's agent browser
+    (``harness/page_browser``) targets an element exactly as computer use
+    does — one rule, never two that drift."""
+    if selector.css:
+        return page.locator(selector.css)
+    if selector.role and selector.name:
+        return page.get_by_role(selector.role, name=selector.name)
+    if selector.name:
+        # Prefer an accessible label, then visible text.
+        return page.get_by_label(selector.name)
+    if selector.text:
+        return page.get_by_text(selector.text)
+    raise UnknownSelector("empty selector")
 
 
 def _flatten_a11y(node: dict[str, Any], out: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:

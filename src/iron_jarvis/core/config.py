@@ -73,6 +73,18 @@ def default_permissions() -> dict[str, str]:
         # the card ONLY for the dev server the Browser pane shows (the user
         # opened it); any other local page cards in every posture.
         "page_screenshot": "ask",
+        # v1.376.0 (IJ harness part 2, Phase 5): the agent's own browser.
+        # Opening a page is page_screenshot's tier and rule (its spend check
+        # lifts the card for the Browser pane's dev server and an address the
+        # user already allowed for that browser; any other local page asks).
+        # Clicking, typing and reading act only on the page the browser is
+        # on, which the address rules keep to pages the user opened or
+        # allowed (harness/page_browser) — allow, like the readers and the
+        # editors; the table can still make them ask or deny.
+        "page_open": "ask",
+        "page_click": "allow",
+        "page_type": "allow",
+        "page_read": "allow",
         # IJ HARNESS SESSIONS (v1.367.0, Phase 4). ask_user only ASKS (the
         # question itself is the consent surface; it changes nothing).
         # exit_plan_mode is the plan-mode door: ASK, and the stream lane cards

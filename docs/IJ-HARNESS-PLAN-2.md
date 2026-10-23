@@ -457,6 +457,179 @@ agent last saw and where ("The agent is on localhost:5173/cart").
   is bundled; checked on the installed build).
 - Stop, archive and the idle timer each leave no browser process behind.
 
+**Result (doer, before review).** Live on a scratch daemon (port 8817, this
+PC's own Claude Code and Codex logins, Iron-Proxy off), a scratch site served
+by `python -m http.server` whose `app.js` looked up `#cartCount` while the
+page's element is `#cart-count` (so Add to cart threw), the Browser pane's
+address sent with each message:
+
+| Check | Outcome |
+|---|---|
+| Claude session (claude-cli) | 22.8 s, no card: `page_open` → `page_click "Add to cart"` → `page_read` showed "Uncaught TypeError: Cannot set properties of null (setting 'textContent')" (quoted in the reply) → `edit_file` (`cartCount` → `cart-count`) → `page_open` → click → `page_read`: "Cart: 1 item", console clean. The pane's picture shows "Cart: 1 item" |
+| Codex session (codex-cli) | 28.6 s, no card: `page_open` → `page_click` (with `role: button`) → `page_read` (1 console error) → read both files → `apply_patch` → `page_open` → click → `page_read`: "Cart: 1 item" |
+| Archive | the session's driver and 8 Edge processes all gone; the pane says "closed" |
+| Stop while the model thought (after `page_open`) | the turn ended "stopped", the browser closed (`closed_reason: stopped`), no process left |
+| Stop during an action (`page_open` of a local address that never answers) | the call ended 0.2 s after Stop ("Stopped: you pressed Stop, so the agent's browser was closed."), no process left |
+| Idle (`IRONJARVIS_PAGE_BROWSER_IDLE_S=30`) | closed 37.7 s after the last action (30 s + the check), every process gone |
+| Daemon shutdown (`POST /shutdown`) | 11 browser processes gone 0.6 s after |
+| Daemon KILLED (TerminateProcess of the daemon alone) | 9 browser processes gone within 0.2 s (the job) |
+
+Frozen build (`pyinstaller packaging/ironjarvis.spec`, into the worktree's
+`packaging/dist`): `ironjarvis.exe page-browser-check http://127.0.0.1:<port>/`
+opened a local page in headless Edge, read its text and its console error,
+closed it and found none of its 8 processes alive (`"ok": true`); the same
+check on a build with v1.375.0's spec (Playwright excluded) says the driver is
+missing (`"ok": false`, in words). The frozen daemon boots and serves
+`/health`. Size: 298,236,152 → 408,555,153 bytes (+110,319,001, ~105 MiB;
+Playwright's driver is 103 MiB of it: `node.exe` 88 MiB + its package). The
+installed (NSIS) build was not made here.
+
+Decisions made in this phase (each pinned by a test):
+
+- **The browser**: the installed Edge (`executable_path` of the Edge the
+  doctor finds — Edge only, the user's decision names it), headless, a
+  throwaway profile and downloads folder in the SYSTEM temp
+  (`ij-agent-browser-*`; downloads are refused anyway), opened on the first
+  `page_open`, one per Build session — a helper agent uses its session's.
+- **Processes**: Playwright starts its own driver, so it is ADOPTED into a
+  kill-on-close Job right after it starts and before it launches anything
+  (`procs.adopt`); Edge and every process Edge starts are born in the job
+  (measured: all members). Close = the context, the driver, then the job.
+  `ALLOWED_RAW_SPAWNS` is unchanged (no file of ours spawns here). A killed
+  daemon leaves its throwaway folder (and Playwright's own empty
+  `playwright-artifacts-*` folder in the temp folder) behind; the next start
+  removes `ij-agent-browser-*` folders older than 6 hours.
+- **The thread**: Playwright's ASYNC API on one dedicated thread with its own
+  event loop for every session's browser; the daemon's loop only awaits a
+  future from it, and a cancel there cancels the action's task. One action at
+  a time per session; each has a time limit in words (open 45 s, click / type
+  / read 15 s), and a wedged driver past it closes the browser.
+- **Stop**: CLOSES the session's browser — at once when an action is under
+  way (the tool races its action against the turn's Stop; Playwright's driver
+  would otherwise finish a click or a page load on its own), and when the turn
+  ends stopped. The next turn opens a fresh one.
+- **The address rules on every navigation**: the Browser pane's dev server
+  and an address the user allowed for this browser open without a card;
+  another local address asks once (`page_open`'s spend check — allowed, it
+  stays allowed until the browser closes); a public site is refused. A
+  navigation the page starts (a link, a form, `location=`, a meta refresh, a
+  popup) is stopped by route interception BEFORE its request; a server
+  redirect is followed by Chromium without asking the route (measured), so
+  its hop is judged the moment the browser starts it and the page is sent
+  away (its request has left; the page is never read, shown or acted on),
+  with an arrival guard behind it; the browser returns to the last allowed
+  page and the result says where the page tried to go. Every action re-checks
+  its page.
+- **Typing**: a password field, a payment field (card number, security code,
+  bank details, `cc-*`), a file picker, or text that reads as a key —
+  REFUSED in words, never carded.
+- **Tiers**: `page_open` ask (its spend check lifts the pane's page);
+  `page_click`, `page_type`, `page_read` allow. Local only cards every open,
+  click and typed entry (`OPENS_PAGES_TOOLS`); low trust refuses all four.
+  Plan mode opens and reads, never clicks or types. No dialect renames them
+  (Claude Code and Codex have no local browser tool).
+- **The pane**: "The agent is on localhost:5173/cart" (host and path, never
+  the query string) and the picture taken after its last action, read when
+  the tab opens, when a page step finishes and when a turn ends — never on a
+  timer. `page_screenshot` with no address looks at the agent's page.
+
+Tests: 58 in `tests/test_build_browser_v1376.py` (a fake browser for the
+fast pins; two against the real Edge and a local `http.server`, one of them a
+KILLED daemon), 16 in `dashboard/__tests__/ij-harness-browser-v1376.test.tsx`
+and `ij-harness-step-words-v1376.test.ts`, and an e2e step (the pane at 390 px,
+no sideways pan). 36 mutations of the daemon's side and 14 of the
+dashboard's (its words, the pane, the low-trust families), each red.
+
+Not done here: the installed (NSIS) build was not made; no hand test of a
+page that opens a popup, a dialog-heavy page or a dev server on HTTPS; the
+throwaway folders a killed daemon leaves are swept only after 6 hours.
+
+**Review (before ship).** Each defect pinned red first and mutation-checked
+(`tests/test_build_browser_review_v1376.py`,
+`dashboard/__tests__/ij-harness-browser-review-v1376.test.tsx`):
+
+- *Typing through a label.* Playwright's fill() follows a `<label>` (or
+  anything inside one) to its control, while the refusal read the label's
+  facts: a css target naming the label of a password field typed the password
+  (real Edge). The facts are now those of the field fill() reaches.
+- *A page that asks before leaving* (unsaved changes) was answered "stay",
+  which cancelled the agent's own page_open with words about a download. The
+  agent's navigation now leaves it and says the page asked; confirm() and
+  prompt() are still answered Cancel ("the agent's browser never says yes for
+  you"), an alert is closed.
+- *Edge closed or crashed* (or its driver killed) left a session whose every
+  page_open raised a raw error until the idle close. The dead browser is
+  closed (job, folder) and the next page_open starts a fresh one, saying so.
+- *A process outside the job.* About two seconds in, Edge has an
+  `identity_helper.exe` that is NOT in the browser's job (Windows starts it in
+  a job of its own; a job allowing no breakaway does not keep it either). It
+  exits ~0.2 s after Edge, but the process list and the close missed it; the
+  doer's "every process is in the job" pin held only in the first two seconds.
+  The list is now the job's members and the driver's whole tree, and a close
+  ends both.
+- *No job, no browser.* When Windows will not put the driver in a job, Edge
+  is no longer launched (the job is what ends it when the daemon is killed).
+- *Playwright's own temp folder* (`playwright-artifacts-*`) was left in the
+  PC's temp folder by a crash or a killed daemon, forever. The driver and Edge
+  now get the browser's throwaway folder as their temp folder.
+- *A cancelled call that only waited its turn* (a helper's, behind another
+  helper's click) closed the session's browser under the click. Only a call
+  that was acting closes it now.
+- *A Stop during an action* closed the browser twice; the second close
+  returned before the first had ended a process (the doer's Stop pin saw a live
+  browser 1 run in 3). One close per browser; every caller waits for it.
+- *A refusal quoting the page.* A tool's failure reaches the model unfenced
+  (only its output is fenced), yet the refusal for a page the agent may not act
+  on quoted its address. It names none now. Proved through the real stream
+  lane: a planted "ignore all previous instructions" page is fenced and
+  withheld, the turn turns low trust, and the next click is refused.
+- *The pane* said a paired browser lets the session browse the web; a Build
+  session never uses it. A paired browser is named with what is true; nothing
+  is said when none is paired.
+
+Decisions:
+
+- **Where a page may send (Handbook words):** "The agent's browser opens,
+  reads and acts only on pages on this PC or your network. A page's own
+  requests (a script from a CDN, an image, its API calls, the next hop of a
+  redirect) go where the page sends them, as in any browser. In a Local only
+  session nothing the browser does reaches a public address: it runs behind a
+  proxy that refuses everything outside this PC and your network, so a script,
+  a request, a WebSocket or a redirect to the internet is stopped before it
+  leaves, and listed as stopped." Measured on the real Edge: outside Local only
+  the test page's CDN script, API call and beacon reached the public host;
+  under Local only none did, this PC still answered. A redirect's request is
+  therefore stopped at the network under Local only and, outside it, treated
+  like any other request a page makes (closing it there would mean fetching
+  every page from the driver instead of the browser).
+- **Clicks:** a click on a button that reads as deleting, sending or paying
+  (computer use's and the browser add-on's one vocabulary, read off the page,
+  never the model's words) asks once, every time, in every posture; the click
+  reads the button again and is made only if it still says what the card said.
+  ("Deploy" is not in that vocabulary; adding it would change computer use and
+  the add-on too.)
+- **"Ask first"** cards every click and typed entry in the agent's browser;
+  opening and reading the Browser's page do not ask. (The chip's words do not
+  yet mention it; they are pinned in the Handbook.)
+- **At most four** agent browsers at once; a fifth closes the least recently
+  used one that is not acting (its pane says so); when all four are acting,
+  the open is refused in words.
+- **The driver runs on the desktop app's own engine.** The packaged app no
+  longer ships Playwright's node.exe (88 MiB): Electron 42.5.0 is Node 24.17.0
+  and drives Edge exactly as node.exe did. Frozen (rebuilt here): 316,874,920
+  bytes (408,555,153 before the review); `page-browser-check` with
+  `IRONJARVIS_PLAYWRIGHT_NODE` set to Electron: ok, 9 processes, none left;
+  without it, it says the browser starts only inside the app. The release
+  check must set that variable to the installed `Iron Jarvis.exe`.
+
+Live (scratch daemon 8817, this PC's Claude Code login, a scratch site): the
+Claude session found the console error, fixed app.js, reloaded, confirmed
+"Cart: 1 item", and its click on "Delete item" carded once with the button's
+words; allowed, the page said "Item deleted". A Local only session on the
+user's own model (glm-5.3-flash) carded page_open and read the page's two
+requests to a public name as "stopped: not on this PC or your network (Local
+only)"; the dev server saw only 127.0.0.1. Archiving left no browser process.
+
 ## Phase 6 — Smaller touches and loose ends (target v1.377.0)
 
 - **Next step:** after a turn, up to two suggested follow-ups as buttons

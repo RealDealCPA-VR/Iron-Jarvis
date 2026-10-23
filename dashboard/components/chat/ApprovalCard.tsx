@@ -360,6 +360,11 @@ export function ApprovalCard({
           On this session&apos;s own branch, a commit, a push, a change on GitHub, a git setting or
           git that throws work away asks you every time.
         </p>
+      ) : onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "page" ? (
+        <p data-testid="approval-page-once" className="text-[11px] leading-relaxed text-zinc-400">
+          In the agent&apos;s browser, a click on something that reads as deleting, sending or
+          paying asks you every time.
+        </p>
       ) : onceOnly && !planAsk && !buildPlanAsk ? (
         <p data-testid="approval-local-only" className="text-[11px] leading-relaxed text-zinc-400">
           This chat is local only, so this asks every time.

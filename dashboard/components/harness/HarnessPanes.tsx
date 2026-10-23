@@ -355,12 +355,17 @@ export function HarnessPanes({
   onUndo,
   onSessionChanged,
   onSessionGone,
+  pageSteps = 0,
 }: {
   view: BuildSessionView;
   livePlan: PlanView | null;
   terminal: SessionTerminalApi;
   /** Bumped when a turn ends, so the changes are read again. */
   refreshKey: number;
+  /** v1.376.0: the running turn's finished steps in the agent's own browser
+   *  (lib/agentBrowser finishedPageSteps) — the Browser pane reads what the
+   *  agent saw again each time it grows. */
+  pageSteps?: number;
   undoFor: (path: string) => ChangeUndoState | null;
   onUndo: (actionId: string, path: string) => Promise<void>;
   /** v1.375.0: the Branch view changed the session (merged, pushed). */
@@ -442,7 +447,9 @@ export function HarnessPanes({
             onSessionGone={onSessionGone}
           />
         ) : null}
-        {tab === "browser" ? <BrowserPreview threadId={view.id} seen={seen} /> : null}
+        {tab === "browser" ? (
+          <BrowserPreview threadId={view.id} seen={seen} refreshKey={refreshKey} pageSteps={pageSteps} />
+        ) : null}
         {tab === "files" ? (
           <FilesPanel
             variant="calm"
