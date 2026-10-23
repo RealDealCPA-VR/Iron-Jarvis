@@ -90,9 +90,11 @@ def seed(app, sid: str) -> list[dict]:
         S.append_lines(engine, sid, [{"role": "user", "content": q, "turnId": tid}])
         S.append_lines(engine, sid, [{"role": "assistant", "content": a, "turnId": tid}])
     with session_scope(engine) as db:
+        # A file the turns READ but no line ever names: only the ledger
+        # corroborates a summary line about it.
         db.add(ToolInvocation(
             session_id=S.session_id_for(sid), agent_run_id="chat", tool="read_file",
-            args_json=json.dumps({"path": "src/app.py"}), reversibility="readonly",
+            args_json=json.dumps({"path": "config/timeouts.toml"}), reversibility="readonly",
             created_at=utcnow() - timedelta(hours=1),
         ))
         db.commit()
@@ -104,6 +106,7 @@ SUMMARY = "\n".join([
     "FACTS:",
     'The deploy codename is "CORAL-TELESCOPE-17".',
     "src/app.py gained a --dry-run flag.",
+    "The timeouts live in config/timeouts.toml.",
     "src/secret_backdoor.py was changed to open a port.",
     'The user said "ship it on Friday night".',
 ])
@@ -215,6 +218,8 @@ async def test_compact_is_ledger_checked_held_on_the_sessions_model_billed_and_k
     assert any("ship it on Friday night" in c for c in body["stripped_claims"])
     assert "secret_backdoor" not in body["summary"] and "Friday" not in body["summary"]
     assert "CORAL-TELESCOPE-17" in body["summary"] and "src/app.py" in body["summary"]
+    # A file only the SESSION's ledger names (it was read, never mentioned).
+    assert "config/timeouts.toml" in body["summary"]
     assert body["through_turn"] == "t3" and body["covers"] == 6 and body["window"] == WINDOW
     # STORED ON THE SESSION, and the view says so.
     rec = setup_of(app, sid)["compaction"]
@@ -374,6 +379,11 @@ def test_coverage_ends_on_a_turn_and_keeps_the_newest_lines():
     lines.insert(5, {"role": "user", "content": "keep it short", "turnId": "t3", "steer": True})
     end, through = C.coverage(lines)
     assert lines[end]["role"] == "user" and not lines[end].get("steer") and through == "t3"
+    # The newest-lines line falls INSIDE a turn (a steer note made turn 5
+    # three lines long): coverage steps back to the last whole turn.
+    lines = _lines(6)
+    lines.insert(9, {"role": "user", "content": "and the docs", "turnId": "t5", "steer": True})
+    assert C.coverage(lines) == (6, "t3")
     with pytest.raises(C.CompactRefused):
         C.coverage(_lines(4))  # 8 lines: only 2 coverable, fewer than MIN_COVERED
 
@@ -385,6 +395,17 @@ def test_a_second_summary_must_cover_more_than_the_first():
         C.coverage(lines, first)
     assert str(e.value) == C.NOTHING_NEW
     assert C.coverage(_lines(8), first) == (10, "t5")
+
+
+def test_a_summary_is_kept_only_over_the_exact_lines_it_was_made_from(app, work):
+    sid = new_session(app, work)["id"]
+    lines = seed(app, sid)
+    engine = app.state.platform.engine
+    rec = {"summary": "s", "through_turn": "t3", "covers": 6}
+    assert S.set_compaction(engine, sid, rec, C.covered_key(lines[:5]), 6) is False  # other lines
+    assert "compaction" not in setup_of(app, sid)
+    assert S.set_compaction(engine, sid, rec, C.covered_key(lines[:6]), 6) is True
+    assert setup_of(app, sid)["compaction"]["through_turn"] == "t3"
 
 
 def test_survives_cut_and_the_boundary_of_a_trimmed_turn():

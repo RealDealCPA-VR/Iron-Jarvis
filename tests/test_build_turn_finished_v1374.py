@@ -30,7 +30,6 @@ from iron_jarvis.core.events import EventType
 from iron_jarvis.daemon import durable_turns as _durable
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.daemon.routes import build as build_routes
-from iron_jarvis.harness import sessions as S
 from tests.test_build_sessions_v1367 import messages_of, new_session, open_turn, until, wire
 from tests.test_build_turns_v1367 import Gated, GatedScript
 from tests.test_chat_turn_stop_v1241 import _asgi_post
