@@ -466,6 +466,13 @@ agent last saw and where ("The agent is on localhost:5173/cart").
 - **Search sessions** in the left pane.
 - **Keyboard:** Ctrl+N new session, Esc stop, Ctrl+L focus the box, Ctrl+K
   the model menu.
+- **The agent's terminal finds your tools** (decided by the user,
+  2026-10-23, after the Phase 4 review found that `git`, `node`, `npm` and
+  `python` do not run from it): a Build session's `shell` and process tools
+  get your normal PATH and home folder (HOME / USERPROFILE and what git, npm
+  and python read from it), so they work as they do in your own terminal;
+  secret variables are still stripped; chat, agents and unattended runs keep
+  the scrubbed environment.
 - **Loose ends from the v1.371.0 review:**
   - Rewind puts a message's pictures back in the box with its words.
   - Past 20 files, say so instead of dropping the extras.
