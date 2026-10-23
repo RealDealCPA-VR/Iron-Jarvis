@@ -83,11 +83,28 @@ export const HARNESS_ROOT_SELECTOR = '[data-testid="ij-harness-view"]';
 /** The session's message box (its Escape stops a running reply). */
 export const HARNESS_BOX_SELECTOR = '[data-testid="harness-input"]';
 
+/** What counts as an OPEN POPUP whose Escape is its own (v1.377.0 review): a
+ *  control that says it opens a popup and has it open (`aria-haspopup` +
+ *  `aria-expanded="true"` — the model menu, the account list, the session's
+ *  ⋯ menu), an open combobox, and a dialog, menu or listbox on screen. NOT a
+ *  bare `aria-expanded="true"`: a DISCLOSURE (a reply's folded plan, its
+ *  "Worked for …" line, its receipt, the thinking fold) is not a popup, and
+ *  counting one meant that after the user opened ANY of them, Esc stopped
+ *  nothing for the rest of the session. */
+export const POPUP_SELECTOR = [
+  '[aria-expanded="true"][aria-haspopup]:not([aria-haspopup="false"])',
+  '[role="combobox"][aria-expanded="true"]',
+  '[role="dialog"]',
+  '[role="alertdialog"]',
+  '[role="menu"]',
+  '[role="listbox"]',
+].join(", ");
+
 /** A popup the Escape belongs to, inside `root` (or a page-level modal). */
 export function popupOpenIn(root: Element | null): boolean {
   if (typeof document !== "undefined" && document.querySelector('[aria-modal="true"]')) return true;
   if (!root) return false;
-  return !!root.querySelector('[aria-expanded="true"], [role="dialog"]');
+  return !!root.querySelector(POPUP_SELECTOR);
 }
 
 /** Is `target` a text field other than the message box? */
@@ -161,6 +178,12 @@ export function useHarnessKeys(
     // Ctrl+N / Ctrl+L / Ctrl+K: CAPTURE, so the app's palette (a window
     // listener in the bubble phase) never sees a press the harness took.
     const onCapture = (e: KeyboardEvent) => {
+      // Only the harness's own keys are read (v1.377.0 review): the context
+      // walks the page (a few querySelector calls), and this runs on EVERY
+      // key press in the window — every letter typed in the box.
+      const k = (e.key ?? "").toLowerCase();
+      const ours = k === "escape" || k === "esc" || ((e.ctrlKey || e.metaKey) && (k === "n" || k === "l" || k === "k"));
+      if (!ours) return;
       const ctx = contextOf(e);
       if (e.key === "Escape" || e.key === "Esc") {
         seen.set(e, ctx);
@@ -195,5 +218,12 @@ export function useHarnessKeys(
   }, []);
 }
 
-/** The keys in words (the box's title). */
-export const HARNESS_KEYS_HINT = "Ctrl+N new session · Esc stop · Ctrl+L message box · Ctrl+K model";
+/** The keys in words (the box's title) — only keys that WORK where the user
+ *  is (v1.377.0 review): an ordinary Chrome or Edge tab keeps Ctrl+N for a
+ *  new window and the page never sees it, so the hint names Ctrl+N only in
+ *  the desktop app (whose menu claims no Ctrl+N). */
+export function harnessKeysHint(desktop: boolean): string {
+  const keys = ["Esc stops a reply", "Ctrl+L message box", "Ctrl+K model"];
+  if (desktop) keys.push("Ctrl+N new session");
+  return keys.join(" · ");
+}

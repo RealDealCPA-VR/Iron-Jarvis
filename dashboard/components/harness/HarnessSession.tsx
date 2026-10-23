@@ -130,7 +130,8 @@ import {
   type BranchAt,
   type BranchDraft,
 } from "@/lib/buildNext";
-import { useHarnessKeys } from "@/lib/harnessKeys";
+import { harnessKeysHint, useHarnessKeys } from "@/lib/harnessKeys";
+import { isDesktopShell } from "@/lib/desktopShell";
 import type { RewindExtras } from "@/lib/buildRewind";
 import { finishedPageSteps } from "@/lib/agentBrowser";
 import { AtMenu, PickedChips, RewindList, SentPicks, SlashMenu } from "@/components/harness/HarnessComposerMenus";
@@ -1631,6 +1632,7 @@ export function HarnessSession({
               type="button"
               aria-label="Session actions"
               aria-expanded={menuOpen}
+              aria-haspopup="menu"
               onClick={() => setMenuOpen((v) => !v)}
               className="grid h-7 w-7 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
             >
@@ -2040,6 +2042,8 @@ export function HarnessSession({
               aria-controls={listId}
               aria-activedescendant={activeRowId}
               data-testid="harness-input"
+              // v1.377.0 review: the keys, only those that work here.
+              title={harnessKeysHint(isDesktopShell())}
               placeholder={
                 busy
                   ? "Add a note while it works (Enter), or Ctrl+Enter to send after it"
