@@ -3660,6 +3660,18 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/ij-harness-{slash-commands,no-folder,
   slash-nofolder-review,new-folder-nofolder-review}-v1379.test.tsx`; four
   `ij-harness-slash-at-v1373` pins moved on purpose (new command rows).
+  SAME RELEASE (test-only): `test_build_turn_finished_v1374`'s long-turn test
+  read the notice right after the follower returned, but `recorded_turn`
+  publishes it AFTER the last frame (and its sync handler runs on a worker):
+  three loaded full runs read "not enough values to unpack (expected 1, got
+  0)". It now `until`s the event and the handler's verdict; a 0.5 s delay
+  before the notice's row read reproduces the old shape's exact error. ALSO:
+  the v1343 "real files untouched" guards errored ONCE on the user's
+  `~/.claude.json` (its `mcpServers` view changed at 19:02:49 mid-run); every
+  test that reads Claude Code's settings (21 files, 672 tests) left the file
+  untouched, and a second full run with a before/after snapshot was clean —
+  Claude Code itself rewrote it. The guard names only the file; if it fires
+  again, snapshot the view (hash per project) before believing a test.
 
 - **The IJ harness is MEASURED again: a benchmark turn runs AS a Build
   session; the walkthrough's gaps are written down** (v1.378.0, IJ harness

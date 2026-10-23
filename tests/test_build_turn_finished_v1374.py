@@ -107,7 +107,13 @@ async def test_a_turn_longer_than_a_minute_is_announced_once_after_its_reply_is_
 
     app.state.platform.event_bus.add_handler(on_event)
     await _long_turn(app, sid, clock, "bt-long", 75)
-    [ev] = finished(app)
+    # v1.379.0: the notice is published AFTER the reply line and after the
+    # turn's last frame (the follower has already returned), and a sync
+    # handler runs on a worker — on a loaded runner both landed after a plain
+    # read ("not enough values to unpack (expected 1, got 0)", three full runs
+    # on 2026-10-23). Wait for the event and for the handler's verdict.
+    [ev] = await until(lambda: finished(app))
+    await until(lambda: seen_reply)
     assert ev.session_id == f"build:{sid}"
     assert ev.payload["thread_id"] == sid and ev.payload["turn_id"] == "bt-long"
     assert ev.payload["outcome"] == "done" and ev.payload["title"] == "Fix the nav bar"
