@@ -159,3 +159,47 @@ def test_each_covered_turn_runs_from_its_first_line_to_its_last():
         (naive, naive + timedelta(minutes=3)),
         (naive + timedelta(minutes=10), naive + timedelta(minutes=12)),
     ]
+
+
+# --------------------------------------------------------------------------- #
+# nothing heavy on the event loop
+# --------------------------------------------------------------------------- #
+
+
+async def test_the_transcript_is_read_and_measured_off_the_event_loop(app, work, monkeypatch):
+    """A session keeps up to 200 lines of JSON (replies with their steps and
+    thinking: megabytes). Parsing and measuring it on the loop froze every
+    request in the app for the length of the parse (the v1.153.1 rule)."""
+    import threading
+
+    from tests.test_build_compact_v1374 import seed
+
+    sid = new_session(app, work)["id"]
+    seed(app, sid)
+    loop_thread = threading.get_ident()
+    where: dict[str, list[int]] = {"messages": [], "key": [], "billed": []}
+    real_messages, real_key = S._messages, C.covered_key
+    from iron_jarvis.harness import library as L
+
+    real_bill = L._bill
+
+    def spy_messages(row):
+        where["messages"].append(threading.get_ident())
+        return real_messages(row)
+
+    def spy_key(lines):
+        where["key"].append(threading.get_ident())
+        return real_key(lines)
+
+    def spy_bill(*a, **kw):
+        where["billed"].append(threading.get_ident())
+        return real_bill(*a, **kw)
+
+    monkeypatch.setattr(S, "_messages", spy_messages)
+    monkeypatch.setattr(C, "covered_key", spy_key)
+    monkeypatch.setattr(L, "_bill", spy_bill)
+    body = await _compact(app, sid, _summary())
+    assert body["through_turn"] == "t3"
+    for what, threads in where.items():
+        assert threads, f"{what} never ran"
+        assert loop_thread not in threads, f"{what} ran on the event loop"

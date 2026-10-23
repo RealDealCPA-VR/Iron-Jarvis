@@ -491,10 +491,12 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
         raise CompactRefused(NO_SESSION, 404)
     if getattr(row, "archived_at", None) is not None:
         raise CompactRefused(ARCHIVED, 409)
-    setup = S._setup(row)
-    messages = S._messages(row)
+    # Up to 200 lines of JSON (replies with their steps and thinking): read
+    # and measured OFF the loop, like every other read of a transcript here
+    # (review, v1.374.0 — the v1.153.1 rule).
+    setup, messages = await asyncio.to_thread(lambda: (S._setup(row), S._messages(row)))
     prior = standing(setup)
-    end, through = coverage(messages, prior)
+    end, through = await asyncio.to_thread(coverage, messages, prior)
 
     # THE SESSION'S OWN MODEL, ON ITS OWN ACCOUNT: the pair its turns run on.
     try:
@@ -509,12 +511,15 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
     if not provider or _is_mock(provider):
         raise CompactRefused(NO_REAL_MODEL)
     window = _context_window(SimpleNamespace(platform=platform), provider, model) or DEFAULT_WINDOW
-    pairs = fit_pairs(messages, end, prior, window)
-    # Review (v1.374.0): only what the COVERED turns did may back the summary.
-    paths, tools = await asyncio.to_thread(ledger_facts, engine, thread_id, turn_windows(messages[:end]))
-    # What the summary takes the place of in the next turn's prompt: it is
-    # asked to be much shorter, and kept only when it is lighter.
-    replaced_tokens, replaced_words = replaced(messages, end, prior)
+    # What the summarizer reads; what the summary takes the place of in the
+    # next turn's prompt (it is asked to be much shorter, and kept only when
+    # it is lighter); the address of the covered lines; and when each covered
+    # turn ran (only what THOSE turns did may back the summary — review).
+    pairs, (replaced_tokens, replaced_words), key, windows = await asyncio.to_thread(
+        lambda: (fit_pairs(messages, end, prior, window), replaced(messages, end, prior),
+                 covered_key(messages[:end]), turn_windows(messages[:end])),
+    )
+    paths, tools = await asyncio.to_thread(ledger_facts, engine, thread_id, windows)
 
     router = platform.router
     got: dict[str, Any] = {}
@@ -557,8 +562,9 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
     if isinstance(err, _egress.LocalOnlyRefused):
         raise err
     if got.get("route") is not None and not got.get("mock"):
-        # Billed to the session, whatever the summary's fate (the model ran).
-        _bill(platform, got["route"], thread_id)
+        # Billed to the session, whatever the summary's fate (the model ran)
+        # — a database write, so off the loop.
+        await asyncio.to_thread(_bill, platform, got["route"], thread_id)
     if err is not None:
         from ..providers.failure_words import friendly_error
 
@@ -594,9 +600,7 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
     })
     if record is None:
         raise CompactRefused(NOTHING_KEPT, 502)
-    stored = await asyncio.to_thread(
-        S.set_compaction, engine, thread_id, record, covered_key(messages[:end]), end,
-    )
+    stored = await asyncio.to_thread(S.set_compaction, engine, thread_id, record, key, end)
     if not stored:
         raise CompactRefused(CHANGED, 409)
     return {**(view({"compaction": record}) or {}), "window": int(window)}
