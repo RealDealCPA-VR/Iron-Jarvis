@@ -199,7 +199,7 @@ class GitSession:
 
     @classmethod
     def start(cls, repo: Path, workspace: Path, slug: str, *, branch: "str | None" = None,
-              env: "dict[str, str] | None" = None) -> "GitSession":
+              env: "dict[str, str] | None" = None, start_point: str = "HEAD") -> "GitSession":
         """Create a new branch + linked worktree at *workspace*.
 
         Uses ``git worktree add -b <branch> <workspace> HEAD``. The main repo's
@@ -208,7 +208,9 @@ class GitSession:
         ``branch`` and ``env`` (v1.375.0, a Build session): the new branch's
         name (``ij/<name>``) and the environment (:func:`git_env` — no
         terminal prompt); omitted = :func:`branch_name` and this process's own,
-        the review system's original call.
+        the review system's original call. ``start_point`` (v1.377.0, a
+        session BRANCHED from another): the commit the new branch starts from
+        instead of HEAD.
         """
         repo = Path(repo)
         workspace = Path(workspace)
@@ -226,7 +228,7 @@ class GitSession:
         branch = branch or branch_name(slug)
 
         _git(
-            ["worktree", "add", "-b", branch, str(workspace), "HEAD"],
+            ["worktree", "add", "-b", branch, str(workspace), start_point or "HEAD"],
             cwd=repo,
             env=env,
         )

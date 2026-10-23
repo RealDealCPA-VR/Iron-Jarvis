@@ -290,31 +290,43 @@ def _strip_store_as(spec: dict[str, Any]) -> dict[str, Any]:
     return {**spec, "input_schema": {**schema, "properties": new_props}}
 
 
-def runtime_note(registry: Any, name: str) -> str:
+def runtime_note(registry: Any, name: str, *, shell_description: str = "") -> str:
     """The real tool's own description, as the runtime facts a dialect's
     command tool carries — minus the sentence that steers the model to
     Jarvis's own tool names (a dialect shows other names). "" when the tool
-    is not registered."""
+    is not registered. ``shell_description`` (v1.377.0): a BUILD SESSION's
+    shell runs with the user's own PATH (``harness/command_env``), so its
+    facts are those words, not the registered (scrubbed) ones."""
     tool = registry.get(name) if name else None
+    if tool is None:
+        return ""
     text = str(getattr(tool, "description", "") or "").strip()
+    if shell_description and name == "shell":
+        text = shell_description.strip()
     if not text:
         return ""
     keep = [s for s in re.split(r"(?<=[.!?])\s+", text) if "Prefer the built-in tools" not in s]
     return " ".join(keep).strip()
 
 
-def model_specs(registry: Any, plan: ToolPlan) -> list[dict[str, Any]]:
+def model_specs(registry: Any, plan: ToolPlan, *, shell_description: str = "") -> list[dict[str, Any]]:
     """What the model is shown: the dialect's tools, then the pass-through
-    real tools as the registry describes them."""
+    real tools as the registry describes them. ``shell_description``
+    (v1.377.0, a Build session): the shell's facts there — the user's own
+    PATH and the tools found on it — for every dialect's command tool AND the
+    pass-through ``shell``; "" = the registered words, exactly as before."""
     out = []
     for tool in plan.dialect_tools:
         spec = tool.spec()
-        note = runtime_note(registry, tool.runtime_from)
+        note = runtime_note(registry, tool.runtime_from, shell_description=shell_description)
         if note:
             spec = {**spec, "description": spec["description"] + "\n\nHow commands run here: " + note}
         out.append(spec)
     if plan.passthrough:
-        out += [_strip_store_as(s) for s in registry.specs(list(plan.passthrough))]
+        for s in registry.specs(list(plan.passthrough)):
+            if shell_description and s.get("name") == "shell":
+                s = {**s, "description": shell_description}
+            out.append(_strip_store_as(s))
     return out
 
 
@@ -424,6 +436,9 @@ class HarnessTurn:
         self._called_as: dict[str, str] = {}
         #: call id -> the dialect tool the model called (for its own words)
         self._called_tool: dict[str, _dialects.DialectTool] = {}
+        #: v1.377.0: a Build session's shell facts (the user's own PATH and
+        #: the tools found on it — ``harness/command_env``); "" elsewhere.
+        self.shell_description = ""
 
     # -- the prompt --------------------------------------------------------- #
 
@@ -463,7 +478,7 @@ class HarnessTurn:
     # -- tools -------------------------------------------------------------- #
 
     def specs(self, registry: Any) -> list[dict[str, Any]]:
-        return model_specs(registry, self.plan)
+        return model_specs(registry, self.plan, shell_description=self.shell_description)
 
     def translate_calls(self, calls: list[Any]) -> list[Any]:
         """The model's calls mapped to the real tools (same ids). A name the
@@ -676,6 +691,7 @@ def build(
     plan_mode: bool = False,
     ask_user: bool = False,
     library: Iterable[str] = (),
+    shell_description: str = "",
 ) -> HarnessTurn:
     """Plan the tools, compose the tree and render it. Pure apart from the
     registry / permission reads (no I/O): the project layer is read by the
@@ -712,6 +728,9 @@ def build(
         requested=requested, plan=plan, layer=layer, tree=tree, rendered=rendered, today=today,
     )
     turn.plan_mode = bool(plan_mode)
+    # v1.377.0: a Build session's commands run with the user's own PATH; the
+    # caller worked out the words off the loop (``harness/command_env``).
+    turn.shell_description = str(shell_description or "")
     return turn
 
 

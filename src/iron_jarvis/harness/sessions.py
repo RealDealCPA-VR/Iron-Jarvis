@@ -507,6 +507,66 @@ def cut_transcript(engine: Any, thread_id: str, turn_id: str, keep: int, cut_at:
         return {"ok": False, "reason": "the conversation could not be saved"}
 
 
+class BranchRefused(ValueError):
+    """A message a session cannot be branched from (words; a 404 / 400)."""
+
+    def __init__(self, message: str, status: int = 400) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+#: The title a branched session takes, from its origin's.
+BRANCH_TITLE = "{title} (branch)"
+NOT_A_MESSAGE = "That message is not one of this session's."
+
+
+def branch_lines(messages: list[dict[str, Any]], turn_id: str, at: str) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """BRANCH FROM A MESSAGE (v1.377.0, IJ harness part 2 Phase 6): the lines a
+    new session starts with, and — when it branches at a QUESTION — that
+    question (its words and what rode them go into the new session's box).
+
+    ``at`` = ``"reply"``: the conversation up to AND INCLUDING turn
+    ``turn_id``'s reply (every line of that turn: steer notes too);
+    ``"question"``: the conversation BEFORE that turn's question. Raises
+    :class:`BranchRefused` (404) for a turn the transcript does not hold, and
+    (400) for a reply branch of a turn with no reply yet. Pure."""
+    from .rewind import turn_starts
+
+    tid = str(turn_id or "")
+    starts = turn_starts(messages)
+    index = next((i for i, m in starts if m["turnId"] == tid), None)
+    if index is None:
+        raise BranchRefused(NOT_A_MESSAGE, 404)
+    if at == "question":
+        return [dict(m) for m in messages[:index]], dict(messages[index])
+    last = max(i for i, m in enumerate(messages) if m.get("turnId") == tid)
+    if not any(m.get("role") == "assistant" and m.get("turnId") == tid for m in messages):
+        raise BranchRefused("That message has no reply yet to branch from.", 400)
+    return [dict(m) for m in messages[: last + 1]], None
+
+
+def create_with_lines(engine: Any, folder: str, title: str, setup: "dict[str, Any] | None",
+                      lines: list[dict[str, Any]]) -> ChatThreadRecord:
+    """:func:`create`, holding ``lines`` from the start (a branched session —
+    its origin's conversation up to the message, whitelisted like every line,
+    stamps kept). BLOCKING."""
+    stamp = utcnow().isoformat()
+    kept = [c for c in (_clean_line(x, stamp) for x in (lines or [])) if c is not None][-MAX_MESSAGES:]
+    row = create(engine, folder, title, setup)
+    if not kept:
+        return row
+    with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+        fresh = db.get(ChatThreadRecord, row.id)
+        if fresh is None:
+            return row
+        fresh.messages_json = json.dumps(kept)
+        db.add(fresh)
+        db.commit()
+        db.refresh(fresh)
+        db.expunge(fresh)
+        return fresh
+
+
 def set_compaction(engine: Any, thread_id: str, record: dict[str, Any], key: str, covers: int) -> bool:
     """COMPACT's store half (v1.374.0, ``harness/compact``): keep ``record``
     as the session's standing summary, in ONE write under the conversation
@@ -651,6 +711,10 @@ def session_view(row: Any, *, states: "dict[str, dict[str, bool]] | None" = None
     from .compact import view as _compaction_view
 
     out["compaction"] = _compaction_view(setup)
+    # v1.377.0 (part 2, Phase 6): the session and message this one was
+    # branched from ("Branch from here") — None for every other session.
+    branched = setup.get("branched_from")
+    out["branched_from"] = branched if isinstance(branched, dict) and branched.get("thread_id") else None
     if git:
         # v1.375.0 (part 2, Phase 4): the session's branch, its base and
         # where it works — only on a session that has one, so every other

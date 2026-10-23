@@ -1900,6 +1900,20 @@ class AgentRuntime:
         if notebook_slug and "notebook" not in armed_names and self.p.registry.get("notebook") is not None:
             armed_names.append("notebook")
         tool_specs = self.p.registry.specs(armed_names)
+        # v1.377.0 (IJ harness part 2 Phase 6): a HELPER of a Build session
+        # runs its commands with the user's own PATH and home folder
+        # (``harness/command_env`` — keyed on the session), so its shell is
+        # described that way: the tools really found on it, never the
+        # scrubbed "no python". Every other run: the registered words.
+        if "shell" in armed_names and str(getattr(session, "origin", "") or "") == _HELPER_ORIGIN:
+            from ..harness.command_env import build_shell_description, is_build_call
+
+            if is_build_call(session.id):
+                _shell_words = await asyncio.to_thread(build_shell_description)
+                tool_specs = [
+                    {**s, "description": _shell_words} if s.get("name") == "shell" else s
+                    for s in tool_specs
+                ]
 
         system_prompt = agent_def.system_prompt
         # THE RUN OPTIONS (v1.299.0, the schedule knobs): ``skip_memory`` gates

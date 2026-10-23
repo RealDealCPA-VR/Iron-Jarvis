@@ -463,8 +463,8 @@ class ProcessStartTool(Tool):
         """The start itself, run while :meth:`ProcessTable.reserve` holds a
         slot; ``release`` hands it back the moment the program is in the
         table (it is counted as running from then on)."""
-        from ..sandbox.native import scrubbed_env
         from ..sandbox.policy import SandboxPolicy
+        from .command_env import command_env
 
         raw_cwd = args.get("cwd")
 
@@ -484,7 +484,11 @@ class ProcessStartTool(Tool):
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
         policy = SandboxPolicy.from_config(getattr(ctx.config, "sandbox", {}))
-        env = scrubbed_env() if policy.modify_env == "deny" else None
+        # v1.377.0 (the user's decision): a Build session's program — its own
+        # turn's or a helper's, keyed on the session — gets the user's PATH
+        # and home folder, secrets removed; every other run the scrubbed
+        # environment, exactly as before (``harness/command_env``).
+        env = command_env(policy.modify_env, ctx.session_id)
 
         def _spawn() -> Any:
             return procs.spawn(

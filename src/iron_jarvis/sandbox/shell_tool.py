@@ -20,7 +20,7 @@ from ..core.trust import LOW_TRUST_SHELL_REFUSAL
 from ..tools.base import Tool, ToolContext, ToolResult
 from .base import Sandbox, SandboxResult
 from .manager import SandboxManager
-from .native import NativeSandbox, scrubbed_env_description
+from .native import NativeSandbox, build_env_description, scrubbed_env_description
 from .policy import SandboxPolicy
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ _POSIX_ONLY_ON_WINDOWS = frozenset(
 )
 
 
-def runtime_description(os_name: str | None = None) -> str:
+def runtime_description(os_name: str | None = None, *, build_tools: "tuple[str, ...] | None" = None) -> str:
     """The model-facing ``shell`` description, computed per-OS at registration
     (v1.205.0).
 
@@ -70,13 +70,22 @@ def runtime_description(os_name: str | None = None) -> str:
     and ``manager.get()`` probes Docker on every invocation — so the
     description cannot promise one runtime. It keeps today's wording for the
     Docker case and is honest about what the native fallback actually is.
+
+    ``build_tools`` (v1.377.0): a BUILD SESSION's commands run with the
+    user's own PATH (``native.build_env``); the native part then names the
+    tools really found on it (``native.build_env_tools``). Omitted: the
+    scrubbed words, exactly as before.
     """
+    native = (
+        scrubbed_env_description(os_name) if build_tools is None
+        else build_env_description(build_tools, os_name)
+    )
     return (
         "Run a shell command inside the sandboxed session workspace "
         "(§16/§17). The runtime is decided per call: when Docker is "
         "available the command runs in an isolated Linux container; "
         "otherwise it runs on the native runtime — "
-        + scrubbed_env_description(os_name)
+        + native
     )
 
 
@@ -280,11 +289,21 @@ class SandboxedShellTool(Tool):
             with _lock:
                 return bool(_box["cancelled"])
 
+        # v1.377.0 (the user's decision): a BUILD SESSION's command — its own
+        # turn or one of its helpers, keyed on the session — runs with the
+        # user's PATH and home folder, secrets removed (``native.build_env``);
+        # every other run keeps the scrubbed environment. Decided here, before
+        # the worker thread (an in-memory read).
+        from ..harness.command_env import is_build_call
+
+        build = is_build_call(ctx.session_id)
+
         def _native_run(sandbox: Sandbox) -> SandboxResult:
             if type(sandbox).run is NativeSandbox.run:
                 return sandbox.run(  # type: ignore[call-arg]
                     args["command"], cwd=run_cwd, timeout=timeout,
                     on_spawn=_published, cancelled=_was_cancelled,
+                    **({"build": True} if build else {}),
                 )
             return sandbox.run(args["command"], cwd=run_cwd, timeout=timeout)
 

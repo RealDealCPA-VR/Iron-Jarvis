@@ -268,6 +268,215 @@ def scrubbed_env() -> dict[str, str]:
     return env
 
 
+# --------------------------------------------------------------------------- #
+# a Build session's commands: the user's own tools (v1.377.0)
+# --------------------------------------------------------------------------- #
+#
+# THE USER'S DECISION (2026-10-23, IJ harness part 2 Phase 6): in a Build
+# session, the agent's ``shell`` and program tools get the user's normal PATH
+# and home folder, so ``git``, ``node``, ``npm`` and ``python`` run as they do
+# in the user's own terminal and ``git commit`` uses their own identity;
+# SECRET VARIABLES ARE STILL STRIPPED; chat, agents and every unattended run
+# keep :func:`scrubbed_env` exactly as before. WHICH run is a Build session is
+# decided by ``harness/command_env`` (keyed on the session); THIS is only what
+# the environment is.
+
+#: Words that mark a variable whose VALUE is a secret, read in its NAME
+#: (upper-cased): a key, a token, a password, a session or cookie, a private
+#: key, a credential. ``ASKPASS``: a program that answers git's / ssh's
+#: password prompt for whatever started the app (Claude Code sets one) — a
+#: prompt the user never sees.
+SECRET_NAME_WORDS: tuple[str, ...] = (
+    "KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASSPHRASE", "CREDENTIAL",
+    "SESSION", "COOKIE", "PRIVATE", "ASKPASS",
+)
+#: ``AUTH`` anywhere in a name (``OAUTH``, ``AUTHENTICATION``,
+#: ``AUTHORIZATION``, ``SSH_AUTH_SOCK``, ``NPM_CONFIG__AUTH``) — but never
+#: ``AUTHOR`` (``GIT_AUTHOR_NAME`` / ``GIT_AUTHOR_EMAIL`` are the user's own
+#: commit identity, the very thing this environment exists to carry).
+_AUTH_RX = re.compile(r"AUTH(?!OR(?:S|ED)?(?:_|$))")
+#: A whole ``_``-separated part that is a secret's name: a personal access
+#: token (``AZURE_DEVOPS_EXT_PAT``), a DSN (it carries a key).
+SECRET_NAME_PARTS: frozenset[str] = frozenset({"PAT", "DSN"})
+#: Every variable of these families is dropped: model and cloud vendors'
+#: keys and endpoints, the forges' tokens, this app's own internals (its
+#: install token among them), Iron-Proxy's, Playwright's (the app's own
+#: browser driver), a parent Claude Code session's settings and the
+#: tracing / packaging internals of the processes that started the daemon.
+DROP_PREFIXES: tuple[str, ...] = (
+    "ANTHROPIC_", "OPENAI_", "GEMINI_", "GOOGLE_", "AZURE_", "AWS_", "GH_", "GITHUB_",
+    "HF_", "HUGGING_FACE_", "HUGGINGFACE_", "IRONJARVIS_", "IRON_PROXY_", "PLAYWRIGHT_",
+    "CLAUDE_CODE_", "CLAUDE_AGENT_SDK_", "SENTRY", "_PYI", "_MEIPASS", "PYINSTALLER_",
+)
+#: Exact names dropped: Electron's own (``ELECTRON_RUN_AS_NODE`` makes every
+#: Electron app — VS Code's ``code`` too — run as plain node; the crash
+#: handler's pipe), the dev daemon's own virtual environment (``uv run`` sets
+#: it; the user's terminal has none), a parent's trace context.
+DROP_NAMES: frozenset[str] = frozenset({
+    "ELECTRON_RUN_AS_NODE", "CHROME_CRASHPAD_PIPE_NAME", "VIRTUAL_ENV",
+    "UV_RUN_RECURSION_DEPTH", "BAGGAGE",
+})
+
+
+def secret_name(name: str) -> bool:
+    """Is ``name`` a variable :func:`build_env` drops (a secret, a vendor's,
+    this app's own, a parent's)? Case-insensitive, as Windows is. Never
+    reads a value."""
+    up = str(name or "").upper()
+    if not up:
+        return True
+    if up in DROP_NAMES or any(up.startswith(p) for p in DROP_PREFIXES):
+        return True
+    if any(word in up for word in SECRET_NAME_WORDS) or _AUTH_RX.search(up):
+        return True
+    return any(part in SECRET_NAME_PARTS for part in re.split(r"[^A-Z0-9]+", up))
+
+
+def _own_bin_dirs() -> list[str]:
+    """Folders on PATH that belong to THIS app, not the user: a dev daemon's
+    own virtual environment (``uv run`` puts its Scripts first — ``python``
+    would be Iron Jarvis's, with Iron Jarvis's packages) and a frozen
+    daemon's bundle. Normalised for comparing."""
+    out: list[str] = []
+    try:
+        if getattr(sys, "frozen", False):
+            meipass = getattr(sys, "_MEIPASS", "")
+            if meipass:
+                out.append(os.path.normcase(os.path.normpath(meipass)))
+        elif sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+            out.append(os.path.normcase(os.path.normpath(
+                os.path.join(sys.prefix, "Scripts" if os.name == "nt" else "bin"))))
+    except Exception:  # noqa: BLE001 — nothing of ours named: PATH as it is
+        return []
+    return out
+
+
+def _user_path(path: str) -> str:
+    own = _own_bin_dirs()
+    if not own:
+        return path
+    kept = []
+    for entry in str(path or "").split(os.pathsep):
+        norm = os.path.normcase(os.path.normpath(entry)) if entry.strip() else ""
+        if norm and any(norm == o or norm.startswith(o.rstrip("\\/") + os.sep) for o in own):
+            continue
+        kept.append(entry)
+    return os.pathsep.join(kept)
+
+
+def build_env(base: "dict[str, str] | None" = None) -> dict[str, str]:
+    """The environment a BUILD SESSION's commands run with (v1.377.0, the
+    user's decision): the daemon's own environment (``base``; ``None`` = this
+    process's — the desktop hands the daemon the user's) with every variable
+    :func:`secret_name` matches removed — secrets by their NAME, the vendors'
+    and this app's own (its install token), Iron-Proxy's, Playwright's,
+    Electron's, a parent Claude Code session's markers
+    (``drop_claude_session_markers``) and the git variables that would point
+    every git call at ANOTHER repository (``git.integration._ELSEWHERE_VARS``,
+    what ``git_env`` drops). PATH loses only this app's own folders (a dev
+    daemon's virtual environment). Plus ``GIT_TERMINAL_PROMPT=0``, as every
+    Build git call has: no git waits on a password typed into a terminal
+    nobody sees (a credential WINDOW the user's own git opens is allowed).
+    Everything else — PATH, HOME / USERPROFILE / HOMEDRIVE / HOMEPATH,
+    APPDATA / LOCALAPPDATA, TEMP, the user's own git / npm / pip settings —
+    stays, so git, node, npm, pnpm, python, pip and uv find their tools,
+    config and sign-ins. NEVER logs or returns a value it dropped."""
+    from ..core.claude_markers import drop_claude_session_markers
+    from ..git.integration import _ELSEWHERE_VARS
+
+    source = os.environ if base is None else base
+    env = {str(k): str(v) for k, v in source.items() if not secret_name(str(k))}
+    drop_claude_session_markers(env)
+    elsewhere = {v.upper() for v in _ELSEWHERE_VARS}
+    for name in [k for k in env if k.upper() in elsewhere]:
+        env.pop(name, None)
+    for name in [k for k in env if k.upper() == "PATH"]:
+        env[name] = _user_path(env[name])
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
+#: The tools a coding session usually reaches for, in the order the
+#: description names them.
+BUILD_TOOLS: tuple[str, ...] = ("git", "gh", "node", "npm", "npx", "pnpm", "yarn", "python", "py",
+                                "pip", "uv")
+#: How long :func:`build_env_tools` remembers what it found.
+BUILD_TOOLS_TTL_S = 60.0
+_TOOLS_CACHE: dict[str, Any] = {}
+
+
+def _store_alias(found: str) -> bool:
+    """A Microsoft Store "App execution alias" (``…\\WindowsApps\\python.exe``):
+    it OPENS THE STORE when Python is not installed — not a tool the user has."""
+    norm = found.replace("/", "\\").lower()
+    return "\\microsoft\\windowsapps\\" in norm and Path(found).name.lower().startswith("python")
+
+
+def build_env_tools(env: "dict[str, str] | None" = None) -> tuple[str, ...]:
+    """Which of :data:`BUILD_TOOLS` resolve on the Build environment's PATH
+    (``shutil.which`` with that PATH), plus ``"posix"`` when ``ls`` does too
+    (Git's Unix tools on PATH). BLOCKING (a stat per folder and extension):
+    callers on the event loop go through ``asyncio.to_thread``; remembered
+    :data:`BUILD_TOOLS_TTL_S` per PATH. Never raises (nothing found = ())."""
+    import shutil
+    import time as _time
+
+    try:
+        env = build_env() if env is None else env
+        path = next((v for k, v in env.items() if k.upper() == "PATH"), "")
+        hit = _TOOLS_CACHE.get(path)
+        now = _time.monotonic()
+        if hit is not None and now - hit[0] < BUILD_TOOLS_TTL_S:
+            return hit[1]
+        found: list[str] = []
+        for name in (*BUILD_TOOLS, "ls"):
+            where = shutil.which(name, path=path)
+            if not where or _store_alias(where):
+                continue
+            found.append("posix" if name == "ls" else name)
+        out = tuple(found)
+        _TOOLS_CACHE.clear()  # one PATH at a time is enough
+        _TOOLS_CACHE[path] = (now, out)
+        return out
+    except Exception:  # noqa: BLE001 — unknown is "found nothing", never a claim
+        return ()
+
+
+def build_env_description(tools: "tuple[str, ...] | list[str]", os_name: str | None = None) -> str:
+    """Model-facing truth about a Build session's commands (v1.377.0): the
+    user's own PATH and home folder, the tools REALLY found on it (``tools``
+    from :func:`build_env_tools` — never a promise of one that is not there),
+    their git identity and sign-ins, and that secret variables are removed.
+    Lives beside :func:`build_env` for the reason :func:`scrubbed_env_description`
+    lives beside :func:`scrubbed_env`: the words and the truth must not drift."""
+    names = [t for t in tools if t != "posix"]
+    found = (
+        f"Found on it: {', '.join(names)}." if names
+        else "None of git, node, npm or python was found on it."
+    )
+    who = (
+        " Their git identity, settings and sign-ins apply (a commit is theirs)."
+        if "git" in names else ""
+    )
+    if (os_name or os.name) == "nt":
+        posix = (
+            "" if "posix" in tools else
+            " No POSIX tools (mv/ls/cp/rm/cat/grep do not resolve)."
+        )
+        return (
+            "Windows cmd.exe with the user's own PATH and home folder, as in their own "
+            f"terminal. {found}{who} Secret variables (keys, tokens, passwords) are removed."
+            f"{posix} Prefer the built-in tools (rename_file, list_files, grep, "
+            "read_document/write_document) for file work."
+        )
+    return (
+        "POSIX sh with the user's own PATH and home folder, as in their own terminal. "
+        f"{found}{who} Secret variables (keys, tokens, passwords) are removed. Prefer the "
+        "built-in tools (rename_file, list_files, grep, read_document/write_document) for "
+        "file work."
+    )
+
+
 def host_os_line(system: str | None = None) -> str:
     """One model-facing line naming the OS this install runs on (v1.228.0,
     audit T6). ``platform.system()`` by default; on Windows it also says what
@@ -340,17 +549,24 @@ class NativeSandbox(Sandbox):
 
     def run(
         self, command: str, *, cwd: Path, timeout: float | None = None,
-        on_spawn: Any = None, cancelled: Any = None,
+        on_spawn: Any = None, cancelled: Any = None, build: bool = False,
     ) -> SandboxResult:
         """``on_spawn`` / ``cancelled`` (v1.372.0): ``procs.run``'s seams,
         passed by the shell tool so a STOPPED call kills its command's tree
-        instead of letting it run to its timeout. Omitted: unchanged."""
+        instead of letting it run to its timeout. Omitted: unchanged.
+        ``build`` (v1.377.0): the call belongs to a BUILD SESSION
+        (``harness/command_env`` decided it, keyed on the session) — under
+        ``modify_env = "deny"`` it runs with :func:`build_env` (the user's
+        PATH and home, secrets removed) instead of :func:`scrubbed_env`."""
         limit = timeout if timeout is not None else self.policy.timeout_s
         # NOT child_env (review): a shell line pipes and redirects, and
         # PYTHONIOENCODING=utf-8 would make `type x.csv | python ...` fail on
         # an ANSI byte and `python export.py > out.csv` write UTF-8 Excel
         # misreads. A Python child keeps its own page; `_as_text` judges it.
-        env = scrubbed_env() if self.policy.modify_env == "deny" else None
+        if self.policy.modify_env == "deny":
+            env = build_env() if build else scrubbed_env()
+        else:
+            env = None
         start = time.monotonic()
         # `procs.run` (v1.333.0; Popen + communicate(timeout) since v1.228.0,
         # RT3): on a timeout the WHOLE tree is killed and the pipes are then

@@ -96,11 +96,20 @@ class RewindPlan:
     already_undone: int = 0
     #: action id -> the files its revert puts back (rel), for a partial answer.
     action_files: dict[str, list[str]] = field(default_factory=dict)
+    #: v1.377.0: what rode the question besides its words — the pictures and
+    #: files it carried, the folder files picked with "@" and the skill picked
+    #: with "/" — so a rewind puts them back in the box WITH the words.
+    attachments: list[str] = field(default_factory=list)
+    picked_files: list[str] = field(default_factory=list)
+    skill: str = ""
 
     def view(self) -> dict[str, Any]:
         return {
             "to": self.to,
             "question": self.question,
+            "attachments": list(self.attachments),
+            "picked_files": list(self.picked_files),
+            "skill": self.skill,
             "turns": list(self.turns),
             "files": list(self.files),
             "problems": list(self.problems),
@@ -121,6 +130,22 @@ def _messages(row: Any) -> list[dict[str, Any]]:
     except (TypeError, ValueError):
         data = []
     return [m for m in data if isinstance(m, dict)] if isinstance(data, list) else []
+
+
+#: At most this many paths of a question go back in the box (the turn route's
+#: own cap per list, ``BuildTurnBody``).
+MAX_QUESTION_PATHS = 20
+
+
+def _paths(value: Any) -> list[str]:
+    """A question line's saved path list: strings, de-duplicated, bounded."""
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for v in value:
+        if isinstance(v, str) and v.strip() and v.strip() not in out:
+            out.append(v.strip())
+    return out[:MAX_QUESTION_PATHS]
 
 
 def _is_question(m: dict[str, Any]) -> bool:
@@ -461,6 +486,9 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str,
     prev_at = _naive_utc(messages[index - 1].get("at")) if index > 0 else None
     out = RewindPlan(
         to=to, question=str(question.get("content") or ""), turns=turns, keep=index, cut_at=cut_at,
+        attachments=_paths(question.get("attachmentPaths")),
+        picked_files=_paths(question.get("filePaths")),
+        skill=str(question.get("skill") or "").strip()[:200] if isinstance(question.get("skill"), str) else "",
     )
     disk = _Disk()
     seen_files: dict[str, dict[str, Any]] = {}

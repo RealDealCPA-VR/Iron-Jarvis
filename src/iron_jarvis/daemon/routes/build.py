@@ -184,6 +184,17 @@ class BuildRewindBody(BaseModel):
     to: str = Field(min_length=1, max_length=80)
 
 
+class BuildBranchBody(BaseModel):
+    """``POST /build/sessions/{id}/branch`` (v1.377.0, part 2 Phase 6):
+    start a NEW session from one of this session's messages — ``at`` =
+    ``"reply"``: the conversation up to and including turn ``turn_id``'s
+    reply; ``"question"``: the conversation before that turn's question
+    (whose words and files go into the new session's box)."""
+
+    turn_id: str = Field(min_length=1, max_length=80)
+    at: str = Field(default="reply", max_length=20)
+
+
 class BuildAnswerBody(BaseModel):
     ask_id: str = Field(min_length=1, max_length=80)
     answer: Any = None
@@ -1281,6 +1292,20 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 )
             playbook = got
         setup = _setup_of(row)
+        # v1.377.0 (part 2, Phase 6): the Browser pane's address is KEPT on the
+        # session with every message the screen sends (a local page only, or
+        # nothing), so a CONTINUATION the daemon starts itself — "Resume when
+        # ready", "Continue on another account", with nobody's screen behind
+        # it — still knows the dev server the user was looking at.
+        from ...harness.preview import local_address
+
+        shown = local_address(preview_url)
+        kept = local_address(str(setup.get("preview_url") or ""))
+        if continuation and not shown:
+            preview_url = kept
+        elif not continuation and shown != kept:
+            await asyncio.to_thread(S.update, platform.engine, thread_id,
+                                    setup={"preview_url": shown or None})
         pin, account_provider = await asyncio.to_thread(turn_account, platform, thread_id, setup)
         from ...projects.locate import project_for_path
 
@@ -1568,6 +1593,28 @@ async def account_wait_loop(d: Any, on_tick: Any) -> None:
 REWIND_RUNNING = "This session is still answering. Stop it before you rewind it."
 
 
+def rewind_commit_facts(row: Any, cut_at: Any) -> dict[str, Any]:
+    """v1.377.0 (part 2, Phase 6): a rewind to before a message whose work was
+    COMMITTED on the session's own branch says so — the files go back as
+    changes not committed yet, the commits stay on the branch
+    (``branches.commits_since`` / ``commits_note``). ``{}`` for a session with
+    no branch or nothing committed since. BLOCKING (git); never raises."""
+    from ...harness import branches as B
+
+    try:
+        facts = B.facts_of(_setup_of(row))
+        commits = B.commits_since(facts, cut_at) if facts else []
+    except Exception:  # noqa: BLE001
+        return {}
+    if not commits or not facts:
+        return {}
+    branch = facts.get("branch", "")
+    return {
+        "committed": {"branch": branch, "count": len(commits), "commits": commits[:5]},
+        "commits_note": B.commits_note(commits, branch),
+    }
+
+
 async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
     """Rewind the session TO before turn ``to`` (``harness/rewind``): every
     file its turns changed from there on is put back through the undo journal
@@ -1605,6 +1652,8 @@ async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
             return JSONResponse(status_code=409, content={
                 "detail": R.problems_sentence(plan.problems), "rewound": False, **plan.view(),
             })
+        # v1.377.0: read before anything moves (the commits stay either way).
+        committed = await asyncio.to_thread(rewind_commit_facts, row, plan.cut_at)
         restored: list[str] = []
         for action_id in plan.actions:
             try:
@@ -1654,7 +1703,7 @@ async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
                     "files": len(plan.files),
                 }, session_id=S.session_id_for(thread_id))
         return {
-            "rewound": True, **plan.view(),
+            "rewound": True, **plan.view(), **committed,
             "note": R.commands_note(plan.commands),
             "messages": cut.get("count", 0),
             "mode": cut.get("mode", S.MODE_ACT),
@@ -1746,6 +1795,10 @@ def register(app: FastAPI, d: Any) -> None:
             queued = []
         view["queued"] = [q for q in queued if isinstance(q, dict)] if isinstance(queued, list) else []
         view["turn_id"] = _running_turn(d, row.id) if view["running"] else ""
+        # v1.377.0 (part 2, Phase 6): Compact is writing this session's summary
+        # right now — a screen that comes back to it mid-Compact says
+        # "Summarizing earlier turns…" (a send would be refused meanwhile).
+        view["compacting"] = row.id in _COMPACTING
         # v1.368.0: the session's account (with its live status, from the
         # CACHED snapshot) and which vendor its model belongs to ("" = a
         # local model or an API key: no account; the header names the place).
@@ -2056,7 +2109,14 @@ def register(app: FastAPI, d: Any) -> None:
                     R.plan, platform.engine, platform.config.home, platform.registry, thread_id, to,
                     getattr(platform, "permissions", None),
                 )
-                return {**plan.view(), "note": R.commands_note(plan.commands),
+                # v1.377.0: committed work since that message is said BEFORE
+                # the second press (the files go back; the commits stay).
+                row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
+                committed = (
+                    await asyncio.to_thread(rewind_commit_facts, row, plan.cut_at)
+                    if row is not None else {}
+                )
+                return {**plan.view(), **committed, "note": R.commands_note(plan.commands),
                         "detail": R.problems_sentence(plan.problems) if plan.problems else ""}
             points = await asyncio.to_thread(R.checkpoints, platform.engine, thread_id)
         except R.RewindError as exc:
@@ -2089,6 +2149,106 @@ def register(app: FastAPI, d: Any) -> None:
         """Rewind the session to before turn ``to`` — files and conversation
         (:func:`rewind_session`)."""
         return await rewind_session(d, thread_id, body.to.strip())
+
+    @app.post("/build/sessions/{thread_id}/followups")
+    async def build_followups(thread_id: str) -> dict[str, Any]:
+        """NEXT STEP (v1.377.0, part 2 Phase 6): up to two questions the user
+        might ask next, after the session's newest reply — the chat's
+        follow-ups (``chat_followups``, off by default: no model call when
+        off) on the SESSION's own model and account, pinned, in its Local only
+        scope, billed to the session (``harness/followups``). Never a 500 for
+        a model failure: ``{suggestions: [], reason}``."""
+        from ...harness import followups as _followups
+
+        await asyncio.to_thread(_session_or_404, thread_id)
+        running = thread_id in _STARTING or bool(_running_turn(d, thread_id))
+        return await _followups.suggest(d.platform, thread_id, running=running)
+
+    @app.post("/build/sessions/{thread_id}/branch", status_code=201)
+    async def branch_build_session(thread_id: str, body: BuildBranchBody) -> Any:
+        """BRANCH FROM A MESSAGE (v1.377.0, part 2 Phase 6): a NEW session
+        holding this session's conversation up to one of its messages, in the
+        same folder, on the same model and account — NOTHING of this session
+        changes. DECISIONS: a session on its own git branch gets the new
+        session its OWN new branch and worktree from the same base (the base
+        branch as it is now — ``branches.branch_start_point``), never the
+        same worktree (two sessions would write the same files); the new
+        session starts in act mode with no approved plan and no conversation
+        grants (it asks again), and the account, model, reasoning, approval
+        setting, Local only and the Browser pane's address go with it. A
+        question branch answers ``draft`` (the question's words and files)
+        for the new session's box."""
+        from ...harness import branches as B
+
+        at = (body.at or "reply").strip().lower()
+        if at not in ("reply", "question"):
+            raise HTTPException(status_code=400, detail="at must be 'reply' or 'question'")
+        engine = engine_of()
+        row = await asyncio.to_thread(_session_or_404, thread_id)
+        setup = _setup_of(row)
+        messages = await asyncio.to_thread(S._messages, row)
+        turn_id = body.turn_id.strip()
+        try:
+            lines, question = S.branch_lines(messages, turn_id, at)
+        except S.BranchRefused as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+        title = S.BRANCH_TITLE.format(title=(row.title or S.NEW_SESSION_TITLE))
+        new_setup: dict[str, Any] = {
+            k: setup[k] for k in (
+                "provider", "model", "reasoning", "approval_mode", "local_only", "account",
+                "account_name", "preview_url",
+            ) if setup.get(k) not in (None, "", [])
+        }
+        branched = {"thread_id": thread_id, "title": row.title or "", "turn_id": turn_id, "at": at}
+        facts = B.facts_of(setup)
+        if facts:
+            # Its OWN branch from the same base, in its own worktree beside
+            # the repository (off the loop: git).
+            start_point = await asyncio.to_thread(B.branch_start_point, facts)
+            checkout = facts.get("checkout") or facts.get("repo", "")
+            problem = await asyncio.to_thread(S.folder_problem, checkout)
+            if problem:
+                raise HTTPException(status_code=409, detail=f"This session's folder cannot be used now: {problem}")
+            try:
+                started = await asyncio.to_thread(
+                    lambda: B.start(checkout, title=title, start_point=start_point,
+                                    base=facts.get("base", "")),
+                )
+            except B.GitRefused as exc:
+                content: dict[str, Any] = {"detail": str(exc)}
+                if exc.details:
+                    content["details"] = exc.details
+                return JSONResponse(status_code=exc.status, content=content)
+            work = started.pop("folder")
+            branched["branch"] = started.get("branch", "")
+            try:
+                new_row = await asyncio.to_thread(
+                    S.create_with_lines, engine, work, title,
+                    {**new_setup, B.SETUP_KEY: started, "branched_from": branched}, lines,
+                )
+            except Exception:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(B.remove_worktree, d.platform.config.home, started)
+                raise
+        else:
+            folder = S.folder_of(row)
+            problem = await asyncio.to_thread(S.folder_problem, folder)
+            if problem:
+                raise HTTPException(status_code=409, detail=f"This session's folder cannot be used now: {problem}")
+            new_row = await asyncio.to_thread(
+                S.create_with_lines, engine, folder, title, {**new_setup, "branched_from": branched}, lines,
+            )
+        view = await asyncio.to_thread(_full_view, new_row)
+        if question is not None:
+            from ...harness.rewind import _paths
+
+            view["draft"] = {
+                "text": str(question.get("content") or ""),
+                "attachments": _paths(question.get("attachmentPaths")),
+                "picked_files": _paths(question.get("filePaths")),
+                "skill": str(question.get("skill") or "") if isinstance(question.get("skill"), str) else "",
+            }
+        return view
 
     @app.post("/build/sessions/{thread_id}/compact")
     async def build_compact(thread_id: str) -> dict[str, Any]:

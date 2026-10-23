@@ -352,10 +352,14 @@ def short_name(title: str = "") -> str:
     return f"{slug}-{secrets.token_hex(2)}"
 
 
-def start(folder: str, *, title: str = "") -> dict[str, str]:
+def start(folder: str, *, title: str = "", start_point: str = "", base: "str | None" = None) -> dict[str, str]:
     """Make the session's branch and worktree for ``folder`` (the folder the
     user picked; already checked by ``fs_policy.root_problem``). Returns the
     facts to store; raises :class:`GitRefused` in words.
+
+    ``start_point`` / ``base`` (v1.377.0, a session BRANCHED from another's
+    message): the new branch starts from that commit and names that base,
+    instead of the main checkout's HEAD and current branch.
 
     ``git worktree add -b ij/<name> <worktree> HEAD`` through
     ``GitSession.start`` (the review system's own start, with this branch
@@ -399,7 +403,8 @@ def start(folder: str, *, title: str = "") -> dict[str, str]:
     worktree = wt_dir / name
     start_sha = _ref_sha(Path(root), "HEAD")
     try:
-        gs = GitSession.start(Path(root), worktree, name, branch=branch, env=git_env())
+        gs = GitSession.start(Path(root), worktree, name, branch=branch, env=git_env(),
+                              **({"start_point": start_point} if start_point else {}))
     except GitError as exc:
         left = _undo_start(root, worktree, branch, start_sha)
         if made_dir:
@@ -412,7 +417,9 @@ def start(folder: str, *, title: str = "") -> dict[str, str]:
             409, _masked(str(exc)),
         ) from None
     base_commit = _g(["rev-parse", "HEAD"], worktree, reads=True).out.strip()
-    base = info["branch"] or ("" if gs.base == "HEAD" else gs.base)
+    base_name = info["branch"] or ("" if gs.base == "HEAD" else gs.base)
+    if base is not None:
+        base_name = base  # v1.377.0: a branched session names its origin's base
     # The folder the user picked, inside the worktree (a pick may be a folder
     # INSIDE the repository; the session then works in the worktree's copy).
     try:
@@ -431,7 +438,7 @@ def start(folder: str, *, title: str = "") -> dict[str, str]:
         "main": main,
         "worktree": str(worktree),
         "branch": branch,
-        "base": base,
+        "base": base_name,
         "base_commit": base_commit,
         "name": name,
         "created_at": utcnow().isoformat(),
@@ -585,6 +592,83 @@ def merge_base(facts: dict[str, str], wt: Path) -> str:
         if got.ok and got.out.strip():
             return got.out.strip()
     return facts.get("base_commit", "") or "HEAD"
+
+
+def branch_start_point(facts: "dict[str, str] | None") -> str:
+    """Where a session BRANCHED from another session's message starts its OWN
+    new branch (v1.377.0, the decision: from the same base, never the same
+    worktree): the base branch as it is now when the repository still has
+    it, else the commit the original branch started from. "" when neither
+    can be named (the caller then starts from the checkout's HEAD). BLOCKING."""
+    if not facts:
+        return ""
+    base = facts.get("base", "")
+    repo = facts.get("repo", "")
+    if base and repo and Path(repo).is_dir():
+        sha = _ref_sha(Path(repo), f"refs/heads/{base}")
+        if sha:
+            return sha
+    return facts.get("base_commit", "")
+
+
+#: At most this many commits are named by :func:`commits_since`.
+COMMITS_SINCE_MAX = 50
+
+
+def commits_since(facts: "dict[str, str] | None", since: Any) -> list[dict[str, str]]:
+    """The commits ON THE SESSION'S BRANCH made at or after ``since`` (a
+    datetime, naive = UTC) — newest first, ``{sha, subject}``, at most
+    :data:`COMMITS_SINCE_MAX` (v1.377.0: a REWIND to before a message whose
+    work was committed says so — the files go back, the commits stay). Only
+    the branch's own commits (from where it meets its base). [] for a session
+    with no branch, a gone worktree or any git failure. BLOCKING; never raises."""
+    from datetime import datetime, timezone
+
+    try:
+        if not facts or facts.get("removed_at") or since is None:
+            return []
+        wt = Path(facts.get("worktree", ""))
+        branch = facts.get("branch", "")
+        if not wt.is_dir() or not branch:
+            return []
+        when = since if isinstance(since, datetime) else datetime.fromisoformat(str(since))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        floor = int(when.timestamp())
+        mb = merge_base(facts, wt)
+        got = _g(["log", "--format=%h%x1f%ct%x1f%s%x1e", "-n", str(COMMITS_SINCE_MAX),
+                  f"{mb}..refs/heads/{branch}"], wt, reads=True)
+        if not got.ok:
+            return []
+        out: list[dict[str, str]] = []
+        for rec in got.out.split("\x1e"):
+            bits = rec.strip("\n").split("\x1f")
+            if len(bits) < 3 or not bits[0].strip():
+                continue
+            try:
+                at = int(bits[1].strip())
+            except ValueError:
+                continue
+            if at >= floor:
+                out.append({"sha": bits[0].strip(), "subject": bits[2].strip()[:200]})
+        return out
+    except Exception:  # noqa: BLE001 — not knowing is no commits named, never a refusal
+        return []
+
+
+def commits_note(commits: list[dict[str, str]], branch: str) -> str:
+    """What a rewind says about COMMITTED work (v1.377.0): "" when none."""
+    if not commits:
+        return ""
+    n = len(commits)
+    shown = ", ".join(f"“{c['subject']}”" for c in commits[:3] if c.get("subject"))
+    more = f" and {n - 3} more" if n > 3 else ""
+    what = f"{n} commit{'s' if n != 1 else ''} on {branch}" + (f" ({shown}{more})" if shown else "")
+    return (
+        f"Some of this work was committed: {what} came after this message. Rewinding puts "
+        "the files back, but the commits stay on the branch, so the files show as changes "
+        "that are not committed yet."
+    )
 
 
 def pick_remote(wt: Path, branch: str) -> str:

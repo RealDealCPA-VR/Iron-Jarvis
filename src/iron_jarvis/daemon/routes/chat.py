@@ -1057,7 +1057,39 @@ def _clean_setup(raw: Any) -> str:
     git_facts = _clean_git(raw.get("git"))
     if git_facts:
         out["git"] = git_facts
+    # IJ HARNESS PHASE 6 (v1.377.0) — the address the session's Browser pane
+    # showed with its last message (a page on this PC or the user's network
+    # only, ``harness/preview.local_address``), so a CONTINUATION the daemon
+    # starts with nobody watching ("Resume when ready", "Continue on another
+    # account") still knows the dev server; and where a session BRANCHED from
+    # (the session and message it was started from). Only /build writes them.
+    from ...harness.preview import local_address as _local_address
+
+    preview = raw.get("preview_url")
+    if isinstance(preview, str) and _local_address(preview):
+        out["preview_url"] = _local_address(preview)
+    branched = _clean_branched_from(raw.get("branched_from"))
+    if branched:
+        out["branched_from"] = branched
     return json.dumps(out, separators=(",", ":")) if out else ""
+
+
+#: The keys of a Build session's ``branched_from`` (v1.377.0).
+_BRANCHED_KEYS = ("thread_id", "title", "turn_id", "at", "branch")
+
+
+def _clean_branched_from(raw: Any) -> "dict[str, str] | None":
+    """``setup.branched_from`` as stored: the session and message a Build
+    session was branched from — strings only, bounded; None unless it names
+    the session it came from."""
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, str] = {}
+    for key in _BRANCHED_KEYS:
+        v = raw.get(key)
+        if isinstance(v, str) and v.strip():
+            out[key] = " ".join(v.split())[:200]
+    return out if out.get("thread_id") else None
 
 
 #: The keys of a Build session's limit record / resume wait (v1.368.0).
@@ -3428,6 +3460,9 @@ async def chat_stream(
             # only when this client draws the question card.
             plan_mode=plan_mode,
             ask_user=bool(getattr(body, "mcp_cards", False)),
+            # v1.377.0 (lock-step): a Build session's commands find the
+            # user's tools — its model is told so.
+            session_id=_tool_session,
         )
         system = _harness.system_without_exits(system, _chat_turn._ENV_EXIT_LINES)
         _grounding.harness = True

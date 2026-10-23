@@ -4919,9 +4919,16 @@ async def _build_harness(
     d, body, requested: str, *, provider: str, model: str, resolved_proj, grounding,
     stream: bool, low_trust: bool, tool_ceiling=None, approval_mode: str = "",
     text_only: bool = False, plan_mode: bool = False, ask_user: bool = False,
+    session_id: str = "",
 ):
     """``(HarnessTurn, rule_files_section)`` for a harness turn — built ONCE,
     before the planner, from the turn's choice of model and its folder.
+
+    ``session_id`` (v1.377.0): the turn's TOOL session. A Build session's
+    (``build:<id>``) commands run with the user's own PATH
+    (``harness/command_env``), so its model is told that — the tools really
+    found on it — instead of the scrubbed words (worked out off the loop).
+    MIRROR NOTE (lock-step): both lanes pass it.
 
     ``plan_mode`` / ``ask_user`` (v1.367.0, a Build session's turn): the
     session is in plan mode (read-only tools + the exit door); the stream
@@ -5004,6 +5011,12 @@ async def _build_harness(
             event_bus=bus, session_id="chat",
         )
     prov, mod = _harness_model(d.platform, provider, model)
+    shell_words = ""
+    if session_id:
+        from ..harness.command_env import build_shell_description, is_build_call
+
+        if is_build_call(session_id):
+            shell_words = await asyncio.to_thread(build_shell_description)
     turn = _mode.build(
         registry=d.platform.registry,
         permissions=d.platform.permissions,
@@ -5022,6 +5035,7 @@ async def _build_harness(
         plan_mode=bool(plan_mode),
         ask_user=bool(ask_user) and stream,
         library=library,
+        shell_description=shell_words,
     )
     return turn, rules_section
 
@@ -7490,6 +7504,9 @@ async def run_chat_turn(
             low_trust=normalize_trust(trust) == TRUST_LOW, text_only=text_only_pick,
             # v1.367.0 (lock-step): a Build session's plan mode.
             plan_mode=plan_mode,
+            # v1.377.0 (lock-step): a Build session's commands find the
+            # user's tools — its model is told so.
+            session_id=_tool_session,
         )
         system = _harness.system_without_exits(system, _ENV_EXIT_LINES)
         _grounding.harness = True
