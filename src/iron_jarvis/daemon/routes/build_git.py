@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -97,6 +98,31 @@ def _refused(exc: B.GitRefused) -> JSONResponse:
     return JSONResponse(status_code=exc.status, content=content)
 
 
+#: ONE git action at a time per session (the e2e's finding, v1.375.0): the
+#: Branch view re-reads the branch the moment Merge answers — a dozen git
+#: calls whose working folder is the worktree — while the user presses
+#: "Remove the worktree"; a folder some process is IN cannot be renamed on
+#: Windows. Reads and actions of one session take its lock (in the worker
+#: thread, never on the loop), so a discard waits for a read in flight.
+_GIT_LOCKS: dict[str, threading.Lock] = {}
+_GIT_LOCKS_GUARD = threading.Lock()
+#: How long an action waits for the session's lock before it says so.
+GIT_LOCK_WAIT_S = 120.0
+GIT_BUSY = "This session's branch is busy with another git action. Try again in a moment."
+
+
+def _locked(thread_id: str, fn: Any) -> Any:
+    """``fn()`` under the session's git lock. BLOCKING (a worker thread)."""
+    with _GIT_LOCKS_GUARD:
+        lock = _GIT_LOCKS.setdefault(thread_id, threading.Lock())
+    if not lock.acquire(timeout=GIT_LOCK_WAIT_S):
+        raise B.GitRefused(GIT_BUSY, 409)
+    try:
+        return fn()
+    finally:
+        lock.release()
+
+
 def register(app: FastAPI, d: Any) -> None:
     from .build import _COMPACTING, _STARTING, COMPACTING_SENTENCE, _running_turn, _setup_of
 
@@ -133,7 +159,7 @@ def register(app: FastAPI, d: Any) -> None:
             return busy
         _STARTING.add(thread_id)
         try:
-            return await asyncio.to_thread(fn)
+            return await asyncio.to_thread(_locked, thread_id, fn)
         except B.GitRefused as exc:
             return _refused(exc)
         finally:
@@ -161,7 +187,7 @@ def register(app: FastAPI, d: Any) -> None:
         """The session's branch as the Branch view shows it."""
         _row, facts = await asyncio.to_thread(_row_facts, thread_id)
         try:
-            return await asyncio.to_thread(B.status, facts)
+            return await asyncio.to_thread(_locked, thread_id, lambda: B.status(facts))
         except B.GitRefused as exc:
             return _refused(exc)
 
@@ -171,7 +197,7 @@ def register(app: FastAPI, d: Any) -> None:
         not (the Changes pane's shape)."""
         _row, facts = await asyncio.to_thread(_row_facts, thread_id)
         try:
-            return await asyncio.to_thread(B.branch_changes, facts)
+            return await asyncio.to_thread(_locked, thread_id, lambda: B.branch_changes(facts))
         except B.GitRefused as exc:
             return _refused(exc)
 
@@ -240,7 +266,7 @@ def register(app: FastAPI, d: Any) -> None:
         screen's slow poll at most), never in a loop here."""
         _row, facts = await asyncio.to_thread(_row_facts, thread_id)
         try:
-            return await asyncio.to_thread(B.pr_status, facts)
+            return await asyncio.to_thread(_locked, thread_id, lambda: B.pr_status(facts))
         except B.GitRefused as exc:
             return _refused(exc)
 
@@ -318,7 +344,7 @@ async def draft_message(d: Any, thread_id: str) -> Any:
     if facts is None:
         raise HTTPException(status_code=409, detail=B.NO_BRANCH)
     try:
-        material = await asyncio.to_thread(B.draft_material, facts)
+        material = await asyncio.to_thread(_locked, thread_id, lambda: B.draft_material(facts))
     except B.GitRefused as exc:
         return _refused(exc)
     if not material:

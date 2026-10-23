@@ -1961,9 +1961,14 @@ def register(app: FastAPI, d: Any) -> None:
         facts = B.facts_of(_setup_of(row))
         moved: dict[str, Any] | None = None
         if facts and not facts.get("removed_at"):
+            from .build_git import _locked
+
             S.end_session_programs(thread_id)
             try:
-                moved = B.remove_worktree(d.platform.config.home, facts)
+                # Under the session's git lock: a Branch view read in flight
+                # (a git call whose working folder is the worktree) finishes
+                # before the folder is moved.
+                moved = _locked(thread_id, lambda: B.remove_worktree(d.platform.config.home, facts))
             except B.GitRefused as exc:
                 content: dict[str, Any] = {
                     "detail": f"{exc} The session was not deleted.",

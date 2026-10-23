@@ -296,6 +296,79 @@ touched. The header shows the branch and its base. The Changes pane gains a
 - The packaged app finds `git` and `gh` on PATH, or says in plain words that
   it cannot.
 
+**Result (doer, before review).** Live on a scratch daemon (port 8817, the
+local model custom / glm-5.3-flash, a scratch repository with a local bare
+remote in the temp folder), through the API:
+
+| Check | Outcome |
+|---|---|
+| New session in the repository | `ij/session-dbf2` in `shop.ij-worktrees\session-dbf2` beside `shop`, base main; the main checkout stayed on main, `git status` empty, main's commit unmoved; listed under `shop` |
+| The agent's edit | 7.6 s, `apply_patch` in the worktree; `app.py` gained `greet()` there, the checkout's `app.py` untouched |
+| Branch view | `app.py` modified +4 −0, and `__pycache__/…pyc` (the model ran Python in the worktree; the scratch repo had no `.gitignore`) |
+| The agent asked to commit and push | the model found git by its full path (`"C:\Program Files\Git\bin\git.exe" … commit … && … push`); each call put up an "Allow once / Deny" card ("This pushes to origin. Every push from a session's branch … asks you first."), denied twice, no commit made; the model then asked the user what to do (`ask_user`) |
+| Commit | glm-5.3-flash drafted "Add greet function to app.py"; committed (edited) as the repository's own author, 2 files |
+| Push | the bare remote got `ij/session-dbf2` at the branch's commit |
+| Merge into main | a merge commit in the main checkout with the two parents; `app.py` there now has `greet()` |
+| Remove the worktree | moved to `<home>\trash\<stamp>\worktree-session-dbf2`; `git worktree list` shows only main; the branch kept; the session archived |
+
+The real screen (e2e on Edge, the demo model): the switch, the header's
+branch, the Branch view, Commit (the demo model drafts nothing and says
+so), Push, Merge and Remove the worktree, and no sideways pan at 390 px.
+Its first run FOUND A RACE, fixed in this phase: right after Merge the
+Branch view re-reads the branch (git calls whose working folder is the
+worktree) while the user presses "Remove the worktree" — a folder a
+process is in cannot be renamed on Windows, so the remove said "in use".
+A session's git reads and actions now run one at a time (a per-session
+lock, taken off the loop), and a brief hold (a virus scanner) is retried
+for a few seconds before Discard says the folder is in use.
+
+Decisions made in this phase (each pinned by a test):
+
+- **Branch name**: `ij/<slug>-<4 hex>` — the session has no title yet when
+  it starts, so `ij/session-3f2a`; the worktree folder has the same short
+  name. A pick inside the repository works in the worktree's copy of that
+  folder.
+- **Grouping**: under the folder the user PICKED (the repository's), never a
+  `<repo>.ij-worktrees` group; the session is named by that folder.
+- **Project**: the project of the folder the user picked (the worktree sits
+  outside every project's root). The project's "Project folder" line in the
+  prompt names the session's worktree of it, never the main checkout, and a
+  paragraph tells the model the main checkout is the user's.
+- **Harness layer and rule files**: the worktree's own when it has one (a
+  tracked layer comes with the branch), else the main checkout's (an
+  untracked `.ironjarvis/harness/` or `AGENTS.local.md` is not in a new
+  worktree) — per rule file. The experience library belongs to the folder
+  the user picked (its accepted edits are written there).
+- **Merge when the base is checked out nowhere**: the same merge commit is
+  made without touching any working tree (`merge-tree` → `commit-tree` →
+  `update-ref` with the old value). A checked-out base is merged in that
+  checkout with `git merge --no-ff`, refused first when that checkout has
+  uncommitted changes or the merge would conflict (`git merge-tree`); a
+  merge git itself stops (a hook) is aborted and said so.
+- **The agent's commit / push**: from `shell`, `process_start` or
+  `process_write`, a `git commit`, `git push` or `gh pr create|merge`
+  ASKS in every posture (auto-approve included), "Allow once" and Deny only,
+  past every grant (a tool spend check with `once_only`); the POST lane,
+  which cannot ask, refuses it; a helper's run pauses the same way. A force
+  push (`-f`, `--force*`, `--mirror`, `+refspec`) is refused by the tool
+  itself. Only while the session works on a branch: a session in its folder
+  directly is exactly as before. It reads the command's text, so it is a
+  guardrail against a careless model, not a sandbox.
+- **Archive** keeps the worktree. **Delete** moves it to the trash first
+  (the branch stays); a worktree that cannot be moved refuses the delete in
+  words. **Discard** archives the session.
+- **Commit identity**: the user's own git name and e-mail; Iron Jarvis's
+  default only when git names no one, and the answer says so.
+- **gh**: Create PR only when installed AND signed in for the remote's host
+  (`gh auth status`, remembered 60 s); otherwise the GitHub compare link.
+  Checks are read when asked and every 60 s while the Branch view is on
+  screen. A doctor row says when `gh` is missing (developer rows, not the
+  first-run card).
+
+Not done here: the real GitHub was not driven (a fake `gh` in the tests);
+the packaged app was not built (git and gh are found with `shutil.which`
+on the PATH the desktop app hands the daemon).
+
 ## Phase 5 — A browser the agent can drive (target v1.376.0)
 
 **What you see.** The agent can open your dev server, click, type, read the

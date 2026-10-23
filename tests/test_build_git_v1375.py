@@ -674,6 +674,7 @@ async def test_delete_moves_the_worktree_to_the_trash_and_a_busy_one_is_refused_
     def busy(src, dst):
         raise PermissionError(32, "The process cannot access the file because it is being used")
 
+    monkeypatch.setattr(B, "RENAME_RETRY_S", 0.0)
     monkeypatch.setattr(B.os, "rename", busy)
     status, body = await asgi(app, "DELETE", f"/build/sessions/{sid}")
     assert status == 409 and "The session was not deleted." in body["detail"] and "in use" in body["detail"]
@@ -684,6 +685,63 @@ async def test_delete_moves_the_worktree_to_the_trash_and_a_busy_one_is_refused_
     assert done["deleted"] == sid and done["worktree"]["moved"] is True and done["worktree"]["branch"] == branch
     assert not wt.exists() and Path(done["worktree"]["trash"]).is_dir()
     assert git_ok("rev-parse", "--verify", f"refs/heads/{branch}", cwd=repo)
+
+
+async def test_a_brief_hold_on_the_worktree_is_waited_out(app, repo, monkeypatch):
+    """A worktree held for a moment (a virus scanner opening a new file) is
+    retried before Discard says it is in use."""
+    sid, wt, _b = await _committed_session(app, repo)
+    real = B.os.rename
+    tries: list[int] = []
+
+    def held_twice(src, dst):
+        tries.append(1)
+        if len(tries) <= 2:
+            raise PermissionError(5, "Access is denied")
+        return real(src, dst)
+
+    monkeypatch.setattr(B, "RENAME_RETRY_S", 0.01)
+    monkeypatch.setattr(B.os, "rename", held_twice)
+    status, done = await asgi(app, "POST", f"/build/sessions/{sid}/git/discard", {"confirm": True})
+    assert status == 200, done
+    assert done["moved"] is True and len(tries) == 3 and not wt.exists()
+
+
+async def test_a_branch_read_in_flight_finishes_before_the_worktree_is_moved(app, repo, monkeypatch):
+    """THE E2E'S FINDING: right after Merge the Branch view re-reads the branch
+    (git calls whose working folder is the worktree) while the user presses
+    "Remove the worktree" — a folder a process is IN cannot be renamed on
+    Windows. One git action at a time per session: the remove waits."""
+    import asyncio
+    import time as _time
+
+    sid, wt, _b = await _committed_session(app, repo)
+    order: list[str] = []
+    real_status, real_remove = B.status, B.remove_worktree
+
+    def slow_status(facts):
+        order.append("read-start")
+        _time.sleep(0.6)
+        out = real_status(facts)
+        order.append("read-end")
+        return out
+
+    def remove(home, facts):
+        order.append("remove-start")
+        return real_remove(home, facts)
+
+    monkeypatch.setattr(B, "status", slow_status)
+    monkeypatch.setattr(B, "remove_worktree", remove)
+
+    async def discard_soon():
+        while "read-start" not in order:
+            await asyncio.sleep(0.01)
+        return await asgi(app, "POST", f"/build/sessions/{sid}/git/discard", {"confirm": True})
+
+    (s1, _st), (s2, done) = await asyncio.gather(asgi(app, "GET", f"/build/sessions/{sid}/git"), discard_soon())
+    assert s1 == 200 and s2 == 200, done
+    assert order == ["read-start", "read-end", "remove-start"]
+    assert not wt.exists()
 
 
 async def test_archive_keeps_the_worktree(app, repo):

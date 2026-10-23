@@ -1232,6 +1232,26 @@ def looks_like_worktree(facts: dict[str, str]) -> bool:
     )
 
 
+#: A worktree held for a moment (a git read still running in it, a virus
+#: scanner opening a new file) is retried this many times, this far apart,
+#: before Discard says it is in use (the v1.341.1 lesson: a step that must
+#: own a file retries a brief hold and names a long one).
+RENAME_TRIES = 20
+RENAME_RETRY_S = 0.25
+
+
+def _rename_retrying(src: Path, dst: Path) -> None:
+    """``os.rename`` that retries a brief hold; the last failure is raised."""
+    for attempt in range(max(1, RENAME_TRIES)):
+        try:
+            os.rename(src, dst)
+            return
+        except OSError as exc:
+            if _cross_device(exc) or attempt >= RENAME_TRIES - 1:
+                raise
+            time.sleep(RENAME_RETRY_S)
+
+
 def _cross_device(exc: OSError) -> bool:
     """A rename that failed only because the trash is on another drive
     (Windows ERROR_NOT_SAME_DEVICE, POSIX EXDEV)."""
@@ -1261,7 +1281,7 @@ def remove_worktree(home: Any, facts: dict[str, str]) -> dict[str, Any]:
             n += 1
         trash.mkdir(parents=True, exist_ok=True)
         try:
-            os.rename(wt, target)
+            _rename_retrying(wt, target)
         except OSError as exc:
             if not _cross_device(exc):
                 raise GitRefused(
