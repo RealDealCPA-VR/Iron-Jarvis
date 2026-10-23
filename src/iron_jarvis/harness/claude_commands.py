@@ -67,6 +67,8 @@ MAX_PLUGINS = 60
 MAX_JSON_BYTES = 2 * 1024 * 1024
 #: An expanded command, at most (a turn's message is capped at 200,000).
 MAX_EXPANDED_CHARS = 100_000
+#: ``@`` names in one command looked up on disk, at most (the rest stay words).
+MAX_AT_REFS = 32
 #: Parsed command files kept in memory.
 CACHE_SIZE = 2000
 
@@ -1007,8 +1009,10 @@ def expand(cmd: Command, args: str, *, folder: str, read_room: int,
     if folder:
         from .sessions import FolderFileRefused, folder_files
 
-        for ref in refs:
-            if len(files) >= max(0, read_room):
+        for checked, ref in enumerate(refs):
+            # Review: at most MAX_AT_REFS names are looked up on disk — a
+            # repository's command file of thousands of "@x" is words past it.
+            if len(files) >= max(0, read_room) or checked >= MAX_AT_REFS:
                 left.append(ref)
                 continue
             try:

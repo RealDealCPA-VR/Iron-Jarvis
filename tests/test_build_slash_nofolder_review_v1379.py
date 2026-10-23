@@ -175,6 +175,20 @@ def test_a_file_or_a_shell_line_in_the_users_words_is_their_words(cc, work):
     assert named.text == "Read @named.txt and summarize."
 
 
+def test_a_command_naming_thousands_of_files_looks_up_only_a_few(cc, work, monkeypatch):
+    write(work / ".claude" / "commands" / "flood.md", " ".join(f"@missing-{i}.txt" for i in range(2000)))
+    looked: list[list[str]] = []
+    real = S.folder_files
+
+    def spy(folder, paths):
+        looked.append(list(paths))
+        return real(folder, paths)
+
+    monkeypatch.setattr(S, "folder_files", spy)
+    out = CC.expand(CC.find([str(work)], "flood"), "", folder=str(work), read_room=4)
+    assert len(looked) == CC.MAX_AT_REFS and out.files == [] and len(out.left) == 2000
+
+
 # --------------------------------------------------------------------------- #
 # 3. a network path is refused by its spelling, never resolved
 # --------------------------------------------------------------------------- #
