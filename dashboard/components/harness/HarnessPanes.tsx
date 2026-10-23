@@ -244,7 +244,12 @@ function ChangesPane({
   // opens on the Branch view — the branch IS that session's work, and its
   // Commit / Push / Create PR buttons are there (the walkthrough pressed
   // Changes, then Branch, every time). "This session" is one press away.
-  const [scope, setScope] = useState<"session" | "branch">("branch");
+  // (Review: only while the branch is live work. A removed worktree's Branch
+  // view is one sentence and a merged branch's diff against its base is
+  // empty, so those keep the old first view: what the session changed.)
+  const [scope, setScope] = useState<"session" | "branch">(() =>
+    view.git && !view.git.removed && !view.git.merged ? "branch" : "session",
+  );
   if (view.git && scope === "branch") {
     return (
       <div data-testid="pane-changes" className="space-y-2">
