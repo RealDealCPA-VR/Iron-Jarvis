@@ -240,6 +240,10 @@ async function typed(text: string) {
 
 describe("a typed “/name words” runs that name with the words as its arguments", () => {
   it("a skill: the skill rides that one message and the words are its text", async () => {
+    // The turn stays open while the question is looked at (it is shown while
+    // the turn runs; the daemon's own line replaces it after).
+    const s = controlledStream();
+    fetchMock.mockResolvedValueOnce(s.response);
     await opened();
     await typed("/pixio-skill make me a logo");
     key("Enter");
@@ -247,7 +251,30 @@ describe("a typed “/name words” runs that name with the words as its argumen
     expect(turnBody()).toMatchObject({ text: "make me a logo", skill: "pixio-skill" });
     expect(turnBody()).not.toHaveProperty("command");
     expect(await screen.findByTestId("harness-sent-skill")).toHaveTextContent("pixio-skill");
+    expect(screen.getByTestId("harness-user-bubble")).toHaveTextContent("make me a logo");
     expect(box().value).toBe("");
+    await act(async () => {
+      s.push("done", { reply: "ok" });
+      s.end();
+    });
+  });
+
+  it("a waiting message that starts with “/name” is sent as that name even when “/” was never opened", async () => {
+    // A reload restores the queue; nothing has read the lists yet.
+    api.gets["/build/sessions/s1"] = view({ queued: [{ text: "/review app.py" }] });
+    const s = controlledStream();
+    fetchMock.mockResolvedValueOnce(s.response);
+    await opened();
+    expect(api.calls.some((c) => c.path === "/build/sessions/s1/commands")).toBe(false);
+    type("first");
+    key("Enter");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), NET);
+    await act(async () => {
+      s.push("done", { reply: "ok" });
+      s.end();
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), NET);
+    expect(turnBody(1)).toMatchObject({ text: "app.py", command: "review" });
   });
 
   it("the folder's skill rides as `folder_skill`; a skill alone (no words) is a message", async () => {

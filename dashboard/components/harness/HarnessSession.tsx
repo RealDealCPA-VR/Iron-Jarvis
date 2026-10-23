@@ -417,6 +417,53 @@ export function HarnessSession({
   const [commandsNote, setCommandsNote] = useState("");
   // v1.379.0: "/usage" — what the session used, said in the conversation.
   const [usageNote, setUsageNote] = useState<string | null>(null);
+  // v1.379.0: the three lists "/" reads, read ONCE per session — and awaited
+  // by a send that starts with "/name" (a waiting message sent after a reload
+  // never opened the menu that reads them, and would go as plain text).
+  const listsPromise = useRef<Promise<{
+    yours: SkillOption[];
+    folder: SkillOption[];
+    custom: CustomCommand[];
+  }> | null>(null);
+  function ensureSlashLists() {
+    if (!listsPromise.current) {
+      const id = encodeURIComponent(threadId);
+      const noteOf = (r: unknown) => {
+        const note = r && typeof r === "object" ? (r as { note?: unknown }).note : "";
+        return typeof note === "string" ? note : "";
+      };
+      listsPromise.current = Promise.all([
+        get<unknown>("/skills")
+          .then((r) => decodeSkills(r, "yours"))
+          .catch(() => [] as SkillOption[])
+          .then((s) => {
+            setYourSkills(s);
+            return s;
+          }),
+        get<unknown>(`/build/sessions/${id}/skills`)
+          .then((r) => {
+            setFolderSkillNote(noteOf(r));
+            return decodeSkills(r, "folder");
+          })
+          .catch(() => [] as SkillOption[])
+          .then((s) => {
+            setFolderSkills(s);
+            return s;
+          }),
+        get<unknown>(`/build/sessions/${id}/commands`)
+          .then((r) => {
+            setCommandsNote(noteOf(r));
+            return decodeCommands(r);
+          })
+          .catch(() => [] as CustomCommand[])
+          .then((c) => {
+            setCustomCommands(c);
+            return c;
+          }),
+      ]).then(([yours, folder, custom]) => ({ yours, folder, custom }));
+    }
+    return listsPromise.current;
+  }
   const [rewindOpen, setRewindOpen] = useState(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -909,7 +956,8 @@ export function HarnessSession({
     // v1.379.0: a message that STARTS with "/name" runs that command or skill
     // (Claude Code's rule): the words after the name are its arguments. An
     // unknown "/word" is ordinary text (a path such as /etc/hosts too).
-    const typed = resolveTyped(raw, commands, folderSkills, yourSkills, customCommands);
+    const lists = leadingSlash(raw) ? await ensureSlashLists() : null;
+    const typed = lists ? resolveTyped(raw, commands, lists.folder, lists.yours, lists.custom) : null;
     if (busy && typed) {
       // Claude Code queues a command sent while it answers; the session's own
       // quick ones (the model menu, the rewind list, …) just open.
@@ -1401,30 +1449,7 @@ export function HarnessSession({
   // opens in this session (an older Iron Jarvis has no folder list and no
   // commands list: none, quietly).
   useEffect(() => {
-    if (!wantsLists) return;
-    if (yourSkills === null) {
-      get<unknown>("/skills")
-        .then((r) => setYourSkills(decodeSkills(r, "yours")))
-        .catch(() => setYourSkills([]));
-    }
-    if (folderSkills === null) {
-      get<unknown>(`/build/sessions/${encodeURIComponent(threadId)}/skills`)
-        .then((r) => {
-          setFolderSkills(decodeSkills(r, "folder"));
-          const note = r && typeof r === "object" ? (r as { note?: unknown }).note : "";
-          setFolderSkillNote(typeof note === "string" ? note : "");
-        })
-        .catch(() => setFolderSkills([]));
-    }
-    if (customCommands === null) {
-      get<unknown>(`/build/sessions/${encodeURIComponent(threadId)}/commands`)
-        .then((r) => {
-          setCustomCommands(decodeCommands(r));
-          const note = r && typeof r === "object" ? (r as { note?: unknown }).note : "";
-          setCommandsNote(typeof note === "string" ? note : "");
-        })
-        .catch(() => setCustomCommands([]));
-    }
+    if (wantsLists) void ensureSlashLists();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wantsLists]);
   const commands = useMemo(
