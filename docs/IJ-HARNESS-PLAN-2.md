@@ -657,6 +657,146 @@ only)"; the dev server saw only 127.0.0.1. Archiving left no browser process.
 **Done when.** Each has a screen or server test that fails on today's code,
 and one live walkthrough shows them working together.
 
+### Result (v1.377.0)
+
+**The agent's terminal finds your tools.** ONE switch, keyed on the session,
+never on a tool, a posture or a model's argument: `harness/command_env.py`
+(`is_build_call(session_id)`) answers yes for a `build:<id>` call and for a
+helper started by one (registered in `harness/helpers` under a `build:`
+parent); `shell` (the registered `SandboxedShellTool`, native runs only) and
+`process_start` then run with `sandbox/native.build_env()`; everything else
+(chat, agents, a non-Build agent run, schedules, goals, workflows, the phone,
+unattended doors) keeps `scrubbed_env()` exactly as before. `build_env` is the
+daemon's own environment (the desktop hands it the user's) minus, by NAME
+only (`secret_name`, case-insensitive; no value is ever read or printed):
+
+- names holding KEY, TOKEN, SECRET, PASSWORD, PASSWD, PASSPHRASE,
+  CREDENTIAL, SESSION, COOKIE, PRIVATE, ASKPASS, or AUTH (but never AUTHOR —
+  `GIT_AUTHOR_*` is the user's commit identity), or a `_`-part PAT / DSN;
+- whole families: ANTHROPIC_, OPENAI_, GEMINI_, GOOGLE_, AZURE_, AWS_, GH_,
+  GITHUB_, HF_ / HUGGING*_, IRONJARVIS_ (the install token), IRON_PROXY_,
+  PLAYWRIGHT_, CLAUDE_CODE_ / CLAUDE_AGENT_SDK_ and a parent Claude Code
+  session's markers, SENTRY*, PyInstaller's;
+- exact names: ELECTRON_RUN_AS_NODE, CHROME_CRASHPAD_PIPE_NAME, VIRTUAL_ENV,
+  UV_RUN_RECURSION_DEPTH, BAGGAGE; the git variables that point git at
+  another repository (what `git_env` drops); this app's own folders on PATH
+  (a dev daemon's virtual environment, a frozen daemon's bundle);
+- plus `GIT_TERMINAL_PROMPT=0` (no git waits on a password typed into a
+  terminal nobody sees).
+
+Kept: PATH (minus the app's own folders), HOME / USERPROFILE / HOMEDRIVE /
+HOMEPATH, APPDATA / LOCALAPPDATA, TEMP, the user's own git / npm / pip / nvm /
+pnpm settings. The model is told the truth: in a Build session the shell's
+description and the harness's runtime note say "Windows cmd.exe with the
+user's own PATH and home folder … Found on it: git, node, npm, …" (read off
+that PATH with `shutil.which`, off the loop, remembered 60 s; a Microsoft
+Store python alias does not count). Known cost of the families: AWS_PROFILE
+and other non-secret AWS_/GITHUB_/GOOGLE_ settings go too (their CLIs still
+read their own config files); SESSIONNAME is dropped by the SESSION word.
+Low trust still refuses a native shell; Local only still cards every command;
+the git guard still cards a bare `git push` once-only on a branch session.
+Terminal panes are untouched.
+
+**Next step.** `POST /build/sessions/{id}/followups` reuses the chat's
+follow-ups and its setting (`chat_followups`, off by default): at most two,
+asked of the session's own model (held, and pinned to its account), billed to
+the session, none while a reply runs, none for the demo model or a reply with
+no words. A press puts the words in the box; it never sends.
+
+**Branch from a message** (a reply or a question): `POST
+/build/sessions/{id}/branch` makes a NEW session in the same folder, titled
+"<title> (branch)", carrying the session's model, reasoning, account,
+approval setting, Local only and Browser address, in act mode, with no plan
+and no grants. From a reply the conversation up to it is copied; from a
+question the conversation before it is copied and the question goes in the
+new session's box. A session on its own git branch gives the new session its
+OWN new branch (never the same worktree) started from the same base: the
+base branch's tip, else the commit the first session started from. The old
+session is not changed. The new session says "Branched from …" (a button that
+opens the old one).
+
+**Search sessions** in the left pane, by title and folder name; Escape clears
+it first.
+
+**Keys** (`lib/harnessKeys.ts`): Ctrl+N New session, Esc stop, Ctrl+L the
+message box, Ctrl+K the model menu — INSIDE the IJ harness only (the focus is
+in the harness view, or nothing is focused and the last click was in it).
+Ctrl+K precedence: inside the harness it is the model menu, taken in the
+capture phase and stopped there so the app's command palette never sees it;
+anywhere else (the title bar's search, the sidebar, every other page) it is
+the palette, untouched. Esc stops only while a reply runs, and never when the
+Escape belongs to something else (a dialog, an open menu or list — read
+before anything handles the press — the question dock, another text field,
+an Escape a handler already took). Never during IME composition.
+
+**Loose ends.** Rewind puts back a message's pictures and `@` files with its
+words; past the box's limits (20 files, 4 read) it says how many were left
+out. (Its "/" skill does not go back yet: the daemon's preview names it, the
+box does not restore it.) Continuation turns (Resume when ready, Continue on another account)
+carry the Browser pane's address (stored with the session's setup, re-checked
+as local). A rewind over a committed turn says so: "Some of this work was
+committed: N commit(s) on <branch> (“subject”) came after this message.
+Rewinding puts the files back, but the commits stay on the branch, so the
+files show as changes that are not committed yet." Returning to a session
+mid-Compact shows "Summarizing earlier turns…" (`compacting` on the session
+view; re-read every 2 s until it ends). One sign-in rule for the model menu
+and the header chip: the daemon's — an account that is signed out stays
+pickable in both (the cached list can be stale; the turn shows the sign-in
+card), one turned off or missing is not, with the reason in words. "Ask
+first" now reads "Asks before it edits files, uses the internet, runs
+commands, or clicks or types in a browser." The chat's gauge never calls the
+safe size the model's limit when the window is not known (`window_known`).
+
+**The screenshot scan: decided NOT to OCR-scan screenshots.** Measured here
+(headless Edge on a local server, Windows OCR, the chat's `scan_context`):
+OCR 0.02–0.12 s and the scan ≤ 0.06 s, so cost is not the reason. Of six
+pages, the planted injection was flagged — and so were a chatbot admin page
+with a "System prompt" field and a docs page that QUOTES the phrase "ignore
+all previous instructions": false positives that would turn low trust on
+exactly the AI-app work this harness exists for. Faint text (#f2f2f2 on
+white) was not read by the OCR at all, so the scan misses the hidden case it
+was meant for. A page's TEXT already reaches the model fenced and scanned
+(`page_read`); a picture stays unscanned.
+
+Tests: 29 in `tests/test_build_env_v1377.py` and
+`tests/test_build_phase6_v1377.py`, 25 in
+`dashboard/__tests__/ij-harness-phase6-v1377.test.tsx`, an e2e step (the keys
+inside the harness only, the search, Branch from here). Each new behaviour
+was run on the v1.376.0 code first and was red there (21 of the 25 screen
+tests; the other 4 are pure-helper and control pins). Mutations: 30 of the
+daemon's side and 21 of the screen's, each red. Pins moved on purpose:
+`reads-follow-setting-v13600`, `ij-harness-model-accounts-v1376`,
+`ij-harness-rewind-library-v1370`, `test_harness_model_fold_v1376` and its
+fixture (signed-out accounts are pickable).
+
+Live (scratch daemon 8817, a throwaway Iron-Proxy folder, Iron-Proxy off,
+this PC's Claude Code login, a scratch git project): the agent ran
+`git status`, `node -v`, `npm test` and `python -m pytest` by name; its
+`git commit` carded once-only and, allowed, was authored with this PC's git
+identity (the project has none of its own); the names its commands received
+(names only) held none of the planted secret, the install token, Iron-Proxy's,
+Claude Code's markers or the venv's, and held PATH, USERPROFILE, HOMEDRIVE,
+HOMEPATH, APPDATA, LOCALAPPDATA, TEMP, PNPM_HOME and NVM_HOME. Branching the
+session from a reply gave a new session on its own branch from `main`;
+follow-ups came back from the session's model and were billed to it. On the
+screen (`next dev` 8818): the Next step buttons filled the box; Ctrl+K in the
+harness opened the model menu and from the title bar's search the palette;
+Ctrl+L focused the box; Esc stopped a running reply ("Cut off after 3.1 s");
+the search found sessions by folder and title; Branch from a question opened
+the new session with the question in its box and "Branched from …"; Rewind to
+here on the committed turn showed the commits sentence; 390 px, no sideways
+pan.
+
+Still open: a claude-cli session returned empty replies from the turn after
+it was asked to dump its environment (even "Say hello" came back empty; a
+fresh session answered) — seen live, not explained, not this change's code.
+Ctrl+N works in the desktop app (its menu has no Ctrl+N) and in the e2e; in an
+ordinary Chrome or Edge tab the browser keeps Ctrl+N for a new window and the
+page never sees it (the New session button is the way there). A rewound or
+branched question's "/" skill is not put back in the box. The branch
+name comes from the session title's first words. The account carried by a
+branch was not tried live with Iron-Proxy on.
+
 ## Phase 7 — Measure the feel (target v1.378.0)
 
 - Rerun the 30-task benchmark for all five setups (Claude Code, Codex, Jarvis
