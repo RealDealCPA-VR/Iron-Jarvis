@@ -174,3 +174,23 @@ async def test_the_picked_folder_skill_is_reset_for_the_caller(app, work):
     # ... while the turn itself still got its playbook.
     await until(lambda: any(m.get("role") == "assistant" for m in messages_of(app, sid)))
     assert "PICKED-RESET-MARK" in script.calls[0]["system"]
+
+
+async def test_a_listed_folder_skill_with_nothing_to_follow_is_not_called_missing(app, work):
+    """A SKILL.md that is only a header (its `description:` is the trigger
+    line) passes the layer's validator, so "/" lists it — and picking it said
+    "no such skill in this folder", which was false. It is refused for what
+    it is, before any model call."""
+    sd = work / ".ironjarvis" / "harness" / "skills" / "header-only"
+    sd.mkdir(parents=True)
+    (sd / "SKILL.md").write_text("---\ndescription: tidy the imports\n---\n", encoding="utf-8")
+    sid = new_session(app, work)["id"]
+    script = wire(app, Script(["never"]))
+    status, raw = await open_turn(app, sid, {"text": "go", "turn_id": "rv-hdr", "folder_skill": "header-only"})
+    assert status == 400, raw
+    assert "header-only" in raw and "nothing to follow" in raw
+    assert "no such skill" not in raw
+    assert script.calls == [] and messages_of(app, sid) == []
+    # The really missing one keeps its 404.
+    status, raw = await open_turn(app, sid, {"text": "go", "turn_id": "rv-none", "folder_skill": "nope"})
+    assert status == 404 and "no such skill in this folder: nope" in raw

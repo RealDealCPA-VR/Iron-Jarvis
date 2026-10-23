@@ -1101,12 +1101,20 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 known = set(platform.registry.names())
             except Exception:  # noqa: BLE001 — the validator then skips tool names
                 known = None
-            playbook = await asyncio.to_thread(
+            got = await asyncio.to_thread(
                 read_playbook, folder, folder_skill, known_tools=known,
                 event_bus=getattr(platform, "event_bus", None), session_id=S.session_id_for(thread_id),
-            ) or ""
-            if not playbook:
+            )
+            if got is None:
                 raise HTTPException(status_code=404, detail=f"no such skill in this folder: {folder_skill}")
+            if not got.strip():
+                # v1.373.0 review: listed by "/" (its header is the trigger
+                # line) but nothing to follow — not "no such skill".
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"The skill {folder_skill} has nothing to follow: its SKILL.md holds only a header.",
+                )
+            playbook = got
         setup = _setup_of(row)
         pin, account_provider = await asyncio.to_thread(turn_account, platform, thread_id, setup)
         from ...projects.locate import project_for_path

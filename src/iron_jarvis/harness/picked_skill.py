@@ -93,7 +93,9 @@ def read_playbook(
     """The playbook text of the folder skill ``name`` — its SKILL.md without
     the header, clipped to :data:`PLAYBOOK_CHARS` and scanned — or None when
     the folder's VALID layer has no skill by that name (or it cannot be read
-    now). BLOCKING. Never raises."""
+    now). ``""`` when the skill IS there but its SKILL.md is only a header
+    (v1.373.0 review: the validator lists it, so "no such skill" was false).
+    BLOCKING. Never raises."""
     from ..core.promptguard import guard
     from ..projects.folder_rules import _usable_folder
     from .components import HARNESS_PARTS, MAX_SKILL_CHARS, LayerInvalid, _frontmatter, _inside, _read_text
@@ -120,7 +122,7 @@ def read_playbook(
         _fields, body = _frontmatter(text)
         body = body.strip()[:PLAYBOOK_CHARS]
         if not body:
-            return None
+            return ""
         return guard(
             body, source=f"project harness skill {wanted}", event_bus=event_bus,
             session_id=session_id, cap=None,
