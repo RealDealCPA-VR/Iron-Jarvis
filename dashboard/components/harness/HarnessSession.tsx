@@ -857,8 +857,15 @@ export function HarnessSession({
   // The account decides the vendor (Phase 5): the session view says which.
   const vendor = vendorOf(view?.accountVendor);
   const currentAccount: BuildAccount | null = sessionAccount(view?.account, vendor, accounts ?? null);
-  // The list is the daemon's cached snapshot: read it again while it is open.
-  useVisibleInterval(() => void refreshAccounts(), ACCOUNTS_POLL_MS, accountsOpen);
+  // The list is the daemon's cached snapshot: read it again while it is open
+  // — the header chip's list, and (v1.376.0) the model menu, which lists the
+  // same accounts with their states. An Iron Jarvis with no list (a 404:
+  // `accounts` null) is not asked again.
+  useVisibleInterval(() => void refreshAccounts(), ACCOUNTS_POLL_MS, accountsOpen || (modelMenuOpen && accounts !== null));
+  useEffect(() => {
+    if (modelMenuOpen && accounts !== null) void refreshAccounts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelMenuOpen]);
 
   /** Read the session again after an account press and follow a turn the
    *  daemon is running for it (a wait that resumed at once). The press's own

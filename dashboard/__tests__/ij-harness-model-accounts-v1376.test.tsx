@@ -395,6 +395,35 @@ describe("the Iron-Proxy accounts in the Claude group", () => {
     expect(codex).toHaveTextContent("Codex Plus· PlusReady");
   });
 
+  it("opening the menu reads the account list again, so each state is the one now", async () => {
+    renderSession();
+    await screen.findByTestId("account-chip");
+    const reads = () => api.calls.filter((c) => c.method === "GET" && c.path === "/build/accounts").length;
+    await waitFor(() => expect(reads()).toBe(1));
+    // Personal reached its limit since the session opened.
+    api.gets["/build/accounts"] = {
+      claude: [WORK, { ...PERSONAL, status: "limit", usage: undefined, resets_at: RESET, limit_kind: "usage" }],
+      codex: [],
+      iron_proxy: PROXY_ON,
+    };
+    fireEvent.click(screen.getByTitle("Switch model"));
+    const row = await screen.findByTestId("model-account-personal");
+    await waitFor(() =>
+      expect(within(row).getByTestId("model-account-state").textContent).toBe(`Limit reached · ${resetWords(RESET)}`),
+    );
+    expect(reads()).toBeGreaterThanOrEqual(2); // read again on open (and every few seconds while open)
+  });
+
+  it("an Iron Jarvis with no account list (a 404) is not asked again when the menu opens", async () => {
+    api.gets["/build/accounts"] = new api.ApiError("no such route", 404);
+    api.gets["/build/sessions/s1"] = view({ setup: { provider: "claude-cli", model: "claude-opus-4-8" } });
+    renderSession();
+    const reads = () => api.calls.filter((c) => c.method === "GET" && c.path === "/build/accounts").length;
+    await waitFor(() => expect(reads()).toBe(1));
+    await openMenu("");
+    expect(reads()).toBe(1);
+  });
+
   it("a turned-off account is shown and cannot be picked; the session's own removed account stays listed and marked", async () => {
     api.gets["/build/accounts"] = { claude: [PERSONAL, SHUT], codex: [], iron_proxy: PROXY_ON };
     api.gets["/build/sessions/s1"] = onWork({ account: { id: "work", name: "Work", status: "missing" } });
