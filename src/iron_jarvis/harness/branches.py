@@ -15,7 +15,7 @@ The user's decisions (``docs/IJ-HARNESS-PLAN-2.md``, decisions 1–3, final):
    the compare link), **Merge into <base>** (a normal merge — never a force
    push, never a rewrite of the base branch, never a deleted branch) and
    **Discard** (the worktree folder MOVES to ``<home>/trash/<stamp>/``,
-   ``git worktree prune`` forgets it, and the BRANCH STAYS until the user
+   git forgets that worktree (only it), and the BRANCH STAYS until the user
    deletes it).
 
 THE FACTS (:func:`clean_git_record`) live on the session's setup under
@@ -103,6 +103,10 @@ DRIVE_ROOT = (
     "session's branch. Work in the folder directly."
 )
 BARE_REPO = "This is a bare repository with no files to work on. Work in the folder directly."
+SUBMODULE = (
+    "This folder is inside a git submodule, so a branch for it would sit inside the repository "
+    "that holds it. Work in the folder directly."
+)
 NO_BRANCH = "This session works in its folder directly; it has no branch of its own."
 GONE = "This session's worktree is gone (discarded or removed), so there is nothing to do here."
 DETACHED_BASE = (
@@ -310,7 +314,14 @@ def inspect_folder(folder: str) -> dict[str, Any]:
         out["has_commits"] = _g(["rev-parse", "--verify", "-q", "HEAD"], root, reads=True).ok
         main, bare = _main_checkout(root)
         out["worktrees_dir"] = worktrees_dir_for(main)
-        if bare and _norm(main) == root:
+        # Review (v1.375.0): a SUBMODULE's ``git worktree list`` names its git
+        # folder (``<super>/.git/modules/<name>``) as the main checkout, so
+        # its session worktrees landed INSIDE the superproject's .git, and a
+        # merge then ran in a git folder that has no files.
+        sup = _g(["rev-parse", "--show-superproject-working-tree"], root, reads=True)
+        if sup.ok and sup.out.strip():
+            out["note"] = SUBMODULE
+        elif bare and _norm(main) == root:
             out["note"] = BARE_REPO
         elif not out["has_commits"]:
             out["note"] = NO_COMMITS
@@ -514,6 +525,24 @@ def _live(facts: dict[str, str]) -> Path:
 def _ref_sha(cwd: Path, ref: str) -> str:
     got = _g(["rev-parse", "--verify", "-q", ref], cwd, reads=True)
     return got.out.strip() if got.ok else ""
+
+
+def _require_on_branch(facts: dict[str, str], wt: Path) -> None:
+    """Review (v1.375.0): every action reads the worktree's HEAD as the
+    session's branch. A ``git switch main`` (or a detached checkout) run in
+    the worktree moved it — and Commit then committed onto the USER'S
+    ``main``. Refused in words, nothing changed, until it is switched back."""
+    branch = facts.get("branch", "")
+    got = _g(["symbolic-ref", "-q", "HEAD"], wt, reads=True)
+    now = got.out.strip() if got.ok else ""
+    if now == f"refs/heads/{branch}":
+        return
+    where = (f"the branch {now[len('refs/heads/'):]}" if now.startswith("refs/heads/")
+             else "a single commit (detached)")
+    raise GitRefused(
+        f"This session's worktree is on {where} instead of its branch {branch}, so nothing was "
+        f"changed. Switch it back (git switch {branch}) and try again.", 409,
+    )
 
 
 def merge_base(facts: dict[str, str], wt: Path) -> str:
@@ -890,6 +919,7 @@ def commit(facts: dict[str, str], message: str) -> dict[str, Any]:
         raise GitRefused(EMPTY_MESSAGE, 400)
     if len(msg) > MAX_MESSAGE_CHARS:
         raise GitRefused(f"A commit message holds at most {MAX_MESSAGE_CHARS:,} characters.", 400)
+    _require_on_branch(facts, wt)
     added = _g(["add", "-A"], wt)
     if not added.ok:
         raise GitRefused("Git could not stage the changes.", 409, _masked(added.err or added.out))
@@ -962,6 +992,22 @@ def push(facts: dict[str, str]) -> dict[str, Any]:
 
 _GH_AUTH: dict[tuple[str, str], tuple[float, bool | None]] = {}
 
+#: What cmd.exe reads as syntax in an argument handed to a batch file.
+_BATCH_UNSAFE_RX = re.compile(r'["%!^&|<>\r\n]')
+GH_BATCH_UNSAFE = (
+    "The GitHub CLI on this PC runs through a batch file, which cannot be handed quotes or any "
+    "of % ! ^ & | < > safely. Take them out of the title, or install GitHub CLI's own gh.exe."
+)
+
+
+def _gh_batch_unsafe(exe: "str | None", args: list[str]) -> bool:
+    """True when ``exe`` is a batch file (Windows) and an argument holds
+    something cmd.exe would read as syntax."""
+    return bool(
+        exe and os.name == "nt" and exe.lower().endswith((".cmd", ".bat"))
+        and any(_BATCH_UNSAFE_RX.search(str(a)) for a in args)
+    )
+
 
 def gh_env() -> dict[str, str]:
     return git_env({
@@ -977,6 +1023,12 @@ def _gh(args: list[str], cwd: Path, *, timeout: float = GH_S) -> Any:
     exe = gh_path()
     if not exe:
         raise GitRefused("The GitHub CLI is not installed on this PC.", 409)
+    if _gh_batch_unsafe(exe, args):
+        # Review (v1.375.0): a gh that is a BATCH FILE runs through cmd.exe,
+        # which reads quotes, %, & and | in its arguments as commands — a
+        # pull request title `x" & del … & "` RAN them. A title that cannot
+        # be handed over safely is refused; nothing runs.
+        raise GitRefused(GH_BATCH_UNSAFE, 400)
     res = procs.run([exe, *args], cwd=cwd, timeout=timeout, env=gh_env())
     return GitRun(
         code=-1 if res.timed_out else res.returncode,
@@ -1036,6 +1088,7 @@ def create_pr(facts: dict[str, str], title: str, body: str) -> dict[str, Any]:
     if not title:
         raise GitRefused("Give the pull request a title first.", 400)
     body = str(body or "")[:MAX_BODY_CHARS]
+    _require_on_branch(facts, wt)
     st = status(facts)
     if st.get("ahead", 0) == 0:
         raise GitRefused(f"This branch has no commits that {base} does not have, so there is nothing "
@@ -1043,6 +1096,8 @@ def create_pr(facts: dict[str, str], title: str, body: str) -> dict[str, Any]:
     gh = gh_state(st.get("remote_host") or "github.com")
     if not gh["installed"] or not gh["signed_in"]:
         raise GitRefused(gh["note"], 409)
+    if _gh_batch_unsafe(gh_path(), [title, base, facts["branch"]]):
+        raise GitRefused(GH_BATCH_UNSAFE, 400)  # before the push, so nothing happens
     pushed: dict[str, Any] = {}
     if not st.get("pushed"):
         pushed = push(facts)
@@ -1154,6 +1209,7 @@ def merge(facts: dict[str, str]) -> dict[str, Any]:
     base_sha = _ref_sha(wt, f"refs/heads/{base}")
     if not base_sha:
         raise GitRefused(f"The branch {base} no longer exists, so there is nothing to merge into.", 409)
+    _require_on_branch(facts, wt)
     if _porcelain(wt):
         raise GitRefused(UNCOMMITTED_BEFORE_MERGE, 409)
     head = _ref_sha(wt, "HEAD")
@@ -1174,6 +1230,15 @@ def merge(facts: dict[str, str]) -> dict[str, Any]:
     tree = lines[0].strip()
     message = f"Merge branch '{branch}' into {base}"
     where = _worktree_of_branch(wt, base)
+    if where and not Path(where).is_dir():
+        # Review (v1.375.0): a checkout of the base on a drive that is not
+        # plugged in (or a folder that moved) used to crash the merge (a git
+        # call whose working folder does not exist).
+        raise GitRefused(
+            f"{base} is checked out at {where}, a folder that is not there right now (a drive that "
+            "is not plugged in, or a folder that moved), so nothing was merged. Bring it back, or "
+            "merge there with git.", 409,
+        )
     if where:
         place = Path(where)
         if _porcelain(place, untracked=False):
@@ -1191,6 +1256,12 @@ def merge(facts: dict[str, str]) -> dict[str, Any]:
                 if back else
                 f"The merge did not go through. Check your checkout of {base} at {where}."
             )
+            if back and "untracked working tree files would be overwritten" in (got.err or ""):
+                # Review (v1.375.0): git's own refusal, said in words.
+                words = (
+                    f"Your checkout of {base} at {where} has files that are not in git which the merge "
+                    "would overwrite, so nothing was merged. Move them away first (Details names them)."
+                )
             if got.timed_out:
                 words = _timed_out_words("The merge", START_S) + " " + words
             raise GitRefused(words, 409, _masked(got.err or got.out))
@@ -1202,6 +1273,25 @@ def merge(facts: dict[str, str]) -> dict[str, Any]:
         new = made.out.strip()
         if not made.ok or not new:
             raise GitRefused("Git could not make the merge commit.", 409, _masked(made.err))
+        # Review (v1.375.0): "checked out nowhere" is read off ``git worktree
+        # list``, which shows a checkout in the middle of a REBASE (or a
+        # bisect) of the base as "detached" — and moving the base under it
+        # broke the user's rebase at its end ("could not update
+        # refs/heads/main"). git's own guard knows: a dry-run fetch into the
+        # base is refused while any checkout uses it. Nothing is written.
+        guard = _g(["fetch", "--dry-run", "--no-tags", "--no-write-fetch-head",
+                    "--no-recurse-submodules", ".", f"{new}:refs/heads/{base}"], wt)
+        if not guard.ok:
+            if "refusing to fetch into branch" in (guard.err or ""):
+                raise GitRefused(
+                    f"{base} is in use in one of your checkouts (a rebase or a bisect may be under "
+                    "way), so nothing was merged. Finish that first, then merge again.", 409,
+                    _masked(guard.err),
+                )
+            raise GitRefused(
+                f"{base} changed while merging, so nothing was changed. Merge again.", 409,
+                _masked(guard.err or guard.out),
+            )
         moved = _g(["update-ref", "-m", message, f"refs/heads/{base}", new, base_sha], wt)
         if not moved.ok:
             raise GitRefused(
@@ -1261,20 +1351,51 @@ def _cross_device(exc: OSError) -> bool:
     return getattr(exc, "winerror", None) == 17 or exc.errno == errno.EXDEV
 
 
+IN_USE = (
+    "Some files in the worktree are in use (a program or a terminal may be open in it), so "
+    "nothing was moved. Close it and try again."
+)
+
+
+def _forget_worktree(main: str, wt: Path) -> None:
+    """Make git forget THIS worktree only, once its folder has moved away:
+    ``git worktree remove <path>`` (no ``--force``) drops just its record in
+    the repository — and refuses, deleting nothing, if a folder is back at
+    that path. Review (v1.375.0): ``git worktree prune`` forgot EVERY
+    worktree whose folder was missing right then, so a user's own worktree
+    on an unplugged drive lost its record (its index, its HEAD) and read
+    "not a git repository" once plugged back in. On a failure nothing else
+    is tried: git keeps listing ours as "prunable", which is harmless."""
+    if main and Path(main).is_dir() and not wt.exists():
+        _g(["worktree", "remove", str(wt)], main)
+
+
 def remove_worktree(home: Any, facts: dict[str, str]) -> dict[str, Any]:
     """DISCARD (and "remove the worktree" after a merge): the worktree folder
     MOVES to ``<home>/trash/<stamp>/worktree-<name>`` — never deleted — and
-    ``git worktree prune`` makes git forget it. THE BRANCH STAYS (its commits
-    are kept until the user deletes the branch themself). A folder in use (a
-    program or a terminal open in it) is refused in words with NOTHING moved.
-    Answers ``{moved, trash}``."""
+    git forgets that worktree (:func:`_forget_worktree`). THE BRANCH STAYS
+    (its commits are kept until the user deletes the branch themself). A
+    folder in use (a program or a terminal open in it) is refused in words
+    with NOTHING moved.
+
+    The trash on ANOTHER DRIVE (review, v1.375.0): a move across drives is a
+    copy and a delete, and the delete used to find a file in use only part
+    of the way through — leaving a half-deleted worktree (its ``.git`` file
+    gone first, so every later Discard and Delete refused it for good).
+    Now the folder is first RENAMED beside itself on its own drive (one
+    step, refused while a program holds a file in it, nothing moved), then
+    copied to the trash (a failed copy renames it back: nothing moved), and
+    only then is the renamed folder deleted; should a file there still be
+    held, the full copy is in the trash and the answer names the leftover
+    (``leftover``). Answers ``{moved, trash}``."""
     wt = Path(facts.get("worktree", ""))
     main = facts.get("main") or facts.get("repo") or ""
-    dest = ""
+    dest, leftover = "", ""
     if wt.exists():
         if not looks_like_worktree(facts):
             raise GitRefused(NOT_A_WORKTREE, 409)
-        trash = Path(home) / "trash" / _stamp()
+        stamp = _stamp()
+        trash = Path(home) / "trash" / stamp
         target = trash / f"worktree-{wt.name}"
         n = 2
         while target.exists():
@@ -1285,29 +1406,41 @@ def remove_worktree(home: Any, facts: dict[str, str]) -> dict[str, Any]:
             _rename_retrying(wt, target)
         except OSError as exc:
             if not _cross_device(exc):
-                raise GitRefused(
-                    "Some files in the worktree are in use (a program or a terminal may be open in "
-                    "it), so nothing was moved. Close it and try again.", 409, _masked(str(exc)),
-                ) from None
+                raise GitRefused(IN_USE, 409, _masked(str(exc))) from None
+            stage = wt.parent / f".{wt.name}.discarding-{stamp}"
+            n = 2
+            while stage.exists():
+                stage = wt.parent / f".{wt.name}.discarding-{stamp}-{n}"
+                n += 1
             try:
-                shutil.copytree(wt, target, symlinks=True)
+                _rename_retrying(wt, stage)
+            except OSError as exc1:
+                raise GitRefused(IN_USE, 409, _masked(str(exc1))) from None
+            try:
+                shutil.copytree(stage, target, symlinks=True)
             except OSError as exc2:
                 with contextlib.suppress(OSError):
                     shutil.rmtree(target)
+                try:
+                    os.rename(stage, wt)
+                except OSError:
+                    raise GitRefused(
+                        f"The worktree could not be copied to the trash, and it is now at {stage} "
+                        f"(rename it back to {wt.name}). Nothing in it was deleted.", 409,
+                        _masked(str(exc2)),
+                    ) from None
                 raise GitRefused("The worktree could not be copied to the trash, so nothing was moved.",
                                  409, _masked(str(exc2))) from None
             try:
-                shutil.rmtree(wt)
-            except OSError as exc3:
-                raise GitRefused(
-                    f"A copy of the worktree is in the trash ({target}), but some of its files could not "
-                    "be removed from where they were — a program may be using them.", 409,
-                    _masked(str(exc3)),
-                ) from None
+                shutil.rmtree(stage)
+            except OSError:
+                leftover = str(stage)
         dest = str(target)
-    if main and Path(main).is_dir():
-        _g(["worktree", "prune"], main)
-    return {"moved": bool(dest), "trash": dest}
+    _forget_worktree(main, wt)
+    out: dict[str, Any] = {"moved": bool(dest), "trash": dest}
+    if leftover:
+        out["leftover"] = leftover
+    return out
 
 
 __all__ = [

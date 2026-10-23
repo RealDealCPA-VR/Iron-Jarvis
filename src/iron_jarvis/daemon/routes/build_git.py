@@ -29,7 +29,7 @@ under ``details``:
 * ``POST …/git/merge`` — a normal merge into the base, refused in words with
   nothing changed when it cannot go through cleanly;
 * ``POST …/git/discard {confirm: true}`` — the worktree folder to the trash,
-  ``git worktree prune``, the branch kept, the session archived.
+  git forgets that worktree (only it), the branch kept, the session archived.
 
 A session that works in its folder directly answers 409 to each of these.
 Every action that changes something holds the session (no turn, rewind or
@@ -294,7 +294,7 @@ def register(app: FastAPI, d: Any) -> None:
     async def git_discard(thread_id: str, body: DiscardBody) -> Any:
         """DISCARD (or "remove the worktree" after a merge): the session's
         programs are stopped, the worktree folder MOVES to the trash and git
-        forgets it (``git worktree prune``); the BRANCH STAYS. The session is
+        forgets that worktree (only it); the BRANCH STAYS. The session is
         then archived. ``confirm`` must be true (the screen's two presses)."""
         if not body.confirm:
             return JSONResponse(status_code=400, content={"detail": CONFIRM_DISCARD})
@@ -315,6 +315,11 @@ def register(app: FastAPI, d: Any) -> None:
                 f"The worktree is in Iron Jarvis's trash and the branch {branch} is kept."
                 if done["moved"] else f"The worktree was already gone; the branch {branch} is kept."
             )
+            if done.get("leftover"):
+                done["note"] += (
+                    f" Some of its files were in use and stayed at {done['leftover']}; the full copy "
+                    "is in the trash, so that folder can be deleted once nothing uses it."
+                )
             return done
 
         return await _held(thread_id, run)
