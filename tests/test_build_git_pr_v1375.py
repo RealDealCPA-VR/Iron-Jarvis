@@ -13,19 +13,47 @@ compare link instead; the sign-in check is remembered (it is a network call).
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
+import pytest
+
+from iron_jarvis.daemon.app import create_app
 from iron_jarvis.harness import branches as B
 from iron_jarvis.onboarding.doctor import check_gh
-from tests.test_build_git_v1375 import (  # noqa: F401 — fixtures
-    _no_real_gh,
-    app,
-    fake_gh,
+from tests.test_build_git_v1375 import (
+    FakeGh,
     git,
+    install_fake_gh,
+    make_repo,
     new_branch_session,
-    repo,
+    no_real_gh,
 )
 from tests.test_build_sessions_v1367 import asgi, setup_of
+
+pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_gh(monkeypatch):
+    no_real_gh(monkeypatch)
+    yield
+    B.forget_gh_state()
+
+
+@pytest.fixture()
+def fake_gh(tmp_path, monkeypatch) -> FakeGh:
+    return install_fake_gh(tmp_path, monkeypatch)
+
+
+@pytest.fixture()
+def app(tmp_path):
+    return create_app(str(tmp_path / "home"))
+
+
+@pytest.fixture()
+def repo(tmp_path) -> Path:
+    return make_repo(tmp_path / "proj")
 
 
 def _github_remote(tmp_path: Path, repo: Path) -> Path:

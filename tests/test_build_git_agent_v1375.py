@@ -35,18 +35,37 @@ from iron_jarvis.harness import branches as B
 from iron_jarvis.harness import git_guard as G
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.providers.router import RouteResult
-from tests.test_build_git_v1375 import (  # noqa: F401 — fixtures
-    _no_real_gh,
-    app,
+from iron_jarvis.daemon.app import create_app
+from tests.test_build_git_v1375 import (
     git,
     make_remote,
+    make_repo,
     new_branch_session,
-    repo,
+    no_real_gh,
     turn,
 )
-from tests.test_build_sessions_v1367 import Script, asgi, turn_frames, turn_log, until, wire
+from tests.test_build_sessions_v1367 import Script, asgi, turn_frames, until, wire
 from tests.test_chat_turn_stop_v1241 import _asgi_post
 from tests.test_build_plan_ask_v1367 import _finish, _start
+
+pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_gh(monkeypatch):
+    no_real_gh(monkeypatch)
+    yield
+    B.forget_gh_state()
+
+
+@pytest.fixture()
+def app(tmp_path):
+    return create_app(str(tmp_path / "home"))
+
+
+@pytest.fixture()
+def repo(tmp_path) -> Path:
+    return make_repo(tmp_path / "proj")
 
 
 def _ledger(app, tool: str) -> list[ToolInvocation]:

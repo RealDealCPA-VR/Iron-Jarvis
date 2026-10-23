@@ -520,7 +520,9 @@ def merge_base(facts: dict[str, str], wt: Path) -> str:
     """The commit the branch's diff is measured from: where it meets its base
     branch now, else the commit it started from."""
     base = facts.get("base", "")
-    if base and _ref_sha(wt, f"refs/heads/{base}"):
+    if base:
+        # One call: a base branch that is gone fails here, and the commit the
+        # branch started from stands in.
         got = _g(["merge-base", f"refs/heads/{base}", "HEAD"], wt, reads=True)
         if got.ok and got.out.strip():
             return got.out.strip()
@@ -669,7 +671,6 @@ def status(facts: dict[str, str]) -> dict[str, Any]:
     host = (github_repo(url) or ("github.com", "", ""))[0]
     out["gh"] = gh_state(host) if github_repo(url) else {"installed": bool(gh_path()), "signed_in": None,
                                                          "note": "This remote is not on GitHub."}
-    out["identity"] = has_identity(wt, git_env())
     return out
 
 

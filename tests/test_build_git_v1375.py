@@ -188,23 +188,27 @@ class FakeGh:
         return json.loads(self.state.read_text(encoding="utf-8"))
 
 
-@pytest.fixture(autouse=True)
-def _no_real_gh(monkeypatch):
+def no_real_gh(monkeypatch) -> None:
     """NEVER the real GitHub CLI: every v1375 test runs with no ``gh`` on PATH
-    unless it installs the fake; the remembered sign-in is forgotten."""
+    unless it installs the fake; the remembered sign-in is forgotten. Each
+    v1375 file arms it in an autouse fixture."""
     monkeypatch.setenv("PATH", _path_without_gh())
     B.forget_gh_state()
-    yield
-    B.forget_gh_state()
 
 
-@pytest.fixture()
-def fake_gh(tmp_path, monkeypatch) -> FakeGh:
+def install_fake_gh(tmp_path: Path, monkeypatch) -> FakeGh:
     gh = FakeGh(tmp_path / "fakegh")
     monkeypatch.setenv("IJ_FAKE_GH_STATE", str(gh.state))
     monkeypatch.setenv("PATH", str(gh.folder) + os.pathsep + os.environ["PATH"])
     B.forget_gh_state()
     return gh
+
+
+@pytest.fixture(autouse=True)
+def _no_real_gh(monkeypatch):
+    no_real_gh(monkeypatch)
+    yield
+    B.forget_gh_state()
 
 
 @pytest.fixture()
