@@ -921,3 +921,79 @@ async def test_a_refusal_never_quotes_the_pages_own_words(tmp_path, monkeypatch)
         assert "ignore" not in res.error.lower()
     finally:
         inst.shutdown()
+
+
+@REAL
+@pytest.mark.timeout(120)
+async def test_real_edge_a_dead_driver_is_replaced_too():
+    """Item 5: the DRIVER (Playwright's node.exe) killed — Edge's context
+    never says it closed — is noticed by its process and replaced as well."""
+    import psutil
+
+    site = Site({"/": "<title>Shop</title>shop"})
+    b = _browsers()
+    key = "build:driver"
+    try:
+        await b.open(key, site.base, preview=site.base)
+        old = b.pids(key)
+        backend = b._sessions[key].backend
+        psutil.Process(backend._driver).kill()
+        await asyncio.sleep(1.0)
+        with pytest.raises(PB.BrowserProblem, match="had stopped"):
+            await b.read(key, preview=site.base)
+        again = await b.open(key, site.base, preview=site.base)
+        assert again.title == "Shop"
+        end = time.monotonic() + 15
+        left = [p for p in old if psutil.pid_exists(p) and p not in b.pids(key)]
+        while left and time.monotonic() < end:
+            await asyncio.sleep(0.2)
+            left = [p for p in left if psutil.pid_exists(p)]
+        assert left == []
+    finally:
+        b.shutdown()
+        site.close()
+
+
+# --------------------------------------------------------------------------- #
+# the address rules: every odd form a model (or a page) can write
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("url", [
+    "file:///C:/Windows/win.ini",
+    "about:settings",
+    "data:text/html,<h1>x</h1>",
+    "javascript:alert(1)",
+    "view-source:http://localhost:5173/",
+    "edge://settings",
+    "chrome://version",
+    "blob:http://localhost:5173/0b6f",
+    "http://[::]:5173/",
+    "http://0x7f.1:5173/",              # Chromium reads 127.0.0.1; judged by name: refused (safe side)
+    "http://evil%2ecom/",
+    "http://127.0.0.1.nip.io:5173/",    # a public NAME that resolves to this PC (DNS rebinding)
+    "http://localtest.me:5173/",
+    "http://localhost:5173@evil.example/",
+    "http://evil.example\\@localhost:5173/",
+    "https://example.com/",
+])
+def test_odd_addresses_are_refused(url):
+    """Item 2c (review): every scheme but http(s), an unspecified address, a
+    hex host, an encoded dot, a public name that resolves to this PC, user
+    info that hides the real host — refused, by the same predicate the route
+    guard applies to Chromium's own reading of each navigation."""
+    assert PB.judge(url, set(), "http://localhost:5173").kind == "refuse"
+    from iron_jarvis.harness.preview import local_address
+
+    assert local_address(PB.normalize(url)) == ""
+
+
+@pytest.mark.parametrize("url, kind", [
+    ("http://localhost.:5173/", "ask"),         # this PC, but another origin to a browser
+    ("http://2130706433:5173/", "ask"),         # 127.0.0.1 spelled as a number: local, not the pane's
+    ("http://0.0.0.0:5173/", "ok"),             # a dev server's "listening on every address"
+    ("http://LOCALHOST:5173/x", "ok"),
+    ("http://localhost:5174/", "ask"),          # the same host, another port: another app
+])
+def test_this_pcs_odd_spellings_are_judged_as_this_pc(url, kind):
+    assert PB.judge(url, set(), "http://localhost:5173").kind == kind
