@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.376.3 (2026-10-22).*
+holds itself to. Current as of v1.377.0 (2026-10-22).*
 
 ---
 
@@ -1896,6 +1896,50 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Your tools in the agent's terminal, and smaller touches (v1.377.0)
+
+**The agent's terminal finds your tools.** In a Build session in the IJ
+harness, the commands the agent runs see your normal PATH and home folder,
+so `git`, `node`, `npm`, `python` and the rest of your own tools work by
+name, the way they do in your own terminal, and a commit carries your own
+git name and e-mail. Secrets are still kept out: any variable whose name or
+value looks like a key, a token, a password or a sign-in (including a
+password inside an address — the address is kept without it) never reaches
+the agent's commands, and neither does anything of Iron Jarvis's own. Your
+account selectors (for example the cloud profile you work under) and your
+SSH agent are kept, so your tools act as the account you chose. Chat,
+agents, and scheduled or other unattended runs keep the plain, stripped-down
+environment they always had.
+
+On a session's own branch, the agent's commits and pushes still ask you
+every time, and so do your own git aliases that would commit or push — an
+alias that would force a push is refused like the push itself.
+
+**Smaller touches in the IJ harness:**
+
+- **Next step** — with suggested follow-ups switched on (the same setting as
+  in chat, off until you turn it on), up to two suggestions appear after a
+  reply; pressing one puts it in the box and never sends it.
+- **Branch from here** — on any message, starts a new session with the
+  conversation up to that message. In a session on its own branch, the new
+  session gets its own branch, starting from the code as it was at that
+  message (work not yet committed stays behind, and the header says so).
+- **Search sessions** in the left pane, by title or folder (Escape clears
+  the search).
+- **Keys** — Ctrl+N new session (in the desktop app; a browser tab keeps
+  Ctrl+N for a new window), Esc stops a reply that is running, Ctrl+L puts
+  the cursor in the box, Ctrl+K opens the model menu. Outside the IJ harness
+  Ctrl+K is still the search palette.
+- **Rewind to here** puts the message's pictures, `@` files and `/` skill
+  back in the box with its words, and says so when part of the work it takes
+  back was already committed (the commits stay on the branch).
+- Coming back to a session while it is compacting shows "Summarizing earlier
+  turns…".
+- An account that needs signing in again can be picked in both the model
+  menu and the account chip; the next reply then shows the sign-in card.
+- **Ask first** now says what it covers: "Asks before it edits files, uses
+  the internet, runs commands, or clicks or types in a browser."
 
 ## The agent's own browser, and accounts in the model menu (v1.376.0)
 

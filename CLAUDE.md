@@ -3569,6 +3569,87 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A Build session's commands see the user's PATH and home, never a
+  secret; the rest of the app stays scrubbed** (v1.377.0, IJ harness part 2
+  Phase 6 — the user's decision of 2026-10-23 after the Phase 4 review found
+  `git`/`node`/`npm`/`python` unusable from the agent's shell; doer + a
+  reviewer that found 7 real defects incl. two leaks, each red first and
+  mutation-checked). THE SWITCH: `harness/command_env.is_build_call(
+  session_id)` — ONLY a `build:<id>` call or a helper registered under a
+  `build:` parent; `command_env(modify_env, session_id)` gives `shell` (the
+  registered `SandboxedShellTool`, native runs) and `process_start`
+  `sandbox/native.build_env()`; EVERYTHING else (chat, agents, schedules,
+  goals, workflows, the phone, a chat's helper, a mission, `Build:`, "")
+  gets `scrubbed_env()` byte for byte (pinned). Low trust still refuses a
+  native shell; Local only still cards every command; terminal PANES are
+  untouched. `build_env()`: the daemon's environment MINUS (by NAME) secret
+  words (KEY, TOKEN, SECRET, PASSWORD/PASSWD/PASSPHRASE, PASS/PWD as a part —
+  never `PWD` itself —, CREDENTIAL, SESSION, COOKIE, PRIVATE, ASKPASS,
+  WEBHOOK, JWT, AUTH but never AUTHOR, PAT/DSN parts), vendor families
+  (ANTHROPIC_, OPENAI_, GEMINI_, GOOGLE_, AZURE_, AWS_, GH_, GITHUB_, HF_,
+  IRONJARVIS_, IRON_PROXY_, PLAYWRIGHT_, CLAUDE_CODE_, …), exact names
+  (ELECTRON_RUN_AS_NODE, VIRTUAL_ENV, PyInstaller's), a parent Claude Code
+  session's markers, git's repo redirects, and any value pointing into the
+  app's own install/venv; and (review) by VALUE: whatever
+  `detections.redact.mask` would change or a known credential shape drops
+  the variable, EXCEPT a URL's `user:password@`, which is removed and the
+  variable KEPT (a dropped `PIP_INDEX_URL` installs from the public index);
+  folder lists (PATH-like) are never value-judged (`sk-learn-env`). KEPT:
+  PATH, HOME/USERPROFILE/HOMEDRIVE/HOMEPATH/APPDATA/LOCALAPPDATA/TEMP, the
+  user's git/npm/pip/nvm/pnpm settings, `SSH_AUTH_SOCK`, `GCM_*`,
+  `KUBECONFIG`, cloud ACCOUNT SELECTORS (`AWS_PROFILE`, …) and key PATHS
+  (`GOOGLE_APPLICATION_CREDENTIALS`) — a dropped selector sends `aws`/
+  `gcloud` to the user's DEFAULT (often production) account. `GIT_CONFIG_
+  COUNT` + its `KEY_n`/`VALUE_n` pairs are judged as ONE unit (dropping
+  `GIT_CONFIG_KEY_0` for "KEY" made EVERY git command refuse to start — found
+  live). `GIT_TERMINAL_PROMPT=0` added. The model is told the truth:
+  `build_env_tools` (the tools really on that PATH; a Store python alias
+  does not count) → `build_env_description` in the shell description and the
+  runtime note (Build only). THE GIT GUARD (v1.375.0) now resolves the USER'S
+  OWN ALIASES (global, XDG, repo config, includes, `GIT_CONFIG_COUNT`,
+  alias-of-alias, `!` shell aliases) — `git pf` with `pf = push --force`
+  force-pushed uncarded; also closed `git -c alias.push=status push -f`.
+  PHASE 6 TOUCHES: Next step (`harness/followups.py`, the chat's
+  `chat_followups` setting, off by default; the session's pair under hold +
+  pin, billed, Local only respected; a press fills the box, never sends);
+  Branch from here (`lib/buildNext.ts` + the build routes: a new session
+  with the conversation up to the message; on a git session its OWN new
+  branch from the newest commit on the original branch at or before the last
+  line it holds, else where the original started — never the base's later
+  tip, never later turns' commits; uncommitted work is NOT carried and
+  `branched_from.code` + the header say so; model, reasoning, account,
+  approval, Local only and Browser address copied; act mode, no plan, no
+  grants); Search sessions; keys (`lib/harnessKeys.ts`: Ctrl+N new session —
+  the desktop app's `buildMenu` binds no Ctrl+N; a browser tab keeps it, so
+  the hint names it only in the desktop app —, Esc stops a running reply but
+  never a real popup's Escape (`aria-haspopup`/combobox/dialog/menu/listbox
+  — an open DISCLOSURE (`aria-expanded`) is not a popup; the review found Esc
+  dead once any fold was open), IME, another field, Ctrl+L, Ctrl+K = the
+  model menu inside the harness taken in CAPTURE so the palette never sees
+  it, the palette everywhere else); Rewind / a question branch put back
+  pictures, `@` files and the `/` skill (`skillSource` saved on questions);
+  rewinding committed work says the commits stay; "Summarizing…" on return
+  mid-Compact; ONE sign-in rule (signed-out PICKABLE in menu and chip — the
+  daemon's rule; off/missing blocked); "Ask first" = "Asks before it edits
+  files, uses the internet, runs commands, or clicks or types in a browser."
+  (`lib/permissionLevels`); the chat gauge's unknown-window words
+  (`lib/contextWords.ts`). SCREENSHOTS ARE NOT OCR-SCANNED (decided with
+  measurements: cheap, but flagged ordinary AI-app admin and docs pages —
+  false positives that would lower trust in exactly the harness's work —
+  and missed faint text; `page_read` text is already fenced and scanned).
+  FOUND, NOT FIXED HERE: Anthropic's safety classifier answers `stop_reason:
+  "refusal"` (`stop_details.category`, e.g. "cyber") with no content, and
+  Iron Jarvis turns it into an EMPTY reply + "Press Retry" — the classifier
+  judges the whole conversation, so every later message in that session is
+  refused (`claude_native/transport.assemble` treats it as handled since
+  v1.300.0; `adapters/anthropic._finish` maps it to "stop"); being fixed
+  next. KNOWN: commands can print a sign-in the user's own tools hold (`gh
+  auth token`, `git credential fill`); system-wide git aliases are not read;
+  a restored `@` file deleted since is refused at send with a sentence.
+  Pins: `tests/test_build_{env,env_review,phase6,phase6_review,git_aliases,
+  branch_point}_v1377.py`, `dashboard/__tests__/{ij-harness-phase6,
+  ij-harness-keys-review}-v1377.test.tsx`.
+
 - **A Build session's agent drives its OWN invisible Edge on local pages
   only; page text is untrusted; nothing outlives the session; and the
   harness model menu lists each company once, with the Iron-Proxy accounts
