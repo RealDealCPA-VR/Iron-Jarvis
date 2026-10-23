@@ -544,6 +544,92 @@ Not done here: the installed (NSIS) build was not made; no hand test of a
 page that opens a popup, a dialog-heavy page or a dev server on HTTPS; the
 throwaway folders a killed daemon leaves are swept only after 6 hours.
 
+**Review (before ship).** Each defect pinned red first and mutation-checked
+(`tests/test_build_browser_review_v1376.py`,
+`dashboard/__tests__/ij-harness-browser-review-v1376.test.tsx`):
+
+- *Typing through a label.* Playwright's fill() follows a `<label>` (or
+  anything inside one) to its control, while the refusal read the label's
+  facts: a css target naming the label of a password field typed the password
+  (real Edge). The facts are now those of the field fill() reaches.
+- *A page that asks before leaving* (unsaved changes) was answered "stay",
+  which cancelled the agent's own page_open with words about a download. The
+  agent's navigation now leaves it and says the page asked; confirm() and
+  prompt() are still answered Cancel ("the agent's browser never says yes for
+  you"), an alert is closed.
+- *Edge closed or crashed* (or its driver killed) left a session whose every
+  page_open raised a raw error until the idle close. The dead browser is
+  closed (job, folder) and the next page_open starts a fresh one, saying so.
+- *A process outside the job.* About two seconds in, Edge has an
+  `identity_helper.exe` that is NOT in the browser's job (Windows starts it in
+  a job of its own; a job allowing no breakaway does not keep it either). It
+  exits ~0.2 s after Edge, but the process list and the close missed it; the
+  doer's "every process is in the job" pin held only in the first two seconds.
+  The list is now the job's members and the driver's whole tree, and a close
+  ends both.
+- *No job, no browser.* When Windows will not put the driver in a job, Edge
+  is no longer launched (the job is what ends it when the daemon is killed).
+- *Playwright's own temp folder* (`playwright-artifacts-*`) was left in the
+  PC's temp folder by a crash or a killed daemon, forever. The driver and Edge
+  now get the browser's throwaway folder as their temp folder.
+- *A cancelled call that only waited its turn* (a helper's, behind another
+  helper's click) closed the session's browser under the click. Only a call
+  that was acting closes it now.
+- *A Stop during an action* closed the browser twice; the second close
+  returned before the first had ended a process (the doer's Stop pin saw a live
+  browser 1 run in 3). One close per browser; every caller waits for it.
+- *A refusal quoting the page.* A tool's failure reaches the model unfenced
+  (only its output is fenced), yet the refusal for a page the agent may not act
+  on quoted its address. It names none now. Proved through the real stream
+  lane: a planted "ignore all previous instructions" page is fenced and
+  withheld, the turn turns low trust, and the next click is refused.
+- *The pane* said a paired browser lets the session browse the web; a Build
+  session never uses it. A paired browser is named with what is true; nothing
+  is said when none is paired.
+
+Decisions:
+
+- **Where a page may send (Handbook words):** "The agent's browser opens,
+  reads and acts only on pages on this PC or your network. A page's own
+  requests (a script from a CDN, an image, its API calls, the next hop of a
+  redirect) go where the page sends them, as in any browser. In a Local only
+  session nothing the browser does reaches a public address: it runs behind a
+  proxy that refuses everything outside this PC and your network, so a script,
+  a request, a WebSocket or a redirect to the internet is stopped before it
+  leaves, and listed as stopped." Measured on the real Edge: outside Local only
+  the test page's CDN script, API call and beacon reached the public host;
+  under Local only none did, this PC still answered. A redirect's request is
+  therefore stopped at the network under Local only and, outside it, treated
+  like any other request a page makes (closing it there would mean fetching
+  every page from the driver instead of the browser).
+- **Clicks:** a click on a button that reads as deleting, sending or paying
+  (computer use's and the browser add-on's one vocabulary, read off the page,
+  never the model's words) asks once, every time, in every posture; the click
+  reads the button again and is made only if it still says what the card said.
+  ("Deploy" is not in that vocabulary; adding it would change computer use and
+  the add-on too.)
+- **"Ask first"** cards every click and typed entry in the agent's browser;
+  opening and reading the Browser's page do not ask. (The chip's words do not
+  yet mention it; they are pinned in the Handbook.)
+- **At most four** agent browsers at once; a fifth closes the least recently
+  used one that is not acting (its pane says so); when all four are acting,
+  the open is refused in words.
+- **The driver runs on the desktop app's own engine.** The packaged app no
+  longer ships Playwright's node.exe (88 MiB): Electron 42.5.0 is Node 24.17.0
+  and drives Edge exactly as node.exe did. Frozen (rebuilt here): 316,874,920
+  bytes (408,555,153 before the review); `page-browser-check` with
+  `IRONJARVIS_PLAYWRIGHT_NODE` set to Electron: ok, 9 processes, none left;
+  without it, it says the browser starts only inside the app. The release
+  check must set that variable to the installed `Iron Jarvis.exe`.
+
+Live (scratch daemon 8817, this PC's Claude Code login, a scratch site): the
+Claude session found the console error, fixed app.js, reloaded, confirmed
+"Cart: 1 item", and its click on "Delete item" carded once with the button's
+words; allowed, the page said "Item deleted". A Local only session on the
+user's own model (glm-5.3-flash) carded page_open and read the page's two
+requests to a public name as "stopped: not on this PC or your network (Local
+only)"; the dev server saw only 127.0.0.1. Archiving left no browser process.
+
 ## Phase 6 — Smaller touches and loose ends (target v1.377.0)
 
 - **Next step:** after a turn, up to two suggested follow-ups as buttons
