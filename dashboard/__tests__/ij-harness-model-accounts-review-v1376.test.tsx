@@ -81,7 +81,8 @@ vi.mock("@/components/terminal/FilesPanel", () => ({
 
 import { HarnessSession, ACCOUNTS_POLL_MS } from "@/components/harness/HarnessSession";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
-import { accountMenuState, decodeAccounts } from "@/lib/buildAccounts";
+import { AccountCard } from "@/components/harness/HarnessAccounts";
+import { accountMenuState, decodeAccount, decodeAccounts } from "@/lib/buildAccounts";
 
 /* ------------------------------------------------------------- fixtures */
 
@@ -332,6 +333,30 @@ describe("a window over its limit", () => {
     });
     expect(accountMenuState(near!.groups.claude[0]).text).toBe("Near its limit · 99% used · 5 hours");
   });
+});
+
+/* ------------------------------- the card and the menu share one 90% */
+
+describe("the account card's warning bar and the menu's 'Near its limit' turn at the same percent", () => {
+  // AccountCard's bar used a literal 90 and now reads NEAR_LIMIT_PERCENT;
+  // nothing pinned the card's boundary, so moving the shared number would
+  // have changed the card silently. 89% is the accent and plain words; 90%
+  // is the warning tone in both.
+  for (const [pct, warn] of [[89, false], [90, true]] as const) {
+    it(`${pct}%`, () => {
+      const a = decodeAccount(
+        acct({ id: "u", name: "Usage", status: "usage", usage: { percent: pct, window: "5 hours", window_mins: 300, resets_at: null } }),
+      )!;
+      render(<AccountCard account={a} current={false} />);
+      const bar = screen.getByRole("meter").firstElementChild as HTMLElement;
+      expect(bar.className.includes("bg-tone-warn"), "card bar").toBe(warn);
+      expect(bar.className.includes("bg-accent"), "card bar").toBe(!warn);
+      const s = accountMenuState(a);
+      expect(s.kind).toBe(warn ? "near" : "usage");
+      expect(s.text).toBe(warn ? `Near its limit · ${pct}% used · 5 hours` : `${pct}% used · 5 hours`);
+      expect(s.warn).toBe(warn);
+    });
+  }
 });
 
 /* ------------------------------------------------- 5. Escape and focus */
