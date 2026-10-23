@@ -28,6 +28,11 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  *     each one without sending; an "@" pick is a chip in the box;
  *  9. on the demo model, a folder skill picked with "/" and a file picked
  *     with "@" ride a real turn: the question the daemon saves names both.
+ * 10. (v1.376.0) the model menu with Iron-Proxy accounts (stubbed): one
+ *     group per company, one entry per account, a signed-out one not
+ *     pickable; at 390 px (a sheet) and at 1280 px it stays in the window,
+ *     and a pick under another account sends the account and the model in
+ *     one request — both chips then name it.
  */
 
 const DAEMON = "http://127.0.0.1:8807";
@@ -316,6 +321,145 @@ test("a faked account limit shows the card; Resume when ready waits, survives a 
   expect(calls).toEqual(["turn", "POST", "DELETE", "POST", "rejoin"]);
 });
 
+// v1.376.0: the model menu groups by company and lists the Iron-Proxy
+// accounts — STUBBED in the browser (GET /models, GET /build/accounts and
+// the session's account fields, the PATCH), in the daemon's own shapes,
+// so nothing about the scratch daemon's real session changes. At 390 px
+// and at 1280 px the chip names the account inside the box (Send stays in
+// it), the menu and an account's model panel stay inside the window (on a
+// phone the menu is a sheet and the panel opens under its row; on a desktop
+// beside the menu), and a pick under another account is ONE request
+// carrying the account and the model.
+async function modelMenuAccounts(page: Page, phone: boolean) {
+  const acct = (over: Record<string, unknown>) => ({
+    vendor: "claude", vendor_label: "Claude Code", provider: "claude-cli", default: false, plan: null, plan_label: "", ...over,
+  });
+  const WORK = acct({ id: "work", name: "Work", default: true, plan: "max", plan_label: "Max", status: "ready" });
+  const PERSONAL = acct({
+    id: "personal", name: "Personal", plan: "pro", plan_label: "Pro", status: "usage",
+    usage: { percent: 38, window: "7 days", window_mins: 10080, resets_at: "2030-01-01T16:12:00Z" },
+  });
+  const SIDE = acct({ id: "side", name: "Side", plan: "pro", plan_label: "Pro", status: "needs_sign_in" });
+  const models = [
+    { provider: "claude-cli", model: "subscription", available: true, kind: "cli", inherited_from: null },
+    { provider: "claude-cli", model: "claude-opus-4-8", label: "Opus 4.8", available: true, kind: "cli", inherited_from: null },
+    { provider: "claude-cli", model: "claude-sonnet-4-6", label: "Sonnet 4.6", available: true, kind: "cli", inherited_from: null },
+    { provider: "anthropic", model: "claude-opus-4-8", label: "Opus 4.8", available: true, kind: "api", inherited_from: "claude-cli" },
+    { provider: "codex-cli", model: "gpt-5.5", available: true, kind: "cli", inherited_from: null },
+    { provider: "openai", model: "gpt-5.5", available: true, kind: "api", inherited_from: null },
+    { provider: "mock", model: "mock-1", available: true, kind: "local", on_this_network: true },
+  ];
+  let on: { account: Record<string, unknown>; model: string } = { account: WORK, model: "claude-opus-4-8" };
+  const patched: unknown[] = [];
+  await page.route(`${DAEMON}/models`, (route) => stub(route, () => ({ body: JSON.stringify({ models }) })));
+  await page.route(`${DAEMON}/build/accounts`, (route) =>
+    stub(route, () => ({
+      body: JSON.stringify({
+        claude: [WORK, PERSONAL, SIDE],
+        codex: [],
+        iron_proxy: { enabled: true, running: true, needs_update: false, note: "" },
+      }),
+    })),
+  );
+  await page.route(`${DAEMON}/build/sessions/${sessionId}`, async (route) => {
+    if (route.request().method() === "OPTIONS") return stub(route, () => ({ body: "" }));
+    if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON() as { account?: string; model?: string };
+      patched.push(body);
+      if (body.account === "personal") on = { account: PERSONAL, model: body.model ?? "" };
+    }
+    const real = await route.fetch({ url: `${DAEMON}/build/sessions/${sessionId}`, method: "GET" });
+    const view = (await real.json()) as Record<string, unknown>;
+    return stub(route, () => ({
+      body: JSON.stringify({
+        ...view,
+        setup: {
+          ...((view.setup as Record<string, unknown>) ?? {}),
+          provider: "claude-cli",
+          model: on.model,
+          account: on.account.id,
+          account_name: on.account.name,
+        },
+        account: on.account,
+        account_vendor: "claude",
+        account_limit: null,
+        account_wait: null,
+      }),
+    }));
+  });
+  await page.goto(`/terminals?session=${sessionId}`);
+  await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+  const chip = page.getByTitle("Switch model");
+  await expect(chip).toHaveText("Opus 4.8 · Work", { timeout: 30_000 });
+  const inBox = async () =>
+    page.evaluate(() => {
+      const r = (el: Element | null) => (el ? el.getBoundingClientRect() : null);
+      const card = r(document.querySelector('[data-testid="harness-composer"]'));
+      const send = r(document.querySelector('[data-testid="harness-send"]'));
+      const chipEl = r(document.querySelector('[title="Switch model"]'));
+      return card && send && chipEl
+        ? { card: [card.left, card.right], send: [send.left, send.right], chip: [chipEl.left, chipEl.right] }
+        : null;
+    });
+  const box = await inBox();
+  expect(box).not.toBeNull();
+  // The chip and Send are both inside the composer card.
+  expect(box!.send[0]).toBeGreaterThanOrEqual(box!.card[0]);
+  expect(box!.send[1]).toBeLessThanOrEqual(box!.card[1] + 0.5);
+  expect(box!.chip[0]).toBeGreaterThanOrEqual(box!.card[0]);
+  expect(box!.chip[1]).toBeLessThanOrEqual(box!.card[1] + 0.5);
+
+  await chip.click();
+  const menu = page.getByTestId("model-menu");
+  await expect(menu.getByTestId("model-account-personal")).toBeVisible({ timeout: 20_000 });
+  await expect(menu.locator('[data-company="claude"]')).toContainText("Claude (Anthropic)");
+  await expect(menu.getByTestId("model-account-side")).toBeDisabled();
+  await expect(menu.getByTestId("model-account-work")).toHaveAttribute("data-current", "true");
+  await menu.getByTestId("model-account-personal").click();
+  const panel = page.getByTestId("model-sub");
+  await expect(panel).toBeVisible();
+  const fit = await page.evaluate(() => {
+    const r = (id: string) => document.querySelector(`[data-testid="${id}"]`)?.getBoundingClientRect() ?? null;
+    const m = r("model-menu");
+    const p = r("model-sub");
+    return m && p
+      ? {
+          w: window.innerWidth,
+          pan: document.documentElement.scrollWidth - window.innerWidth,
+          menu: { left: m.left, right: m.right, top: m.top },
+          panel: { left: p.left, right: p.right, top: p.top, height: p.height },
+        }
+      : null;
+  });
+  expect(fit).not.toBeNull();
+  expect(fit!.menu.left).toBeGreaterThanOrEqual(0);
+  expect(fit!.menu.right).toBeLessThanOrEqual(fit!.w);
+  expect(fit!.menu.top).toBeGreaterThanOrEqual(0);
+  expect(fit!.panel.left).toBeGreaterThanOrEqual(0);
+  expect(fit!.panel.right).toBeLessThanOrEqual(fit!.w);
+  expect(fit!.panel.height).toBeGreaterThan(40);
+  expect(fit!.pan).toBeLessThanOrEqual(0);
+  if (phone) {
+    // A sheet: the panel opens UNDER its row, inside the menu.
+    expect(fit!.panel.left).toBeGreaterThanOrEqual(fit!.menu.left);
+    expect(fit!.panel.right).toBeLessThanOrEqual(fit!.menu.right + 0.5);
+  } else {
+    // Beside the menu, on its left, as the chat's (its edge sits on the
+    // menu's 1 px border: 4 px from the row, which is 5 px inside).
+    expect(fit!.panel.left).toBeLessThan(fit!.menu.left);
+    expect(fit!.panel.right).toBeLessThanOrEqual(fit!.menu.left + 2);
+  }
+  if (process.env.IJ_E2E_SHOTS) {
+    await page.screenshot({ path: join(process.env.IJ_E2E_SHOTS, `ij-harness-${phone ? "phone" : "desktop"}-model-accounts.png`) });
+  }
+  await panel.getByText("Sonnet 4.6").click();
+  await expect(chip).toHaveText("Sonnet 4.6 · Personal", { timeout: 20_000 });
+  await expect(page.getByTestId("account-chip-name")).toHaveText("Personal");
+  expect(patched).toEqual([{ account: "personal", model: "claude-sonnet-4-6" }]);
+  const after = await inBox();
+  expect(after!.send[1]).toBeLessThanOrEqual(after!.card[1] + 0.5);
+}
+
 test.describe("390 px — Build never pans sideways", () => {
   test.use({ viewport: { width: 390, height: 844 } });
   test("the IJ harness view fits the width", async ({ page }) => {
@@ -406,6 +550,10 @@ test.describe("390 px — Build never pans sideways", () => {
     await page.getByRole("button", { name: "Remove notes-for-at.md" }).click();
     await expect(page.getByTestId("harness-at-chip")).toHaveCount(0);
   });
+  test("the model menu lists the accounts, fits, and switches account and model in one press", async ({ page }) => {
+    test.skip(!sessionId, "needs the session from the first test");
+    await modelMenuAccounts(page, true);
+  });
   test("the Terminals view fits the width", async ({ page }) => {
     await page.goto("/terminals");
     await expect(page.getByTestId("build-view-terminals")).toBeVisible({ timeout: 90_000 });
@@ -413,6 +561,14 @@ test.describe("390 px — Build never pans sideways", () => {
     await page.waitForTimeout(800);
     const pan = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(pan).toBeLessThanOrEqual(0);
+  });
+});
+
+test.describe("1280 px — the model menu with accounts", () => {
+  test.use({ viewport: { width: 1280, height: 900 } });
+  test("the accounts list in the menu, the panel opens beside it, and a pick switches both", async ({ page }) => {
+    test.skip(!sessionId, "needs the session from the first test");
+    await modelMenuAccounts(page, false);
   });
 });
 

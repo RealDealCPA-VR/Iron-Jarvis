@@ -323,6 +323,19 @@ function AccountState({ state }: { state: MenuAccount["state"] }) {
   );
 }
 
+/** The menu, above the chip. */
+const MODEL_MENU =
+  "absolute bottom-full right-0 z-20 mb-1.5 w-60 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40";
+/** v1.376.0 (IJ harness): below `sm` the menu is a sheet along the window's
+ *  bottom edge that scrolls inside — with a company's ways and accounts (and
+ *  a model panel opened under its row) it is taller than the room above the
+ *  chip, and it ran past the window's top at 390 px (measured in a real
+ *  browser, e2e/ij-harness.spec.ts). */
+const MODEL_MENU_PHONE_SHEET =
+  "max-sm:fixed max-sm:inset-x-2 max-sm:bottom-2 max-sm:mb-0 max-sm:w-auto max-sm:max-h-[70dvh] max-sm:overflow-y-auto";
+/** The sheet's width: below it, the harness menu is a sheet. */
+const PHONE_QUERY = "(max-width: 639.98px)";
+
 /** A provider's model panel: beside its row. */
 const MODEL_PANEL =
   "absolute right-full z-30 mr-1 w-56 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40";
@@ -406,6 +419,15 @@ export function ModelMenu({
     [companies, filter],
   );
   const companyRecent = useMemo(() => (companies ? companies.recent(recent) : []), [companies, recent]);
+  // v1.376.0: on a phone the harness menu is a sheet that scrolls, and a
+  // model panel opens under its row: bring the panel into view.
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!companies || !sub || typeof window === "undefined") return;
+    if (!window.matchMedia?.(PHONE_QUERY)?.matches) return;
+    const panel = menuRef.current?.querySelector<HTMLElement>('[data-testid="model-sub"]');
+    panel?.scrollIntoView?.({ block: "nearest" });
+  }, [companies, sub]);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -650,8 +672,9 @@ export function ModelMenu({
       </button>
       {open && (
         <div
+          ref={menuRef}
           data-testid="model-menu"
-          className="absolute bottom-full right-0 z-20 mb-1.5 w-60 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
+          className={companies ? `${MODEL_MENU} ${MODEL_MENU_PHONE_SHEET}` : MODEL_MENU}
         >
           {/* v1.332.0: the one line a "local only" chat adds here. */}
           {localOnlyLine && (

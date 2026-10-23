@@ -598,9 +598,15 @@ describe("the model chip names the account", () => {
     expect(row.contains(chip)).toBe(true);
     expect(row.contains(screen.getByTestId("harness-send"))).toBe(true);
     expect(row.className.split(/\s+/)).toEqual(expect.arrayContaining(["flex-wrap", "max-w-full", "min-w-0"]));
-    // On a phone an account's models open UNDER it, inside the menu (beside
-    // it, the window has no room on the left of a menu that sits by Send).
+    // On a phone the menu is a sheet along the window's bottom that scrolls
+    // (with the accounts it is taller than the room above the chip: at
+    // 390 px it ran past the window's top), and an account's models open
+    // UNDER it, inside the sheet (beside it, there is no room on the left).
     fireEvent.click(chip);
+    const menu = await screen.findByTestId("model-menu");
+    expect(menu.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["max-sm:fixed", "max-sm:inset-x-2", "max-sm:bottom-2", "max-sm:max-h-[70dvh]", "max-sm:overflow-y-auto"]),
+    );
     fireEvent.click(await screen.findByTestId("model-account-personal"));
     const panel = await screen.findByTestId("model-sub");
     expect(panel.className.split(/\s+/)).toEqual(
