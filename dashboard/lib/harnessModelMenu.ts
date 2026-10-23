@@ -197,12 +197,15 @@ export function companyMenu(
 ): CompanyMenu {
   // ---- fold a keyless API into the CLI that serves it
   const cliModels = new Map<string, Set<string>>();
+  /** The CLI's own first row: what the daemon says the CLI offers. */
+  const cliFirst = new Map<string, ModelOption>();
   for (const m of models) {
     const co = COMPANY_OF[m.provider];
     if (co && m.provider === co.cli) {
       const set = cliModels.get(co.cli) ?? new Set<string>();
       set.add(m.model);
       cliModels.set(co.cli, set);
+      if (!cliFirst.has(co.cli)) cliFirst.set(co.cli, m);
     }
   }
   const alias: Record<string, string> = {};
@@ -217,7 +220,22 @@ export function companyMenu(
     const value = `${co.cli}::${m.model}`;
     alias[`${m.provider}::${m.model}`] = value;
     if (cliModels.get(co.cli)?.has(m.model)) continue; // the same model: once, under the CLI
-    listed.push({ ...m, provider: co.cli, inherited_from: null, kind: "cli" });
+    // Review: a folded row RUNS on the CLI, and the daemon applies a
+    // reasoning level by the SERVING adapter (providers/router
+    // `_applied_reasoning`: claude-cli and codex-cli take every level for
+    // every model). So its levels are the CLI's own — read off the CLI's
+    // rows — never the API table's (a keyless OpenAI's gpt-4o says none; the
+    // first cut also lost the chip for every folded pick: the composer looked
+    // the pick up in the unfolded catalog, where claude-cli never lists it).
+    const own = cliFirst.get(co.cli);
+    listed.push({
+      ...m,
+      provider: co.cli,
+      inherited_from: null,
+      kind: "cli",
+      reasoning: own?.reasoning ?? m.reasoning,
+      reasoning_default: own?.reasoning_default ?? "",
+    });
   }
 
   // ---- the accounts of each CLI way

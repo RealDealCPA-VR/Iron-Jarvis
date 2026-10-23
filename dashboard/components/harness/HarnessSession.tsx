@@ -46,7 +46,7 @@ import { asPermissionMode } from "@/lib/permissionLevels";
 import { phaseLabel } from "@/lib/stepWords";
 import { collectDockAsks, dockAskKeyHint } from "@/lib/dockAsk";
 import { answerElicitation, decideSampling } from "@/lib/mcpInteract";
-import { machineName, modelGroupName, providerDisplay, providerHeading } from "@/lib/onboarding";
+import { isProviderDefaultModel, machineName, modelGroupName, providerDisplay, providerHeading } from "@/lib/onboarding";
 import { reasoningDefaultOf } from "@/lib/reasoningChip";
 import type { ModelOption } from "@/lib/types";
 import { Markdown, MemoMarkdown } from "@/components/Markdown";
@@ -1259,14 +1259,38 @@ export function HarnessSession({
   const offerCompact = offersCompact(reading?.context ?? null, beforeSummary);
   const lastReply = [...shown].reverse().find((m) => m.role === "assistant");
   const choice = view?.setup.provider && view?.setup.model ? `${view.setup.provider}::${view.setup.model}` : "";
-  const levels = reasoningLevelsOf(reasoningRowFor(choice, catalog.models, defaultProvider, defaultModel));
-  const reasoningDef = reasoningDefaultOf(reasoningRowFor(choice, catalog.models, defaultProvider, defaultModel));
   // v1.376.0: the chip names the session's ACCOUNT after the model ("Opus 4.8
   // · Work"). A session on a provider with no model of its own (an account
   // chosen from another vendor leaves the model to the vendor) runs that
   // provider's own default — routes/build sends model "" — so the chip says
   // that ("Your Claude plan"), never the app's default model.
   const ownDefault = view?.setup.provider && !view.setup.model ? view.setup.provider : "";
+  // Review: the MENU and the reasoning chip read the same pick the chip
+  // names. A provider's own default is its plan row ("subscription": the
+  // CLI's default, exactly what a turn with model "" runs); a provider with no
+  // such row marks nothing — never "default model", the APP's default, which
+  // this session does not run on.
+  const ownDefaultRow = ownDefault
+    ? catalog.models.find((m) => m.provider === ownDefault && isProviderDefaultModel(m.model))
+    : undefined;
+  const sessionChoice = ownDefault ? `${ownDefault}::${ownDefaultRow?.model ?? ""}` : choice;
+  // v1.376.0: one group per company, and the Iron-Proxy accounts in it
+  // (lib/harnessModelMenu); the chat's menu never gets this.
+  const companies = useMemo(
+    () => companyMenu(catalog.models, accounts, sessionAccount(view?.account, vendor, accounts ?? null), sessionChoice),
+    [catalog.models, accounts, view?.account, vendor, sessionChoice],
+  );
+  // Review: the reasoning row is looked up in the FOLDED list, by the pick as
+  // that list spells it. A keyless Anthropic's model picked under Claude Code
+  // is stored as claude-cli::<id>, which GET /models never lists under
+  // claude-cli: the chip used to vanish for it. The unfolded catalog answers
+  // what the folded list no longer spells (the app's default on a keyless
+  // Anthropic, say).
+  const reasoningRow =
+    reasoningRowFor(companies.choice, companies.models, defaultProvider, defaultModel) ??
+    reasoningRowFor(sessionChoice, catalog.models, defaultProvider, defaultModel);
+  const levels = reasoningLevelsOf(reasoningRow);
+  const reasoningDef = reasoningDefaultOf(reasoningRow);
   const modelPart = ownDefault
     ? {
         // A provider no words table knows (a fleet node) by its group's name:
@@ -1279,12 +1303,6 @@ export function HarnessSession({
       }
     : modelTriggerOf(choice, catalog.models, defaultProvider, defaultModel);
   const trigger = currentAccount ? { ...modelPart, account: currentAccount.name } : modelPart;
-  // v1.376.0: one group per company, and the Iron-Proxy accounts in it
-  // (lib/harnessModelMenu); the chat's menu never gets this.
-  const companies = useMemo(
-    () => companyMenu(catalog.models, accounts, sessionAccount(view?.account, vendor, accounts ?? null), choice),
-    [catalog.models, accounts, view?.account, vendor, choice],
-  );
   const place = !vendor && !currentAccount ? placeWords(provider, model, catalog.models) : "";
   // v1.371.0: a picture alone is a message; one still going up is waited for.
   // v1.373.0: so is a file picked with "@".
