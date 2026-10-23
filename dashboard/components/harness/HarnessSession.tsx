@@ -1601,13 +1601,6 @@ export function HarnessSession({
                 <span className="truncate">{branchedFromWords(view.branchedFrom)}</span>
               </button>
             ) : null}
-            {view.branchedFrom?.code ? (
-              // v1.377.0 review: where its CODE started (the committed work
-              // its conversation describes), and what was not carried.
-              <p data-testid="harness-branched-code" className="text-[12px] text-zinc-500">
-                {branchedCodeWords(view.branchedFrom)}
-              </p>
-            ) : null}
           </div>
           {accounts && (vendor || currentAccount) ? (
             <AccountChip
@@ -1690,6 +1683,15 @@ export function HarnessSession({
               </div>
             ) : null}
           </div>
+          {view.branchedFrom?.code ? (
+            // v1.377.0 review: where its CODE started (the committed work its
+            // conversation describes), and what was not carried — a row of
+            // its own across the header (the left column is narrow on a
+            // phone, beside the account chip).
+            <p data-testid="harness-branched-code" className="basis-full text-[12px] text-zinc-500">
+              {branchedCodeWords(view.branchedFrom)}
+            </p>
+          ) : null}
         </header>
 
         <div
