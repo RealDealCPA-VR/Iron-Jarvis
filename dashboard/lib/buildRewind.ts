@@ -99,28 +99,37 @@ export interface RewindPoint {
   turnId: string;
   question: string;
   at: string;
-  /** Files the turn from this message on changed, and commands it ran. */
+  /** What going back to before this message undoes: the file changes (one
+   *  per write or edit the ledger kept — a file edited twice counts twice)
+   *  and the commands of this message's turn AND every later one. */
   files: number;
   commands: number;
 }
 
+const count = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+
 /** The checkpoints answer, NEWEST first, without the daemon's own
  *  "carry on" questions (they are not shown in the conversation either).
- *  An answer that is not one reads as none. */
+ *  An answer that is not one reads as none.
+ *
+ *  v1.373.0 review: the daemon counts each turn on its own; a rewind to an
+ *  earlier message undoes every later turn too (the "carry on" ones
+ *  included), so each point carries the sum from it to the newest — the
+ *  list used to say "2 files changed from here on" over five changes. */
 export function decodeRewindPoints(raw: unknown): RewindPoint[] {
+  const all = list(rec(raw).checkpoints).map(rec);
   const out: RewindPoint[] = [];
-  for (const p of list(rec(raw).checkpoints).map(rec)) {
+  let files = 0;
+  let commands = 0;
+  for (let i = all.length - 1; i >= 0; i -= 1) {
+    const p = all[i];
+    files += count(p.files);
+    commands += count(p.commands);
     const turnId = str(p.turn_id);
     if (!turnId || p.continuation === true) continue;
-    out.push({
-      turnId,
-      question: str(p.question),
-      at: str(p.at),
-      files: typeof p.files === "number" && p.files > 0 ? p.files : 0,
-      commands: typeof p.commands === "number" && p.commands > 0 ? p.commands : 0,
-    });
+    out.push({ turnId, question: str(p.question), at: str(p.at), files, commands });
   }
-  return out.reverse();
+  return out;
 }
 
 /** v1.373.0 (part 2, Phase 2): the messages a session can be rewound to —

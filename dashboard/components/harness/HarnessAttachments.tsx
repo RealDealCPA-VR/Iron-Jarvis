@@ -100,7 +100,22 @@ export function pastedFiles(data: DataTransfer | null): File[] {
   return out;
 }
 
-export function useHarnessAttachments() {
+/** v1.373.0 review: how many files one message's turn READS (uploads and
+ *  the "@" files together — lib/buildComposer READ_PER_MESSAGE, the daemon's
+ *  `chat_turn._MAX_ATTACHMENTS`). The box used to take up to MAX_FILES
+ *  pictures while the turn read four and dropped the rest without a word. */
+export interface ReadLimit {
+  /** Files one message may carry in all. */
+  max: number;
+  /** How many of them the message already carries besides its uploads. */
+  others: () => number;
+  /** What the box says when one more would not be read. */
+  words: string;
+}
+
+export function useHarnessAttachments(limit?: ReadLimit) {
+  const limitRef = useRef(limit);
+  limitRef.current = limit;
   const [files, setFiles] = useState<HarnessFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -113,6 +128,9 @@ export function useHarnessAttachments() {
    *  while another was still going up used to clear `busyRef` when the FIRST
    *  settled, so a held send went without the second (v1.371.0 review). */
   const inFlight = useRef(0);
+  /** Files picked and still going up (v1.373.0 review): they hold a place
+   *  against the read limit, so two quick picks cannot overfill a message. */
+  const pendingRef = useRef(0);
   /** The ONE send waiting for the uploads (v1.371.0 review): Enter pressed
    *  twice while a picture went up queued two sends, and both fired — the
    *  second read the box before React cleared it and posted the same
@@ -133,7 +151,11 @@ export function useHarnessAttachments() {
 
   const add = useCallback(async (picked: File[], opts: { pasted?: boolean } = {}) => {
     setProblem(null);
-    const room = MAX_FILES - filesRef.current.length;
+    const lim = limitRef.current;
+    // Uploads still going up hold a place too (two picks in a row).
+    const held = filesRef.current.length + pendingRef.current;
+    const readRoom = lim ? lim.max - lim.others() - held : Infinity;
+    const room = Math.min(MAX_FILES - held, readRoom);
     const accepted: File[] = [];
     for (const f of picked) {
       if (f.size > MAX_FILE_BYTES) {
@@ -141,13 +163,14 @@ export function useHarnessAttachments() {
         continue;
       }
       if (accepted.length >= room) {
-        setProblem(`Up to ${MAX_FILES} files per message.`);
+        setProblem(lim && accepted.length >= readRoom ? lim.words : `Up to ${MAX_FILES} files per message.`);
         break;
       }
       accepted.push(f);
     }
     if (accepted.length === 0) return;
     inFlight.current += 1;
+    pendingRef.current += accepted.length;
     busyRef.current = true;
     setUploading(true);
     const got: (HarnessFile | undefined)[] = new Array(accepted.length);
@@ -175,7 +198,12 @@ export function useHarnessAttachments() {
     try {
       await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, accepted.length) }, worker));
       const ok = got.filter((g): g is HarnessFile => !!g);
-      if (ok.length) setFiles((prev) => [...prev, ...ok].slice(0, MAX_FILES));
+      if (ok.length) {
+        // The ref at once too: the read limit counts it before the next
+        // render (the place it held as `pending` is given back below).
+        filesRef.current = [...filesRef.current, ...ok].slice(0, MAX_FILES);
+        setFiles((prev) => [...prev, ...ok].slice(0, MAX_FILES));
+      }
       if (failed.length) {
         setProblem(
           failed.length === 1
@@ -185,6 +213,7 @@ export function useHarnessAttachments() {
       }
     } finally {
       inFlight.current -= 1;
+      pendingRef.current -= accepted.length;
       if (inFlight.current === 0) {
         busyRef.current = false;
         setUploading(false);
@@ -210,10 +239,11 @@ export function useHarnessAttachments() {
   }, []);
 
   /** v1.373.0: put a message's files back (it never started, or it came off
-   *  the waiting list) — unless the box already holds files of its own. */
+   *  the waiting list) BESIDE any the box holds now — v1.373.0 review: a box
+   *  that already held files used to keep them and drop these. */
   const restore = useCallback((back: HarnessFile[]) => {
     if (!back.length) return;
-    setFiles((prev) => (prev.length ? prev : back.slice(0, MAX_FILES)));
+    setFiles((prev) => [...prev, ...back.filter((b) => !prev.some((f) => f.path === b.path))].slice(0, MAX_FILES));
   }, []);
 
   /** Call ``fn`` once the uploads in flight have settled (at once when none).
@@ -224,7 +254,11 @@ export function useHarnessAttachments() {
     else fn();
   }, []);
 
-  return { files, filesRef, uploading, busyRef, problem, add, remove, clear, restore, whenSettled };
+  /** Files this message carries from the box's uploads, those still going
+   *  up included (the "@" picks are counted against the same limit). */
+  const held = useCallback(() => filesRef.current.length + pendingRef.current, []);
+
+  return { files, filesRef, uploading, busyRef, problem, add, remove, clear, restore, whenSettled, held };
 }
 
 /** The paperclip: opens the file picker. */

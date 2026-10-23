@@ -117,8 +117,15 @@ test("Rewind to here: the file goes back, the message returns to the box, the de
   await page.goto(`/terminals?session=${sessionId}`);
   await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
   const box = page.getByTestId("harness-input");
+  // Wait for THIS turn's reply (v1.373.0 review): the first test's reply also
+  // says "saved RESULT.md", so waiting on the last reply's words passed at
+  // once, and the count read before the new reply landed (1, not 2). The
+  // first test's reply is on screen before the count is read.
+  await expect(page.getByTestId("harness-reply").first()).toBeVisible({ timeout: 30_000 });
+  const before = await page.getByTestId("harness-reply").count();
   await box.fill("Write it once more");
   await box.press("Enter");
+  await expect(page.getByTestId("harness-reply")).toHaveCount(before + 1, { timeout: 90_000 });
   await expect(page.getByTestId("harness-reply").last()).toContainText("saved RESULT.md", { timeout: 90_000 });
   await expect.poll(() => existsSync(join(work, "RESULT.md")), { timeout: 20_000 }).toBe(true);
   const replies = await page.getByTestId("harness-reply").count();

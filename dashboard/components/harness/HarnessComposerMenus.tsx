@@ -7,9 +7,10 @@
  *
  * The rules live in `lib/buildComposer` (pure, tested on their own); the key
  * handling lives with the box in HarnessSession. These are drawn INSIDE the
- * composer card and ABOVE it (`useAtMenuFit` with `aboveOnly`: as tall as
+ * composer card and ABOVE it (`useAtMenuFit` with `preferAbove`: as tall as
  * the room above the card allows, never over the box and never past the top
- * of the window), the width of the card — so a phone-width window never pans.
+ * of the window; below the card only when not even a row fits above — v1.373.0
+ * review), the width of the card — so a phone-width window never pans.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -20,12 +21,16 @@ import type { AtFile, CommandId, PickedSkill, SlashRow } from "@/lib/buildCompos
 import { RewindControl } from "@/components/harness/RewindControl";
 
 const PANEL =
-  "absolute bottom-full left-0 right-0 z-20 mb-2 max-h-[min(28rem,60vh)] overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40";
+  "absolute left-0 right-0 z-20 max-h-[min(28rem,60vh)] overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40";
+/** Above the card (the usual side), or below it when not even a row fits
+ *  above (lib/chatRefsMenuFit `preferAbove`) — never over the box. */
+const SIDE = { above: "bottom-full mb-2", below: "top-full mt-2" } as const;
 
 const ROW =
   "flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-accent/[0.12] hover:text-accent-soft";
 
-/** A panel above the box (its parent, the composer card). */
+/** A panel above the box (its parent, the composer card) — below it only
+ *  when not even a row fits above. */
 function AboveBox({
   testId,
   fitKey,
@@ -36,14 +41,15 @@ function AboveBox({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
-  const fit = useAtMenuFit(ref, true, fitKey, { aboveOnly: true });
+  const fit = useAtMenuFit(ref, true, fitKey, { preferAbove: true });
+  const side = fit?.side ?? "above";
   return (
     <div
       ref={ref}
       data-testid={testId}
-      data-side="above"
+      data-side={side}
       style={fit ? { maxHeight: fit.maxHeight } : undefined}
-      className={PANEL}
+      className={`${PANEL} ${SIDE[side]}`}
     >
       {children}
     </div>
@@ -65,6 +71,7 @@ const keepFocus = (e: React.MouseEvent) => e.preventDefault();
 
 /** The "/" menu: the session's commands, then the folder's skills, then yours. */
 export function SlashMenu({
+  listId,
   rows,
   active,
   loading,
@@ -72,6 +79,8 @@ export function SlashMenu({
   onPick,
   onHover,
 }: {
+  /** The listbox's id; row i is `${listId}-row-${i}` (the box points at it). */
+  listId: string;
   rows: SlashRow[];
   active: number;
   /** A skill list is still on its way. */
@@ -83,7 +92,7 @@ export function SlashMenu({
 }) {
   return (
     <AboveBox testId="harness-slash-menu" fitKey={`${rows.length}|${loading}|${note}`}>
-      <div role="listbox" aria-label="Commands and skills" className="p-1">
+      <div id={listId} role="listbox" aria-label="Commands and skills" className="p-1">
         <Hint>Commands and skills. ↑↓ and Enter, or keep typing</Hint>
         {rows.map((row, i) => {
           const on = i === active;
@@ -93,6 +102,7 @@ export function SlashMenu({
             return (
               <button
                 key={row.key}
+                id={`${listId}-row-${i}`}
                 type="button"
                 role="option"
                 aria-selected={on}
@@ -116,6 +126,7 @@ export function SlashMenu({
           return (
             <button
               key={row.key}
+              id={`${listId}-row-${i}`}
               type="button"
               role="option"
               aria-selected={on}
@@ -161,6 +172,7 @@ function whereOf(rel: string): string {
 
 /** The "@" menu: files in this session's folder. */
 export function AtMenu({
+  listId,
   rows,
   more,
   active,
@@ -169,6 +181,8 @@ export function AtMenu({
   onPick,
   onHover,
 }: {
+  /** The listbox's id; row i is `${listId}-row-${i}` (the box points at it). */
+  listId: string;
   rows: AtFile[];
   more: number;
   active: number;
@@ -179,7 +193,7 @@ export function AtMenu({
 }) {
   return (
     <AboveBox testId="harness-at-menu" fitKey={`${rows.length}|${more}|${loading}|${failed}`}>
-      <div role="listbox" aria-label="Files in this folder" className="p-1">
+      <div id={listId} role="listbox" aria-label="Files in this folder" className="p-1">
         <Hint>Files in this folder. The file is read with your message</Hint>
         {rows.map((f, i) => {
           const on = i === active;
@@ -187,6 +201,7 @@ export function AtMenu({
           return (
             <button
               key={f.path}
+              id={`${listId}-row-${i}`}
               type="button"
               role="option"
               aria-selected={on}
@@ -307,11 +322,13 @@ export function SentPicks({ files, skill }: { files?: readonly string[]; skill?:
   );
 }
 
+/** What going back to before this message undoes (its turn and every later
+ *  one — lib/buildRewind sums them). Each write or edit is one change. */
 function pointWords(p: RewindPoint): string {
   const parts: string[] = [];
-  if (p.files) parts.push(p.files === 1 ? "1 file changed" : `${p.files} files changed`);
+  if (p.files) parts.push(p.files === 1 ? "1 file change" : `${p.files} file changes`);
   if (p.commands) parts.push(p.commands === 1 ? "1 command" : `${p.commands} commands`);
-  return parts.length ? `${parts.join(", ")} from here on` : "No file changed from here on";
+  return parts.length ? `${parts.join(", ")} from here on` : "No file changes from here on";
 }
 
 /** "/rewind": the session's messages, newest first, each with the existing

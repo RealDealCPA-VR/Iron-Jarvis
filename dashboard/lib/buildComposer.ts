@@ -230,3 +230,21 @@ export function queuedWords(item: QueuedItem): string {
   if (item.skill) parts.push(`skill ${item.skill.name}`);
   return parts.join(" · ");
 }
+
+/** A message that never started goes back in the box BEFORE what the box
+ *  holds now (it was written first), never instead of it (v1.373.0 review:
+ *  a waiting message refused at send lost its words when the next message
+ *  was already being typed). The same words twice are kept once. */
+export function withMessageRestored(box: string, text: string): string {
+  const back = text.trim();
+  const cur = box.trim();
+  if (!back || back === cur) return box;
+  if (!cur) return text;
+  return `${back}\n\n${cur}`;
+}
+
+/** The "@" files of a message that never started, beside those the box holds
+ *  now: each once, the box's first. */
+export function withFilesRestored(box: readonly AtFile[], back: readonly AtFile[]): AtFile[] {
+  return [...box, ...back.filter((b) => !box.some((f) => f.path === b.path))];
+}

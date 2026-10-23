@@ -16,7 +16,7 @@
  *  - Escape closes either list without sending and keeps the words;
  *  - a message queued with Ctrl+Enter keeps its own skill and files, and a
  *    message that never started gets them back in the box;
- *  - the lists are drawn above the box (lib/chatRefsMenuFit, aboveOnly).
+ *  - the lists are drawn above the box (lib/chatRefsMenuFit, preferAbove).
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -362,7 +362,9 @@ describe("the session's commands call what the box already has", () => {
     // Newest first; the daemon's own "carry on" question is not listed.
     expect(points[0]).toHaveTextContent("Make it blue");
     expect(points[1]).toHaveTextContent("Add a cart");
-    expect(points[1]).toHaveTextContent("2 files changed, 1 command from here on");
+    // (v1.373.0 review: "file changes" — one per write or edit — counted
+    // from this message to the newest.)
+    expect(points[1]).toHaveTextContent("2 file changes, 1 command from here on");
     // The existing two-press rewind: the first press only says what goes back.
     fireEvent.click(within(points[1]).getByTestId("rewind-start"));
     expect(await within(list).findByTestId("rewind-confirm", {}, NET)).toHaveTextContent(
@@ -628,19 +630,19 @@ describe("the lists are drawn above the box", () => {
     expect(at.className).toContain("bottom-full");
   });
 
-  it("aboveOnly keeps a menu above the box and inside the window, even with little room", () => {
+  it("preferAbove keeps a menu above the box and inside the window while a row fits there", () => {
     // A phone (390 x 844): the box near the bottom — the menu takes the cap.
-    const roomy = fitAtMenu({ cardTop: 640, cardBottom: 760, clipTop: 0, clipBottom: 844, viewportHeight: 844, aboveOnly: true });
+    const roomy = fitAtMenu({ cardTop: 640, cardBottom: 760, clipTop: 0, clipBottom: 844, viewportHeight: 844, preferAbove: true });
     expect(roomy).toEqual({ side: "above", maxHeight: 448 });
     expect(640 - 8 - roomy!.maxHeight).toBeGreaterThanOrEqual(0);
-    // The box scrolled near the top: never below the box (over the panes),
-    // never past the window's top edge, even under the usual 96 px floor.
-    const tight = fitAtMenu({ cardTop: 70, cardBottom: 190, clipTop: 0, clipBottom: 844, viewportHeight: 844, aboveOnly: true });
-    expect(tight!.side).toBe("above");
-    expect(70 - 8 - tight!.maxHeight).toBeGreaterThanOrEqual(0);
-    // Without it (the chat's menu) the same box opens below: the rule the
-    // harness opts out of.
-    expect(fitAtMenu({ cardTop: 70, cardBottom: 190, clipTop: 0, clipBottom: 844, viewportHeight: 844 })!.side).toBe("below");
+    // Room for a few rows above but more below: still above (the chat's
+    // menu would go to the bigger side), never past the window's top edge.
+    const some = fitAtMenu({ cardTop: 200, cardBottom: 320, clipTop: 0, clipBottom: 844, viewportHeight: 844, preferAbove: true });
+    expect(some!.side).toBe("above");
+    expect(200 - 8 - some!.maxHeight).toBeGreaterThanOrEqual(0);
+    expect(fitAtMenu({ cardTop: 200, cardBottom: 320, clipTop: 0, clipBottom: 844, viewportHeight: 844 })!.side).toBe("below");
+    // (v1.373.0 review: with no room above for even a row, it opens below
+    // the card — ij-harness-slash-at-review-v1373.)
   });
 });
 
@@ -696,7 +698,7 @@ describe("the rules on their own", () => {
           { turn_id: "c", question: "two", at: "y", files: 0, commands: 3 },
         ],
       }).map((p) => [p.turnId, p.files, p.commands]),
-    ).toEqual([["c", 0, 3], ["a", 1, 0]]);
+    ).toEqual([["c", 0, 3], ["a", 1, 3]]); // (v1.373.0 review: summed from each point to the newest)
     expect(decodeRewindPoints({})).toEqual([]);
   });
 });

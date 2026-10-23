@@ -20,7 +20,7 @@
  * back in the composer, even when the turn ended while nobody watched it.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
   CircleAlert,
@@ -105,6 +105,8 @@ import {
   sessionCommands,
   skillFields,
   slashRows,
+  withFilesRestored,
+  withMessageRestored,
   type AtFile,
   type PickedSkill,
   type QueuedItem,
@@ -264,8 +266,6 @@ export function HarnessSession({
   // again after one, like after a reply.
   const [rewinds, setRewinds] = useState(0);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
-  // v1.371.0: pictures and files for the next message (HarnessAttachments).
-  const att = useHarnessAttachments();
   // v1.373.0 (part 2, Phase 2): "/" and "@" in the box. The caret and the
   // two Escapes are what the chat's token menus read (lib/composerMenus);
   // a pick leaves a chip: a skill for the next message, files of the folder.
@@ -273,12 +273,23 @@ export function HarnessSession({
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [atDismissed, setAtDismissed] = useState(false);
   const [menuActive, setMenuActive] = useState(0);
+  // v1.373.0 review: the box names the open list and its highlighted row
+  // (aria-controls / aria-activedescendant) — a screen reader heard nothing.
+  const menuIdBase = useId();
   const [skill, setSkill] = useState<PickedSkill | null>(null);
   const skillRef = useRef<PickedSkill | null>(null);
   skillRef.current = skill;
   const [atFiles, setAtFiles] = useState<AtFile[]>([]);
   const atFilesRef = useRef<AtFile[]>([]);
   atFilesRef.current = atFiles;
+  // v1.371.0: pictures and files for the next message (HarnessAttachments).
+  // v1.373.0 review: no more files in all than one turn reads — the uploads
+  // AND the "@" picks (the box used to take 20 pictures; the turn read 4).
+  const att = useHarnessAttachments({
+    max: READ_PER_MESSAGE,
+    others: () => atFilesRef.current.length,
+    words: READ_LIMIT_WORDS,
+  });
   const [yourSkills, setYourSkills] = useState<SkillOption[] | null>(null);
   const [folderSkills, setFolderSkills] = useState<SkillOption[] | null>(null);
   const [folderSkillNote, setFolderSkillNote] = useState("");
@@ -460,21 +471,29 @@ export function HarnessSession({
     [load, onChanged, threadId, refreshAccounts],
   );
 
-  /** A message that never started goes back in the box: its words (unless
-   *  the box holds words already) and what rode it — uploads, "@" files and
-   *  the "/" skill (each unless the box holds its own). Nothing is lost. */
+  /** A message that never started goes back in the box: its words and what
+   *  rode it — uploads, "@" files and the "/" skill. v1.373.0 review: BESIDE
+   *  what the box holds now (a waiting message refused at send used to lose
+   *  its words to the next message being typed, and hand that message its
+   *  files). One skill per message: when the box already holds another, that
+   *  one stays and the line says which did not go back. */
   const restoreUploads = att.restore;
   const restoreToBox = useCallback(
     (text: string, extras?: TurnExtras) => {
-      if (text) setInput((cur) => (cur.trim() ? cur : text));
+      if (text) setInput((cur) => withMessageRestored(cur, text));
       if (!extras) return;
       if (extras.skill) {
         const back = extras.skill;
-        setSkill((cur) => cur ?? back);
+        const cur = skillRef.current;
+        if (!cur) setSkill(back);
+        else if (cur.name !== back.name || cur.source !== back.source) {
+          const note = `The skill ${back.name} did not go back in the box: it already holds ${cur.name}.`;
+          setError((e) => (e ? `${e} ${note}` : note));
+        }
       }
       if (extras.files.length) {
         const back = extras.files;
-        setAtFiles((cur) => (cur.length ? cur : back));
+        setAtFiles((cur) => withFilesRestored(cur, back));
       }
       if (extras.attachments.length) restoreUploads(extras.attachments);
     },
@@ -967,6 +986,15 @@ export function HarnessSession({
   const atList = atToken
     ? atFileRows(folderFiles.listing, atToken.query, atFiles.map((f) => f.path))
     : { rows: [] as AtFile[], more: 0 };
+  // The open list, its highlighted row, and their ids for the box's aria.
+  const menuRowCount = slashToken ? slashList.length : atToken ? atList.rows.length : 0;
+  const activeRow = Math.min(menuActive, Math.max(menuRowCount - 1, 0));
+  const listId = slashToken ? `${menuIdBase}-slash` : atToken ? `${menuIdBase}-at` : undefined;
+  const activeRowId = listId && menuRowCount > 0 ? `${listId}-row-${activeRow}` : undefined;
+  // A list still being read (v1.373.0 review: Enter waits for it).
+  const slashLoading = yourSkills === null || folderSkills === null;
+  const atLoading = folderFiles.listing === null && !folderFiles.failed;
+  const menuLoading = slashToken ? slashLoading : atToken ? atLoading : false;
   // The highlighted row goes back to the top as the typed word changes.
   const menuWord = slashToken ? `/${slashToken.query}` : atToken ? `@${atToken.query}` : "";
   useEffect(() => {
@@ -1013,7 +1041,7 @@ export function HarnessSession({
     if (atFilesRef.current.some((x) => x.path === f.path)) return;
     // A file picked by name must be READ: one turn reads READ_PER_MESSAGE
     // files, uploads included, and the daemon refuses a message past it.
-    if (att.filesRef.current.length + atFilesRef.current.length >= READ_PER_MESSAGE) {
+    if (att.held() + atFilesRef.current.length >= READ_PER_MESSAGE) {
       setError(READ_LIMIT_WORDS);
       return;
     }
@@ -1032,7 +1060,18 @@ export function HarnessSession({
         return true;
       }
       const n = slashToken ? slashList.length : atList.rows.length;
-      if (n === 0) return false; // nothing to pick: Enter sends the words
+      if (n === 0) {
+        // v1.373.0 review: a list still being read has nothing to pick YET —
+        // Enter used to send the half-typed "@notes" as the message, with no
+        // file. It waits instead; once the list is read, nothing to pick
+        // means Enter sends the words (the chat's rule).
+        const plainEnter = e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey;
+        if (menuLoading && (plainEnter || (e.key === "Tab" && !e.shiftKey))) {
+          e.preventDefault();
+          return true;
+        }
+        return false;
+      }
       const cur = Math.min(menuActive, n - 1);
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -1477,19 +1516,21 @@ export function HarnessSession({
             {/* v1.373.0: "/" and "@" — above the box, never over it. */}
             {slashToken ? (
               <SlashMenu
+                listId={listId ?? ""}
                 rows={slashList}
-                active={Math.min(menuActive, Math.max(slashList.length - 1, 0))}
-                loading={yourSkills === null || folderSkills === null}
+                active={activeRow}
+                loading={slashLoading}
                 note={folderSkillNote}
                 onPick={pickSlash}
                 onHover={setMenuActive}
               />
             ) : atToken ? (
               <AtMenu
+                listId={listId ?? ""}
                 rows={atList.rows}
                 more={atList.more}
-                active={Math.min(menuActive, Math.max(atList.rows.length - 1, 0))}
-                loading={folderFiles.listing === null && !folderFiles.failed}
+                active={activeRow}
+                loading={atLoading}
                 failed={folderFiles.failed}
                 onPick={pickAt}
                 onHover={setMenuActive}
@@ -1521,6 +1562,9 @@ export function HarnessSession({
             <textarea
               ref={boxRef}
               aria-label="Message"
+              aria-autocomplete="list"
+              aria-controls={listId}
+              aria-activedescendant={activeRowId}
               data-testid="harness-input"
               placeholder={
                 busy
