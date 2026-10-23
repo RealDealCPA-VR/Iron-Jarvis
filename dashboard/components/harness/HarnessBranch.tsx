@@ -189,7 +189,17 @@ export function BranchView({
   }
 
   const base = git.base;
-  const canMerge = !!status && status.ahead > 0 && status.baseExists && !status.inBase && !!base;
+  // Review (v1.375.0): hidden as soon as a merge answers, not when the
+  // branch is read again — a second press only met "Nothing to merge".
+  const canMerge = !!status && status.ahead > 0 && status.baseExists && !status.inBase && !!base && !merged;
+  // Review (v1.375.0): the second press of Discard says what goes with the
+  // worktree when some of its work is not committed (it is in the trash,
+  // not lost — the title says where).
+  const uncommitted = status?.uncommitted ?? 0;
+  const discardConfirm =
+    uncommitted > 0
+      ? `Confirm: ${uncommitted === 1 ? "1 uncommitted file goes" : `${uncommitted} uncommitted files go`} to the trash`
+      : "Confirm discard";
 
   if (removed) {
     return (
@@ -297,7 +307,7 @@ export function BranchView({
             })
           }
           label="Discard"
-          confirmLabel="Confirm discard"
+          confirmLabel={discardConfirm}
           title={`The worktree folder goes to Iron Jarvis's trash; the branch ${git.branch} stays.`}
         />
         {busy ? <Loader2 size={13} aria-label="Working" className="animate-spin text-zinc-500" /> : null}

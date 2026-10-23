@@ -414,6 +414,28 @@ describe("the Branch view", () => {
     expect(posted("/build/sessions/s1/git/discard")[0].body).toEqual({ confirm: true, after_merge: true });
   });
 
+  it("review: Merge is gone as soon as the merge answers, before the branch is read again", async () => {
+    api.posts["POST /build/sessions/s1/git/merge"] = { merged: true, into: "main", where: REPO, commit: "aa11", offer_remove: true };
+    renderBranch();
+    await screen.findByText("cart.py");
+    fireEvent.click(screen.getByRole("button", { name: "Merge into main" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm merge" }));
+    await screen.findByTestId("branch-merged");
+    // The stale read still says "1 ahead, not in main" (this fixture never
+    // changes): the button must not come back from it.
+    await waitFor(() => expect(api.calls.filter((c) => c.path === "/build/sessions/s1/git").length).toBeGreaterThan(1));
+    expect(screen.queryByRole("button", { name: "Merge into main" })).toBeNull();
+  });
+
+  it("review: Discard's second press says nothing more when everything is committed", async () => {
+    api.gets["/build/sessions/s1/git"] = status({ uncommitted: 0 });
+    api.posts["POST /build/sessions/s1/git/discard"] = { moved: true, trash: "C:\\home\\trash\\x", note: "kept" };
+    renderBranch();
+    await screen.findByText(`1 commit on ${BRANCH} · nothing waiting to commit · 1 not pushed to origin`);
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(screen.getByRole("button", { name: "Confirm discard" })).toBeTruthy();
+  });
+
   it("a refused merge says the daemon's words; nothing else happens", async () => {
     api.posts["POST /build/sessions/s1/git/merge"] = new api.ApiError("x", 409, false, {
       detail: "Merging would conflict in app.py. Nothing was changed: bring main's changes into this branch and settle them first, then merge.",
@@ -442,7 +464,9 @@ describe("the Branch view", () => {
     expect(discard.getAttribute("title")).toContain(`the branch ${BRANCH} stays`);
     fireEvent.click(discard);
     expect(posted("/build/sessions/s1/git/discard")).toEqual([]);
-    fireEvent.click(screen.getByRole("button", { name: "Confirm discard" }));
+    // Review (v1.375.0): the second press names the work not committed (the
+    // fixture's status has 2 files) — it goes to the trash with the folder.
+    fireEvent.click(screen.getByRole("button", { name: "Confirm: 2 uncommitted files go to the trash" }));
     await waitFor(() => expect(onGone).toHaveBeenCalled());
     expect(posted("/build/sessions/s1/git/discard")[0].body).toEqual({ confirm: true, after_merge: false });
   });
