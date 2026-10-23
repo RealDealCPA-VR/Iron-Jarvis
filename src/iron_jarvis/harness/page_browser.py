@@ -366,10 +366,13 @@ def typing_refusal(facts: dict[str, Any], text: str) -> str:
 #: tool), or a dev server whose "Delete" reaches a shared database. The words
 #: are the BUTTON's (read off the page), never the model's target, and they
 #: are read again at the click.
+#: NEVER the button's words: a tool's FAILURE reaches the model unfenced
+#: (the lanes fence only a page tool's output), so an error carries no text
+#: the page wrote.
 CLICK_NOT_ASKED = (
-    "That click was not made: the button reads \u201c{words}\u201d, which asks the user first, "
-    "and the user was not asked about it as it reads now (the page may have changed it). Call "
-    "page_click again to ask."
+    "That click was not made: the button reads as deleting, sending or paying, which asks the "
+    "user first, and the user was not asked about it as it reads now (the page may have "
+    "changed it). Call page_click again to ask."
 )
 #: How long a button's checked words stand for its click.
 CHECK_TTL_S = 300.0
@@ -1801,14 +1804,17 @@ class AgentBrowsers:
 
     def _check_here(self, sess: _Session) -> None:
         """Every action re-checks the page it acts on (belt and braces under
-        the route and the arrival guard)."""
+        the route and the arrival guard). v1.376.0 review: the refusal never
+        names the page's address — a failure reaches the model unfenced, and
+        a page's path (or a public host's name) is the page's own words."""
         url = sess.backend.url()
         if url.startswith(("http://", "https://")):
             verdict = judge(url, sess.allowed, sess.preview_origin)
             if verdict.kind != "ok":
                 raise BrowserProblem(
-                    f"The agent's browser is on {where(url)}, which is not an address it may "
-                    "act on. Call page_open with your dev server's address."
+                    "The agent's browser is on a page that is not an address it may act on "
+                    "(not the Browser pane's dev server or an address the user allowed). Call "
+                    "page_open with your dev server's address."
                 )
 
     async def _do(self, sess: _Session, op: str, limit: float, **kw: Any) -> ActResult:
@@ -1838,7 +1844,7 @@ class AgentBrowsers:
                 if risky_click_word(words):
                     asked = self.checked_words(sess.key, kw.get("target"))
                     if asked is None or " ".join(asked.split()).lower() != " ".join(words.split()).lower():
-                        raise BrowserProblem(CLICK_NOT_ASKED.format(words=_line(words)[:80]))
+                        raise BrowserProblem(CLICK_NOT_ASKED)
             name = await b.click(kw.get("target"), limit)
             await b.settle()
             out.did = f"Clicked \"{_line(name)}\"" if name else "Clicked"
