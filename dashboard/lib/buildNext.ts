@@ -21,6 +21,8 @@
 
 import { ApiError, post } from "@/lib/api";
 import type { BuildFolder } from "@/lib/buildSessions";
+import type { PickedSkill } from "@/lib/buildComposer";
+import { pickedSkillOf } from "@/lib/buildRewind";
 
 /** At most this many Next step buttons (the daemon caps it too). */
 export const MAX_NEXT_STEPS = 2;
@@ -71,17 +73,21 @@ export interface BranchDraft {
   text: string;
   attachments: string[];
   pickedFiles: string[];
+  /** v1.377.0 review: the question's "/" skill (with its source), or null. */
+  skill?: PickedSkill | null;
 }
 
 export function decodeBranchDraft(raw: unknown): BranchDraft | null {
   const r = rec(raw);
   if (!r) return null;
-  const draft = {
+  const draft: BranchDraft = {
     text: str(r.text, 20_000),
     attachments: paths(r.attachments),
     pickedFiles: paths(r.picked_files),
   };
-  return draft.text || draft.attachments.length || draft.pickedFiles.length ? draft : null;
+  const skill = pickedSkillOf(r.skill, r.skill_source);
+  if (skill) draft.skill = skill;
+  return draft.text || draft.attachments.length || draft.pickedFiles.length || skill ? draft : null;
 }
 
 /** Where a session was branched from (its view's `branched_from`). */
@@ -91,6 +97,33 @@ export interface BranchedFrom {
   turnId: string;
   at: BranchAt;
   branch: string;
+  /** v1.377.0 review: where the new session's CODE started (a session on its
+   *  own git branch only) — null when the daemon did not say. */
+  code: BranchCode | null;
+}
+
+/** Where a branched session's code started: a commit of the ORIGINAL
+ *  session's branch (`from: "branch"`) or where that session started
+ *  (`"start"`), and whether work not committed there was left behind. */
+export interface BranchCode {
+  short: string;
+  subject: string;
+  from: "branch" | "start";
+  branch: string;
+  uncommitted: boolean;
+}
+
+function decodeBranchCode(raw: unknown): BranchCode | null {
+  const r = rec(raw);
+  const short = str(r?.short, 40).trim();
+  if (!r || !/^[0-9a-f]{4,40}$/i.test(short)) return null;
+  return {
+    short,
+    subject: str(r.subject, 200).trim(),
+    from: r.from === "start" ? "start" : "branch",
+    branch: str(r.branch, 300).trim(),
+    uncommitted: r.uncommitted === true,
+  };
 }
 
 export function decodeBranchedFrom(raw: unknown): BranchedFrom | null {
@@ -103,6 +136,7 @@ export function decodeBranchedFrom(raw: unknown): BranchedFrom | null {
     turnId: str(r.turn_id, 80),
     at: r.at === "question" ? "question" : "reply",
     branch: str(r.branch, 300),
+    code: decodeBranchCode(r.code),
   };
 }
 
@@ -110,6 +144,22 @@ export function decodeBranchedFrom(raw: unknown): BranchedFrom | null {
 export function branchedFromWords(b: BranchedFrom): string {
   const from = b.title ? `Branched from “${b.title}”` : "Branched from another session";
   return b.branch ? `${from}, on its own branch ${b.branch}` : from;
+}
+
+/** Where a branched session's CODE starts, in words (v1.377.0 review): the
+ *  conversation up to the message came with it, and so did the work its
+ *  branch had COMMITTED by then — never changes that were not committed. */
+export function branchedCodeWords(b: BranchedFrom): string {
+  const c = b.code;
+  if (!c) return "";
+  const subject = c.subject ? ` (“${c.subject}”)` : "";
+  const where =
+    c.from === "start"
+      ? `Its code starts where that session started, at ${c.short}${subject}: nothing had been committed by that message.`
+      : `Its code starts at ${c.short}${subject}${c.branch ? ` on ${c.branch}` : ""}, the last commit before that message.`;
+  return c.uncommitted
+    ? `${where} Changes that were not committed in that session were not carried over.`
+    : where;
 }
 
 /** The control's words (one place; the vocabulary scan reads them). */

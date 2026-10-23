@@ -594,21 +594,77 @@ def merge_base(facts: dict[str, str], wt: Path) -> str:
     return facts.get("base_commit", "") or "HEAD"
 
 
-def branch_start_point(facts: "dict[str, str] | None") -> str:
-    """Where a session BRANCHED from another session's message starts its OWN
-    new branch (v1.377.0, the decision: from the same base, never the same
-    worktree): the base branch as it is now when the repository still has
-    it, else the commit the original branch started from. "" when neither
-    can be named (the caller then starts from the checkout's HEAD). BLOCKING."""
-    if not facts:
-        return ""
-    base = facts.get("base", "")
-    repo = facts.get("repo", "")
-    if base and repo and Path(repo).is_dir():
-        sha = _ref_sha(Path(repo), f"refs/heads/{base}")
-        if sha:
-            return sha
-    return facts.get("base_commit", "")
+def branch_point(facts: "dict[str, str] | None", when: Any, kept: bool = True) -> dict[str, Any]:
+    """WHERE A BRANCHED SESSION'S CODE STARTS (v1.377.0 review): the newest
+    commit ON THE ORIGINAL SESSION'S BRANCH made at or before ``when`` (the
+    time of the last line the new session holds — a reply's own time; for a
+    question, the line before it), so the new session's code holds exactly
+    the committed work its conversation describes; else (nothing committed
+    by then, or ``kept`` False: no line is kept) the commit the original
+    session STARTED from. Never the base branch's current tip (the doer's
+    first cut: the new session's conversation described work its code did
+    not have) and never the branch's current tip when later turns committed
+    after the message. Work NOT committed is not carried (it lives only in
+    the original worktree and may be from later turns): ``uncommitted`` says
+    whether the original worktree holds any now, so the screen can say so.
+
+    ``{commit, short, subject, from: "branch"|"start", uncommitted}``; {}
+    when no commit can be named (no facts / no repository) — the caller then
+    starts from the checkout's HEAD. BLOCKING (git); never raises."""
+    from datetime import datetime, timezone
+
+    try:
+        if not facts:
+            return {}
+        branch = facts.get("branch", "")
+        start = facts.get("base_commit", "")
+        wt = facts.get("worktree", "")
+        wt_ok = bool(wt) and not facts.get("removed_at") and Path(wt).is_dir()
+        cwd = wt if wt_ok else facts.get("repo", "")
+        if not cwd or not Path(cwd).is_dir():
+            return {}
+        floor: "int | None" = None
+        if kept and when not in (None, ""):
+            try:
+                at = when if isinstance(when, datetime) else datetime.fromisoformat(str(when))
+                if at.tzinfo is None:
+                    at = at.replace(tzinfo=timezone.utc)  # the daemon stamps naive UTC
+                floor = int(at.timestamp())
+            except (TypeError, ValueError):
+                floor = None
+        commit, subject, origin = "", "", "start"
+        if kept and branch:
+            rng = f"{start}..refs/heads/{branch}" if start else f"refs/heads/{branch}"
+            got = _g(["log", "--first-parent", "--format=%H%x1f%ct%x1f%s%x1e", "-n", "1000", rng],
+                     cwd, reads=True)
+            if got.ok:
+                for rec in got.out.split("\x1e"):
+                    bits = rec.strip("\n").split("\x1f")
+                    if len(bits) < 3 or not bits[0].strip():
+                        continue
+                    try:
+                        ct = int(bits[1].strip())
+                    except ValueError:
+                        continue
+                    # No time known for the message: the branch as it is.
+                    if floor is None or ct <= floor:
+                        commit, subject, origin = bits[0].strip(), bits[2].strip(), "branch"
+                        break
+        if not commit:
+            commit = start
+            if commit:
+                got = _g(["log", "-1", "--format=%s", commit], cwd, reads=True)
+                subject = got.out.strip() if got.ok else ""
+        if not commit:
+            return {}
+        uncommitted = False
+        if wt_ok:
+            got = _g(["status", "--porcelain", "--untracked-files=normal"], wt, reads=True)
+            uncommitted = bool(got.ok and got.out.strip())
+        return {"commit": commit, "short": commit[:7], "subject": subject[:200], "from": origin,
+                "uncommitted": uncommitted}
+    except Exception:  # noqa: BLE001 — not knowing is "from the checkout", never a crash
+        return {}
 
 
 #: At most this many commits are named by :func:`commits_since`.
@@ -1562,6 +1618,7 @@ __all__ = [
     "TURN_BRANCH",
     "TurnBranch",
     "branch_changes",
+    "branch_point",
     "clean_git_record",
     "commit",
     "compare_url",

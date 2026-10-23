@@ -169,7 +169,10 @@ async def test_branch_from_a_question_holds_the_conversation_before_it_and_hands
     assert status == 201, view
     assert [m["content"] for m in view["messages"]] == ["first", "answer to first"]
     assert view["draft"] == {"text": "look at this", "attachments": ["C:\\up\\shot.png"],
-                             "picked_files": ["src/a.py"], "skill": "tidy"}
+                             "picked_files": ["src/a.py"], "skill": "tidy",
+                             # v1.377.0 review: where the skill came from (an
+                             # older line, like this one, did not say).
+                             "skill_source": ""}
 
 
 async def test_branch_refuses_a_message_that_is_not_there_or_a_reply_not_written_yet(app, work):
@@ -209,7 +212,10 @@ async def test_a_branch_sessions_branch_gets_its_own_new_branch_from_the_same_ba
     assert ng["worktree"] != og["worktree"], "never the same worktree"
     assert ng["base"] == og["base"] == "main"
     wt_new = Path(ng["worktree"])
-    assert git("rev-parse", "HEAD", cwd=wt_new) == git("rev-parse", "main", cwd=repo), "from the base's tip"
+    # (v1.377.0 review: nothing was committed on the old branch by then, so
+    # the code starts where the old session started — here main's tip.)
+    head = git("rev-parse", "HEAD", cwd=wt_new)
+    assert head == git("rev-parse", "main", cwd=repo) and head.startswith(og["base_commit"])
     assert (wt_new / "app.py").read_bytes() == b"x = 1\n", "the old worktree's work is not carried"
     assert (wt_old / "app.py").read_bytes() == b"x = 2\n" and thread_row(app, sid).setup_json == before
     assert view["branched_from"]["branch"] == ng["branch"]

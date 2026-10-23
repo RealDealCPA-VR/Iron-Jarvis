@@ -195,6 +195,14 @@ class BuildBranchBody(BaseModel):
     at: str = Field(default="reply", max_length=20)
 
 
+def skill_source(question: Any) -> str:
+    """v1.377.0 review: where a saved question's "/" skill came from —
+    ``folder`` (the folder's own harness skills) or ``yours`` — or "" (none,
+    or an older line that did not say; the screen then restores nothing)."""
+    src = question.get("skillSource") if isinstance(question, dict) else None
+    return src if src in ("folder", "yours") else ""
+
+
 class BuildAnswerBody(BaseModel):
     ask_id: str = Field(min_length=1, max_length=80)
     answer: Any = None
@@ -1404,6 +1412,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 question["filePaths"] = list(picked)
             if chat_body.skill or folder_skill:
                 question["skill"] = chat_body.skill or folder_skill
+                # v1.377.0 review: WHERE it came from, so a rewind or a
+                # branch can put the chip back in the box exactly.
+                question["skillSource"] = "yours" if chat_body.skill else "folder"
             if continuation:
                 question["continuation"] = True
             saved = await asyncio.to_thread(S.append_lines, platform.engine, thread_id, [question])
@@ -2170,9 +2181,12 @@ def register(app: FastAPI, d: Any) -> None:
         holding this session's conversation up to one of its messages, in the
         same folder, on the same model and account — NOTHING of this session
         changes. DECISIONS: a session on its own git branch gets the new
-        session its OWN new branch and worktree from the same base (the base
-        branch as it is now — ``branches.branch_start_point``), never the
-        same worktree (two sessions would write the same files); the new
+        session its OWN new branch and worktree, never the same worktree
+        (two sessions would write the same files), started where the
+        conversation was at that message — the original branch's newest
+        commit at or before it, else where the original session started
+        (``branches.branch_point``, the v1.377.0 review; work not committed
+        is not carried and ``branched_from.code`` says so); the new
         session starts in act mode with no approved plan and no conversation
         grants (it asks again), and the account, model, reasoning, approval
         setting, Local only and the Browser pane's address go with it. A
@@ -2202,9 +2216,16 @@ def register(app: FastAPI, d: Any) -> None:
         branched = {"thread_id": thread_id, "title": row.title or "", "turn_id": turn_id, "at": at}
         facts = B.facts_of(setup)
         if facts:
-            # Its OWN branch from the same base, in its own worktree beside
-            # the repository (off the loop: git).
-            start_point = await asyncio.to_thread(B.branch_start_point, facts)
+            # Its OWN branch, in its own worktree beside the repository, from
+            # where the conversation was at that message (off the loop: git).
+            cut_at = lines[-1].get("at") if lines else None
+            point = await asyncio.to_thread(B.branch_point, facts, cut_at, bool(lines))
+            start_point = str(point.get("commit") or "")
+            if point:
+                branched["code"] = {
+                    **{k: point[k] for k in ("short", "subject", "from", "uncommitted")},
+                    "branch": facts.get("branch", ""),
+                }
             checkout = facts.get("checkout") or facts.get("repo", "")
             problem = await asyncio.to_thread(S.folder_problem, checkout)
             if problem:
@@ -2247,6 +2268,7 @@ def register(app: FastAPI, d: Any) -> None:
                 "attachments": _paths(question.get("attachmentPaths")),
                 "picked_files": _paths(question.get("filePaths")),
                 "skill": str(question.get("skill") or "") if isinstance(question.get("skill"), str) else "",
+                "skill_source": skill_source(question),
             }
         return view
 

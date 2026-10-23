@@ -1078,17 +1078,33 @@ def _clean_setup(raw: Any) -> str:
 _BRANCHED_KEYS = ("thread_id", "title", "turn_id", "at", "branch")
 
 
-def _clean_branched_from(raw: Any) -> "dict[str, str] | None":
+def _clean_branched_from(raw: Any) -> "dict[str, Any] | None":
     """``setup.branched_from`` as stored: the session and message a Build
     session was branched from — strings only, bounded; None unless it names
     the session it came from."""
     if not isinstance(raw, dict):
         return None
-    out: dict[str, str] = {}
+    out: dict[str, Any] = {}
     for key in _BRANCHED_KEYS:
         v = raw.get(key)
         if isinstance(v, str) and v.strip():
             out[key] = " ".join(v.split())[:200]
+    # v1.377.0 review: where the branched session's CODE started — a commit
+    # of the original session's branch, or where that session started — and
+    # whether work not committed was left behind (said on screen).
+    code = raw.get("code")
+    if isinstance(code, dict):
+        short = code.get("short")
+        clean: dict[str, Any] = {}
+        if isinstance(short, str) and _re.fullmatch(r"[0-9a-fA-F]{4,40}", short.strip()):
+            clean["short"] = short.strip()[:12]
+            subject = code.get("subject")
+            clean["subject"] = " ".join(subject.split())[:200] if isinstance(subject, str) else ""
+            clean["from"] = "start" if code.get("from") == "start" else "branch"
+            branch = code.get("branch")
+            clean["branch"] = " ".join(branch.split())[:200] if isinstance(branch, str) else ""
+            clean["uncommitted"] = code.get("uncommitted") is True
+            out["code"] = clean
     return out if out.get("thread_id") else None
 
 

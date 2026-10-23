@@ -122,6 +122,7 @@ import {
   BRANCH_TITLE_REPLY,
   atFileFromPath,
   branchSession,
+  branchedCodeWords,
   branchedFromWords,
   fetchNextSteps,
   fileFromPath,
@@ -535,6 +536,17 @@ export function HarnessSession({
           setAtFiles(next);
         }
         if (extras.attachments.length) att.restore(extras.attachments.map(fileFromPath));
+        // v1.377.0 review: its "/" skill too (one per message: a box that
+        // already holds another keeps it and says which did not go back).
+        if (extras.skill) {
+          const back = extras.skill;
+          const cur = skillRef.current;
+          if (!cur) setSkill(back);
+          else if (cur.name !== back.name || cur.source !== back.source) {
+            const note = `The skill ${back.name} did not go back in the box: it already holds ${cur.name}.`;
+            setError((e) => (e ? `${e} ${note}` : note));
+          }
+        }
         setRewindNote(extras.commitsNote || null);
       }
       setUndone(new Set());
@@ -770,6 +782,8 @@ export function HarnessSession({
           setAtFiles(picks);
         }
         if (initialDraft.attachments.length) att.restore(initialDraft.attachments.map(fileFromPath));
+        // v1.377.0 review: the question's "/" skill goes in the box too.
+        if (initialDraft.skill) setSkill(initialDraft.skill);
       }
       // Notes sent to a turn that ended while nobody watched: back in the box.
       const sent = readSentSteers(threadId);
@@ -1585,6 +1599,13 @@ export function HarnessSession({
                 <GitFork size={12} aria-hidden className="shrink-0" />
                 <span className="truncate">{branchedFromWords(view.branchedFrom)}</span>
               </button>
+            ) : null}
+            {view.branchedFrom?.code ? (
+              // v1.377.0 review: where its CODE started (the committed work
+              // its conversation describes), and what was not carried.
+              <p data-testid="harness-branched-code" className="text-[12px] text-zinc-500">
+                {branchedCodeWords(view.branchedFrom)}
+              </p>
             ) : null}
           </div>
           {accounts && (vendor || currentAccount) ? (

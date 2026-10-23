@@ -134,7 +134,8 @@ describe("Rewind to here: two presses, the refusal in words", () => {
     fireEvent.click(screen.getByTestId("rewind-confirm-button"));
     // v1.377.0: the message's own files ride with its words (none here).
     await waitFor(() =>
-      expect(onRewound).toHaveBeenCalledWith("Add a cart", { attachments: [], pickedFiles: [], commitsNote: "" }),
+      // v1.377.0 review: the message's "/" skill rides too (none here).
+      expect(onRewound).toHaveBeenCalledWith("Add a cart", { attachments: [], pickedFiles: [], commitsNote: "", skill: null }),
     );
     expect(posts("/build/sessions/s1/rewind")).toEqual([
       { method: "POST", path: "/build/sessions/s1/rewind", body: { to: "t1" } },

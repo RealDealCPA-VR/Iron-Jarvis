@@ -13,6 +13,7 @@
  * preview", never as a wrong one.
  */
 
+import type { PickedSkill } from "@/lib/buildComposer";
 import { ApiError, get, post } from "@/lib/api";
 
 export interface RewindFile {
@@ -52,6 +53,8 @@ export interface RewindPreview {
   /** v1.377.0: work from here on was COMMITTED on the session's branch — the
    *  files go back, the commits stay ("" when nothing was committed). */
   commitsNote: string;
+  /** v1.377.0 review: the message's "/" skill, with where it came from. */
+  skill: PickedSkill | null;
 }
 
 /** What a rewind hands back to the box beside the message's words. */
@@ -59,6 +62,9 @@ export interface RewindExtras {
   attachments: string[];
   pickedFiles: string[];
   commitsNote: string;
+  /** v1.377.0 review: the "/" skill the message carried, with where it came
+   *  from (null: none, or an older line that did not say where). */
+  skill: PickedSkill | null;
 }
 
 export type RewindOutcome =
@@ -115,7 +121,21 @@ const strs = (v: unknown): string[] =>
 
 /** The message's own files and the committed-work sentence (v1.377.0). */
 function extrasOf(r: Record<string, unknown>): RewindExtras {
-  return { attachments: strs(r.attachments), pickedFiles: strs(r.picked_files), commitsNote: str(r.commits_note) };
+  return {
+    attachments: strs(r.attachments),
+    pickedFiles: strs(r.picked_files),
+    commitsNote: str(r.commits_note),
+    skill: pickedSkillOf(r.skill, r.skill_source),
+  };
+}
+
+/** A saved question's skill as a box chip — only with a known source (the
+ *  daemon's `skill_source`: "folder" | "yours"); a guess would send a folder
+ *  skill as the user's (or back) and be refused at send. */
+export function pickedSkillOf(name: unknown, source: unknown): PickedSkill | null {
+  const n = typeof name === "string" ? name.trim() : "";
+  if (!n || n.length > 200) return null;
+  return source === "folder" || source === "yours" ? { name: n, source } : null;
 }
 
 /** One message a session can be rewound to (`GET …/rewind` without `to`). */

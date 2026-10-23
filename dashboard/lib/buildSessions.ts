@@ -229,6 +229,8 @@ const LINE_KEYS = [
   // v1.373.0 (part 2, Phase 2): what rode a question — "@" files, a "/" skill.
   "filePaths",
   "skill",
+  // v1.377.0 review: where that skill came from ("folder" | "yours").
+  "skillSource",
   // v1.374.0 (part 2, Phase 3): a reply's reading of how full the
   // conversation is, and its task list.
   "context",

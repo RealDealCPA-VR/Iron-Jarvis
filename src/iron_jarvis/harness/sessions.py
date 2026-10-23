@@ -94,6 +94,9 @@ LINE_KEYS: tuple[str, ...] = (
     # from the session's folder (:func:`folder_files`) and the skill picked
     # with "/" — what rode the turn beside the words.
     "filePaths", "skill",
+    # v1.377.0 review: where that skill came from ("folder" | "yours"), so a
+    # rewind or a branch can put it back in the box.
+    "skillSource",
     # v1.374.0 (part 2, Phase 3): on a reply, how full the conversation was
     # for the model that turn (``context`` — the planner's own numbers, from
     # the done frame) and the turn's own task list as it last stood (``plan``

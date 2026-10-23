@@ -91,7 +91,8 @@ import { leftOutWords, useHarnessAttachments, MAX_FILES } from "@/components/har
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { accountBlockedReason, decodeAccounts } from "@/lib/buildAccounts";
 import { decodeFolders } from "@/lib/buildSessions";
-import { filterFolders, withNextStep, decodeNextSteps, MAX_NEXT_STEPS } from "@/lib/buildNext";
+import { filterFolders, withNextStep, decodeNextSteps, MAX_NEXT_STEPS, branchedCodeWords, decodeBranchedFrom } from "@/lib/buildNext";
+import { pickedSkillOf } from "@/lib/buildRewind";
 import { harnessKeyAction } from "@/lib/harnessKeys";
 import { PERMISSION_LEVELS } from "@/lib/permissionLevels";
 import { fillWords, trimmedWords } from "@/lib/contextWords";
@@ -730,7 +731,78 @@ describe("the rewind control hands back what rode the message", () => {
         attachments: ["C:\\up\\x.png"],
         pickedFiles: ["C:\\w\\a.py"],
         commitsNote: "",
+        // v1.377.0 review: the skill rides too (none here) — moved on purpose.
+        skill: null,
       }),
     );
+  });
+});
+
+/* ------------------------------------------------- v1.377.0 review */
+
+describe("review: the '/' skill goes back, and a branched session says where its code starts", () => {
+  it("a rewind puts the message's skill chip back with its words (only with a known source)", async () => {
+    const preview = {
+      to: "t1", question: "Tidy it", turns: ["t1"], files: [], problems: [], commands: [], can_rewind: true,
+      note: "", detail: "", attachments: [], picked_files: [], skill: "tidy", skill_source: "folder",
+    };
+    api.gets["/build/sessions/s1"] = view({
+      messages: [userLine("Tidy it", "t1", { skill: "tidy", skillSource: "folder" }), replyLine("Ok.", "t1")],
+    });
+    api.gets["/build/sessions/s1/rewind?to=t1"] = preview;
+    api.postAnswers["POST /build/sessions/s1/rewind"] = () => {
+      api.gets["/build/sessions/s1"] = view();
+      return { rewound: true, ...preview };
+    };
+    renderSession();
+    fireEvent.click(await screen.findByTestId("rewind-start"));
+    fireEvent.click(await screen.findByTestId("rewind-confirm-button"));
+    await waitFor(() => expect(box().value).toBe("Tidy it"));
+    expect(await screen.findByTestId("harness-skill-chip")).toHaveTextContent("tidy");
+  });
+
+  it("a question branch hands its skill to the new session's box", async () => {
+    api.gets["/build/sessions/s1"] = view({
+      messages: [userLine("Tidy it", "t1", { skill: "tidy", skillSource: "yours" }), replyLine("Ok.", "t1")],
+    });
+    api.postAnswers["POST /build/sessions/s1/branch"] = {
+      ...view({ id: "s2" }),
+      draft: { text: "Tidy it", attachments: [], picked_files: [], skill: "tidy", skill_source: "yours" },
+    };
+    const onBranched = vi.fn();
+    renderSession({ onBranched });
+    const bubble = await screen.findByTestId("harness-user-bubble");
+    fireEvent.click(within(bubble.parentElement as HTMLElement).getByTestId("harness-branch-question"));
+    await waitFor(() =>
+      expect(onBranched).toHaveBeenCalledWith("s2", {
+        text: "Tidy it", attachments: [], pickedFiles: [], skill: { name: "tidy", source: "yours" },
+      }),
+    );
+  });
+
+  it("a session opened with a skill in its draft shows the chip, and says where its code starts", async () => {
+    api.gets["/build/sessions/s1"] = view({
+      branched_from: {
+        thread_id: "s0", title: "First try", turn_id: "t1", at: "reply", branch: "ij/next-1a2b",
+        code: { short: "abc1234", subject: "add a", from: "branch", branch: "ij/first-9f9f", uncommitted: true },
+      },
+    });
+    renderSession({ initialDraft: { text: "Again", attachments: [], pickedFiles: [], skill: { name: "tidy", source: "folder" } } });
+    expect(await screen.findByTestId("harness-skill-chip")).toHaveTextContent("tidy");
+    expect(screen.getByTestId("harness-branched-code")).toHaveTextContent(
+      "Its code starts at abc1234 (“add a”) on ij/first-9f9f, the last commit before that message. Changes that were not committed in that session were not carried over.",
+    );
+  });
+
+  it("the code words: from where the session started, clean, and never from a bad commit name", () => {
+    const base = { threadId: "s0", title: "T", turnId: "t1", at: "reply" as const, branch: "" };
+    expect(
+      branchedCodeWords({ ...base, code: { short: "def5678", subject: "", from: "start", branch: "ij/a", uncommitted: false } }),
+    ).toBe("Its code starts where that session started, at def5678: nothing had been committed by that message.");
+    expect(decodeBranchedFrom({ thread_id: "s0", code: { short: "not-a-sha; rm -rf", from: "branch" } })?.code).toBeNull();
+    expect(decodeBranchedFrom({ thread_id: "s0" })?.code).toBeNull();
+    expect(branchedCodeWords({ ...base, code: null })).toBe("");
+    expect(pickedSkillOf("tidy", "elsewhere")).toBeNull();
+    expect(pickedSkillOf("tidy", "folder")).toEqual({ name: "tidy", source: "folder" });
   });
 });

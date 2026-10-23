@@ -102,6 +102,8 @@ class RewindPlan:
     attachments: list[str] = field(default_factory=list)
     picked_files: list[str] = field(default_factory=list)
     skill: str = ""
+    #: v1.377.0 review: "folder" | "yours" | "" (an older line said nothing).
+    skill_source: str = ""
 
     def view(self) -> dict[str, Any]:
         return {
@@ -110,6 +112,7 @@ class RewindPlan:
             "attachments": list(self.attachments),
             "picked_files": list(self.picked_files),
             "skill": self.skill,
+            "skill_source": self.skill_source,
             "turns": list(self.turns),
             "files": list(self.files),
             "problems": list(self.problems),
@@ -489,6 +492,7 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str,
         attachments=_paths(question.get("attachmentPaths")),
         picked_files=_paths(question.get("filePaths")),
         skill=str(question.get("skill") or "").strip()[:200] if isinstance(question.get("skill"), str) else "",
+        skill_source=(question.get("skillSource") if question.get("skillSource") in ("folder", "yours") else ""),
     )
     disk = _Disk()
     seen_files: dict[str, dict[str, Any]] = {}

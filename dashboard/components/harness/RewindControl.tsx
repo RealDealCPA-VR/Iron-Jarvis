@@ -95,6 +95,7 @@ export function RewindControl({
           attachments: out.attachments.length ? out.attachments : preview.attachments,
           pickedFiles: out.pickedFiles.length ? out.pickedFiles : preview.pickedFiles,
           commitsNote: out.commitsNote || preview.commitsNote,
+          skill: out.skill ?? preview.skill,
         });
         return;
       }
