@@ -357,7 +357,8 @@ export function ApprovalCard({
           on a Build session's own branch, which says ITS reason. */}
       {onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "git" ? (
         <p data-testid="approval-git-once" className="text-[11px] leading-relaxed text-zinc-400">
-          A commit or push on this session&apos;s branch asks you every time.
+          On this session&apos;s own branch, a commit, a push, a change on GitHub, a git setting or
+          git that throws work away asks you every time.
         </p>
       ) : onceOnly && !planAsk && !buildPlanAsk ? (
         <p data-testid="approval-local-only" className="text-[11px] leading-relaxed text-zinc-400">

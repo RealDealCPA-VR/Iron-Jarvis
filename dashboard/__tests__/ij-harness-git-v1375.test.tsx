@@ -502,6 +502,8 @@ describe("an agent's commit or push card says why it asks every time", () => {
       />,
     );
     expect(screen.getByTestId("approval-git-once")).toHaveTextContent("asks you every time");
+    // Review (v1.375.0): true for every kind that cards, not commit / push only.
+    expect(screen.getByTestId("approval-git-once")).toHaveTextContent(/git setting.*throws work away/);
     expect(screen.queryByTestId("approval-local-only")).toBeNull();
     expect(screen.getByTestId("approval-cost")).toHaveTextContent("This pushes to origin.");
     expect(screen.getByRole("button", { name: "Allow once" })).toBeInTheDocument();
