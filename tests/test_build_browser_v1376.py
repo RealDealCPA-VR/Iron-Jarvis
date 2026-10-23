@@ -555,6 +555,55 @@ async def test_a_click_to_another_local_address_is_stopped_with_the_way_to_ask(t
     assert "localhost:8020/admin" in res.output and "call page_open with that address" in res.output
 
 
+async def test_an_action_on_a_page_the_rules_would_not_open_is_refused(tmp_path, fake):
+    """Belt and braces under the route and the arrival guard: every action
+    re-checks the page it acts on."""
+    backend = await _open(fake, tmp_path)
+    backend._url = "https://example.com/"  # a navigation that slipped past
+    token = preview(DEV)
+    try:
+        res = await PA.PageClickTool().execute({"target": "Log"}, ctx(tmp_path))
+        read = await PA.PageReadTool().execute({}, ctx(tmp_path))
+    finally:
+        PV.reset_preview(token)
+    assert res.ok is False and "not an address it may act on" in res.error
+    assert read.ok is False and backend.clicks == []
+
+
+async def test_the_manager_itself_refuses_a_public_open_before_starting(fake):
+    with pytest.raises(PB.BrowserProblem, match="does not open public websites"):
+        await fake.open("build:x", "https://example.com/")
+    assert fake.made == []
+
+
+async def test_a_page_that_arrives_somewhere_refused_is_sent_away(tmp_path):
+    """The arrival guard (``framenavigated``) — the backstop for a hop the
+    route and the redirect guard did not see."""
+    seen: list[tuple[str, str]] = []
+    backend = PB.EdgeBackend(
+        edge="edge", work=tmp_path, guard=lambda u: PB.judge(u, set(), "http://localhost:5173"),
+        note=lambda k, t: seen.append((k, t)),
+    )
+    left: list[Any] = []
+
+    class _Page:
+        async def goto(self, url, timeout=None):
+            left.append(url)
+
+    class _Frame:
+        parent_frame = None
+
+        def __init__(self, url):
+            self.url = url
+
+    page = _Page()
+    backend._on_navigated(page, _Frame("http://localhost:5173/fine"))
+    backend._on_navigated(page, _Frame("https://example.com/far"))
+    await backend.quiet()
+    assert seen == [("blocked", "refuse|https://example.com/far")]
+    assert left == ["about:blank"]
+
+
 async def test_a_click_on_the_dev_server_goes_through(tmp_path, fake):
     await _open(fake, tmp_path)
     token = preview(DEV)
@@ -646,6 +695,7 @@ async def test_one_action_at_a_time_per_session(tmp_path, fake):
     assert b.clicks == ["Log"]
 
 
+@pytest.mark.timeout(60)
 async def test_a_wedged_action_is_ended_by_its_time_limit(tmp_path, fake, monkeypatch):
     monkeypatch.setattr(PB, "ACTION_TIMEOUT_S", 0.2)
     monkeypatch.setattr(PB, "HARD_BOUND_EXTRA_S", 0.3)
@@ -812,6 +862,7 @@ SITE = """<html><head><title>Shop</title></head><body>
 <label>Password <input type=password id=pw oninput="document.getElementById('pwlen').textContent='typed '+this.value.length"></label>
 <p id=pwlen>typed 0</p>
 <a href="/r">redirect away</a>
+<a href="/r404">redirect to nothing</a>
 <a href="PUBLIC/js-landed">public link</a>
 <a href="OTHER/other">other app</a>
 <script>console.error('boot error'); fetch('/missing')</script>
@@ -831,9 +882,10 @@ class _Site:
 
             def do_GET(self):
                 site.hits.append(self.path)
-                if self.path == "/r":
+                if self.path in ("/r", "/r404"):
+                    far = "/landed" if self.path == "/r" else "/nowhere"
                     self.send_response(302)
-                    self.send_header("Location", f"http://public.test:{site.port}/landed")
+                    self.send_header("Location", f"http://public.test:{site.port}{far}")
                     self.end_headers()
                     return
                 if self.path == "/":
@@ -897,7 +949,14 @@ async def test_real_edge_reads_the_console_and_failed_requests_and_leaves_nothin
         import psutil
 
         names = {psutil.Process(p).name().lower() for p in _alive(pids)}
-        assert "node.exe" in names and "msedge.exe" in names, names  # driver + Edge, all in the job
+        assert "node.exe" in names and "msedge.exe" in names, names  # driver + Edge
+        # Every process of the driver's tree is a member of the browser's
+        # kill-on-close job (procs.adopt) — so nothing can outlive it.
+        job = browsers._sessions[key].backend._job
+        assert job is not None
+        members = set(job.member_pids())
+        tree = PB._tree_of(browsers._sessions[key].backend._driver)
+        assert tree and set(tree) <= members, (tree, members)
         clicked = await browsers.click(key, "Add to cart", preview=site.base)
         assert clicked.did == 'Clicked "Add to cart"'
         await browsers.click(key, "Broken", preview=site.base)
@@ -918,6 +977,11 @@ async def test_real_edge_reads_the_console_and_failed_requests_and_leaves_nothin
         redirected = await browsers.click(key, "redirect away", preview=site.base)
         assert redirected.blocked and "public.test" in redirected.blocked[0]
         assert redirected.url == site.base
+        # …also when the far page is an error page (the arrival guard alone
+        # never sees an address there: the redirect's hop is judged).
+        nowhere = await browsers.click(key, "redirect to nothing", preview=site.base)
+        assert nowhere.blocked and "public.test" in nowhere.blocked[0]
+        assert nowhere.url == site.base
         # Another address on this PC: stopped before its request, with the way to ask.
         hop = await browsers.click(key, "other app", preview=site.base)
         assert hop.blocked and "call page_open with that address" in hop.blocked[0]

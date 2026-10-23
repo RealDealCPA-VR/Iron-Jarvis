@@ -344,6 +344,50 @@ test.describe("390 px — Build never pans sideways", () => {
     const shots = process.env.IJ_E2E_SHOTS;
     if (shots) await page.screenshot({ path: join(shots, "ij-harness-phone.png"), fullPage: true });
   });
+  // v1.376.0 (part 2, Phase 5): the Browser pane says where the agent's own
+  // browser is and shows its latest picture — at 390 px with no sideways
+  // pan, however long the address. The view and the picture are STUBBED in
+  // the browser (the demo model opens no page), in the route's own shapes.
+  test("the Browser pane shows the agent's view and fits the width", async ({ page }) => {
+    test.skip(!sessionId, "needs the session from the first test");
+    const picture = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const where = "localhost:5173/" + "a-very-long-path-segment/".repeat(6) + "cart";
+    await page.route(`${DAEMON}/build/sessions/${sessionId}/browser`, (route) =>
+      stub(route, () => ({
+        body: JSON.stringify({
+          view: {
+            open: true, where, blank: false, title: "Cart", at: new Date().toISOString(),
+            shot: true, shot_at: "2026-10-23T09:41:00+00:00", note: "",
+          },
+        }),
+      })),
+    );
+    await page.route(new RegExp(`/build/sessions/${sessionId}/browser/shot`), async (route) => {
+      if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS });
+      await route.fulfill({ status: 200, headers: { ...CORS, "content-type": "image/png" }, body: picture });
+    });
+    await page.goto(`/terminals?session=${sessionId}`);
+    await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+    await page.getByTestId("harness-pane-tab-browser").click();
+    await expect(page.getByTestId("agent-browser-where")).toContainText("The agent is on localhost:5173/");
+    await expect(page.getByTestId("agent-browser-shot")).toBeVisible();
+    await page.waitForTimeout(500);
+    const pan = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(pan).toBeLessThanOrEqual(0);
+    const fits = await page.evaluate(() => {
+      const r = (id: string) => document.querySelector(`[data-testid="${id}"]`)?.getBoundingClientRect() ?? null;
+      const img = r("agent-browser-shot");
+      const line = r("agent-browser-where");
+      return img && line ? { right: Math.max(img.right, line.right), vw: window.innerWidth } : null;
+    });
+    expect(fits).not.toBeNull();
+    expect(fits!.right).toBeLessThanOrEqual(fits!.vw);
+    const shots = process.env.IJ_E2E_SHOTS;
+    if (shots) await page.screenshot({ path: join(shots, "ij-harness-agent-browser-phone.png"), fullPage: true });
+  });
   // v1.373.0 (part 2, Phase 2): the "/" and "@" lists open ABOVE the box —
   // never over it, never past the window's top or sides — and Escape closes
   // each one without sending or touching the words.
