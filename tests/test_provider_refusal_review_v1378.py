@@ -797,3 +797,30 @@ def test_a_declined_nudge_reply_is_marked_refused_and_an_ordinary_one_is_not(tmp
         else:
             done = client.post("/chat", json=body).json()
         assert done.get("refused") is want, (want, done.get("reply"))
+
+
+# =========================================================================== #
+# 12. a Build session's Compact that is declined says the SESSION's way out
+# =========================================================================== #
+async def test_a_declined_compact_in_a_build_session_says_rewind(tmp_path):
+    """Compact (`POST /build/sessions/{id}/compact`) answers a failed summary
+    call in `failure_words`' words, read OUTSIDE the turn's Build surface — so
+    a refusal said the CHAT's way out ("Start a new chat, or edit an earlier
+    message") inside the IJ harness, which has Rewind and new sessions."""
+    from iron_jarvis.daemon.app import create_app
+    from tests.test_build_compact_v1374 import WINDOW, Writer, seed, wire_writer
+    from tests.test_build_sessions_v1367 import CLAUDE, asgi, new_session
+
+    app = create_app(str(tmp_path / "home"))
+    app.state.platform.config.model_context_windows = {f"{CLAUDE[0]}::{CLAUDE[1]}": WINDOW}
+    work = tmp_path / "work"
+    work.mkdir()
+    sid = new_session(app, work)["id"]
+    seed(app, sid)
+    wire_writer(app, Writer(raises=_refusal()))
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/compact", {})
+    assert status == 502, body
+    detail = body["detail"]
+    assert detail.startswith("Claude Code declined to answer this conversation."), detail
+    assert "Rewind to before the message that set it off, or start a new session." in detail
+    assert "edit an earlier message" not in detail and "Retry" not in detail
