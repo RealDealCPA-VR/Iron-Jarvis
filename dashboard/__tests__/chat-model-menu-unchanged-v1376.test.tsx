@@ -192,6 +192,17 @@ async function drawEverything(): Promise<Record<string, string>> {
   fireEvent.click(after);
   const again = await screen.findByTestId("model-menu");
   out.treeAfterPick = again.outerHTML;
+  // Review: the picked model's own panel — its row marked with the check —
+  // and the keys: Escape in the box closes the menu and moves no focus
+  // (the harness's menu hands focus back to its chip; the chat's never did).
+  const claudeAgain = within(again)
+    .getAllByRole("button")
+    .find((b) => b.getAttribute("aria-expanded") !== null && b.textContent?.startsWith("Claude Code"));
+  fireEvent.click(claudeAgain as HTMLElement);
+  out.subAfterPick = (await screen.findByTestId("model-sub")).outerHTML;
+  fireEvent.keyDown(screen.getByTestId("model-filter"), { key: "Escape" });
+  out.escapeCloses = String(screen.queryByTestId("model-menu") === null);
+  out.focusAfterEscape = document.activeElement?.tagName ?? "";
   return out;
 }
 
