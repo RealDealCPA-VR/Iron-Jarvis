@@ -3640,6 +3640,24 @@ does not need a bump, stop and bump it.
   at a turn's edge can still count). Pins: `tests/test_build_{compact,
   turn_finished,plan_lines}_v1374.py` (+ the review files),
   `dashboard/__tests__/{ij-harness-work,build-finish-notice}-v1374.test.tsx`.
+  v1.374.1 (a REAL race + a load fix, both from v1.374.0's red Tests gate;
+  Release was green and published): (1) `Orchestrator.cancel_session`'s
+  CROSS-LOOP branch (a schedule fire runs on APScheduler's own loop) handed
+  `task.cancel` over BEFORE it stamped the row, and `_finalize_cancelled`
+  POPS `_stop_reasons` — when the run's loop finalized first, the stamp found
+  no reason and saved "The agent was stopped before it finished." over
+  Emergency stop's sentence. It now stamps + saves FIRST, then
+  `call_soon_threadsafe(task.cancel)`, so the finalizer's write is always
+  the last. Pin: `tests/test_emergency_stop_cross_loop_v13741.py` (the
+  cancelling thread's `.get` held back 0.5 s — the old order gives CI's
+  exact words; a plain cross-loop cancel keeps STOPPED_SUMMARY). (2) The two
+  real-bundle Iron-Proxy tests ran against the app's 10 s
+  `START_TIMEOUT_S`; a Node cold start (0.47 s idle here) passed it on the
+  loaded runner. They set 60 s and print the whole status (its `error`) on
+  failure. A TIMING SCRIPT run outside pytest must set its own
+  `IRON_PROXY_DATA_DIR` (the conftest fixture is pytest-only): without it
+  `IronProxyService.start()` ADOPTS the user's running proxy through
+  `~/.iron-proxy/proxy.json` (read-only here, but never acceptable).
 
 - **`/` and `@` in a Build session's box; the app's font is SHIPPED; the
   harness reads like a document** (v1.373.0, IJ harness part 2 Phase 2 + the
