@@ -474,3 +474,91 @@ async def test_an_accepted_layer_edit_lands_in_the_worktrees_tracked_layer_not_t
     lesson = next(r for r in out.minted if r.kind == "lesson")
     assert lesson.folder == str(repo)
     L.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# the phase's own pins, strengthened (each survived a mutation before)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_read_of_the_main_checkout_never_rewrites_its_index(repo):
+    """Merge reads the user's checkout (``git status``) before it merges; a
+    read with optional locks REWRITES a stale index (a file whose time
+    changed, its content not). The read takes no lock (GIT_OPTIONAL_LOCKS=0)."""
+    import time as _time
+
+    future = _time.time() + 300
+    os.utime(repo / "app.py", (future, future))  # touched, not changed
+    before = (repo / ".git" / "index").read_bytes()
+    assert B._porcelain(repo, untracked=False) == []
+    assert (repo / ".git" / "index").read_bytes() == before, "a read rewrote the user's index"
+    assert git("status", "--porcelain", cwd=repo) == ""
+
+
+def test_a_base_that_moves_between_the_check_and_the_update_is_never_overwritten(repo, monkeypatch):
+    facts = _start(repo)
+    _commit_in(Path(facts["worktree"]), "new.py", b"print('new')\n")
+    git("checkout", "-q", "--detach", cwd=repo)
+    real = B._g
+    moved_to: list[str] = []
+
+    def racing(args, cwd, **kw):
+        if args and args[0] == "update-ref" and not moved_to:
+            # Someone moves main (a fast-forward) between the guard and the update.
+            git("update-ref", "refs/heads/main",
+                git("commit-tree", "HEAD^{tree}", "-p", "refs/heads/main", "-m", "theirs", cwd=repo), cwd=repo)
+            moved_to.append(git("rev-parse", "refs/heads/main", cwd=repo))
+        return real(args, cwd, **kw)
+
+    monkeypatch.setattr(B, "_g", racing)
+    with pytest.raises(B.GitRefused, match="changed while merging"):
+        B.merge(facts)
+    assert git("rev-parse", "refs/heads/main", cwd=repo) == moved_to[0], "their commit was overwritten"
+
+
+async def test_delete_waits_for_a_branch_read_in_flight_before_it_moves_the_worktree(app, repo, monkeypatch):
+    import asyncio
+    import time as _time
+
+    from tests.test_build_git_v1375 import new_branch_session
+    from tests.test_build_sessions_v1367 import asgi
+
+    view = await new_branch_session(app, repo)
+    sid, wt = view["id"], Path(view["git"]["worktree"])
+    order: list[str] = []
+    real_status, real_remove = B.status, B.remove_worktree
+
+    def slow_status(facts):
+        order.append("read-start")
+        _time.sleep(0.6)
+        out = real_status(facts)
+        order.append("read-end")
+        return out
+
+    def remove(home, facts):
+        order.append("remove-start")
+        return real_remove(home, facts)
+
+    monkeypatch.setattr(B, "status", slow_status)
+    monkeypatch.setattr(B, "remove_worktree", remove)
+
+    async def delete_soon():
+        while "read-start" not in order:
+            await asyncio.sleep(0.01)
+        return await asgi(app, "DELETE", f"/build/sessions/{sid}")
+
+    (s1, _st), (s2, done) = await asyncio.gather(asgi(app, "GET", f"/build/sessions/{sid}/git"), delete_soon())
+    assert s1 == 200 and s2 == 200, done
+    assert order == ["read-start", "read-end", "remove-start"]
+    assert not wt.exists() and done["worktree"]["moved"] is True
+
+
+def test_the_git_facts_whitelist_keeps_only_a_real_session_record():
+    good = {"repo": "C:/r", "worktree": "C:/r.ij-worktrees/s-1", "branch": "ij/s-1", "base": "main",
+            "pr_number": 7, "extra": "dropped", "trash": ["not", "a", "string"]}
+    kept = B.clean_git_record(good)
+    assert kept["pr_number"] == "7" and "extra" not in kept and "trash" not in kept
+    for missing in ("repo", "worktree"):
+        assert B.clean_git_record({k: v for k, v in good.items() if k != missing}) is None
+    assert B.clean_git_record({**good, "branch": "main"}) is None, "only an ij/ branch is a session's"
+    assert B.clean_git_record("not a dict") is None
