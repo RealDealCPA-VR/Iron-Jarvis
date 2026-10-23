@@ -3669,6 +3669,18 @@ does not need a bump, stop and bump it.
   written from the REAL daemon's answers must pin every provider the catalog
   can find on the machine (CLIs, on-disk logins, local servers), or it
   records the developer's PC.
+  v1.376.2 (a wrong answer from a SLOW close; v1.376.1 was published, its
+  Tests gate red on the real-Edge pin `test_real_edge_reads_the_console_and_
+  failed_requests_and_leaves_nothing` — `assert closed`): `close_blocking`
+  waited `CLOSE_TIMEOUT_S + 6` s for the close it hands the browser thread;
+  on the loaded runner the polite close + kill + folder removal took longer,
+  the fallback ("did not answer; terminating its job" — in the CI log) found
+  the kill handle already taken by the close still in flight, and answered
+  [] while that close went on to end every process. The wait is now
+  `CLOSE_TIMEOUT_S + CLOSE_SLACK_S` (30 s) — a hang detector, not a speed
+  bar. Pin: `test_a_slow_close_still_reports_the_processes_it_ended` (a
+  7 s folder removal with the polite bound at 0.1 s: CI's exact `[]` on the
+  old wait).
 
 - **A Build session in a git folder works on ITS OWN BRANCH in a worktree
   BESIDE the repository; the user's main checkout is touched by Merge only;

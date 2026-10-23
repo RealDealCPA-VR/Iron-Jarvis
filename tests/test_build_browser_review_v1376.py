@@ -1192,3 +1192,47 @@ def test_the_driver_node_override_reaches_playwrights_own_driver_lookup():
     # Outside the browser's start nothing leaks into Playwright's own lookup.
     assert transport.compute_driver_executable() == (plain_node, plain_cli)
     assert "ELECTRON_RUN_AS_NODE" not in transport.get_driver_env()
+
+
+# --------------------------------------------------------------------------- #
+# v1.376.1: a SLOW close is not a wedged one
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_slow_close_still_reports_the_processes_it_ended(monkeypatch):
+    """v1.376.1 (the Tests gate's real-Edge pin on a loaded runner, the log
+    said "agent browser close did not answer; terminating its job"):
+    `close_blocking` waited CLOSE_TIMEOUT_S + 6 s for the close it handed to
+    the browser thread. Past that it treated the thread as WEDGED — but the
+    close had already taken the browser's kill handle and was still going
+    (polite close, kill, then removing the throwaway folder), so the fallback
+    found nothing to kill and the close answered [] while it went on to end
+    every process. The wait is a hang detector: it now leaves room for every
+    bounded step of a close (CLOSE_SLACK_S). Held here by a folder removal
+    that takes 7 s with the polite close's bound shrunk to 0.1 s (the old
+    wait: 6.1 s)."""
+    from tests.test_build_browser_v1376 import DEV, FakeBackend
+
+    made: list[Any] = []
+
+    def factory(**kw):
+        backend = FakeBackend(**kw)
+        made.append(backend)
+        return backend
+
+    real_remove = PB._remove_work
+
+    def slow_remove(work):
+        time.sleep(7.0)
+        real_remove(work)
+
+    monkeypatch.setattr(PB, "CLOSE_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(PB, "_remove_work", slow_remove)
+    inst = PB.AgentBrowsers(backend_factory=factory)
+    try:
+        await inst.open("build:slow", DEV, preview=DEV)
+        closed = await inst.close("build:slow", "test")
+        assert closed == [424242], closed
+        assert made[0].killed and not inst.is_open("build:slow")
+    finally:
+        inst.shutdown()
