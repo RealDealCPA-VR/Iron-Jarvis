@@ -209,6 +209,13 @@ export function useHarnessAttachments() {
     setProblem(null);
   }, []);
 
+  /** v1.373.0: put a message's files back (it never started, or it came off
+   *  the waiting list) — unless the box already holds files of its own. */
+  const restore = useCallback((back: HarnessFile[]) => {
+    if (!back.length) return;
+    setFiles((prev) => (prev.length ? prev : back.slice(0, MAX_FILES)));
+  }, []);
+
   /** Call ``fn`` once the uploads in flight have settled (at once when none).
    *  ONE waiting call: a later one replaces it (one send per press of the
    *  box, however many presses landed while a picture went up). */
@@ -217,7 +224,7 @@ export function useHarnessAttachments() {
     else fn();
   }, []);
 
-  return { files, filesRef, uploading, busyRef, problem, add, remove, clear, whenSettled };
+  return { files, filesRef, uploading, busyRef, problem, add, remove, clear, restore, whenSettled };
 }
 
 /** The paperclip: opens the file picker. */

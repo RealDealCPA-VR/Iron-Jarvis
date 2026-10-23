@@ -88,8 +88,29 @@ import {
   SentAttachments,
   pastedFiles,
   useHarnessAttachments,
+  type HarnessFile,
 } from "@/components/harness/HarnessAttachments";
 import { previewAddressFor } from "@/components/harness/BrowserPreview";
+import { AtMenu, PickedChips, RewindList, SentPicks, SlashMenu } from "@/components/harness/HarnessComposerMenus";
+import { slashTokenAt, spliceToken, tokenAt } from "@/lib/slash";
+import { atMenuOpen, slashMenuOpen } from "@/lib/composerMenus";
+import { useProjectFilesState } from "@/lib/atMenuFiles";
+import {
+  atFileRows,
+  decodeSkills,
+  queuedItemBody,
+  queuedWords,
+  READ_LIMIT_WORDS,
+  READ_PER_MESSAGE,
+  sessionCommands,
+  skillFields,
+  slashRows,
+  type AtFile,
+  type PickedSkill,
+  type QueuedItem,
+  type SkillOption,
+  type SlashRow,
+} from "@/lib/buildComposer";
 import {
   armResumeWhenReady,
   cancelResumeWhenReady,
@@ -136,6 +157,15 @@ const MAX_QUEUED = 3;
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** What rides a NEW turn beside its words: the uploads (v1.371.0), the files
+ *  picked with "@" and the skill picked with "/" (v1.373.0). Kept whole so a
+ *  message that never started goes back in the box with all of it. */
+interface TurnExtras {
+  attachments: HarnessFile[];
+  files: AtFile[];
+  skill: PickedSkill | null;
 }
 
 /** The live reply: subscribed HERE, so the session does not re-render per token. */
@@ -225,7 +255,8 @@ export function HarnessSession({
   // v1.372.0: the helper agents the running turn started, one row each
   // (its `helper` frames; lib/buildHelpers). The reply keeps them after.
   const [helpers, setHelpers] = useState<HelperView[]>([]);
-  const [queued, setQueued] = useState<string[]>([]);
+  // v1.373.0: a waiting message keeps its own skill and files.
+  const [queued, setQueued] = useState<QueuedItem[]>([]);
   const turnRef = useRef<string | null>(null);
   const [turnId, setTurnId] = useState<string | null>(null);
   const [turnsEnded, setTurnsEnded] = useState(0);
@@ -235,6 +266,23 @@ export function HarnessSession({
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   // v1.371.0: pictures and files for the next message (HarnessAttachments).
   const att = useHarnessAttachments();
+  // v1.373.0 (part 2, Phase 2): "/" and "@" in the box. The caret and the
+  // two Escapes are what the chat's token menus read (lib/composerMenus);
+  // a pick leaves a chip: a skill for the next message, files of the folder.
+  const [caret, setCaret] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const [atDismissed, setAtDismissed] = useState(false);
+  const [menuActive, setMenuActive] = useState(0);
+  const [skill, setSkill] = useState<PickedSkill | null>(null);
+  const skillRef = useRef<PickedSkill | null>(null);
+  skillRef.current = skill;
+  const [atFiles, setAtFiles] = useState<AtFile[]>([]);
+  const atFilesRef = useRef<AtFile[]>([]);
+  atFilesRef.current = atFiles;
+  const [yourSkills, setYourSkills] = useState<SkillOption[] | null>(null);
+  const [folderSkills, setFolderSkills] = useState<SkillOption[] | null>(null);
+  const [folderSkillNote, setFolderSkillNote] = useState("");
+  const [rewindOpen, setRewindOpen] = useState(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -412,8 +460,29 @@ export function HarnessSession({
     [load, onChanged, threadId, refreshAccounts],
   );
 
+  /** A message that never started goes back in the box: its words (unless
+   *  the box holds words already) and what rode it — uploads, "@" files and
+   *  the "/" skill (each unless the box holds its own). Nothing is lost. */
+  const restoreUploads = att.restore;
+  const restoreToBox = useCallback(
+    (text: string, extras?: TurnExtras) => {
+      if (text) setInput((cur) => (cur.trim() ? cur : text));
+      if (!extras) return;
+      if (extras.skill) {
+        const back = extras.skill;
+        setSkill((cur) => cur ?? back);
+      }
+      if (extras.files.length) {
+        const back = extras.files;
+        setAtFiles((cur) => (cur.length ? cur : back));
+      }
+      if (extras.attachments.length) restoreUploads(extras.attachments);
+    },
+    [restoreUploads],
+  );
+
   const runTurn = useCallback(
-    async (text: string | null, rejoinId?: string, files?: readonly string[]) => {
+    async (text: string | null, rejoinId?: string, extras?: TurnExtras) => {
       const id = rejoinId ?? mintTurnId();
       turnRef.current = id;
       setTurnId(id);
@@ -431,14 +500,20 @@ export function HarnessSession({
       try {
         // v1.371.0: the message's files, and the page the Browser pane
         // shows (the agent may screenshot that dev server without asking).
+        // v1.373.0: the files picked with "@" in the folder, and the skill
+        // picked with "/" (`skill` for yours, `folder_skill` for the folder's).
         const preview = previewAddressFor(threadId);
+        const ups = extras?.attachments ?? [];
+        const picks = extras?.files ?? [];
         const res = await stream.run(
           rejoinId
             ? undefined
             : {
                 text,
                 turn_id: id,
-                ...(files && files.length ? { attachments: [...files] } : {}),
+                ...(ups.length ? { attachments: ups.map((f) => f.path) } : {}),
+                ...(picks.length ? { files: picks.map((f) => f.path) } : {}),
+                ...skillFields(extras?.skill),
                 ...(preview ? { preview_url: preview } : {}),
               },
           undefined,
@@ -472,17 +547,18 @@ export function HarnessSession({
           if (v?.turnId && v.turnId !== "running") {
             turnRef.current = null;
             setSending(false);
-            if (text) setInput((cur) => (cur.trim() ? cur : text));
+            if (text !== null) restoreToBox(text, extras);
             void runTurn(null, v.turnId);
             return;
           }
         }
         // An account limit is said by its card; the error frame repeats it.
         if (!limitSeenRef.current) setError(turnErrorText(e));
-        if (!started && text) {
-          // Never started: the words go back in the box, nothing was lost.
+        if (!started && text !== null) {
+          // Never started: the words and what rode them go back in the box,
+          // nothing was lost (v1.373.0: a file-only message too).
           setPending(null);
-          setInput((cur) => (cur.trim() ? cur : text));
+          restoreToBox(text, extras);
         }
       } finally {
         turnRef.current = null;
@@ -491,7 +567,7 @@ export function HarnessSession({
       }
       if (started) await settle(id, unread, clean);
     },
-    [stream, threadId, onFrame, load, settle],
+    [stream, threadId, onFrame, load, settle, restoreToBox],
   );
 
   // Open: read the session, its accounts, and follow a turn already running.
@@ -517,7 +593,7 @@ export function HarnessSession({
         );
         if (back.length) setInput((cur) => withSteersRestored(cur, back));
       }
-      if (v.queued.length) setQueued(v.queued.map((q) => q.text).slice(0, MAX_QUEUED));
+      if (v.queued.length) setQueued(v.queued.slice(0, MAX_QUEUED));
       if (v.running && v.turnId && v.turnId !== "running") void runTurn(null, v.turnId);
     });
     return () => {
@@ -540,9 +616,9 @@ export function HarnessSession({
   const queueRef = useRef(queued);
   queueRef.current = queued;
   const persistQueue = useCallback(
-    (items: string[]) => {
+    (items: QueuedItem[]) => {
       put(`/chat/threads/${encodeURIComponent(threadId)}/queue`, {
-        items: items.map((text) => ({ text })),
+        items: items.map(queuedItemBody),
       }).catch(() => {
         /* the queue still lives in this window */
       });
@@ -558,8 +634,10 @@ export function HarnessSession({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turnsEnded]);
 
-  async function send(textIn?: string) {
-    const fromBox = textIn === undefined;
+  /** Send the box (no argument) or a waiting message (its own words, skill
+   *  and files — v1.373.0). */
+  async function send(item?: QueuedItem) {
+    const fromBox = item === undefined;
     if (!view) return;
     // v1.371.0: a send never goes without its files — one pressed while a
     // picture is still going up waits for it, then reads the box as it is
@@ -568,11 +646,14 @@ export function HarnessSession({
       att.whenSettled(() => void send());
       return;
     }
-    const text = (textIn ?? boxRef.current?.value ?? input).trim();
-    const files = fromBox ? att.filesRef.current : [];
-    if (!text && files.length === 0) return;
+    const text = (item ? item.text : (boxRef.current?.value ?? input)).trim();
+    const files: HarnessFile[] = fromBox ? att.filesRef.current : (item.attachments ?? []);
+    const picks: AtFile[] = fromBox ? atFilesRef.current : (item.files ?? []);
+    const picked: PickedSkill | null = fromBox ? skillRef.current : (item.skill ?? null);
+    if (!text && files.length === 0 && picks.length === 0) return;
     if (busy) {
-      // A note while it works is words only; the files wait in the box.
+      // A note while it works is words only; the files and the skill wait
+      // in the box.
       if (text) await steer(text);
       return;
     }
@@ -581,17 +662,23 @@ export function HarnessSession({
       return;
     }
     const paths = files.map((f) => f.path);
+    const filePaths = picks.map((f) => f.path);
     if (fromBox) {
       setInput("");
+      setCaret(0);
       att.clear();
+      setAtFiles([]);
+      setSkill(null);
     }
     setPending({
       role: "user",
       content: text,
       at: new Date().toISOString(),
       ...(paths.length ? { attachmentPaths: paths } : {}),
+      ...(filePaths.length ? { filePaths } : {}),
+      ...(picked ? { skill: picked.name } : {}),
     });
-    await runTurn(text, undefined, paths);
+    await runTurn(text, undefined, { attachments: files, files: picks, skill: picked });
   }
 
   async function steer(text: string) {
@@ -613,17 +700,36 @@ export function HarnessSession({
     }
   }
 
+  /** Ctrl+Enter while it works: the box waits to be sent after the reply —
+   *  its words AND its own skill and files (v1.373.0), so the next message
+   *  typed meanwhile starts empty. */
   function queueMessage() {
     const text = input.trim();
-    if (!text) return;
+    const files = att.filesRef.current;
+    const picks = atFilesRef.current;
+    if (!text && files.length === 0 && picks.length === 0) return;
+    if (att.busyRef.current) {
+      setError("A file is still being attached. Queue the message when it is done.");
+      return;
+    }
     if (queued.length >= MAX_QUEUED) {
       setError(`Up to ${MAX_QUEUED} messages can wait. Send or remove one first.`);
       return;
     }
-    const next = [...queued, text];
+    const item: QueuedItem = {
+      text,
+      ...(skillRef.current ? { skill: skillRef.current } : {}),
+      ...(picks.length ? { files: picks } : {}),
+      ...(files.length ? { attachments: files } : {}),
+    };
+    const next = [...queued, item];
     setQueued(next);
     persistQueue(next);
     setInput("");
+    setCaret(0);
+    att.clear();
+    setAtFiles([]);
+    setSkill(null);
   }
 
   async function stop() {
@@ -823,6 +929,137 @@ export function HarnessSession({
     }
   }
 
+  // ----------------------------------------- "/" and "@" in the box (v1.373.0)
+  const offline = !daemon.checking && !daemon.online;
+  const menuState = { text: input, caret, slashDismissed, atDismissed };
+  // A running reply does NOT close them (the chat's composer does): a skill
+  // or a file picked now rides the message queued with Ctrl+Enter.
+  const slashOpen = !!view && !offline && slashMenuOpen(menuState, false);
+  const atOpen = !!view && !offline && atMenuOpen(menuState, false);
+  const slashToken = slashOpen ? slashTokenAt(input, caret) : null;
+  const atToken = atOpen ? tokenAt(input, caret, "@") : null;
+  // The two skill lists, asked the first time "/" opens in this session (an
+  // older Iron Jarvis has no folder list: none, quietly).
+  useEffect(() => {
+    if (!slashOpen) return;
+    if (yourSkills === null) {
+      get<unknown>("/skills")
+        .then((r) => setYourSkills(decodeSkills(r, "yours")))
+        .catch(() => setYourSkills([]));
+    }
+    if (folderSkills === null) {
+      get<unknown>(`/build/sessions/${encodeURIComponent(threadId)}/skills`)
+        .then((r) => {
+          setFolderSkills(decodeSkills(r, "folder"));
+          const note = r && typeof r === "object" ? (r as { note?: unknown }).note : "";
+          setFolderSkillNote(typeof note === "string" ? note : "");
+        })
+        .catch(() => setFolderSkills([]));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slashOpen]);
+  const commands = useMemo(() => sessionCommands(view?.mode ?? "act"), [view?.mode]);
+  const slashList: SlashRow[] = slashToken
+    ? slashRows(slashToken.query, commands, folderSkills, yourSkills, skill)
+    : [];
+  // The SESSION's folder only (GET /fs/files on it, the chat's own query).
+  const folderFiles = useProjectFilesState(atOpen, view?.folder || null);
+  const atList = atToken
+    ? atFileRows(folderFiles.listing, atToken.query, atFiles.map((f) => f.path))
+    : { rows: [] as AtFile[], more: 0 };
+  // The highlighted row goes back to the top as the typed word changes.
+  const menuWord = slashToken ? `/${slashToken.query}` : atToken ? `@${atToken.query}` : "";
+  useEffect(() => {
+    setMenuActive(0);
+  }, [menuWord]);
+
+  /** Put the caret at `pos` once React has written the new text. */
+  function placeCaret(pos: number) {
+    boxRef.current?.focus();
+    requestAnimationFrame(() => {
+      const el = boxRef.current;
+      if (el) el.selectionStart = el.selectionEnd = pos;
+    });
+  }
+
+  /** A pick takes ONLY the "/word" or "@word" out of the message (the chat's
+   *  v1.105.0 rule: a prompt already written is never eaten). */
+  function consumeToken(tok: { start: number; end: number; query: string }) {
+    setInput(spliceToken(input, tok));
+    setCaret(tok.start);
+    placeCaret(tok.start);
+  }
+
+  function pickSlash(row: SlashRow) {
+    const tok = slashTokenAt(input, caret);
+    if (!tok || !view) return;
+    setSlashDismissed(false);
+    consumeToken(tok);
+    if (row.kind === "skill") {
+      setSkill({ name: row.skill.name, source: row.skill.source });
+      return;
+    }
+    // The session's commands call what the box already has.
+    if (row.command.id === "plan") void patchSetup({ mode: view.mode === "plan" ? "act" : "plan" });
+    else if (row.command.id === "rewind") setRewindOpen(true);
+    else setModelMenuOpen(true);
+  }
+
+  function pickAt(f: AtFile) {
+    const tok = tokenAt(input, caret, "@");
+    if (!tok) return;
+    setAtDismissed(false);
+    consumeToken(tok);
+    if (atFilesRef.current.some((x) => x.path === f.path)) return;
+    // A file picked by name must be READ: one turn reads READ_PER_MESSAGE
+    // files, uploads included, and the daemon refuses a message past it.
+    if (att.filesRef.current.length + atFilesRef.current.length >= READ_PER_MESSAGE) {
+      setError(READ_LIMIT_WORDS);
+      return;
+    }
+    setAtFiles((cur) => [...cur, f]);
+  }
+
+  /** The menus' keys, asked before the box's own: ↑↓ move, Enter or Tab
+   *  picks, Escape closes the menu (or the rewind list) WITHOUT sending and
+   *  without touching the words. True when the key was handled. */
+  function onMenuKey(e: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
+    if (slashToken || atToken) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (slashToken) setSlashDismissed(true);
+        else setAtDismissed(true);
+        return true;
+      }
+      const n = slashToken ? slashList.length : atList.rows.length;
+      if (n === 0) return false; // nothing to pick: Enter sends the words
+      const cur = Math.min(menuActive, n - 1);
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setMenuActive(e.key === "ArrowDown" ? Math.min(cur + 1, n - 1) : Math.max(cur - 1, 0));
+        return true;
+      }
+      const enter = e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey;
+      if (enter || (e.key === "Tab" && !e.shiftKey)) {
+        e.preventDefault();
+        if (slashToken) pickSlash(slashList[cur]);
+        else pickAt(atList.rows[cur]);
+        return true;
+      }
+      return false;
+    }
+    if (rewindOpen && e.key === "Escape") {
+      e.preventDefault();
+      setRewindOpen(false);
+      return true;
+    }
+    return false;
+  }
+
+  /** Every way the caret moves (the chat's four: onSelect alone never fires
+   *  for a collapsed caret). */
+  const trackCaret = (e: React.SyntheticEvent<HTMLTextAreaElement>) => setCaret(e.currentTarget.selectionStart ?? 0);
+
   // ------------------------------------------------------------- render
   // Keep the newest line in view — the TRANSCRIPT scrolls, never the page (a
   // scrollIntoView would drag the whole window down on a phone).
@@ -851,10 +1088,11 @@ export function HarnessSession({
   const levels = reasoningLevelsOf(reasoningRowFor(choice, catalog.models, defaultProvider, defaultModel));
   const reasoningDef = reasoningDefaultOf(reasoningRowFor(choice, catalog.models, defaultProvider, defaultModel));
   const trigger = modelTriggerOf(choice, catalog.models, defaultProvider, defaultModel);
-  const offline = !daemon.checking && !daemon.online;
   const place = !vendor && !currentAccount ? placeWords(provider, model, catalog.models) : "";
   // v1.371.0: a picture alone is a message; one still going up is waited for.
-  const sendReady = (!!input.trim() || att.files.length > 0 || att.uploading) && !!view && !offline;
+  // v1.373.0: so is a file picked with "@".
+  const sendReady =
+    (!!input.trim() || att.files.length > 0 || att.uploading || atFiles.length > 0) && !!view && !offline;
 
   if (loadError && !view) {
     return (
@@ -1029,6 +1267,9 @@ export function HarnessSession({
                   ) : null}
                   {/* v1.371.0: the pictures and files the message carried. */}
                   <SentAttachments paths={m.attachmentPaths ?? []} />
+                  {/* v1.373.0: the folder's files picked with "@", and the
+                      skill picked with "/". */}
+                  <SentPicks files={m.filePaths} skill={m.skill} />
                   {/* v1.370.0: rewind to before this message (two presses;
                       a refusal is listed in words). Only a message the
                       daemon wrote has a turn to rewind to. */}
@@ -1200,7 +1441,7 @@ export function HarnessSession({
                   key={k}
                   className="inline-flex max-w-full items-center gap-1 rounded-full bg-white/[0.06] px-2.5 py-1 text-[12px] text-zinc-400"
                 >
-                  <span className="truncate">Waiting to send: {q}</span>
+                  <span className="truncate">Waiting to send: {queuedWords(q)}</span>
                   <button
                     type="button"
                     aria-label="Remove this waiting message"
@@ -1233,6 +1474,44 @@ export function HarnessSession({
               void att.add(dropped);
             }}
           >
+            {/* v1.373.0: "/" and "@" — above the box, never over it. */}
+            {slashToken ? (
+              <SlashMenu
+                rows={slashList}
+                active={Math.min(menuActive, Math.max(slashList.length - 1, 0))}
+                loading={yourSkills === null || folderSkills === null}
+                note={folderSkillNote}
+                onPick={pickSlash}
+                onHover={setMenuActive}
+              />
+            ) : atToken ? (
+              <AtMenu
+                rows={atList.rows}
+                more={atList.more}
+                active={Math.min(menuActive, Math.max(atList.rows.length - 1, 0))}
+                loading={folderFiles.listing === null && !folderFiles.failed}
+                failed={folderFiles.failed}
+                onPick={pickAt}
+                onHover={setMenuActive}
+              />
+            ) : rewindOpen ? (
+              <RewindList
+                threadId={threadId}
+                disabled={busy || view.archived}
+                onRewound={(q) => void onRewound(q)}
+                onTouched={() => void onRewound("")}
+                onClose={() => {
+                  setRewindOpen(false);
+                  boxRef.current?.focus({ preventScroll: true });
+                }}
+              />
+            ) : null}
+            <PickedChips
+              skill={skill}
+              files={atFiles}
+              onRemoveSkill={() => setSkill(null)}
+              onRemoveFile={(i) => setAtFiles((cur) => cur.filter((_, j) => j !== i))}
+            />
             <AttachmentChips files={att.files} uploading={att.uploading} onRemove={att.remove} />
             {att.problem ? (
               <p data-testid="harness-attach-problem" role="alert" className="px-3 pt-1 text-[12px] text-tone-warn">
@@ -1244,12 +1523,24 @@ export function HarnessSession({
               aria-label="Message"
               data-testid="harness-input"
               placeholder={
-                busy ? "Add a note while it works (Enter), or Ctrl+Enter to send after it" : `Build in ${view.folderName}…`
+                busy
+                  ? "Add a note while it works (Enter), or Ctrl+Enter to send after it"
+                  : `Build in ${view.folderName}…  / for commands and skills, @ for files`
               }
               value={input}
               rows={2}
               disabled={offline}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                setCaret(e.target.selectionStart ?? e.target.value.length);
+                // Typing again brings an Escaped menu back (the chat's rule).
+                setSlashDismissed(false);
+                setAtDismissed(false);
+              }}
+              onKeyUp={trackCaret}
+              onClick={trackCaret}
+              onFocus={trackCaret}
+              onSelect={trackCaret}
               onPaste={(e) => {
                 // v1.371.0: a pasted picture is attached; pasted text is typed.
                 const pasted = pastedFiles(e.clipboardData);
@@ -1259,6 +1550,8 @@ export function HarnessSession({
               }}
               onKeyDown={(e) => {
                 if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                // v1.373.0: an open "/" or "@" menu owns ↑↓, Enter, Tab, Escape.
+                if (onMenuKey(e)) return;
                 if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && busy) {
                   e.preventDefault();
                   queueMessage();

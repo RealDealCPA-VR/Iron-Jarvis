@@ -428,8 +428,13 @@ class HarnessTurn:
         # named only when page_screenshot is in this turn's gate. Like the
         # date, it changes per turn and is NOT part of the fingerprint.
         from .preview import prompt_line
+        # v1.373.0 (part 2, Phase 2): a skill from the session's own folder,
+        # picked with "/" for this message (harness/picked_skill) — its
+        # playbook, in the chat's "/skill" words. Per message, so it is NOT
+        # part of the fingerprint either.
+        from .picked_skill import prompt_section
 
-        return "\n\n" + self.rendered + date + prompt_line(self.plan.gate)
+        return "\n\n" + self.rendered + date + prompt_line(self.plan.gate) + prompt_section()
 
     @staticmethod
     def system_without_exits(system: str, exit_lines: str) -> str:

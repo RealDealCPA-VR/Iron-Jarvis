@@ -116,13 +116,32 @@ export function projectFolders(listing: ProjectListing): ProjectEntry[] {
   return out;
 }
 
+/** True when every character of `q` appears in `text` in order ("hsess"
+ *  in "harnesssession.tsx"): the loose match a file picker offers after the
+ *  exact ones. Both already lower case. */
+export function holdsInOrder(text: string, q: string): boolean {
+  let at = 0;
+  for (const ch of q) {
+    at = text.indexOf(ch, at);
+    if (at < 0) return false;
+    at += 1;
+  }
+  return true;
+}
+
 /** How well `name`/`rel` match `q`: 0 the name starts with it, 1 the name
- *  holds it, 2 only the path inside the project does; null no match. */
-function score(name: string, rel: string, q: string): number | null {
+ *  holds it, 2 only the path inside the project does; with `fuzzy` (v1.373.0,
+ *  the Build session's "@"), 3 the name holds its letters in order, 4 the
+ *  path does; null no match. */
+function score(name: string, rel: string, q: string, fuzzy = false): number | null {
   const n = name.toLowerCase();
   if (n.startsWith(q)) return 0;
   if (n.includes(q)) return 1;
-  if (rel.toLowerCase().includes(q)) return 2;
+  const r = rel.toLowerCase();
+  if (r.includes(q)) return 2;
+  if (!fuzzy) return null;
+  if (holdsInOrder(n, q)) return 3;
+  if (holdsInOrder(r, q)) return 4;
   return null;
 }
 
@@ -132,13 +151,16 @@ function score(name: string, rel: string, q: string): number | null {
  * files. Something typed: the folders and files whose name or path holds it,
  * best match first (a name that starts with it, then one that holds it, then
  * a path), folders before files at the same rank, newest first within that.
- * `attached` paths are not offered again.
+ * `attached` paths are not offered again. `fuzzy` (v1.373.0, the Build
+ * session's "@") also matches a name or path that holds the typed letters in
+ * order, ranked after every exact match; the chat's menu does not pass it.
  */
 export function matchProjectEntries(
   listing: ProjectListing | null,
   query: string,
   attached: readonly string[] = [],
   max: number = AT_FILES_ROWS_MAX,
+  opts: { fuzzy?: boolean } = {},
 ): ProjectEntry[] {
   if (!listing) return [];
   const q = query.trim().toLowerCase();
@@ -153,7 +175,7 @@ export function matchProjectEntries(
   }
   const ranked: { e: ProjectEntry; s: number; i: number }[] = [];
   [...folders, ...files].forEach((e, i) => {
-    const s = score(e.name, e.rel, q);
+    const s = score(e.name, e.rel, q, opts.fuzzy === true);
     if (s !== null) ranked.push({ e, s, i });
   });
   ranked.sort((a, b) => a.s - b.s || a.i - b.i);
@@ -181,21 +203,37 @@ export function entryWhere(e: ProjectEntry): string {
  * for a closed menu or another folder is dropped; a failure lists nothing.
  */
 export function useProjectFiles(open: boolean, root: string | null): ProjectListing | null {
-  const [listing, setListing] = useState<ProjectListing | null>(null);
+  return useProjectFilesState(open, root).listing;
+}
+
+/** {@link useProjectFiles}, also saying whether the read FAILED (v1.373.0):
+ *  the Build session's "@" menu says "reading" while it waits and "could not
+ *  be read" after a failure, where the chat's menu simply draws nothing. */
+export function useProjectFilesState(
+  open: boolean,
+  root: string | null,
+): { listing: ProjectListing | null; failed: boolean } {
+  const [state, setState] = useState<{ listing: ProjectListing | null; failed: boolean }>({
+    listing: null,
+    failed: false,
+  });
   const seqRef = useRef(0);
   useEffect(() => {
     const seq = ++seqRef.current;
     if (!open || !root) {
-      setListing(null);
+      // The same state object when nothing changes: no extra render.
+      setState((prev) => (prev.listing === null && !prev.failed ? prev : { listing: null, failed: false }));
       return;
     }
     get<unknown>(projectFilesPath(root))
       .then((d) => {
-        if (seq === seqRef.current) setListing(decodeProjectFiles(d));
+        if (seq !== seqRef.current) return;
+        const listing = decodeProjectFiles(d);
+        setState({ listing, failed: listing === null });
       })
       .catch(() => {
-        if (seq === seqRef.current) setListing(null);
+        if (seq === seqRef.current) setState({ listing: null, failed: true });
       });
   }, [open, root]);
-  return listing;
+  return state;
 }

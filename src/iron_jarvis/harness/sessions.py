@@ -90,6 +90,10 @@ LINE_KEYS: tuple[str, ...] = (
     # v1.372.0 (part 2, Phase 1): the helper agents a reply's turn started
     # (``routes/build._ReplyWatch.helper_lines``).
     "helpers",
+    # v1.373.0 (part 2, Phase 2): on a question, the files picked with "@"
+    # from the session's folder (:func:`folder_files`) and the skill picked
+    # with "/" — what rode the turn beside the words.
+    "filePaths", "skill",
 )
 
 
@@ -460,11 +464,16 @@ def history(row: Any) -> list[dict[str, str]]:
             # Dropping its line left the reply to it with no question — the
             # next turn's history could then START with the assistant, and
             # the model never learned a picture had been sent.
-            content = sent_files_line(m.get("attachmentPaths"))
+            # v1.373.0: a file picked with "@" alone counts the same way.
+            content = sent_files_line(_listed(m.get("attachmentPaths")) + _listed(m.get("filePaths")))
         if role not in ("user", "assistant") or not content.strip():
             continue
         out.append({"role": role, "content": content})
     return out
+
+
+def _listed(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
 
 
 def sent_files_line(paths: Any) -> str:
@@ -717,6 +726,63 @@ def folder_problem(folder: str) -> str | None:
         return f"that folder cannot be used: {type(exc).__name__}"
 
 
+#: Files picked with "@" one message may carry (the screen's list is bounded too).
+MAX_FOLDER_FILES = 20
+
+
+class FolderFileRefused(ValueError):
+    """A file picked with "@" is not a readable file inside the session's
+    folder. The message is one plain sentence naming it."""
+
+
+def folder_files(folder: str, paths: Iterable[Any]) -> list[str]:
+    """The files picked with "@" for one message (v1.373.0, part 2 Phase 2),
+    each checked to be a FILE INSIDE the session's ``folder`` — the
+    attachments' read gate is broad on purpose (an upload lives elsewhere),
+    so these are checked against the folder HERE, before the turn reads them.
+
+    A path is joined to the folder when relative, then RESOLVED (links,
+    junctions and ``..`` followed) and must land inside the resolved folder
+    (``fs_policy``'s own containment), be a file, and pass ``fs_read_ok`` (the
+    protected folders, the user's readable-folders setting). The answer is the
+    resolved paths, in the order picked, each once — the turn reads exactly
+    the file that was checked. Raises :class:`FolderFileRefused` with one
+    sentence for the first that fails; nothing is read before every one
+    passed. BLOCKING (stats): call it off the loop."""
+    from ..core.fs_policy import _canonical, _within, fs_read_ok
+
+    picked = [str(p or "").strip() for p in paths if str(p or "").strip()]
+    if not picked:
+        return []
+    if len(picked) > MAX_FOLDER_FILES:
+        raise FolderFileRefused(f"A message can carry at most {MAX_FOLDER_FILES} files from the folder.")
+    try:
+        root = _canonical(str(folder or "").strip())
+    except Exception:  # noqa: BLE001 — an unreadable folder refuses every file
+        raise FolderFileRefused("This session's folder cannot be read now.") from None
+    out: list[str] = []
+    for raw in picked:
+        name = raw.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] or raw
+        try:
+            candidate = Path(raw)
+            if not candidate.is_absolute():
+                candidate = Path(str(folder).strip()) / candidate
+            target = _canonical(candidate)
+        except Exception:  # noqa: BLE001 — an unparseable path is not in the folder
+            raise FolderFileRefused(f"{name} is not a file in this session's folder.") from None
+        if target == root or not _within(target, root):
+            raise FolderFileRefused(f"{name} is not in this session's folder, so it was not sent.")
+        if not target.is_file():
+            raise FolderFileRefused(f"{name} is not a file in this session's folder.")
+        ok, why = fs_read_ok(target)
+        if not ok:
+            raise FolderFileRefused(f"{name} cannot be read: {why}")
+        text = str(target)
+        if text not in out:
+            out.append(text)
+    return out
+
+
 def resolved_folder(folder: str) -> str:
     """The folder as stored: absolute and normalised (never resolved through
     links — the user's own spelling of a drive stays)."""
@@ -738,6 +804,7 @@ __all__ = [
     "end_session_programs",
     "folder_key",
     "folder_names",
+    "folder_files",
     "folder_problem",
     "get_row",
     "history",

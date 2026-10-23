@@ -67,12 +67,16 @@ export function fitAtMenu(m: {
   clipTop: number;
   clipBottom: number;
   viewportHeight: number;
+  /** v1.373.0 (the Build session's box): always above the card, never over
+   *  it, and never past the top edge — even when that leaves little room. */
+  aboveOnly?: boolean;
 }): AtMenuFit | null {
   if (!(m.cardBottom > m.cardTop) || !(m.viewportHeight > 0)) return null;
   const top = Math.max(m.clipTop, 0);
   const bottom = Math.min(m.clipBottom, m.viewportHeight);
   const cap = Math.min(AT_MENU_MAX_PX, Math.floor(m.viewportHeight * AT_MENU_MAX_VH));
   const above = Math.floor(m.cardTop - AT_MENU_GAP_PX - AT_MENU_EDGE_PX - top);
+  if (m.aboveOnly) return { side: "above", maxHeight: Math.max(0, Math.min(cap, above)) };
   const below = Math.floor(bottom - m.cardBottom - AT_MENU_GAP_PX - AT_MENU_EDGE_PX);
   const side: AtMenuSide =
     above >= Math.min(cap, AT_MENU_COMFORT_PX) || above >= below ? "above" : "below";
@@ -104,7 +108,9 @@ export function useAtMenuFit(
   menuRef: RefObject<HTMLElement | null>,
   open: boolean,
   key: string,
+  opts: { aboveOnly?: boolean } = {},
 ): AtMenuFit | null {
+  const aboveOnly = opts.aboveOnly === true;
   const [fit, setFit] = useState<AtMenuFit | null>(null);
   useLayoutEffect(() => {
     if (!open) {
@@ -124,6 +130,7 @@ export function useAtMenuFit(
         clipTop: clip ? clip.top : 0,
         clipBottom: clip ? clip.bottom : vh,
         viewportHeight: vh,
+        aboveOnly,
       });
       setFit((prev) => (sameFit(prev, next) ? prev : next));
     };
@@ -134,6 +141,6 @@ export function useAtMenuFit(
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
     };
-  }, [menuRef, open, key]);
+  }, [menuRef, open, key, aboveOnly]);
   return fit;
 }

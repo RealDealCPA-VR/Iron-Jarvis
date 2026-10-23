@@ -25,7 +25,11 @@ What these routes add:
   the question). The turn is NAMED and DAEMON-OWNED (``TurnLogs``): leaving
   Build, a reload or a closed window does not stop it; Stop does. The daemon
   writes the question when the turn starts and the reply when it ends — the
-  screen never saves a session's transcript;
+  screen never saves a session's transcript. v1.373.0: the box's "/" and "@"
+  ride it as ``skill`` / ``folder_skill`` (a playbook for this message) and
+  ``files`` (files picked in the session's folder, checked to be inside it);
+* ``GET /build/sessions/{id}/skills`` (v1.373.0) — the folder's own harness
+  skills, for the "/" menu;
 * ``POST /build/sessions/{id}/answer {ask_id, answer | skip}`` — the user's
   answer to an ``ask_user`` question of THIS session's running turn.
 
@@ -135,6 +139,21 @@ class BuildTurnBody(BaseModel):
     #: dropped by ``harness.preview.local_address`` (a 422 would have failed
     #: the whole message over the pane's address).
     preview_url: str = ""
+    #: v1.373.0 (part 2, Phase 2): a skill picked with "/" in the box, loaded
+    #: for this turn as the chat's "/skill" playbook (``ChatBody.skill``). An
+    #: unknown one is refused (404, the chat's words) before any model call.
+    skill: str = Field(default="", max_length=200)
+    #: v1.373.0: files picked with "@" from the SESSION's folder. Each must be
+    #: a file inside that folder (``harness/sessions.folder_files``: links and
+    #: ".." resolved first), and with the uploads no more than one turn reads
+    #: (``chat_turn._MAX_ATTACHMENTS``), or the message is refused in words;
+    #: the turn reads them the way it reads an attachment.
+    files: list[str] = Field(default_factory=list, max_length=20)
+    #: v1.373.0: a skill of the session FOLDER's own harness layer
+    #: (``.ironjarvis/harness/skills/<name>``), picked with "/" — read through
+    #: the layer's validator and scanned (``harness/picked_skill``). One skill
+    #: per message: ``skill`` or this, not both.
+    folder_skill: str = Field(default="", max_length=64)
 
 
 class BuildRewindBody(BaseModel):
@@ -981,6 +1000,9 @@ class WaitEnded(Exception):
 async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            attachments: "list[str] | None" = None,
                            preview_url: str = "",
+                           skill: str = "",
+                           files: "list[str] | None" = None,
+                           folder_skill: str = "",
                            continuation: bool = False,
                            resume_of: "dict[str, Any] | None" = None) -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
@@ -1002,7 +1024,17 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     limit card in one locked write — right before the question is written,
     so a Cancel or a Choose account that landed while the account was being
     re-checked starts nothing (:class:`WaitEnded`), and the continuation's
-    own limit card can never be wiped by a clear that ran after it."""
+    own limit card can never be wiped by a clear that ran after it.
+
+    v1.373.0 (part 2, Phase 2): ``skill`` — a skill picked with "/" rides the
+    turn as ``ChatBody.skill`` (the lane's eager check refuses an unknown one
+    with a 404 before anything is written or asked of a model); ``files`` —
+    files picked with "@", checked to be inside the session's folder
+    (``harness/sessions.folder_files``; 400 in words otherwise), then read
+    like attachments; ``folder_skill`` — a skill of the folder's own harness
+    layer (``harness/picked_skill``; 404 in words when the folder's valid
+    layer has none by that name). The question line records them
+    (``skill``, ``filePaths``)."""
     from .chat import _turn_logs
     from ...iron_proxy.pin import reset_pin, set_pin
 
@@ -1028,6 +1060,48 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             raise HTTPException(
                 status_code=409, detail=f"This session's folder cannot be used now: {problem}",
             )
+        # v1.373.0: the "@" files — inside this session's folder, or nothing
+        # is started (and nothing outside it is read).
+        picked: list[str] = []
+        if files:
+            try:
+                picked = await asyncio.to_thread(S.folder_files, folder, list(files))
+            except S.FolderFileRefused as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from None
+            # The lane reads this many attachments per turn and drops the rest
+            # without a word (``chat_turn._MAX_ATTACHMENTS``). A file picked by
+            # name must be READ, or the saved question would claim it was sent:
+            # a message that would lose some is refused in words instead.
+            from ..chat_turn import _MAX_ATTACHMENTS
+
+            total = len(attachments or []) + len(picked)
+            if total > _MAX_ATTACHMENTS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"One message reads at most {_MAX_ATTACHMENTS} files, and this one has {total}. "
+                        "Remove some, or send them over two messages."
+                    ),
+                )
+        # v1.373.0: a skill of the folder's own harness layer — its playbook,
+        # read and scanned now, rides the harness block (``picked_skill``).
+        folder_skill = str(folder_skill or "").strip()
+        playbook = ""
+        if folder_skill:
+            if str(skill or "").strip():
+                raise HTTPException(status_code=400, detail="Pick one skill per message.")
+            from ...harness.picked_skill import read_playbook
+
+            try:
+                known = set(platform.registry.names())
+            except Exception:  # noqa: BLE001 — the validator then skips tool names
+                known = None
+            playbook = await asyncio.to_thread(
+                read_playbook, folder, folder_skill, known_tools=known,
+                event_bus=getattr(platform, "event_bus", None), session_id=S.session_id_for(thread_id),
+            ) or ""
+            if not playbook:
+                raise HTTPException(status_code=404, detail=f"no such skill in this folder: {folder_skill}")
         setup = _setup_of(row)
         pin, account_provider = await asyncio.to_thread(turn_account, platform, thread_id, setup)
         from ...projects.locate import project_for_path
@@ -1053,8 +1127,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # The Build screen draws the question cards: an app's question
             # and the model's own (ask_user).
             mcp_cards=True,
-            attachments=list(attachments or []),
+            attachments=[*list(attachments or []), *picked],
             local_only=setup.get("local_only") is True,
+            skill=str(skill or "").strip(),
         )
         holder: dict[str, Any] = {}
         token = set_pin(pin) if pin is not None else None
@@ -1071,6 +1146,10 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         from ...providers.hold import reset_hold, set_hold
 
         hold_token = set_hold(*_turn_pair(platform, chat_body, project))
+        # v1.373.0: the folder skill picked with "/", for the harness block.
+        from ...harness.picked_skill import reset_picked, set_picked
+
+        picked_token = set_picked(folder_skill, playbook)
         try:
             try:
                 gen = await stream_chat_turn(
@@ -1099,6 +1178,10 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             question: dict[str, Any] = {"role": "user", "content": text, "turnId": turn_id}
             if attachments:
                 question["attachmentPaths"] = list(attachments)
+            if picked:
+                question["filePaths"] = list(picked)
+            if chat_body.skill or folder_skill:
+                question["skill"] = chat_body.skill or folder_skill
             if continuation:
                 question["continuation"] = True
             saved = await asyncio.to_thread(S.append_lines, platform.engine, thread_id, [question])
@@ -1110,6 +1193,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
             ))
         finally:
+            reset_picked(picked_token)
             reset_hold(hold_token)
             reset_preview(preview_token)
             if token is not None:
@@ -1655,6 +1739,25 @@ def register(app: FastAPI, d: Any) -> None:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from None
         return {"checkpoints": points}
 
+    @app.get("/build/sessions/{thread_id}/skills")
+    def build_folder_skills(thread_id: str) -> dict[str, Any]:
+        """v1.373.0 (part 2, Phase 2): the session FOLDER's own harness skills
+        for the box's "/" menu (``{skills: [{name, description, rel}], note}``)
+        — only a VALID layer's (the turn would not read the others); an
+        invalid layer offers none and its ``note`` says why. The user's own
+        skills are ``GET /skills``, as in Chat. Sync: the threadpool runs it."""
+        from ...harness.picked_skill import folder_skills
+
+        row = S.get_row(d.platform.engine, thread_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such Build session")
+        try:
+            known = set(d.platform.registry.names())
+        except Exception:  # noqa: BLE001 — the validator then skips tool names
+            known = None
+        skills, note = folder_skills(S.folder_of(row), known_tools=known)
+        return {"skills": skills, "note": note}
+
     @app.post("/build/sessions/{thread_id}/rewind")
     async def build_rewind(thread_id: str, body: BuildRewindBody) -> Any:
         """Rewind the session to before turn ``to`` — files and conversation
@@ -1670,9 +1773,10 @@ def register(app: FastAPI, d: Any) -> None:
 
         platform = d.platform
         text = (body.text or "").strip()
-        if not text and not body.attachments:
+        if not text and not body.attachments and not body.files:
             # v1.371.0: a picture alone is a message (the chat page's rule,
-            # v1.275.0); nothing at all is not.
+            # v1.275.0) — v1.373.0: so is a file picked with "@"; nothing at
+            # all is not (a skill alone has nothing to work on).
             raise HTTPException(status_code=400, detail="Write a message first.")
         if len(text) > MAX_TURN_CHARS:
             raise HTTPException(status_code=413, detail="That message is too long.")
@@ -1707,7 +1811,10 @@ def register(app: FastAPI, d: Any) -> None:
         try:
             lg = await start_build_turn(d, thread_id, text, turn_id,
                                         attachments=list(body.attachments or []),
-                                        preview_url=body.preview_url)
+                                        preview_url=body.preview_url,
+                                        skill=body.skill,
+                                        files=list(body.files or []),
+                                        folder_skill=body.folder_skill)
         except SessionBusy:
             return JSONResponse(
                 status_code=409,

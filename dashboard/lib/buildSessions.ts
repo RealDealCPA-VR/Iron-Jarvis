@@ -17,6 +17,7 @@ import { ApiError, get, patch, post, del } from "@/lib/api";
 import { BUILD_SESSION_PREFIX } from "@/lib/buildLinks";
 import type { PlanStepState, PlanView } from "@/lib/planChecklist";
 import type { PaneMessage } from "@/components/terminal/paneWork";
+import { decodeQueuedItem, type QueuedItem } from "@/lib/buildComposer";
 
 // Where a Build session opens lives in the import-free lib/buildLinks (the
 // bell and the Activity rows read it); re-exported here for the screen.
@@ -119,9 +120,9 @@ export interface BuildSetup {
   accountName: string;
 }
 
-export interface QueuedItem {
-  text: string;
-}
+/** A waiting message (Ctrl+Enter): its words and, since v1.373.0, its own
+ *  skill and files (lib/buildComposer decodes them). */
+export type { QueuedItem } from "@/lib/buildComposer";
 
 export interface BuildSessionView extends BuildSessionRow {
   folder: string;
@@ -166,6 +167,10 @@ export type BuildMessage = PaneMessage & {
   /** v1.372.0: the helper agents the reply's turn started (raw; read by
    *  lib/buildHelpers decodeSavedHelpers). */
   helpers?: unknown;
+  /** v1.373.0: on a question, the files picked with "@" in the session's
+   *  folder, and the skill picked with "/" (what rode it beside the words). */
+  filePaths?: string[];
+  skill?: string;
 };
 
 /** The keys a line may carry (the daemon's LINE_KEYS). Anything else dies. */
@@ -200,6 +205,9 @@ const LINE_KEYS = [
   "accountLimit",
   // v1.372.0 (part 2, Phase 1): the helper agents a reply's turn started.
   "helpers",
+  // v1.373.0 (part 2, Phase 2): what rode a question — "@" files, a "/" skill.
+  "filePaths",
+  "skill",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {
@@ -268,10 +276,10 @@ export function decodeSessionView(raw: unknown): BuildSessionView | null {
       .map(decodeMessage)
       .filter((m): m is BuildMessage => m !== null),
     sessionId: str(r.session_id, 140) || `${BUILD_SESSION_PREFIX}${row.id}`,
+    // v1.373.0: a waiting message keeps its own skill and files.
     queued: (Array.isArray(r.queued) ? r.queued : [])
-      .map((q) => str(rec(q)?.text, 20_000))
-      .filter((t) => t.trim())
-      .map((text) => ({ text })),
+      .map(decodeQueuedItem)
+      .filter((q): q is QueuedItem => q !== null),
     turnId: str(r.turn_id, 80),
     account: r.account ?? null,
     accountVendor: r.account_vendor === "claude" || r.account_vendor === "codex" ? r.account_vendor : "",

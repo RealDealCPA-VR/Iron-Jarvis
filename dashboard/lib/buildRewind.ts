@@ -94,6 +94,41 @@ export function decodeRewindPreview(raw: unknown): RewindPreview | null {
   };
 }
 
+/** One message a session can be rewound to (`GET …/rewind` without `to`). */
+export interface RewindPoint {
+  turnId: string;
+  question: string;
+  at: string;
+  /** Files the turn from this message on changed, and commands it ran. */
+  files: number;
+  commands: number;
+}
+
+/** The checkpoints answer, NEWEST first, without the daemon's own
+ *  "carry on" questions (they are not shown in the conversation either).
+ *  An answer that is not one reads as none. */
+export function decodeRewindPoints(raw: unknown): RewindPoint[] {
+  const out: RewindPoint[] = [];
+  for (const p of list(rec(raw).checkpoints).map(rec)) {
+    const turnId = str(p.turn_id);
+    if (!turnId || p.continuation === true) continue;
+    out.push({
+      turnId,
+      question: str(p.question),
+      at: str(p.at),
+      files: typeof p.files === "number" && p.files > 0 ? p.files : 0,
+      commands: typeof p.commands === "number" && p.commands > 0 ? p.commands : 0,
+    });
+  }
+  return out.reverse();
+}
+
+/** v1.373.0 (part 2, Phase 2): the messages a session can be rewound to —
+ *  the "/rewind" list. Nothing is touched. */
+export async function listRewindPoints(threadId: string): Promise<RewindPoint[]> {
+  return decodeRewindPoints(await get<unknown>(`/build/sessions/${encodeURIComponent(threadId)}/rewind`));
+}
+
 /** What rewinding to ``turnId`` would do — nothing is touched. */
 export async function previewRewind(threadId: string, turnId: string): Promise<RewindPreview | null> {
   const raw = await get<unknown>(

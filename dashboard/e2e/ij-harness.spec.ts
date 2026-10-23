@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, type Page, type Route } from "@playwright/test";
@@ -23,6 +23,11 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  *     says what goes back and touches nothing, the second removes the file
  *     the turn wrote, puts the message back in the box and drops the reply;
  *     the demo model leaves no library suggestion.
+ *  8. (v1.373.0, part 2 Phase 2) at 390 px the "/" and "@" lists open above
+ *     the box — never over it, never past the window — and Escape closes
+ *     each one without sending; an "@" pick is a chip in the box;
+ *  9. on the demo model, a folder skill picked with "/" and a file picked
+ *     with "@" ride a real turn: the question the daemon saves names both.
  */
 
 const DAEMON = "http://127.0.0.1:8807";
@@ -332,6 +337,68 @@ test.describe("390 px — Build never pans sideways", () => {
     const shots = process.env.IJ_E2E_SHOTS;
     if (shots) await page.screenshot({ path: join(shots, "ij-harness-phone.png"), fullPage: true });
   });
+  // v1.373.0 (part 2, Phase 2): the "/" and "@" lists open ABOVE the box —
+  // never over it, never past the window's top or sides — and Escape closes
+  // each one without sending or touching the words.
+  test("the / and @ lists sit above the box and inside the window", async ({ page }) => {
+    test.skip(!sessionId, "needs the session from the first test");
+    writeFileSync(join(work, "notes-for-at.md"), "the build word is periwinkle\n");
+    await page.goto(`/terminals?session=${sessionId}`);
+    await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+    const box = page.getByTestId("harness-input");
+    for (const [word, menu, row] of [
+      ["/", "harness-slash-menu", "harness-slash-command"],
+      ["@notes", "harness-at-menu", "harness-at-file"],
+    ] as const) {
+      await box.fill(word);
+      await expect(page.getByTestId(menu)).toBeVisible({ timeout: 20_000 });
+      await expect(page.getByTestId(row).first()).toBeVisible({ timeout: 20_000 });
+      await page.waitForTimeout(300);
+      const r = await page.evaluate((id) => {
+        const rect = (el: Element | null) => (el ? el.getBoundingClientRect() : null);
+        const m = rect(document.querySelector(`[data-testid="${id}"]`));
+        const card = rect(document.querySelector('[data-testid="harness-composer"]'));
+        const input = rect(document.querySelector('[data-testid="harness-input"]'));
+        return m && card && input
+          ? {
+              w: window.innerWidth,
+              h: window.innerHeight,
+              pan: document.documentElement.scrollWidth - window.innerWidth,
+              m: { top: m.top, bottom: m.bottom, left: m.left, right: m.right, height: m.height },
+              cardTop: card.top,
+              inputTop: input.top,
+            }
+          : null;
+      }, menu);
+      expect(r).not.toBeNull();
+      // Above the box: its bottom edge at or above the card's top, so it
+      // covers neither the card nor the box inside it.
+      expect(r!.m.bottom).toBeLessThanOrEqual(r!.cardTop + 0.5);
+      expect(r!.m.bottom).toBeLessThanOrEqual(r!.inputTop);
+      // Inside the window, with rows to show.
+      expect(r!.m.top).toBeGreaterThanOrEqual(0);
+      expect(r!.m.left).toBeGreaterThanOrEqual(0);
+      expect(r!.m.right).toBeLessThanOrEqual(r!.w);
+      expect(r!.m.height).toBeGreaterThan(40);
+      expect(r!.pan).toBeLessThanOrEqual(0);
+      if (process.env.IJ_E2E_SHOTS) {
+        await page.screenshot({ path: join(process.env.IJ_E2E_SHOTS, `ij-harness-phone-${menu}.png`) });
+      }
+      // Escape closes it; nothing is sent and the words stay.
+      await box.press("Escape");
+      await expect(page.getByTestId(menu)).toHaveCount(0);
+      await expect(box).toHaveValue(word);
+    }
+    // A file picked with "@" becomes a chip in the box. (New words: typing
+    // is what brings an Escaped list back, and the same words are no typing.)
+    await box.fill("@notes-for");
+    await expect(page.getByTestId("harness-at-file").first()).toBeVisible({ timeout: 20_000 });
+    await box.press("Enter");
+    await expect(page.getByTestId("harness-at-chip")).toContainText("notes-for-at.md");
+    await expect(box).toHaveValue("");
+    await page.getByRole("button", { name: "Remove notes-for-at.md" }).click();
+    await expect(page.getByTestId("harness-at-chip")).toHaveCount(0);
+  });
   test("the Terminals view fits the width", async ({ page }) => {
     await page.goto("/terminals");
     await expect(page.getByTestId("build-view-terminals")).toBeVisible({ timeout: 90_000 });
@@ -385,3 +452,36 @@ for (const size of [
     });
   });
 }
+
+// v1.373.0 (part 2, Phase 2) on the demo model: a skill of the folder's own
+// harness layer picked with "/" and a file picked with "@" ride a real turn
+// through the daemon — the question it saves names both.
+test("/ and @ ride a real turn: the saved question names the folder skill and the file", async ({ page }) => {
+  test.skip(!sessionId, "needs the session from the first test");
+  writeFileSync(join(work, "notes-for-at.md"), "the build word is periwinkle\n");
+  const skillDir = join(work, ".ironjarvis", "harness", "skills", "e2e-notes");
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(join(skillDir, "SKILL.md"), "---\ndescription: answer from the notes file\n---\nRead the notes first.\n");
+  await page.goto(`/terminals?session=${sessionId}`);
+  await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+  const box = page.getByTestId("harness-input");
+  await box.fill("/e2e");
+  const skillRow = page.locator('[data-testid="harness-slash-skill"][data-name="e2e-notes"]');
+  await expect(skillRow).toBeVisible({ timeout: 20_000 });
+  await expect(skillRow).toHaveAttribute("data-source", "folder");
+  await box.press("Enter");
+  await expect(page.getByTestId("harness-skill-chip")).toContainText("e2e-notes");
+  await box.fill("@notes-for");
+  await expect(page.getByTestId("harness-at-file").first()).toBeVisible({ timeout: 20_000 });
+  await box.press("Enter");
+  await expect(page.getByTestId("harness-at-chip")).toContainText("notes-for-at.md");
+  const replies = await page.getByTestId("harness-reply").count();
+  await box.fill("What is the build word?");
+  await box.press("Enter");
+  await expect(page.getByTestId("harness-reply")).toHaveCount(replies + 1, { timeout: 90_000 });
+  // The re-read transcript (the line the DAEMON wrote) names both.
+  await expect(page.getByTestId("harness-sent-skill").last()).toContainText("e2e-notes", { timeout: 20_000 });
+  await expect(page.getByTestId("harness-sent-file").last()).toContainText("notes-for-at.md");
+  await expect(page.getByTestId("harness-skill-chip")).toHaveCount(0);
+  await expect(page.getByTestId("harness-at-chip")).toHaveCount(0);
+});

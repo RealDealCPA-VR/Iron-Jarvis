@@ -43,11 +43,14 @@ export function RewindControl({
   disabled,
   onRewound,
   onTouched,
+  shown = false,
 }: {
   threadId: string;
   turnId: string;
   /** A reply is running: the control waits. */
   disabled?: boolean;
+  /** v1.373.0: always visible (the "/rewind" list), not only on hover. */
+  shown?: boolean;
   /** Rewound: the question of the message rewound to (it goes back in the box). */
   onRewound: (question: string) => void;
   /** A rewind was refused AFTER it was sent (the disk moved under it): read
@@ -106,7 +109,11 @@ export function RewindControl({
           disabled={disabled}
           title={disabled ? REWIND_BUSY_TITLE : "Put the files back as they were before this message, and remove the conversation from here on"}
           onClick={() => void first()}
-          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-zinc-500 opacity-0 transition-opacity hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+          className={
+            shown
+              ? "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40"
+              : "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-zinc-500 opacity-0 transition-opacity hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+          }
         >
           <History size={12} aria-hidden />
           {REWIND_LABEL}
