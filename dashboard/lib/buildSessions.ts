@@ -50,6 +50,25 @@ export interface BuildFolder {
   isProject: boolean;
   projectId: string | null;
   sessions: BuildSessionRow[];
+  /** v1.379.0: the one group of sessions started with NO folder (its path is
+   *  ""; each works in its own folder under the chat files folder). */
+  noFolder?: boolean;
+}
+
+/** v1.379.0: the words New session and a session with no folder say about
+ *  where such a session keeps its files. */
+export const NO_FOLDER_NAME = "No folder";
+export function noFolderLine(workRoot: string): string {
+  return workRoot
+    ? `No folder: the session keeps its files in a new folder in ${workRoot}, made with your first message.`
+    : "No folder: the session keeps its files in a new folder of its own, made with your first message.";
+}
+
+/** The empty conversation of a session with no folder. */
+export function noFolderEmptyWords(workRoot: string): string {
+  return workRoot
+    ? `Ask for anything. Its files go in a new folder in ${workRoot}, made with your first message.`
+    : "Ask for anything. Its files go in a new folder of its own, made with your first message.";
 }
 
 function rec(v: unknown): Record<string, unknown> | null {
@@ -83,19 +102,27 @@ export function decodeFolders(raw: unknown): BuildFolder[] {
   for (const f of list) {
     const r = rec(f);
     const path = str(r?.path, 1000);
-    if (!r || !path) continue;
+    const noFolder = r?.no_folder === true;
+    if (!r || (!path && !noFolder)) continue;
     const sessions = (Array.isArray(r.sessions) ? r.sessions : [])
       .map(decodeRow)
       .filter((x): x is BuildSessionRow => x !== null);
     out.push({
-      path,
-      name: str(r.name, 200).trim() || path,
-      isProject: r.is_project === true,
-      projectId: typeof r.project_id === "string" && r.project_id ? r.project_id : null,
+      path: noFolder ? "" : path,
+      name: noFolder ? NO_FOLDER_NAME : str(r.name, 200).trim() || path,
+      isProject: !noFolder && r.is_project === true,
+      projectId: !noFolder && typeof r.project_id === "string" && r.project_id ? r.project_id : null,
       sessions,
+      ...(noFolder ? { noFolder: true } : {}),
     });
   }
   return out;
+}
+
+/** GET /build/sessions → where a session with no folder keeps its files
+ *  (v1.379.0; "" from an older Iron Jarvis). */
+export function decodeWorkRoot(raw: unknown): string {
+  return str(rec(raw)?.work_root, 1000);
 }
 
 // ------------------------------------------------------------- one session
@@ -164,6 +191,11 @@ export interface BuildSessionView extends BuildSessionRow {
   compacting: boolean;
   /** v1.377.0: the session and message this one was branched from. */
   branchedFrom: BranchedFrom | null;
+  /** v1.379.0: started with NO folder — it works in its own folder
+   *  (`workFolder`, "" until its first message makes it) under `workRoot`. */
+  noFolder: boolean;
+  workFolder: string;
+  workRoot: string;
 }
 
 /** A transcript line: the chat page's own message shape (the daemon keeps
@@ -187,6 +219,8 @@ export type BuildMessage = PaneMessage & {
    *  folder, and the skill picked with "/" (what rode it beside the words). */
   filePaths?: string[];
   skill?: string;
+  /** v1.379.0: the question was one of Claude Code's own commands. */
+  command?: string;
   /** v1.374.0: on a reply, how full the conversation was for the model that
    *  turn (raw; lib/buildContext decodeTurnContext), and the turn's own task
    *  list as it last stood (raw, the checklist's saved form; replyPlan). */
@@ -235,6 +269,9 @@ const LINE_KEYS = [
   // conversation is, and its task list.
   "context",
   "plan",
+  // v1.379.0: a question typed as one of Claude Code's own commands — its
+  // name (the expanded text it sent stays with the daemon).
+  "command",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {
@@ -317,6 +354,9 @@ export function decodeSessionView(raw: unknown): BuildSessionView | null {
     git: decodeSessionGit(r.git),
     compacting: r.compacting === true,
     branchedFrom: decodeBranchedFrom(r.branched_from),
+    noFolder: r.no_folder === true,
+    workFolder: r.no_folder === true ? str(r.work_folder, 1000) : "",
+    workRoot: r.no_folder === true ? str(r.work_root, 1000) : "",
   };
 }
 
@@ -332,10 +372,18 @@ export async function listSessions(archived = false): Promise<BuildFolder[]> {
   return decodeFolders(await get<unknown>(archived ? "/build/sessions?archived=1" : "/build/sessions"));
 }
 
+/** v1.379.0: the list and where a session with no folder keeps its files. */
+export async function listSessionsWithRoot(): Promise<{ folders: BuildFolder[]; workRoot: string }> {
+  const raw = await get<unknown>("/build/sessions");
+  return { folders: decodeFolders(raw), workRoot: decodeWorkRoot(raw) };
+}
+
 export async function getSession(id: string): Promise<BuildSessionView | null> {
   return decodeSessionView(await get<unknown>(`/build/sessions/${encodeURIComponent(id)}`));
 }
 
+/** A new session in `folder`; v1.379.0: "" = a session with NO folder (it
+ *  makes its own with its first message). */
 export async function createSession(folder: string, extra: Record<string, unknown> = {}): Promise<BuildSessionView | null> {
   return decodeSessionView(await post<unknown>("/build/sessions", { folder, ...extra }));
 }

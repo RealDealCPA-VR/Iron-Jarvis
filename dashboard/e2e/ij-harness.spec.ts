@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, type Page, type Route } from "@playwright/test";
@@ -774,4 +774,102 @@ test("Phase 6: the keys inside the harness only, the search, and Branch from her
   await page.keyboard.press("Control+n");
   await expect(page.getByTestId("harness-new-session-form")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId("harness-new-folder")).toBeFocused();
+});
+
+// v1.379.0: a typed "/name words" runs like Claude Code's "/": a skill rides
+// that message with the words as its text, a custom command (one in the
+// folder's .claude/commands) is expanded by the daemon and its question shows
+// what was typed; an unknown "/word" is ordinary text.
+test("v1.379.0: a typed /skill words and a typed /command words ride real turns", async ({ page }) => {
+  test.skip(!sessionId, "needs the session from the first test");
+  const cmdDir = join(work, ".claude", "commands");
+  mkdirSync(cmdDir, { recursive: true });
+  writeFileSync(
+    join(cmdDir, "e2e-review.md"),
+    "---\ndescription: Review a file for the e2e\nargument-hint: <file>\n---\nReview $ARGUMENTS and say one thing.\n",
+  );
+  await page.goto(`/terminals?session=${sessionId}`);
+  await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByTestId("harness-reply").first()).toBeVisible({ timeout: 30_000 });
+  const box = page.getByTestId("harness-input");
+
+  // The menu lists the folder's command with its source and hint.
+  await box.fill("/e2e-rev");
+  const row = page.locator('[data-testid="harness-slash-custom"][data-name="e2e-review"]');
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  await expect(row).toContainText("this folder");
+  await expect(row).toContainText("<file>");
+
+  // A typed skill with words.
+  let replies = await page.getByTestId("harness-reply").count();
+  await box.fill("/research what otters eat");
+  await expect(page.getByTestId("harness-slash-invoking")).toHaveAttribute("data-name", "research", { timeout: 20_000 });
+  await box.press("Enter");
+  await expect(page.getByTestId("harness-reply")).toHaveCount(replies + 1, { timeout: 90_000 });
+  await expect(page.getByTestId("harness-sent-skill").last()).toContainText("research", { timeout: 20_000 });
+  await expect(page.getByTestId("harness-user-bubble").last()).toHaveText("what otters eat");
+
+  // A typed custom command with words: the question shows what was typed.
+  replies = await page.getByTestId("harness-reply").count();
+  await box.fill("/e2e-review notes-for-at.md");
+  await expect(page.getByTestId("harness-slash-invoking")).toHaveAttribute("data-name", "e2e-review", { timeout: 20_000 });
+  await box.press("Enter");
+  await expect(page.getByTestId("harness-reply")).toHaveCount(replies + 1, { timeout: 90_000 });
+  await expect(page.getByTestId("harness-user-bubble").last()).toHaveText("/e2e-review notes-for-at.md", {
+    timeout: 20_000,
+  });
+
+  // An unknown "/word" is ordinary text.
+  replies = await page.getByTestId("harness-reply").count();
+  await box.fill("/no-such-command hello");
+  await box.press("Enter");
+  await expect(page.getByTestId("harness-reply")).toHaveCount(replies + 1, { timeout: 90_000 });
+  await expect(page.getByTestId("harness-user-bubble").last()).toHaveText("/no-such-command hello");
+});
+
+// v1.379.0: a session with NO folder. The chat files folder is pointed at a
+// scratch folder first, so nothing is made in the user's Documents.
+test("v1.379.0: a session with no folder makes its own folder with its first message", async ({ page }) => {
+  const chatFiles = mkdtempSync(join(tmpdir(), "ij-harness-e2e-chatfiles-"));
+  try {
+    const put = await page.request.put(`${DAEMON}/settings`, { data: { values: { chat_files_root: chatFiles } } });
+    expect(put.ok()).toBe(true);
+    await openHarness(page);
+    await page.getByTestId("harness-new-session").click();
+    const form = page.getByTestId("harness-new-session-form");
+    await expect(form.getByTestId("harness-new-no-folder-line")).toContainText(
+      `No folder: the session keeps its files in a new folder in ${chatFiles}`,
+    );
+    await form.getByTestId("harness-new-no-folder").click();
+    await expect(page.getByTestId("harness-session")).toBeVisible();
+    const folderLine = page.getByTestId("harness-folder");
+    await expect(folderLine).toHaveAttribute("data-no-folder", "true");
+    await expect(folderLine).toContainText("its files get a folder of their own with your first message");
+    // Nothing made yet.
+    expect(readdirSync(chatFiles)).toEqual([]);
+    // The list's "No folder" group holds it.
+    await expect(page.locator('[data-testid="harness-folder-group"][data-no-folder="true"]')).toBeVisible();
+
+    const box = page.getByTestId("harness-input");
+    await box.fill("Write a hello file");
+    await box.press("Enter");
+    await expect(page.getByTestId("harness-reply").last()).toContainText("saved RESULT.md", { timeout: 90_000 });
+    await expect(page.getByTestId("harness-work-folder")).toContainText("files in ", { timeout: 30_000 });
+    await expect(page.getByTestId("harness-open-work-folder")).toBeVisible();
+    const made = readdirSync(chatFiles);
+    expect(made).toHaveLength(1);
+    expect(made[0]).toMatch(/^\d{4}-\d{2}-\d{2} Write a hello file$/);
+    expect(existsSync(join(chatFiles, made[0], "RESULT.md"))).toBe(true);
+    // No branch line: there is no repository.
+    await expect(page.getByTestId("harness-branch")).toHaveCount(0);
+  } finally {
+    await page.request
+      .put(`${DAEMON}/settings`, { data: { values: { chat_files_root: "" } } })
+      .catch(() => undefined);
+    try {
+      rmSync(chatFiles, { recursive: true, force: true });
+    } catch {
+      /* left for the OS to clear */
+    }
+  }
 });

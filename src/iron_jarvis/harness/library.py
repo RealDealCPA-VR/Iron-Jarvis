@@ -416,11 +416,15 @@ def stretch_evidence(engine: Any, thread_id: str, turn_ids: Any) -> Evidence | N
 
     from ..core.models import ChatThreadRecord, ToolInvocation, UndoJournal, is_build_thread
     from .rewind import _naive_utc
-    from .sessions import checkout_of, layer_folder_of, session_id_for
+    from .sessions import checkout_of, is_folderless, layer_folder_of, session_id_for
 
     with session_scope(engine) as db:
         row = db.get(ChatThreadRecord, str(thread_id or ""))
         if row is None or not is_build_thread(row):
+            return None
+        if is_folderless(row):
+            # v1.379.0: a session with no folder learns nothing for a folder
+            # (its own folder is one-off): no evidence, so no reflection.
             return None
         try:
             messages = json.loads(row.messages_json or "[]")

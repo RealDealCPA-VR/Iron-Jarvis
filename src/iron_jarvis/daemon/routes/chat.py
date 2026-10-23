@@ -1071,6 +1071,11 @@ def _clean_setup(raw: Any) -> str:
     branched = _clean_branched_from(raw.get("branched_from"))
     if branched:
         out["branched_from"] = branched
+    # IJ HARNESS (v1.379.0): a Build session started with NO folder — it works
+    # in its own folder under the chat files folder, made with its first turn
+    # (``harness/sessions.set_work_folder``). Stored ONLY as a real true.
+    if raw.get("no_folder") is True:
+        out["no_folder"] = True
     return json.dumps(out, separators=(",", ":")) if out else ""
 
 

@@ -30,6 +30,17 @@ What these routes add:
   ``files`` (files picked in the session's folder, checked to be inside it);
 * ``GET /build/sessions/{id}/skills`` (v1.373.0) — the folder's own harness
   skills, for the "/" menu;
+* ``GET /build/sessions/{id}/commands`` (v1.379.0) — Claude Code's own custom
+  "/" commands for the session (``harness/claude_commands``: personal,
+  project and enabled plugins' command files, and a plugin's skills under
+  Claude Code's ``<plugin>:<skill>`` names) — names, descriptions and
+  argument hints, never a command's text. A turn's ``command`` runs one: its
+  text is expanded the way Claude Code does it and sent as the message,
+  without running anything it names;
+* v1.379.0: a session may start with NO folder (``POST /build/sessions``
+  without ``folder``): it works in its OWN folder under the chat files folder
+  (``config.chat_files_dir``), made when its first turn starts and removed
+  when it is archived or deleted while still empty;
 * ``POST /build/sessions/{id}/answer {ask_id, answer | skip}`` — the user's
   answer to an ``ask_user`` question of THIS session's running turn.
 
@@ -98,7 +109,9 @@ FINISH_NOTICE_AFTER_S = 60.0
 
 
 class BuildSessionCreate(BaseModel):
-    folder: str = Field(min_length=1, max_length=1000)
+    #: v1.379.0: "" (or omitted) = a session with NO folder — it works in its
+    #: own folder under the chat files folder, made with its first turn.
+    folder: str = Field(default="", max_length=1000)
     title: str = Field(default="", max_length=400)
     provider: str = ""
     model: str = ""
@@ -175,6 +188,10 @@ class BuildTurnBody(BaseModel):
     #: the layer's validator and scanned (``harness/picked_skill``). One skill
     #: per message: ``skill`` or this, not both.
     folder_skill: str = Field(default="", max_length=64)
+    #: v1.379.0: one of Claude Code's own custom commands, typed
+    #: ``/<command> <words>`` (``harness/claude_commands``). ``text`` holds
+    #: the words after the name — its ARGUMENTS. Not with a skill.
+    command: str = Field(default="", max_length=200)
 
 
 class BuildRewindBody(BaseModel):
@@ -1165,6 +1182,100 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
 # --------------------------------------------------------------------------- #
 
 
+# --------------------------------------------------------------------------- #
+# a session with no folder (v1.379.0)
+# --------------------------------------------------------------------------- #
+
+NO_FOLDER_NO_BRANCH = (
+    "A session with no folder is not in a repository, so it cannot work on a branch of its own."
+)
+#: The title a folderless session's own folder takes when its first message
+#: has no words to name it (a picture alone, a skill alone).
+WORK_FOLDER_TITLE = "Build session"
+
+
+def _work_folder_title(text: str) -> str:
+    """The first words of the first message — the folder's name after its
+    date, like the chat's own work folder (``documents/workfolder``)."""
+    words = " ".join(str(text or "").split())
+    if words.startswith("/"):
+        # "/review app.py" names a folder "review app.py", not "/review…".
+        words = words.lstrip("/")
+    return words[:60] or WORK_FOLDER_TITLE
+
+
+def make_work_folder(platform: Any, thread_id: str, text: str) -> tuple[str, bool]:
+    """The OWN folder of a session started with no folder: made now under the
+    chat files folder (``<chat files>/<YYYY-MM-DD> <first words>``, the
+    v1.244.0 rule — where the user finds what the agent made) and kept on the
+    session (first wins: a folder another turn made meanwhile is used, and
+    this one removed). Answers ``(folder, made_now)``. Raises ``OSError`` when
+    it cannot be made. BLOCKING."""
+    from ...documents.workfolder import make_chat_workfolder
+
+    root = platform.config.chat_files_dir
+    made = make_chat_workfolder(root, _work_folder_title(text), [], platform.config.home / "uploads")
+    path = str(made["path"])
+    kept = S.set_work_folder(platform.engine, thread_id, path)
+    if kept != path:
+        _remove_if_empty(path)
+        return kept, False
+    return path, True
+
+
+def _remove_if_empty(path: str) -> bool:
+    """Remove ``path`` when it is an EMPTY folder (never anything inside it).
+    True when it was removed. Never raises."""
+    import os
+
+    try:
+        p = S.resolved_folder(path)
+        if p and os.path.isdir(p) and not os.listdir(p):
+            os.rmdir(p)
+            return True
+    except OSError:
+        pass
+    return False
+
+
+def drop_empty_work_folder(platform: Any, thread_id: str) -> bool:
+    """A session with no folder that is archived or deleted takes its OWN
+    folder with it when that folder is still EMPTY (nothing was made there);
+    one holding files is kept — the user's files are never touched. Only a
+    folder inside the chat files folder, and only when no other session works
+    in it (a branched session shares its origin's). The session forgets it,
+    so a later turn makes a new one. BLOCKING; never raises."""
+    try:
+        row = S.get_row(platform.engine, thread_id)
+        if row is None or not S.is_folderless(row):
+            return False
+        folder = S.folder_of(row)
+        if not folder:
+            return False
+        from ...core.fs_policy import _canonical, _within
+
+        try:
+            root = _canonical(str(platform.config.chat_files_dir))
+            inside = _within(_canonical(folder), root)
+        except Exception:  # noqa: BLE001 — an unreadable path is not ours to remove
+            return False
+        if not inside or S.folder_users(platform.engine, folder, besides=thread_id):
+            return False
+        if _remove_if_empty(folder):
+            S.set_work_folder(platform.engine, thread_id, None)
+            return True
+    except Exception:  # noqa: BLE001 — archive and delete never fail on this
+        log.warning("removing build session %s's empty folder failed", thread_id, exc_info=True)
+    return False
+
+
+def command_folders(row: Any) -> list[str]:
+    """The folders whose ``.claude/commands`` a session's "/" offers: its
+    working folder, and (v1.375.0) the folder the user picked when it works
+    in a worktree. A folderless session's own folder counts once made."""
+    return list(dict.fromkeys(f for f in (S.folder_of(row), S.checkout_of(row)) if f))
+
+
 class SessionBusy(Exception):
     """The session already has a turn running (or starting)."""
 
@@ -1181,6 +1292,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            skill: str = "",
                            files: "list[str] | None" = None,
                            folder_skill: str = "",
+                           command: str = "",
                            continuation: bool = False,
                            resume_of: "dict[str, Any] | None" = None) -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
@@ -1212,7 +1324,19 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     like attachments; ``folder_skill`` — a skill of the folder's own harness
     layer (``harness/picked_skill``; 404 in words when the folder's valid
     layer has none by that name). The question line records them
-    (``skill``, ``filePaths``)."""
+    (``skill``, ``filePaths``).
+
+    v1.379.0: ``command`` — one of Claude Code's own custom commands
+    (``harness/claude_commands``), typed ``/<command> <text>``: ``text`` is
+    its arguments; the command's file is expanded Claude Code's way and sent
+    as the message (its ``@`` files ride as "@" files when they pass the
+    folder's checks; its shell lines are NEVER run by the app — the model is
+    told to run them with its own shell tool). The question line shows what
+    was typed and keeps the expansion for later turns (``commandText``). A
+    skill alone is a message too (its words: ``sessions.SKILL_ALONE``). A
+    session with no folder makes its own folder now, at its first turn
+    (:func:`make_work_folder`); a turn that then does not start leaves no
+    empty folder behind."""
     from .chat import _turn_logs
     from ...iron_proxy.pin import reset_pin, set_pin
 
@@ -1232,6 +1356,10 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     from ...harness import library as _library
 
     _library.note_turn_started(thread_id)
+    # v1.379.0: a folder THIS call made for a session with no folder — taken
+    # back (when still empty) if no turn starts after all.
+    made_folder = ""
+    started = False
     try:
         row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
         if row is None:
@@ -1239,6 +1367,27 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         if getattr(row, "archived_at", None) is not None:
             raise HTTPException(status_code=409, detail=ARCHIVED_SENTENCE)
         folder = S.folder_of(row)
+        if not folder and S.is_folderless(row):
+            # v1.379.0: a session started with no folder gets its OWN folder
+            # now, at its first turn (an abandoned empty session made none).
+            try:
+                folder, fresh = await asyncio.to_thread(
+                    make_work_folder, platform, thread_id,
+                    text or command or str(skill or "").strip() or str(folder_skill or "").strip(),
+                )
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"This session's own folder could not be made in {platform.config.chat_files_dir}: "
+                        f"{exc.strerror or exc}"
+                    ),
+                ) from None
+            if fresh:
+                made_folder = folder
+            row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="no such Build session")
         problem = await asyncio.to_thread(S.folder_problem, folder)
         if problem:
             raise HTTPException(
@@ -1272,6 +1421,34 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         # v1.373.0: a skill of the folder's own harness layer — its playbook,
         # read and scanned now, rides the harness block (``picked_skill``).
         folder_skill = str(folder_skill or "").strip()
+        command = str(command or "").strip().lstrip("/")
+        if command and (folder_skill or str(skill or "").strip()):
+            raise HTTPException(status_code=400, detail="Send one command or one skill per message.")
+        # What the MODEL is sent as this message, and what the question line
+        # shows (v1.379.0: they differ for a command and for a skill alone).
+        model_text = text
+        content = text
+        line_extra: dict[str, Any] = {}
+        if command:
+            from ...harness import claude_commands as CC
+
+            cmd = await asyncio.to_thread(CC.find, command_folders(row), command)
+            if cmd is None:
+                raise HTTPException(status_code=404, detail=f"There is no command /{command} for this session.")
+            try:
+                expanded = await asyncio.to_thread(
+                    CC.expand, cmd, text, folder=folder, read_room=_MAX_ATTACHMENTS - total,
+                    event_bus=getattr(platform, "event_bus", None), session_id=S.session_id_for(thread_id),
+                )
+            except CC.CommandRefused as exc:
+                raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+            model_text = expanded.text
+            picked += [f for f in expanded.files if f not in picked]
+            content = f"/{cmd.name}" + (f" {text}" if text else "")
+            line_extra = {"command": cmd.name, "commandText": expanded.text[:S.MAX_COMMAND_TEXT]}
+        elif not text and not attachments and not picked and (folder_skill or str(skill or "").strip()):
+            # v1.379.0: a skill picked with "/" and nothing else is a message.
+            model_text = S.SKILL_ALONE.format(name=folder_skill or str(skill).strip())
         playbook = ""
         if folder_skill:
             if str(skill or "").strip():
@@ -1335,7 +1512,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         _history, _summary = await asyncio.to_thread(_compact.history_for_turn, row)
         history = [ChatMessageBody(**m) for m in _history]
         chat_body = ChatBody(
-            messages=[*history, ChatMessageBody(role="user", content=text)],
+            messages=[*history, ChatMessageBody(role="user", content=model_text)],
             provider=account_provider or str(setup.get("provider") or ""),
             model=str(setup.get("model") or ""),
             reasoning=str(setup.get("reasoning") or ""),
@@ -1405,7 +1582,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                     with contextlib.suppress(Exception):
                         await gen.aclose()
                     raise WaitEnded(thread_id)
-            question: dict[str, Any] = {"role": "user", "content": text, "turnId": turn_id}
+            question: dict[str, Any] = {"role": "user", "content": content, "turnId": turn_id, **line_extra}
             if attachments:
                 question["attachmentPaths"] = list(attachments)
             if picked:
@@ -1425,6 +1602,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             lg = logs.start(turn_id, thread_id, recorded_turn(
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
             ))
+            started = True
         finally:
             _branches.reset_turn_branch(branch_token)
             _compact.reset_summary(summary_token)
@@ -1437,6 +1615,13 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         holder["log"] = lg
     finally:
         _STARTING.discard(thread_id)
+        if made_folder and not started:
+            # v1.379.0: no turn started after all — the folder made for it
+            # goes again (only while it is empty), so a refused first message
+            # leaves nothing behind; the next one makes a new folder.
+            with contextlib.suppress(Exception):
+                if await asyncio.to_thread(_remove_if_empty, made_folder):
+                    await asyncio.to_thread(S.set_work_folder, platform.engine, thread_id, None)
     return lg
 
 
@@ -1824,6 +2009,10 @@ def register(app: FastAPI, d: Any) -> None:
             (view["account"] or {}).get("vendor")
             or BA.vendor_of(d.platform, str(setup.get("provider") or ""))
         )
+        if view.get("no_folder"):
+            # v1.379.0: where a session with no folder makes its own folder
+            # (the header says it before the first turn makes it).
+            view["work_root"] = str(d.platform.config.chat_files_dir)
         return view
 
     def _vendor_switch(setup: dict[str, Any], provider: "str | None") -> dict[str, Any]:
@@ -1906,17 +2095,27 @@ def register(app: FastAPI, d: Any) -> None:
         """Every IJ harness session grouped by its folder (newest first).
         ``archived=1`` includes the archived ones (each row says so)."""
         include = str(archived or "").strip().lower() in ("1", "true", "yes", "all")
-        return S.list_grouped(engine_of(), include_archived=include, states=TURNS.thread_states())
+        out = S.list_grouped(engine_of(), include_archived=include, states=TURNS.thread_states())
+        # v1.379.0: where a session started with no folder keeps its files
+        # (New session says so in one line).
+        out["work_root"] = str(d.platform.config.chat_files_dir)
+        return out
 
     @app.post("/build/sessions", status_code=201)
     async def create_build_session(body: BuildSessionCreate) -> dict[str, Any]:
         """A new session working in ``folder``. The folder must be usable
         (``fs_policy.root_problem``: absolute, on this PC, allowed, and
-        writable) — refused with the reason otherwise."""
-        folder = S.resolved_folder(body.folder)
-        problem = await asyncio.to_thread(S.folder_problem, folder)
-        if problem:
-            raise HTTPException(status_code=400, detail=f"This folder cannot be used: {problem}")
+        writable) — refused with the reason otherwise. v1.379.0: no folder
+        at all is a session that works in its OWN folder under the chat files
+        folder, made with its first turn (no git, no branch)."""
+        folderless = not (body.folder or "").strip()
+        if folderless and body.branch is True:
+            raise HTTPException(status_code=400, detail=NO_FOLDER_NO_BRANCH)
+        folder = "" if folderless else S.resolved_folder(body.folder)
+        if not folderless:
+            problem = await asyncio.to_thread(S.folder_problem, folder)
+            if problem:
+                raise HTTPException(status_code=400, detail=f"This folder cannot be used: {problem}")
         mode = (body.mode or "").strip().lower()
         if mode and mode not in S.MODES:
             raise HTTPException(status_code=400, detail="mode must be 'act' or 'plan'")
@@ -1932,6 +2131,11 @@ def register(app: FastAPI, d: Any) -> None:
         # or an API key: none (exactly Phase 4). Off the loop: the vendor of a
         # keyless API provider is read through provider availability.
         setup = await asyncio.to_thread(_with_initial_account, d.platform, setup, body.account.strip())
+        if folderless:
+            row = await asyncio.to_thread(
+                S.create, engine_of(), "", body.title, {**setup, S.NO_FOLDER_KEY: True},
+            )
+            return await asyncio.to_thread(_full_view, row)
         if body.branch is False:
             # v1.375.0: "work in the folder directly" — exactly the old path,
             # no git call at all.
@@ -2036,6 +2240,9 @@ def register(app: FastAPI, d: Any) -> None:
             from ...harness import library as _library
 
             _library.flush(d.platform, thread_id)
+            # v1.379.0: a session with no folder takes its own folder with it
+            # when nothing was made there (one with files is kept).
+            await asyncio.to_thread(drop_empty_work_folder, d.platform, thread_id)
         return out
 
     @app.post("/build/sessions/{thread_id}/unarchive")
@@ -2087,11 +2294,20 @@ def register(app: FastAPI, d: Any) -> None:
                 if exc.details:
                     content["details"] = exc.details
                 return JSONResponse(status_code=exc.status, content=content)
+        # v1.379.0: a session with no folder takes its own folder with it when
+        # nothing was made there (one with files is kept, and said so below).
+        kept_folder = ""
+        if S.is_folderless(row):
+            S.end_session_programs(thread_id)
+            if not drop_empty_work_folder(d.platform, thread_id):
+                kept_folder = S.folder_of(row)
         if not delete_thread(engine_of(), thread_id):
             raise HTTPException(status_code=404, detail="no such Build session")
         out: dict[str, Any] = {"deleted": thread_id}
         if moved is not None:
             out["worktree"] = {**moved, "branch": facts.get("branch", "")}
+        if kept_folder:
+            out["kept_folder"] = kept_folder
         return out
 
     @app.post("/build/folders/rename")
@@ -2154,6 +2370,30 @@ def register(app: FastAPI, d: Any) -> None:
         # checkout's (S.layer_folder_of — the session's folder otherwise).
         skills, note = folder_skills(S.layer_folder_of(row), known_tools=known)
         return {"skills": skills, "note": note}
+
+    @app.get("/build/sessions/{thread_id}/commands")
+    def build_session_commands(thread_id: str) -> dict[str, Any]:
+        """v1.379.0: Claude Code's own custom "/" commands for this session,
+        for the box's "/" menu — ``{commands: [{name, description,
+        argument_hint, source: personal|project|plugin, plugin, kind:
+        command|skill, skill?}], note}``: the user's personal commands, the
+        session folder's (and, on a branch, the picked folder's)
+        ``.claude/commands``, and every ENABLED plugin's commands — plus a
+        plugin's skills under Claude Code's ``<plugin>:<skill>`` names (kind
+        "skill", run as the app's own skill of that name). A catalog plugin
+        that was never installed is not offered. Names, descriptions and
+        argument hints only — never a command's text. Sync: the threadpool
+        runs it (stats and small reads, cached)."""
+        from ...harness import claude_commands as CC
+
+        row = S.get_row(d.platform.engine, thread_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such Build session")
+        found = CC.discover(command_folders(row), registry=getattr(d.platform, "skills", None))
+        return {
+            "commands": [c.row() for c in found.commands] + [s.row() for s in found.skills],
+            "note": found.note,
+        }
 
     @app.post("/build/sessions/{thread_id}/rewind")
     async def build_rewind(thread_id: str, body: BuildRewindBody) -> Any:
@@ -2251,6 +2491,20 @@ def register(app: FastAPI, d: Any) -> None:
                 with contextlib.suppress(Exception):
                     await asyncio.to_thread(B.remove_worktree, d.platform.config.home, started)
                 raise
+        elif S.is_folderless(row):
+            # v1.379.0: a branch of a session with no folder has no folder
+            # either, and works in its origin's OWN folder when one was made
+            # (like a branch of a folder session, which shares its folder);
+            # before the first turn it makes its own.
+            folder = S.folder_of(row)
+            if folder:
+                problem = await asyncio.to_thread(S.folder_problem, folder)
+                if problem:
+                    raise HTTPException(status_code=409, detail=f"This session's folder cannot be used now: {problem}")
+            new_row = await asyncio.to_thread(
+                S.create_with_lines, engine, folder, title,
+                {**new_setup, S.NO_FOLDER_KEY: True, "branched_from": branched}, lines,
+            )
         else:
             folder = S.folder_of(row)
             problem = await asyncio.to_thread(S.folder_problem, folder)
@@ -2312,10 +2566,12 @@ def register(app: FastAPI, d: Any) -> None:
         # v1.373.0 review: a blank entry is no file — `{"files": ["  "]}` used
         # to pass this check and start a turn that sent the model nothing.
         has_files = any(str(p or "").strip() for p in [*(body.attachments or []), *(body.files or [])])
-        if not text and not has_files:
+        picks = bool((body.skill or "").strip() or (body.folder_skill or "").strip() or (body.command or "").strip())
+        if not text and not has_files and not picks:
             # v1.371.0: a picture alone is a message (the chat page's rule,
-            # v1.275.0) — v1.373.0: so is a file picked with "@"; nothing at
-            # all is not (a skill alone has nothing to work on).
+            # v1.275.0) — v1.373.0: so is a file picked with "@"; v1.379.0:
+            # so is a skill or a command typed with "/" (Claude Code runs
+            # "/name" alone); nothing at all is not.
             raise HTTPException(status_code=400, detail="Write a message first.")
         if len(text) > MAX_TURN_CHARS:
             raise HTTPException(status_code=413, detail="That message is too long.")
@@ -2353,7 +2609,8 @@ def register(app: FastAPI, d: Any) -> None:
                                         preview_url=body.preview_url,
                                         skill=body.skill,
                                         files=list(body.files or []),
-                                        folder_skill=body.folder_skill)
+                                        folder_skill=body.folder_skill,
+                                        command=body.command)
         except SessionBusy:
             return JSONResponse(
                 status_code=409,

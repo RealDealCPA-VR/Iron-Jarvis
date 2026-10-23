@@ -66,6 +66,14 @@ def register(app: FastAPI, d: Any) -> None:
         row = S.get_row(engine_of(), thread_id)
         if row is None:
             raise HTTPException(status_code=404, detail="no such Build session")
+        if S.is_folderless(row):
+            # v1.379.0: the experience library belongs to a FOLDER the user
+            # works in again; a session with no folder has its own one-off
+            # folder, so it neither keeps nor offers lessons.
+            return {
+                "folder": S.folder_of(row), "folder_name": S.NO_FOLDER_NAME, "lessons": [], "edits": [],
+                "proposals": [], "open_limit": L.OPEN_LIMIT, "reflection": L.status_of(thread_id),
+            }
         try:
             # v1.375.0: a branch's library is the picked folder's (S.checkout_of).
             return {**L.view(engine_of(), S.checkout_of(row)), "reflection": L.status_of(thread_id)}

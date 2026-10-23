@@ -67,6 +67,19 @@ MAX_TITLE_CHARS = 120
 MAX_NAME_CHARS = 80
 #: The default title until the first question names the session.
 NEW_SESSION_TITLE = "New session"
+#: v1.379.0: a session started with NO folder (``setup.no_folder``) works in
+#: its OWN folder under the chat files folder (``config.chat_files_dir``),
+#: made when its first turn starts (:func:`set_work_folder`). Its group in
+#: the list, and its header, say so.
+NO_FOLDER_KEY = "no_folder"
+NO_FOLDER_NAME = "No folder"
+#: The list's key for that one group (never a folder key: those are paths).
+_NO_FOLDER_GROUP = "<no folder>"
+#: v1.379.0: the words a later turn reads for a question that was a skill
+#: picked with "/" and nothing else (the model was sent these words then).
+SKILL_ALONE = "Follow the {name} skill."
+#: The expanded command text a question line keeps for later turns, at most.
+MAX_COMMAND_TEXT = 20_000
 #: The plan kept on a session (``setup.plan``), at most.
 MAX_PLAN_CHARS = 20_000
 MAX_PLAN_STEPS = 50
@@ -102,6 +115,11 @@ LINE_KEYS: tuple[str, ...] = (
     # the done frame) and the turn's own task list as it last stood (``plan``
     # — its last ``plan_update``, the checklist the reply folds).
     "context", "plan",
+    # v1.379.0: on a question typed as one of Claude Code's own commands
+    # (``/review src/app.py``): the command's name, and the text it expanded
+    # to (``harness/claude_commands.expand``) — what the model was sent and
+    # what a later turn's history reads in place of the typed line.
+    "command", "commandText",
 )
 
 
@@ -319,6 +337,68 @@ def mode_of(row: Any) -> str:
     return MODE_PLAN if _setup(row).get("mode") == MODE_PLAN else MODE_ACT
 
 
+def is_folderless(row: Any) -> bool:
+    """v1.379.0: was the session started with NO folder? (Its working folder,
+    once its first turn made one, is its own folder under the chat files
+    folder.)"""
+    return _setup(row).get(NO_FOLDER_KEY) is True
+
+
+def set_work_folder(engine: Any, thread_id: str, path: "str | None") -> str:
+    """v1.379.0: keep (``path``) or forget (None) the OWN folder of a session
+    started with no folder, in ONE locked write. Keeping is first-wins: when
+    the session already has one (another turn made it meanwhile), that one is
+    answered and ``path`` is not stored. Only a folderless session is touched
+    (a picked folder never changes). Answers the session's working folder
+    after the write ("" = none). BLOCKING."""
+    from ..daemon.routes.chat import _clean_setup
+
+    with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+        row = db.get(ChatThreadRecord, str(thread_id or ""))
+        if row is None or not is_build_thread(row):
+            return ""
+        setup = _setup(row)
+        if setup.get(NO_FOLDER_KEY) is not True:
+            return str(setup.get("workspace_dir") or "")
+        current = str(setup.get("workspace_dir") or "").strip()
+        if path is None:
+            setup.pop("workspace_dir", None)
+        elif current:
+            return current
+        else:
+            setup["workspace_dir"] = str(path)
+        row.setup_json = _clean_setup(setup)
+        # NOT ``updated_at``: making the folder is not activity of its own.
+        db.add(row)
+        db.commit()
+        return "" if path is None else str(path)
+
+
+def folder_users(engine: Any, folder: str, *, besides: str = "") -> list[str]:
+    """The Build sessions (other than ``besides``) whose working folder is
+    ``folder`` — a branched folderless session shares its origin's folder,
+    so an empty one is removed only when nobody else works in it. The id and
+    setup COLUMNS only. BLOCKING."""
+    from sqlmodel import select
+
+    key = folder_key(folder)
+    if not key:
+        return []
+    T = ChatThreadRecord
+    out: list[str] = []
+    with session_scope(engine) as db:
+        for tid, raw in db.exec(select(T.id, T.setup_json).where(T.surface == BUILD_SURFACE)):
+            if str(tid) == besides or not raw:
+                continue
+            try:
+                setup = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(setup, dict) and folder_key(str(setup.get("workspace_dir") or "")) == key:
+                out.append(str(tid))
+    return out
+
+
 def get_row(engine: Any, thread_id: str) -> ChatThreadRecord | None:
     """The BUILD thread ``thread_id`` (detached), or None — a chat thread is
     not a session and answers None."""
@@ -336,7 +416,12 @@ def create(engine: Any, folder: str, title: str = "", setup: "dict[str, Any] | N
     chat's ONE setup whitelist (``routes.chat._clean_setup``)."""
     from ..daemon.routes.chat import _clean_setup
 
-    raw = {**(setup or {}), "workspace_dir": str(folder)}
+    raw = {**(setup or {})}
+    if str(folder or "").strip():
+        raw["workspace_dir"] = str(folder)
+    elif raw.get(NO_FOLDER_KEY) is not True:
+        # v1.379.0: only a session STARTED with no folder may have none.
+        raise ValueError("Choose the folder this session works in.")
     row = ChatThreadRecord(
         title=clean_name(title, cap=MAX_TITLE_CHARS) or NEW_SESSION_TITLE,
         surface=BUILD_SURFACE,
@@ -615,6 +700,16 @@ def history_of(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     for m in messages:
         role = m.get("role")
         content = str(m.get("content") or "")
+        if role == "user" and isinstance(m.get("commandText"), str) and m["commandText"].strip():
+            # v1.379.0: a question typed as a command ("/review app.py") is
+            # read as what it expanded to — what the model was sent then.
+            content = m["commandText"]
+        elif (
+            role == "user" and not content.strip() and isinstance(m.get("skill"), str) and m["skill"].strip()
+            and not (_listed(m.get("attachmentPaths")) or _listed(m.get("filePaths")))
+        ):
+            # v1.379.0: a skill picked with "/" and nothing else.
+            content = SKILL_ALONE.format(name=m["skill"].strip())
         if role == "user" and not content.strip():
             # v1.371.0 review: a picture (or file) sent ALONE has no words.
             # Dropping its line left the reply to it with no question — the
@@ -689,6 +784,11 @@ def session_view(row: Any, *, states: "dict[str, dict[str, bool]] | None" = None
     info = (names or {}).get(folder_key(shown)) or {
         "path": shown, "name": _base_name(shown), "is_project": False, "project_id": None,
     }
+    folderless = setup.get(NO_FOLDER_KEY) is True
+    if folderless:
+        # v1.379.0: a session with no folder is named so; its own folder (made
+        # with its first turn) is ``work_folder`` ("" until then).
+        info = {"path": folder, "name": NO_FOLDER_NAME, "is_project": False, "project_id": None}
     out.update({
         "folder": folder,
         "folder_name": info["name"],
@@ -709,6 +809,10 @@ def session_view(row: Any, *, states: "dict[str, dict[str, bool]] | None" = None
         "account_limit": setup.get("account_limit") or None,
         "account_wait": setup.get("account_wait") or None,
     })
+    if folderless:
+        # Only on a session that has none, so every other view is as before.
+        out["no_folder"] = True
+        out["work_folder"] = folder
     # v1.374.0 (part 2, Phase 3): the summary standing in for the older turns
     # (Compact) — None when none. The key only on a view that knows it.
     from .compact import view as _compaction_view
@@ -758,17 +862,26 @@ def list_grouped(engine: Any, *, include_archived: bool = False,
     for r in rows:
         # v1.375.0: a session on its own branch is grouped under the folder
         # the user PICKED (its repository's), never under a stray
-        # "<repo>.ij-worktrees" group of its own.
-        folder = checkout_of(r)
-        key = folder_key(folder) or ""
+        # "<repo>.ij-worktrees" group of its own. v1.379.0: every session
+        # started with no folder shares ONE group, keyed apart from any real
+        # folder (whatever its own work folder is).
+        folderless = is_folderless(r)
+        folder = "" if folderless else checkout_of(r)
+        key = _NO_FOLDER_GROUP if folderless else (folder_key(folder) or "")
         if key not in groups:
             groups[key] = {"sessions": []}
             order.append(key)
             paths[key] = folder
         groups[key]["sessions"].append(session_view(r, states=states))
-    names = folder_names(engine, paths.values())
+    names = folder_names(engine, [p for k, p in paths.items() if k != _NO_FOLDER_GROUP])
     folders = []
     for key in order:
+        if key == _NO_FOLDER_GROUP:
+            folders.append({
+                "path": "", "name": NO_FOLDER_NAME, "is_project": False, "project_id": None,
+                "no_folder": True, "sessions": groups[key]["sessions"],
+            })
+            continue
         info = names.get(key) or {
             "path": paths[key], "name": _base_name(paths[key]), "is_project": False, "project_id": None,
         }
@@ -990,6 +1103,9 @@ __all__ = [
     "folder_names",
     "folder_files",
     "folder_problem",
+    "folder_users",
+    "is_folderless",
+    "set_work_folder",
     "get_row",
     "history",
     "list_grouped",

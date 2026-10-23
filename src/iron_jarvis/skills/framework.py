@@ -101,6 +101,17 @@ def marketplace_catalog_dirs(home: "Path | None" = None) -> list[Path]:
     return out
 
 
+def claude_trash_dirs(home: "Path | None" = None) -> list[Path]:
+    """Where Claude Code PUTS AWAY what is no longer installed (v1.379.0):
+    ``~/.claude/plugins/.trash`` (plugins the claude.ai sync removed) and
+    ``~/.claude/skills/.trash`` (skill folders it moved aside). Claude Code
+    does not load either, so neither may the app — the recursive scan walked
+    straight into a removed plugin's copy and, sorting first, served ITS
+    skill text over the installed copy of the same name."""
+    base = (home or Path.home()) / ".claude"
+    return [p for p in (base / "plugins" / ".trash", base / "skills" / ".trash") if p.is_dir()]
+
+
 def _under_any(path: Path, roots: list[Path]) -> bool:
     """True when ``path`` lives inside any of ``roots`` (resolved, so a symlinked
     or differently-cased marketplace clone is still recognised)."""
@@ -263,7 +274,7 @@ class SkillRegistry:
         # A cloned marketplace is a STORE to browse, not skills the user
         # installed — excluded so the catalog's sample/authoring plugins never
         # enter the registry (v1.98.0).
-        catalogs = marketplace_catalog_dirs()
+        catalogs = marketplace_catalog_dirs() + claude_trash_dirs()
         for root, tag in external_skill_roots():
             self.discover_recursive(root, source=tag, exclude=catalogs)
         for extra in extra_paths or []:
