@@ -541,7 +541,10 @@ def build_env(base: "dict[str, str] | None" = None) -> dict[str, str]:
     own = _own_roots()
     for name in list(env):
         value = without_url_credentials(env[name])
-        if secret_value(value):
+        # A FOLDER LIST (a name holding PATH) is never dropped by its value:
+        # a folder named like a key shape ("sk-learn-env" reads as an "sk-"
+        # key) would take PATH with it, and then nothing runs.
+        if "PATH" not in name.upper() and secret_value(value):
             env.pop(name, None)
             continue
         if name.upper() != "PATH":

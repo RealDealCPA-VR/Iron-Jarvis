@@ -404,3 +404,15 @@ async def test_git_runs_in_a_build_session_whose_environment_sets_git_config_pai
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "status --short")
     res = await SandboxedShellTool().execute({"command": "git st"}, _ctx(repo, "build:review-gitcfg"))
     assert res.ok, "git failed in a Build session with git config pairs in the environment"
+
+
+def test_a_folder_list_is_never_dropped_for_a_name_that_looks_like_a_key():
+    """A value rule judging a FOLDER LIST would drop PATH for a folder named
+    like a key shape (``sk-learn-env`` reads as an ``sk-`` key) — and then
+    nothing runs. Folder lists (a name holding PATH) keep their folders."""
+    sep = os.pathsep
+    folders = sep.join([r"C:\envs\sk-learn-env\Scripts" if WIN else "/opt/sk-learn-env/bin",
+                        r"C:\tools" if WIN else "/usr/bin"])
+    env = N.build_env({"PATH": folders, "PYTHONPATH": folders, "PSMODULEPATH": folders})
+    lost = sorted(n for n in ("PATH", "PYTHONPATH", "PSMODULEPATH") if env.get(n) != folders)
+    assert lost == [], f"folder lists were dropped (names only): {lost}"
