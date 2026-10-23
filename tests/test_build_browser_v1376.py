@@ -1015,20 +1015,28 @@ async def test_real_edge_dies_with_a_daemon_that_is_killed(tmp_path):
         async def main():
             b = PB.AgentBrowsers()
             await b.open("build:k", {site.base!r}, preview={site.base!r})
-            print(json.dumps(b.pids("build:k")), flush=True)
+            work = str(b._sessions["build:k"].work)
+            print(json.dumps({{"pids": b.pids("build:k"), "work": work}}), flush=True)
             await asyncio.sleep(120)
 
         asyncio.run(main())
     """), encoding="utf-8")
     child = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE, text=True)
+    work = None
     try:
         line = await asyncio.wait_for(asyncio.to_thread(child.stdout.readline), 90)
-        pids = json.loads(line)
+        got = json.loads(line)
+        pids, work = got["pids"], Path(got["work"])
         assert len(_alive(pids)) >= 3, pids  # the driver, Edge and its helpers
         psutil.Process(child.pid).kill()  # TerminateProcess: nothing runs on the way out
         child.wait(10)
         assert await _wait_dead(pids, 20) == []
+        # A killed daemon cannot clean up after itself: its throwaway folder
+        # stays (unlocked now) until the next start's sweep of old ones.
+        assert work.exists()
     finally:
         if child.poll() is None:
             child.kill()
         site.close()
+        if work is not None:
+            await asyncio.to_thread(PB._remove_work, work)
