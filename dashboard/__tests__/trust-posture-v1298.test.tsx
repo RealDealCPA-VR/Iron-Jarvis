@@ -267,8 +267,10 @@ describe("sessions/[id] — the low-trust banner", () => {
     // it, so the sentence names "programs that keep running" - moved on purpose.
     // v1.371.0: page_screenshot joined it, so the sentence names
     // "screenshots of pages" - moved on purpose.
+    // v1.376.0: the agent's own browser joined it ("pages in its own
+    // browser") - moved on purpose.
     expect(banner).toHaveTextContent(
-      `This run is in low trust — ${REASON}. This run can't change settings, schedules, rules, connections, memory, agents or skills, can't type into your terminals, can't start programs that keep running, can't call your web services, can't take screenshots of pages and can't spend credits. It can still read, search and answer.`,
+      `This run is in low trust — ${REASON}. This run can't change settings, schedules, rules, connections, memory, agents or skills, can't type into your terminals, can't start programs that keep running, can't call your web services, can't take screenshots of pages, can't use pages in its own browser and can't spend credits. It can still read, search and answer.`,
     );
     expect(screen.getAllByTestId("trust-banner")).toHaveLength(1);
     // The header chip rides along too.

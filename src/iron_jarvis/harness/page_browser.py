@@ -1392,7 +1392,12 @@ class AgentBrowsers:
             sess.dropped = {"console": 0, "failed": 0, "dialog": 0}
         elif op == "picture":
             self._check_here(sess)
-            out.picture = await b.screenshot(jpeg=False)
+            try:
+                out.picture = await b.screenshot(jpeg=False)
+            except BrowserProblem:
+                raise
+            except Exception as exc:  # noqa: BLE001 — said in words, like every action
+                raise BrowserProblem(playwright_words(exc, what="The screenshot", limit_s=10)) from None
         else:  # pragma: no cover — the tools name the ops
             raise BrowserProblem(f"unknown browser action {op!r}")
         await self._after(sess, out)

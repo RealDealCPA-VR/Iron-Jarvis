@@ -100,6 +100,12 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
     words: "screenshots of pages",
     tools: ["page_screenshot"],
   },
+  // v1.376.0 (IJ harness part 2, Phase 5): the agent's own browser —
+  // flagged content must not open, click, type in or read back a page.
+  {
+    words: "pages in its own browser",
+    tools: ["page_open", "page_click", "page_type", "page_read"],
+  },
   {
     words: "spending",
     tools: ["generate_media"],
@@ -110,7 +116,8 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
 export const LOW_TRUST_CANNOT =
   "This run can't change settings, schedules, rules, connections, memory, agents or skills, " +
   "can't type into your terminals, can't start programs that keep running, " +
-  "can't call your web services, can't take screenshots of pages and can't spend credits. " +
+  "can't call your web services, can't take screenshots of pages, can't use pages in its own browser " +
+  "and can't spend credits. " +
   "It can still read, search and answer.";
 
 /** The chip's whole hover: the daemon's reason (and since when), then what

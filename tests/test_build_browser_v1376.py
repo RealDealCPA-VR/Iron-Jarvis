@@ -730,6 +730,20 @@ async def test_page_screenshot_sees_the_page_the_agent_is_on(tmp_path, fake):
     assert saved.is_file() and saved.parent == tmp_path / "home" / "page-screenshots"
 
 
+async def test_a_failed_screenshot_of_the_agents_page_is_said_in_words(tmp_path, fake):
+    backend = await _open(fake, tmp_path)
+
+    async def broken(*, jpeg):
+        if jpeg:
+            return b"\xff\xd8 fake jpeg"
+        raise RuntimeError("Target page, context or browser has been closed\nCall log: …")
+
+    backend.screenshot = broken
+    res = await PS.PageScreenshotTool().execute({}, ctx(tmp_path))
+    assert res.ok is False and res.error.startswith("The screenshot failed: Target page")
+    assert "Call log" not in res.error  # the first line only
+
+
 async def test_page_screenshot_with_no_browser_and_no_url_says_what_to_do(tmp_path, fake):
     res = await PS.PageScreenshotTool().execute({}, ctx(tmp_path))
     assert res.ok is False and "page_open" in res.error
