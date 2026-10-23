@@ -66,13 +66,16 @@ KEEP = [
     # Git Credential Manager's settings are not secrets, and git push needs
     # them (tests/test_build_env_review_v1377.py holds the decision).
     "SSH_AUTH_SOCK", "GCM_CREDENTIAL_STORE",
+    # moved on purpose (the review): a cloud tool's account selector — dropping
+    # it sent the agent's command to the user's DEFAULT account.
+    "AWS_PROFILE", "GOOGLE_APPLICATION_CREDENTIALS",
 ]
 
 #: What is DROPPED: secrets by name, vendors', this app's own, a parent's.
 DROP = [
     PLANTED, "PIXIO_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY",
-    "OPENAI_BASE_URL", "GEMINI_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "AZURE_OPENAI_ENDPOINT",
-    "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE", "GH_TOKEN", "GITHUB_TOKEN", "HF_TOKEN",
+    "OPENAI_BASE_URL", "GEMINI_API_KEY", "AZURE_OPENAI_ENDPOINT",
+    "AWS_SECRET_ACCESS_KEY", "GH_TOKEN", "GITHUB_TOKEN", "HF_TOKEN",
     "HUGGING_FACE_HUB_TOKEN", "NPM_TOKEN", "NPM_CONFIG__AUTH", "NPM_CONFIG_//REGISTRY.NPMJS.ORG/:_AUTHTOKEN",
     "DATABASE_PASSWORD", "MY_SECRET", "SESSION_COOKIE", "PRIVATE_KEY_PATH", "SENTRY_DSN",
     "SENTRY-TRACE", "BAGGAGE", "AZURE_DEVOPS_EXT_PAT", "STRIPE_SECRET", "OAUTH_CLIENT",

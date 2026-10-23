@@ -314,7 +314,18 @@ SECRET_NAME_PARTS: frozenset[str] = frozenset({
 #: Bash / with KeeAgent / gpg4win finds the agent only by it (the push itself
 #: is carded by the git guard). Its value is still judged
 #: (:func:`secret_value`).
-KEEP_NAMES: frozenset[str] = frozenset({"PWD", "SSH_AUTH_SOCK"})
+KEEP_NAMES: frozenset[str] = frozenset({
+    "PWD", "SSH_AUTH_SOCK",
+    # A cloud tool's ACCOUNT SELECTOR, or the PATH of its own sign-in file —
+    # not a secret: WHICH account, project or host it acts on. The family
+    # rule dropped them, and then aws / gcloud / client libraries / gh fall
+    # back to the user's DEFAULT account: an agent's command meant for the
+    # "dev" profile acted on the default one (often production). Kept, as in
+    # the user's own terminal; the keys and tokens of these families still go.
+    "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE", "AZURE_CONFIG_DIR", "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_APPLICATION_CREDENTIALS", "GH_HOST", "GH_CONFIG_DIR",
+})
 #: Git Credential Manager's own settings (``GCM_CREDENTIAL_STORE``,
 #: ``GCM_AUTHORITY``, ``GCM_INTERACTIVE``...): where its sign-ins live and how
 #: it asks -- never a credential, and on a store other than the default
@@ -347,9 +358,15 @@ def secret_name(name: str) -> bool:
     up = str(name or "").upper()
     if not up:
         return True
-    if up in DROP_NAMES or any(up.startswith(p) for p in DROP_PREFIXES):
+    if up in DROP_NAMES:
         return True
-    if up in KEEP_NAMES or any(up.startswith(p) for p in KEEP_PREFIXES):
+    # Exact names before the families (a selector inside AWS_ / GOOGLE_ /
+    # GH_); the prefixes only after them.
+    if up in KEEP_NAMES:
+        return False
+    if any(up.startswith(p) for p in DROP_PREFIXES):
+        return True
+    if any(up.startswith(p) for p in KEEP_PREFIXES):
         return False
     if any(word in up for word in SECRET_NAME_WORDS) or _AUTH_RX.search(up):
         return True

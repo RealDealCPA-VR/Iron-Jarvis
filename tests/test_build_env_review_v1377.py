@@ -416,3 +416,33 @@ def test_a_folder_list_is_never_dropped_for_a_name_that_looks_like_a_key():
     env = N.build_env({"PATH": folders, "PYTHONPATH": folders, "PSMODULEPATH": folders})
     lost = sorted(n for n in ("PATH", "PYTHONPATH", "PSMODULEPATH") if env.get(n) != folders)
     assert lost == [], f"folder lists were dropped (names only): {lost}"
+
+
+# --------------------------------------------------------------------------- #
+# a cloud tool's ACCOUNT SELECTOR is kept: dropping it redirects the command
+# --------------------------------------------------------------------------- #
+
+#: Not secrets: WHICH account / project / host a cloud tool acts on, or the
+#: PATH of its own sign-in file. The doer's family rule dropped them, and
+#: then ``aws`` / ``gcloud`` / client libraries / ``gh`` fall back to the
+#: user's DEFAULT account — an agent's ``aws s3 rm`` meant for the "dev"
+#: profile would act on the default one (often production). The user's own
+#: terminal acts on the profile they chose; so does the agent's.
+SELECTORS = {
+    "AWS_PROFILE": "dev", "AWS_DEFAULT_PROFILE": "dev", "AWS_REGION": "eu-west-1",
+    "AWS_DEFAULT_REGION": "eu-west-1", "AWS_CONFIG_FILE": r"C:\Users\someone\.aws\config",
+    "AWS_SHARED_CREDENTIALS_FILE": r"C:\Users\someone\.aws\credentials",
+    "AZURE_CONFIG_DIR": r"C:\Users\someone\.azure-dev", "GOOGLE_CLOUD_PROJECT": "my-dev-project",
+    "GOOGLE_APPLICATION_CREDENTIALS": r"C:\Users\someone\keys\dev-sa.json",
+    "GH_HOST": "github.example.test", "GH_CONFIG_DIR": r"C:\Users\someone\.config\gh-work",
+}
+
+
+def test_a_cloud_tools_account_selector_is_kept_and_its_secrets_are_not():
+    secrets = {"AWS_ACCESS_KEY_ID": FAKE, "AWS_SECRET_ACCESS_KEY": FAKE, "AWS_SESSION_TOKEN": FAKE,
+               "GH_TOKEN": FAKE, "AZURE_CLIENT_SECRET": FAKE, "GOOGLE_API_KEY": FAKE}
+    env = N.build_env({**SELECTORS, **secrets})
+    lost = sorted(n for n, v in SELECTORS.items() if env.get(n) != v)
+    leaked = sorted(n for n in secrets if n in env)
+    assert lost == [], f"a cloud tool's account selector was dropped (names only): {lost}"
+    assert leaked == [], f"a cloud secret reached the child (names only): {leaked}"
