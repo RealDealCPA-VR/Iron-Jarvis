@@ -425,6 +425,47 @@ def _sweep_stale(now: float | None = None, folder: "Path | None" = None) -> int:
     return removed
 
 
+#: v1.376.0 review: a request a Local only browser refused (its proxy).
+LOCAL_ONLY_REFUSED = "stopped: not on this PC or your network (Local only)"
+#: Chromium's words for a request its proxy would not carry.
+_PROXY_REFUSALS = ("ERR_PROXY_CONNECTION_FAILED", "ERR_TUNNEL_CONNECTION_FAILED")
+LOCAL_ONLY_CHANGED = (
+    "Local only was turned {state} after the agent's browser opened, so that browser was "
+    "closed: the browser is started for the session's Local only setting."
+)
+LOCAL_ONLY_FRESH = (
+    "Local only was turned {state} after the agent's browser opened, so a fresh one was "
+    "started for it."
+)
+
+
+def local_only_bypass() -> str:
+    """The addresses a LOCAL ONLY agent browser reaches (v1.376.0 review,
+    DECISION for item 2b), as Chromium's ``--proxy-bypass-list``: built from
+    ``providers/egress``' ONE definition of "this PC or your own network" —
+    its address blocks, ``localhost`` and its sub-names, single-label names
+    (``<local>``) and the private name suffixes — judged by NAME, never by a
+    DNS answer, exactly like ``egress.private_host``. Everything else goes to
+    a proxy that refuses it (:class:`EdgeBackend`), so it never leaves."""
+    from ..providers import egress
+
+    rules = ["localhost", "*.localhost", "<local>"]
+    rules += [str(net) for net in egress._PRIVATE_NETS]
+    rules += ["*" + suffix for suffix in egress.PRIVATE_SUFFIXES]
+    return ";".join(rules)
+
+
+def _local_only_now() -> bool:
+    """Whether the work in flight in THIS context is Local only (the turn's
+    or the helper's scope). Unknown reads as Local only — the stricter."""
+    try:
+        from ..providers.egress import current_scope
+
+        return bool(current_scope().on)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def idle_close_s() -> float:
     """The idle time a browser is closed after (:data:`IDLE_CLOSE_S`, or the
     scratch hook :data:`IDLE_ENV`)."""
@@ -560,13 +601,20 @@ class EdgeBackend:
 
     def __init__(self, *, edge: str, work: Path, guard: Callable[[str], Verdict],
                  note: Callable[[str, str], None], background: bool = False,
-                 extra_args: "tuple[str, ...]" = ()) -> None:
+                 extra_args: "tuple[str, ...]" = (), local_only: bool = False) -> None:
         self._edge = edge
         self._work = work
         self._guard = guard
         self._note = note
         self._background = background
         self._extra = tuple(extra_args)
+        #: v1.376.0 review: a Local only browser runs behind a proxy that
+        #: refuses every public address (:func:`local_only_bypass`). The
+        #: "proxy" is a port on 127.0.0.1 this browser holds BOUND and never
+        #: listens on: every connection to it is refused at once, and no
+        #: other program can take the port while the browser lives.
+        self.local_only = bool(local_only)
+        self._refuser: Any = None
         self._cm: Any = None
         self._pw: Any = None
         self._ctx: Any = None
@@ -598,6 +646,9 @@ class EdgeBackend:
             # starts from here on is born in the job (procs.adopt).
             self._job = await asyncio.to_thread(procs.adopt, self._driver, background=self._background)
             self._known.add(self._driver)
+        args = [*EDGE_ARGS, *self._extra]
+        if self.local_only:
+            args += self._refusing_proxy()
         self._ctx = await self._pw.chromium.launch_persistent_context(
             str(self._work / "profile"),
             executable_path=self._edge,
@@ -609,7 +660,7 @@ class EdgeBackend:
             handle_sigint=False,
             handle_sigterm=False,
             handle_sighup=False,
-            args=[*EDGE_ARGS, *self._extra],
+            args=args,
             timeout=START_TIMEOUT_S * 1000,
         )
         await self._ctx.route("**/*", self._route)
@@ -620,6 +671,28 @@ class EdgeBackend:
         if self._page is None:
             self._adopt_page(await self._ctx.new_page())
         self._remember(self._members())
+
+    def _refusing_proxy(self) -> list[str]:
+        """Edge's switches for Local only: every address outside this PC and
+        the user's network goes to a proxy that refuses it (a request, a
+        WebSocket, a beacon, a server redirect's next hop, a preconnect) —
+        measured: none of them reaches the server, while this PC still
+        answers. The proxy is Chromium's own setting, so it holds below
+        anything a page can do; the address is passed as switches, not
+        Playwright's ``proxy`` option (which also proxies loopback)."""
+        import socket
+
+        refuser = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        refuser.bind(("127.0.0.1", 0))  # bound, never listening: refuses
+        self._refuser = refuser
+        port = refuser.getsockname()[1]
+        return [f"--proxy-server=http://127.0.0.1:{port}", f"--proxy-bypass-list={local_only_bypass()}"]
+
+    def _drop_refuser(self) -> None:
+        refuser, self._refuser = self._refuser, None
+        if refuser is not None:
+            with contextlib.suppress(Exception):
+                refuser.close()
 
     def _remember(self, pids: "list[int]") -> None:
         self._known.update(pids)
@@ -658,14 +731,18 @@ class EdgeBackend:
                 self._remember(members)
             pids = sorted(set(members) | self._known)
             job = self._job
-            if job is not None:
-                try:
-                    job.terminate()
-                finally:
-                    job.close()
-                self._job = None
-            else:
-                _kill_procs(list(self._procs.values()))
+            try:
+                if job is not None:
+                    try:
+                        job.terminate()
+                    finally:
+                        job.close()
+                    self._job = None
+                else:
+                    _kill_procs(list(self._procs.values()))
+            finally:
+                # The Local only proxy's port is let go only once Edge is gone.
+                self._drop_refuser()
             return pids
 
     def _members(self) -> list[int]:
@@ -762,6 +839,8 @@ class EdgeBackend:
             failure = str(request.failure or "")
             if "ERR_ABORTED" in failure or "ERR_BLOCKED_BY_CLIENT" in failure:
                 return  # a page that moved on / the rules' own stop (noted as blocked)
+            if self.local_only and any(code in failure for code in _PROXY_REFUSALS):
+                failure = LOCAL_ONLY_REFUSED
             self._note("failed", f"{request.method} {where(request.url)} — {failure}")
         except Exception:  # noqa: BLE001
             pass
@@ -1122,6 +1201,8 @@ class _Session:
     #: Sentences the NEXT action result opens with, once (a browser started
     #: fresh after Edge died) — v1.376.0 review.
     notes: list[str] = field(default_factory=list)
+    #: Started behind the Local only proxy (v1.376.0 review).
+    local_only: bool = False
 
 
 @dataclass
@@ -1232,22 +1313,26 @@ class AgentBrowsers:
         fut = asyncio.run_coroutine_threadsafe(coro, self._host.loop())
         return await asyncio.wrap_future(fut)
 
+    # Each action reads the CALLER's Local only scope (the turn's, or the
+    # helper's) here, on the daemon's side, and hands it over explicitly.
     async def open(self, key: str, url: str, *, preview: str = "", background: bool = False) -> ActResult:
-        return await self.run(self._act(key, "open", url=url, preview=preview, background=background))
+        return await self.run(self._act(key, "open", url=url, preview=preview, background=background,
+                                        local_only=_local_only_now()))
 
     async def click(self, key: str, target: Any, *, preview: str = "") -> ActResult:
-        return await self.run(self._act(key, "click", target=target, preview=preview))
+        return await self.run(self._act(key, "click", target=target, preview=preview,
+                                        local_only=_local_only_now()))
 
     async def type(self, key: str, target: Any, text: str, *, submit: bool = False,
                    preview: str = "") -> ActResult:
         return await self.run(self._act(key, "type", target=target, text=text, submit=submit,
-                                        preview=preview))
+                                        preview=preview, local_only=_local_only_now()))
 
     async def read(self, key: str, *, preview: str = "") -> ActResult:
-        return await self.run(self._act(key, "read", preview=preview))
+        return await self.run(self._act(key, "read", preview=preview, local_only=_local_only_now()))
 
     async def picture(self, key: str, *, preview: str = "") -> ActResult:
-        return await self.run(self._act(key, "picture", preview=preview))
+        return await self.run(self._act(key, "picture", preview=preview, local_only=_local_only_now()))
 
     async def close(self, key: str, reason: str = "") -> list[int]:
         """Close ``key``'s browser (nothing open: nothing to do)."""
@@ -1316,7 +1401,7 @@ class AgentBrowsers:
 
         return note
 
-    async def _start(self, key: str, background: bool) -> _Session:
+    async def _start(self, key: str, background: bool, local_only: bool = False) -> _Session:
         if not self._swept:
             self._swept = True
             await asyncio.to_thread(_sweep_stale)
@@ -1328,11 +1413,14 @@ class AgentBrowsers:
             if problem:
                 raise BrowserProblem(problem)
         work = await asyncio.to_thread(_new_work)
-        sess = _Session(key=key, backend=None, work=work, lock=asyncio.Lock())
+        sess = _Session(key=key, backend=None, work=work, lock=asyncio.Lock(), local_only=bool(local_only))
         factory = self._factory or EdgeBackend
+        # ``local_only`` only when on: a test's stand-in predating it takes no
+        # such keyword.
         backend = factory(
             edge=edge, work=work, guard=self._guard_for(sess), note=self._note_for(sess),
             background=background, extra_args=self.extra_args,
+            **({"local_only": True} if local_only else {}),
         )
         sess.backend = backend
         with self._lock:
@@ -1361,8 +1449,21 @@ class AgentBrowsers:
             self._idle_task = asyncio.ensure_future(self._idle_watch())
         return sess
 
-    async def _session(self, key: str, *, create: bool, background: bool) -> "_Session | None":
+    async def _session(self, key: str, *, create: bool, background: bool,
+                       local_only: bool = False) -> "_Session | None":
         sess = self._sessions.get(key)
+        if sess is not None and not sess.lock.locked() and sess.local_only != bool(local_only):
+            # v1.376.0 review: the Local only proxy is chosen when Edge
+            # starts, so a browser started for the other setting is never
+            # used: it closes, and page_open starts one for this turn's.
+            state = "on" if local_only else "off"
+            await self._close(key, "local only changed")
+            if not create:
+                raise BrowserProblem(LOCAL_ONLY_CHANGED.format(state=state))
+            fresh = await self._session(key, create=True, background=background, local_only=local_only)
+            if fresh is not None:
+                fresh.notes.append(LOCAL_ONLY_FRESH.format(state=state))
+            return fresh
         if sess is not None and not sess.lock.locked() and not _alive(sess.backend):
             # v1.376.0 review: Edge went away under the agent (closed by the
             # user, a crash). Its job, its folder and its entry go — never a
@@ -1371,7 +1472,7 @@ class AgentBrowsers:
             await self._close(key, "crashed")
             if not create:
                 raise BrowserProblem(DIED)
-            fresh = await self._session(key, create=True, background=background)
+            fresh = await self._session(key, create=True, background=background, local_only=local_only)
             if fresh is not None:
                 fresh.notes.append(FRESH_AFTER_DIED)
             return fresh
@@ -1381,15 +1482,16 @@ class AgentBrowsers:
         async with gate:
             sess = self._sessions.get(key)
             if sess is None:
-                sess = await self._start(key, background)
+                sess = await self._start(key, background, local_only)
         self._starting.pop(key, None)
         return sess
 
     async def _act(self, key: str, op: str, *, preview: str = "", background: bool = False,
-                   **kw: Any) -> ActResult:
+                   local_only: bool = False, **kw: Any) -> ActResult:
         if op == "open" and judge(str(kw.get("url") or ""), set(), "").kind == "refuse":
             raise BrowserProblem(NOT_LOCAL)  # before a browser is started for nothing
-        sess = await self._session(key, create=(op == "open"), background=background)
+        sess = await self._session(key, create=(op == "open"), background=background,
+                                   local_only=local_only)
         if sess is None:
             raise BrowserProblem(NO_PAGE)
         try:
@@ -1399,6 +1501,10 @@ class AgentBrowsers:
         try:
             if self._sessions.get(key) is not sess:
                 raise BrowserProblem(NO_PAGE)  # closed while this waited
+            if sess.local_only != bool(local_only):
+                # Local only changed while this waited behind another action.
+                await self._close(key, "local only changed")
+                raise BrowserProblem(LOCAL_ONLY_CHANGED.format(state="on" if local_only else "off"))
             sess.last_used = time.monotonic()
             # The page the user's Browser pane shows NOW (the turn's own
             # preview_url): opened without asking. A page the agent opened
