@@ -203,3 +203,91 @@ async def test_the_transcript_is_read_and_measured_off_the_event_loop(app, work,
     for what, threads in where.items():
         assert threads, f"{what} never ran"
         assert loop_thread not in threads, f"{what} ran on the event loop"
+
+
+# --------------------------------------------------------------------------- #
+# the session's ONE account (v1.368.0): the summary is written on it, or not
+# at all
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture()
+def proxied(tmp_path, monkeypatch):
+    """The real Iron-Proxy service + client against the fake (the v1368
+    harness), with the two subscription adapters as account doubles."""
+    from tests.test_build_accounts_v1368 import isolate, make_fake
+
+    gen = isolate(tmp_path, monkeypatch)
+    next(gen)
+    fake = make_fake(tmp_path)
+    try:
+        yield fake
+    finally:
+        fake.stop()
+        gen.close()
+
+
+async def test_the_summary_is_written_on_the_sessions_own_account_and_never_another(
+    proxied, tmp_path, work, monkeypatch,
+):
+    from iron_jarvis.iron_proxy import pin as P
+    from tests.test_build_account_turns_v1368 import _only_pinned
+    from tests.test_build_accounts_v1368 import Behaviour, enable, iso, wire_doubles
+    from tests.test_build_compact_v1374 import seed
+
+    fake = proxied
+    app = create_app(str(tmp_path / "home"))
+    await enable(app)
+    beh = wire_doubles(app, monkeypatch, Behaviour())
+    status, view = await asgi(app, "POST", "/build/sessions",
+                              {"folder": str(work), "provider": "claude-cli", "model": "claude-sonnet-4-5"})
+    assert status == 201, view
+    sid = view["id"]
+    assert setup_of(app, sid)["account"] == "c-work"
+    seed(app, sid)
+    fake.queries.clear()
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/compact", {})
+    assert status == 200, body
+    # ONE call, leased on the session's account only, under its pin.
+    assert beh.leases == [("claude-cli", "c-work")]
+    assert [p.profile_id for p in beh.pins] == ["c-work"]
+    _only_pinned(fake, "c-work")
+    assert P.current() is None  # the pin did not outlive the press
+
+    # The account is parked: the press says so, and NOTHING runs anywhere
+    # else — no other account, no other provider.
+    other = (await asgi(app, "POST", "/build/sessions",
+                        {"folder": str(work), "provider": "claude-cli", "model": "claude-sonnet-4-5"}))[1]["id"]
+    seed(app, other)
+    fake.states["c-work"].update({"status": "parked", "parkedUntil": iso(5400),
+                                  "parkedReason": {"kind": "quota-exhausted"}})
+    beh.leases.clear()
+    beh.attempts.clear()
+    fake.queries.clear()
+    status, body = await asgi(app, "POST", f"/build/sessions/{other}/compact", {})
+    # The account's OWN sentence (the turn's limit card's words), never the
+    # generic "couldn't finish this answer. Press Retry" (review, v1.374.0).
+    assert status == 409, body
+    assert body["detail"].startswith('The Claude account "Work Max" is at its usage limit until'), body
+    assert body["detail"].endswith(C.NOTHING_SUMMARIZED)
+    assert "Retry" not in body["detail"] and "couldn't finish" not in body["detail"]
+    assert beh.leases == [] and set(beh.attempts) <= {"claude-cli"}
+    _only_pinned(fake, "c-work")
+    assert "compaction" not in setup_of(app, other)
+
+
+async def test_a_failed_summary_call_is_said_in_whole_sentences(app, work):
+    """The headline and its fix are two sentences ("...this answer Press
+    Retry" read as one broken line)."""
+    from iron_jarvis.providers.adapters.base import ProviderError
+    from tests.test_build_compact_v1374 import seed
+
+    sid = new_session(app, work)["id"]
+    seed(app, sid)
+    wire_writer(app, Writer(raises=ProviderError("anthropic: the request was refused", status_code=400)))
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/compact", {})
+    assert status == 502, body
+    detail = body["detail"]
+    assert ". " in detail and detail.endswith("."), detail
+    assert not any(f"{a} {b}" in detail for a, b in (("answer", "Press"), ("error", "Retry"), ("error", "Check")))
+    assert "compaction" not in setup_of(app, sid)

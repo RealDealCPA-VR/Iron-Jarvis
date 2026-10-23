@@ -122,6 +122,7 @@ NOT_LIGHTER = (
     "Try again after a few more turns."
 )
 CHANGED = "The conversation changed while it was being summarized, so nothing was kept. Try again."
+NOTHING_SUMMARIZED = "Nothing was summarized."
 
 
 class CompactRefused(Exception):
@@ -566,11 +567,22 @@ async def compact(platform: Any, thread_id: str) -> dict[str, Any]:
         # — a database write, so off the loop.
         await asyncio.to_thread(_bill, platform, got["route"], thread_id)
     if err is not None:
+        if pin is not None and getattr(pin, "limit", None):
+            # Review (v1.374.0): the session's account could not serve (parked,
+            # signed out): its OWN sentence, the turn's limit card's words —
+            # never the generic "couldn't finish this answer".
+            from ..daemon.routes.build import limit_words
+
+            said = limit_words(pin.limit)
+            if said:
+                raise CompactRefused(f"{said} {NOTHING_SUMMARIZED}", 409)
         from ..providers.failure_words import friendly_error
 
         words = friendly_error(err, provider=provider)
-        said = " ".join(p for p in (words.get("title", ""), words.get("fix", "")) if p).strip()
-        raise CompactRefused(said or NO_SUMMARY, 502)
+        said = ". ".join(
+            p.strip().rstrip(".") for p in (words.get("title", ""), words.get("fix", "")) if p.strip()
+        )
+        raise CompactRefused(f"{said}." if said else NO_SUMMARY, 502)
     if got.get("mock"):
         raise CompactRefused(NO_REAL_MODEL)
     if not out.ok:
