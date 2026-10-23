@@ -3569,6 +3569,21 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **The app icon is the user's "iU" tile, at every size Windows draws**
+  (v1.380.0; the user pasted the artwork). Pasted pictures are not files:
+  it was taken from this conversation's own record (the session `.jsonl`'s
+  base64 image block) and kept as `desktop/assets/icon-source.png`.
+  `icon.png` = the tile cropped to its rounded square (radius measured on the
+  source), corners transparent, 256 RGBA; `icon.ico` = 16, 20, 24, 32, 40, 48,
+  64, 96, 128, 256. `build.win.icon` is the `.ico` (exe, shortcuts, NSIS
+  installer/uninstaller); `main.js` `windowIcon()` gives every BrowserWindow
+  that sets an icon the `.ico` on Windows (else the `.png`); the tray already
+  preferred the `.ico`. The in-app title-bar mark and the dashboard's
+  `app/icon.svg` favicon are unchanged (the user asked for the desktop and the
+  taskbar). Windows' icon cache can keep the old picture on a shortcut until
+  it refreshes. `desktop/assets/README.md` says how to remake the files. Pin:
+  `tests/test_app_icon_v1380.py` (red on the old files: 4 of 5).
+
 - **Claude Code's `/` in the IJ harness: a typed `/name words` RUNS it;
   Claude Code's own command files are read, never executed; a Build session
   needs NO folder** (v1.379.0; the user: "I want to be able to use the same

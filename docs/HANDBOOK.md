@@ -1897,6 +1897,14 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## A new app icon (v1.380.0)
+
+Iron Jarvis has a new icon: the blue-and-white "iU" on a dark rounded tile.
+It is used for the desktop and Start-menu shortcuts, the taskbar button, the
+tray icon and the installer, each drawn from a size made for it (16 to 256
+pixels). After the update installs, Windows may keep showing the old picture
+on a shortcut for a while; signing out and back in refreshes it.
+
 ## Claude Code's `/` commands, and sessions with no folder (v1.379.0)
 
 **Type `/name` and your words, then press Enter**, in a Build session's box

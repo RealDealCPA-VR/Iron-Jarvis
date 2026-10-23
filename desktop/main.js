@@ -2000,7 +2000,7 @@ function createMainWindow() {
       symbolColor: "#a6b0ba", // window-control glyphs: zinc, not pure white
       height: 40,
     },
-    icon: path.join(__dirname, "assets", "icon.png"),
+    icon: windowIcon(),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -3406,6 +3406,14 @@ function installAskWatcher() {
       });
   };
   setInterval(tick, ASK_WATCH_MS);
+}
+
+// The window's own icon (the taskbar button). On Windows the multi-size .ico
+// (16–256) draws crisper at taskbar sizes than one 256 px PNG scaled down.
+function windowIcon() {
+  const ico = path.join(__dirname, "assets", "icon.ico");
+  if (process.platform === "win32" && fs.existsSync(ico)) return ico;
+  return path.join(__dirname, "assets", "icon.png");
 }
 
 function createTray() {
@@ -5093,7 +5101,7 @@ function openPopout(rawPath) {
     title: "Iron Jarvis",
     titleBarStyle: "hidden",
     titleBarOverlay: { color: "#0a0a0f", symbolColor: "#a6b0ba", height: 40 },
-    icon: path.join(__dirname, "assets", "icon.png"),
+    icon: windowIcon(),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

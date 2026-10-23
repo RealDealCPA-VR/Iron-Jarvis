@@ -1,18 +1,28 @@
 # Iron Jarvis Desktop — assets
 
-`icon.png` is a **placeholder** application icon: a 256×256 RGBA PNG with a dark
-background and a crimson "arc-reactor" core (matches the Iron Jarvis splash).
+The application icon (v1.380.0): the "iU" tile the user chose.
 
-It is referenced by:
+- `icon-source.png` — the artwork exactly as the user gave it (a dark rounded
+  tile on a dark background). Keep it: every other file is made from it.
+- `icon.png` — the tile cropped to its rounded square, corners made
+  transparent, 256×256 RGBA.
+- `icon.ico` — the same at 16, 20, 24, 32, 40, 48, 64, 96, 128 and 256 px, so
+  Windows draws each place (tray, taskbar, desktop shortcut, installer) from
+  a size made for it.
 
-- `main.js` → `BrowserWindow({ icon: assets/icon.png })`
-- `package.json` → `build.win.icon`
+They are referenced by:
 
-To ship a real brand icon, replace `icon.png` with a **256×256 (or larger)**
-PNG. `electron-builder` will convert it to `.ico` automatically for the Windows
-NSIS installer. (You can also drop in a prebuilt `icon.ico` and point
-`build.win.icon` at it.)
+- `package.json` → `build.win.icon` (`icon.ico`): the app's exe, its desktop
+  and Start-menu shortcuts, and the NSIS installer/uninstaller.
+- `main.js` → `windowIcon()` (the `.ico` on Windows, else the `.png`) for the
+  main window and pop-out windows — the taskbar button.
+- `main.js` → `createTray()` (the `.ico`, else the `.png`) for the tray.
 
-Nothing here fails the build if the icon is missing — Electron falls back to its
-default window icon — but keeping a valid PNG here means `pnpm dist` produces a
-branded installer out of the box.
+To change the icon: replace `icon-source.png` and remake `icon.png` and
+`icon.ico` from it (crop to the tile, round the corners with a transparent
+outside, then save the sizes above). `tests/test_app_icon_v1380.py` checks the
+sizes, the transparent corners and every reference.
+
+Windows keeps its own icon cache: after an update installs, a desktop
+shortcut can show the old icon until Windows refreshes it (signing out and in
+does it).
