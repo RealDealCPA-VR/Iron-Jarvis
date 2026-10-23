@@ -60,10 +60,25 @@ def git_env(extra: "dict[str, str] | None" = None) -> dict[str, str]:
     import os
 
     env = dict(os.environ)
+    # Review (v1.375.0): a variable that points git at ANOTHER repository
+    # (set for a hook git is running, or by a shell the app was started
+    # from) would make every call of a Build session act on that one,
+    # whatever its working folder — a worktree added to the wrong repository.
+    for key in _ELSEWHERE_VARS:
+        env.pop(key, None)
     env["GIT_TERMINAL_PROMPT"] = "0"
     if extra:
         env.update(extra)
     return env
+
+
+#: git variables that choose WHICH repository a call works on (git sets most
+#: of them for the hooks it runs).
+_ELSEWHERE_VARS = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX", "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+)
 
 
 def run_git(

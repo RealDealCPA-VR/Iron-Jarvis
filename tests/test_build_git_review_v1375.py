@@ -562,3 +562,18 @@ def test_the_git_facts_whitelist_keeps_only_a_real_session_record():
         assert B.clean_git_record({k: v for k, v in good.items() if k != missing}) is None
     assert B.clean_git_record({**good, "branch": "main"}) is None, "only an ij/ branch is a session's"
     assert B.clean_git_record("not a dict") is None
+
+
+def test_a_git_variable_that_names_another_repository_is_never_followed(repo, tmp_path, monkeypatch):
+    """git sets GIT_DIR / GIT_INDEX_FILE for the hooks it runs; an app (or a
+    test run) started under one made every Build git call act on THAT
+    repository, whatever the session's folder."""
+    other = make_repo(tmp_path / "other")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(other / ".git" / "index"))
+    facts = _start(repo)
+    monkeypatch.delenv("GIT_DIR")
+    monkeypatch.delenv("GIT_INDEX_FILE")
+    assert git("branch", "--list", "ij/*", cwd=other) == "", "the session's branch went to another repository"
+    assert facts["branch"] in git("branch", "--list", "ij/*", cwd=repo)
+    assert git("worktree", "list", "--porcelain", cwd=other).count("worktree ") == 1
