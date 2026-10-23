@@ -137,7 +137,17 @@ def make_chat_workfolder(
     """
     stamp = (today or date.today()).isoformat()
     root.mkdir(parents=True, exist_ok=True)
-    folder = _unique(root / f"{stamp} {folder_title(title)}")
-    folder.mkdir(parents=False, exist_ok=False)
+    # v1.379.0 review: two first messages with the same words at the same
+    # moment (two Build sessions with no folder) both found the same name
+    # free and the second mkdir failed — the next free name is taken instead.
+    for _attempt in range(20):
+        folder = _unique(root / f"{stamp} {folder_title(title)}")
+        try:
+            folder.mkdir(parents=False, exist_ok=False)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise OSError(f"no free name for {stamp} {folder_title(title)} in {root}")
     copied, skipped = copy_uploads_into(folder, files, uploads_dir)
     return {"path": str(folder), "created": True, "files": copied, "skipped": skipped}

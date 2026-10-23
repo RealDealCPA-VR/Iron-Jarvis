@@ -500,14 +500,59 @@ def _installed(folders: list[str]) -> list[tuple[str, str, Path]]:
     return out
 
 
+#: ``.claude.json`` is read for its signed-in account only (it can be large:
+#: every project's history lives there).
+MAX_ACCOUNT_FILE_BYTES = 32 * 1024 * 1024
+_UUID_RX = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.I)
+
+
+def _uuid(value: Any) -> str:
+    text = str(value or "").strip()
+    return text.lower() if _UUID_RX.match(text) else ""
+
+
+def signed_in_bucket() -> str:
+    """The synced-plugins folder Claude Code reads for the SIGNED-IN account
+    (2.1.307: ``<organization>_<account>``, both lower case, the account
+    ``unbound`` when it has none). The account comes from ``.claude.json``'s
+    ``oauthAccount`` — in ``CLAUDE_CONFIG_DIR`` when set, else
+    ``~/.claude.json``: the user's own sign-in. Claude Code also takes
+    ``CLAUDE_CODE_ORGANIZATION_UUID`` / ``CLAUDE_CODE_ACCOUNT_UUID``, but in
+    the daemon those can only be a PARENT Claude Code session's (a daemon
+    started from one), never the user's — so they are not read here (the
+    v1.303.1 rule for that session's markers). "" when no account can be read
+    (then every account's folder is offered, as before). Read-only."""
+    raw = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    path = (Path(raw).expanduser() / ".claude.json") if raw else (Path.home() / ".claude.json")
+    oauth: Any = {}
+    try:
+        if path.is_file() and path.stat().st_size <= MAX_ACCOUNT_FILE_BYTES:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            oauth = data.get("oauthAccount") if isinstance(data, dict) else {}
+    except (OSError, ValueError, UnicodeDecodeError):
+        oauth = {}
+    oauth = oauth if isinstance(oauth, dict) else {}
+    org = _uuid(oauth.get("organizationUuid"))
+    if not org:
+        return ""
+    account = _uuid(oauth.get("accountUuid")) or "unbound"
+    return f"{org}_{account}"
+
+
 def _synced() -> list[tuple[str, str, Path]]:
-    """Plugins synced from claude.ai: ``plugins/synced/<account>/<name>/``."""
+    """Plugins synced from claude.ai: ``plugins/synced/<account>/<name>/`` —
+    v1.379.0 review: only the SIGNED-IN account's folder when the account is
+    known (:func:`signed_in_bucket`; Claude Code reads only that one), every
+    account's folder otherwise."""
     base = plugins_root() / "synced"
     out: list[tuple[str, str, Path]] = []
     try:
         buckets = sorted(p for p in base.iterdir() if p.is_dir() and not p.name.startswith("."))
     except OSError:
         return out
+    mine = signed_in_bucket()
+    if mine:
+        buckets = [b for b in buckets if b.name.lower() == mine]
     for bucket in buckets:
         try:
             dirs = sorted(p for p in bucket.iterdir() if p.is_dir() and not p.name.startswith("."))
@@ -737,55 +782,145 @@ SHELL_LINES_NOTE = (
 _AT_RX = re.compile(r"(?<![\w@`])@([^\s`'\"<>()\[\]{},;|]+)")
 
 
+#: Placeholders a fill leaves alone and the words it put in (Claude Code's
+#: own two private characters: U+FFFF keeps a ``$``, U+FFFE brackets a value
+#: that came from the ARGUMENTS — read back by :func:`_marked_refs` and
+#: :func:`_command_shell_lines` so the user's words never re-trigger a file or
+#: a shell line, then removed).
+_KEEP = "\uffff"
+_SPAN = "\ufffe"
+
+
 def _split_args(text: str) -> list[str]:
-    """Claude Code's argument split: shell-like quoting, else whitespace."""
+    """The arguments, one per word: whitespace splits, ``"…"`` and ``'…'``
+    group words (Claude Code: "Indexed arguments use shell-style quoting").
+    A BACKSLASH IS A LETTER — except right before a quote, which it keeps as
+    a quote — because this is a Windows app and ``C:\\Users\\x`` must stay a
+    path (a POSIX shell reading makes it ``C:Usersx``). An unclosed quote
+    reads the line as plain words."""
     text = str(text or "")
     if not text.strip():
         return []
-    import shlex
+    out: list[str] = []
+    cur: list[str] = []
+    started = False
+    quote = ""
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and quote != "'" and i + 1 < len(text) and text[i + 1] in "\"'":
+            cur.append(text[i + 1])
+            started = True
+            i += 2
+            continue
+        if quote:
+            if ch == quote:
+                quote = ""
+            else:
+                cur.append(ch)
+        elif ch in "\"'":
+            quote = ch
+            started = True
+        elif ch.isspace():
+            if started:
+                out.append("".join(cur))
+                cur, started = [], False
+        else:
+            cur.append(ch)
+            started = True
+        i += 1
+    if quote:
+        return text.split()
+    if started:
+        out.append("".join(cur))
+    return out
 
-    try:
-        parts = shlex.split(text, posix=True)
-    except ValueError:
-        parts = []
-    return parts if parts else text.split()
 
-
-def substitute(body: str, args: str, named: Iterable[str] = ()) -> str:
-    """Claude Code's argument filling (2.1.307): ``$name`` (a named argument),
-    ``$ARGUMENTS[N]`` and ``$N`` (0-based: ``$0`` is the first argument), and
-    ``$ARGUMENTS`` (the whole line). A placeholder with no argument is left as
-    it is; ``\\$`` keeps a literal dollar. When the arguments filled nothing,
-    they are added at the end as ``ARGUMENTS: …``. Pure."""
-    keep = "￿"
+def _fill(body: str, args: str, named: Iterable[str] = ()) -> str:
+    """Claude Code 2.1.307's argument filling (its ``eBe``), every value that
+    came from ``args`` bracketed by :data:`_SPAN`: ``\\$`` before a
+    placeholder keeps a literal dollar; ``$name`` (a NAMED argument) is ""
+    when its position has no word — and still counts as filled; ``$ARGUMENTS[N]``
+    and ``$N`` are 0-BASED (``$0`` is the first word, ``$1`` the second — the
+    docs' own table) and stay as written, unfilled, when there is no such
+    word; ``$ARGUMENTS`` is the whole line as typed; when nothing was filled
+    the words are added as ``ARGUMENTS: …``. A value's own ``$`` is never
+    filled again."""
     words = _split_args(args)
-    names = sorted({n for n in named if n}, key=len, reverse=True)
+    ordered = [n for n in dict.fromkeys(str(x) for x in named) if n and not n.isdigit() and len(n) <= 64][:64]
+    names = sorted(ordered, key=len, reverse=True)
     alt = "|".join([r"\d", "ARGUMENTS", *[re.escape(n) + r"(?![\[\w])" for n in names]])
-    text = re.sub(r"(?<!\\)\\\$(?=" + alt + ")", keep, str(body or ""))
+    text = str(body or "").replace(_KEEP, "\ufffd").replace(_SPAN, "\ufffd")
+    text = re.sub(r"(?<!\\)\\\$(?=" + alt + ")", _KEEP, text)
     used = False
 
-    def put(value: str) -> str:
+    def put(value: "str | None") -> str:
         nonlocal used
         used = True
-        return value.replace("$", keep)
+        clean = str(value or "").replace(_KEEP, "\ufffd").replace(_SPAN, "\ufffd")
+        return _SPAN + clean.replace("$", _KEEP) + _SPAN
 
-    ordered = list(dict.fromkeys(named))
     for name in names:
         index = ordered.index(name)
-        if index < len(words):
-            text = re.sub(r"\$" + re.escape(name) + r"(?![\[\w])", lambda _m, v=words[index]: put(v), text)
+        value = words[index] if index < len(words) else ""
+        text = re.sub(r"\$" + re.escape(name) + r"(?![\[\w])", lambda _m, v=value: put(v), text)
 
-    def by_index(m: re.Match[str]) -> str:
+    def by_bracket(m: "re.Match[str]") -> str:
+        i = int(m.group(1))
+        return put(words[i]) if i < len(words) else _KEEP + m.group(0)[1:]
+
+    def by_index(m: "re.Match[str]") -> str:
         i = int(m.group(1))
         return put(words[i]) if i < len(words) else m.group(0)
 
-    text = re.sub(r"\$ARGUMENTS\[(\d+)\]", by_index, text)
+    text = re.sub(r"\$ARGUMENTS\[(\d+)\]", by_bracket, text)
     text = re.sub(r"\$(\d+)(?!\w)", by_index, text)
     if "$ARGUMENTS" in text:
         text = text.replace("$ARGUMENTS", put(str(args or "")))
     if not used and str(args or "").strip():
-        text = f"{text}\n\nARGUMENTS: {str(args).strip().replace('$', keep)}"
-    return text.replace(keep, "$")
+        text = f"{text}\n\nARGUMENTS: {put(str(args).strip())}"
+    return text.replace(_KEEP, "$")
+
+
+def _unmark(text: str) -> str:
+    return text.replace(_SPAN, "")
+
+
+def substitute(body: str, args: str, named: Iterable[str] = ()) -> str:
+    """Claude Code's argument filling (:func:`_fill`), as plain text. Pure."""
+    return _unmark(_fill(body, args, named))
+
+
+def _spans(marked: str) -> list[tuple[int, int]]:
+    """The ``(start, end)`` of each bracketed value in ``marked``."""
+    at = [i for i, ch in enumerate(marked) if ch == _SPAN]
+    return list(zip(at[0::2], at[1::2]))
+
+
+def _marked_refs(marked: str) -> list[str]:
+    """The ``@path`` references whose ``@`` is the COMMAND's own text (its
+    ``@$0`` reads the file the words name) — never one the user's words
+    wrote: their words are words, as in any other message."""
+    spans = _spans(marked)
+    out: list[str] = []
+    for m in _AT_RX.finditer(marked or ""):
+        if any(a < m.start() < b for a, b in spans):
+            continue
+        raw = _unmark(m.group(1)).rstrip(".,:;!?")
+        if raw and raw not in out:
+            out.append(raw)
+    return out
+
+
+def _command_shell_lines(marked: str) -> bool:
+    """Shell lines in the COMMAND's own text — a value the words filled in is
+    read as plain letters, so a ``!`…``` the user typed is never one."""
+    chars = list(marked)
+    for a, b in _spans(marked):
+        for i in range(a + 1, b):
+            if not chars[i].isspace():
+                chars[i] = "x"
+    return has_shell_lines(_unmark("".join(chars)))
 
 
 def at_paths(text: str) -> list[str]:
@@ -853,12 +988,18 @@ def expand(cmd: Command, args: str, *, folder: str, read_room: int,
         body = body.replace("${CLAUDE_PROJECT_DIR}", str(folder))
     if cmd.plugin_root:
         body = body.replace("${CLAUDE_PLUGIN_ROOT}", cmd.plugin_root.replace("\\", "/"))
-    text = substitute(body, args, cmd.arguments)
+    marked = _fill(body, args, cmd.arguments)
+    text = _unmark(marked)
     if len(text) > MAX_EXPANDED_CHARS:
         raise CommandRefused(
             f"The command /{cmd.name} with these words is too long to send. Use shorter words.", 413,
         )
-    shell = has_shell_lines(text)
+    # Review (v1.379.0): only the COMMAND's own text names files and shell
+    # lines — a "@secret" or a "!`…`" in the words typed after the name is
+    # the user's words, exactly as in any other message (Claude Code:
+    # "argument values aren't re-expanded").
+    shell = _command_shell_lines(marked)
+    refs = _marked_refs(marked)
     if shell:
         text = f"{text}\n\n{SHELL_LINES_NOTE}"
     files: list[str] = []
@@ -866,7 +1007,7 @@ def expand(cmd: Command, args: str, *, folder: str, read_room: int,
     if folder:
         from .sessions import FolderFileRefused, folder_files
 
-        for ref in at_paths(text):
+        for ref in refs:
             if len(files) >= max(0, read_room):
                 left.append(ref)
                 continue
@@ -879,7 +1020,7 @@ def expand(cmd: Command, args: str, *, folder: str, read_room: int,
                 if f not in files:
                     files.append(f)
     else:
-        left = at_paths(text)
+        left = refs
     return Expanded(
         name=cmd.name, source=cmd.source, plugin=cmd.plugin, text=text, files=files, left=left,
         shell_lines=shell, scanned=scanned, ignored=ignored,

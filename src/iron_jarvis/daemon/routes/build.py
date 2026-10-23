@@ -1257,6 +1257,25 @@ def _remove_if_empty(path: str) -> bool:
     return False
 
 
+def _make_again(path: str) -> bool:
+    """Make a session's OWN folder again at ``path`` when the user removed it
+    — only while the folder above it is still there (an unplugged drive or a
+    moved chat files folder is NOT a removed folder: nothing is made, and the
+    turn is refused in words). True when it was made now. BLOCKING."""
+    import os
+
+    try:
+        p = S.resolved_folder(path)
+        if not p or os.path.isdir(p) or os.path.lexists(p):
+            return False
+        if not os.path.isdir(os.path.dirname(p)):
+            return False
+        os.mkdir(p)
+        return True
+    except OSError:
+        return False
+
+
 def drop_empty_work_folder(platform: Any, thread_id: str) -> bool:
     """A session with no folder that is archived or deleted takes its OWN
     folder with it when that folder is still EMPTY (nothing was made there);
@@ -1386,13 +1405,23 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         if getattr(row, "archived_at", None) is not None:
             raise HTTPException(status_code=409, detail=ARCHIVED_SENTENCE)
         folder = S.folder_of(row)
+        if folder and S.is_folderless(row) and await asyncio.to_thread(_make_again, folder):
+            # v1.379.0 review: the user removed this session's own folder
+            # between turns — it is made again at the same place (every later
+            # message was refused "folder does not exist" for good). Taken
+            # back, like a first one, if no turn starts after all.
+            made_folder = folder
         if not folder and S.is_folderless(row):
             # v1.379.0: a session started with no folder gets its OWN folder
             # now, at its first turn (an abandoned empty session made none).
+            # Review: a command names it "<command> <words>", not by its words
+            # alone ("/review app.py" made "<date> app").
+            command_name = str(command or "").strip().lstrip("/")
+            named = f"{command_name} {text}".strip() if command_name else text
             try:
                 folder, fresh = await asyncio.to_thread(
                     make_work_folder, platform, thread_id,
-                    text or command or str(skill or "").strip() or str(folder_skill or "").strip(),
+                    named or str(skill or "").strip() or str(folder_skill or "").strip(),
                 )
             except OSError as exc:
                 raise HTTPException(

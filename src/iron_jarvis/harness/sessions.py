@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -1036,6 +1037,18 @@ class FolderFileRefused(ValueError):
     folder. The message is one plain sentence naming it."""
 
 
+def _network_spelling(path: str) -> bool:
+    """Is ``path`` spelled as a network location (``\\\\host\\share``,
+    ``//host/share``, ``\\\\?\\UNC\\…``)? Read from the TEXT only — nothing is
+    resolved or opened. Only ``\\\\?\\C:\\…`` and ``\\\\.\\C:\\…`` (a local
+    drive behind a device prefix) are let through; any other device path
+    (``\\\\?\\GLOBALROOT\\…``, a pipe) counts as one too."""
+    t = str(path or "").strip().replace("/", "\\")
+    if not t.startswith("\\\\"):
+        return False
+    return not re.match(r"^\\\\[?.]\\[A-Za-z]:(\\|$)", t)
+
+
 def folder_files(folder: str, paths: Iterable[Any]) -> list[str]:
     """The files picked with "@" for one message (v1.373.0, part 2 Phase 2),
     each checked to be a FILE INSIDE the session's ``folder`` — the
@@ -1062,8 +1075,17 @@ def folder_files(folder: str, paths: Iterable[Any]) -> list[str]:
     except Exception:  # noqa: BLE001 — an unreadable folder refuses every file
         raise FolderFileRefused("This session's folder cannot be read now.") from None
     out: list[str] = []
+    folder_on_share = _network_spelling(str(folder or "").strip())
     for raw in picked:
         name = raw.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] or raw
+        # v1.379.0 review: a NETWORK path (\\host\share, //host/share,
+        # \\?\UNC\…) is refused by its SPELLING, before anything resolves it —
+        # resolving one opens a connection to that host, which hands it the
+        # user's Windows sign-in, and a project's command file (a repository's
+        # text) can name one. A session whose own folder is on a share keeps
+        # its files there, so the check is skipped for it.
+        if _network_spelling(raw) and not folder_on_share:
+            raise FolderFileRefused(f"{name} is not in this session's folder, so it was not sent.")
         try:
             candidate = Path(raw)
             if not candidate.is_absolute():
