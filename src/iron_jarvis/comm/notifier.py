@@ -247,6 +247,39 @@ def _workflow_line(payload: dict) -> str:
     return f"{subject} ended"
 
 
+def build_took_words(seconds: Any) -> str:
+    """How long a Build turn took, in the bell's words ("took 3 min 12 s");
+    "" for a value that is not a number of seconds. The twin of the
+    dashboard's ``lib/buildLinks.buildTookWords`` and desktop/main.js's
+    ``runOutcomeBuildTook`` (one fixture, one-notice-v13600)."""
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or seconds < 0:
+        return ""
+    whole = int(round(seconds))
+    if whole < 60:
+        return f"took {whole} s"
+    minutes, rest = divmod(whole, 60)
+    return f"took {minutes} min {rest} s" if rest else f"took {minutes} min"
+
+
+def build_finished_title(payload: dict) -> str:
+    """The bell's headline for ``build.turn_finished`` (v1.374.0)."""
+    return (
+        "Your Build session could not finish"
+        if _text(payload.get("outcome")) == "failed"
+        else "Your Build session finished"
+    )
+
+
+def _build_finished_line(payload: dict) -> str:
+    """A long Build turn ended (v1.374.0) — said on a destination that
+    subscribed the type (never "This PC": the bell / the tray watcher say it
+    there). The session's title and how long it took, never an id."""
+    title = str(payload.get("title") or "").strip() if isinstance(payload.get("title"), str) else ""
+    title = title if len(title) <= 120 else title[:119] + "…"
+    bits = [b for b in (title, build_took_words(payload.get("seconds"))) if b]
+    return build_finished_title(payload) + (f" — {' · '.join(bits)}" if bits else "")
+
+
 def _provider_name(provider: str) -> str:
     try:
         from ..providers.failure_words import heading, plain_name
@@ -368,6 +401,8 @@ def format_event(event: Any) -> str:
         return _review_line(payload)
     if etype == EventType.AUTONOMY_EXECUTED:
         return "Iron Jarvis ran an action on its own — see it on the Autonomy page."
+    if etype == EventType.BUILD_TURN_FINISHED:
+        return _build_finished_line(payload)
     words = EVENT_WORDS.get(str(etype or ""))
     if words:
         return _with_summary(f"Iron Jarvis: {words}", payload.get("summary"))
@@ -432,7 +467,11 @@ def bell_pings(event: Any) -> bool:
       cleanly done and was not stopped by the user — the bell's "could not
       finish" / "needs you" / "finished, but part of it failed" rows;
     * ``session.completed`` of a mission's root run, unless stopped;
-    * ``workflow.completed`` that FAILED.
+    * ``workflow.completed`` that FAILED;
+    * ``build.turn_finished`` (v1.374.0): a Build turn that ran longer than a
+      minute and ended — the bell's "Your Build session finished" row (it
+      rings unless the user is LOOKING at that session in a window, a rule
+      only the window can apply).
 
     A run with no session id has no bell row. Never raises."""
     try:
@@ -442,6 +481,8 @@ def bell_pings(event: Any) -> bool:
             return False
         if etype == EventType.WORKFLOW_COMPLETED:
             return _text(payload.get("status")) == "failed"
+        if etype == EventType.BUILD_TURN_FINISHED:
+            return bool(_text(payload.get("thread_id")) or _text(_event_field(event, "session_id")))
         if etype != EventType.SESSION_COMPLETED:
             return False
         if not _text(_event_field(event, "session_id")):
@@ -634,6 +675,12 @@ class Notifier:
             # ask watcher toasts while it sits in the tray. "This PC" (alive
             # only while a window is) added a second toast beside the first.
             # The phone and every other destination keep their one line.
+            targets = self.without_desktop(targets)
+        elif etype == EventType.BUILD_TURN_FINISHED:
+            # v1.374.0: a long Build turn that ended is said on this PC by the
+            # bell (a window is open) or the desktop app's tray watcher (none
+            # is) — never a second toast from "This PC". A destination that
+            # subscribed the type (the phone) still hears it.
             targets = self.without_desktop(targets)
         if not targets:
             return {}

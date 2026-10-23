@@ -7,7 +7,8 @@
  * /fs/files on the SESSION's folder — never outside it). What a session adds:
  *
  * - "/" lists the session's own commands — `/plan` (Plan first, the mode
- *   switch the box already has), `/rewind` (the list of messages to go back
+ *   switch the box already has), `/compact` (v1.374.0: the meter's Compact —
+ *   summarize the older turns), `/rewind` (the list of messages to go back
  *   to), `/model` (the model menu) — then the folder's own harness skills
  *   (`GET /build/sessions/{id}/skills`) and the user's skills (`GET /skills`,
  *   the chat's list). A picked skill is a chip, sent as `skill` (the user's)
@@ -24,9 +25,10 @@
 import { matchProjectEntries, type ProjectListing } from "@/lib/atMenuFiles";
 import type { BuildMode } from "@/lib/buildSessions";
 
-/** The session's own "/" commands. No "/compact" yet: Compact comes with a
- *  later phase, and a command that does nothing would be a lie. */
-export type CommandId = "plan" | "rewind" | "model";
+/** The session's own "/" commands. v1.374.0 (part 2, Phase 3): "/compact"
+ *  presses the same Compact the meter offers (it says in words when there is
+ *  not enough conversation to summarize yet). */
+export type CommandId = "plan" | "compact" | "rewind" | "model";
 
 export interface SessionCommand {
   id: CommandId;
@@ -44,6 +46,11 @@ export function sessionCommands(mode: BuildMode): SessionCommand[] {
         mode === "plan"
           ? "Stop planning: let it make changes from your next message"
           : "Plan first: it reads and writes a plan for you to approve before it changes anything",
+    },
+    {
+      id: "compact",
+      name: "compact",
+      description: "Summarize the earlier turns so the conversation stays light (the full conversation is kept)",
     },
     { id: "rewind", name: "rewind", description: "Go back to before one of your messages" },
     { id: "model", name: "model", description: "Choose the model this session uses" },

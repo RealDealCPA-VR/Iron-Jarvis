@@ -117,7 +117,12 @@ def test_this_pc_is_quiet_for_exactly_what_the_bell_pings(case, desktop_sink):
     else:
         assert len(desktop_sink) == 1, f"{case['case']}: This PC lost its one notice"
     # Every other destination is unchanged: the phone still hears it.
-    assert len(phone.sent) == 1, case["case"]
+    # v1.374.0 (moved on purpose): a case marked `phone: false` is not a
+    # default alert (a long Build turn's notice is desktop only).
+    if case.get("phone", True):
+        assert len(phone.sent) == 1, case["case"]
+    else:
+        assert phone.sent == [], case["case"]
 
 
 def test_inside_a_schedule_fire_no_destination_gets_the_generic_run_alert(desktop_sink):
@@ -532,5 +537,8 @@ def test_the_watcher_reads_the_bells_events_and_the_notice_opens_the_run():
     # Closing to the tray marks the moment the bell stopped speaking.
     hide = src[src.index("function hideToTray") : src.index("// --- Start at login")]
     assert "runOutcomeWindowSeenAt = Date.now()" in hide
-    # The audit types are exactly the bell's two run-outcome types.
-    assert 'const RUN_OUTCOME_AUDIT_TYPES = "session.completed,workflow.completed";' in src
+    # The audit types are exactly the bell's run-outcome types — v1.374.0
+    # (moved on purpose): and a long Build turn that ended.
+    assert (
+        'const RUN_OUTCOME_AUDIT_TYPES = "session.completed,workflow.completed,build.turn_finished";' in src
+    )

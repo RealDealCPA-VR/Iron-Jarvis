@@ -212,6 +212,15 @@ class EventType:
     # IJ harness Phase 7 (v1.370.0). A Build session was REWOUND to before
     # one of its turns: {thread_id, to, turns, files} (counts only).
     BUILD_REWOUND = "build.rewound"
+    # IJ harness part 2, Phase 3 (v1.374.0). A Build turn that ran longer
+    # than a minute ENDED (it finished, or failed on something other than its
+    # account's limit — that card is its own news, ``build.account_limit``):
+    # {thread_id, turn_id, title, seconds, outcome: "done" | "failed"}.
+    # Published once per turn, after its reply line is written; never for a
+    # turn the user stopped or a shutdown cut off. The bell says it (and the
+    # desktop app from the tray); "This PC" stays quiet for it
+    # (comm/notifier.bell_pings). session_id = "build:<thread id>".
+    BUILD_TURN_FINISHED = "build.turn_finished"
     # The experience library proposed something for a project folder — a
     # lesson to keep, or an edit to the folder's harness files — that waits
     # for the user's Accept: {id, kind, folder_name, thread_id, summary}

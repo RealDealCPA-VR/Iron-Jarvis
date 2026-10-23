@@ -492,6 +492,24 @@ _register_end_hook()
 Emit = Callable[[str, dict], None]
 
 
+def helper_plan(engine: Any, session_id: str) -> "dict[str, Any] | None":
+    """A helper run's plan as the checklist's saved form (``{steps: [{goal,
+    state}], total}``) — the daemon's own copy (``agents/transcript``) — or
+    None when its run made none (most never do) or it cannot be read. While
+    the run is live the first unfinished step is ``running``; once it is over
+    every step is settled. BLOCKING (two indexed reads); never raises."""
+    from ..agents.transcript import latest_plan, plan_checklist
+
+    try:
+        stored = latest_plan(engine, session_id)
+    except Exception:  # noqa: BLE001 — unreadable: no plan, never a guess
+        return None
+    if not stored:
+        return None
+    steps = plan_checklist(stored)
+    return {"steps": steps[:50], "total": len(steps)} if steps else None
+
+
 @dataclass
 class HelperCall:
     """One helper-starting tool call of a harness turn, and the row it draws."""
@@ -510,6 +528,12 @@ class HelperCall:
     _queue: Any = None
     _pump: "asyncio.Task | None" = None
     _closed: bool = False
+    #: v1.374.0 (part 2, Phase 3): the helper's PLAN when its run planned its
+    #: work (the decomposed lane) — the daemon's own checklist
+    #: (``transcript.plan_checklist``), re-read when a phase frame says the
+    #: run moved on, and sent on the row's frame when it changed.
+    _plan: Any = None
+    _plan_due: bool = False
 
     # -- frames ------------------------------------------------------------- #
 
@@ -578,6 +602,9 @@ class HelperCall:
                 await asyncio.sleep(ASK_POLL_S)
             if frame is not None:
                 self._take(frame)
+            if self._plan_due:
+                self._plan_due = False
+                await self._refresh_plan()
             self._check_ask()
 
     def _take(self, frame: Any) -> None:
@@ -607,6 +634,24 @@ class HelperCall:
             title = str(data.get("phase") or "")
             if title:
                 self.say(phase=title, detail=_short(data.get("detail"), 160))
+                # v1.374.0: a phase is where a planned run moves (planned,
+                # step k of N, checking, writing up): its checklist is read
+                # again, off the loop, by the follower.
+                self._plan_due = True
+
+    async def _refresh_plan(self) -> None:
+        """Read the helper run's plan (off the loop) and send it on the row
+        when it changed (v1.374.0). Never raises."""
+        platform, child = self._platform, self.child
+        if platform is None or not child:
+            return
+        try:
+            plan = await asyncio.to_thread(helper_plan, platform.engine, child)
+        except Exception:  # noqa: BLE001 — a row never breaks a helper
+            return
+        if plan and plan != self._plan:
+            self._plan = plan
+            self.say(plan=plan)
 
     def _check_ask(self) -> None:
         platform = self._platform

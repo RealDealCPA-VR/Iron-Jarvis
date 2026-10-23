@@ -148,6 +148,9 @@ export interface BuildSessionView extends BuildSessionRow {
   /** The daemon keeps accounts on the view (Phase 5): its limit card and
    *  wait are then the truth (null = none), not "an older Iron Jarvis". */
   knowsAccounts: boolean;
+  /** v1.374.0: the summary standing in for the older turns (Compact) — raw,
+   *  lib/buildContext decodeCompaction; null = none. */
+  compaction: unknown;
 }
 
 /** A transcript line: the chat page's own message shape (the daemon keeps
@@ -171,6 +174,11 @@ export type BuildMessage = PaneMessage & {
    *  folder, and the skill picked with "/" (what rode it beside the words). */
   filePaths?: string[];
   skill?: string;
+  /** v1.374.0: on a reply, how full the conversation was for the model that
+   *  turn (raw; lib/buildContext decodeTurnContext), and the turn's own task
+   *  list as it last stood (raw, the checklist's saved form; replyPlan). */
+  context?: unknown;
+  plan?: unknown;
 };
 
 /** The keys a line may carry (the daemon's LINE_KEYS). Anything else dies. */
@@ -208,6 +216,10 @@ const LINE_KEYS = [
   // v1.373.0 (part 2, Phase 2): what rode a question — "@" files, a "/" skill.
   "filePaths",
   "skill",
+  // v1.374.0 (part 2, Phase 3): a reply's reading of how full the
+  // conversation is, and its task list.
+  "context",
+  "plan",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {
@@ -286,6 +298,7 @@ export function decodeSessionView(raw: unknown): BuildSessionView | null {
     accountLimit: r.account_limit ?? null,
     accountWait: r.account_wait ?? null,
     knowsAccounts: "account_limit" in r || "account_wait" in r || "account" in r,
+    compaction: r.compaction ?? null,
   };
 }
 

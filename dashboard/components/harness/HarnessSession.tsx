@@ -83,6 +83,22 @@ import {
 } from "@/components/harness/harnessLook";
 import { LibraryCards } from "@/components/harness/LibraryCards";
 import { LiveHelperRows, SavedHelperRows } from "@/components/harness/HarnessHelpers";
+// v1.374.0 (part 2, Phase 3): the task list under the reply, how full the
+// conversation is (and Compact), and "the user is looking at this session".
+import { LivePlan, SettledPlan } from "@/components/harness/HarnessPlan";
+import { ContextMeter } from "@/components/harness/ContextMeter";
+import { CompactionCard } from "@/components/chat/CompactionCard";
+import {
+  compactSession,
+  compactedNote,
+  compactionCardInfo,
+  decodeCompaction,
+  latestContext,
+  offersCompact,
+  readingIsBeforeSummary,
+  replyPlan,
+} from "@/lib/buildContext";
+import { LOOKING_BEAT_MS, noteLooking, stopLooking } from "@/lib/buildWatching";
 import { applyHelperFrame, helperCallIds, type HelperView } from "@/lib/buildHelpers";
 import {
   AttachButton,
@@ -313,7 +329,34 @@ export function HarnessSession({
   const [waiting, setWaiting] = useState(false);
   const [choosing, setChoosing] = useState(false);
   const [limitError, setLimitError] = useState<string | null>(null);
+  // v1.374.0: Compact — a press under way, what it said, and the summary card.
+  const [compacting, setCompacting] = useState(false);
+  const [compactNote, setCompactNote] = useState<string | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const compactingRef = useRef(false);
   const busy = sending || stream.streaming;
+
+  // v1.374.0: while this session is on screen in front and its window has
+  // focus, the bell knows the user is LOOKING at it (lib/buildWatching): a
+  // long turn that ends here says nothing — they watched it end.
+  useEffect(() => {
+    const look = () => {
+      if (document.visibilityState === "visible" && document.hasFocus()) noteLooking(threadId);
+      else stopLooking();
+    };
+    look();
+    const beat = window.setInterval(look, LOOKING_BEAT_MS);
+    window.addEventListener("focus", look);
+    window.addEventListener("blur", look);
+    document.addEventListener("visibilitychange", look);
+    return () => {
+      window.clearInterval(beat);
+      window.removeEventListener("focus", look);
+      window.removeEventListener("blur", look);
+      document.removeEventListener("visibilitychange", look);
+      stopLooking();
+    };
+  }, [threadId]);
 
   // ------------------------------------------------------------- reading
   /** Take a session view the daemon answered with: the view, and (from an
@@ -509,6 +552,7 @@ export function HarnessSession({
       setTurnId(id);
       setSending(true);
       setError(null);
+      setCompactNote(null);
       // A new (or rejoined: its frames replay) turn draws its own helpers.
       setHelpers([]);
       limitSeenRef.current = false;
@@ -665,6 +709,16 @@ export function HarnessSession({
     // THEN (the chat page's v1.275.0 rule).
     if (fromBox && att.busyRef.current) {
       att.whenSettled(() => void send());
+      return;
+    }
+    // v1.374.0: while Compact writes the summary nothing starts (the daemon
+    // would refuse it): the box keeps its words, a waiting message waits on.
+    if (compactingRef.current) {
+      if (item) {
+        const back = [item, ...queueRef.current].slice(0, MAX_QUEUED);
+        setQueued(back);
+        persistQueue(back);
+      }
       return;
     }
     const text = (item ? item.text : (boxRef.current?.value ?? input)).trim();
@@ -917,6 +971,35 @@ export function HarnessSession({
     }
   }
 
+  // ------------------------------------------------- Compact (v1.374.0)
+  /** Summarize the older turns (the meter's Compact, and "/compact"): the
+   *  daemon writes it with the session's own model, checks it against the
+   *  conversation and the session's ledger, and keeps it; later turns read it
+   *  in their place. The conversation shown here is never cut. A refusal (not
+   *  enough conversation yet, the demo model, nothing could be checked) is
+   *  said in the daemon's words. */
+  async function compact() {
+    if (compactingRef.current || !view) return;
+    if (busy) {
+      setError("Wait for the reply to finish, then compact.");
+      return;
+    }
+    compactingRef.current = true;
+    setCompacting(true);
+    setCompactNote(null);
+    setError(null);
+    try {
+      const done = await compactSession(threadId);
+      await load();
+      setCompactNote(done ? compactedNote(done.covers, done.stripped) : "Summarized the earlier turns.");
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : "The earlier turns could not be summarized.");
+    } finally {
+      compactingRef.current = false;
+      setCompacting(false);
+    }
+  }
+
   // ---------------------------------------------------- header actions
   async function saveTitle() {
     const t = (renaming ?? "").trim();
@@ -1031,6 +1114,7 @@ export function HarnessSession({
     }
     // The session's commands call what the box already has.
     if (row.command.id === "plan") void patchSetup({ mode: view.mode === "plan" ? "act" : "plan" });
+    else if (row.command.id === "compact") void compact(); // v1.374.0: the meter's Compact
     else if (row.command.id === "rewind") setRewindOpen(true);
     else setModelMenuOpen(true);
   }
@@ -1124,6 +1208,13 @@ export function HarnessSession({
     return dup ? base : [...base, pending];
   }, [view?.messages, pending, turnId]);
   const livePlan = planFromCards(stream.tools);
+  // v1.374.0: how full the conversation is — the newest reply's reading, the
+  // daemon's own numbers — and the summary standing in for the older turns.
+  const reading = latestContext(view?.messages ?? []);
+  const compaction = decodeCompaction(view?.compaction);
+  const beforeSummary = readingIsBeforeSummary(reading?.at ?? null, compaction);
+  const summarized = !!compaction && beforeSummary;
+  const offerCompact = offersCompact(reading?.context ?? null, beforeSummary);
   const lastReply = [...shown].reverse().find((m) => m.role === "assistant");
   const choice = view?.setup.provider && view?.setup.model ? `${view.setup.provider}::${view.setup.model}` : "";
   const levels = reasoningLevelsOf(reasoningRowFor(choice, catalog.models, defaultProvider, defaultModel));
@@ -1133,7 +1224,10 @@ export function HarnessSession({
   // v1.371.0: a picture alone is a message; one still going up is waited for.
   // v1.373.0: so is a file picked with "@".
   const sendReady =
-    (!!input.trim() || att.files.length > 0 || att.uploading || atFiles.length > 0) && !!view && !offline;
+    (!!input.trim() || att.files.length > 0 || att.uploading || atFiles.length > 0) &&
+    !!view &&
+    !offline &&
+    !compacting;
 
   if (loadError && !view) {
     return (
@@ -1259,6 +1353,20 @@ export function HarnessSession({
                 >
                   Rename
                 </button>
+                {compaction ? (
+                  // v1.374.0: the summary standing in for the older turns.
+                  <button
+                    type="button"
+                    data-testid="harness-read-summary"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setSummaryOpen(true);
+                    }}
+                    className="w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06]"
+                  >
+                    Read the summary of earlier turns
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   data-testid="harness-archive"
@@ -1338,6 +1446,8 @@ export function HarnessSession({
                     <MemoMarkdown content={m.content} />
                   </div>
                 ) : null}
+                {/* v1.374.0: the turn's task list, folded into its reply. */}
+                <SettledPlan plan={replyPlan(m.plan, !!m.error)} />
                 {(() => {
                   // Phase 5: the limit card this reply ended on, as one quiet
                   // line in the transcript (the live card is below).
@@ -1403,6 +1513,9 @@ export function HarnessSession({
                 return cards.length ? <LiveToolRows cards={cards} since={stream.startedAt ?? null} /> : null;
               })()}
               <LiveText stream={stream} />
+              {/* v1.374.0: the task list under the live reply, ticking off as
+                  the turn's plan_update calls mark its steps. */}
+              <LivePlan plan={livePlan} />
               {steerNotes.length ? (
                 <ul data-testid="harness-steer-notes" className="space-y-0.5">
                   {steerNotes.map((n, k) => (
@@ -1452,8 +1565,16 @@ export function HarnessSession({
           {/* v1.370.0: the experience library's suggestions for this folder
               (Accept / Decline), never while a reply runs. */}
           {!busy ? <LibraryCards threadId={threadId} refreshKey={turnsEnded + rewinds} /> : null}
+          {compactNote ? (
+            <p data-testid="harness-compact-note" role="status" className="text-[12px] text-zinc-400">
+              {compactNote}
+            </p>
+          ) : null}
           {error ? <ErrorNote>{error}</ErrorNote> : null}
         </div>
+        {summaryOpen && compaction ? (
+          <CompactionCard info={compactionCardInfo(compaction)} onClose={() => setSummaryOpen(false)} />
+        ) : null}
 
         {/* --------------------------------------------- the dock + composer */}
         <div className={`shrink-0 px-1 pb-1 ${HARNESS_COLUMN}`}>
@@ -1633,6 +1754,17 @@ export function HarnessSession({
                 <span>{view.mode === "plan" ? "Planning" : "Plan first"}</span>
               </button>
               <div className="ml-auto flex shrink-0 items-center gap-1">
+                {/* v1.374.0: how full the conversation is for this model
+                    (the daemon's reading of the newest reply), and Compact
+                    past the daemon's threshold. */}
+                <ContextMeter
+                  reading={reading?.context ?? null}
+                  offer={offerCompact}
+                  summarized={summarized}
+                  busy={compacting}
+                  onCompact={() => void compact()}
+                  onViewSummary={() => setSummaryOpen(true)}
+                />
                 {levels.length > 0 ? (
                   <ReasoningChip
                     levels={levels}

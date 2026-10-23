@@ -37,7 +37,16 @@ import { clockTime, formatTokens } from "@/lib/format";
 import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
 import { agentsPath, missionPath } from "@/lib/mission";
 import { MISSION_ORIGIN, sessionHref } from "@/lib/missionLinks";
-import { announceBuildSessionLink, buildLimitHeadline, buildSessionHref, buildThreadOf, sessionLinkFor } from "@/lib/buildLinks";
+import {
+  announceBuildSessionLink,
+  buildFinishedBody,
+  buildFinishedHeadline,
+  buildLimitHeadline,
+  buildSessionHref,
+  buildThreadOf,
+  sessionLinkFor,
+} from "@/lib/buildLinks";
+import { lookingAt } from "@/lib/buildWatching";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
 import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
@@ -148,6 +157,10 @@ export interface ActivityItem {
   body: string;
   /** v1.305.0: a row for the dropdown only — never pinged to the desktop. */
   quiet?: boolean;
+  /** v1.374.0: the Build session a `build.turn_finished` row is about (its
+   *  thread id). Its ping is skipped, and its badge count dropped, while the
+   *  user is LOOKING at that session (lib/buildWatching) — they saw it end. */
+  build?: string;
   /** v1.351.0 (G03): unattended work that FAILED or FELL SHORT. Counted on
    *  the bell's badge (and the tab title) until the dropdown is opened —
    *  nobody was watching when it happened, so the badge is how they learn.
@@ -223,6 +236,9 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // v1.370.0 (IJ harness Phase 7): the experience library suggested a lesson
   // (or an edit to the folder's harness files) for a Build session's folder.
   "library.proposal",
+  // v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ran longer than
+  // a minute ended — said unless the user watched it end.
+  "build.turn_finished",
 ];
 
 /** Every /events type the bell reads (v1.311.0, wave 3,
@@ -875,6 +891,30 @@ export function toActivity(e: IJEvent): ActivityItem | null {
         : `A Build session resumed${name ? ` on the ${name} account` : ""}`,
       body: title.length > 140 ? `${title.slice(0, 139)}…` : title,
       ...(limitRow ? { attention: true } : {}),
+    };
+  }
+  if (e.type === "build.turn_finished") {
+    // v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ran longer
+    // than a minute ENDED. Payload: {thread_id, turn_id, title, seconds,
+    // outcome: "done" | "failed"}; session_id "build:<id>". It rings and
+    // counts on the badge (the session waits for the user's next step) —
+    // unless the user is looking at that session (the ping effect below);
+    // the desktop app says it from the tray in these same words
+    // (desktop/main.js runOutcomeNotice, one fixture).
+    const thread =
+      (typeof p.thread_id === "string" && p.thread_id.trim()) ||
+      buildThreadOf(typeof e.session_id === "string" ? e.session_id : "") ||
+      "";
+    if (!thread) return null;
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: buildSessionHref(thread),
+      icon: p.outcome === "failed" ? AlertTriangle : CheckCircle2,
+      title: buildFinishedHeadline(p.outcome),
+      body: buildFinishedBody(p.title, p.seconds),
+      attention: true,
+      build: thread,
     };
   }
   if (e.type === "library.proposal") {
@@ -2242,6 +2282,14 @@ export function NotificationBell() {
     if (latest.standsInFor?.some((id) => pingedRef.current.has(id))) return;
     pingedRef.current.add(latest.id);
     if (pingedRef.current.size > 200) pingedRef.current = new Set([...pingedRef.current].slice(-100));
+    // v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ended while
+    // the user was LOOKING at that session (shown, in front, focused — in this
+    // window or another of the app's, lib/buildWatching) says nothing: they
+    // saw it end. Its row is kept, but seen (never counted on the badge).
+    if (latest.build && lookingAt(latest.build)) {
+      setSeenAttention((prev) => (prev.has(latest.id) ? prev : new Set(prev).add(latest.id)));
+      return;
+    }
     if (quietHere()) return;
     notify(latest.title, latest.body || "Open the dashboard for details.", () =>
       setOpen(true),

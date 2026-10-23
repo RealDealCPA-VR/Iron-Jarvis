@@ -3069,7 +3069,11 @@ function planPaneNotifications(seen, panes, windowOpen) {
 // here, never announced, so a later close does not repeat it); a failed
 // workflow is one notice — its step's notice stands in for it, or it stands
 // in for its step; and the daemon keeps "This PC" quiet for exactly these.
-const RUN_OUTCOME_AUDIT_TYPES = "session.completed,workflow.completed";
+// v1.374.0 (IJ harness part 2, Phase 3): and a Build turn that ran longer
+// than a minute and ended (`build.turn_finished`), said once from the tray in
+// the bell's words ("Your Build session finished"); the click opens Build on
+// that session.
+const RUN_OUTCOME_AUDIT_TYPES = "session.completed,workflow.completed,build.turn_finished";
 //: Entries one read asks for (the bell's own replay reads 50).
 const RUN_OUTCOME_LIMIT = 50;
 //: How many seen ids the watcher remembers (newest kept).
@@ -3135,6 +3139,17 @@ function runOutcomeTsMs(ts) {
   return Number.isFinite(ms) ? ms : 0;
 }
 
+// How long a Build turn took (lib/buildLinks.buildTookWords, the bell's
+// words; comm/notifier.build_took_words): "took 3 min 12 s", or "".
+function runOutcomeBuildTook(seconds) {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "";
+  const whole = Math.round(seconds);
+  if (whole < 60) return `took ${whole} s`;
+  const min = Math.floor(whole / 60);
+  const rest = whole % 60;
+  return rest ? `took ${min} min ${rest} s` : `took ${min} min`;
+}
+
 // One audit entry ({id, type, session_id, payload}) as the bell's ATTENTION
 // row, or null (a clean finish, a run the user stopped, a mission, a chat, an
 // untagged run — the bell rings none of them as attention).
@@ -3143,6 +3158,25 @@ function runOutcomeNotice(entry) {
   const id = typeof entry.id === "string" ? entry.id : "";
   const p = entry.payload && typeof entry.payload === "object" ? entry.payload : {};
   if (!id) return null;
+  if (entry.type === "build.turn_finished") {
+    // v1.374.0: a long Build turn that ended (the bell's row, word for word).
+    const sid = typeof entry.session_id === "string" ? entry.session_id : "";
+    const thread =
+      (typeof p.thread_id === "string" && p.thread_id.trim()) ||
+      (sid.startsWith("build:") ? sid.slice("build:".length) : "");
+    if (!thread) return null;
+    const title = typeof p.title === "string" ? p.title.trim() : "";
+    const bits = [title.length > 120 ? `${title.slice(0, 119)}…` : title, runOutcomeBuildTook(p.seconds)].filter(
+      (b) => b,
+    );
+    return {
+      id,
+      ts: runOutcomeTsMs(entry.ts),
+      title: p.outcome === "failed" ? "Your Build session could not finish" : "Your Build session finished",
+      body: bits.join(" · ") || RUN_OUTCOME_NO_DETAIL,
+      href: `/terminals?session=${encodeURIComponent(thread)}`,
+    };
+  }
   if (entry.type === "workflow.completed") {
     if (p.status !== "failed") return null;
     const name = typeof p.workflow === "string" ? p.workflow.trim() : "";

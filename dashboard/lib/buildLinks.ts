@@ -93,3 +93,29 @@ export function buildLimitHeadline(kind: unknown, accountName: unknown): string 
   if (kind === "busy") return `${who} is busy right now`;
   return `${who} reached its limit`;
 }
+
+/** How long a Build turn took, in words ("took 3 min 12 s"), or "" — the
+ *  twin of desktop/main.js `runOutcomeBuildTook` and comm/notifier
+ *  `build_took_words` (one fixture: one-notice-v13600). */
+export function buildTookWords(seconds: unknown): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "";
+  const whole = Math.round(seconds);
+  if (whole < 60) return `took ${whole} s`;
+  const min = Math.floor(whole / 60);
+  const rest = whole % 60;
+  return rest ? `took ${min} min ${rest} s` : `took ${min} min`;
+}
+
+/** The bell's headline for `build.turn_finished` (v1.374.0): a Build turn
+ *  that ran longer than a minute ended. */
+export function buildFinishedHeadline(outcome: unknown): string {
+  return outcome === "failed" ? "Your Build session could not finish" : "Your Build session finished";
+}
+
+/** Its line under the headline: the session's title and how long it took
+ *  ("" when neither is known). */
+export function buildFinishedBody(title: unknown, seconds: unknown): string {
+  const t = typeof title === "string" ? title.trim() : "";
+  const clipped = t.length > 120 ? `${t.slice(0, 119)}…` : t;
+  return [clipped, buildTookWords(seconds)].filter((b) => b).join(" · ");
+}

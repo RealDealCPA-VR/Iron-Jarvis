@@ -433,8 +433,15 @@ class HarnessTurn:
         # playbook, in the chat's "/skill" words. Per message, so it is NOT
         # part of the fingerprint either.
         from .picked_skill import prompt_section
+        # v1.374.0 (part 2, Phase 3): the summary standing in for the
+        # session's older turns (harness/compact — Compact), which the turn's
+        # history then leaves out. Per message, so not in the fingerprint.
+        from .compact import prompt_section as summary_section
 
-        return "\n\n" + self.rendered + date + prompt_line(self.plan.gate) + prompt_section()
+        return (
+            "\n\n" + self.rendered + date + prompt_line(self.plan.gate) + prompt_section()
+            + summary_section()
+        )
 
     @staticmethod
     def system_without_exits(system: str, exit_lines: str) -> str:

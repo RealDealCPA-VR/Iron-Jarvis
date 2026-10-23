@@ -18,6 +18,7 @@
 
 import type { ToolCard, TurnStep } from "@/lib/useChatStream";
 import { agentPhrase, agentRunName, type AgentRunStamp } from "@/lib/agentRun";
+import { readSavedPlan, settlePlan, toSavedPlan, type PlanView, type SavedPlan } from "@/lib/planChecklist";
 
 export type HelperState = "starting" | "queued" | "running" | "waiting" | "done" | "failed" | "stopped";
 
@@ -68,6 +69,10 @@ export interface HelperView {
   ask: HelperAsk | null;
   /** Its tool calls, live (oldest first). */
   tools: ToolCard[];
+  /** v1.374.0: its run's plan when the run planned its work (the decomposed
+   *  lane) — the daemon's own checklist, sent on the row's frame each time
+   *  the run moves on (harness/helpers `helper_plan`); absent for most. */
+  plan?: PlanView | null;
 }
 
 /** One helper as the reply keeps it. */
@@ -82,6 +87,9 @@ export interface SavedHelper {
   endedAt: number | null;
   result: string;
   work: TurnStep[];
+  /** v1.374.0: the helper's own plan when its run planned its work (the
+   *  decomposed lane) — the checklist's saved form, settled; absent else. */
+  plan?: SavedPlan;
 }
 
 const rec = (v: unknown): Record<string, unknown> | null =>
@@ -159,6 +167,8 @@ export function applyHelperFrame(prev: readonly HelperView[], data: Record<strin
     h.phaseDetail = str(data.detail, 200);
   }
   if ("ask" in data) h.ask = decodeAsk(data.ask);
+  // v1.374.0: the run's plan, read as untrusted as the rest (junk is none).
+  if ("plan" in data) h.plan = readSavedPlan(data.plan);
   const step = rec(data.step);
   const sid = str(step?.id, 200);
   const sname = str(step?.name, 200);
@@ -232,6 +242,11 @@ export function decodeSavedHelpers(raw: unknown): SavedHelper[] {
       endedAt: int(r.endedAt),
       result: str(r.result, 2000),
       work,
+      // v1.374.0: read as untrusted as the rest; a malformed plan is none.
+      ...(() => {
+        const plan = toSavedPlan(readSavedPlan(r.plan));
+        return plan ? { plan } : {};
+      })(),
     });
   }
   return out;
@@ -253,14 +268,19 @@ export function helperStamp(h: SavedHelper): AgentRunStamp {
     steps: h.steps,
     status: h.state === "done" ? "completed" : h.state === "failed" ? "failed" : "cancelled",
     agent: h.agent || undefined,
+    // v1.374.0: the run's plan as it ended (the settled row opens to it).
+    ...(h.plan ? { plan: h.plan } : {}),
   };
 }
 
 /** A live helper that ENDED (its last frame came) as a saved one — so the
- *  row reads the same before and after the reply is re-read. */
+ *  row reads the same before and after the reply is re-read. v1.374.0: with
+ *  the plan its live row showed, settled (nothing left working). */
 export function settledFromLive(h: HelperView): SavedHelper | null {
   if (h.state !== "done" && h.state !== "failed" && h.state !== "stopped") return null;
+  const saved = toSavedPlan(settlePlan(h.plan ?? null, h.state === "failed" ? "failed" : "completed"));
   return {
+    ...(saved ? { plan: saved } : {}),
     id: h.id,
     session: h.session,
     agent: h.agent,

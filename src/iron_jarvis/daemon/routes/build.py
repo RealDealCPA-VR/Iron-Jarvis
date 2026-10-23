@@ -81,6 +81,20 @@ ARCHIVED_SENTENCE = "This session is archived. Bring it back before you continue
 #: running" check and ``TurnLogs.start``) — on the loop thread only, so two
 #: messages sent at once cannot both start a turn.
 _STARTING: set[str] = set()
+#: v1.374.0 (part 2, Phase 3): sessions whose older turns are being
+#: summarized right now (Compact). They are in ``_STARTING`` too (no turn,
+#: rewind or resumed wait starts meanwhile); this set only lets a refusal say
+#: so in its own words. On the loop thread only.
+_COMPACTING: set[str] = set()
+
+COMPACTING_SENTENCE = (
+    "This session is summarizing its earlier turns. Send your message when that finishes."
+)
+COMPACT_RUNNING = "This session is still answering. Wait for the reply, or stop it, before you compact it."
+
+#: v1.374.0: a turn that ran longer than this, and ended, is said by the bell
+#: (and by the desktop app from the tray) — ``build.turn_finished``.
+FINISH_NOTICE_AFTER_S = 60.0
 
 
 class BuildSessionCreate(BaseModel):
@@ -486,6 +500,10 @@ class _ReplyWatch:
         #: v1.372.0: the helper agents this turn started (``helper`` frames),
         #: by call id, in the order they started — kept on the reply line.
         self.helpers: dict[str, dict[str, Any]] = {}
+        #: v1.374.0: the turn's task list as its last ``plan_update`` left it
+        #: (``[{step, status}]``, the plan tool's own vocabulary) — the
+        #: checklist the reply line keeps (:func:`saved_plan`).
+        self.last_plan: list[dict[str, str]] = []
 
     def see(self, event: str, raw: str) -> None:
         try:
@@ -538,6 +556,7 @@ class _ReplyWatch:
                         self.plan_update_steps = [
                             {"step": st["step"], "status": "pending"} for st in steps
                         ]
+                        self.last_plan = [dict(st) for st in steps]
                 if name == "exit_plan_mode" and ok is True:
                     # The plan the user approved: the call's own `plan`, else
                     # what the reply had said so far (Claude Code's
@@ -589,6 +608,10 @@ class _ReplyWatch:
             h["startedAt"] = data["since"]
         if isinstance(data.get("ended"), int):
             h["endedAt"] = data["ended"]
+        # v1.374.0: the helper's plan as its row last showed it (the turn's
+        # end reads it once more, settled — _with_helper_plans).
+        if isinstance(data.get("plan"), dict) and isinstance(data["plan"].get("steps"), list):
+            h["plan"] = {"steps": list(data["plan"]["steps"])[:50], "total": data["plan"].get("total")}
         step = data.get("step")
         if isinstance(step, dict) and step.get("status") == "finished":
             if len(h["work"]) < MAX_SAVED_STEPS:
@@ -644,6 +667,11 @@ class _ReplyWatch:
                 "refit": done.get("refit"),
                 "doors": done.get("doors") or [],
             })
+            # v1.374.0: how full the conversation was for the model this turn
+            # — the planner's own numbers, never a guess on the screen.
+            ctx = context_receipt(done.get("context"))
+            if ctx is not None:
+                line["context"] = ctx
             if done.get("trust") and done.get("trust") != "full":
                 line["trust"] = done.get("trust")
                 line["trustReason"] = done.get("trust_reason") or ""
@@ -671,6 +699,9 @@ class _ReplyWatch:
         if self.helpers:
             # v1.372.0: the helper agents this turn started.
             line["helpers"] = self.helper_lines(status)
+        if self.last_plan:
+            # v1.374.0: the turn's task list as it last stood (the reply folds it).
+            line["plan"] = saved_plan(self.last_plan)
         line["timing"] = {
             "startedAt": int(self.started_at * 1000),
             "firstTokenAt": int(self.first_token_at * 1000) if self.first_token_at else None,
@@ -678,6 +709,66 @@ class _ReplyWatch:
         }
         out.append(line)
         return out
+
+
+#: The plan tool's statuses as the checklist's states (lib/planChecklist).
+_PLAN_STATE = {"pending": "waiting", "in_progress": "running", "completed": "done"}
+
+
+def saved_plan(steps: list[dict[str, str]]) -> dict[str, Any]:
+    """A ``plan_update`` step list in the checklist's saved form (the chat's
+    ``agentRun.plan``: ``{steps: [{goal, state}], total}``). States are kept
+    as the model last reported them; the screen settles a step left waiting
+    or working once the turn is over (``lib/planChecklist.settlePlan``)."""
+    kept = [
+        {"goal": str(st.get("step") or "")[:500], "state": _PLAN_STATE.get(str(st.get("status")), "waiting")}
+        for st in steps if str(st.get("step") or "").strip()
+    ]
+    return {"steps": kept, "total": len(kept)}
+
+
+def context_receipt(ctx: Any) -> "dict[str, Any] | None":
+    """The done frame's ``context`` as the reply line keeps it (v1.374.0): the
+    planner's own numbers for this turn — ``window`` (what the model can read
+    at once, ``_context_window``), ``used`` (what the planned transcript sent)
+    and, from the compaction report, ``tokens`` (what the whole conversation
+    needs with nothing left out), ``percent`` (that against the window — the
+    figure the Compact offer keys off, ``compaction.SUGGEST_AT``) and
+    ``level`` / ``suggest_at``. None when there is no window to measure by."""
+    if not isinstance(ctx, dict):
+        return None
+    out: dict[str, Any] = {}
+    for key in ("window", "used", "tokens", "percent", "suggest_at", "auto_at"):
+        v = ctx.get(key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0:
+            out[key] = int(v)
+    if not out.get("window"):
+        return None
+    if ctx.get("level") in ("ok", "suggest", "auto"):
+        out["level"] = ctx["level"]
+    if ctx.get("compacted") is True:
+        out["compacted"] = True
+    return out
+
+
+def _with_helper_plans(engine: Any, lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """v1.374.0: each helper the reply keeps gains its run's PLAN when the run
+    planned its work (the decomposed lane): the daemon's own checklist read
+    once more now the run is over (``harness/helpers.helper_plan`` — settled),
+    in place of the last one its row was sent. BLOCKING (two reads per
+    helper, at most ``MAX_SAVED_HELPERS``); a plan that cannot be read keeps
+    what the row last showed. Never raises."""
+    from ...harness.helpers import helper_plan
+
+    for line in lines:
+        for h in line.get("helpers") or []:
+            sid = str(h.get("session") or "") if isinstance(h, dict) else ""
+            if not sid:
+                continue
+            plan = helper_plan(engine, sid)
+            if plan:
+                h["plan"] = plan
+    return lines
 
 
 async def _apply_session_changes(engine: Any, thread_id: str, watch: _ReplyWatch) -> None:
@@ -857,6 +948,30 @@ async def _announce_account_limit(platform: Any, thread_id: str, limit: "dict[st
         log.warning("announcing build session %s's account limit failed", thread_id, exc_info=True)
 
 
+async def _announce_turn_finished(platform: Any, thread_id: str, turn_id: str, status: str,
+                                  seconds: float) -> None:
+    """``build.turn_finished`` (v1.374.0) for a long turn that ended: the
+    session's title, how long it took and how it ended ("done" | "failed").
+    The bell says it (unless the user is looking at that session); "This PC"
+    stays quiet for it (``comm/notifier.bell_pings``). Never raises."""
+    try:
+        bus = getattr(platform, "event_bus", None)
+        if bus is None:
+            return
+        from ...core.events import EventType
+
+        row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
+        await bus.publish(EventType.BUILD_TURN_FINISHED, {
+            "thread_id": thread_id,
+            "turn_id": turn_id,
+            "title": (getattr(row, "title", "") or "") if row is not None else "",
+            "seconds": int(seconds),
+            "outcome": "done" if status == "done" else "failed",
+        }, session_id=S.session_id_for(thread_id))
+    except Exception:  # noqa: BLE001 — the turn never fails on its notice
+        log.warning("announcing build session %s's finished turn failed", thread_id, exc_info=True)
+
+
 async def _note_account_limit(platform: Any, thread_id: str, turn_id: str,
                               limit: "dict[str, Any] | None", *, done: bool) -> None:
     """Both halves at once (:func:`_keep_account_limit` then
@@ -883,6 +998,8 @@ async def _record_turn_end(engine: Any, thread_id: str, turn_id: str, watch: "_R
     lines = watch.lines(turn_id, status)
     if lines:
         with contextlib.suppress(Exception):
+            if watch.helpers:
+                lines = await asyncio.to_thread(_with_helper_plans, engine, lines)
             await asyncio.to_thread(S.append_lines, engine, thread_id, lines)
     served = _turn_served(pin, status)
     if pin is not None and platform is not None and (watch.account_limit or served):
@@ -970,6 +1087,18 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
         if pin is not None and platform is not None and watch.account_limit:
             with contextlib.suppress(BaseException):
                 await asyncio.shield(_announce_account_limit(platform, thread_id, watch.account_limit))
+        # v1.374.0 (part 2, Phase 3): a turn that ran longer than a minute and
+        # ENDED (done or failed) is told to the bell — ONCE, after its reply
+        # line is written (the notice opens a session that already shows it).
+        # Never for a turn the user stopped or a shutdown cut off, and never
+        # beside an account's limit card (that card is the same news).
+        elapsed = time.time() - watch.started_at
+        if (
+            platform is not None and status in ("done", "error") and not watch.account_limit
+            and elapsed > FINISH_NOTICE_AFTER_S
+        ):
+            with contextlib.suppress(BaseException):
+                await asyncio.shield(_announce_turn_finished(platform, thread_id, turn_id, status, elapsed))
         # v1.370.0 (Phase 7): the EXPERIENCE LIBRARY notes a turn that
         # FINISHED; the session is reflected on ONCE it has been idle (one
         # model call per idle period over every noted turn — never one per
@@ -1043,6 +1172,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     # v1.373.0 review: a blank entry is no upload (it was counted, saved on
     # the question and silently skipped by the lane).
     attachments = [str(a) for a in (attachments or []) if str(a or "").strip()]
+    if thread_id in _COMPACTING:
+        # v1.374.0: Compact holds the session; say so, not "still answering".
+        raise HTTPException(status_code=409, detail=COMPACTING_SENTENCE)
     if thread_id in _STARTING or _running_turn(d, thread_id):
         raise SessionBusy(thread_id)
     _STARTING.add(thread_id)
@@ -1125,7 +1257,13 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         # Role + content only: no native carrier (no thinking, no signature)
         # ever crosses into a turn — so a session MOVES between accounts and
         # vendors with nothing another account would refuse (v1.368.0).
-        history = [ChatMessageBody(**m) for m in await asyncio.to_thread(S.history, row)]
+        # v1.374.0 (part 2, Phase 3): a standing summary (Compact) stands in
+        # for the older turns — they are left out of the history, and the
+        # summary rides the harness block (armed below with the turn).
+        from ...harness import compact as _compact
+
+        _history, _summary = await asyncio.to_thread(_compact.history_for_turn, row)
+        history = [ChatMessageBody(**m) for m in _history]
         chat_body = ChatBody(
             messages=[*history, ChatMessageBody(role="user", content=text)],
             provider=account_provider or str(setup.get("provider") or ""),
@@ -1163,6 +1301,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         from ...harness.picked_skill import reset_picked, set_picked
 
         picked_token = set_picked(folder_skill, playbook)
+        summary_token = _compact.set_summary(_summary)
         try:
             try:
                 gen = await stream_chat_turn(
@@ -1206,6 +1345,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
             ))
         finally:
+            _compact.reset_summary(summary_token)
             reset_picked(picked_token)
             reset_hold(hold_token)
             reset_preview(preview_token)
@@ -1397,6 +1537,8 @@ async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
     from .undo import perform_undo
 
     platform = d.platform
+    if thread_id in _COMPACTING:
+        return JSONResponse(status_code=409, content={"detail": COMPACTING_SENTENCE})
     if thread_id in _STARTING or _running_turn(d, thread_id):
         return JSONResponse(status_code=409, content={"detail": REWIND_RUNNING})
     _STARTING.add(thread_id)
@@ -1776,6 +1918,34 @@ def register(app: FastAPI, d: Any) -> None:
         """Rewind the session to before turn ``to`` — files and conversation
         (:func:`rewind_session`)."""
         return await rewind_session(d, thread_id, body.to.strip())
+
+    @app.post("/build/sessions/{thread_id}/compact")
+    async def build_compact(thread_id: str) -> dict[str, Any]:
+        """COMPACT (v1.374.0, part 2 Phase 3): summarize the session's older
+        turns with its OWN model and account, check the summary against the
+        conversation and the session's ledger, and keep it on the session —
+        later turns read it in place of those turns; the transcript is never
+        cut (``harness/compact``). Refused while a turn runs or starts; the
+        session is held while the model writes (no turn, rewind or resumed
+        wait starts meanwhile). Answers the stored summary (what the card
+        shows) plus ``window``; a refusal in words (400 nothing to summarize /
+        no real model, 409 running / changed, 409 the local-only shape, 502
+        nothing could be checked / no summary / the model failed)."""
+        from ...harness import compact as _compact
+
+        if thread_id in _COMPACTING:
+            raise HTTPException(status_code=409, detail=COMPACTING_SENTENCE)
+        if thread_id in _STARTING or _running_turn(d, thread_id):
+            raise HTTPException(status_code=409, detail=COMPACT_RUNNING)
+        _STARTING.add(thread_id)
+        _COMPACTING.add(thread_id)
+        try:
+            return await _compact.compact(d.platform, thread_id)
+        except _compact.CompactRefused as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+        finally:
+            _COMPACTING.discard(thread_id)
+            _STARTING.discard(thread_id)
 
     @app.post("/build/sessions/{thread_id}/turn")
     async def build_turn(thread_id: str, body: BuildTurnBody):

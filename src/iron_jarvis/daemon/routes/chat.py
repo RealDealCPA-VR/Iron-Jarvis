@@ -1038,6 +1038,14 @@ def _clean_setup(raw: Any) -> str:
     # wait (DURABLE: the daemon's wait loop reads it after a restart). Only
     # the daemon's /build routes write them; each is whitelisted key by key.
     out.update(_clean_account_setup(raw))
+    # IJ HARNESS COMPACT (v1.374.0, part 2 Phase 3) — the summary standing in
+    # for a Build session's older turns, by its own whitelist (only the
+    # daemon's Compact writes it; a rewind past its coverage removes it).
+    from ...harness.compact import clean_record as _clean_compaction
+
+    compaction = _clean_compaction(raw.get("compaction"))
+    if compaction:
+        out["compaction"] = compaction
     return json.dumps(out, separators=(",", ":")) if out else ""
 
 

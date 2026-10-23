@@ -1,5 +1,5 @@
 {
-  "_about": "v1.360.0 lane 10A: ONE notice per run outcome. Each case is a persisted event (the audit's shape: id, type, session_id, ts, payload). `pings` = the dashboard bell raises a desktop ping for it while a window is open (so the daemon keeps 'This PC' quiet: comm/notifier.bell_pings); `attention` = it counts on the bell's badge, and the desktop app says it while it sits in the tray (comm/notifier.bell_attention, desktop/main.js runOutcomeNotice); `title` / `body` / `href` = the bell row's words, which the tray notice repeats. Read by tests/test_one_notice_v13600.py (Python + main.js under node) and dashboard/__tests__/one-notice-v13600.test.tsx (the real bell).",
+  "_about": "v1.360.0 lane 10A: ONE notice per run outcome. Each case is a persisted event (the audit's shape: id, type, session_id, ts, payload). `pings` = the dashboard bell raises a desktop ping for it while a window is open (so the daemon keeps 'This PC' quiet: comm/notifier.bell_pings); `attention` = it counts on the bell's badge, and the desktop app says it while it sits in the tray (comm/notifier.bell_attention, desktop/main.js runOutcomeNotice); `title` / `body` / `href` = the bell row's words, which the tray notice repeats. Read by tests/test_one_notice_v13600.py (Python + main.js under node) and dashboard/__tests__/one-notice-v13600.test.tsx (the real bell). v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ran longer than a minute and ended (`build.turn_finished`) is a ringing row too, said from the tray once; `phone` (default true) = the default notifier also sends it to a phone destination; a Build turn's notice is desktop only (not a default alert).",
   "cases": [
     {
       "case": "schedule-failed",
@@ -260,6 +260,50 @@
       },
       "pings": false,
       "attention": false
+    },
+    {
+      "case": "build-turn-finished",
+      "event": {
+        "id": "evt_build_done",
+        "type": "build.turn_finished",
+        "session_id": "build:bs_long",
+        "ts": "2026-10-19T03:12:00",
+        "payload": {
+          "thread_id": "bs_long",
+          "turn_id": "bt_long1",
+          "title": "Fix the nav bar",
+          "seconds": 192,
+          "outcome": "done"
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "phone": false,
+      "title": "Your Build session finished",
+      "body": "Fix the nav bar · took 3 min 12 s",
+      "href": "/terminals?session=bs_long"
+    },
+    {
+      "case": "build-turn-failed",
+      "event": {
+        "id": "evt_build_failed",
+        "type": "build.turn_finished",
+        "session_id": "build:bs_err",
+        "ts": "2026-10-19T03:13:00",
+        "payload": {
+          "thread_id": "bs_err",
+          "turn_id": "bt_err1",
+          "title": "Move the tests",
+          "seconds": 120,
+          "outcome": "failed"
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "phone": false,
+      "title": "Your Build session could not finish",
+      "body": "Move the tests · took 2 min",
+      "href": "/terminals?session=bs_err"
     }
   ]
 }

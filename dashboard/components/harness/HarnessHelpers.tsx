@@ -20,6 +20,11 @@
  * The rows read ONLY the `helper` frames (live) and the reply's saved
  * `helpers` (settled): lib/buildHelpers. Nothing here polls: the turn's own
  * stream carries the progress, so no reload is needed to see it.
+ *
+ * v1.374.0 (part 2, Phase 3): a helper whose run PLANS its work (the
+ * decomposed lane) shows that plan as the chat's checklist (PlanChecklist,
+ * through AgentRunLive's `plan` and the settled row's stamp), ticking off as
+ * the run moves on — the daemon sends its own copy on the row's frames.
  */
 
 import { Bot, X } from "lucide-react";
@@ -118,6 +123,9 @@ export function LiveHelperRow({ helper }: { helper: HelperView }) {
         tools={helper.tools}
         phaseTitle={asking ? "Waiting for your OK" : helper.phase ? phaseWords(helper.phase) : null}
         phaseDetail={asking ? null : helper.phaseDetail || null}
+        // v1.374.0: the run's plan, ticking off as it works (the chat's
+        // checklist, AgentRunLive's own `plan`) — absent for most helpers.
+        plan={helper.plan ?? null}
       >
         <Asked task={helper.task} />
         {asking && helper.ask ? (

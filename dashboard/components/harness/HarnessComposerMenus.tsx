@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AtSign, Cpu, FileText, History, ListChecks, Loader2, Sparkles, X } from "lucide-react";
+import { AtSign, Cpu, FileText, History, Layers, ListChecks, Loader2, Sparkles, X } from "lucide-react";
 import { useAtMenuFit } from "@/lib/chatRefsMenuFit";
 import { listRewindPoints, type RewindPoint } from "@/lib/buildRewind";
 import type { AtFile, CommandId, PickedSkill, SlashRow } from "@/lib/buildComposer";
@@ -62,6 +62,7 @@ function Hint({ children }: { children: ReactNode }) {
 
 const COMMAND_ICON: Record<CommandId, typeof ListChecks> = {
   plan: ListChecks,
+  compact: Layers,
   rewind: History,
   model: Cpu,
 };

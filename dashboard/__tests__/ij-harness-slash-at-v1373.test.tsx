@@ -3,8 +3,8 @@
  * box. The mocks and fixtures are ij-harness-pictures-v1371's (copied, not
  * imported: a test file is not a module other tests import).
  *
- *  - "/" lists the session's commands (/plan, /rewind, /model — no /compact
- *    yet) and the skills (the folder's own and the user's), filters as you
+ *  - "/" lists the session's commands (/plan, /rewind, /model — and since
+ *    v1.374.0 /compact) and the skills (the folder's own and the user's), filters as you
  *    type; Enter (or Tab) picks; a skill is a chip and rides the NEXT turn's
  *    body as `skill` (the user's) or `folder_skill` (the folder's), then the
  *    chip is gone;
@@ -213,14 +213,14 @@ async function opened() {
 /* ---------------------------------------------------------------- tests */
 
 describe("“/” lists the session's commands and the skills", () => {
-  it("shows /plan, /rewind and /model, then the folder's skills and yours, and filters as you type", async () => {
+  it("shows /plan, /compact, /rewind and /model, then the folder's skills and yours, and filters as you type", async () => {
     await opened();
     type("/");
     const menu = await screen.findByTestId("harness-slash-menu");
-    expect(rowNames("harness-slash-command")).toEqual(["plan", "rewind", "model"]);
-    // No /compact: it comes with a later phase, and a command that does
-    // nothing would be a lie.
-    expect(within(menu).queryByText("/compact")).toBeNull();
+    // v1.374.0 (moved on purpose): /compact exists now — it presses the
+    // meter's Compact (ij-harness-work-v1374).
+    expect(rowNames("harness-slash-command")).toEqual(["plan", "compact", "rewind", "model"]);
+    expect(within(menu).getByText("/compact")).toBeTruthy();
     await waitFor(() => expect(rowNames("harness-slash-skill")).toEqual(["release-notes", "bulleteer", "pdf-tools"]), NET);
     expect(screen.getAllByTestId("harness-slash-skill")[0].getAttribute("data-source")).toBe("folder");
     // The two lists were read: yours (the chat's), and the folder's own.
@@ -276,12 +276,14 @@ describe("“/” lists the session's commands and the skills", () => {
     await opened();
     type("/");
     await waitFor(() => expect(rowNames("harness-slash-skill")).toEqual(["release-notes", "bulleteer", "pdf-tools"]), NET);
-    // plan, rewind, model, release-notes: three steps down.
+    // plan, compact, rewind, model, release-notes: four steps down (v1.374.0
+    // moved on purpose: /compact joined the commands).
+    key("ArrowDown");
     key("ArrowDown");
     key("ArrowDown");
     key("ArrowDown");
     const rows = screen.getAllByRole("option");
-    expect(rows[3].getAttribute("aria-selected")).toBe("true");
+    expect(rows[4].getAttribute("aria-selected")).toBe("true");
     key("Tab");
     const chip = await screen.findByTestId("harness-skill-chip");
     expect(chip.getAttribute("data-source")).toBe("folder");
@@ -653,13 +655,14 @@ describe("the rules on their own", () => {
     const folder = [{ name: "release-notes", description: "notes", source: "folder" as const }];
     const yours = [{ name: "bulleteer", description: "bullets", source: "yours" as const }];
     expect(slashRows("", cmds, folder, yours).map((r) => r.key)).toEqual([
-      "cmd:plan", "cmd:rewind", "cmd:model", "skill:folder:release-notes", "skill:yours:bulleteer",
+      "cmd:plan", "cmd:compact", "cmd:rewind", "cmd:model", "skill:folder:release-notes", "skill:yours:bulleteer",
     ]);
     expect(slashRows("", cmds, folder, yours, { name: "bulleteer", source: "yours" }).map((r) => r.key)).not.toContain(
       "skill:yours:bulleteer",
     );
     expect(slashRows("bullets", cmds, folder, yours).map((r) => r.key)).toEqual(["skill:yours:bulleteer"]);
-    expect(cmds.map((c) => c.name)).not.toContain("compact");
+    // v1.374.0 (moved on purpose): Compact exists, so "/compact" does too.
+    expect(cmds.map((c) => c.name)).toContain("compact");
   });
 
   it("slashRows: a NAME match ranks above a row that matches only by its description", () => {

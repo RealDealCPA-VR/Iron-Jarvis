@@ -94,6 +94,11 @@ LINE_KEYS: tuple[str, ...] = (
     # from the session's folder (:func:`folder_files`) and the skill picked
     # with "/" — what rode the turn beside the words.
     "filePaths", "skill",
+    # v1.374.0 (part 2, Phase 3): on a reply, how full the conversation was
+    # for the model that turn (``context`` — the planner's own numbers, from
+    # the done frame) and the turn's own task list as it last stood (``plan``
+    # — its last ``plan_update``, the checklist the reply folds).
+    "context", "plan",
 )
 
 
@@ -435,6 +440,14 @@ def cut_transcript(engine: Any, thread_id: str, turn_id: str, keep: int, cut_at:
                 if key in setup:
                     setup.pop(key, None)
                     changed_setup = True
+            # v1.374.0: a summary that covers a line this cut takes describes
+            # turns that are no longer there — it goes (a later Compact makes
+            # a new one); one that ends before the cut stays.
+            from .compact import standing, survives_cut
+
+            if "compaction" in setup and not survives_cut(standing(setup), msgs, keep):
+                setup.pop("compaction", None)
+                changed_setup = True
             if changed_setup:
                 row.setup_json = _clean_setup(setup)
             row.updated_at = _next_stamp(row.updated_at)
@@ -451,12 +464,49 @@ def cut_transcript(engine: Any, thread_id: str, turn_id: str, keep: int, cut_at:
         return {"ok": False, "reason": "the conversation could not be saved"}
 
 
+def set_compaction(engine: Any, thread_id: str, record: dict[str, Any], key: str, covers: int) -> bool:
+    """COMPACT's store half (v1.374.0, ``harness/compact``): keep ``record``
+    as the session's standing summary, in ONE write under the conversation
+    lock — only while the ``covers`` lines it summarizes are exactly the ones
+    the summary was made from (``compact.covered_key``). False when the
+    conversation moved meanwhile (or there is no such session): nothing is
+    kept. The transcript itself is never touched. BLOCKING; never raises."""
+    from ..daemon.routes.chat import _clean_setup
+    from .compact import covered_key
+
+    try:
+        with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+            row = db.get(ChatThreadRecord, str(thread_id or ""))
+            if row is None or not is_build_thread(row):
+                return False
+            msgs = _messages(row)
+            if len(msgs) < covers or covered_key(msgs[:covers]) != key:
+                return False
+            setup = _setup(row)
+            setup["compaction"] = record
+            row.setup_json = _clean_setup(setup)
+            # NOT ``updated_at``: a summary is not activity (archive's rule).
+            db.add(row)
+            db.commit()
+            return True
+    except Exception:  # noqa: BLE001 — the route reports it in words
+        log.warning("keeping build session %s's summary failed", thread_id, exc_info=True)
+        return False
+
+
 def history(row: Any) -> list[dict[str, str]]:
     """What the next turn's model is shown of the conversation: the user's
     questions (steer notes included) and the replies, role + content only —
-    a reply that failed with nothing written is left out."""
+    a reply that failed with nothing written is left out. v1.374.0: a turn
+    reads it through ``harness/compact.history_for_turn``, which leaves out
+    the lines a standing summary covers."""
+    return history_of(_messages(row))
+
+
+def history_of(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """:func:`history`'s rule over a list of transcript lines."""
     out: list[dict[str, str]] = []
-    for m in _messages(row):
+    for m in messages:
         role = m.get("role")
         content = str(m.get("content") or "")
         if role == "user" and not content.strip():
@@ -542,6 +592,11 @@ def session_view(row: Any, *, states: "dict[str, dict[str, bool]] | None" = None
         "account_limit": setup.get("account_limit") or None,
         "account_wait": setup.get("account_wait") or None,
     })
+    # v1.374.0 (part 2, Phase 3): the summary standing in for the older turns
+    # (Compact) — None when none. The key only on a view that knows it.
+    from .compact import view as _compaction_view
+
+    out["compaction"] = _compaction_view(setup)
     return out
 
 
