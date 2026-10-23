@@ -485,6 +485,38 @@ describe("an agent's commit or push card says why it asks every time", () => {
   });
 });
 
+describe("the card arrives through the session's own stream", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("an approval frame with once_reason git draws the branch rule on the docked card", async () => {
+    let ctl!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start(c) { ctl = c; } });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } })));
+    api.gets["/build/sessions/s1"] = rawView();
+    api.gets["/build/accounts"] = new api.ApiError("no such route", 404);
+    render(<HarnessSession threadId="s1" terminal={terminal} listRunning={false} onChanged={() => {}} onGone={() => {}} />);
+    await screen.findByTestId("harness-empty");
+    const box = screen.getByTestId("harness-input") as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "Commit it" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1));
+    const frame = {
+      id: "ap1", call_id: "c1", tool: "shell", args: { command: "git commit -am wip" },
+      once_only: true, once_reason: "git", cost_note: `This makes a commit on ${BRANCH}. Every commit asks you first.`,
+    };
+    await act(async () => {
+      ctl.enqueue(new TextEncoder().encode(`event: approval\ndata: ${JSON.stringify(frame)}\n\n`));
+    });
+    const card = await screen.findByTestId("chat-approval-card");
+    expect(within(card).getByTestId("approval-git-once")).toHaveTextContent("asks you every time");
+    expect(within(card).queryByTestId("approval-local-only")).toBeNull();
+    expect(within(card).getByTestId("approval-cost")).toHaveTextContent(`This makes a commit on ${BRANCH}.`);
+    await act(async () => {
+      ctl.close();
+    });
+  });
+});
+
 describe("the decoders whitelist", () => {
   it("drops a compare link that is not a web page", () => {
     expect(decodeBranchStatus({ compare_url: "javascript:alert(1)" })!.compareUrl).toBe("");
