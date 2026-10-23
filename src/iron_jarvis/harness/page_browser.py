@@ -355,6 +355,50 @@ def typing_refusal(facts: dict[str, Any], text: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# clicking: a button that reads as deleting, sending or paying asks (pure)
+# --------------------------------------------------------------------------- #
+
+#: DECISION (v1.376.0 review, item 3): a click whose button READS as deleting,
+#: sending or paying asks the user ONCE, every time — the browser add-on's
+#: risk door and computer use read the same words (D12: ONE vocabulary,
+#: ``computeruse/policy``), and the agent's browser must not be weaker where
+#: they apply: a local admin page the user allowed (a router, a NAS, a deploy
+#: tool), or a dev server whose "Delete" reaches a shared database. The words
+#: are the BUTTON's (read off the page), never the model's target, and they
+#: are read again at the click.
+CLICK_NOT_ASKED = (
+    "That click was not made: the button reads \u201c{words}\u201d, which asks the user first, "
+    "and the user was not asked about it as it reads now (the page may have changed it). Call "
+    "page_click again to ask."
+)
+#: How long a button's checked words stand for its click.
+CHECK_TTL_S = 300.0
+#: A check waits this long for an action of the session to finish.
+CHECK_LOCK_WAIT_S = 10.0
+
+
+def risky_click_word(words: Any) -> str:
+    """The word of computer use's destructive / payment vocabulary a
+    button's words hold ("delete"), or "" (pure)."""
+    from ..computeruse import policy as P
+
+    label = " ".join(str(words or "").split()).lower()
+    if not label:
+        return ""
+    for word in (*P._DESTRUCTIVE_WORDS, *P._PAYMENT_WORDS):
+        if word in label:
+            return word
+    return ""
+
+
+def _target_key(target: Any) -> str:
+    try:
+        return json.dumps(target, sort_keys=True, default=str)
+    except Exception:  # noqa: BLE001
+        return str(target)
+
+
+# --------------------------------------------------------------------------- #
 # Edge, Playwright, the throwaway folder
 # --------------------------------------------------------------------------- #
 
@@ -618,6 +662,21 @@ _FIELD_FACTS = """
     autocomplete: (t.getAttribute('autocomplete') || '').toLowerCase(),
     words: words.toLowerCase(),
   };
+}
+"""
+
+#: What a click target READS as: its own words and those of the button or
+#: link it sits in (a click on a span inside "Delete account" presses that
+#: button) — visible text, aria-label, a submit's value, title, alt.
+_CLICK_WORDS = """
+(el) => {
+  const host = el.closest('button, [role=button], a, [role=link], input[type=submit], input[type=button], summary') || el;
+  const bits = [];
+  for (const e of new Set([el, host])) {
+    bits.push(e.getAttribute('aria-label'), e.innerText, e.getAttribute('title'), e.getAttribute('alt'));
+    if (e.tagName === 'INPUT') bits.push(e.value);
+  }
+  return bits.filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim().slice(0, 200);
 }
 """
 
@@ -1148,6 +1207,15 @@ class EdgeBackend:
             ) from None
         return name
 
+    async def label(self, target: Any) -> str:
+        """What the element a click would press READS as (v1.376.0 review)."""
+        loc = await self._resolve(target, "click")
+        try:
+            words = await loc.evaluate(_CLICK_WORDS, timeout=5000)
+        except Exception:  # noqa: BLE001
+            words = ""
+        return " ".join(str(words or "").split())[:200]
+
     async def field(self, target: Any) -> "tuple[Any, dict[str, Any]]":
         loc = await self._resolve(target, "type")
         try:
@@ -1372,6 +1440,9 @@ class AgentBrowsers:
         self._views: "collections.OrderedDict[str, dict[str, Any]]" = collections.OrderedDict()
         self._swept = False
         self._use_counter = itertools.count(1)
+        #: (key, target) -> (the words a click's check read, when): what the
+        #: user was asked about (v1.376.0 review). Any thread.
+        self._checked: dict[tuple[str, str], tuple[str, float]] = {}
         #: Test seam: extra Edge switches (a host-resolver rule).
         self.extra_args: tuple[str, ...] = ()
 
@@ -1460,6 +1531,23 @@ class AgentBrowsers:
 
     async def picture(self, key: str, *, preview: str = "") -> ActResult:
         return await self.run(self._act(key, "picture", preview=preview, local_only=_local_only_now()))
+
+    async def click_words(self, key: str, target: Any) -> str:
+        """What ``target`` on ``key``'s page reads as, for page_click's check
+        (v1.376.0 review); remembered as the words that check judged."""
+        words = await self.run(self._click_words(key, target))
+        with self._lock:
+            self._checked[(key, _target_key(target))] = (words, time.monotonic())
+        return words
+
+    def checked_words(self, key: str, target: Any) -> "str | None":
+        """The words page_click's check read for ``target`` (None: never, or
+        too long ago)."""
+        with self._lock:
+            row = self._checked.get((key, _target_key(target)))
+        if row is None or time.monotonic() - row[1] > CHECK_TTL_S:
+            return None
+        return row[0]
 
     async def close(self, key: str, reason: str = "") -> list[int]:
         """Close ``key``'s browser (nothing open: nothing to do)."""
@@ -1614,6 +1702,26 @@ class AgentBrowsers:
         self._starting.pop(key, None)
         return sess
 
+    async def _click_words(self, key: str, target: Any) -> str:
+        sess = self._sessions.get(key)
+        if sess is None:
+            raise BrowserProblem(NO_PAGE)
+        try:
+            await asyncio.wait_for(sess.lock.acquire(), CHECK_LOCK_WAIT_S)
+        except TimeoutError:
+            raise BrowserProblem(BUSY) from None
+        try:
+            if self._sessions.get(key) is not sess:
+                raise BrowserProblem(NO_PAGE)
+            self._check_here(sess)
+            probe = getattr(sess.backend, "label", None)
+            if probe is None:
+                return ""
+            async with asyncio.timeout(ACTION_TIMEOUT_S):
+                return str(await probe(target) or "")
+        finally:
+            sess.lock.release()
+
     async def _make_room(self, key: str) -> None:
         """At most :data:`MAX_BROWSERS` open: the least recently used one that
         is not acting is closed ("room"); none free → refused in words."""
@@ -1722,6 +1830,15 @@ class AgentBrowsers:
                 out.text = _mask((await b.text())[:OPEN_TEXT_HEAD])
         elif op == "click":
             self._check_here(sess)
+            probe = getattr(b, "label", None)
+            if probe is not None:
+                # The button's words AT the click: a risky one is pressed only
+                # when page_click's check showed the user these very words.
+                words = str(await probe(kw.get("target")) or "")
+                if risky_click_word(words):
+                    asked = self.checked_words(sess.key, kw.get("target"))
+                    if asked is None or " ".join(asked.split()).lower() != " ".join(words.split()).lower():
+                        raise BrowserProblem(CLICK_NOT_ASKED.format(words=_line(words)[:80]))
             name = await b.click(kw.get("target"), limit)
             await b.settle()
             out.did = f"Clicked \"{_line(name)}\"" if name else "Clicked"
@@ -1817,6 +1934,8 @@ class AgentBrowsers:
             self._pids.pop(key, None)
             self._allowed.pop(key, None)
             self._urls.pop(key, None)
+            for gone in [k for k in self._checked if k[0] == key]:
+                self._checked.pop(gone, None)
         if sess is None and kill is None:
             return []
         pids: list[int] = []
@@ -1948,5 +2067,5 @@ __all__ = [
     "ACTION_TIMEOUT_S", "AgentBrowsers", "BROWSERS", "BrowserProblem", "EdgeBackend", "IDLE_CLOSE_S",
     "IDLE_ENV", "NOT_LOCAL", "NO_EDGE", "NO_PAGE", "NO_PLAYWRIGHT", "OPEN_TIMEOUT_S", "STOPPED",
     "Verdict", "blocked_words", "browser_key", "close_for_stop", "edge_executable", "idle_close_s",
-    "judge", "normalize", "playwright_problem", "typing_refusal", "where",
+    "judge", "normalize", "playwright_problem", "risky_click_word", "typing_refusal", "where",
 ]

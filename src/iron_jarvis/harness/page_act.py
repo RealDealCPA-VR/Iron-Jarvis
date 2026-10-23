@@ -18,6 +18,11 @@ WHO DECIDES WHAT THEY MAY DO:
   the page the browser is on, and the browser is only ever on a page the
   rules opened (every navigation is checked, ``page_browser``). The user's
   permission table can still make them ask or deny.
+* v1.376.0 review: a click on a button that READS as deleting, sending or
+  paying (computer use's and the browser add-on's one vocabulary) asks ONCE,
+  every time, in every posture (``page_click``'s spend check, which reads the
+  button's own words off the page); "Ask first" (``always_ask``) cards every
+  click and typed entry (``chat_turn.STRICT_ASK_TOOLS``).
 * Local only (``providers/egress.OPENS_PAGES_TOOLS``): ``page_open``,
   ``page_click`` and ``page_type`` card EVERY call (a page loads what it
   names); ``page_read`` reads what is already loaded.
@@ -239,6 +244,39 @@ class PageClickTool(_PageTool):
         },
         "required": [],
     }
+
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> "SpendCheck | None":
+        """v1.376.0 review DECISION (item 3): a click on a button that READS
+        as deleting, sending or paying asks ONCE, every time, in every
+        posture, with the button's own words (read off the page — a css
+        target that names nothing still reads "Delete account"); the click
+        reads them again and is made only when they still match. Anything
+        else: no opinion (the posture decides — "Ask first" cards every
+        click). No browser, a target that matches nothing: no opinion
+        (execute says why)."""
+        target = _target_args(args or {})
+        if not target:
+            return None
+        key = PB.browser_key(ctx)
+        if not PB.BROWSERS.is_open(key):
+            return None
+        try:
+            words = await PB.BROWSERS.click_words(key, target)
+        except PB.BrowserProblem:
+            return None
+        if not PB.risky_click_word(words):
+            return None
+        shown = PB.where(PB.BROWSERS.current_url(key)) or "its page"
+        return SpendCheck(
+            ask=True,
+            words=(
+                f"Click \u201c{PB._line(words)[:80]}\u201d on {shown} in the agent's browser. "
+                "It reads as deleting, sending or paying for something, so it asks every time."
+            ),
+            cost_note="asks every time",
+            once_only=True,
+            reason="page",
+        )
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         target = _target_args(args or {})

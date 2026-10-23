@@ -612,3 +612,221 @@ async def test_a_call_cancelled_while_waiting_its_turn_does_not_close_the_browse
     finally:
         PV.reset_preview(token)
         inst.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# a click that reads as deleting, sending or paying asks — every time
+# --------------------------------------------------------------------------- #
+
+
+def _labelled_browsers(monkeypatch):
+    """A fake AgentBrowsers whose browser knows what each target READS
+    (``label``), put where the tools look — and the DEV page with two risky
+    buttons: one named, one only reachable by css."""
+    from tests.test_build_browser_v1376 import DEV, PAGES, FakeBackend
+
+    class LabelledFake(FakeBackend):
+        labels = {"#danger": "Delete account"}
+
+        async def label(self, target):
+            name = target if isinstance(target, str) else (target.get("name") or target.get("css"))
+            if name not in PAGES.get(self._url, {}).get("buttons", {}):
+                raise PB.BrowserProblem(f"Nothing on the page matches {name!r}.")
+            return self.labels.get(name, name)
+
+    made: list[Any] = []
+
+    def factory(**kw):
+        backend = LabelledFake(**kw)
+        made.append(backend)
+        return backend
+
+    buttons = dict(PAGES[DEV]["buttons"])
+    buttons["Delete account"] = ("console", "deleted")
+    buttons["#danger"] = ("console", "deleted by css")
+    monkeypatch.setitem(PAGES[DEV], "buttons", buttons)
+    inst = PB.AgentBrowsers(backend_factory=factory)
+    inst.made = made  # type: ignore[attr-defined]
+    monkeypatch.setattr(PB, "BROWSERS", inst)
+    return inst
+
+
+@pytest.mark.parametrize("words, risky", [
+    ("Delete account", "delete"), ("Pay now", "pay"), ("Place order", "order"),
+    ("Send", "send"), ("Remove item", "remove"), ("Add to cart", ""), ("Save", ""), ("", ""),
+])
+def test_the_click_vocabulary_is_computer_uses_one_list(words, risky):
+    """D12: the agent's browser reads a button with the SAME vocabulary the
+    browser add-on's risk door and computer use read (computeruse/policy) —
+    never a second list that drifts."""
+    assert PB.risky_click_word(words) == risky
+
+
+async def _click_through_the_stream(app, target, mode, decide):
+    from tests.test_approval_modes_v1188 import _body as mode_body
+    from tests.test_approval_modes_v1188 import _calls_stream
+    from tests.test_chat_approvals_v1187 import _drive_stream
+
+    args = {"css": target} if target.startswith("#") else {"target": target}
+    app.state.platform.router.stream = _calls_stream([("page_click", args)])
+    return await _drive_stream(app, mode_body("click it", mode, tools=["page_click"]), decide)
+
+
+@pytest.mark.parametrize("target", ["Delete account", "#danger"])
+async def test_a_click_that_reads_as_deleting_asks_once_even_in_yolo(tmp_path, monkeypatch, target):
+    """DECISION (review item 3): a click on a button whose words read as
+    deleting, sending or paying (the add-on's and computer use's ONE
+    vocabulary) asks the user ONCE, every time — in every posture, yolo
+    included, past every grant — with the button's OWN words (a css target
+    that names nothing still reads "Delete account"). Anything else clicks
+    as before."""
+    from iron_jarvis.daemon.app import create_app
+    from tests.test_build_browser_v1376 import DEV
+    from tests.test_chat_approvals_v1187 import _asgi_post
+
+    inst = _labelled_browsers(monkeypatch)
+    try:
+        await inst.open("chat", DEV, preview=DEV)
+        app = create_app(str(tmp_path / "home"))
+        seen: list[dict] = []
+
+        async def deny(data):
+            seen.append(data)
+            status, _ = await _asgi_post(app, f"/chat/approvals/{data['id']}", {"decision": "deny"})
+            assert status == 200
+
+        await _click_through_the_stream(app, target, "yolo", deny)
+        assert [d["tool"] for d in seen] == ["page_click"]
+        assert seen[0].get("once_only") is True and seen[0].get("once_reason") == "page"
+        assert "Delete account" in (seen[0].get("cost_note") or ""), seen[0]
+        assert inst.made[0].clicks == []  # denied: nothing was clicked
+    finally:
+        inst.shutdown()
+
+
+async def test_an_ordinary_click_does_not_ask_in_yolo(tmp_path, monkeypatch):
+    from iron_jarvis.daemon.app import create_app
+    from tests.test_build_browser_v1376 import DEV
+
+    inst = _labelled_browsers(monkeypatch)
+    try:
+        await inst.open("chat", DEV, preview=DEV)
+        app = create_app(str(tmp_path / "home"))
+        seen: list[dict] = []
+
+        async def note(data):
+            seen.append(data)
+
+        await _click_through_the_stream(app, "Add to cart", "yolo", note)
+        assert seen == [] and inst.made[0].clicks == ["Add to cart"]
+    finally:
+        inst.shutdown()
+
+
+async def test_a_risky_click_that_was_never_checked_or_changed_since_is_not_made(tmp_path, monkeypatch):
+    """The words are read again AT the click: a risky button the user was
+    not asked about (a caller that skipped the check, or a page that swapped
+    the button after it) is refused, never clicked."""
+    from iron_jarvis.harness import page_act as PA
+    from tests.test_build_browser_v1376 import DEV, ctx
+
+    inst = _labelled_browsers(monkeypatch)
+    try:
+        await inst.open("build:s1", DEV, preview=DEV)
+        backend = inst.made[0]
+        res = await PA.PageClickTool().execute({"target": "Delete account"}, ctx(tmp_path))
+        assert res.ok is False and "asks the user first" in res.error
+        # Checked while it read "Archive"; the page then swapped the words.
+        backend.labels = {"#danger": "Archive"}
+        quiet = await PA.PageClickTool().spend_check({"css": "#danger"}, ctx(tmp_path))
+        assert quiet is None
+        backend.labels = {"#danger": "Delete account"}
+        res = await PA.PageClickTool().execute({"css": "#danger"}, ctx(tmp_path))
+        assert res.ok is False and "Delete account" in res.error
+        assert backend.clicks == []
+        # Checked as it is (the card), then clicked: made.
+        check = await PA.PageClickTool().spend_check({"css": "#danger"}, ctx(tmp_path))
+        assert check is not None and check.ask is True and check.once_only is True
+        res = await PA.PageClickTool().execute({"css": "#danger"}, ctx(tmp_path))
+        assert res.ok, res.error
+        assert backend.clicks == ["#danger"]
+    finally:
+        inst.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# "Ask first" cards a click and a typed entry
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("tool, args", [
+    ("page_click", {"target": "Add to cart"}),
+    ("page_type", {"target": "Email", "text": "a@b.test"}),
+])
+async def test_always_ask_cards_a_click_and_a_typed_entry(tmp_path, monkeypatch, tool, args):
+    """DECISION (review item 7): "Ask first" (always_ask) cards what can
+    change something — a click or a typed entry on a page can change the dev
+    server's data — like a file edit; opening and reading the pane's page do
+    not (they look)."""
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.daemon.chat_turn import STRICT_ASK_TOOLS
+    from tests.test_approval_modes_v1188 import _body as mode_body
+    from tests.test_approval_modes_v1188 import _calls_stream
+    from tests.test_build_browser_v1376 import DEV
+    from tests.test_chat_approvals_v1187 import _asgi_post, _drive_stream
+
+    assert {"page_click", "page_type"} <= STRICT_ASK_TOOLS
+    assert not ({"page_open", "page_read"} & STRICT_ASK_TOOLS)
+    inst = _labelled_browsers(monkeypatch)
+    try:
+        await inst.open("chat", DEV, preview=DEV)
+        app = create_app(str(tmp_path / "home"))
+        app.state.platform.router.stream = _calls_stream([(tool, args)])
+        seen: list[str] = []
+
+        async def deny(data):
+            seen.append(data["tool"])
+            status, _ = await _asgi_post(app, f"/chat/approvals/{data['id']}", {"decision": "deny"})
+            assert status == 200
+
+        await _drive_stream(app, mode_body("do it", "always_ask", tools=[tool]), deny)
+        assert seen == [tool]
+        assert inst.made[0].clicks == [] and inst.made[0].typed == []
+    finally:
+        inst.shutdown()
+
+
+RISKY_PAGE = """<html><head><title>Admin</title></head><body>
+<p id=out>nothing yet</p>
+<button id=b onclick="document.getElementById('out').textContent='account deleted'">Delete <span id=s>account</span></button>
+<input type=submit id=pay value="Pay now" onclick="document.getElementById('out').textContent='paid'">
+<button id=ok onclick="document.getElementById('out').textContent='saved'">Save</button>
+</body></html>"""
+
+
+@REAL
+@pytest.mark.timeout(180)
+async def test_real_edge_a_click_reads_the_buttons_own_words():
+    """The check reads what the PAGE says the target is: a span inside the
+    "Delete account" button, a submit whose words are its value. Unchecked,
+    the risky click is not made; checked as it reads, it is."""
+    site = Site({"/": RISKY_PAGE})
+    b = _browsers()
+    key = "build:risky"
+    try:
+        await b.open(key, site.base, preview=site.base)
+        assert PB.risky_click_word(await b.click_words(key, {"css": "#s"})) == "delete"
+        assert PB.risky_click_word(await b.click_words(key, {"css": "#pay"})) == "pay"
+        assert PB.risky_click_word(await b.click_words(key, {"css": "#ok"})) == ""
+        b._checked.clear()  # as if no check had run
+        with pytest.raises(PB.BrowserProblem, match="was not asked"):
+            await b.click(key, {"css": "#s"}, preview=site.base)
+        assert "nothing yet" in (await b.read(key, preview=site.base)).text
+        await b.click_words(key, {"css": "#s"})  # the card's check
+        await b.click(key, {"css": "#s"}, preview=site.base)
+        assert "account deleted" in (await b.read(key, preview=site.base)).text
+        await b.click(key, {"css": "#ok"}, preview=site.base)  # ordinary: no check needed
+        assert "saved" in (await b.read(key, preview=site.base)).text
+    finally:
+        b.shutdown()
+        site.close()
