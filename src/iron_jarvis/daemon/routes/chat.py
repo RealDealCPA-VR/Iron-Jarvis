@@ -4875,7 +4875,7 @@ async def chat_stream(
                             if _engine_asks:
                                 _grant_extra = {tc.name, _perm_name}
                                 log.info(
-                                    "chat: %s runs without a card — the service says it is free (%s)",
+                                    "chat: %s runs without a card — its own check needs none (%s)",
                                     tc.name, _sc.cost_note,
                                 )
                     _plan["carded"] = _needs_card

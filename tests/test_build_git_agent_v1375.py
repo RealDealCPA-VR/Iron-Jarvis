@@ -133,7 +133,10 @@ def test_inside_a_branch_turn_a_push_asks_once_and_a_force_is_refused():
         check = G.guard_check("git push origin HEAD")
         assert check.ask is True and check.once_only is True and check.reason == "git"
         assert "ij/x" in check.words and "asks you first" in check.words
-        assert G.guard_check("git push --force") is None, "a force push has nothing to approve"
+        # Review (v1.375.0): a refused command shows NO card in any lane —
+        # its check answers "no card" and the tool refuses it before it runs.
+        refused = G.guard_check("git push --force")
+        assert refused.ask is False and refused.words == G.FORCE_REFUSAL
         assert G.force_refusal("git push --force") == G.FORCE_REFUSAL
         assert G.guard_check("git status") is None
     finally:

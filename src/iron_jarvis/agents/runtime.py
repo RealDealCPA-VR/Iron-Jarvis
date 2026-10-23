@@ -2534,7 +2534,7 @@ class AgentRuntime:
                 )
                 if _mode is PermissionMode.ASK:
                     logging.getLogger("iron_jarvis.agents.runtime").info(
-                        "run %s: %s runs without a pause — the service says it is free (%s)",
+                        "run %s: %s runs without a pause — its own check needs none (%s)",
                         session.id, tc.name, spend.cost_note,
                     )
                     return "", {tc.name, _pk}

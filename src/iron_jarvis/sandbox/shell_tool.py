@@ -206,19 +206,21 @@ class SandboxedShellTool(Tool):
 
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> Any:
         """v1.375.0: while a Build turn works on its own branch, a ``git
-        commit`` / ``git push`` / ``gh pr create`` asks first in every
-        posture, once per call (``harness/git_guard``); None otherwise — the
-        ordinary permission verdict decides, exactly as before."""
+        commit`` / ``git push`` / ``gh pr create`` (and the rest of
+        ``harness/git_guard``'s list) asks first in every posture, once per
+        call, and a command the tool refuses shows no card; None otherwise —
+        the ordinary permission verdict decides, exactly as before."""
         from ..harness.git_guard import guard_check
 
         return guard_check(args.get("command") if isinstance(args, dict) else "")
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        # v1.375.0: a force push from a session's branch is refused before
-        # anything runs, whatever the posture or a card's answer.
-        from ..harness.git_guard import force_refusal
+        # v1.375.0: git the plan rules out on a session's branch (a force
+        # push, deleting a branch, a history rewrite — harness/git_guard) is
+        # refused before anything runs, whatever the posture.
+        from ..harness.git_guard import refusal
 
-        refused = force_refusal(args.get("command") if isinstance(args, dict) else "")
+        refused = refusal(args.get("command") if isinstance(args, dict) else "")
         if refused:
             return ToolResult(ok=False, output="", error=refused)
         policy = SandboxPolicy.from_config(getattr(ctx.config, "sandbox", {}))

@@ -504,8 +504,9 @@ def prompt_line() -> str:
     return (
         f"\n\nThis session works on its own git branch, {tb.branch}{base}, in a worktree at "
         f"{tb.worktree}. The user's main checkout at {tb.repo} is theirs: make every change "
-        "here, never there. Commit or push only when the user asks; every commit and push asks "
-        "the user first, and a force push is refused."
+        "here, never there. Commit or push only when the user asks; every commit, push and pull "
+        "request asks the user first, and a force push, deleting a branch or rewriting history is "
+        "refused."
     )
 
 

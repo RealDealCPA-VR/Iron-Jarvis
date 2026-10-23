@@ -416,9 +416,9 @@ class ProcessStartTool(Tool):
         command = str(args.get("command") or "").strip()
         if not command:
             return ToolResult(ok=False, error="`command` is empty")
-        from .git_guard import force_refusal
+        from .git_guard import refusal
 
-        refused = force_refusal(command)
+        refused = refusal(command)
         if refused:
             return ToolResult(ok=False, error=refused)
         try:
@@ -609,9 +609,9 @@ class ProcessWriteTool(Tool):
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from ..tools.builtins import _bool_arg
 
-        from .git_guard import force_refusal
+        from .git_guard import refusal
 
-        refused = force_refusal(args.get("input") if isinstance(args, dict) else "")
+        refused = refusal(args.get("input") if isinstance(args, dict) else "")
         if refused:
             return ToolResult(ok=False, error=refused)
         mp, err = _lookup(args, ctx)
