@@ -239,6 +239,7 @@ async def test_every_pick_under_an_account_is_accepted_and_served_on_that_accoun
     folded = [p for p in pairs if p["model"] in ("claude-opus-4-8", "claude-sonnet-4-6", "claude-fable-5", "gpt-4o")]
     assert folded, "the menu offered none of the ids only a keyless API lists"
     seen = set()
+    signed_out_seen = 0
     for n, p in enumerate(pairs):
         sid = await _new_session(app, work, ON_WORK)
         status, view = await asgi(app, "PATCH", f"/build/sessions/{sid}", p["body"])
@@ -251,6 +252,19 @@ async def test_every_pick_under_an_account_is_accepted_and_served_on_that_accoun
         beh.calls.clear()
         beh.leases.clear()
         fake.queries.clear()
+        if want_account == "c-gone":
+            # v1.377.0 (IJ harness part 2 Phase 6) DECISION: a SIGNED-OUT
+            # account is pickable in the menu (the header chip's rule and the
+            # daemon's): the switch is accepted (above) and the turn shows the
+            # sign-in card — nothing runs on any other account.
+            status, raw = await open_turn(app, sid, {"text": "hi", "turn_id": f"fold-{n}"})
+            assert status == 200, raw
+            limits = [d for e, d in frames_of(raw) if e == "account_limit"]
+            assert limits and limits[0]["account"] == "c-gone" and limits[0]["kind"] == "signin", (p, limits)
+            assert beh.calls == [], (p, beh.calls)
+            assert {q.get("profileId") for q in picks(fake)} <= {"c-gone"}, (p, picks(fake))
+            signed_out_seen += 1
+            continue
         done = await _run(app, sid, f"fold-{n}")
         # Served by the CLI the menu named, with the model the menu named, on
         # the account the menu named — and nothing else was asked.
@@ -263,6 +277,8 @@ async def test_every_pick_under_an_account_is_accepted_and_served_on_that_accoun
         seen.add((provider, p["model"], want_account))
     # The menu offered every model of both CLIs on every account that can serve.
     assert {a for _, _, a in seen} == {"c-work", "c-spare", "x-plus", "x-team"}
+    # …and the signed-out one too (it meets the sign-in card).
+    assert signed_out_seen > 0
 
 
 async def test_every_pick_with_iron_proxy_off_is_accepted_and_served_on_this_pcs_login(tmp_path, work, monkeypatch):

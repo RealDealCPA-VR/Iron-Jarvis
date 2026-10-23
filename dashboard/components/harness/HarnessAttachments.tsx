@@ -92,6 +92,15 @@ export function uploadName(file: File, pasted: boolean, n: number, now: Date = n
   return `pasted-${stamp}-${n + 1}-${tail}.${ext}`;
 }
 
+/** v1.377.0 (Phase 6): what the box says when files that went back did not
+ *  fit — named, never dropped without a word. */
+export function leftOutWords(left: readonly { label?: string; name: string }[], max: number): string {
+  const names = left.slice(0, 3).map((f) => f.label || f.name);
+  const more = left.length > 3 ? ` and ${left.length - 3} more` : "";
+  const what = left.length === 1 ? "1 file did not go back in the box" : `${left.length} files did not go back in the box`;
+  return `${what} (${names.join(", ")}${more}): one message carries at most ${max} files. Send these in another message.`;
+}
+
 /** The files a clipboard paste carries (none for plain text). */
 export function pastedFiles(data: DataTransfer | null): File[] {
   if (!data) return [];
@@ -238,12 +247,29 @@ export function useHarnessAttachments(limit?: ReadLimit) {
     setProblem(null);
   }, []);
 
-  /** v1.373.0: put a message's files back (it never started, or it came off
-   *  the waiting list) BESIDE any the box holds now — v1.373.0 review: a box
-   *  that already held files used to keep them and drop these. */
+  /** v1.373.0: put a message's files back (it never started, it came off the
+   *  waiting list, or — v1.377.0 — it was rewound to or branched from)
+   *  BESIDE any the box holds now — v1.373.0 review: a box that already held
+   *  files used to keep them and drop these. v1.377.0 (Phase 6): the box
+   *  takes only what one message can carry (the read limit, and never past
+   *  MAX_FILES) and SAYS which did not go back — the extras used to be cut
+   *  off at 20 without a word. */
   const restore = useCallback((back: HarnessFile[]) => {
     if (!back.length) return;
-    setFiles((prev) => [...prev, ...back.filter((b) => !prev.some((f) => f.path === b.path))].slice(0, MAX_FILES));
+    const cur = filesRef.current;
+    const fresh = back.filter((b, i) => !cur.some((f) => f.path === b.path) && back.findIndex((x) => x.path === b.path) === i);
+    if (!fresh.length) return;
+    const lim = limitRef.current;
+    const held = cur.length + pendingRef.current;
+    const readRoom = lim ? lim.max - lim.others() - held : Infinity;
+    const room = Math.max(0, Math.min(MAX_FILES - held, readRoom));
+    const kept = fresh.slice(0, room);
+    const left = fresh.slice(room);
+    if (kept.length) {
+      filesRef.current = [...cur, ...kept];
+      setFiles((prev) => [...prev, ...kept.filter((b) => !prev.some((f) => f.path === b.path))]);
+    }
+    if (left.length) setProblem(leftOutWords(left, lim ? Math.min(lim.max, MAX_FILES) : MAX_FILES));
   }, []);
 
   /** Call ``fn`` once the uploads in flight have settled (at once when none).

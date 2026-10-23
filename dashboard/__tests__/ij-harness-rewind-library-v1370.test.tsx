@@ -132,7 +132,10 @@ describe("Rewind to here: two presses, the refusal in words", () => {
     expect(screen.getByTestId("rewind-commands")).toHaveTextContent("Commands are not undone");
     expect(confirm).toHaveTextContent("the message goes back in your box");
     fireEvent.click(screen.getByTestId("rewind-confirm-button"));
-    await waitFor(() => expect(onRewound).toHaveBeenCalledWith("Add a cart"));
+    // v1.377.0: the message's own files ride with its words (none here).
+    await waitFor(() =>
+      expect(onRewound).toHaveBeenCalledWith("Add a cart", { attachments: [], pickedFiles: [], commitsNote: "" }),
+    );
     expect(posts("/build/sessions/s1/rewind")).toEqual([
       { method: "POST", path: "/build/sessions/s1/rewind", body: { to: "t1" } },
     ]);

@@ -59,7 +59,14 @@ export interface PermissionLevel {
 
 /** What each level does, before its reading sentence. */
 const LEVEL_DOES: Readonly<Record<PermissionMode, { label: string; does: string; tone: PermissionTone }>> = {
-  always_ask: { label: "Ask first", does: "Asks before it edits files, uses the internet or runs commands.", tone: "neutral" },
+  // v1.377.0 (Phase 6): the words name what v1.376.0's review made it card —
+  // a click or a typed entry in a browser (a Build session's own browser,
+  // and the browser add-on's acting tools).
+  always_ask: {
+    label: "Ask first",
+    does: "Asks before it edits files, uses the internet, runs commands, or clicks or types in a browser.",
+    tone: "neutral",
+  },
   approve_for_me: {
     label: "Ask when risky",
     does: "Edits files and searches the web on its own, asks before running commands.",

@@ -17,7 +17,8 @@
  */
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, FolderOpen, Loader2, Pencil, Plus, SquareTerminal, X } from "lucide-react";
+import { Check, FolderOpen, Loader2, Pencil, Plus, Search, SquareTerminal, X } from "lucide-react";
+import { filterFolders } from "@/lib/buildNext";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import { PaneDot, stateWord } from "@/components/terminal/PaneState";
 import type { RailPane } from "@/components/terminal/PaneRail";
@@ -117,6 +118,8 @@ function NewSessionForm({
       <input
         id="harness-new-folder"
         data-testid="harness-new-folder"
+        // v1.377.0: the form opens ready to type (New session, Ctrl+N).
+        autoFocus
         value={folder}
         onChange={(e) => setFolder(e.target.value)}
         placeholder="Paste a folder path"
@@ -317,7 +320,10 @@ export function HarnessSidebar({
   defaultFolder,
   terminals,
   onOpenTerminal,
+  newRequest = 0,
 }: {
+  /** v1.377.0: Ctrl+N — each change opens New session. */
+  newRequest?: number;
   /** null while the first read is out. */
   folders: BuildFolder[] | null;
   listError: string | null;
@@ -334,6 +340,15 @@ export function HarnessSidebar({
   const [creating, setCreating] = useState(false);
   const [busyFolder, setBusyFolder] = useState<string | null>(null);
   const [groupProblem, setGroupProblem] = useState<string | null>(null);
+  // v1.377.0 (Phase 6): Ctrl+N opens New session (lib/harnessKeys).
+  useEffect(() => {
+    if (newRequest > 0) setCreating(true);
+  }, [newRequest]);
+  // v1.377.0: search the sessions by title and folder name (the chat list's
+  // search as the model: a quiet box, Escape clears it first).
+  const [query, setQuery] = useState("");
+  const shown = folders ? filterFolders(folders, query) : null;
+  const total = folders ? folders.reduce((n, f) => n + f.sessions.length, 0) : 0;
 
   async function startIn(folder: string) {
     setBusyFolder(folder);
@@ -367,12 +382,39 @@ export function HarnessSidebar({
         </button>
       )}
 
+      {total > 0 ? (
+        // `isolate` + `z-[1]` (the v1.313.0 rule): the icon paints OVER the
+        // field, not under its fill.
+        <div className="relative isolate shrink-0">
+          <Search
+            size={12}
+            aria-hidden="true"
+            className="pointer-events-none absolute left-2.5 top-1/2 z-[1] -translate-y-1/2 text-zinc-500"
+          />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // Escape clears the box first (and is not the reply's Stop).
+              if (e.key === "Escape" && query) {
+                e.preventDefault();
+                e.stopPropagation();
+                setQuery("");
+              }
+            }}
+            placeholder="Search sessions…"
+            aria-label="Search sessions"
+            data-testid="harness-session-search"
+            className="field w-full py-1.5 pl-8 text-[12px]"
+          />
+        </div>
+      ) : null}
       <div data-testid="harness-session-groups" className="min-h-0 flex-1 space-y-3 overflow-y-auto">
         {listError ? (
           <p role="alert" className="px-2 text-[12px] text-tone-danger">
             {listError}
           </p>
-        ) : folders === null ? (
+        ) : folders === null || shown === null ? (
           <p className="flex items-center gap-1.5 px-2 text-[12px] text-zinc-500">
             <Loader2 size={12} className="animate-spin" /> Reading your sessions…
           </p>
@@ -380,8 +422,12 @@ export function HarnessSidebar({
           <p data-testid="harness-no-sessions" className="px-2 text-[13px] text-zinc-500">
             No sessions yet. Start one in a folder to build there.
           </p>
+        ) : shown.length === 0 ? (
+          <p data-testid="harness-no-session-match" className="px-2 text-[12px] leading-relaxed text-zinc-500">
+            No sessions match “{query.trim()}”.
+          </p>
         ) : (
-          folders.map((f) => (
+          shown.map((f) => (
             <FolderGroup
               key={f.path}
               folder={f}

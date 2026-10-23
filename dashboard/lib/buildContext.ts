@@ -21,6 +21,7 @@
  */
 
 import { post } from "@/lib/api";
+import { fillWords } from "@/lib/contextWords";
 import { readSavedPlan, type PlanView } from "@/lib/planChecklist";
 import type { CompactionInfo } from "@/components/chat/CompactionCard";
 
@@ -173,9 +174,8 @@ export function offersCompact(reading: TurnContext | null, beforeSummary: boolea
  *  window nobody knows is the app's own safe size, and is called that —
  *  never "what this model can read". */
 export function meterTitle(reading: TurnContext): string {
-  return reading.appSized
-    ? `This conversation fills about ${reading.percent}% of what Iron Jarvis sends this model at once. This model's own limit is not known, so a safe size is used.`
-    : `This conversation fills about ${reading.percent}% of what this model can read at once.`;
+  // v1.377.0: the ONE wording, shared with the chat page's gauge.
+  return fillWords("conversation", reading.percent, !reading.appSized);
 }
 
 /** What a press that worked says. */

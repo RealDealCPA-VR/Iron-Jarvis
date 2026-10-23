@@ -31,6 +31,7 @@ import {
   GROUP_TITLES,
   NEAR_LIMIT_PERCENT,
   RESUME_WHEN_READY,
+  accountBlockedReason,
   accountStatusLine,
   limitCardLine,
   limitCardWords,
@@ -78,6 +79,10 @@ export function AccountCard({
   busy?: boolean;
 }) {
   const line = accountStatusLine(account);
+  // v1.377.0 (Phase 6): the model menu's rule, one function — turned off and
+  // removed cannot be picked (the daemon refuses them); signed out can (the
+  // next turn shows the sign-in card).
+  const blocked = current ? "" : accountBlockedReason(account);
   return (
     <div
       data-testid={`account-card-${account.id}`}
@@ -91,7 +96,8 @@ export function AccountCard({
             type="button"
             data-testid={`account-pick-${account.id}`}
             onClick={onPick}
-            disabled={busy}
+            disabled={busy || !!blocked}
+            title={blocked || undefined}
             className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-zinc-100 hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:opacity-50"
           >
             {account.name}

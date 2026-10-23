@@ -80,7 +80,9 @@ afterEach(() => cleanup());
 describe("one reading decision, one sentence per state", () => {
   it("the old descriptions are byte for byte what they were (a caller that knows nothing)", () => {
     expect(PERMISSION_LEVELS.always_ask.description).toBe(
-      "Asks before it edits files, uses the internet or runs commands. Reads files anywhere on this PC without asking",
+      // v1.377.0 (IJ harness part 2 Phase 6): "Ask first" names the browser
+      // clicks and typed entries it cards (since v1.376.0).
+      "Asks before it edits files, uses the internet, runs commands, or clicks or types in a browser. Reads files anywhere on this PC without asking",
     );
     expect(PERMISSION_LEVELS.approve_for_me.description).toBe(
       "Edits files and searches the web on its own, asks before running commands. Reads files anywhere on this PC without asking",

@@ -745,6 +745,86 @@
       }
     },
     {
+      "way": "claude-cli",
+      "account": "c-gone",
+      "row": "Your Claude plan",
+      "model": "subscription",
+      "body": {
+        "account": "c-gone",
+        "model": "subscription"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-gone",
+      "row": "Opus 5.5long docs",
+      "model": "claude-opus-5-5",
+      "body": {
+        "account": "c-gone",
+        "model": "claude-opus-5-5"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-gone",
+      "row": "Fable 5.1long docs",
+      "model": "claude-fable-5-1",
+      "body": {
+        "account": "c-gone",
+        "model": "claude-fable-5-1"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-gone",
+      "row": "Sonnet 5.5long docs",
+      "model": "claude-sonnet-5-5",
+      "body": {
+        "account": "c-gone",
+        "model": "claude-sonnet-5-5"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-gone",
+      "row": "Haiku 4.5",
+      "model": "claude-haiku-4-5-20251001",
+      "body": {
+        "account": "c-gone",
+        "model": "claude-haiku-4-5-20251001"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-gone",
+      "row": "Opus 4.8",
+      "model": "claude-opus-4-8",
+      "body": {
+        "account": "c-gone",
+        "model": "claude-opus-4-8"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-gone",
+      "row": "Sonnet 4.6",
+      "model": "claude-sonnet-4-6",
+      "body": {
+        "account": "c-gone",
+        "model": "claude-sonnet-4-6"
+      }
+    },
+    {
+      "way": "claude-cli",
+      "account": "c-gone",
+      "row": "claude-fable-5",
+      "model": "claude-fable-5",
+      "body": {
+        "account": "c-gone",
+        "model": "claude-fable-5"
+      }
+    },
+    {
       "way": "codex-cli",
       "account": "x-plus",
       "row": "Your ChatGPT plan",

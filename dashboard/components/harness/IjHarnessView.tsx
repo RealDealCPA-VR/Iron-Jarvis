@@ -20,6 +20,8 @@ import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import type { RailPane } from "@/components/terminal/PaneRail";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
+import type { BranchDraft } from "@/lib/buildNext";
+import { useHarnessKeys } from "@/lib/harnessKeys";
 import {
   LAST_SESSION_KEY,
   createSession,
@@ -149,6 +151,19 @@ export function IjHarnessView({
     [folders, selected],
   );
 
+  // v1.377.0 (part 2, Phase 6): a session just BRANCHED from a question opens
+  // with that question in its box (handed over once, for that session only).
+  const [draftFor, setDraftFor] = useState<{ id: string; draft: BranchDraft } | null>(null);
+  function openBranched(id: string, draft: BranchDraft | null) {
+    pickedRef.current = true;
+    setDraftFor(draft ? { id, draft } : null);
+    setSelected(id);
+    void refresh();
+  }
+  // Ctrl+N (lib/harnessKeys): New session in the left pane.
+  const [newRequest, setNewRequest] = useState(0);
+  useHarnessKeys({ onNew: () => setNewRequest((n) => n + 1) }, () => ({ busy: false, asking: false }));
+
   async function start(folder: string, extra?: StartExtra): Promise<string | null> {
     try {
       // v1.375.0: New session's branch switch rides only when it was shown.
@@ -189,6 +204,7 @@ export function IjHarnessView({
           defaultFolder={defaultFolder}
           terminals={terminals}
           onOpenTerminal={onOpenTerminal}
+          newRequest={newRequest}
         />
       </aside>
       <div className="min-w-0 flex-1 xl:min-h-0">
@@ -202,6 +218,12 @@ export function IjHarnessView({
             onGone={() => {
               setSelected(null);
               void refresh();
+            }}
+            onBranched={openBranched}
+            initialDraft={draftFor && draftFor.id === selected ? draftFor.draft : null}
+            onOpenSession={(id) => {
+              pickedRef.current = true;
+              setSelected(id);
             }}
           />
         ) : (

@@ -328,6 +328,7 @@ interface PanelResponse {
 }
 import { useEvents } from "@/lib/useEvents";
 import { CHAT_EVENT_TYPES } from "@/components/chat/chatEventTypes";
+import { fillWords, trimmedWords, windowKnownOf } from "@/lib/contextWords";
 import { useDictation } from "@/lib/useDictation";
 import { useTTS } from "@/lib/useTTS";
 import {
@@ -1069,11 +1070,13 @@ function ContextMeter({ usage }: { usage: ContextUsage | null }) {
     <span
       className={`hidden items-center gap-1 text-[11px] sm:inline-flex ${tone}`}
       // v1.356.0 (G75): the hover says how full the chat is in words a new
-      // user knows, never "context window" or "token".
+      // user knows, never "context window" or "token". v1.377.0: a window no
+      // pin, measurement or catalog knows is the app's SAFE SIZE, never "what
+      // this model can read" — the IJ harness meter's words (lib/contextWords).
       title={
         trimmed
-          ? `${usage.dropped} earlier message${usage.dropped === 1 ? " was" : "s were"} summarized so this chat fits what this model can read at once. A model that reads longer chats would keep them.`
-          : `This chat fills about ${pct}% of what this model can read at once.`
+          ? trimmedWords(usage.dropped, windowKnownOf(usage))
+          : fillWords("chat", pct, windowKnownOf(usage))
       }
     >
       <span className="relative inline-block h-1 w-8 overflow-hidden rounded-full bg-white/10">
@@ -1120,7 +1123,7 @@ function CompactionOffer({
     // "Compact now"); the fill level stays on the hover for the curious.
     <div
       data-testid="compaction-offer"
-      title={`This chat fills about ${pct}% of what this model can read at once.`}
+      title={fillWords("chat", pct, windowKnownOf(usage))}
       className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-tone-warn/25 bg-tone-warn/[0.05] px-3 py-2 text-[12px] text-tone-warn"
     >
       <span data-testid="compaction-offer-words">{COMPACTION_OFFER_WORDS}</span>

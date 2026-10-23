@@ -16,7 +16,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AtSign, Cpu, FileText, History, Layers, ListChecks, Loader2, Sparkles, X } from "lucide-react";
 import { useAtMenuFit } from "@/lib/chatRefsMenuFit";
-import { listRewindPoints, type RewindPoint } from "@/lib/buildRewind";
+import { listRewindPoints, type RewindExtras, type RewindPoint } from "@/lib/buildRewind";
 import type { AtFile, CommandId, PickedSkill, SlashRow } from "@/lib/buildComposer";
 import { RewindControl } from "@/components/harness/RewindControl";
 
@@ -344,7 +344,7 @@ export function RewindList({
   threadId: string;
   /** A reply is running: rewinding waits (the daemon refuses it too). */
   disabled: boolean;
-  onRewound: (question: string) => void;
+  onRewound: (question: string, extras: RewindExtras) => void;
   onTouched: () => void;
   onClose: () => void;
 }) {
@@ -400,9 +400,9 @@ export function RewindList({
                   threadId={threadId}
                   turnId={p.turnId}
                   disabled={disabled}
-                  onRewound={(q) => {
+                  onRewound={(q, extras) => {
                     onClose();
-                    onRewound(q);
+                    onRewound(q, extras);
                   }}
                   onTouched={onTouched}
                 />

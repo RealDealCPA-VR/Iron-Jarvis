@@ -27,6 +27,7 @@ import {
   ListChecks,
   FolderOpen,
   GitBranch,
+  GitFork,
   Loader2,
   MoreHorizontal,
   Pencil,
@@ -113,6 +114,23 @@ import {
   type HarnessFile,
 } from "@/components/harness/HarnessAttachments";
 import { previewAddressFor } from "@/components/harness/BrowserPreview";
+// v1.377.0 (part 2, Phase 6): Next step, Branch from a message, the keys,
+// and what a rewind hands back to the box.
+import {
+  BRANCH_LABEL,
+  BRANCH_TITLE_QUESTION,
+  BRANCH_TITLE_REPLY,
+  atFileFromPath,
+  branchSession,
+  branchedFromWords,
+  fetchNextSteps,
+  fileFromPath,
+  withNextStep,
+  type BranchAt,
+  type BranchDraft,
+} from "@/lib/buildNext";
+import { useHarnessKeys } from "@/lib/harnessKeys";
+import type { RewindExtras } from "@/lib/buildRewind";
 import { finishedPageSteps } from "@/lib/agentBrowser";
 import { AtMenu, PickedChips, RewindList, SentPicks, SlashMenu } from "@/components/harness/HarnessComposerMenus";
 import { slashTokenAt, spliceToken, tokenAt } from "@/lib/slash";
@@ -179,6 +197,8 @@ const REREAD_TRIES = 4;
 const REREAD_GAP_MS = 500;
 /** The chat's own cap on waiting messages (routes/chat MAX_THREAD_QUEUE). */
 const MAX_QUEUED = 3;
+/** v1.377.0: how often a session read mid-Compact is read again. */
+export const COMPACT_REREAD_MS = 2000;
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -213,6 +233,38 @@ function LiveText({ stream }: { stream: ReturnType<typeof useChatStream> }) {
         </div>
       ) : null}
     </>
+  );
+}
+
+/** v1.377.0 (Phase 6): "Branch from here" on a message — one press starts a
+ *  NEW session (nothing of this one changes, so no confirm). Quiet until the
+ *  message is hovered or the control has focus, like Rewind. */
+function BranchButton({
+  at,
+  turnId,
+  working,
+  disabled,
+  onBranch,
+}: {
+  at: BranchAt;
+  turnId: string;
+  working: boolean;
+  disabled: boolean;
+  onBranch: (turnId: string, at: BranchAt) => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={`harness-branch-${at}`}
+      data-turn={turnId}
+      disabled={disabled || working}
+      title={at === "reply" ? BRANCH_TITLE_REPLY : BRANCH_TITLE_QUESTION}
+      onClick={() => onBranch(turnId, at)}
+      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-zinc-500 opacity-0 transition-opacity hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100"
+    >
+      {working ? <Loader2 size={12} className="animate-spin" aria-hidden /> : <GitFork size={12} aria-hidden />}
+      {BRANCH_LABEL}
+    </button>
   );
 }
 
@@ -254,6 +306,9 @@ export function HarnessSession({
   listRunning,
   onChanged,
   onGone,
+  onBranched,
+  initialDraft,
+  onOpenSession,
 }: {
   threadId: string;
   terminal: SessionTerminalApi;
@@ -263,6 +318,14 @@ export function HarnessSession({
   onChanged: () => void;
   /** The session was deleted or archived from here. */
   onGone: () => void;
+  /** v1.377.0: "Branch from here" started a NEW session (open it; a question
+   *  branch hands its words and files to the new session's box). */
+  onBranched?: (id: string, draft: BranchDraft | null) => void;
+  /** v1.377.0: what goes in this session's box when it opens (a session just
+   *  branched from a question). */
+  initialDraft?: BranchDraft | null;
+  /** v1.377.0: open another session (the "Branched from" line). */
+  onOpenSession?: (id: string) => void;
 }) {
   const daemon = useDaemon();
   const catalog = useModels();
@@ -339,6 +402,19 @@ export function HarnessSession({
   const [compactNote, setCompactNote] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const compactingRef = useRef(false);
+  // v1.377.0 (Phase 6): a Compact the daemon is running for this session
+  // that this screen did not start (pressed, then the user left and came
+  // back): the view says so, and the box waits the same way.
+  const elsewhereCompacting = !!view?.compacting && !compacting;
+  // v1.377.0: the words of a rewind of committed work (the commits stayed).
+  const [rewindNote, setRewindNote] = useState<string | null>(null);
+  // v1.377.0: Next step — up to two suggested follow-ups after a reply (the
+  // chat's, off unless switched on); a press fills the box, never sends.
+  const [nextSteps, setNextSteps] = useState<string[]>([]);
+  // v1.377.0: Branch from a message — a press under way, and its refusal.
+  const [branching, setBranching] = useState<string | null>(null);
+  const [branchError, setBranchError] = useState<string | null>(null);
+  const nextGenRef = useRef(0);
   const busy = sending || stream.streaming;
 
   // v1.374.0: while this session is on screen in front and its window has
@@ -443,16 +519,30 @@ export function HarnessSession({
   /** A rewind landed (v1.370.0): the DAEMON cut the transcript and put the
    *  files back, so read the session again; the message rewound to goes back
    *  in the box (unless the box already holds words), and the panes, the Undo
-   *  rows and the library read again. */
+   *  rows and the library read again. v1.377.0 (Phase 6): its PICTURES and
+   *  files go back with its words (the box says what did not fit), and a
+   *  rewind of committed work says the commits stayed on the branch. */
   const onRewound = useCallback(
-    async (question: string) => {
-      await load();
+    async (question: string, extras?: RewindExtras) => {
+      const v = await load();
       if (question) setInput((cur) => (cur.trim() ? cur : question));
+      if (extras) {
+        const folder = v?.folder ?? viewRef.current?.folder ?? "";
+        const picks = extras.pickedFiles.map((p) => atFileFromPath(p, folder));
+        if (picks.length) {
+          const next = withFilesRestored(atFilesRef.current, picks);
+          atFilesRef.current = next; // the uploads' room is counted against it at once
+          setAtFiles(next);
+        }
+        if (extras.attachments.length) att.restore(extras.attachments.map(fileFromPath));
+        setRewindNote(extras.commitsNote || null);
+      }
       setUndone(new Set());
       void refreshUndo();
       setRewinds((n) => n + 1);
       onChanged();
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [load, refreshUndo, onChanged],
   );
 
@@ -516,6 +606,16 @@ export function HarnessSession({
       if (back.length) setInput((cur) => withSteersRestored(cur, back));
       setTurnsEnded((n) => n + 1);
       onChanged();
+      // v1.377.0: Next step — asked once a reply ended cleanly and nothing
+      // else started meanwhile (the daemon answers "off", making no model
+      // call, unless the user switched suggestions on).
+      const ask = nextGenRef.current;
+      const replied = !!v?.messages.some((m) => m.role === "assistant" && m.turnId === finished && !m.error);
+      if (clean && replied && turnRef.current === null) {
+        void fetchNextSteps(threadId).then((steps) => {
+          if (nextGenRef.current === ask && turnRef.current === null) setNextSteps(steps);
+        });
+      }
       return clean;
     },
     [load, onChanged, threadId, refreshAccounts],
@@ -558,6 +658,11 @@ export function HarnessSession({
       setSending(true);
       setError(null);
       setCompactNote(null);
+      // v1.377.0: a new turn retires the last reply's Next step buttons (and
+      // a suggestion asked for the last one never lands under this one).
+      nextGenRef.current += 1;
+      setNextSteps([]);
+      setRewindNote(null);
       // A new (or rejoined: its frames replay) turn draws its own helpers.
       setHelpers([]);
       limitSeenRef.current = false;
@@ -649,9 +754,23 @@ export function HarnessSession({
     setPending(null);
     setQuestions([]);
     setLimit(null);
+    setNextSteps([]);
+    setRewindNote(null);
+    setBranchError(null);
     void refreshAccounts();
     void load().then(async (v) => {
       if (!live || !v) return;
+      // v1.377.0: a session just branched from a QUESTION opens with that
+      // question's words and files in its box (nothing is sent).
+      if (initialDraft) {
+        if (initialDraft.text) setInput((cur) => (cur.trim() ? cur : initialDraft.text));
+        const picks = initialDraft.pickedFiles.map((p) => atFileFromPath(p, v.folder));
+        if (picks.length) {
+          atFilesRef.current = picks;
+          setAtFiles(picks);
+        }
+        if (initialDraft.attachments.length) att.restore(initialDraft.attachments.map(fileFromPath));
+      }
       // Notes sent to a turn that ended while nobody watched: back in the box.
       const sent = readSentSteers(threadId);
       const ended = Array.from(new Set(sent.map((s) => s.turnId))).filter((t) => !(v.running && v.turnId === t));
@@ -718,7 +837,8 @@ export function HarnessSession({
     }
     // v1.374.0: while Compact writes the summary nothing starts (the daemon
     // would refuse it): the box keeps its words, a waiting message waits on.
-    if (compactingRef.current) {
+    // v1.377.0: a Compact found running when the session opened counts too.
+    if (compactingRef.current || viewRef.current?.compacting) {
       if (item) {
         const back = [item, ...queueRef.current].slice(0, MAX_QUEUED);
         setQueued(back);
@@ -824,6 +944,37 @@ export function HarnessSession({
       // Gone already (it finished): stop following it here.
       stream.abort();
     }
+  }
+
+  /** v1.377.0: "Branch from here" — a NEW session with this conversation up
+   *  to the message (the daemon copies it; nothing here changes), opened at
+   *  once; a question's words and files go in ITS box. */
+  async function branchFrom(turnId: string, at: BranchAt) {
+    if (branching) return;
+    setBranching(`${at}:${turnId}`);
+    setBranchError(null);
+    try {
+      const made = await branchSession(threadId, turnId, at);
+      onChanged();
+      onBranched?.(made.id, made.draft);
+    } catch (e) {
+      setBranchError(
+        isMissing(e) && !(e instanceof ApiError && /message/i.test(e.message))
+          ? "This version of Iron Jarvis cannot branch a session yet."
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    } finally {
+      setBranching(null);
+    }
+  }
+
+  /** v1.377.0: a Next step press puts its words in the box — never sends. */
+  function pickNextStep(step: string) {
+    setInput((cur) => withNextStep(cur, step));
+    setNextSteps([]);
+    boxRef.current?.focus({ preventScroll: true });
   }
 
   async function answerAsk(id: string, answer: AskAnswer | null): Promise<string | null> {
@@ -1242,6 +1393,22 @@ export function HarnessSession({
     questions,
   });
   const asking = asks.length > 0;
+  // v1.377.0 (Phase 6): the session's keys — Esc stops the reply, Ctrl+L the
+  // box, Ctrl+K the model menu; inside the IJ harness only (lib/harnessKeys
+  // decides where, and leaves Ctrl+K to the app's palette everywhere else).
+  useHarnessKeys(
+    {
+      onStop: () => void stop(),
+      onFocus: () => boxRef.current?.focus({ preventScroll: true }),
+      onModel: () => {
+        if (!asking) setModelMenuOpen(true);
+      },
+    },
+    () => ({ busy, asking }),
+  );
+  // v1.377.0: a Compact found running when the session opened — read the
+  // session again until it ends (then the meter shows the summary).
+  useVisibleInterval(() => void load(), COMPACT_REREAD_MS, elsewhereCompacting);
   const shown: BuildMessage[] = useMemo(() => {
     // The daemon's own "carry on" questions are not shown (Phase 5).
     const base = shownMessages(view?.messages ?? []);
@@ -1311,7 +1478,8 @@ export function HarnessSession({
     (!!input.trim() || att.files.length > 0 || att.uploading || atFiles.length > 0) &&
     !!view &&
     !offline &&
-    !compacting;
+    !compacting &&
+    !elsewhereCompacting;
 
   if (loadError && !view) {
     return (
@@ -1404,6 +1572,19 @@ export function HarnessSession({
                 <GitBranch size={12} aria-hidden className="shrink-0" />
                 <span className="truncate">{branchLine(view.git)}</span>
               </p>
+            ) : null}
+            {view.branchedFrom ? (
+              // v1.377.0: where this session was branched from (press: open it).
+              <button
+                type="button"
+                data-testid="harness-branched-from"
+                onClick={() => view.branchedFrom && onOpenSession?.(view.branchedFrom.threadId)}
+                title="Open the session this one was branched from"
+                className="flex min-w-0 max-w-full items-center gap-1 truncate text-left text-[12px] text-zinc-500 hover:text-zinc-200"
+              >
+                <GitFork size={12} aria-hidden className="shrink-0" />
+                <span className="truncate">{branchedFromWords(view.branchedFrom)}</span>
+              </button>
             ) : null}
           </div>
           {accounts && (vendor || currentAccount) ? (
@@ -1508,7 +1689,7 @@ export function HarnessSession({
                   </p>
                 </div>
               ) : (
-                <div key={i} className="group flex flex-col items-end gap-1">
+                <div key={i} className="group group/msg flex flex-col items-end gap-1">
                   {m.content ? (
                     <div data-testid="harness-user-bubble" className={HARNESS_USER_BUBBLE}>
                       {m.content}
@@ -1527,14 +1708,25 @@ export function HarnessSession({
                       threadId={threadId}
                       turnId={m.turnId}
                       disabled={busy || view.archived}
-                      onRewound={(q) => void onRewound(q)}
+                      onRewound={(q, extras) => void onRewound(q, extras)}
                       onTouched={() => void onRewound("")}
+                    />
+                  ) : null}
+                  {/* v1.377.0: a new session from before this message (it
+                      goes in that session's box). */}
+                  {m.turnId && m !== pending ? (
+                    <BranchButton
+                      at="question"
+                      turnId={m.turnId}
+                      working={branching === `question:${m.turnId}`}
+                      disabled={!!branching}
+                      onBranch={(t, at) => void branchFrom(t, at)}
                     />
                   ) : null}
                 </div>
               )
             ) : (
-              <div key={i} data-testid="harness-reply" className="min-w-0">
+              <div key={i} data-testid="harness-reply" className="group/msg min-w-0">
                 <WorkLine
                   {...paneWorkInput(m)}
                   cutOff={m.truncated ? "truncated" : m.interrupted ? "interrupted" : null}
@@ -1597,11 +1789,42 @@ export function HarnessSession({
                     undoFor={undoFor}
                     onUndo={onUndo}
                   />
+                  {/* v1.377.0: a new session with the conversation up to
+                      and including this reply. */}
+                  {m.turnId ? (
+                    <BranchButton
+                      at="reply"
+                      turnId={m.turnId}
+                      working={branching === `reply:${m.turnId}`}
+                      disabled={!!branching}
+                      onBranch={(t, at) => void branchFrom(t, at)}
+                    />
+                  ) : null}
                 </div>
                 <DoorsStrip doors={m.doors} />
               </div>
             ),
           )}
+          {/* v1.377.0 (Phase 6): Next step — up to two follow-ups the session's
+              model suggests (only when "Suggest follow-up questions" is on). A
+              press puts the words in the box; nothing is sent. */}
+          {!busy && nextSteps.length ? (
+            <div data-testid="harness-next-steps" className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[12px] text-zinc-500">Next:</span>
+              {nextSteps.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  data-testid="harness-next-step"
+                  onClick={() => pickNextStep(s)}
+                  title="Put this in the message box (it is not sent)"
+                  className="max-w-full truncate rounded-full bg-white/[0.06] px-3 py-1 text-left text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.1] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          ) : null}
           {busy ? (
             <div data-testid="harness-live" className="min-w-0 space-y-2">
               {/* v1.372.0: each helper is ONE row (its own tool card is not
@@ -1670,6 +1893,13 @@ export function HarnessSession({
               {compactNote}
             </p>
           ) : null}
+          {rewindNote ? (
+            // v1.377.0: a rewind of COMMITTED work — the commits stayed.
+            <p data-testid="harness-rewind-commits" role="status" className="text-[12px] text-tone-warn">
+              {rewindNote}
+            </p>
+          ) : null}
+          {branchError ? <ErrorNote>{branchError}</ErrorNote> : null}
           {error ? <ErrorNote>{error}</ErrorNote> : null}
         </div>
         {summaryOpen && compaction ? (
@@ -1762,7 +1992,7 @@ export function HarnessSession({
               <RewindList
                 threadId={threadId}
                 disabled={busy || view.archived}
-                onRewound={(q) => void onRewound(q)}
+                onRewound={(q, extras) => void onRewound(q, extras)}
                 onTouched={() => void onRewound("")}
                 onClose={() => {
                   setRewindOpen(false);
@@ -1870,7 +2100,7 @@ export function HarnessSession({
                   reading={reading?.context ?? null}
                   offer={offerCompact}
                   summarized={summarized}
-                  busy={compacting}
+                  busy={compacting || elsewhereCompacting}
                   onCompact={() => void compact()}
                   onViewSummary={() => setSummaryOpen(true)}
                 />

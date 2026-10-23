@@ -378,12 +378,18 @@ function warnsKind(kind: AccountStatusLine["kind"]): boolean {
   return kind === "limit" || kind === "sign_in" || kind === "off" || kind === "missing";
 }
 
-/** Why an account cannot be switched to, in words ("" = it can). Signed out,
- *  turned off and removed cannot serve a turn at all; an account AT its limit
- *  can be chosen (the chip's list allows it, and the daemon too: the next
- *  turn then shows the limit card, with Resume when ready). */
+/** Why an account cannot be switched to, in words ("" = it can) — THE ONE
+ *  RULE the model menu AND the header chip's list follow (v1.377.0, Phase 6;
+ *  the menu used to block a signed-out account the chip allowed). It is the
+ *  DAEMON's rule (`routes/build.account_patch`): turned off and removed are
+ *  refused there, so they cannot be picked here. A signed-out account CAN be
+ *  picked — the daemon allows it and the next turn shows the sign-in card
+ *  with the way to sign in — because the state shown is a cached snapshot:
+ *  an account just signed in on Connections still reads "needs to sign in"
+ *  until the next check, and blocking it would trap the user behind a
+ *  stale word. An account AT its limit can be chosen too (the next turn
+ *  shows the limit card, with Resume when ready). */
 export function accountBlockedReason(a: BuildAccount): string {
-  if (a.status === "needs_sign_in") return "Sign it in again on the Connections page to use it.";
   if (a.status === "off") return "Turn it on in Connections to use it.";
   if (a.status === "missing") return "Iron-Proxy no longer has this account. Choose another one.";
   return "";

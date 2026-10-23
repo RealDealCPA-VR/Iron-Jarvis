@@ -507,6 +507,10 @@ export interface ContextUsage {
   /** Compaction is switched off. The fill level above is still real — the
    *  setting governs the remedy, not the reporting. */
   disabled?: boolean;
+  /** v1.374.0 (daemon) / v1.377.0 (read here): false when nothing knows this
+   *  model's window and `window` is the app's own safe size — the gauge then
+   *  never calls it the model's limit (lib/contextWords). Absent = known. */
+  window_known?: boolean;
 }
 
 // -------------------------------------------------------------- frame decoding

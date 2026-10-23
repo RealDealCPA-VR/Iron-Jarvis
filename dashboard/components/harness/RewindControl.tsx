@@ -21,6 +21,7 @@ import {
   rewindFileWords,
   rewindProblemWords,
   rewindTo,
+  type RewindExtras,
   type RewindPreview,
   type RewindProblem,
 } from "@/lib/buildRewind";
@@ -51,8 +52,10 @@ export function RewindControl({
   disabled?: boolean;
   /** v1.373.0: always visible (the "/rewind" list), not only on hover. */
   shown?: boolean;
-  /** Rewound: the question of the message rewound to (it goes back in the box). */
-  onRewound: (question: string) => void;
+  /** Rewound: the question of the message rewound to (it goes back in the
+   *  box) — v1.377.0: with its pictures and files, and the committed-work
+   *  sentence when the rewound work was committed. */
+  onRewound: (question: string, extras: RewindExtras) => void;
   /** A rewind was refused AFTER it was sent (the disk moved under it): read
    *  the session again — the daemon's sentence says what already went back. */
   onTouched?: () => void;
@@ -88,7 +91,11 @@ export function RewindControl({
       const out = await rewindTo(threadId, turnId);
       if (out.ok) {
         setPhase({ kind: "idle" });
-        onRewound(out.question || preview.question);
+        onRewound(out.question || preview.question, {
+          attachments: out.attachments.length ? out.attachments : preview.attachments,
+          pickedFiles: out.pickedFiles.length ? out.pickedFiles : preview.pickedFiles,
+          commitsNote: out.commitsNote || preview.commitsNote,
+        });
         return;
       }
       setPhase({ kind: "refused", detail: out.detail, problems: out.problems, restored: out.restored });
@@ -144,6 +151,13 @@ export function RewindControl({
           {phase.preview.note ? (
             <p data-testid="rewind-commands" className="text-[12px] text-zinc-400">
               {phase.preview.note}
+            </p>
+          ) : null}
+          {phase.preview.commitsNote ? (
+            // v1.377.0: work from here on was committed on the session's
+            // branch: the files go back, the commits stay.
+            <p data-testid="rewind-commits" className="text-[12px] text-tone-warn">
+              {phase.preview.commitsNote}
             </p>
           ) : null}
           <p className="text-[12px] text-zinc-400">

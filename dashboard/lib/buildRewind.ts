@@ -44,10 +44,25 @@ export interface RewindPreview {
   note: string;
   /** The daemon's refusal sentence ("" when it can rewind). */
   detail: string;
+  /** v1.377.0: what rode the message besides its words — they go back in the
+   *  box with them: its pictures and files, and the folder files picked
+   *  with "@" (absolute paths). */
+  attachments: string[];
+  pickedFiles: string[];
+  /** v1.377.0: work from here on was COMMITTED on the session's branch — the
+   *  files go back, the commits stay ("" when nothing was committed). */
+  commitsNote: string;
+}
+
+/** What a rewind hands back to the box beside the message's words. */
+export interface RewindExtras {
+  attachments: string[];
+  pickedFiles: string[];
+  commitsNote: string;
 }
 
 export type RewindOutcome =
-  | { ok: true; question: string; files: RewindFile[]; note: string; libraryDropped: number }
+  | ({ ok: true; question: string; files: RewindFile[]; note: string; libraryDropped: number } & RewindExtras)
   | { ok: false; detail: string; problems: RewindProblem[]; restored: string[]; partial: boolean };
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -91,7 +106,16 @@ export function decodeRewindPreview(raw: unknown): RewindPreview | null {
     canRewind: r.can_rewind === true && probs.length === 0,
     note: str(r.note),
     detail: str(r.detail),
+    ...extrasOf(r),
   };
+}
+
+const strs = (v: unknown): string[] =>
+  list(v).filter((x): x is string => typeof x === "string" && x.trim() !== "").slice(0, 20);
+
+/** The message's own files and the committed-work sentence (v1.377.0). */
+function extrasOf(r: Record<string, unknown>): RewindExtras {
+  return { attachments: strs(r.attachments), pickedFiles: strs(r.picked_files), commitsNote: str(r.commits_note) };
 }
 
 /** One message a session can be rewound to (`GET …/rewind` without `to`). */
@@ -160,6 +184,7 @@ export async function rewindTo(threadId: string, turnId: string): Promise<Rewind
       files: files(raw.files),
       note: str(raw.note),
       libraryDropped: typeof raw.library_dropped === "number" ? raw.library_dropped : 0,
+      ...extrasOf(raw),
     };
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) {

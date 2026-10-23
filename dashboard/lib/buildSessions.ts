@@ -19,6 +19,7 @@ import type { PlanStepState, PlanView } from "@/lib/planChecklist";
 import type { PaneMessage } from "@/components/terminal/paneWork";
 import { decodeQueuedItem, type QueuedItem } from "@/lib/buildComposer";
 import { decodeSessionGit, type SessionGit } from "@/lib/buildGit";
+import { decodeBranchedFrom, type BranchedFrom } from "@/lib/buildNext";
 
 // Where a Build session opens lives in the import-free lib/buildLinks (the
 // bell and the Activity rows read it); re-exported here for the screen.
@@ -158,6 +159,11 @@ export interface BuildSessionView extends BuildSessionRow {
   /** v1.375.0: the session's own git branch (lib/buildGit); null = it works
    *  in its folder directly. */
   git: SessionGit | null;
+  /** v1.377.0 (Phase 6): Compact is writing this session's summary right now
+   *  (a return mid-Compact says "Summarizing earlier turns…"). */
+  compacting: boolean;
+  /** v1.377.0: the session and message this one was branched from. */
+  branchedFrom: BranchedFrom | null;
 }
 
 /** A transcript line: the chat page's own message shape (the daemon keeps
@@ -307,6 +313,8 @@ export function decodeSessionView(raw: unknown): BuildSessionView | null {
     knowsAccounts: "account_limit" in r || "account_wait" in r || "account" in r,
     compaction: r.compaction ?? null,
     git: decodeSessionGit(r.git),
+    compacting: r.compacting === true,
+    branchedFrom: decodeBranchedFrom(r.branched_from),
   };
 }
 

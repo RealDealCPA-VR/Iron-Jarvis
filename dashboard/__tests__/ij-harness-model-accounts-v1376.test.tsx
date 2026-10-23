@@ -379,13 +379,14 @@ describe("the Iron-Proxy accounts in the Claude group", () => {
     expect(within(state("capped")).getByTestId("model-account-warn")).toBeTruthy();
     expect((row("capped") as HTMLButtonElement).disabled).toBe(false);
 
-    // Side: signed out — shown, not pickable, with its reason.
+    // Side: signed out — shown with its state, and PICKABLE (v1.377.0, IJ
+    // harness part 2 Phase 6: the header chip's rule and the daemon's; the
+    // next turn shows the sign-in card — the state is a cached snapshot, so
+    // an account just signed in must not be trapped behind it).
     expect(state("side").textContent).toBe("Needs to sign in again");
     expect(within(state("side")).getByTestId("model-account-warn")).toBeTruthy();
-    expect((row("side") as HTMLButtonElement).disabled).toBe(true);
-    expect(row("side").getAttribute("title")).toBe(
-      "Needs to sign in again. Sign it in again on the Connections page to use it.",
-    );
+    expect((row("side") as HTMLButtonElement).disabled).toBe(false);
+    expect(row("side").getAttribute("title")).toBeNull();
 
     // The warning states are not told by colour alone: each has the mark.
     for (const id of ["near", "capped", "side"]) {
@@ -444,15 +445,18 @@ describe("the Iron-Proxy accounts in the Claude group", () => {
   });
 
   it("an unpickable account's models cannot be reached: no panel opens, nothing is sent", async () => {
+    // v1.377.0: a TURNED-OFF account is the unpickable one (a signed-out
+    // one is pickable now — the daemon's rule, the chip's too).
+    api.gets["/build/accounts"] = { claude: [WORK, PERSONAL, SHUT], codex: [], iron_proxy: PROXY_ON };
     renderSession();
     const menu = await openMenu();
-    fireEvent.click(within(menu).getByTestId("model-account-side"));
+    fireEvent.click(within(menu).getByTestId("model-account-shut"));
     expect(screen.queryByTestId("model-sub")).toBeNull();
     fireEvent.change(screen.getByTestId("model-filter"), { target: { value: "opus" } });
-    const sideRow = (await screen.findAllByTestId("model-match")).find((r) => r.getAttribute("data-account") === "side");
-    expect((sideRow as HTMLButtonElement).disabled).toBe(true);
+    const shutRow = (await screen.findAllByTestId("model-match")).find((r) => r.getAttribute("data-account") === "shut");
+    expect((shutRow as HTMLButtonElement).disabled).toBe(true);
     fireEvent.keyDown(screen.getByTestId("model-filter"), { key: "Enter" }); // the first row: Work's
-    expect(patches().some((c) => (c.body as { account?: string }).account === "side")).toBe(false);
+    expect(patches().some((c) => (c.body as { account?: string }).account === "shut")).toBe(false);
   });
 });
 
