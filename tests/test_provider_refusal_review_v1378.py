@@ -513,3 +513,142 @@ def test_a_desktop_handed_off_job_that_is_refused_tells_the_phone_in_words(tmp_p
     assert line.startswith("I hit a problem: Claude Code declined to do this task."), line
     assert "stop_reason" not in line and "ProviderRefusal" not in line
     assert any("Claude Code declined to do this task" in s for s in ch.sent)
+
+
+# =========================================================================== #
+# 7. durable: a refused NAMED turn replays the same words — live and on disk
+# =========================================================================== #
+def test_a_refused_named_turn_replays_its_words_from_memory_and_from_the_record(tmp_path, monkeypatch):
+    """A reload (rejoin) and a restart (the turn record) must show the SAME
+    refusal — title, fix and the typed press — never an empty reply and never
+    a Retry; and the error turn carries no route object (v1.165.0)."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.app import create_app
+    from tests.test_provider_refusal_v1378 import CHAT_FIX, CHAT_TITLE, _sse_frames, _wire_refusal
+
+    home = str(tmp_path)
+    body = {"messages": [{"role": "user", "content": "Say hello"}], "turn_id": "turn-ref", "thread_id": "th-ref"}
+    with TestClient(create_app(home)) as client:
+        _wire_refusal(client.app.state.platform, monkeypatch, _refusal())
+        live = _sse_frames(client.post("/chat/stream", json=body).text)
+        rejoin = _sse_frames(client.get("/chat/turns/turn-ref/stream").text)
+    with TestClient(create_app(home)) as client:  # a restart: the record replays
+        stored = _sse_frames(client.get("/chat/turns/turn-ref/stream").text)
+        listed = client.get("/chat/turns", params={"thread_id": "th-ref"}).json()["turns"]
+    for frames in (live, rejoin, stored):
+        [err] = [d for ev, d in frames if ev == "error"]
+        assert (err["title"], err["fix"], err["fix_kind"]) == (CHAT_TITLE, CHAT_FIX, "refusal")
+        assert not any(ev == "done" for ev, _ in frames)
+        assert not any("route" in d for _, d in frames), "an error turn carries no route"
+    assert [t["status"] for t in listed] == ["error"]
+
+
+# =========================================================================== #
+# 8. "the model wrote nothing": the v1.246.0 nudge is unchanged; a declined
+#    nudge reads the surface's words and claims no reply above
+# =========================================================================== #
+def _nudge_app(tmp_path, monkeypatch, second):
+    """A turn whose model writes NOTHING, then `second()` answers the nudge."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.providers.router import RouteResult
+
+    client = TestClient(create_app(str(tmp_path)))
+    platform = client.app.state.platform
+    calls = {"n": 0}
+
+    async def fake_complete(**kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            from iron_jarvis.providers.adapters.base import LLMResponse
+
+            return RouteResult(LLMResponse(text="", usage={"input_tokens": 1, "output_tokens": 0}), "claude-cli", "m")
+        return await second(stream=False)
+
+    async def fake_stream(**kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            from iron_jarvis.providers.adapters.base import LLMResponse
+
+            yield {"type": "final", "response": LLMResponse(text="", usage={"input_tokens": 1, "output_tokens": 0}),
+                   "provider": "claude-cli", "model": "m"}
+            return
+        async for f in second(stream=True):
+            yield f
+
+    monkeypatch.setattr(platform.router, "complete", fake_complete)
+    monkeypatch.setattr(platform.router, "stream", fake_stream)
+    return client, calls
+
+
+def _reply_of(client, lane: str, body: dict) -> str:
+    from tests.test_provider_refusal_v1378 import _sse_frames
+
+    if lane == "stream":
+        r = client.post("/chat/stream", json=body)
+        [done] = [d for ev, d in _sse_frames(r.text) if ev == "done"]
+        return done["reply"]
+    return client.post("/chat", json=body).json()["reply"]
+
+
+@pytest.mark.parametrize("lane", ["stream", "post"])
+def test_an_empty_answer_still_gets_the_nudge_and_the_plain_words(tmp_path, monkeypatch, lane):
+    """No regression of v1.246.0: a model that writes nothing for an
+    ordinary reason is asked once more, and a failed nudge says what
+    happened ("Press Retry" is right THERE — nothing was declined)."""
+
+    def second(stream: bool):
+        if stream:
+            async def gen():
+                raise ProviderError("claude-cli API error 500: oops", status_code=500)
+                yield  # pragma: no cover
+            return gen()
+
+        async def boom():
+            raise ProviderError("claude-cli API error 500: oops", status_code=500)
+        return boom()
+
+    client, calls = _nudge_app(tmp_path, monkeypatch, second)
+    reply = _reply_of(client, lane, {"messages": [{"role": "user", "content": "Say hello"}]})
+    assert calls["n"] == 2, "the one nudge happened"
+    assert reply.startswith("The model returned an empty answer"), reply
+    assert "Press Retry" in reply
+
+
+@pytest.mark.parametrize("lane", ["stream", "post"])
+def test_a_declined_nudge_in_a_build_pane_says_the_panes_way_out(tmp_path, monkeypatch, lane):
+    def second(stream: bool):
+        if stream:
+            async def gen():
+                raise _refusal()
+                yield  # pragma: no cover
+            return gen()
+
+        async def boom():
+            raise _refusal()
+        return boom()
+
+    client, _calls = _nudge_app(tmp_path, monkeypatch, second)
+    reply = _reply_of(client, lane, {"messages": [{"role": "user", "content": "Say hello"}], "pane_id": "pane-7"})
+    assert reply.startswith("Claude Code declined to answer this conversation."), reply
+    assert PANE_WAY in reply and "edit an earlier message" not in reply
+
+
+def test_a_nudge_declined_after_words_streamed_claims_no_reply_above(tmp_path, monkeypatch):
+    """The stream lane STREAMS the nudge; if it is declined after a few words,
+    the reply the turn ends with is the refusal's sentence alone (done.reply
+    is authoritative and holds none of those words) — so it must not say
+    "The reply above is incomplete"."""
+
+    def second(stream: bool):
+        async def gen():
+            yield {"type": "text", "text": "Hel"}
+            raise _refusal(partial=True)
+        return gen()
+
+    client, _calls = _nudge_app(tmp_path, monkeypatch, second)
+    reply = _reply_of(client, "stream", {"messages": [{"role": "user", "content": "Say hello"}]})
+    assert reply.startswith("Claude Code declined to answer this conversation."), reply
+    assert "reply above" not in reply

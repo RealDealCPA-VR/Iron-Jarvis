@@ -137,6 +137,7 @@ from ..chat_turn import (
     _rewrite_verdict,
     _last_user_text,
     _no_text_reply,
+    surface_for as _surface_for,
     _error_detail,
     OUT_OF_ROUNDS_INSTRUCTION,
     _is_office_turn,
@@ -5769,7 +5770,9 @@ async def chat_stream(
             if not reply.strip():
                 # v1.246.0 — lock-step with chat_turn (v1.378.0: a declined
                 # nudge says so).
-                reply = _no_text_reply(tools_used, last_tool_output, _f_refusal)
+                reply = _no_text_reply(
+                    tools_used, last_tool_output, _f_refusal, surface=_surface_for(body),
+                )
             reply += refusal_footnotes(refused_tools)
             if stopped_note:
                 reply += f"\n\n_Note: {stopped_note}._"

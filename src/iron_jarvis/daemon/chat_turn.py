@@ -3188,17 +3188,43 @@ def _joined_thinking(parts: list[str]) -> str:
     return "\n\n".join(p for p in parts if p)[:THINKING_CAP]
 
 
-def _no_text_reply(tools_used: list[str], last_tool_output: str, refusal=None) -> str:
+def surface_for(body) -> "str | None":
+    """Where a chat turn's failure words are read (v1.378.0 review): a Build
+    PANE's chat (the body names its pane) gets the pane's way out; every
+    other turn reads the surface it runs in (None: the chat's, the phone's, a
+    Build session's — ``failure_words.current_surface``). Never raises.
+    MIRROR NOTE (lock-step): ``error_payload`` and both lanes' nudge reply."""
+    try:
+        from ..providers.failure_words import SURFACE_PANE
+
+        return SURFACE_PANE if str(getattr(body, "pane_id", "") or "").strip() else None
+    except Exception:  # noqa: BLE001 — wording only
+        return None
+
+
+def _no_text_reply(
+    tools_used: list[str], last_tool_output: str, refusal=None, *, surface: "str | None" = None,
+) -> str:
     """The reply when the model wrote nothing even after being asked once.
     Says what happened in plain words; never an empty bubble.
 
     v1.378.0: *refusal* — the nudge itself was DECLINED by the provider's
     safety check (``adapters.base.ProviderRefusal``): the reply says so in the
     refusal's own sentence (``failure_words``), never "Press Retry" — the same
-    conversation would be declined again.
+    conversation would be declined again. v1.378.0 review: worded for the
+    turn's *surface* (:func:`surface_for` — a pane's way out in a pane), and
+    never "The reply above is incomplete": this reply IS the whole reply and
+    holds none of the declined answer, even when the streamed nudge showed a
+    few words first.
     MIRROR NOTE (lock-step): both chat lanes call this."""
     if refusal is not None:
-        words = friendly_error(refusal)
+        try:
+            declined = refusal_of(refusal)
+            if declined is not None:
+                declined.partial = False
+        except Exception:  # noqa: BLE001 — wording only
+            pass
+        words = friendly_error(refusal, surface=surface)
         return f"{words['title']}. {words['fix']}"
     if last_tool_output.strip():
         snippet = last_tool_output.strip()[:600]
@@ -3269,10 +3295,7 @@ def error_payload(d, body, exc: Exception, *, detail: "str | None" = None) -> di
         # v1.378.0 review: a Build PANE's chat (one conversation per
         # terminal) gets a way out it can take; every other turn reads the
         # surface it runs in (the chat's, the phone's, a Build session's).
-        from ..providers.failure_words import SURFACE_PANE
-
-        surface = SURFACE_PANE if str(getattr(body, "pane_id", "") or "").strip() else None
-        words = friendly_error(exc, provider=hint, manager=manager, surface=surface)
+        words = friendly_error(exc, provider=hint, manager=manager, surface=surface_for(body))
     except Exception:  # noqa: BLE001 - the error must still be answered
         log.debug("friendly words for a chat error failed", exc_info=True)
         return {"detail": base}
@@ -8750,7 +8773,9 @@ async def run_chat_turn(
         if not reply.strip():
             # v1.246.0: said in plain words — never the bare "(no reply)".
             # v1.378.0: a nudge the safety check declined says so (lock-step).
-            reply = _no_text_reply(tools_used, last_tool_output, _f_refusal)
+            reply = _no_text_reply(
+                tools_used, last_tool_output, _f_refusal, surface=surface_for(body),
+            )
         reply += refusal_footnotes(refused_tools)
         if stopped_note:
             reply += f"\n\n_Note: {stopped_note}._"
