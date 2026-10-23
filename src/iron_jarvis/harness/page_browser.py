@@ -1666,6 +1666,15 @@ class AgentBrowsers:
                 ) from None
             except BrowserProblem:
                 raise
+            except asyncio.CancelledError:
+                # v1.376.0 review: a cancel (Stop, a helper's deadline, its
+                # run ending) that lands while this call is ACTING closes the
+                # browser — Playwright's driver would finish the click or the
+                # page load on its own. A call cancelled while it only WAITED
+                # for the lock never gets here: it touched nothing, and the
+                # action that holds the browser carries on.
+                asyncio.ensure_future(self._close(key, "stopped"))
+                raise
             except Exception as exc:  # noqa: BLE001 — v1.376.0 review: always words
                 # A Playwright error outside an action's own words (Edge went
                 # away mid-action: "Target page, context or browser has been

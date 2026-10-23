@@ -562,3 +562,53 @@ async def test_real_edge_playwrights_artifacts_folder_never_lands_in_the_pcs_tem
         if work is not None:
             with contextlib.suppress(Exception):
                 PB._remove_work(work)
+
+
+# --------------------------------------------------------------------------- #
+# a call cancelled while it WAITS leaves the browser to the one acting
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_call_cancelled_while_waiting_its_turn_does_not_close_the_browser(tmp_path, monkeypatch):
+    """Item 5 (review). A helper's call that is cancelled (its own deadline,
+    its run ended) while it is still WAITING for the session's browser —
+    another helper's click holds it — has touched nothing; the doer's code
+    closed the session's browser anyway, ending the other helper's click and
+    every later page step of the session. Only a call that was ACTING closes
+    it (its driver would finish the action on its own)."""
+    from tests.test_build_browser_v1376 import DEV, FakeBackend, ctx
+    from iron_jarvis.harness import page_act as PA
+    from iron_jarvis.harness import preview as PV
+
+    made: list[Any] = []
+
+    def factory(**kw):
+        backend = FakeBackend(**kw)
+        made.append(backend)
+        return backend
+
+    inst = PB.AgentBrowsers(backend_factory=factory)
+    monkeypatch.setattr(PB, "BROWSERS", inst)
+    token = PV.set_preview(DEV)
+    try:
+        assert (await PA.PageOpenTool().execute({"url": DEV}, ctx(tmp_path))).ok
+        backend = made[-1]
+        backend.delay_s = 1.0
+        acting = asyncio.ensure_future(PA.PageClickTool().execute({"target": "Log"}, ctx(tmp_path)))
+        for _ in range(100):
+            if backend.active:
+                break
+            await asyncio.sleep(0.01)
+        waiting = asyncio.ensure_future(PA.PageClickTool().execute({"target": "Log"}, ctx(tmp_path)))
+        await asyncio.sleep(0.2)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        res = await acting
+        await asyncio.sleep(0.3)  # a background close would have landed by now
+        assert res.ok, res.error
+        assert not backend.killed and inst.is_open("build:s1")
+        assert backend.clicks == ["Log"]  # the cancelled one never clicked
+    finally:
+        PV.reset_preview(token)
+        inst.shutdown()

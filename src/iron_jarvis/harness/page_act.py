@@ -34,7 +34,6 @@ instructions). A Stop closes the browser at once (:func:`run_action`).
 from __future__ import annotations
 
 import asyncio
-import threading
 from typing import Any, Awaitable, Callable
 
 from ..tools.base import (
@@ -67,15 +66,6 @@ def _turn_handle(ctx: Any) -> Any:
         return None
 
 
-def _close_in_background(key: str, reason: str) -> None:
-    """Close ``key``'s browser from a thread of its own (a cancelled task
-    must not await; the close is bounded and never raises)."""
-    threading.Thread(
-        target=PB.BROWSERS.close_blocking, args=(key, reason), name="ij-agent-browser-close",
-        daemon=True,
-    ).start()
-
-
 async def run_action(ctx: Any, action: "Callable[[str, str], Awaitable[PB.ActResult]]") -> "PB.ActResult | ToolResult":
     """Run ONE browser action for ``ctx``'s session — raced against the
     turn's Stop. DECISION (v1.376.0): a Stop never leaves an action running:
@@ -106,9 +96,13 @@ async def run_action(ctx: Any, action: "Callable[[str, str], Awaitable[PB.ActRes
     except PB.BrowserProblem as exc:
         return ToolResult(ok=False, error=str(exc))
     except asyncio.CancelledError:
+        # v1.376.0 review: the cancel reaches the action on the browser
+        # thread, which closes the browser ONLY when it was acting
+        # (page_browser.AgentBrowsers._act). A call still waiting for the
+        # session's browser — another helper's click holds it — touched
+        # nothing and must not close it under that click.
         if not task.done():
             task.cancel()
-        _close_in_background(key, "stopped")
         raise
 
 
