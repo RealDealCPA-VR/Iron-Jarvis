@@ -297,3 +297,65 @@ def test_a_one_shot_candidate_that_declines_ends_it(tmp_path, monkeypatch):
     assert r.status_code == 502, r.text
     assert r.json()["detail"].startswith("Codex declined to do this task"), r.text
     assert declines.calls == 1 and later.calls == 0
+
+
+# =========================================================================== #
+# 5. the fleet's Anthropic-compatible adapter speaks the same Messages API
+# =========================================================================== #
+_COMPAT_REFUSED = {
+    "id": "msg_r", "type": "message", "role": "assistant", "model": "claude-proxy",
+    "content": [], "stop_reason": "refusal", "stop_sequence": None,
+    "stop_details": {"type": "refusal", "category": "cyber", "explanation": "flagged"},
+    "usage": {"input_tokens": 120, "output_tokens": 0},
+}
+
+
+def _compat_stream(text: str = "") -> list[str]:
+    import json as _json
+
+    ev = [{"type": "message_start", "message": {"id": "msg_r", "type": "message", "role": "assistant",
+                                                "content": [], "model": "claude-proxy", "stop_reason": None,
+                                                "usage": {"input_tokens": 0, "output_tokens": 0}}}]
+    if text:
+        ev += [
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+            {"type": "content_block_stop", "index": 0},
+        ]
+    ev += [
+        {"type": "message_delta",
+         "delta": {"stop_reason": "refusal", "stop_sequence": None,
+                   "stop_details": {"type": "refusal", "category": "cyber", "explanation": "flagged"}},
+         "usage": {"output_tokens": 0}},
+        {"type": "message_stop"},
+    ]
+    return [_json.dumps(e) for e in ev]
+
+
+async def test_the_anthropic_compatible_endpoint_types_a_refusal_in_complete_and_stream():
+    """A LiteLLM proxy (the user's own) passes Anthropic's Messages answer
+    through for a Claude model, so `stop_reason: "refusal"` arrives here in
+    the SAME shape. It became an empty reply and "Press Retry". Now the typed
+    refusal — not claimed to be the whole conversation (what stands behind a
+    proxy is not known: the words say "may")."""
+    from tests.test_anthropic_compat_litellm_v1330 import _adapter, _json, _stream_of, MSG
+
+    with pytest.raises(ProviderRefusal) as info:
+        await _adapter(_json(_COMPAT_REFUSED)).complete(system="", messages=MSG, tools=[])
+    err = info.value
+    assert err.category == "cyber" and err.explanation == "flagged"
+    assert err.failed_provider == "fleet-spark" and err.whole_conversation is False
+    assert err.no_failover is True and err.partial is False
+    with pytest.raises(ProviderRefusal) as info:
+        _ = [f async for f in _adapter(_stream_of(_compat_stream())).stream(system="", messages=MSG, tools=[])]
+    assert info.value.category == "cyber" and info.value.partial is False
+    frames: list[dict] = []
+    with pytest.raises(ProviderRefusal) as info:
+        async for f in _adapter(_stream_of(_compat_stream("Sure, "))).stream(system="", messages=MSG, tools=[]):
+            frames.append(f)
+    assert [f["text"] for f in frames if f["type"] == "text"] == ["Sure, "]
+    assert info.value.partial is True
+    # An ordinary end is untouched.
+    ok = dict(_COMPAT_REFUSED, stop_reason="end_turn", content=[{"type": "text", "text": "hi"}])
+    ok.pop("stop_details")
+    assert (await _adapter(_json(ok)).complete(system="", messages=MSG, tools=[])).text == "hi"
