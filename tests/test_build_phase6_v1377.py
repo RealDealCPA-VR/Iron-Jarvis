@@ -18,11 +18,7 @@ REAL app factory, real routes, real store; the model is the only double
 
 from __future__ import annotations
 
-import asyncio
-import json
-import os
 import shutil
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,12 +35,10 @@ from tests.test_build_sessions_v1367 import (
     Script,
     asgi,
     asgi_get,
-    messages_of,
     new_session,
     open_turn,
     setup_of,
     thread_row,
-    turn_log,
     until,
     wire,
 )
