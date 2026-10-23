@@ -183,6 +183,23 @@ describe("v1.378.0: a refused Build turn offers Rewind, never Retry", () => {
     expect(screen.queryByTestId("harness-refusal-rewind")).toBeNull();
   });
 
+  it("review: an ARCHIVED session offers no press (nothing can be rewound there)", async () => {
+    api.gets["/build/sessions/s1"] = { ...view(CONVERSATION), archived: true };
+    renderSession();
+    await screen.findByTestId("harness-reply-error", {}, NET);
+    expect(screen.queryByTestId("harness-refusal-rewind")).toBeNull();
+  });
+
+  it("review: no press when no message of the session can be rewound to (none the daemon wrote)", async () => {
+    api.gets["/build/sessions/s1"] = view([
+      { role: "user", content: "Say hello", at: "2026-10-23T10:05:00" },
+      { ...REFUSED_LINE, turnId: undefined },
+    ]);
+    renderSession();
+    await screen.findByTestId("harness-reply-error", {}, NET);
+    expect(screen.queryByTestId("harness-refusal-rewind")).toBeNull();
+  });
+
   it("control: a failure that is not a refusal has no rewind press", async () => {
     api.gets["/build/sessions/s1"] = view([
       CONVERSATION[0],

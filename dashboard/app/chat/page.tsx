@@ -152,6 +152,7 @@ import {
   NEW_CHAT_WORDS,
   failureAction,
   failureFacts,
+  isRefusal,
   signInLabel,
 } from "@/lib/failureActions";
 import { codeParts, paneHref, useCliSignIn } from "@/lib/cliSignIn";
@@ -689,6 +690,12 @@ interface ChatMessage {
   /** This assistant reply was cut off mid-stream (Stop, or a committed failure)
    *  — shown with a subtle marker so a partial answer never looks complete. */
   interrupted?: boolean;
+  /** v1.378.0 review: the cut-off reply's rest was DECLINED by the provider's
+   *  safety check (`fix_kind` "refusal"). Continue and "Regenerate reply"
+   *  would send the same conversation to the same model, which declines it
+   *  again — neither is offered, and the note says the rest was declined.
+   *  Saved with the thread, so a reopened chat knows. */
+  refused?: boolean;
   /** The turn proposed a reusable workflow — rendered as a draft card
    *  (v1.120.0). Persists with the thread like every other field. */
   workflowDraft?: WorkflowDraft;
@@ -3255,12 +3262,16 @@ const MessageRow = memo(function MessageRow({
       {(m.interrupted || m.truncated) && (
         <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] italic text-tone-warn">
           <span data-testid="reply-cut-note">
-            {m.truncated
+            {m.refused
+              ? "The rest of this reply was declined."
+              : m.truncated
               ? "The reply ran out of room and stopped."
               : "The reply was cut off."}
           </span>
-          {/* v1.323.0: CONTINUE — only the newest plain chat reply, never mid-turn. */}
-          {isLast && !busy && !m.panelWho && !m.fromSession && !m.runResult && m.content.trim() && (
+          {/* v1.323.0: CONTINUE — only the newest plain chat reply, never mid-turn.
+              v1.378.0 review: never on a reply whose rest was DECLINED (it
+              would send the same conversation to be declined again). */}
+          {isLast && !busy && !m.refused && !m.panelWho && !m.fromSession && !m.runResult && m.content.trim() && (
             <button
               type="button"
               data-testid="continue-reply"
@@ -8563,6 +8574,8 @@ export default function ChatPage() {
                   content: partial,
                   interrupted: true,
                   ...(sources.length ? { sources } : {}),
+                  // v1.378.0 review: the rest was declined (typed fix_kind).
+                  ...(isRefusal(failureFacts(e)) ? { refused: true } : {}),
                 },
               ]
             : history;
@@ -11947,6 +11960,9 @@ export default function ChatPage() {
                         i === messages.length - 1 &&
                         i > 0 &&
                         messages[i - 1].role === "user" &&
+                        // v1.378.0 review: a DECLINED reply is not regenerated
+                        // (the same conversation is declined again).
+                        !m.refused &&
                         !busy;
                       return (
                         // Calm chat W1-4: each message holds itself to the
