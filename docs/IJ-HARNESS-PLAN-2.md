@@ -952,14 +952,19 @@ after the v1.370.3 run, so the two days are not the same model setup.
 runs, no task called a part 2 tool (helpers, skills, `page_*`,
 `list_agents`): 0 calls, as in Phase 1's run — the tasks are small,
 single-folder and have no web page. What changed is the shell, now the Build
-session's (counted from the trajectories by the program each command
-starts, approximately): Jarvis on Claude ran `python` 84 times (v1.370.3:
-`py` 74, `python` 13 — the scrubbed description said "no python … py.exe is
-available") and used POSIX tools (`cat`, `ls`, `tail`, `head`, `find`) in 89
-commands across 25 tasks, none "is not recognized" (v1.370.3: 11 commands in
-7 tasks, 4 not recognized); glm used them in 34 commands across 9 tasks, none
-not recognized (v1.370.3: 13 in 4, 4 not recognized). Jarvis on Codex used no
-POSIX tool either time (Python and cmd's own commands).
+session's (counted from the trajectories by the words in each command,
+so approximately; recounted in the review): Jarvis on Claude named `python`
+95 times in 58 of its 86 commands (v1.370.3: `py` 74 times in 45 commands,
+`python` 13 times in 11 — the scrubbed description said "no python … py.exe
+is available") and named POSIX tools (`cat`, `ls`, `tail`, `head`, `find`)
+89 times in 41 commands across 25 tasks (v1.370.3: 10 times in 6 commands
+across 6 tasks, 4 of them answered "is not recognized"); glm named them 29
+times in 20 commands across 9 tasks (v1.370.3: 8 times in 6 commands across
+3 tasks, 3 not recognized). No command on any setup answered "is not
+recognized" this time (v1.370.3: 4 on Claude, 2 on Codex, 5 on glm). Jarvis
+on Codex used no POSIX tool either time (Python and cmd's own commands).
+(The first count of this paragraph said "ran `python` 84 times" — 84 was the
+number of shell calls — and "89 commands" for 89 mentions in 41 commands.)
 
 **The walkthrough** is `docs/IJ-HARNESS-WALKTHROUGH.md` (screenshots in
 `docs/walkthrough/`): the three tasks driven through the real IJ harness
@@ -968,9 +973,14 @@ counted; the pull request step against a stand-in `gh` and a local bare
 remote (no GitHub repository or pull request was made). Claude Code's side
 is counted from its desktop documentation, each count labelled documented or
 estimated, its screenshots not captured. Every step was possible in the IJ
-harness. Totals (IJ harness / Claude Code): bug fix with a test 11 / 9
-(estimated), UI change checked in the browser 9 / 5–7 (estimated), feature on
-a branch to a PR 11 / 12–14 (estimated). Two presses were removed in this
+harness. Totals (IJ harness / Claude Code, every Claude Code count estimated
+from its page): bug fix with a test 11 / 6–9, UI change checked in the
+browser 9 / 4–7, feature on a branch to a PR 11 / 8–14. (Corrected in the
+review: the first count took Manual as Claude Code's default mode, which its
+page does not say, and counted an approval for the local dev server, which
+the page says needs none.) So the "no more presses than in Claude Code" half
+of "Done when" is NOT met: tasks 1 and 2 take more presses in the IJ harness
+whatever mode Claude Code starts in. Two presses were removed in this
 phase, each with a test that failed first: New session opens on the folder of
 the session in front (it took the Terminals view's folder — empty here — so a
 second session in the same folder meant pasting the folder again), and in a
@@ -980,14 +990,79 @@ Changes, then Branch).
 **Next gaps** (where the IJ harness still needs more presses or shows less;
 details in the walkthrough): seeing a change takes the files line, a press
 per file and an Escape per diff dialog, where Claude Code's line counts open
-one diff of every file; working in the folder directly costs the branch
+its diff view in a pane; working in the folder directly costs the branch
 switch each time (decision 1; Claude Code's Worktree is the reverse, which is
-why the branch task was cheaper here); a finished reply's steps do not say
-what they touched ("Ran · shell" — the Build reply line saves no step target)
-and the test output is two presses away; Create PR is two presses (a box,
-then Create pull request); the live page in the Browser pane is two presses
-(the first shows the agent's picture); right after Commit the Branch line
-read stale until the next read.
+why the branch task was cheaper here); the test output is two presses away;
+Create PR is two presses (a box, then Create pull request); the live page in
+the Browser pane is two presses (the first shows the agent's picture). (Two
+more the first draft listed — a finished reply's steps not saying what they
+touched, and the Branch line reading stale right after Commit — were fixed in
+the review below.)
+
+**Review (v1.378.0).** A separate reviewer read the diff, re-read every
+number from the bench's own files, reran the two lost tasks, checked every
+screenshot and re-read Claude Code's desktop page. Five defects, each with a
+test that failed first and mutations that all went red:
+
+1. A CANCELLED benchmark run (Ctrl+C, a Stop) never ended its Build session:
+   the runner ended `build:bench-<hex>` only after a turn that returned, and
+   each turn now has a session of its own, so a program the turn's shell had
+   left running was kept for a session nothing would ever end again (the old
+   shared "chat" session was at least swept by the next run).
+   `session_ended_on_escape` ends it on any way out; the hold is armed inside
+   it. `tests/test_harness_bench_build_session_review_v1378.py`.
+2. Changes opened on the Branch view for EVERY session on a branch,
+   including one whose worktree was removed (one sentence, no files) or whose
+   branch was merged (an empty diff). Those open on "This session" again. The
+   Branch view does show uncommitted work, so a live branch keeps it.
+3. After Commit the note "Committed …" landed before the branch was read
+   again, beside the line from before the commit and a grey Push (the
+   walkthrough's own screenshot). The branch is now read first, and only the
+   newest read is drawn.
+4. Gap 3: a Build reply's saved steps had no target ("Ran · shell").
+   `harness/step_target.py` is the daemon's twin of `lib/workTarget`,
+   called from `routes/build._ReplyWatch` only, and ONE table
+   (`dashboard/__tests__/fixtures/step-target-v1378.json`) holds the two
+   equal. The table also found that the TypeScript 60-character cut could
+   split an emoji and save half of it.
+5. Gap 6: a changed file the model named by its whole path was listed by
+   that path; the row now says its path inside the folder.
+
+Checked and found sound: a benchmark turn as a Build session writes no
+session row, starts no library reflection, rings no finish notice, writes no
+compaction or limit card (all of those live in `routes/build`, which the
+bench never calls), meets no git guard (that needs a session's branch) and
+gives no helper a parent it should not have (none was started); the
+guardrail is in every runner's prompt (150 of 150 prompts in this run); the
+new identity gives each Jarvis setup a new folder, so no v1.370.x record can
+be reused, and only the Jarvis runner names `session: "build"`; `build_env`
+still strips secrets. The Build environment gives the Jarvis runner the
+user's PATH and home, which the Claude Code and Codex runners always had
+(their CLIs run with the whole environment); the outside-folder check is
+unchanged and still watches only the benchmark's own folder.
+
+Numbers: the five-setup table, its v1.370.3 brackets and the per-task losses
+and gains match the bench's files; the shell counts above were recounted and
+corrected. The review reran the lost task once more on each setup (fresh
+root, the same configuration, Iron-Proxy off): Jarvis on Claude **passed**
+(118.1 s, 8 tool calls), Jarvis on glm **passed** (204.9 s, 21 tool calls).
+Each lost task has now passed twice on its own, which reads as variance, not
+as an effect of this phase; but the full run itself did lose a task on two
+setups, so "no task lost" was not met by the run as run.
+
+The walkthrough's Claude Code counts were corrected against the page (see
+the doc), and with them the totals: the IJ harness needs more presses than
+Claude Code for tasks 1 and 2. Screenshots: all checked; no e-mail, account
+name, plan, key or path outside the scratch folders (those show the Windows
+user name, as this repository's own paths do). `t3-changes.jpg` was removed:
+it was labelled "before the fix" but is pixel-for-pixel the same picture as
+`t3-after-changes.jpg`. `t3-commit.jpg` now says it shows the stale line
+fixed in the review. Nothing was re-shot.
+
+Still open: gaps 1, 2, 4 and 5 and the two presses to see a test run; the
+sandbox warning that opens a step's output; one run of
+`test_build_turn_finished_v1374` failed under heavy load during the review
+(it passed alone and in a second loaded run).
 
 ## What this plan does not change
 
