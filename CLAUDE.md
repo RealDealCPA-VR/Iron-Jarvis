@@ -3569,6 +3569,48 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **The IJ harness is MEASURED again: a benchmark turn runs AS a Build
+  session; the walkthrough's gaps are written down** (v1.378.0, IJ harness
+  part 2 Phase 7; a doer + a reviewer that found 5 real defects, each red
+  first and mutation-checked). BENCH: the Jarvis runner ran every task under
+  the chat lane's "chat" session, so v1.377.0's Build env (the user's PATH)
+  never reached a benchmark turn and nothing held the model; each task turn
+  now runs under its own `build:bench-<hex>` session with `providers.hold`
+  armed, `ask_user` off, and `session: "build"` in the Jarvis runner's
+  identity (a new config folder — no older record is reused).
+  `harness_bench/runners.session_ended_on_escape` ends that session on ANY
+  way out (a Ctrl+C/Stop used to leave the turn's programs alive under a
+  session nothing would end); the hold is armed inside it. The bench calls
+  the chat lane directly, so library reflection, the finish notice, Build
+  compaction and session-row writes (all in `routes/build.py`) never run for
+  it. RESULTS (in `docs/IJ-HARNESS-PLAN-2.md` Phase 7, read from the bench's
+  own `results.json`): Claude Code 30/30, Codex 30/30, Jarvis on Codex 30/30
+  (gained `hard-expression-evaluator`), Jarvis on Claude 29/30 and glm
+  28/30 — both lost `hard-expression-evaluator` in the full run and passed
+  it TWICE alone (variance); no part 2 tool was called in 90 Jarvis runs;
+  "is not recognized" fell to 0 on every setup. WALKTHROUGH
+  (`docs/IJ-HARNESS-WALKTHROUGH.md`, 21 JPEGs in `docs/walkthrough/`,
+  checked for e-mail/account/key/project content): every step possible;
+  presses IJ 11/9/11 vs Claude Code 6–9/4–7/8–14 (Claude Code counted from
+  its desktop page, estimated — the page does not say Manual is the default
+  and says local dev servers need no approval) — "no more presses" is NOT
+  met for tasks 1 and 2; gaps listed there. SCREEN FIXES: New session opens
+  on the folder of the session in front (an archived one falls back to the
+  old default); Changes opens on the Branch view only for a LIVE branch
+  (`branch_changes` covers committed + uncommitted + untracked; a removed
+  worktree or merged branch opens "This session"); after Commit the branch
+  is read BEFORE the "Committed" note, newest read wins (a sequence guard);
+  a Build reply line saves each step's target (`harness/step_target.py` is
+  the Python twin of `lib/workTarget.stepTarget`, held equal by the 70-case
+  fixture `dashboard/__tests__/fixtures/step-target-v1378.json` — change both
+  together; the table found the TS 60-char cut splitting an emoji); a file
+  named by its whole path is listed by its path inside the folder
+  (`routes/chat_changes.py`, chat and Build). Pins:
+  `tests/test_harness_bench_build_session{,_review}_v1378.py`,
+  `tests/test_step_target_v1378.py`, `tests/test_chat_changes_whole_path_v1378.py`,
+  `dashboard/__tests__/{ij-harness-new-folder,ij-harness-changes-branch-default,
+  ij-harness-phase7-review}-v1378.test.tsx`, `step-target-twin-v1378.test.ts`.
+
 - **A provider's safety REFUSAL is a typed error with a way out — never an
   empty reply, never retried, never moved to another provider** (v1.378.0;
   found by the Phase 6 review: Anthropic's classifier answers `stop_reason:

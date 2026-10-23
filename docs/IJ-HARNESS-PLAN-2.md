@@ -12,6 +12,26 @@ reviewer agent that tries to break it, each fix pinned by a test that fails
 on the old code, a live run on a scratch daemon (never the user's app), and
 one release per phase.
 
+**Status (2026-10-23): every phase shipped**, each built by a doer agent and
+checked by a separate reviewer agent before release:
+
+| Phase | Release |
+|---|---|
+| 1 helper agents and skills | v1.372.0 |
+| 2 `/` and `@` in the message box | v1.373.1 (v1.373.0's gate was red; not published) |
+| 3 the conversation shows the work | v1.374.0 (+ v1.374.1) |
+| 4 git: a branch per session | v1.375.0 |
+| 5 the agent's own browser | v1.376.1, v1.376.3 (v1.376.0 and .2 were not published) |
+| 6 smaller touches; your tools in the agent's terminal | v1.377.0 |
+| 7 measure the feel (benchmark + walkthrough) | v1.378.0, with the model-refusal fix |
+
+Phase 7's "Done when" is met for the benchmark only on the reruns (one hard
+task lost on two setups in the full run, passed twice alone on each), and is
+NOT met for presses: the bug fix and the UI change still take more presses
+in the IJ harness than in Claude Code. The gaps are listed under Phase 7.
+After this plan, at the user's request: Claude Code's own `/` commands and
+skills typed by name, and sessions with no folder (v1.379.0).
+
 ## Already at parity (no work planned)
 
 | Claude Code desktop | IJ harness today |

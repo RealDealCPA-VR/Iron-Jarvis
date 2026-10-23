@@ -1897,6 +1897,27 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## The IJ harness, measured (v1.378.0)
+
+The IJ harness was measured against Claude Code and Codex on the same 30
+coding tasks, and walked through three everyday jobs side by side with the
+Claude Code desktop app. The numbers and the walkthrough are in
+`docs/IJ-HARNESS-PLAN-2.md` (Phase 7) and `docs/IJ-HARNESS-WALKTHROUGH.md`.
+Small changes the walkthrough led to:
+
+- **New session** opens on the folder of the session you are looking at, so
+  a second session in the same folder no longer means choosing the folder
+  again.
+- **Changes** opens on the branch view in a session working on its own
+  branch (it shows committed and not-yet-committed work alike). A session
+  whose branch was merged or removed opens on "This session".
+- **After Commit**, the branch line updates before the "Committed" note
+  appears, so Push is ready at once.
+- **A finished reply's steps** still say what they touched (the file read
+  or changed, the program run), as they did while the reply was running.
+- **Changed files** are listed by their place inside the folder
+  (`web/style.css`), not by their whole path.
+
 ## When a model declines a conversation (v1.378.0)
 
 Sometimes a model's own safety check declines to answer. Claude does this
