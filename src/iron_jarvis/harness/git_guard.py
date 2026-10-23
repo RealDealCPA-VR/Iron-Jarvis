@@ -38,17 +38,27 @@ its folder directly is untouched — exactly as before.
 HONEST LIMITS: this reads the command's text. It catches git as a model
 writes it (``git push``, ``git -C x commit``, ``cmd /c "git push"``,
 ``bash -lc 'git push'``, ``git.exe push``, an alias given with ``-c
-alias.x=…``); an alias in the user's own git config, a script file or code
-that builds the command at run time is not caught. A command that only
-MENTIONS git (``echo git push``) is read as if it ran it. It is a guardrail
-against a careless model, not a sandbox.
+alias.x=…``) and — since the v1.377.0 review, when Phase 6 gave a Build
+session's commands the user's own home folder and so made every alias in
+their git config LIVE in the agent's shell — an alias of the user's own
+(:func:`user_aliases`: ``GIT_CONFIG_GLOBAL``, else ``$XDG_CONFIG_HOME/git/
+config`` and ``~/.gitconfig``; the repository's own config; ``[include]`` /
+``[includeIf]`` followed; ``GIT_CONFIG_COUNT`` pairs), an alias of an alias
+and a shell alias (``!git push --force``). An alias never hides one of git's
+own commands (git ignores such an alias, and so does this guard — an alias
+``push = status`` must not make a real push read as a status). A script file,
+the system-wide config or code that builds the command at run time is not
+caught. A command that only MENTIONS git (``echo git push``) is read as if it
+ran it. It is a guardrail against a careless model, not a sandbox.
 """
 
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 #: Where a git (or gh) program name starts in a command line.
@@ -99,7 +109,31 @@ def _tokens(segment: str) -> list[str]:
     return out
 
 
-def _subcommand(tokens: list[str]) -> "tuple[str, list[str]]":
+#: git's OWN commands. git ignores an alias that would hide one ("aliases
+#: that hide existing Git commands are ignored"), so this guard never expands
+#: one either: ``git -c alias.push=status push`` is a real push.
+_GIT_COMMANDS = frozenset("""
+add am annotate apply archive backfill bisect blame branch bugreport bundle cat-file check-attr
+check-ignore check-mailmap check-ref-format checkout checkout-index cherry cherry-pick citool clean
+clone column commit commit-graph commit-tree config count-objects credential describe diagnose diff
+diff-files diff-index diff-tree difftool fast-export fast-import fetch fetch-pack filter-branch fmt-merge-msg
+for-each-ref for-each-repo format-patch fsck gc get-tar-commit-id grep gui hash-object help hook
+index-pack init instaweb interpret-trailers log ls-files ls-remote ls-tree mailinfo mailsplit
+maintenance merge merge-base merge-file merge-index merge-tree mergetool mktag mktree multi-pack-index
+mv name-rev notes pack-objects pack-refs prune prune-packed pull push range-diff read-tree rebase
+reflog refs remote repack replace replay request-pull rerere reset restore rev-list rev-parse revert
+rm send-email shortlog show show-branch show-index show-ref sparse-checkout stash status stripspace
+submodule switch symbolic-ref tag unpack-objects update-index update-ref update-server-info var
+verify-commit verify-pack verify-tag version whatchanged worktree write-tree
+""".split())
+#: How deep an alias of an alias (of an alias…) is followed.
+_ALIAS_DEPTH = 6
+#: A SHELL alias (``!…``) is returned as this subcommand; :func:`classify`
+#: judges its text as a command line of its own.
+_SHELL_ALIAS = "!"
+
+
+def _subcommand(tokens: list[str], depth: int = 0) -> "tuple[str, list[str]]":
     aliases: dict[str, str] = {}
     i = 0
     while i < len(tokens):
@@ -116,12 +150,214 @@ def _subcommand(tokens: list[str]) -> "tuple[str, list[str]]":
             i += 1
             continue
         sub, rest = tok.lower(), tokens[i + 1:]
-        if sub in aliases:
-            expanded = _tokens(aliases[sub].lstrip("!"))
-            if expanded:
-                return expanded[0].lower(), expanded[1:] + rest
-        return sub, rest
+        if sub in _GIT_COMMANDS or depth >= _ALIAS_DEPTH:
+            return sub, rest
+        # v1.377.0 review: the user's own aliases (live in a Build session's
+        # shell since Phase 6) after the line's own `-c alias.*`.
+        body = aliases.get(sub)
+        if body is None:
+            body = user_aliases().get(sub)
+        if body is None:
+            return sub, rest
+        body = body.strip()
+        if body.startswith("!"):
+            return _SHELL_ALIAS, [body[1:]]
+        expanded = _tokens(body)
+        if not expanded:
+            return sub, rest
+        return _subcommand(expanded + rest, depth + 1)
     return "", []
+
+
+# --------------------------------------------------------------------------- #
+# the user's own git aliases (v1.377.0 review)
+# --------------------------------------------------------------------------- #
+
+#: path -> ((mtime_ns, size), {alias: body}, [included paths]) — one stat per
+#: file per judgment; a file is re-read only when it changed.
+_ALIAS_CACHE: "dict[str, tuple[tuple[int, int], dict[str, str], list[str]]]" = {}
+#: A config file larger than this is not read (git configs are a few KB).
+_CONFIG_MAX_BYTES = 512 * 1024
+#: How deep ``[include]`` / ``[includeIf]`` is followed.
+_INCLUDE_DEPTH = 4
+_SECTION_RX = re.compile(r'^\[\s*([A-Za-z0-9.-]+)(?:\s+"(?:[^"\\]|\\.)*")?\s*\]')
+_KEY_RX = re.compile(r"^([A-Za-z][A-Za-z0-9-]*)\s*(?:=\s*(.*))?$")
+
+
+def _value(raw: str) -> str:
+    """A git config value: quotes removed, an unquoted ``#`` / ``;`` comment
+    cut, ``\\"`` / ``\\\\`` unescaped."""
+    out: list[str] = []
+    quoted = False
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        if ch == "\\" and i + 1 < len(raw):
+            nxt = raw[i + 1]
+            out.append({"n": "\n", "t": "\t"}.get(nxt, nxt))
+            i += 2
+            continue
+        if ch == '"':
+            quoted = not quoted
+        elif ch in "#;" and not quoted:
+            break
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out).strip()
+
+
+def _read_config(path: Path) -> "tuple[dict[str, str], list[str]]":
+    """``({alias: body}, [include paths as written])`` of ONE config file
+    (cached by its stat). Never raises: an unreadable file has none."""
+    try:
+        st = path.stat()
+    except OSError:
+        return {}, []
+    key = str(path)
+    sig = (st.st_mtime_ns, st.st_size)
+    hit = _ALIAS_CACHE.get(key)
+    if hit is not None and hit[0] == sig:
+        return hit[1], hit[2]
+    aliases: dict[str, str] = {}
+    includes: list[str] = []
+    try:
+        if st.st_size > _CONFIG_MAX_BYTES:
+            raise OSError("too large")
+        text = path.read_bytes().decode("utf-8", "replace")
+    except OSError:
+        text = ""
+    section = ""
+    lines = text.replace("\r\n", "\n").split("\n")
+    joined: list[str] = []
+    buf = ""
+    for line in lines:
+        if line.endswith("\\") and not line.endswith("\\\\"):
+            buf += line[:-1]
+            continue
+        joined.append(buf + line)
+        buf = ""
+    if buf:
+        joined.append(buf)
+    for raw in joined:
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        m = _SECTION_RX.match(line)
+        if m:
+            section = m.group(1).lower()
+            line = line[m.end():].strip()
+            if not line:
+                continue
+        km = _KEY_RX.match(line)
+        if not km:
+            continue
+        name, val = km.group(1).lower(), _value(km.group(2) or "")
+        if section == "alias" and val:
+            aliases[name] = val
+        elif section in ("include", "includeif") and name == "path" and val:
+            includes.append(val)
+    _ALIAS_CACHE[key] = (sig, aliases, includes)
+    if len(_ALIAS_CACHE) > 64:
+        _ALIAS_CACHE.pop(next(iter(_ALIAS_CACHE)), None)
+    return aliases, includes
+
+
+def _collect(path: Path, out: dict[str, str], depth: int, seen: set[str]) -> None:
+    key = os.path.normcase(str(path))
+    if depth > _INCLUDE_DEPTH or key in seen:
+        return
+    seen.add(key)
+    aliases, includes = _read_config(path)
+    out.update(aliases)
+    for inc in includes:
+        target = Path(os.path.expanduser(inc))
+        if not target.is_absolute():
+            target = path.parent / target
+        # An [includeIf] is followed whatever its condition: an extra alias
+        # can only make this guard stricter (none can hide a git command).
+        _collect(target, out, depth + 1, seen)
+
+
+def _home() -> str:
+    env = os.environ
+    home = env.get("HOME") or env.get("USERPROFILE") or ""
+    if not home and env.get("HOMEDRIVE") and env.get("HOMEPATH"):
+        home = env["HOMEDRIVE"] + env["HOMEPATH"]
+    return home
+
+
+def _repo_config(folder: str) -> "Path | None":
+    """The repository config git reads for ``folder`` (a checkout's
+    ``.git/config``; a worktree's ``.git`` file names its git dir, whose
+    ``commondir`` holds the shared config)."""
+    if not folder:
+        return None
+    dot = Path(folder) / ".git"
+    try:
+        if dot.is_dir():
+            return dot / "config"
+        if dot.is_file():
+            text = dot.read_text(encoding="utf-8", errors="replace").strip()
+            if text.lower().startswith("gitdir:"):
+                gitdir = Path(text.split(":", 1)[1].strip())
+                if not gitdir.is_absolute():
+                    gitdir = Path(folder) / gitdir
+                common = gitdir / "commondir"
+                if common.is_file():
+                    rel = common.read_text(encoding="utf-8", errors="replace").strip()
+                    base = Path(rel) if Path(rel).is_absolute() else gitdir / rel
+                    return base / "config"
+                return gitdir / "config"
+    except OSError:
+        return None
+    return None
+
+
+def user_aliases() -> dict[str, str]:
+    """The git aliases a command of this turn's Build session would get
+    (lower-cased names): the user's global config — ``GIT_CONFIG_GLOBAL``,
+    else ``$XDG_CONFIG_HOME/git/config`` then ``~/.gitconfig`` — then the
+    repository's (the session's worktree, else its repository), then
+    ``GIT_CONFIG_COUNT`` pairs; later wins, as in git. Never raises (an
+    unreadable config has no aliases); reads only small local files, each
+    re-read only when it changed."""
+    from .branches import current
+
+    out: dict[str, str] = {}
+    try:
+        env = os.environ
+        seen: set[str] = set()
+        files: list[Path] = []
+        if env.get("GIT_CONFIG_SYSTEM"):
+            files.append(Path(env["GIT_CONFIG_SYSTEM"]))
+        if env.get("GIT_CONFIG_GLOBAL"):
+            files.append(Path(env["GIT_CONFIG_GLOBAL"]))
+        else:
+            home = _home()
+            xdg = env.get("XDG_CONFIG_HOME") or (os.path.join(home, ".config") if home else "")
+            if xdg:
+                files.append(Path(xdg) / "git" / "config")
+            if home:
+                files.append(Path(home) / ".gitconfig")
+        tb = current()
+        if tb is not None:
+            repo_cfg = _repo_config(tb.worktree) or _repo_config(tb.repo)
+            if repo_cfg is not None:
+                files.append(repo_cfg)
+        for f in files:
+            _collect(f, out, 0, seen)
+        try:
+            count = int(env.get("GIT_CONFIG_COUNT", "0") or 0)
+        except ValueError:
+            count = 0
+        for i in range(min(count, 100)):
+            k = env.get(f"GIT_CONFIG_KEY_{i}", "")
+            if k.lower().startswith("alias."):
+                out[k[6:].lower()] = env.get(f"GIT_CONFIG_VALUE_{i}", "")
+    except Exception:  # noqa: BLE001 — not knowing an alias is the old behaviour, never a crash
+        return out
+    return out
 
 
 def _short_flags(args: list[str]) -> str:
@@ -300,7 +536,7 @@ def _gh_act(toks: list[str]) -> "GitAct | None":
     return GitAct("gh")
 
 
-def classify(command: Any) -> list[GitAct]:
+def classify(command: Any, _depth: int = 0) -> list[GitAct]:
     """The git actions in ``command`` that this guard is about, in order (a
     command line may hold several). [] for anything else."""
     text = str(command or "")
@@ -317,7 +553,14 @@ def classify(command: Any) -> list[GitAct]:
         if m.group("prog").lower() == "gh":
             act = _gh_act(toks)
         else:
-            act = _git_act(*_subcommand(toks))
+            sub, args = _subcommand(toks)
+            if sub == _SHELL_ALIAS:
+                # A shell alias (`!git push --force`, `!f() { git commit …; }; f`):
+                # its text is a command line of its own.
+                if _depth < _ALIAS_DEPTH:
+                    out.extend(classify(args[0] if args else "", _depth + 1))
+                continue
+            act = _git_act(sub, args)
         if act is not None:
             out.append(act)
     return out
@@ -420,5 +663,5 @@ def guard_check(command: Any) -> Any:
 
 __all__ = [
     "FORCE_REFUSAL", "GitAct", "REFUSED_KINDS", "card_words", "classify", "force_refusal",
-    "guard_check", "refusal",
+    "guard_check", "refusal", "user_aliases",
 ]
