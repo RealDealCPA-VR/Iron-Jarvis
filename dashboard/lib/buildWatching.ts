@@ -96,6 +96,40 @@ export function lookingAt(thread: string | null | undefined, now: number = Date.
   return now - n.at >= 0 && now - n.at < LOOKING_FRESH_MS;
 }
 
+/** Review (v1.374.0): the finish notices the user WATCHED end (their event
+ *  ids). The bell keeps such a row seen — but a page that is destroyed (the
+ *  window closed to the tray) or reloaded forgets that, and its "While you
+ *  were away" replay counted the watched turn on the badge again. Kept here,
+ *  shared by every window of the app, newest `WATCHED_MAX`. */
+export const WATCHED_KEY = "ij.build.watched";
+export const WATCHED_MAX = 50;
+
+function readWatched(): string[] {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(WATCHED_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The bell decided the user watched this finish (`lookingAt` said so). */
+export function noteWatched(id: string): void {
+  if (!id) return;
+  try {
+    const kept = readWatched().filter((v) => v !== id);
+    kept.push(id);
+    window.localStorage.setItem(WATCHED_KEY, JSON.stringify(kept.slice(-WATCHED_MAX)));
+  } catch {
+    /* no storage: this page still knows (its own seen set) */
+  }
+}
+
+/** Was this finish watched (by any window of the app)? */
+export function wasWatched(id: string | null | undefined): boolean {
+  return !!id && readWatched().includes(id);
+}
+
 /** Tests only: forget this window's state. */
 export function __resetLooking(): void {
   here = null;

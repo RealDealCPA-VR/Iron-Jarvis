@@ -46,7 +46,7 @@ import {
   buildThreadOf,
   sessionLinkFor,
 } from "@/lib/buildLinks";
-import { lookingAt } from "@/lib/buildWatching";
+import { lookingAt, noteWatched, wasWatched } from "@/lib/buildWatching";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
 import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
@@ -2051,7 +2051,9 @@ export function NotificationBell() {
         const rows: ActivityItem[] = [];
         for (const ev of auditEntriesToEvents(res?.entries, BELL_ACTIVITY_TYPES)) {
           const item = toActivity(ev);
-          if (item) rows.push(item);
+          // v1.374.0 review: a Build turn the user WATCHED end is not news
+          // after a reload (lib/buildWatching noteWatched) — never "away".
+          if (item && !(item.build && wasWatched(item.id))) rows.push(item);
         }
         if (rows.length) setAway(rows);
       })
@@ -2288,6 +2290,7 @@ export function NotificationBell() {
     // saw it end. Its row is kept, but seen (never counted on the badge).
     if (latest.build && lookingAt(latest.build)) {
       setSeenAttention((prev) => (prev.has(latest.id) ? prev : new Set(prev).add(latest.id)));
+      noteWatched(latest.id); // ...and stays seen after a reload (review)
       return;
     }
     if (quietHere()) return;
