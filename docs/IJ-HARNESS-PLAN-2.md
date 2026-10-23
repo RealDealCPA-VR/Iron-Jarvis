@@ -883,6 +883,187 @@ step of the walkthrough is possible in the IJ harness with no more presses
 than in Claude Code. Anything that still is not is written down as the next
 gap.
 
+### Result (v1.378.0)
+
+**The benchmark armed what a Build session arms.** The Jarvis runner already
+offered the whole coding set (helpers, skills, `page_screenshot` and the
+agent's browser — part 2's tools), but it ran every task turn under the chat
+lane's `"chat"` session, so its shell had the SCRUBBED environment and was
+described to the model as one ("no python … no POSIX tools") — v1.377.0's
+"the agent's terminal finds your tools" never reached a benchmark turn, and
+nothing held the model for a helper. Each task turn now runs as a Build
+session does: its own `build:bench-<hex>` session (the shell gets the user's
+PATH and home, minus secrets) with the model held (`providers.hold`), and
+that session is ended after the run (its programs and its agent browser).
+`ask_user` stays off (nobody is there to answer). What is graded did not
+change. Pinned by `tests/test_harness_bench_build_session_v1378.py` (red on
+the old runner; seven mutations, all red).
+
+**The five setups** (`bench-harness run --tier all --seed 0`, the v1.370.3
+pairings, each CLI on its own default model, this PC's own logins, Iron-Proxy
+off; at most two configurations at once and never two on one plan). Numbers
+from the bench's own combined report,
+`%TEMP%\ij-bench-phase7\combined\.ironjarvis\harness-bench\report.md`
+(Iron Jarvis 1.377.0 plus this phase's commits); v1.370.3 in brackets:
+
+| Runner | Passed | Mean time | Mean tool calls | Tokens in | List-price $ |
+|---|---|---|---|---|---|
+| Claude Code | 30/30 (30/30) | 55.8 s (62.2) | 4.8 (4.9) | 3,522,400 (3,820,399) | 6.19 (6.50) |
+| Jarvis on Claude (claude dialect) | 29/30 (30/30) | 38.5 s (31.1) | 6.9 (7.2) | 1,775,973 (1,494,441) | 3.98 (3.66) |
+| Codex | 30/30 (30/30) | 29.6 s (37.7) | 3.8 (3.8) | 1,945,865 (1,979,415) | n/a |
+| Jarvis on Codex (gpt dialect) | 30/30 (29/30) | 37.1 s (43.7) | 7.4 (6.6) | 1,951,531 (1,776,431) | 1.02 (1.07) |
+| Jarvis on glm-5.3-flash (generic) | 28/30 (27/30) | 53.9 s (23.4) | 9.2 (8.9) | 2,385,087 (1,522,553) | 0 (local) |
+
+Every run was scored (none "did not run", none unscored).
+
+**Per task, against v1.370.3** (each `results.json` read task by task):
+
+| Setup | Lost | Gained | The rerun of the lost task alone |
+|---|---|---|---|
+| Claude Code | — | — | — |
+| Codex | — | — | — |
+| Jarvis on Claude | `hard-expression-evaluator` | — | **passed** (74.5 s, 7 tool calls) |
+| Jarvis on Codex | — | `hard-expression-evaluator` | — |
+| Jarvis on glm-5.3-flash | `hard-expression-evaluator` | `hard-idempotent-migration`, `hard-markdown-exporter` | **passed** (89.1 s, 12 tool calls) |
+
+Why each lost run failed (from its trajectory and the hidden check's
+output): Jarvis on Claude wrote `_FUNCTIONS = {"min": (1, None, min), …}`
+and called Python's `min(*values)`, which raises for one argument, so the
+hidden `min(4)` failed (`TypeError: 'int' object is not iterable`); its own
+check script did not try a one-argument call. glm's code passed the spec, but
+it left its own scratch `test_spec.py` in the folder, whose last line raises
+`SystemExit`; the hidden check's test discovery imported it and errored
+(`Failed to import test module: test_spec`). Neither is part 2's code: both
+passed when run again, and both setups passed the task at v1.370.3.
+`hard-scheduler-ordering` failed on glm in both runs (as in every glm run).
+So the "no task lost" condition is met on the reruns, not on the first full
+run.
+
+The times: glm's mean is pulled up by one run — `hard-file-watcher-process`
+took 631.7 s because the model started the watcher in the foreground with
+`timeout_s: 600` and waited it out, then started it properly and passed
+(without that run the mean is 34.0 s); its `hard-expression-evaluator` took
+313 s. Jarvis on Claude was slower per round than two days ago while Claude
+Code was faster; the bench records the CLI's model only as "default", and
+this PC's `~/.claude/settings.json` (model `opus`, effort `high`) changed
+after the v1.370.3 run, so the two days are not the same model setup.
+
+**What Jarvis did that it could not before.** Across the 90 Jarvis task
+runs, no task called a part 2 tool (helpers, skills, `page_*`,
+`list_agents`): 0 calls, as in Phase 1's run — the tasks are small,
+single-folder and have no web page. What changed is the shell, now the Build
+session's (counted from the trajectories by the words in each command,
+so approximately; recounted in the review): Jarvis on Claude named `python`
+95 times in 58 of its 86 commands (v1.370.3: `py` 74 times in 45 commands,
+`python` 13 times in 11 — the scrubbed description said "no python … py.exe
+is available") and named POSIX tools (`cat`, `ls`, `tail`, `head`, `find`)
+89 times in 41 commands across 25 tasks (v1.370.3: 10 times in 6 commands
+across 6 tasks, 4 of them answered "is not recognized"); glm named them 29
+times in 20 commands across 9 tasks (v1.370.3: 8 times in 6 commands across
+3 tasks, 3 not recognized). No command on any setup answered "is not
+recognized" this time (v1.370.3: 4 on Claude, 2 on Codex, 5 on glm). Jarvis
+on Codex used no POSIX tool either time (Python and cmd's own commands).
+(The first count of this paragraph said "ran `python` 84 times" — 84 was the
+number of shell calls — and "89 commands" for 89 mentions in 41 commands.)
+
+**The walkthrough** is `docs/IJ-HARNESS-WALKTHROUGH.md` (screenshots in
+`docs/walkthrough/`): the three tasks driven through the real IJ harness
+screen with the real claude-cli model on a scratch daemon, every press
+counted; the pull request step against a stand-in `gh` and a local bare
+remote (no GitHub repository or pull request was made). Claude Code's side
+is counted from its desktop documentation, each count labelled documented or
+estimated, its screenshots not captured. Every step was possible in the IJ
+harness. Totals (IJ harness / Claude Code, every Claude Code count estimated
+from its page): bug fix with a test 11 / 6–9, UI change checked in the
+browser 9 / 4–7, feature on a branch to a PR 11 / 8–14. (Corrected in the
+review: the first count took Manual as Claude Code's default mode, which its
+page does not say, and counted an approval for the local dev server, which
+the page says needs none.) So the "no more presses than in Claude Code" half
+of "Done when" is NOT met: tasks 1 and 2 take more presses in the IJ harness
+whatever mode Claude Code starts in. Two presses were removed in this
+phase, each with a test that failed first: New session opens on the folder of
+the session in front (it took the Terminals view's folder — empty here — so a
+second session in the same folder meant pasting the folder again), and in a
+session on its own branch Changes opens on the Branch view (every look took
+Changes, then Branch).
+
+**Next gaps** (where the IJ harness still needs more presses or shows less;
+details in the walkthrough): seeing a change takes the files line, a press
+per file and an Escape per diff dialog, where Claude Code's line counts open
+its diff view in a pane; working in the folder directly costs the branch
+switch each time (decision 1; Claude Code's Worktree is the reverse, which is
+why the branch task was cheaper here); the test output is two presses away;
+Create PR is two presses (a box, then Create pull request); the live page in
+the Browser pane is two presses (the first shows the agent's picture). (Two
+more the first draft listed — a finished reply's steps not saying what they
+touched, and the Branch line reading stale right after Commit — were fixed in
+the review below.)
+
+**Review (v1.378.0).** A separate reviewer read the diff, re-read every
+number from the bench's own files, reran the two lost tasks, checked every
+screenshot and re-read Claude Code's desktop page. Five defects, each with a
+test that failed first and mutations that all went red:
+
+1. A CANCELLED benchmark run (Ctrl+C, a Stop) never ended its Build session:
+   the runner ended `build:bench-<hex>` only after a turn that returned, and
+   each turn now has a session of its own, so a program the turn's shell had
+   left running was kept for a session nothing would ever end again (the old
+   shared "chat" session was at least swept by the next run).
+   `session_ended_on_escape` ends it on any way out; the hold is armed inside
+   it. `tests/test_harness_bench_build_session_review_v1378.py`.
+2. Changes opened on the Branch view for EVERY session on a branch,
+   including one whose worktree was removed (one sentence, no files) or whose
+   branch was merged (an empty diff). Those open on "This session" again. The
+   Branch view does show uncommitted work, so a live branch keeps it.
+3. After Commit the note "Committed …" landed before the branch was read
+   again, beside the line from before the commit and a grey Push (the
+   walkthrough's own screenshot). The branch is now read first, and only the
+   newest read is drawn.
+4. Gap 3: a Build reply's saved steps had no target ("Ran · shell").
+   `harness/step_target.py` is the daemon's twin of `lib/workTarget`,
+   called from `routes/build._ReplyWatch` only, and ONE table
+   (`dashboard/__tests__/fixtures/step-target-v1378.json`) holds the two
+   equal. The table also found that the TypeScript 60-character cut could
+   split an emoji and save half of it.
+5. Gap 6: a changed file the model named by its whole path was listed by
+   that path; the row now says its path inside the folder.
+
+Checked and found sound: a benchmark turn as a Build session writes no
+session row, starts no library reflection, rings no finish notice, writes no
+compaction or limit card (all of those live in `routes/build`, which the
+bench never calls), meets no git guard (that needs a session's branch) and
+gives no helper a parent it should not have (none was started); the
+guardrail is in every runner's prompt (150 of 150 prompts in this run); the
+new identity gives each Jarvis setup a new folder, so no v1.370.x record can
+be reused, and only the Jarvis runner names `session: "build"`; `build_env`
+still strips secrets. The Build environment gives the Jarvis runner the
+user's PATH and home, which the Claude Code and Codex runners always had
+(their CLIs run with the whole environment); the outside-folder check is
+unchanged and still watches only the benchmark's own folder.
+
+Numbers: the five-setup table, its v1.370.3 brackets and the per-task losses
+and gains match the bench's files; the shell counts above were recounted and
+corrected. The review reran the lost task once more on each setup (fresh
+root, the same configuration, Iron-Proxy off): Jarvis on Claude **passed**
+(118.1 s, 8 tool calls), Jarvis on glm **passed** (204.9 s, 21 tool calls).
+Each lost task has now passed twice on its own, which reads as variance, not
+as an effect of this phase; but the full run itself did lose a task on two
+setups, so "no task lost" was not met by the run as run.
+
+The walkthrough's Claude Code counts were corrected against the page (see
+the doc), and with them the totals: the IJ harness needs more presses than
+Claude Code for tasks 1 and 2. Screenshots: all checked; no e-mail, account
+name, plan, key or path outside the scratch folders (those show the Windows
+user name, as this repository's own paths do). `t3-changes.jpg` was removed:
+it was labelled "before the fix" but is pixel-for-pixel the same picture as
+`t3-after-changes.jpg`. `t3-commit.jpg` now says it shows the stale line
+fixed in the review. Nothing was re-shot.
+
+Still open: gaps 1, 2, 4 and 5 and the two presses to see a test run; the
+sandbox warning that opens a step's output; one run of
+`test_build_turn_finished_v1374` failed under heavy load during the review
+(it passed alone and in a second loaded run).
+
 ## What this plan does not change
 
 - The Terminals view stays exactly as it is.

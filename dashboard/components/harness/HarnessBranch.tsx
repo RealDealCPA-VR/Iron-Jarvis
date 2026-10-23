@@ -22,7 +22,7 @@
  * and on a slow poll while this view is on screen — never a tight loop.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { GitBranch, Loader2, RefreshCw } from "lucide-react";
 import { ChangedFiles, decodeChanges, type FileChange } from "@/components/chat/ChangedFiles";
 import { ConfirmButton } from "@/components/ui";
@@ -90,16 +90,23 @@ export function BranchView({
   const [round, setRound] = useState(0);
 
   const removed = git.removed;
+  // Review (v1.378.0): only the NEWEST read is drawn — a read that started
+  // before an action and answers after the next one must not put the old
+  // branch back on the line.
+  const readSeq = useRef(0);
 
   const load = useCallback(async () => {
     if (removed) return;
+    const seq = ++readSeq.current;
     try {
       const [st, raw] = await Promise.all([getBranchStatus(sessionId), getBranchChangesRaw(sessionId)]);
+      if (seq !== readSeq.current) return;
       setStatus(st);
       setChanges(decodeChanges(raw));
       setMore(moreFiles(raw));
       setReadError(null);
     } catch (e) {
+      if (seq !== readSeq.current) return;
       setReadError(gitRefusal(e, "The branch could not be read.").detail);
     }
   }, [sessionId, removed]);
@@ -131,14 +138,20 @@ export function BranchView({
     setBusy(name);
     setRefusal(null);
     setNote(null);
+    let said: string | null = null;
     try {
-      const said = await fn();
-      if (said) setNote(said);
+      said = await fn();
     } catch (e) {
       setRefusal(gitRefusal(e));
+    }
+    // Review (v1.378.0, the walkthrough): the branch is read again BEFORE the
+    // note says what happened, so "Committed …" never sits beside the line
+    // from before the commit (and a grey Push).
+    try {
+      await load();
     } finally {
+      if (said) setNote(said);
       setBusy(null);
-      setRound((n) => n + 1);
     }
   }
 

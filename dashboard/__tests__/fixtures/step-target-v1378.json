@@ -1,0 +1,540 @@
+{
+  "kinds": [
+    "convert_document",
+    "docx_edit",
+    "edit_file",
+    "excel_apply_spec",
+    "excel_edit",
+    "excel_profile",
+    "excel_read",
+    "extract_pdf",
+    "glob",
+    "grep",
+    "image_convert",
+    "image_info",
+    "image_resize",
+    "list_files",
+    "list_folder",
+    "multi_edit",
+    "notebook_edit",
+    "page_click",
+    "page_open",
+    "page_read",
+    "page_screenshot",
+    "page_type",
+    "pdf_arrange",
+    "pdf_form_fields",
+    "pdf_form_fill",
+    "pdf_split",
+    "process_start",
+    "read_document",
+    "read_file",
+    "redact_pii",
+    "rename_file",
+    "repl",
+    "rest_call",
+    "run_code",
+    "shell",
+    "view_image",
+    "web_fetch",
+    "web_search",
+    "write_document",
+    "write_file"
+  ],
+  "cases": [
+    {
+      "name": "read_file",
+      "args": {
+        "path": "C:\\Users\\me\\proj\\cart.py"
+      },
+      "target": "cart.py"
+    },
+    {
+      "name": "read_file",
+      "args": {
+        "file_path": "/home/a/b/notes.txt",
+        "numbered": true
+      },
+      "target": "notes.txt"
+    },
+    {
+      "name": "read_file",
+      "args": {
+        "path": "C:"
+      },
+      "target": null
+    },
+    {
+      "name": "read_file",
+      "args": {
+        "paths": [
+          "a/b.txt",
+          "c\\d.txt",
+          "e.txt"
+        ]
+      },
+      "target": "b.txt and 2 more"
+    },
+    {
+      "name": "read_file",
+      "args": {
+        "path": "C:\\keys\\sk-ant-abcdefghijklmnopqrstuvwxyz.txt"
+      },
+      "target": null
+    },
+    {
+      "name": "read_file",
+      "args": null,
+      "target": null
+    },
+    {
+      "name": "read_document",
+      "args": {
+        "path": "D:/clients/k-1 2025.pdf"
+      },
+      "target": "k-1 2025.pdf"
+    },
+    {
+      "name": "extract_pdf",
+      "args": {
+        "source": "return.pdf"
+      },
+      "target": "return.pdf"
+    },
+    {
+      "name": "view_image",
+      "args": {
+        "path": "shot.png"
+      },
+      "target": "shot.png"
+    },
+    {
+      "name": "excel_read",
+      "args": {
+        "path": "sales.xlsx"
+      },
+      "target": "sales.xlsx"
+    },
+    {
+      "name": "excel_profile",
+      "args": {
+        "file": "sales.xlsx"
+      },
+      "target": "sales.xlsx"
+    },
+    {
+      "name": "image_info",
+      "args": {
+        "path": "x/y/logo.svg"
+      },
+      "target": "logo.svg"
+    },
+    {
+      "name": "pdf_form_fields",
+      "args": {
+        "path": "w9.pdf"
+      },
+      "target": "w9.pdf"
+    },
+    {
+      "name": "write_file",
+      "args": {
+        "content": "print(1)\n",
+        "path": "out/report.md"
+      },
+      "target": "report.md"
+    },
+    {
+      "name": "write_document",
+      "args": {
+        "output": "C:/x/sales.xlsx",
+        "source": "a.csv"
+      },
+      "target": "sales.xlsx"
+    },
+    {
+      "name": "convert_document",
+      "args": {
+        "source": "a.docx",
+        "target": "a.pdf"
+      },
+      "target": "a.pdf"
+    },
+    {
+      "name": "image_convert",
+      "args": {
+        "path": "a.png",
+        "out_dir": "C:\\out"
+      },
+      "target": "out"
+    },
+    {
+      "name": "image_resize",
+      "args": {
+        "path": "big.jpg"
+      },
+      "target": "big.jpg"
+    },
+    {
+      "name": "pdf_split",
+      "args": {
+        "path": "all.pdf"
+      },
+      "target": "all.pdf"
+    },
+    {
+      "name": "redact_pii",
+      "args": {
+        "path": "k1.pdf"
+      },
+      "target": "k1.pdf"
+    },
+    {
+      "name": "edit_file",
+      "args": {
+        "new": "b",
+        "old": "a",
+        "path": "src/app.ts"
+      },
+      "target": "app.ts"
+    },
+    {
+      "name": "multi_edit",
+      "args": {
+        "edits": [
+          {
+            "new": "b",
+            "old": "a"
+          }
+        ],
+        "path": "a\\b.py"
+      },
+      "target": "b.py"
+    },
+    {
+      "name": "notebook_edit",
+      "args": {
+        "path": "nb.ipynb"
+      },
+      "target": "nb.ipynb"
+    },
+    {
+      "name": "docx_edit",
+      "args": {
+        "path": "letter.docx"
+      },
+      "target": "letter.docx"
+    },
+    {
+      "name": "excel_edit",
+      "args": {
+        "path": "book.xlsx"
+      },
+      "target": "book.xlsx"
+    },
+    {
+      "name": "excel_apply_spec",
+      "args": {
+        "path": "book.xlsx"
+      },
+      "target": "book.xlsx"
+    },
+    {
+      "name": "rename_file",
+      "args": {
+        "src": "old.txt",
+        "dst": "new.txt"
+      },
+      "target": "old.txt"
+    },
+    {
+      "name": "pdf_arrange",
+      "args": {
+        "path": "a.pdf"
+      },
+      "target": "a.pdf"
+    },
+    {
+      "name": "pdf_form_fill",
+      "args": {
+        "path": "form.pdf"
+      },
+      "target": "form.pdf"
+    },
+    {
+      "name": "list_files",
+      "args": {},
+      "target": null
+    },
+    {
+      "name": "list_files",
+      "args": {
+        "path": "."
+      },
+      "target": "."
+    },
+    {
+      "name": "list_folder",
+      "args": {
+        "folder": "C:\\Users\\me\\Documents\\"
+      },
+      "target": "Documents"
+    },
+    {
+      "name": "glob",
+      "args": {
+        "pattern": "**/*.py"
+      },
+      "target": "**/*.py"
+    },
+    {
+      "name": "grep",
+      "args": {
+        "path": "src",
+        "pattern": "TODO"
+      },
+      "target": "TODO"
+    },
+    {
+      "name": "grep",
+      "args": {
+        "pattern": "C:\\Users\\me\\notes.txt foo"
+      },
+      "target": "notes.txt foo"
+    },
+    {
+      "name": "grep",
+      "args": {
+        "pattern": "password=hunter2"
+      },
+      "target": null
+    },
+    {
+      "name": "grep",
+      "args": {
+        "pattern": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…"
+    },
+    {
+      "name": "grep",
+      "args": {
+        "pattern": "line1\nline2\tx"
+      },
+      "target": "line1 line2 x"
+    },
+    {
+      "name": "grep",
+      "args": {
+        "pattern": "abcdefABCDEF1234567890abcdefABCDEF12"
+      },
+      "target": null
+    },
+    {
+      "name": "grep",
+      "args": {
+        "pattern": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+      },
+      "target": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀…"
+    },
+    {
+      "name": "grep",
+      "args": {
+        "pattern": "   "
+      },
+      "target": null
+    },
+    {
+      "name": "web_search",
+      "args": {
+        "query": "pier 9 hours https://www.example.com/x?y=1"
+      },
+      "target": "pier 9 hours example.com"
+    },
+    {
+      "name": "web_fetch",
+      "args": {
+        "url": "https://www.Example.com/path?token=abc"
+      },
+      "target": "example.com"
+    },
+    {
+      "name": "web_fetch",
+      "args": {
+        "url": "ftp://x.com/a"
+      },
+      "target": null
+    },
+    {
+      "name": "web_fetch",
+      "args": {
+        "url": "http://[::1]:8080/x"
+      },
+      "target": "[::1]"
+    },
+    {
+      "name": "shell",
+      "args": {
+        "command": "python -m pytest -q"
+      },
+      "target": "python"
+    },
+    {
+      "name": "shell",
+      "args": {
+        "command": "\"C:\\Python\\python.exe\" -c 1"
+      },
+      "target": "python"
+    },
+    {
+      "name": "shell",
+      "args": {
+        "command": "cd \"C:\\x\" && python -m pytest"
+      },
+      "target": "cd"
+    },
+    {
+      "name": "shell",
+      "args": {
+        "command": "FOO=1 make"
+      },
+      "target": null
+    },
+    {
+      "name": "shell",
+      "args": {
+        "command": "npm.cmd test"
+      },
+      "target": "npm"
+    },
+    {
+      "name": "shell",
+      "args": {
+        "command": "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz123' x"
+      },
+      "target": "curl"
+    },
+    {
+      "name": "process_start",
+      "args": {
+        "command": "node server.js",
+        "until_exit": false
+      },
+      "target": "node"
+    },
+    {
+      "name": "run_code",
+      "args": {
+        "code": "x",
+        "language": "Python"
+      },
+      "target": "python"
+    },
+    {
+      "name": "run_code",
+      "args": {
+        "language": "c#"
+      },
+      "target": "c#"
+    },
+    {
+      "name": "run_code",
+      "args": {
+        "language": "not a language!"
+      },
+      "target": null
+    },
+    {
+      "name": "repl",
+      "args": {
+        "code": "x = 1"
+      },
+      "target": null
+    },
+    {
+      "name": "rest_call",
+      "args": {
+        "method": "GET",
+        "path": "/x",
+        "service": "crm (svc_123)"
+      },
+      "target": "crm"
+    },
+    {
+      "name": "page_open",
+      "args": {
+        "url": "http://localhost:5173/cart?token=1"
+      },
+      "target": "localhost:5173/cart"
+    },
+    {
+      "name": "page_open",
+      "args": {
+        "url": "localhost:8821"
+      },
+      "target": "localhost:8821"
+    },
+    {
+      "name": "page_open",
+      "args": {
+        "url": "http://localhost:80/"
+      },
+      "target": "localhost"
+    },
+    {
+      "name": "page_open",
+      "args": {
+        "url": "http://[::1]:5173/a"
+      },
+      "target": "[::1]:5173/a"
+    },
+    {
+      "name": "page_screenshot",
+      "args": {
+        "url": "https://example.com/"
+      },
+      "target": "example.com"
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "Add to cart"
+      },
+      "target": "Add to cart"
+    },
+    {
+      "name": "page_type",
+      "args": {
+        "css": "#email",
+        "text": "secret"
+      },
+      "target": "#email"
+    },
+    {
+      "name": "page_read",
+      "args": {},
+      "target": null
+    },
+    {
+      "name": "browser_click",
+      "args": {
+        "target": "Buy"
+      },
+      "target": null
+    },
+    {
+      "name": "mcp__gmail__search_messages",
+      "args": {
+        "query": "invoice"
+      },
+      "target": null
+    },
+    {
+      "name": "unknown_tool",
+      "args": {
+        "path": "x.txt"
+      },
+      "target": null
+    }
+  ]
+}

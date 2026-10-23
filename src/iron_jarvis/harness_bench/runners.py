@@ -73,8 +73,19 @@ JARVIS_APPROVAL_MODE = "yolo"
 DEFAULT_DIALECT = "auto"
 #: The session id the chat lanes give their tools (``ToolContext(session_id=
 #: "chat")`` in routes/chat.py): what a turn's shell leaves running is kept
-#: under it until :func:`procs.end_session` is called for it.
+#: under it until :func:`procs.end_session` is called for it. (The refine
+#: loop's proposer turn still runs under it; a benchmark TASK turn runs as a
+#: Build session since v1.378.0 — :data:`BENCH_SESSION_PREFIX`.)
 LANE_SESSION_ID = "chat"
+#: v1.378.0 (IJ harness part 2, Phase 7): every benchmark task turn runs AS A
+#: BUILD SESSION — its tool calls under a fresh ``build:<this prefix><hex>``
+#: session id (``harness/sessions.session_id_for``) and its model HELD
+#: (``providers.hold``), exactly as ``routes/build.start_build_turn`` runs an
+#: IJ harness turn. Before, the turn ran under "chat": the shell had the
+#: SCRUBBED environment and was described to the model as one, so v1.377.0's
+#: "the agent's terminal finds your tools" (``harness/command_env``) never
+#: reached a benchmark turn, and nothing held the model for a helper.
+BENCH_SESSION_PREFIX = "bench-"
 
 #: The guardrail every runner is given (Phase 0 review, round 2). A real
 #: run's model ended a server task with ``taskkill /f /im python.exe`` — every
@@ -228,6 +239,22 @@ def _entry_from(provider: str, model: str, usage: Any, *, with_tools: bool, sour
 
 
 @contextlib.contextmanager
+def session_ended_on_escape(session_id: str):
+    """v1.378.0 review: end the turn's own session (``procs.end_session``)
+    when the block is left by ANY exception — a cancel (Stop, Ctrl+C) or a
+    runner bug. A run that finishes ends it itself, off the loop, after the
+    block. Each turn has a session of its own, so nothing later sweeps what a
+    cancelled turn left running; this is the one door it has. Synchronous on
+    purpose: a cancelled task must not await again before the programs stop."""
+    try:
+        yield
+    except BaseException:
+        with contextlib.suppress(Exception):
+            procs.end_session(session_id)
+        raise
+
+
+@contextlib.contextmanager
 def counting_router(platform: Any, rollout: Rollout, observed: dict[str, Any]):
     """Enter every model call the platform's router makes into ``rollout``
     while the block runs — ``stream()`` and ``complete()``, whatever the
@@ -374,6 +401,7 @@ class JarvisRunner:
         task's copy carries no harness layer; a refine probe's candidate
         layer when one is set), for the identity."""
         from ..daemon.chat_turn import _harness_model
+        from ..harness.command_env import build_shell_description
         from ..harness.mode import build
 
         provider, model = _harness_model(self.platform, self.provider, self.model)
@@ -381,6 +409,9 @@ class JarvisRunner:
             registry=self.platform.registry, permissions=self.platform.permissions,
             requested=self.dialect, provider=provider, model=model, stream=True,
             approval_mode=JARVIS_APPROVAL_MODE, today="", layer=self._layer(),
+            # v1.378.0: the turn runs as a Build session, so its shell is the
+            # one a Build session's model is shown (the user's PATH).
+            shell_description=build_shell_description(),
         )
 
     def identity(self) -> dict[str, Any]:
@@ -420,6 +451,9 @@ class JarvisRunner:
             "profile_sha256": _sha(profile),
             "round_budget": self.round_budget,
             "approval_mode": JARVIS_APPROVAL_MODE,
+            # v1.378.0: the turn runs as a Build session (its shell's
+            # environment, the held model).
+            "session": "build",
             # v1.370.0: a refine probe's candidate layer (absent for the
             # default harness, so every earlier configuration keeps its key).
             **({"layer_sha256": layer_tree_hash(self.layer_dir), "layer_used": bool(turn.layer.used)}
@@ -467,15 +501,29 @@ class JarvisRunner:
             if text:
                 _note({"kind": "text", "text": text[:4000]})
 
-        from ..harness.components import layer_source
+        from uuid import uuid4
 
-        with counting_router(self.platform, rollout, observed), layer_source(self.layer_dir):
+        from ..daemon.chat_turn import _harness_model
+        from ..harness.components import layer_source
+        from ..harness.sessions import session_id_for
+        from ..providers.hold import reset_hold, set_hold
+
+        # v1.378.0: the turn runs AS A BUILD SESSION (BENCH_SESSION_PREFIX):
+        # a fresh ``build:`` session for its tool calls, and the model held
+        # for the turn and its helpers — the pair a Build turn would run on.
+        session = session_id_for(BENCH_SESSION_PREFIX + uuid4().hex[:12])
+        # (review: the session is ended however the block is left — a Stop
+        # included — and the hold is armed inside it, so nothing can leave
+        # it armed.)
+        with session_ended_on_escape(session), counting_router(self.platform, rollout, observed), \
+                layer_source(self.layer_dir):
+            hold_token = set_hold(*_harness_model(self.platform, self.provider, self.model))
             try:
                 gen = await stream_chat_turn(
                     self.platform, BUILTIN_PERSONAS, body,
                     should_stop=lambda: time.monotonic() > deadline,
                     round_budget=self.round_budget, stay_in_chat=True,
-                    harness=self.dialect,
+                    harness=self.dialect, session_id=session,
                 )
                 async with asyncio.timeout(float(timeout_s) + _GRACE_S):
                     async with contextlib.aclosing(gen) as frames:
@@ -522,12 +570,15 @@ class JarvisRunner:
                 timed_out = True
             except Exception as exc:  # noqa: BLE001 — recorded, never raised past the run
                 error = f"{type(exc).__name__}: {exc}"
+            finally:
+                reset_hold(hold_token)
         # What the turn's shell / run_code left running (a server the agent
-        # started and never stopped) belongs to the lane's session until that
+        # started and never stopped) belongs to the turn's session until that
         # session ends (`procs.owned_by` / `procs.end_session`) — and in this
         # process nothing else ever ends it, so it would outlive the benchmark
-        # and keep its folder open. Stop it here, off the loop.
-        stopped = await asyncio.to_thread(procs.end_session, LANE_SESSION_ID)
+        # and keep its folder open. Stop it here, off the loop (this also
+        # closes the session's agent browser: the end hook of page_browser).
+        stopped = await asyncio.to_thread(procs.end_session, session)
         if stopped:
             out.notes.append(f"stopped {len(stopped)} program(s) the turn left running")
         if time.monotonic() > deadline and done is None:

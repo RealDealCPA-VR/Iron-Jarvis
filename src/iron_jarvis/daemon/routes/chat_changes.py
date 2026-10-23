@@ -315,12 +315,31 @@ def collect_changes(
     }
 
 
+def _shown_rel(entry: dict[str, Any]) -> str:
+    """The row's short path (v1.378.0 review): the path inside the folder the
+    write was made in. A tool given the WHOLE path ("C:/…/shop/web/style.css")
+    left that whole string here, and the row showed it cut off where the
+    Branch view says "web/style.css". ``entry["rel"]`` itself is untouched
+    (an ``apply_patch`` row's entries are matched by it). Never raises."""
+    rel = str(entry.get("rel") or "")
+    if not rel or not Path(rel).is_absolute():
+        return rel
+    ws = (entry.get("first_meta") or {}).get("workspace")
+    try:
+        inner = os.path.relpath(str(entry["target"]), str(Path(ws).resolve()))
+    except (TypeError, ValueError, OSError):
+        return rel
+    if inner == "." or inner.startswith(".."):
+        return rel
+    return inner.replace("\\", "/")
+
+
 def _one_change(home: str | Path, entry: dict[str, Any]) -> dict[str, Any]:
     target: Path = entry["target"]
     first, first_meta = entry["first"], entry["first_meta"]
     out: dict[str, Any] = {
         "path": str(target),
-        "rel": entry["rel"],
+        "rel": _shown_rel(entry),
         "name": target.name,
         "status": "modified",
         "added": None,
