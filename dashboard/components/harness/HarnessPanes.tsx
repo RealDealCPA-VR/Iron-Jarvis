@@ -240,7 +240,11 @@ function ChangesPane({
   onSessionChanged?: () => void;
   onSessionGone?: () => void;
 }) {
-  const [scope, setScope] = useState<"session" | "branch">("session");
+  // v1.378.0 (part 2, Phase 7, the walkthrough): a session on its own branch
+  // opens on the Branch view — the branch IS that session's work, and its
+  // Commit / Push / Create PR buttons are there (the walkthrough pressed
+  // Changes, then Branch, every time). "This session" is one press away.
+  const [scope, setScope] = useState<"session" | "branch">("branch");
   if (view.git && scope === "branch") {
     return (
       <div data-testid="pane-changes" className="space-y-2">
