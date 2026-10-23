@@ -397,14 +397,19 @@ def start(folder: str, *, title: str = "") -> dict[str, str]:
     if not name:
         raise GitRefused("No free name for the session's branch was found. Try again.", 409)
     worktree = wt_dir / name
+    start_sha = _ref_sha(Path(root), "HEAD")
     try:
         gs = GitSession.start(Path(root), worktree, name, branch=branch, env=git_env())
     except GitError as exc:
+        left = _undo_start(root, worktree, branch, start_sha)
         if made_dir:
             with contextlib.suppress(OSError):
                 wt_dir.rmdir()  # only when it is still empty
         raise GitRefused(
-            "Git could not make the session's branch and worktree.", 409, _masked(str(exc)),
+            "Git could not make the session's branch and worktree, so nothing was made."
+            if not left else
+            f"Git could not make the session's branch and worktree; {left} is left behind.",
+            409, _masked(str(exc)),
         ) from None
     base_commit = _g(["rev-parse", "HEAD"], worktree, reads=True).out.strip()
     base = info["branch"] or ("" if gs.base == "HEAD" else gs.base)
@@ -432,6 +437,29 @@ def start(folder: str, *, title: str = "") -> dict[str, str]:
         "created_at": utcnow().isoformat(),
     }
     return {**facts, "folder": str(work)}
+
+
+def _undo_start(root: str, worktree: Path, branch: str, start_sha: str) -> str:
+    """Review (v1.375.0): ``git worktree add -b`` that FAILS can still leave
+    its branch (made first) and even a whole worktree (a ``post-checkout``
+    hook that exits non-zero — Git LFS's own, when git-lfs is missing, is
+    one — fails the command AFTER the checkout). Each retry left another
+    stray ``ij/`` branch and worktree that no session knows. Undone here:
+    the just-made worktree (a fresh checkout, nothing of the user's in it)
+    and the branch, only while it still points at the commit it was made
+    from and is checked out nowhere. Returns what could not be undone, in
+    words ("" = nothing left)."""
+    left: list[str] = []
+    if (worktree / ".git").is_file():
+        _g(["worktree", "remove", "--force", str(worktree)], root)
+        if worktree.exists():
+            left.append(f"the folder {worktree}")
+    if branch and start_sha and _ref_sha(Path(root), f"refs/heads/{branch}") == start_sha:
+        if not _worktree_of_branch(Path(root), branch):
+            _g(["update-ref", "-d", f"refs/heads/{branch}", start_sha], root)
+        if _ref_sha(Path(root), f"refs/heads/{branch}"):
+            left.append(f"the branch {branch}")
+    return " and ".join(left)
 
 
 # --------------------------------------------------------------------------- #

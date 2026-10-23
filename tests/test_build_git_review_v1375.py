@@ -119,6 +119,34 @@ def test_a_folder_inside_a_submodule_cannot_branch_and_nothing_lands_in_the_supe
 
 
 # --------------------------------------------------------------------------- #
+# a start git refuses leaves nothing behind
+# --------------------------------------------------------------------------- #
+
+
+def test_a_start_a_hook_fails_leaves_no_branch_and_no_worktree_behind(repo, tmp_path):
+    # Git LFS's own post-checkout hook exits non-zero when git-lfs is missing;
+    # git then fails `worktree add` AFTER it made the branch and the checkout.
+    hook = repo / ".git" / "hooks" / "post-checkout"
+    hook.write_bytes(
+        b"#!/bin/sh\n"
+        b"echo 'This repository is configured for Git LFS but git-lfs was not found' >&2\n"
+        b"exit 2\n"
+    )
+    hook.chmod(0o755)
+    before = git("rev-parse", "HEAD", cwd=repo)
+    refusals = []
+    for _ in range(2):  # a retry leaves nothing either
+        with pytest.raises(B.GitRefused) as got:
+            B.start(str(repo))
+        refusals.append(got.value)
+    assert git("branch", "--list", "ij/*", cwd=repo) == "", "a stray ij/ branch was left"
+    assert git("worktree", "list", "--porcelain", cwd=repo).count("worktree ") == 1, "a stray worktree"
+    assert not (tmp_path / f"proj{B.WORKTREES_SUFFIX}").exists()
+    assert git("rev-parse", "HEAD", cwd=repo) == before and git("status", "--porcelain", cwd=repo) == ""
+    assert all(str(r).endswith("so nothing was made.") and "git-lfs" in r.details for r in refusals)
+
+
+# --------------------------------------------------------------------------- #
 # discard forgets THIS worktree only
 # --------------------------------------------------------------------------- #
 
