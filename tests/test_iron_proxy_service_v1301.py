@@ -436,7 +436,7 @@ def test_watch_reports_each_cycle_off_the_loop_and_clears_when_off():
 _BUNDLE = Path(__file__).resolve().parents[1] / "desktop" / "vendor" / "iron-proxy" / "iron-proxy.mjs"
 
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(120)
 @pytest.mark.skipif(not _BUNDLE.is_file(), reason="Iron-Proxy bundle not vendored")
 @pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not on PATH")
 def test_the_real_bundle_through_the_service(tmp_path, monkeypatch):
@@ -444,11 +444,16 @@ def test_the_real_bundle_through_the_service(tmp_path, monkeypatch):
     data dir a tmp dir (never ~/.iron-proxy). Health answers, the profile list
     is empty, and stop() leaves no process behind."""
     monkeypatch.delenv("IRONJARVIS_IRON_PROXY_BUNDLE", raising=False)
+    # v1.374.1: a Node cold start answers in ~0.5 s here but went past the
+    # app's 10 s START_TIMEOUT_S on v1.374.0's loaded Tests runner ("running":
+    # False, the start abandoned). This test proves the bundle starts,
+    # answers and stops — not how fast a loaded runner is.
+    monkeypatch.setattr(svc_mod, "START_TIMEOUT_S", 60.0)
     s = IronProxyService(_cfg(tmp_path), register=False)
     assert s.bundled() is True
     st = s.start()
     try:
-        assert st["running"] is True and st["owned"] is True, st
+        assert st["running"] is True and st["owned"] is True, json.dumps(st, default=str)
         assert st["version"] == s._bundle_version() and st["version"]
         assert st["error"] is None and s._outdated is False  # executor-v1 detected
         desc = _descriptor(tmp_path)

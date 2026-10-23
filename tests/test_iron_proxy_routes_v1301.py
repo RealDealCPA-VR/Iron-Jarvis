@@ -513,7 +513,7 @@ _REPO = Path(__file__).resolve().parents[1]
 _BUNDLE = _REPO / "desktop" / "vendor" / "iron-proxy" / "iron-proxy.mjs"
 
 
-@pytest.mark.timeout(90)
+@pytest.mark.timeout(150)
 @pytest.mark.skipif(not _BUNDLE.is_file(), reason="Iron-Proxy bundle not vendored")
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")
 def test_the_real_bundle_starts_answers_and_stops(proj, tmp_path, monkeypatch):
@@ -522,11 +522,17 @@ def test_the_real_bundle_starts_answers_and_stops(proj, tmp_path, monkeypatch):
     view has the card shape, the version comes from SOURCE.txt, disable kills it."""
     monkeypatch.delenv("IRONJARVIS_IRON_PROXY_BUNDLE", raising=False)
     monkeypatch.delenv("IRONJARVIS_IRON_PROXY_NODE", raising=False)
+    # v1.374.1: a Node cold start can pass the app's 10 s START_TIMEOUT_S on a
+    # loaded runner (the service twin of this test failed v1.374.0's Tests
+    # gate that way); this proves the bundle works, not the runner's speed.
+    monkeypatch.setattr("iron_jarvis.iron_proxy.service.START_TIMEOUT_S", 60.0)
     descriptor = tmp_path / "ipd" / "proxy.json"
     with TestClient(create_app(str(proj))) as raw:
         c = _Bodies(raw)
         st = _enable(c)["status"]
-        assert st["running"] is True and st["owned"] is True and st["bundled"] is True, st
+        assert st["running"] is True and st["owned"] is True and st["bundled"] is True, json.dumps(
+            st, default=str
+        )
         assert st["version"]
         assert st["error"] is None, "the vendored bundle must advertise executor-v1"
         token = json.loads(descriptor.read_text())["token"]

@@ -2382,7 +2382,11 @@ class Orchestrator:
                 # own. Hand it to the task's OWN loop, and stamp the row now:
                 # the response is the only place the request shows until the
                 # run unwinds and _finalize_cancelled re-saves the same words.
-                loop.call_soon_threadsafe(task.cancel)
+                # STAMP FIRST, cancel second (v1.374.1): the finalizer POPS the
+                # stop reason, so a cancel handed over before this read let the
+                # run's loop finalize in between, and the stamp then saved the
+                # plain words over Emergency stop's. Stamped first, the
+                # finalizer's write is always the last one.
                 session.status = SessionStatus.CANCELLED
                 session.summary = _with_folder_note(
                     session.summary,
@@ -2392,6 +2396,7 @@ class Orchestrator:
                 )
                 session.finished_at = utcnow()
                 self._save(session)
+                loop.call_soon_threadsafe(task.cancel)
         elif self._remove_queued(session_id):
             # Parked, never started (v1.166.0): the un-started coroutine was
             # closed by _remove_queued; finalize honestly — no agent ever ran.
