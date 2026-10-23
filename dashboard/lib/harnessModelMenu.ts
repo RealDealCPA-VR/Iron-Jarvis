@@ -174,8 +174,15 @@ function accountsFor(
   now: Date,
 ): MenuAccount[] | null {
   const listed = view?.groups[vendor] ?? [];
-  if (listed.length === 0) return null;
   const currentId = current?.id ?? "";
+  // Review: the session's own account is ALWAYS listed — also when its
+  // vendor's list is empty (its only account turned off: the list leaves
+  // off accounts out; or the list not read yet). A plain "Claude Code" row
+  // there read as this PC's own sign-in, while the session's turns still run
+  // on (or are refused for) that account.
+  if (listed.length === 0) {
+    return current && current.vendor === vendor ? [menuAccount(current, currentId, now)] : null;
+  }
   const rows = listed.map((a) => menuAccount(a, currentId, now));
   if (current && current.vendor === vendor && !listed.some((a) => a.id === current.id)) {
     rows.push(menuAccount(current, currentId, now));
@@ -240,7 +247,12 @@ export function companyMenu(
 
   // ---- the accounts of each CLI way
   const vw = view ?? null;
-  const note = vw?.ironProxy?.needsUpdate ? vw.ironProxy.note : "";
+  // Iron-Proxy's own note on a way it lists accounts for: it needs an update
+  // (it cannot keep a session on one account), or (review) it is OFF — the
+  // session's own account is still listed, and its turns are refused until
+  // Iron-Proxy is on again, so the menu says why.
+  const ip = vw?.ironProxy;
+  const note = ip && (ip.needsUpdate || !ip.enabled) ? ip.note : "";
   const accountsOf = new Map<string, MenuAccount[] | null>();
   for (const co of COMPANIES) accountsOf.set(co.cli, accountsFor(co.vendor, vw, current, now));
 

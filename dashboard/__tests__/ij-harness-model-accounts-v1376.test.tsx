@@ -269,6 +269,9 @@ describe("one group per company", () => {
 describe("no duplicate", () => {
   it("a keyless Anthropic served by Claude Code is listed once, under Claude Code", async () => {
     api.gets["/build/accounts"] = { claude: [], codex: [], iron_proxy: PROXY_OFF };
+    // Review: a session with NO account (a session on one keeps it listed
+    // under Claude Code even with Iron-Proxy off — the review file pins it).
+    api.gets["/build/sessions/s1"] = view({ setup: { provider: "claude-cli", model: "claude-opus-4-8" } });
     api.models = [...CLAUDE, ...ANTHROPIC_SERVED, ...CODEX, ...OPENAI_SERVED];
     renderSession();
     const menu = await openMenu("");

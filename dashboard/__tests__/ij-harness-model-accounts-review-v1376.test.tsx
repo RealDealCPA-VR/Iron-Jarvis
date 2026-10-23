@@ -258,6 +258,58 @@ describe("a session on its provider's own default", () => {
   });
 });
 
+/* -------------------------------- 3. the session's own account, alone */
+
+describe("the session's own account is listed even when its vendor's list is empty", () => {
+  it("its only account turned off (the list leaves it out): marked under Claude Code with its state", async () => {
+    api.gets["/build/accounts"] = { claude: [], codex: [], iron_proxy: PROXY_ON };
+    api.gets["/build/sessions/s1"] = onWork(
+      { provider: "claude-cli", model: "claude-opus-5-5" },
+      { account: { ...WORK, status: "off" } },
+    );
+    renderSession();
+    await screen.findByTestId("account-chip");
+    fireEvent.click(screen.getByTitle("Switch model"));
+    const menu = await screen.findByTestId("model-menu");
+    const work = await within(menu).findByTestId("model-account-work");
+    expect(work.getAttribute("data-current")).toBe("true");
+    expect(within(work).getByTestId("model-account-state").textContent).toBe("Turned off");
+    // The way is a heading over that account, not a row of its own.
+    expect(within(menu).getByTestId("model-way-claude-cli").tagName).toBe("DIV");
+  });
+
+  it("Iron-Proxy turned off: the account is still the session's, and the menu says why its turns stop", async () => {
+    const OFF_NOTE = "Iron-Proxy is off; turn it on in Connections to run Build sessions on your accounts.";
+    api.gets["/build/accounts"] = {
+      claude: [],
+      codex: [],
+      iron_proxy: { enabled: false, running: false, needs_update: false, note: OFF_NOTE },
+    };
+    // The daemon's view of a session's account while Iron-Proxy is off: its
+    // name, no status (build_accounts.session_account).
+    api.gets["/build/sessions/s1"] = onWork(
+      { provider: "claude-cli", model: "claude-opus-5-5" },
+      { account: { id: "work", name: "Work", status: null } },
+    );
+    renderSession();
+    await waitFor(() => expect(screen.getByTitle("Switch model").textContent).toBe("Opus 5.5 · Work"));
+    fireEvent.click(screen.getByTitle("Switch model"));
+    const menu = await screen.findByTestId("model-menu");
+    const way = await within(menu).findByTestId("model-way-claude-cli");
+    expect(within(way).getByTestId("model-account-work").getAttribute("data-current")).toBe("true");
+    expect(way).toHaveTextContent(OFF_NOTE);
+    // A model under it is the model alone: the account stays the session's.
+    api.answers["PATCH /build/sessions/s1"] = () => onWork({ provider: "claude-cli", model: "claude-opus-4-8" });
+    fireEvent.click(within(way).getByTestId("model-account-work"));
+    fireEvent.click(within(await screen.findByTestId("model-sub")).getByText("Opus 4.8"));
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.method === "PATCH")).toEqual([
+        { method: "PATCH", path: "/build/sessions/s1", body: { provider: "claude-cli", model: "claude-opus-4-8" } },
+      ]),
+    );
+  });
+});
+
 /* ------------------------------------------------- the 5 s re-read */
 
 describe("the account list is re-read only while the menu is open", () => {
