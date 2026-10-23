@@ -422,6 +422,14 @@ export function ModelMenu({
   // v1.376.0: on a phone the harness menu is a sheet that scrolls, and a
   // model panel opens under its row: bring the panel into view.
   const menuRef = useRef<HTMLDivElement>(null);
+  /** Review (harness only): Escape closes the menu from ANY row (a phone's
+   *  sheet is all rows) and hands focus back to the chip that opened it. */
+  const chipRef = useRef<HTMLButtonElement>(null);
+  const closeToChip = () => {
+    onOpenChange(false);
+    setSub(null);
+    chipRef.current?.focus();
+  };
   useEffect(() => {
     if (!companies || !sub || typeof window === "undefined") return;
     if (!window.matchMedia?.(PHONE_QUERY)?.matches) return;
@@ -640,6 +648,7 @@ export function ModelMenu({
   return (
     <div ref={popRef} className="relative">
       <button
+        ref={chipRef}
         type="button"
         onClick={() => {
           onOpenChange(!open);
@@ -675,6 +684,16 @@ export function ModelMenu({
           ref={menuRef}
           data-testid="model-menu"
           className={companies ? `${MODEL_MENU} ${MODEL_MENU_PHONE_SHEET}` : MODEL_MENU}
+          onKeyDown={
+            companies
+              ? (e) => {
+                  if (e.key !== "Escape") return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  closeToChip();
+                }
+              : undefined
+          }
         >
           {/* v1.332.0: the one line a "local only" chat adds here. */}
           {localOnlyLine && (

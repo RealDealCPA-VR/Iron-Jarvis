@@ -334,6 +334,28 @@ describe("a window over its limit", () => {
   });
 });
 
+/* ------------------------------------------------- 5. Escape and focus */
+
+describe("Escape closes the harness menu from any row and hands focus back to the chip", () => {
+  it("from an account row", async () => {
+    renderSession();
+    const menu = await openMenu();
+    const row = within(menu).getByTestId("model-account-personal");
+    row.focus();
+    fireEvent.keyDown(row, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("model-menu")).toBeNull());
+    expect(document.activeElement).toBe(screen.getByTitle("Switch model"));
+  });
+
+  it("from the filter box", async () => {
+    renderSession();
+    await openMenu();
+    fireEvent.keyDown(screen.getByTestId("model-filter"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("model-menu")).toBeNull());
+    expect(document.activeElement).toBe(screen.getByTitle("Switch model"));
+  });
+});
+
 /* ------------------------------------------------- the 5 s re-read */
 
 describe("the account list is re-read only while the menu is open", () => {
