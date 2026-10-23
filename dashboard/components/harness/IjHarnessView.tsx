@@ -150,6 +150,15 @@ export function IjHarnessView({
     () => !!folders?.some((f) => f.sessions.some((s) => s.id === selected && s.running)),
     [folders, selected],
   );
+  // v1.378.0 (part 2, Phase 7, the walkthrough): New session opens on the
+  // folder of the session in front — its group's folder, the one the user
+  // picked (a session on its own branch is grouped there too). The Terminals
+  // view's folder was the default before, so a second session in the same
+  // folder meant pasting the folder again. No session open: as before.
+  const sessionFolder = useMemo(
+    () => folders?.find((f) => f.sessions.some((s) => s.id === selected))?.path ?? null,
+    [folders, selected],
+  );
 
   // v1.377.0 (part 2, Phase 6): a session just BRANCHED from a question opens
   // with that question in its box (handed over once, for that session only).
@@ -201,7 +210,7 @@ export function IjHarnessView({
           onSelect={setSelected}
           onStart={start}
           onRename={rename}
-          defaultFolder={defaultFolder}
+          defaultFolder={sessionFolder ?? defaultFolder}
           terminals={terminals}
           onOpenTerminal={onOpenTerminal}
           newRequest={newRequest}

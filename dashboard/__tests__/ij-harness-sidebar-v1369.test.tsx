@@ -253,7 +253,10 @@ describe("the view", () => {
     await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "new1"));
     // The folder only: the daemon chooses the account (its Default, even at
     // its limit — v1.368.0); the screen never picks one for a new session.
-    expect(api.posts).toContainEqual(["/build/sessions", { folder: "C:\\work" }]);
+    // (v1.378.0, moved on purpose: the folder is the session in front's —
+    // a1 in C:\work\shop — not the Terminals view's C:\work;
+    // ij-harness-new-folder-v1378.test.tsx.)
+    expect(api.posts).toContainEqual(["/build/sessions", { folder: "C:\\work\\shop" }]);
   });
 
   it("reads the list again on a timer while the window is visible, and not while it is hidden", async () => {
