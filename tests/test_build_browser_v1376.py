@@ -937,6 +937,15 @@ def _alive(pids: list[int]) -> list[int]:
     return [p for p in pids if psutil.pid_exists(p)]
 
 
+def _name(pid: int) -> str:
+    import psutil
+
+    try:
+        return psutil.Process(pid).name().lower()
+    except Exception:  # noqa: BLE001 — gone meanwhile
+        return ""
+
+
 async def _wait_dead(pids: list[int], seconds: float = 15.0) -> list[int]:
     end = time.monotonic() + seconds
     while time.monotonic() < end:
@@ -968,9 +977,20 @@ async def test_real_edge_reads_the_console_and_failed_requests_and_leaves_nothin
         # kill-on-close job (procs.adopt) — so nothing can outlive it.
         job = browsers._sessions[key].backend._job
         assert job is not None
-        members = set(job.member_pids())
-        tree = PB._tree_of(browsers._sessions[key].backend._driver)
-        assert tree and set(tree) <= members, (tree, members)
+        # v1.376.0 review: Edge's identity_helper.exe lives OUTSIDE the job
+        # (Windows starts it for Edge, ~2 s in — measured; this pin held only
+        # when it ran first). Every other process of the tree is a member, and
+        # the browser's process list (what a close ends) holds the whole tree.
+        stray: list[int] = []
+        for _ in range(20):
+            members = set(job.member_pids())
+            tree = PB._tree_of(browsers._sessions[key].backend._driver)
+            stray = [p for p in tree if p not in members and _name(p) != "identity_helper.exe"]
+            if tree and not stray:
+                break
+            await asyncio.sleep(0.1)
+        assert tree and not stray, (tree, members)
+        assert set(tree) <= set(browsers.pids(key))
         clicked = await browsers.click(key, "Add to cart", preview=site.base)
         assert clicked.did == 'Clicked "Add to cart"'
         await browsers.click(key, "Broken", preview=site.base)

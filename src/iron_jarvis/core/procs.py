@@ -643,12 +643,14 @@ def adopt(pid: int, *, background: bool | None = None) -> "_Job | None":
     started (assignment never adopts existing children — the v1.346.1
     lesson). Playwright's driver is such a child: it starts nothing until it
     is asked to launch the browser, and the caller adopts it before asking.
-    Everything it starts afterwards is born inside the job (measured with
-    Edge: the driver, the browser and its gpu, network, storage, renderer
-    and crash-reporter processes all members), so ``terminate()`` — or the
+    What it starts afterwards is born inside the job (measured with Edge:
+    the driver, the browser and its gpu, network, storage, renderer and
+    crash-reporter processes all members), so ``terminate()`` — or the
     daemon dying for any reason, which closes the job's only handle — ends
-    the whole tree. The caller owns the job: ``terminate()`` then
-    ``close()``."""
+    them. A process that something ELSE starts on a member's behalf is not
+    (Edge's ``identity_helper.exe``, measured in the v1.376.0 review): the
+    caller keeps its own list for those. The caller owns the job:
+    ``terminate()`` then ``close()``."""
     k = _kernel()
     if k is None or not pid:
         return None

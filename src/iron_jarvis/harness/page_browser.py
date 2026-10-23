@@ -21,13 +21,21 @@ WHO OWNS THE PROCESSES. Playwright starts its driver (``node.exe``) itself
 (``asyncio.create_subprocess_exec`` inside the playwright package), so the
 spawn cannot go through ``core/procs``' door; the driver is ADOPTED into a
 kill-on-close Job right after it starts and before it is asked to launch
-anything (``procs.adopt`` — it starts nothing on its own), so Edge and every
-process Edge starts are born inside the job (measured: driver, browser, gpu,
-network, storage, renderers, crash reporter — all members). Closing the
-browser closes the context, stops the driver and then TERMINATES the job; a
-daemon that dies for any reason closes the job's only handle and the kernel
-ends the whole tree. ``core/procs.ALLOWED_RAW_SPAWNS`` is unchanged: no file
-of ours spawns anything here.
+anything (``procs.adopt`` — it starts nothing on its own), so Edge and the
+processes Edge starts are born inside the job (measured: driver, browser, gpu,
+network, storage, renderers, crash reporter — all members). ONE EXCEPTION,
+measured in the v1.376.0 review: ~2 s in, Edge has an ``identity_helper.exe``
+that is NOT in the job (Windows starts it for Edge, in a job of its own, even
+when ours allows no breakaway); it exits ~0.2 s after Edge goes. So the
+browser's process list is the job's members AND the driver's whole tree, and
+a close kills what the tree held outside the job too. Closing the browser
+closes the context, stops the driver and then TERMINATES the job; a daemon
+that dies for any reason closes the job's only handle and the kernel ends
+everything in it. ``core/procs.ALLOWED_RAW_SPAWNS`` is unchanged: no file of
+ours spawns anything here.
+
+AT MOST :data:`MAX_BROWSERS` are open at once (v1.376.0 review): a new one
+closes the least recently used browser that is not acting.
 
 THE THREAD. Playwright's ASYNC API runs on ONE dedicated thread with its own
 event loop (:class:`_Host`; a Proactor loop on Windows, which starts
@@ -79,6 +87,7 @@ import asyncio
 import collections
 import contextlib
 import importlib
+import itertools
 import json
 import os
 import shutil
@@ -134,6 +143,12 @@ MAX_ELEMENTS = 40
 VIEW_JPEG_QUALITY = 70
 #: Sessions whose last view is kept in memory.
 MAX_VIEWS = 32
+#: v1.376.0 review DECISION (item 4): at most this many agent browsers are
+#: open at once, across every Build session (each Edge is ~8 processes and a
+#: few hundred MB). Opening one more closes the session browser used least
+#: recently that is not acting (its pane says why); when every one is acting,
+#: the open is refused in words. One session's helpers share its browser.
+MAX_BROWSERS = 4
 #: The throwaway folder's name (in the SYSTEM temp folder).
 WORK_PREFIX = "ij-agent-browser-"
 #: A leftover folder older than this (a daemon that died) is removed.
@@ -172,6 +187,10 @@ DIED = (
 FRESH_AFTER_DIED = (
     "The agent's browser had stopped (Edge was closed or crashed), so a fresh one was "
     "opened: what the page held before (typed text, a sign-in) is gone."
+)
+TOO_MANY = (
+    f"{MAX_BROWSERS} Build sessions already have the agent's browser open and each is in the "
+    "middle of an action, so another cannot start now. Try again in a moment."
 )
 BUSY = (
     "The agent's browser is still busy with another action in this session; "
@@ -633,6 +652,11 @@ class EdgeBackend:
         #: The context closed on its own (Edge exited: the user closed it, a
         #: crash) — v1.376.0 review: the browser is then replaced, never used.
         self._ctx_closed = False
+        #: Every process seen in the driver's tree (psutil objects, which
+        #: refuse a reused pid) — one of Edge's lives outside the job
+        #: (measured), and a polite close takes its parent away before the
+        #: kill could find it by the tree (v1.376.0 review).
+        self._tree_seen: dict[int, Any] = {}
 
     # -- life ----------------------------------------------------------------
     async def start(self) -> None:
@@ -706,7 +730,15 @@ class EdgeBackend:
         except Exception:  # noqa: BLE001
             pass
 
+    def _note_tree(self) -> list[int]:
+        rows = _tree_procs(self._driver)
+        for proc in rows:
+            self._tree_seen.setdefault(proc.pid, proc)
+        return [proc.pid for proc in rows]
+
     async def close(self) -> None:
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(self._note_tree)
         try:
             if self._ctx is not None:
                 await self._ctx.close()
@@ -726,10 +758,15 @@ class EdgeBackend:
             if self._killed:
                 return []
             members = self._members()  # read BEFORE the flag: it empties the list
+            # v1.376.0 review: the driver's whole tree, read BEFORE the job
+            # ends it — Edge's identity_helper.exe lives OUTSIDE the job
+            # (measured), so the job alone does not end it.
+            self._note_tree()
+            tree = list(self._tree_seen.values())
             self._killed = True
             if self._job is None:
                 self._remember(members)
-            pids = sorted(set(members) | self._known)
+            pids = sorted(set(members) | self._known | {p.pid for p in tree})
             job = self._job
             try:
                 if job is not None:
@@ -740,6 +777,8 @@ class EdgeBackend:
                     self._job = None
                 else:
                     _kill_procs(list(self._procs.values()))
+                inside = set(members)
+                _kill_procs([p for p in tree if p.pid not in inside and p.pid != os.getpid()])
             finally:
                 # The Local only proxy's port is let go only once Edge is gone.
                 self._drop_refuser()
@@ -757,7 +796,12 @@ class EdgeBackend:
         return _tree_of(self._driver)
 
     def pids(self) -> list[int]:
-        return sorted(set(self._members()) | self._known)
+        """The browser's processes: the job's members, every process the
+        driver's tree holds (one of Edge's lives outside the job, measured —
+        v1.376.0 review) and every one seen before."""
+        if self._killed:
+            return sorted(self._known | set(self._tree_seen))
+        return sorted(set(self._members()) | self._known | set(self._note_tree()))
 
     def alive(self) -> bool:
         """False once Edge or the driver has gone (closed by the user, a
@@ -1105,6 +1149,20 @@ def _tree_of(pid: int) -> list[int]:
         return []
 
 
+def _tree_procs(pid: int) -> list[Any]:
+    """The driver and every process below it, as psutil objects (which
+    refuse a pid that was reused since they were read). [] when unknown."""
+    if not pid:
+        return []
+    try:
+        import psutil
+
+        root = psutil.Process(pid)
+        return [root, *root.children(recursive=True)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _kill_procs(rows: list[Any]) -> None:
     """The fallback with no job (off Windows, or a job that could not be
     made): kill each recorded process of THIS browser (psutil objects, which
@@ -1203,6 +1261,9 @@ class _Session:
     notes: list[str] = field(default_factory=list)
     #: Started behind the Local only proxy (v1.376.0 review).
     local_only: bool = False
+    #: The order of use across sessions (a counter: two actions within one
+    #: clock tick of Windows' 15.6 ms monotonic clock would tie on time).
+    used_seq: int = 0
 
 
 @dataclass
@@ -1245,6 +1306,7 @@ class AgentBrowsers:
         self._urls: dict[str, str] = {}
         self._views: "collections.OrderedDict[str, dict[str, Any]]" = collections.OrderedDict()
         self._swept = False
+        self._use_counter = itertools.count(1)
         #: Test seam: extra Edge switches (a host-resolver rule).
         self.extra_args: tuple[str, ...] = ()
 
@@ -1482,9 +1544,20 @@ class AgentBrowsers:
         async with gate:
             sess = self._sessions.get(key)
             if sess is None:
+                await self._make_room(key)
                 sess = await self._start(key, background, local_only)
         self._starting.pop(key, None)
         return sess
+
+    async def _make_room(self, key: str) -> None:
+        """At most :data:`MAX_BROWSERS` open: the least recently used one that
+        is not acting is closed ("room"); none free → refused in words."""
+        while len(self._sessions) >= MAX_BROWSERS:
+            free = [s for k, s in self._sessions.items() if k != key and not s.lock.locked()]
+            if not free:
+                raise BrowserProblem(TOO_MANY)
+            oldest = min(free, key=lambda s: s.used_seq)
+            await self._close(oldest.key, "room")
 
     async def _act(self, key: str, op: str, *, preview: str = "", background: bool = False,
                    local_only: bool = False, **kw: Any) -> ActResult:
@@ -1506,6 +1579,7 @@ class AgentBrowsers:
                 await self._close(key, "local only changed")
                 raise BrowserProblem(LOCAL_ONLY_CHANGED.format(state="on" if local_only else "off"))
             sess.last_used = time.monotonic()
+            sess.used_seq = next(self._use_counter)
             # The page the user's Browser pane shows NOW (the turn's own
             # preview_url): opened without asking. A page the agent opened
             # under an earlier one stays allowed (sess.allowed).

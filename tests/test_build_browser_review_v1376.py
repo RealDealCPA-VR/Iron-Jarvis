@@ -338,3 +338,125 @@ def test_the_local_only_proxy_lets_through_exactly_the_private_addresses():
     for suffix in egress.PRIVATE_SUFFIXES:
         assert "*" + suffix in rules, suffix
     assert {"localhost", "*.localhost", "<local>"} <= set(rules)
+
+
+# --------------------------------------------------------------------------- #
+# at most MAX_BROWSERS agent browsers at once
+# --------------------------------------------------------------------------- #
+
+
+async def test_at_most_four_browsers_the_least_recently_used_idle_one_makes_room(tmp_path):
+    """DECISION (review item 4): each Edge is ~8 processes and a few hundred
+    MB, and nothing capped them — one per Build session, kept for 10 idle
+    minutes. Now at most MAX_BROWSERS run; a new one closes the session
+    browser used least recently that is not acting (its pane says why), and
+    when every one is acting the open is refused in words."""
+    from tests.test_build_browser_v1376 import DEV, FakeBackend
+
+    assert PB.MAX_BROWSERS == 4
+    made: dict[str, Any] = {}
+
+    def factory(**kw):
+        backend = FakeBackend(**kw)
+        return backend
+
+    inst = PB.AgentBrowsers(backend_factory=factory)
+    try:
+        for n in range(4):
+            await inst.open(f"build:{n}", DEV, preview=DEV)
+            made[f"build:{n}"] = inst._sessions[f"build:{n}"].backend
+        await inst.read("build:0", preview=DEV)  # build:1 is now the least recently used
+        await inst.open("build:4", DEV, preview=DEV)
+        assert sorted(inst.open_keys()) == ["build:0", "build:2", "build:3", "build:4"]
+        assert made["build:1"].killed
+        assert inst.view("build:1")["closed_reason"] == "room"
+        # Every open browser is acting: the fifth is refused, nothing closed.
+        for k in inst.open_keys():
+            inst._sessions[k].backend.delay_s = 1.5
+        busy = [asyncio.ensure_future(inst.click(k, "Log", preview=DEV)) for k in inst.open_keys()]
+        await asyncio.sleep(0.5)
+        with pytest.raises(PB.BrowserProblem, match="already have the agent's browser open"):
+            await inst.open("build:5", DEV, preview=DEV)
+        await asyncio.gather(*busy)
+        assert len(inst.open_keys()) == 4 and not inst.is_open("build:5")
+    finally:
+        inst.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# every process of the browser's tree, inside the job or not
+# --------------------------------------------------------------------------- #
+
+
+@REAL
+@pytest.mark.timeout(180)
+async def test_real_edge_a_helper_edge_starts_outside_the_job_is_counted_and_ended():
+    """MEASURED (review): ~2 s after it starts, Edge has an
+    ``identity_helper.exe`` that is NOT in the browser's job (it is in a job
+    of its own — Windows starts it for Edge — even when the job allows no
+    breakaway). The doer's "every process Edge starts is born in the job"
+    held only for a check made in the first two seconds, so the browser's
+    process list (and its kill) missed it. Now the list is the job's members
+    AND the driver's whole tree, and a close ends both."""
+    import psutil
+
+    site = Site({"/": "<title>Shop</title>shop"})
+    b = _browsers()
+    key = "build:tree"
+    try:
+        await b.open(key, site.base, preview=site.base)
+        backend = b._sessions[key].backend
+        outside: list[int] = []
+        before: set[int] = set()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            members = set(backend._job.member_pids())
+            seen = {p for p in PB._tree_of(backend._driver) if p not in members}
+            # One that STAYS (seen twice: a process the job is still taking
+            # in reads as outside for an instant).
+            outside = sorted(seen & before)
+            if outside:
+                break
+            before = seen
+            await asyncio.sleep(0.25)
+        if not outside:
+            pytest.skip("this Edge started no process outside the job")
+        listed = set(b.pids(key))
+        assert {p for p in outside if psutil.pid_exists(p)} <= listed, (outside, listed)
+        tree = [psutil.Process(p) for p in PB._tree_of(backend._driver)]
+        ended = set(await b.close(key, "test"))
+        assert {p for p in outside if p in {t.pid for t in tree}} <= ended, (outside, ended)
+        end = time.monotonic() + 15
+        while time.monotonic() < end and any(p.is_running() for p in tree):
+            await asyncio.sleep(0.2)
+        assert not [p for p in tree if p.is_running()]
+    finally:
+        b.shutdown()
+        site.close()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a Windows job")
+def test_kill_ends_a_process_of_the_tree_that_is_outside_the_job(tmp_path, monkeypatch):
+    """The kill's half of the pin above, without Edge: a process of the
+    driver's tree that the job does not hold (and that would not exit on its
+    own) is ended by the close too."""
+    import subprocess
+
+    import psutil
+
+    from iron_jarvis.core import procs
+
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        backend = PB.EdgeBackend(edge="edge", work=tmp_path, guard=lambda u: PB.Verdict("ok"),
+                                 note=lambda k, t: None)
+        backend._job = procs._Job.create(kill_on_close=True, below_normal=False)  # holds nothing
+        backend._driver = 4242
+        monkeypatch.setattr(PB, "_tree_procs", lambda pid: [psutil.Process(sleeper.pid)])
+        ended = backend.kill()
+        assert sleeper.pid in ended
+        sleeper.wait(10)
+        assert sleeper.poll() is not None
+    finally:
+        if sleeper.poll() is None:
+            sleeper.kill()
