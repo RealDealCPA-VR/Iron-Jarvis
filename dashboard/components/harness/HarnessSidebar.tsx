@@ -5,7 +5,11 @@
  *
  *  - New session: in the folder last worked in, or one picked here (the
  *    Folders picker, or a pasted path). A folder Iron Jarvis cannot use is
- *    refused by the daemon in words, shown under the box.
+ *    refused by the daemon in words, shown under the box. v1.379.0: the
+ *    folder is OPTIONAL ("Start with no folder", or Start with the box
+ *    empty): such a session keeps its files in a folder of its own under the
+ *    chat files folder, made with its first message — one line says where.
+ *    All of them share one plain "No folder" group.
  *  - Sessions grouped by folder (GET /build/sessions, newest first). A group
  *    is named by its DISPLAY name; renaming it changes the display name only
  *    (a folder that is a Jarvis project's root shows and renames the
@@ -153,7 +157,7 @@ function NewSessionForm({
       ) : null}
       {/* v1.379.0: a session needs no folder (Claude Code's own rule: attach
           one, or not) — this line says where such a session keeps its files. */}
-      <p data-testid="harness-new-no-folder-line" className="text-[11px] leading-snug text-zinc-500">
+      <p data-testid="harness-new-no-folder-line" className="break-words text-[11px] leading-snug text-zinc-500">
         {noFolderLine(workRoot)}
       </p>
       {problem ? (

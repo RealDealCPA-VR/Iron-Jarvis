@@ -1951,7 +1951,7 @@ export function HarnessSession({
         >
           {offline ? <OfflineHint /> : null}
           {shown.length === 0 && !busy ? (
-            <p data-testid="harness-empty" className="pt-6 text-center text-[13px] text-zinc-500">
+            <p data-testid="harness-empty" className="break-words pt-6 text-center text-[13px] text-zinc-500">
               {view.noFolder
                 ? noFolderEmptyWords(view.workRoot)
                 : `Ask for something to build or change in ${view.folderName}.`}

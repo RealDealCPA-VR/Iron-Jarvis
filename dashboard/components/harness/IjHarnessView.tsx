@@ -198,7 +198,10 @@ export function IjHarnessView({
       data-testid="ij-harness-view"
       className="flex flex-col gap-4 xl:h-[calc(100vh-12rem-var(--ij-strip-h,0px))] xl:min-h-[480px] xl:flex-row"
     >
-      <aside className="flex max-h-[22rem] w-full shrink-0 flex-col xl:max-h-none xl:w-56 2xl:w-64">
+      {/* v1.379.0: below xl the left pane is capped, and it SCROLLS — New
+          session with its folder list open is taller than the cap and was
+          drawn over the session below it at phone width (measured, 390 px). */}
+      <aside className="flex max-h-[22rem] w-full shrink-0 flex-col overflow-y-auto xl:max-h-none xl:w-56 xl:overflow-visible 2xl:w-64">
         <HarnessSidebar
           folders={folders}
           listError={listError}
