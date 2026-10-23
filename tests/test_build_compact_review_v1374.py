@@ -467,3 +467,75 @@ async def test_a_window_no_one_knows_is_said_to_be_the_apps_own_and_compaction_o
     assert build_routes.context_receipt({"window": 9000, "percent": 80, "window_known": True}) == {
         "window": 9000, "percent": 80,
     }
+
+
+# --------------------------------------------------------------------------- #
+# the REAL router: the session's own model or nothing (v1.162.0 / v1.332.0 /
+# v1.372.0) — the doer's pins used a stand-in router that raised by itself
+# --------------------------------------------------------------------------- #
+
+
+class _Spy:
+    """A provider adapter that records every call; ``fail`` makes it refuse
+    as a busy server would (transient)."""
+
+    def __init__(self, provider: str, fail: bool = False) -> None:
+        from iron_jarvis.providers.adapters.base import LLMAdapter, LLMResponse, ProviderError
+
+        spy = self
+
+        class _A(LLMAdapter):
+            def __init__(self, model=None):
+                self.provider, self.model = provider, model or "m"
+
+            async def complete(self, *, system, messages, tools, **kw):
+                spy.calls.append(self.model)
+                if spy.fail:
+                    raise ProviderError(f"{provider}: overloaded", status_code=503)
+                return LLMResponse(text="GOAL: x.\nFACTS:\nThe answer for t1 was given.",
+                                   usage={"input_tokens": 5, "output_tokens": 5})
+
+            async def stream(self, *, system, messages, tools, **kw):
+                resp = await self.complete(system=system, messages=messages, tools=tools, **kw)
+                yield {"type": "final", "response": resp}
+
+        self.calls: list[str] = []
+        self.fail = fail
+        self.adapter = _A
+
+
+def _real_router_with(app, monkeypatch, spies: dict[str, _Spy]) -> None:
+    mgr = app.state.platform.providers
+    for name, spy in spies.items():
+        mgr.register(name, lambda model=None, _s=spy: _s.adapter(model))
+    real = mgr.available
+    monkeypatch.setattr(mgr, "available", lambda name: True if name in spies else real(name))
+
+
+async def test_a_local_only_session_on_a_cloud_model_is_refused_by_the_real_router(app, work, monkeypatch):
+    from tests.test_build_compact_v1374 import seed
+
+    cloud = _Spy("anthropic")
+    _real_router_with(app, monkeypatch, {"anthropic": cloud})
+    sid = new_session(app, work, local_only=True)["id"]  # CLAUDE = ("anthropic", ...)
+    seed(app, sid)
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/compact", {})
+    assert status == 409 and body.get("code") == "local_only", body
+    assert cloud.calls == [], "the conversation was sent to a cloud model"
+    assert "compaction" not in setup_of(app, sid)
+
+
+async def test_a_failing_session_model_is_never_replaced_by_another(app, work, monkeypatch):
+    from tests.test_build_compact_v1374 import seed
+
+    held = _Spy("anthropic", fail=True)
+    other = _Spy("openai")
+    _real_router_with(app, monkeypatch, {"anthropic": held, "openai": other})
+    app.state.platform.config.default_provider = "openai"  # the default fallback a held call must skip
+    sid = new_session(app, work)["id"]
+    seed(app, sid)
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/compact", {})
+    assert status == 502, body
+    assert held.calls, "the session's own model was never asked"
+    assert other.calls == [], "the summary moved to a model the session does not run on"
+    assert "compaction" not in setup_of(app, sid)
