@@ -3569,6 +3569,95 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A Build session's agent drives its OWN invisible Edge on local pages
+  only; page text is untrusted; nothing outlives the session; and the
+  harness model menu lists each company once, with the Iron-Proxy accounts
+  as choices** (v1.376.0 — IJ harness part 2 Phase 5, the user's decision
+  5, plus the user's request "it should list which claude code account the
+  user wants to engage … anthropic and claude code … are the same company";
+  two doers + two reviewers: 11 and 6 real defects, each red first and
+  mutation-checked). BROWSER (`harness/page_browser.py` manager,
+  `harness/page_act.py` tools `page_open`/`page_click`/`page_type`/
+  `page_read`; `page_screenshot` with no `url` shoots the agent's page):
+  Playwright's ASYNC API on ONE dedicated thread + loop (the daemon only
+  awaits futures from it; a cancel cancels the action), the INSTALLED Edge
+  headless, a throwaway profile/downloads/TEMP under the SYSTEM temp
+  (`ij-agent-browser-*`; the driver and Edge get it as TEMP through a
+  wrapper on Playwright's `get_driver_env`, so `playwright-artifacts-*` no
+  longer leaks), one per Build session (a helper uses its session's), at
+  most 4 (a fifth closes the least-recently-used idle one, said in its
+  pane), closed on Stop / archive / delete / 10 min idle
+  (`IRONJARVIS_PAGE_BROWSER_IDLE_S` for tests) / shutdown, ONE close per
+  browser that every caller waits for, a dead Edge or driver closed and
+  restarted on the next `page_open`. PROCESSES: the driver is
+  `procs.adopt`ed into a kill-on-close Job BEFORE it launches Edge — no Job
+  on Windows means NO Edge; `pids()` = the Job's members + the driver's
+  whole tree (Edge's `identity_helper.exe` lives in a job of its own).
+  ADDRESSES (v1.371.0's rules on EVERY navigation): the pane's origin and an
+  origin the user allowed for this browser need no card, another local
+  address asks once (`page_open`'s spend check), public refused; a page's own
+  navigation is stopped by route interception, a server redirect's hop is
+  judged when the browser starts it (its request has left) and the browser
+  returns to the last allowed page; a page's SUB-requests go where the page
+  sends them EXCEPT under Local only, where Edge runs behind a refusing
+  proxy (a bound, never-listened 127.0.0.1 port) with egress's private
+  names/nets as the bypass list — measured, nothing public leaves. UNTRUSTED:
+  `page_read` output is fenced and scanned like `web_fetch`
+  (`returns_untrusted_content`; a flagged page lowers the turn — proven
+  through the real stream lane), a refusal never quotes the page.
+  TYPING: password / payment (`cc-*`, card words) / file-picker fields and
+  key-shaped text are REFUSED (the facts are those of the field `fill()`
+  REACHES — a `<label>` target typed into the password field). CLICKS: a
+  button that reads as deleting/sending/paying (computer use's one
+  vocabulary, read off the page) cards once every time in every posture,
+  re-read before the click. Dialogs: beforeunload left (said), confirm /
+  prompt Cancel, alert closed. TIERS: `page_open` ask (spend check);
+  click/type/read allow; `always_ask` cards click and type
+  (`STRICT_ASK_TOOLS`; the level's words do not say so yet); Local only
+  cards every open/click/typed entry (`OPENS_PAGES_TOOLS`); low trust
+  refuses all four; plan mode opens and reads only. PACKAGING: the spec
+  COLLECTS Playwright but DROPS its `node.exe` (filter the Analysis lists —
+  filtering what is handed in left it); the driver runs on the desktop's
+  own Electron as Node: main.js passes `IRONJARVIS_PLAYWRIGHT_NODE`
+  (`process.execPath`) to the daemon and the daemon sets
+  `ELECTRON_RUN_AS_NODE=1` for the DRIVER ONLY through private Playwright
+  hooks (`_transport.get_driver_env` / `compute_driver_executable` —
+  pinned by `test_the_driver_node_override_reaches_playwrights_own_driver_lookup`
+  so a Playwright upgrade that renames them fails the suite, not the
+  packaged browser); a source run keeps Playwright's own node.exe. Frozen
+  daemon +18.6 MB (316,874,920 B; +110 MB with node.exe). RELEASE CHECK:
+  `"<install>\resources\daemon\ironjarvis.exe" page-browser-check <local url>`
+  with `IRONJARVIS_PLAYWRIGHT_NODE` = the installed `Iron Jarvis.exe` must
+  say `"ok": true` (not yet run on an installed build). MODEL MENU
+  (`lib/harnessModelMenu.companyMenu`, `ModelMenu`'s optional `companies`
+  prop — the CHAT page's menu is byte-identical, pinned against a fixture
+  taken before the change incl. the picked check and Escape): "Claude
+  (Anthropic)" = Claude Code (+ "Anthropic API · pay per use" only with a
+  real key), "OpenAI" = Codex + OpenAI API; a keyless API row
+  (`inherited_from`) FOLDS into its CLI (its rows after the CLI's own; a
+  stored `anthropic::x` reads as its folded pick); with Iron-Proxy the CLI's
+  accounts are entries (name · plan, state words with a second cue:
+  `accountMenuState`, `NEAR_LIMIT_PERCENT` 90, a full window "At its
+  limit"; signed-out / off / removed greyed with the fix on hover; the
+  session's own account is listed even when its vendor's list is empty);
+  a pick under ANOTHER account is ONE `PATCH {account, model}`, under its
+  own account `{provider, model}` (re-sending account would clear a
+  Resume-when-ready wait); the chip names both; the folded pick keeps its
+  reasoning chip; Escape closes from any row and focuses the chip; the
+  phone shows a bottom sheet. Every folded row is proven to reach a pair
+  the daemon accepts and SERVES (`tests/test_harness_model_fold_v1376.py`
+  replays the dashboard's PATCH bodies from the shared fixture
+  `dashboard/__tests__/fixtures/harness-model-fold-v1376.json`,
+  `IJ_REGEN_HARNESS_FOLD=1`). KNOWN: the needs-sign-in rule differs between
+  the menu (blocked) and the header chip (allowed); the chat's Recent drops a
+  harness pick of a folded id; screenshots are not scanned for injection;
+  only key-shaped secrets are caught when typed; "Deploy" is not in the risky
+  vocabulary. Pins: `tests/test_build_browser{,_review}_v1376.py`,
+  `tests/test_harness_model_fold_v1376.py`,
+  `dashboard/__tests__/{ij-harness-browser,ij-harness-browser-review,
+  ij-harness-model-accounts,ij-harness-model-accounts-review,
+  ij-harness-model-fold,chat-model-menu-unchanged}-v1376.test.tsx`.
+
 - **A Build session in a git folder works on ITS OWN BRANCH in a worktree
   BESIDE the repository; the user's main checkout is touched by Merge only;
   the agent's commit/push always asks and history is never rewritten**

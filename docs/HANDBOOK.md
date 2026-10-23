@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.375.0 (2026-10-22).*
+holds itself to. Current as of v1.376.0 (2026-10-22).*
 
 ---
 
@@ -1896,6 +1896,54 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The agent's own browser, and accounts in the model menu (v1.376.0)
+
+**The agent can use your dev server.** In a Build session in the IJ
+harness, the agent can open a page in its own invisible browser (your
+installed Microsoft Edge, with a throwaway profile — never your own), click,
+type, read what the page shows, its console errors and its failed requests,
+and take a screenshot. It works the way you would: open the page, find the
+error, fix the code, reload, click again and check the result. The
+**Browser** panel shows where it is ("The agent is on localhost:5173/cart")
+and the picture taken after its last step.
+
+- **Where it may go.** The page in your Browser panel opens without asking.
+  Any other address on this PC or your network asks once (then stays allowed
+  until that browser closes). Public websites are refused. A page that tries
+  to send the agent somewhere else is stopped and brought back.
+- **What a page may send.** A page's own requests (a script from a CDN, its
+  API calls) go where the page sends them, as in any browser. In a **Local
+  only** session nothing the browser does reaches the internet: those requests
+  are stopped and listed as stopped.
+- **What it never does.** It never types into a password, payment or
+  file-upload field, or text that looks like a key; it never answers "OK" to a
+  page's confirm box for you; downloads are refused. A click on a button that
+  deletes, sends or pays asks you first, every time — even with Don't ask on.
+  With **Ask first**, every click and typed entry in its browser asks.
+- **Page text is not instructions.** What the agent reads on a page is
+  treated as untrusted, like a web page in chat: a page that tries to give it
+  orders is withheld, and the session stops acting on pages for the rest of
+  the turn.
+- **It closes itself** when you press Stop, archive or delete the session,
+  after 10 minutes without use, and when Iron Jarvis quits — nothing is left
+  running. At most four agent browsers are open at once; a fifth closes the
+  one used least recently (its panel says so).
+
+**Pick the account with the model.** The model menu in a Build session now
+lists each company once: **Claude (Anthropic)** holds Claude Code and, when
+you have an API key, the Anthropic API (pay per use); **OpenAI** holds Codex
+and the OpenAI API. Without an API key, the "Anthropic" models were your
+Claude Code login under another name, so they are listed once. When
+Iron-Proxy holds more than one Claude Code (or Codex) account, each account
+is its own entry with its plan and its state — ready, how much is used, near
+its limit, at its limit and when it resets — and picking a model under an
+account moves the session to that account and that model in one step. An
+account that needs signing in again, is turned off or was removed from
+Iron-Proxy is shown greyed, with what to do on hover. The chip on the
+message box names both ("Opus 4.8 · Work"). Escape closes the menu from
+any row. On a phone the menu opens as a sheet along the bottom. The chat
+page's model menu is unchanged.
 
 ## A branch of its own for each Build session (v1.375.0)
 
