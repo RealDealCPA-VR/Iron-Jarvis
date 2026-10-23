@@ -178,6 +178,13 @@ NOT_LOCAL = (
     "It does not open public websites."
 )
 NO_PAGE = "No page is open in the agent's browser. Call page_open with the page's address first."
+#: v1.376.0 review: Windows would not let Iron Jarvis hold the browser's
+#: processes (a kill-on-close job), so none is started.
+NO_JOB = (
+    "The agent's browser was not started: Iron Jarvis could not hold its processes so that "
+    "they end when Iron Jarvis does (Windows refused a job object for them). Restart Iron "
+    "Jarvis and try again."
+)
 STOPPED = "Stopped: you pressed Stop, so the agent's browser was closed."
 #: v1.376.0 review: Edge closed under the agent (by the user, a crash).
 DIED = (
@@ -670,6 +677,14 @@ class EdgeBackend:
             # starts from here on is born in the job (procs.adopt).
             self._job = await asyncio.to_thread(procs.adopt, self._driver, background=self._background)
             self._known.add(self._driver)
+        if self._job is None and sys.platform == "win32":
+            # v1.376.0 review DECISION: on Windows the job is what ends the
+            # browser when the daemon is KILLED (no code of ours runs then).
+            # No job — no job object, access refused, a driver whose pid is
+            # not where it was measured — means no Edge: the driver stops
+            # here and the tool says why.
+            await self._stop_driver()
+            raise BrowserProblem(NO_JOB)
         args = [*EDGE_ARGS, *self._extra]
         if self.local_only:
             args += self._refusing_proxy()
@@ -695,6 +710,15 @@ class EdgeBackend:
         if self._page is None:
             self._adopt_page(await self._ctx.new_page())
         self._remember(self._members())
+
+    async def _stop_driver(self) -> None:
+        """The driver alone (nothing launched yet): Playwright's own stop,
+        then its process if it is still there."""
+        driver = _tree_procs(self._driver)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self._cm.__aexit__(None, None, None), CLOSE_TIMEOUT_S)
+        self._cm = self._pw = None
+        await asyncio.to_thread(_kill_procs, driver)
 
     def _refusing_proxy(self) -> list[str]:
         """Edge's switches for Local only: every address outside this PC and

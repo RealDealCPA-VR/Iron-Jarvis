@@ -460,3 +460,49 @@ def test_kill_ends_a_process_of_the_tree_that_is_outside_the_job(tmp_path, monke
     finally:
         if sleeper.poll() is None:
             sleeper.kill()
+
+
+# --------------------------------------------------------------------------- #
+# no job, no browser (Windows)
+# --------------------------------------------------------------------------- #
+
+
+@REAL
+@pytest.mark.timeout(120)
+async def test_real_edge_no_job_for_the_driver_means_no_browser(monkeypatch):
+    """DECISION (review item 4): on Windows the job is what makes "nothing
+    outlives the daemon" true for a KILLED daemon. When the driver could not
+    be put in one (``procs.adopt`` → None: no job object, access denied, or
+    a Playwright whose driver pid is not where it was measured), the doer's
+    code launched Edge anyway — on a kill path that a killed daemon never
+    runs. Now the browser is not started, the driver is stopped, and the
+    tool says why."""
+    import psutil
+
+    from iron_jarvis.core import procs
+
+    drivers: list[int] = []
+    real_pid = PB._driver_pid
+
+    def spy(cm):
+        pid = real_pid(cm)
+        drivers.append(pid)
+        return pid
+
+    monkeypatch.setattr(PB, "_driver_pid", spy)
+    monkeypatch.setattr(procs, "adopt", lambda *a, **k: None)
+    site = Site({"/": "<title>Shop</title>shop"})
+    b = _browsers()
+    try:
+        with pytest.raises(PB.BrowserProblem, match="could not hold"):
+            await b.open("build:nojob", site.base, preview=site.base)
+        assert not b.is_open("build:nojob")
+        assert drivers and drivers[0]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and psutil.pid_exists(drivers[0]):
+            await asyncio.sleep(0.1)
+        assert not psutil.pid_exists(drivers[0])
+        assert site.hits == []  # Edge never opened the page
+    finally:
+        b.shutdown()
+        site.close()
