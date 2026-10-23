@@ -415,6 +415,14 @@ async function modelMenuAccounts(page: Page, phone: boolean) {
   await expect(menu.locator('[data-company="claude"]')).toContainText("Claude (Anthropic)");
   await expect(menu.getByTestId("model-account-side")).toBeDisabled();
   await expect(menu.getByTestId("model-account-work")).toHaveAttribute("data-current", "true");
+  // Review: Escape on a row (a phone's sheet is all rows) closes the menu
+  // and hands focus back to the chip; the chip opens it again.
+  await menu.getByTestId("model-account-personal").focus();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(chip).toBeFocused();
+  await chip.click();
+  await expect(menu.getByTestId("model-account-personal")).toBeVisible();
   await menu.getByTestId("model-account-personal").click();
   const panel = page.getByTestId("model-sub");
   await expect(panel).toBeVisible();
