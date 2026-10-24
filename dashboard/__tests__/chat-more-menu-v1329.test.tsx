@@ -358,7 +358,10 @@ describe("Archive", () => {
     H.db.running.t1 = ["a reply in progress"];
     await openSavedChat();
     fireEvent.click(within(await openMenu()).getByTestId("chat-more-archive"));
-    const dialog = await screen.findByTestId("archive-chat-dialog");
+    // v1.382.0: ArchiveChatDialog is a next/dynamic chunk; on a loaded runner it
+    // lands after findBy's 1 s default (a 1.5 s hold-back of the chunk reproduces
+    // the loaded-run failure). 10 s stays under vitest's 15 s per-test budget.
+    const dialog = await screen.findByTestId("archive-chat-dialog", {}, { timeout: 10_000 });
     expect(within(dialog).getAllByTestId("archive-chat-running-item").map((li) => li.textContent)).toEqual([
       "a reply in progress",
     ]);

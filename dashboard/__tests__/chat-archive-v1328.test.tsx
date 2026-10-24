@@ -302,7 +302,10 @@ describe("a chat that is still working asks first", () => {
     render(<ChatPage />);
     const menu = await openMenu("Quarterly notes");
     fireEvent.click(within(menu).getByTestId("thread-menu-archive"));
-    const dialog = await screen.findByTestId("archive-chat-dialog");
+    // v1.382.0: ArchiveChatDialog is a next/dynamic chunk; on a loaded runner it
+    // lands after findBy's 1 s default (a 1.5 s hold-back of the chunk reproduces
+    // the loaded-run failure). 10 s stays under vitest's 15 s per-test budget.
+    const dialog = await screen.findByTestId("archive-chat-dialog", {}, { timeout: 10_000 });
     const items = within(dialog)
       .getAllByTestId("archive-chat-running-item")
       .map((li) => li.textContent);
@@ -317,7 +320,7 @@ describe("a chat that is still working asks first", () => {
     render(<ChatPage />);
     const menu = await openMenu("Quarterly notes");
     fireEvent.click(within(menu).getByTestId("thread-menu-archive"));
-    const confirm = await screen.findByTestId("archive-chat-confirm");
+    const confirm = await screen.findByTestId("archive-chat-confirm", {}, { timeout: 10_000 });
     expect(confirm.textContent).toBe("Stop and archive");
     fireEvent.click(confirm);
     await waitFor(() => expect(screen.queryByTestId("archive-chat-dialog")).toBeNull());
@@ -336,7 +339,7 @@ describe("a chat that is still working asks first", () => {
     render(<ChatPage />);
     const menu = await openMenu("Quarterly notes");
     fireEvent.click(within(menu).getByTestId("thread-menu-archive"));
-    fireEvent.click(await screen.findByTestId("archive-chat-confirm"));
+    fireEvent.click(await screen.findByTestId("archive-chat-confirm", {}, { timeout: 10_000 }));
     await waitFor(() =>
       expect(screen.getByTestId("thread-archive-note").textContent).toContain(
         "could not be stopped from here and will finish on its own: a reply in progress",
@@ -350,7 +353,7 @@ describe("a chat that is still working asks first", () => {
     render(<ChatPage />);
     const menu = await openMenu("Quarterly notes");
     fireEvent.click(within(menu).getByTestId("thread-menu-archive"));
-    fireEvent.click(await screen.findByTestId("archive-chat-cancel"));
+    fireEvent.click(await screen.findByTestId("archive-chat-cancel", {}, { timeout: 10_000 }));
     await waitFor(() => expect(screen.queryByTestId("archive-chat-dialog")).toBeNull());
     await settle();
     expect(H.archives).toEqual([{ id: "t1", body: {} }]);
