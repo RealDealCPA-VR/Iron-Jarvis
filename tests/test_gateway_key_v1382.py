@@ -40,7 +40,6 @@ from fastapi.testclient import TestClient
 from iron_jarvis.core.config import persist_config_values, resolve_home
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.fleet import probes
-from iron_jarvis.fleet.adapter import FleetAdapter, node_capabilities
 from iron_jarvis.fleet.endpoint_auth import auth_headers, node_key, root_key
 from iron_jarvis.fleet.models import FleetNode
 from iron_jarvis.fleet.registry import FleetRegistry
@@ -219,6 +218,8 @@ def test_capabilities_survive_the_saved_table_and_an_old_saved_table_reads_unkno
 
 
 def test_a_stated_capability_reaches_the_adapter_and_a_denial_changes_nothing():
+    from iron_jarvis.fleet.adapter import FleetAdapter, node_capabilities
+
     rec = FleetNode(id="custom", base_url="http://gw:4000/v1")
     caps = parse_model_info(model_info_body()).caps
     assert node_capabilities(rec, "vision", caps) == {"tool_use": True, "vision": True}
