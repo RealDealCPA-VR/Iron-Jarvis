@@ -150,13 +150,66 @@ def refusal_of(exc: BaseException | None) -> ProviderRefusal | None:
     return None
 
 
+#: Request headers whose VALUE is a credential (lower-case).
+_CREDENTIAL_HEADERS = (
+    "authorization",
+    "proxy-authorization",
+    "x-api-key",
+    "api-key",
+    "x-goog-api-key",
+)
+
+
+def scrub_sent_credentials(detail: str, resp: Any) -> str:
+    """*detail* with every credential the REQUEST behind *resp* carried taken
+    out (``[key hidden]`` — the Anthropic-compatible adapter's marker).
+
+    Some servers echo the key they were sent in their error body ("Invalid
+    key: Bearer sk-…"). That body becomes the error text, which is shown in
+    chat, written to the ``provider.failed`` event and the log (the gateway-key
+    review: measured with a stand-in that echoes). Reads the header values off
+    ``resp.request`` (httpx); a fake or request-less response leaves *detail*
+    as it is. Never raises."""
+    text = detail or ""
+    try:
+        request = resp.request  # httpx raises when no request was attached
+        headers = request.headers
+    except Exception:  # noqa: BLE001 — nothing to scrub against
+        return text
+    secrets: set[str] = set()
+    for name in _CREDENTIAL_HEADERS:
+        try:
+            value = str(headers.get(name) or "").strip()
+        except Exception:  # noqa: BLE001
+            continue
+        if not value:
+            continue
+        secrets.add(value)
+        scheme, _, token = value.partition(" ")
+        if token.strip() and scheme.isalpha():
+            secrets.add(token.strip())  # "Bearer <key>" -> the key alone too
+    for secret in sorted(secrets, key=len, reverse=True):
+        if len(secret) < 4:
+            continue
+        text = text.replace(secret, "[key hidden]")
+        # Callers cut the body (often at 300 chars) BEFORE it gets here, so a
+        # key can straddle the cut: its leading part ends the text.
+        for k in range(len(secret) - 1, 3, -1):
+            if text.endswith(secret[:k]):
+                text = text[:-k] + "[key hidden]"
+                break
+    return text
+
+
 def provider_error_from_response(provider: str, resp: Any, detail: str) -> ProviderError:
     """Build a :class:`ProviderError` from an httpx-style error ``resp``.
 
     Reads the status code and (case-insensitively) the ``Retry-After`` header;
     both are guarded so a bare/fake response object (as tests inject) degrades to
-    ``status_code=None`` rather than raising.
+    ``status_code=None`` rather than raising. A credential the request carried
+    is taken out of *detail* (:func:`scrub_sent_credentials`).
     """
+    detail = scrub_sent_credentials(detail, resp)
     status = getattr(resp, "status_code", None)
     retry_after = None
     headers = getattr(resp, "headers", None)

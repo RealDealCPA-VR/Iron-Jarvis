@@ -12,6 +12,7 @@ import json
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
 
+from ...providers.adapters.base import scrub_sent_credentials
 from ..app import _ws_token_ok
 from ..schemas import TranscribeBody
 
@@ -180,7 +181,8 @@ async def transcribe_clip(
                 except Exception:  # noqa: BLE001 - some servers reply text/plain
                     text = resp.text.strip()
                 return {"text": text, "backend": label, "model": model}
-            last_err = resp.text[:300]
+            # A server may echo the key it was sent; never show it.
+            last_err = scrub_sent_credentials(resp.text, resp)[:300]
             if resp.status_code not in (400, 404):
                 break  # auth/rate/server trouble — a different model won't help
     guidance = (

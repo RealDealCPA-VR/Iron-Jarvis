@@ -558,3 +558,200 @@ def test_re_detect_on_the_fleet_page_asks_for_metrics_again(tmp_path):
         assert gateway.unkeyed() == []
     finally:
         gateway.stop()
+
+
+# --------------------------------------------------------------------------- #
+# 4. The key never reaches a log line, an event, a saved file or an answer
+# --------------------------------------------------------------------------- #
+class _EchoGateway:
+    """A gateway that REJECTS the key it is sent and echoes it back in the
+    401 body ("Invalid key: <what you sent>") — some servers do. Whatever a
+    background read does with an error, the key must not ride it out."""
+
+    def __init__(self) -> None:
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.keyed = 0
+
+        gw = self
+
+        class H(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *_a):
+                return
+
+            def _any(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                if n:
+                    self.rfile.read(n)
+                sent = self.headers.get("Authorization") or self.headers.get("x-api-key") or ""
+                if sent:
+                    gw.keyed += 1
+                if self.path.startswith("/api/"):
+                    code, body = 404, {"detail": "Not Found"}
+                else:
+                    code, body = 401, {"error": {"message": f"Invalid key: {sent}", "code": "401"}}
+                raw = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            do_GET = do_POST = _any
+
+        self._srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self._srv.daemon_threads = True
+        threading.Thread(target=self._srv.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self._srv.server_address[1]}"
+
+    def stop(self) -> None:
+        self._srv.shutdown()
+        self._srv.server_close()
+
+
+class _Capture:
+    """Every log record from every logger, formatted, at DEBUG."""
+
+    def __init__(self) -> None:
+        import logging
+
+        self.lines: list[str] = []
+        cap = self
+
+        class H(logging.Handler):
+            def emit(self, record):
+                try:
+                    text = record.getMessage()
+                except Exception:  # noqa: BLE001
+                    text = str(record.msg)
+                if record.exc_info:
+                    import traceback
+
+                    text += "".join(traceback.format_exception(*record.exc_info))
+                cap.lines.append(f"{record.name}: {text}")
+
+        self.handler = H(level=logging.DEBUG)
+        self.names = ["", "ironjarvis", "iron_jarvis", "httpx"]
+        self._old: dict[str, int] = {}
+
+    def __enter__(self):
+        import logging
+
+        for name in self.names:
+            lg = logging.getLogger(name)
+            self._old[name] = lg.level
+            lg.setLevel(logging.DEBUG)
+            lg.addHandler(self.handler)
+        return self
+
+    def __exit__(self, *exc):
+        import logging
+
+        for name in self.names:
+            lg = logging.getLogger(name)
+            lg.removeHandler(self.handler)
+            lg.setLevel(self._old[name])
+
+
+def _drive_every_door(client, d, base: str) -> list[str]:
+    """Every gateway door; returns every answer body as text."""
+    import base64
+    import importlib
+
+    out: list[str] = []
+
+    def keep(resp):
+        out.append(resp.text)
+        return resp
+
+    d.fleet_sampler.sample_once(force=True)
+    keep(client.post("/fleet/nodes/custom/detect"))
+    d.fleet_sampler.sample_once(force=True)
+    keep(client.post("/fleet/probe", json={"base_url": base, "api_key_name": "custom_api_key"}))
+    keep(client.post("/fleet/probe", json={"base_url": base}))
+    keep(client.get("/models"))
+    keep(client.post("/connections/endpoints/models", json={"base_url": base + "/v1"}))
+    keep(client.post("/providers/endpoint-models", json={"base_url": base + "/v1", "api_key": ""}))
+    keep(client.post("/chat", json={"messages": [{"role": "user", "content": "hi"}],
+                                    "provider": "custom", "model": "vision"}))
+    out.append(json.dumps(importlib.import_module("iron_jarvis.onboarding.doctor").runtime_checks(d.platform)))
+    keep(client.post("/voice/transcribe", json={
+        "audio_b64": base64.b64encode(b"RIFF....").decode(), "mime": "audio/wav"}))
+    for path in ("/fleet", "/fleet/nodes/custom", "/models", "/connections", "/health",
+                 "/diagnostics", "/settings", "/envelope/custom/vision"):
+        keep(client.get(path))
+    return out
+
+
+@pytest.mark.parametrize("server", ["accepts", "echoes"])
+def test_the_key_never_reaches_a_log_an_event_a_file_or_an_answer(tmp_path, monkeypatch, server):
+    from fastapi.testclient import TestClient
+    from sqlmodel import Session, select
+
+    from iron_jarvis.core.models import EventRecord
+
+    gw = FakeGateway(KEY) if server == "accepts" else _EchoGateway()
+    if server == "accepts":
+        gw.start()
+    try:
+        app = _scratch_app(tmp_path, {
+            "custom_base_url": gw.base + "/v1", "custom_model": "vision",
+            "default_provider": "custom", "default_model": "vision",
+        })
+        d = app.state.d
+        with _Capture() as cap, TestClient(app) as client:
+            answers = _drive_every_door(client, d, gw.base)
+            with Session(d.platform.engine) as s:
+                events = [r.payload_json for r in s.exec(select(EventRecord)).all()]
+        if server == "accepts":
+            assert gw.log() and gw.unkeyed() == []
+            assert (tmp_path / ".ironjarvis" / "fleet-routes.json").exists() or any(
+                p.name == "fleet-routes.json" for p in tmp_path.rglob("fleet-routes.json"))
+        else:
+            assert gw.keyed > 5, "the echoing gateway was never sent the key: the drive proved nothing"
+        leaks = []
+        for i, text in enumerate(answers):
+            if KEY in text:
+                leaks.append(f"answer #{i}")
+        leaks += [f"log line {line.split(':', 1)[0]}" for line in cap.lines if KEY in line]
+        leaks += ["an event payload" for p in events if KEY in (p or "")]
+        for f in tmp_path.rglob("*"):
+            if f.is_file():
+                try:
+                    if KEY.encode() in f.read_bytes():
+                        leaks.append(f"file {f.relative_to(tmp_path)}")
+                except OSError:
+                    pass
+        assert leaks == [], f"the key reached: {sorted(set(leaks))}"
+        routes = list(tmp_path.rglob("fleet-routes.json"))
+        for f in routes:
+            assert "api_base" not in f.read_text("utf-8")
+    finally:
+        gw.stop()
+
+
+def test_an_error_text_never_carries_a_credential_the_request_sent():
+    """The scrub works off the REQUEST's own headers (whatever the adapter
+    sent), takes the bare key out of "Bearer <key>", and catches a key the
+    caller's 300-char cut sliced in half."""
+    import httpx
+
+    from iron_jarvis.providers.adapters.base import provider_error_from_response, scrub_sent_credentials
+
+    for headers in ({"Authorization": f"Bearer {KEY}"}, {"x-api-key": KEY}, {"api-key": KEY},
+                    {"x-goog-api-key": KEY}):
+        req = httpx.Request("POST", "http://gw:4000/v1/chat/completions", headers=headers)
+        resp = httpx.Response(401, request=req, text="nope")
+        err = provider_error_from_response("custom", resp, f"Invalid key: Bearer {KEY} (and {KEY})")
+        assert KEY not in str(err) and "[key hidden]" in str(err), headers
+        body = ("x" * 280) + f"Invalid key: {KEY}"
+        cut = body[:300]
+        assert KEY[:4] in cut and KEY not in cut  # the cut sliced the key
+        assert KEY[: 300 - 280 - len("Invalid key: ")] not in scrub_sent_credentials(cut, resp)[280:]
+    # a fake response with no request: unchanged, never raises
+    assert scrub_sent_credentials("text", object()) == "text"
+    bare = httpx.Response(401, text="x")
+    assert scrub_sent_credentials("text", bare) == "text"
