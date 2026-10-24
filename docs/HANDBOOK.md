@@ -1899,6 +1899,10 @@ reads; it never writes, runs commands, or starts work on its own.
 
 ## Fixes in v1.382.0
 
+- **A Connections card's buttons fit the card.** On a connected app's card
+  (Settings › Connections), the switch, Test, Change key and Remove wrap onto
+  a second line when the card is narrow, instead of "Change key" breaking in
+  two and Remove running past the card's edge.
 - **The model list always fits the window.** The model menu in chat (and in
   the IJ harness) opens where it fits, is never taller than the window, and
   scrolls its list inside while the search box stays at the top. It stays

@@ -3610,6 +3610,15 @@ does not need a bump, stop and bump it.
   still wait 1 s and fail on loaded LOCAL full runs (they pass alone and on
   CI). OPEN: a provider panel can hang below the window after a resize; the
   chat menu's rows do not close on Escape (only the filter does — pre-existing).
+  SAME RELEASE (a USER BUG, a screenshot of Settings › Connections): a
+  connected card's action row (`DirectoryPage`, `connector-actions-<id>`:
+  switch, Test, Change key, Remove) never wrapped, so a narrow card broke
+  "Change key" in two and pushed Remove past the card's edge ("Remo"). The row
+  is `flex-wrap` and every press `whitespace-nowrap` (Remove `shrink-0`).
+  jsdom cannot see this, so the pin is a REAL-BROWSER one:
+  `dashboard/e2e/connections-card-actions.spec.ts` (GET /connectors stubbed;
+  2000×1103 — the user's size — 1406×857, 1280×720, 1024×640, 390×844; every
+  button inside its card, one line, no pan): 5 red on the old row, 5 green.
 
 - **Every request to a saved endpoint carries ITS saved key, and only to
   that server; nothing reaches a LiteLLM gateway the Ollama way** (v1.382.0,
