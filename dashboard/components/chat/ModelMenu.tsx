@@ -14,9 +14,34 @@
  * rows, and closing on an outside press. `open` is the page's state, because
  * the page reads it too (the jump pill steps aside while a composer menu is
  * open, and "Switch model" in Ctrl K opens it).
+ *
+ * THE MENU FITS THE WINDOW (2026-10-24; the user: "in chat the module, the
+ * model selection is cut off"). It used to hang above the chip at its full
+ * height inside the composer, so on a new chat (the composer in the middle
+ * of the window) its top — the filter box and Recent — ran past the window's
+ * top and was clipped by the chat's scrolling section before that. It is now
+ * drawn on the page's top layer (a portal, `position: fixed` at the chip, as
+ * the permission chip's menu is): above the chip when it fits there, else on
+ * the side with more room (lib/modelMenuPlacement), its height capped to that
+ * room. The filter box (and the local-only line) stay at its top and "Make
+ * this my default" at its bottom; the rows between them scroll. It is placed
+ * again when it opens, when the window changes size, when the catalog changes
+ * (models load late) and follows the chip when the page scrolls. A provider's
+ * model panel floats beside its row (components/chat/FitPanel `float`), since
+ * the scrolling list would clip it. The IJ harness's phone sheet keeps its
+ * own place along the window's bottom.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, ChevronRight, CircleAlert } from "lucide-react";
 import { FitPanel } from "@/components/chat/FitPanel";
 // v1.376.0: the IJ harness's company groups and accounts — TYPES only, so
@@ -34,6 +59,14 @@ import {
   reasoningTitle,
 } from "@/lib/reasoningChip";
 import type { ModelOption } from "@/lib/types";
+import {
+  MENU_WIDTH_PX,
+  appTopLimit,
+  menuViewport,
+  modelMenuPlacement,
+  samePlacement,
+  type ModelMenuPlacement,
+} from "@/lib/modelMenuPlacement";
 
 /** v1.263.0: the levels the composer may offer — the daemon's vocabulary. */
 export const REASONING_LEVELS = ["low", "medium", "high"];
@@ -323,9 +356,29 @@ function AccountState({ state }: { state: MenuAccount["state"] }) {
   );
 }
 
-/** The menu, above the chip. */
+/** The menu, at the chip on the page's top layer (its edges and its height
+ *  come from lib/modelMenuPlacement). A column: the filter box on top, the
+ *  rows scrolling under it, "Make this my default" at the bottom. */
 const MODEL_MENU =
-  "absolute bottom-full right-0 z-20 mb-1.5 w-60 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40";
+  "fixed z-50 flex w-60 max-w-[calc(100vw-1rem)] flex-col rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40";
+/** The open menu's id, named by the chip (`aria-controls`): on the page's
+ *  top layer the menu is no longer the element after the chip, so a screen
+ *  reader is told where it is. One menu is open at a time. */
+export const MODEL_MENU_ID = "ij-model-menu";
+/** The rows between the filter box and the footer: the part that scrolls. */
+const MODEL_MENU_LIST = "min-h-0 overflow-y-auto overscroll-contain";
+
+/** The menu's edges and height for a placement. Before the first placement
+ *  (one layout pass, before paint) it sits at the window's corner to be
+ *  measured — never hidden: the filter box takes the focus in that same
+ *  pass, and a hidden box cannot. The phone sheet: its classes place it. */
+function menuStyle(place: ModelMenuPlacement | "sheet" | null): CSSProperties | undefined {
+  if (place === "sheet") return undefined;
+  if (!place) return { left: 0, top: 0 };
+  return place.side === "above"
+    ? { left: place.left, bottom: place.bottom, maxHeight: place.maxHeight }
+    : { left: place.left, top: place.top, maxHeight: place.maxHeight };
+}
 /** v1.376.0 (IJ harness): below `sm` the menu is a sheet along the window's
  *  bottom edge that scrolls inside — with a company's ways and accounts (and
  *  a model panel opened under its row) it is taller than the room above the
@@ -342,7 +395,9 @@ const MODEL_PANEL =
 /** v1.376.0 (IJ harness): below `sm` the panel opens UNDER its row, inside
  *  the menu — beside it, a phone's window has no room on the left (the
  *  menu sits by Send at the right edge), so an account's models could not
- *  be reached. */
+ *  be reached. The chat's menu does the same (review, 2026-10-24): beside
+ *  the menu the panel was shifted back into the window, over the rows it
+ *  belongs to. */
 const MODEL_PANEL_PHONE_INLINE = "max-sm:static max-sm:mr-0 max-sm:mt-0.5 max-sm:w-full";
 
 /** Why a harness filter / Recent row cannot be picked ("" = it can). */
@@ -400,12 +455,21 @@ export function ModelMenu({
   // opens, never per keystroke of the composer (S-05).
   const [filter, setFilter] = useState("");
   const [recent, setRecent] = useState<string[]>([]);
-  useEffect(() => {
-    if (!open) return;
-    setFilter("");
-    setSub(null);
-    setRecent(readRecentModels());
-  }, [open]);
+  // Each opening starts from an empty box, no open panel and the last picks.
+  // Reset WHILE RENDERING the opening (React's "adjust state when a prop
+  // changes"), not in an effect: the menu is measured before paint to choose
+  // where it goes, and an effect's reset landed after that measurement — a
+  // menu reopened on a typed word was placed for one row, then drew all of
+  // them squeezed into the room on the wrong side.
+  const [openedFor, setOpenedFor] = useState(false);
+  if (open !== openedFor) {
+    setOpenedFor(open);
+    if (open) {
+      setFilter("");
+      setSub(null);
+      setRecent(readRecentModels());
+    }
+  }
   const matches = useMemo(() => matchModels(models, filter, MODEL_FILTER_MAX), [models, filter]);
   const providers = useMemo(() => modelProvidersOf(models), [models]);
   // v1.376.0 (IJ harness): the rows listed (a keyless API folded into the
@@ -430,16 +494,42 @@ export function ModelMenu({
     setSub(null);
     chipRef.current?.focus();
   };
+  /** The menu is on the page's top layer — the END of the page in tab order —
+   *  so Tab keeps the order it had when the menu sat right after the chip:
+   *  Shift+Tab from its first control goes back to the chip, and Tab from its
+   *  last moves on from the chip (to the next control in the box) instead of
+   *  out of the page. The menu stays open either way, as it did. */
+  const tabAcrossTheEdge = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(
+      e.currentTarget.querySelectorAll<HTMLElement>("input:not([disabled]), button:not([disabled])"),
+    );
+    if (items.length === 0) return;
+    const at = document.activeElement;
+    if (e.shiftKey && at === items[0]) {
+      e.preventDefault();
+      chipRef.current?.focus();
+    } else if (!e.shiftKey && at === items[items.length - 1]) {
+      // No preventDefault: the browser's own Tab then moves on from the chip.
+      chipRef.current?.focus();
+    }
+  };
   useEffect(() => {
-    if (!companies || !sub || typeof window === "undefined") return;
+    if (!sub || typeof window === "undefined") return;
     if (!window.matchMedia?.(PHONE_QUERY)?.matches) return;
     const panel = menuRef.current?.querySelector<HTMLElement>('[data-testid="model-sub"]');
-    panel?.scrollIntoView?.({ block: "nearest" });
-  }, [companies, sub]);
+    // The row AND its panel (the panel is capped to fit under its row in
+    // what the list shows — components/chat/FitPanel), not the panel alone,
+    // which scrolled the row it belongs to out of sight.
+    const rowAndPanel = panel?.parentElement ?? panel;
+    rowAndPanel?.scrollIntoView?.({ block: "nearest" });
+  }, [sub]);
   useEffect(() => {
     if (!open) return;
+    // The menu is portaled: it is not inside the chip's wrapper, so a press
+    // in it is checked on its own.
     const onDown = (e: MouseEvent) => {
-      if (!popRef.current?.contains(e.target as Node)) {
+      const t = e.target as Node;
+      if (!popRef.current?.contains(t) && !menuRef.current?.contains(t)) {
         onOpenChange(false);
         setSub(null);
       }
@@ -447,6 +537,118 @@ export function ModelMenu({
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [open, onOpenChange]);
+
+  // WHERE THE MENU GOES (lib/modelMenuPlacement). `null` = not placed yet
+  // (measured at the window's corner for the one layout pass before paint);
+  // "sheet" = the IJ harness's phone sheet, whose classes place it along the
+  // window's bottom.
+  const listRef = useRef<HTMLDivElement>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
+  const [place, setPlace] = useState<ModelMenuPlacement | "sheet" | null>(null);
+  const placeRef = useRef<ModelMenuPlacement | "sheet" | null>(null);
+  /** The chip has been seen with a box this opening (it can vanish later:
+   *  a question takes the composer's place). */
+  const chipSeenRef = useRef(false);
+  function placeMenu(redecide: boolean) {
+    const chip = chipRef.current;
+    const menu = menuRef.current;
+    if (!chip || !menu || typeof window === "undefined") return;
+    const prev = placeRef.current;
+    let next: ModelMenuPlacement | "sheet";
+    if (companies && window.matchMedia?.(PHONE_QUERY)?.matches) {
+      next = "sheet";
+    } else {
+      const r = chip.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) chipSeenRef.current = true;
+      const list = listRef.current;
+      // Its whole height, rows and all, even while a cap holds it shorter.
+      const natural = list
+        ? menu.offsetHeight - list.clientHeight + list.scrollHeight
+        : menu.scrollHeight + (menu.offsetHeight - menu.clientHeight);
+      next = modelMenuPlacement(
+        { top: r.top, bottom: r.bottom, left: r.left, right: r.right },
+        menuViewport(),
+        { width: menu.offsetWidth || MENU_WIDTH_PX, height: natural },
+        { topLimit: appTopLimit(), keepSide: !redecide && prev && prev !== "sheet" ? prev.side : undefined },
+      );
+    }
+    const same = next === "sheet" || prev === "sheet" ? next === prev : samePlacement(prev, next);
+    if (same) return;
+    placeRef.current = next;
+    setPlace(next);
+  }
+  // On open, and when the catalog changes under an open menu (the models
+  // load after it opened), the side is chosen again from the menu's real
+  // height — before paint. A typed filter keeps the side it opened on: the
+  // cap is the room on that side, whatever the rows.
+  const listKey = `${models.length}:${companies?.models.length ?? -1}:${companies?.entries.length ?? -1}`;
+  const hasLocalOnlyLine = !!localOnlyLine;
+  useLayoutEffect(() => {
+    if (!open) {
+      placeRef.current = null;
+      chipSeenRef.current = false;
+      setPlace(null);
+      return;
+    }
+    placeMenu(true);
+    // `placeMenu` reads refs and this render's props.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, listKey, hasLocalOnlyLine]);
+  // The filter box takes the focus once per opening (it used to be an
+  // `autoFocus`), WITHOUT scrolling anything to it: the menu is on the top
+  // layer, so nothing behind it needs to move. Inside the composer, the
+  // focus scrolled the chat's clipped section to "show" a box above it.
+  useLayoutEffect(() => {
+    if (open) filterRef.current?.focus({ preventScroll: true });
+  }, [open]);
+  // The menu is fixed to the window: it follows the chip when the page
+  // scrolls, is placed again when the window changes size, and closes when
+  // the chip goes away under it.
+  //
+  // Review (2026-10-24): a scroll and a resize are not the only things that
+  // move the chip. "Make this my default" ends the demo strip above the page,
+  // a notice comes or goes above the composer — the chip moves, no event
+  // fires, and a fixed menu stays where the chip WAS. So while the menu is
+  // open the chip's box is read once a frame (one read; the menu is placed
+  // again only when the box changed), which also sees the chip go away.
+  useEffect(() => {
+    if (!open) return;
+    const follow = (e: Event) => {
+      if (menuRef.current && e.target instanceof Node && menuRef.current.contains(e.target)) return;
+      placeMenu(false);
+    };
+    const resized = () => placeMenu(true);
+    window.addEventListener("scroll", follow, true);
+    window.addEventListener("resize", resized);
+    let frame = 0;
+    let last = "";
+    const watch = () => {
+      const chip = chipRef.current;
+      if (chip) {
+        const r = chip.getBoundingClientRect();
+        const box = `${r.left},${r.top},${r.width},${r.height}`;
+        if (box !== last) {
+          last = box;
+          if (r.width > 0 && r.height > 0) placeMenu(false);
+          else if (chipSeenRef.current) {
+            onOpenChange(false);
+            setSub(null);
+            return;
+          }
+        }
+      }
+      frame = window.requestAnimationFrame(watch);
+    };
+    if (typeof window.requestAnimationFrame === "function") frame = window.requestAnimationFrame(watch);
+    return () => {
+      window.removeEventListener("scroll", follow, true);
+      window.removeEventListener("resize", resized);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+    // `placeMenu` and `onOpenChange` are read at the event; this runs once
+    // per opening.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   /** The ONE way a menu row picks: the caller's choice, the menu, the memory.
    *  v1.376.0: a row under an Iron-Proxy account names it (harness only). */
@@ -456,6 +658,10 @@ export function ModelMenu({
     onOpenChange(false);
     setSub(null);
     if (v) setRecent(rememberRecentModel(v));
+    // The IJ harness reads its keys (Esc stops a reply) by where the focus
+    // is: the row picked was inside the harness until the menu moved to the
+    // page's top layer, so the focus goes back to the chip, inside it.
+    if (companies) chipRef.current?.focus();
   }
 
   /** Where a provider runs, and how it is paid for (a provider row and, in
@@ -505,8 +711,17 @@ export function ModelMenu({
        grows UPWARD over the chat area instead of being
        clipped at the card edge — and v1.350.1: never past
        the WINDOW's top (FitPanel caps it to the room above,
-       or opens it downward when a row sits high). */
-    <FitPanel testId="model-sub" className={companies ? `${MODEL_PANEL} ${MODEL_PANEL_PHONE_INLINE}` : MODEL_PANEL}>
+       or opens it downward when a row sits high). It FLOATS
+       (fixed at its row): the menu's rows scroll, and the
+       scrolling list would clip a panel hanging out of it.
+       The harness's phone sheet keeps it under its row. */
+    <FitPanel
+      testId="model-sub"
+      className={`${MODEL_PANEL} ${MODEL_PANEL_PHONE_INLINE}`}
+      float
+      inlineQuery={PHONE_QUERY}
+      refitKey={place}
+    >
       {modelRows(provider, account)}
     </FitPanel>
   );
@@ -657,6 +872,7 @@ export function ModelMenu({
         disabled={disabled}
         aria-expanded={open}
         aria-haspopup="true"
+        aria-controls={open ? MODEL_MENU_ID : undefined}
         title={disabled ? disabledTitle : "Switch model"}
         className={`${composerChipClass(false)} max-w-[11rem] sm:max-w-[16rem]`}
       >
@@ -679,188 +895,211 @@ export function ModelMenu({
         ) : null}
         <ChevronDown size={12} className="shrink-0 opacity-70" />
       </button>
-      {open && (
-        <div
-          ref={menuRef}
-          data-testid="model-menu"
-          className={companies ? `${MODEL_MENU} ${MODEL_MENU_PHONE_SHEET}` : MODEL_MENU}
-          onKeyDown={
-            companies
-              ? (e) => {
-                  if (e.key !== "Escape") return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  closeToChip();
-                }
-              : undefined
-          }
-        >
-          {/* v1.332.0: the one line a "local only" chat adds here. */}
-          {localOnlyLine && (
-            <p data-testid="model-menu-local-only" className="px-2.5 pb-1 pt-0.5 text-[12px] text-zinc-500">
-              {localOnlyLine}
-            </p>
-          )}
-          {/* v1.277.0: type to find a model across every provider. */}
-          <input
-            data-testid="model-filter"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+      {open &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={menuRef}
+            id={MODEL_MENU_ID}
+            data-testid="model-menu"
+            data-side={place && place !== "sheet" ? place.side : undefined}
+            className={companies ? `${MODEL_MENU} ${MODEL_MENU_PHONE_SHEET}` : MODEL_MENU}
+            style={menuStyle(place)}
             onKeyDown={(e) => {
-              if (companies && e.key === "Enter") {
-                // v1.376.0: the harness's first row, on its account (a row
-                // that cannot be picked is not picked by Enter either).
-                const hit = companyMatches[0];
-                if (hit) {
-                  e.preventDefault();
-                  if (!matchBlocked(hit)) pick(hit.value, hit.account?.id);
-                }
-              } else if (e.key === "Enter" && matches[0]) {
-                e.preventDefault();
-                pick(`${matches[0].provider}::${matches[0].model}`);
-              } else if (e.key === "Escape") {
-                onOpenChange(false);
-                setSub(null);
+              // An IME composing a word owns its keys (its Escape drops the word).
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (e.key === "Tab") {
+                tabAcrossTheEdge(e);
+                return;
               }
+              if (companies && (e.ctrlKey || e.metaKey) && (e.key ?? "").toLowerCase() === "k") {
+                // The IJ harness's Ctrl+K is the model menu (lib/harnessKeys),
+                // never the app's palette: inside the harness the harness took
+                // the key, and the menu is on the page's top layer now — so
+                // the press stops here, from the box or from any row.
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+              }
+              if (!companies || e.key !== "Escape") return;
+              e.preventDefault();
+              e.stopPropagation();
+              closeToChip();
             }}
-            placeholder="Type to find a model…"
-            aria-label="Find a model"
-            autoFocus
-            className="mb-1 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent/40"
-          />
-          {filter.trim() && companies ? (
-            companyMatches.length === 0 ? (
-              <p className="px-2.5 py-1.5 text-[12px] text-zinc-500">No model matches.</p>
-            ) : (
-              companyMatches.map((m) => matchRow(m, "model-match"))
-            )
-          ) : filter.trim() ? (
-            matches.length === 0 ? (
-              <p className="px-2.5 py-1.5 text-[12px] text-zinc-500">No model matches.</p>
-            ) : (
-              matches.map((m) => {
-                const v = `${m.provider}::${m.model}`;
-                return (
-                  <button
-                    key={`match-${v}`}
-                    type="button"
-                    data-testid="model-match"
-                    onClick={() => pick(v)}
-                    disabled={m.available === false}
-                    title={m.available === false ? `${modelGroupName(m)} isn't connected` : undefined}
-                    className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
-                      choice === v ? "text-accent-soft" : "text-zinc-300"
-                    }`}
-                  >
-                    <span className="min-w-0 truncate" title={modelTitle(m, models)}>
-                      {modelText(m, models)}
-                    </span>
-                    <ModelRowChips m={m} />
-                    <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">{modelGroupName(m)}</span>
-                  </button>
-                );
-              })
-            )
-          ) : companies ? (
-            /* v1.376.0 (IJ harness): Recent on its accounts, the default
-               model, then one group per COMPANY — the ways to reach it, and
-               its Iron-Proxy accounts — and every other provider as in the
-               chat. */
-            <>
-              {companyRecent.length > 0 && (
-                <div data-testid="model-recent" className="mb-1 border-b border-white/[0.06] pb-1">
-                  <p className="px-2.5 pb-0.5 text-[10px] uppercase tracking-wide text-zinc-600">Recent</p>
-                  {companyRecent.map((m) => matchRow(m, "model-recent-row"))}
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={() => pick("")}
-                className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] ${
-                  !chosen ? "text-accent-soft" : "text-zinc-300"
-                }`}
-              >
-                default model
-              </button>
-              {companies.entries.map((entry) =>
-                entry.type === "provider" ? (
-                  providerRow(entry.row)
+          >
+            {/* v1.332.0: the one line a "local only" chat adds here. */}
+            {localOnlyLine && (
+              <p data-testid="model-menu-local-only" className="px-2.5 pb-1 pt-0.5 text-[12px] text-zinc-500">
+                {localOnlyLine}
+              </p>
+            )}
+            {/* v1.277.0: type to find a model across every provider. */}
+            <input
+              data-testid="model-filter"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter that finishes an IME word is the IME's, not a pick.
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                if (companies && e.key === "Enter") {
+                  // v1.376.0: the harness's first row, on its account (a row
+                  // that cannot be picked is not picked by Enter either).
+                  const hit = companyMatches[0];
+                  if (hit) {
+                    e.preventDefault();
+                    if (!matchBlocked(hit)) pick(hit.value, hit.account?.id);
+                  }
+                } else if (e.key === "Enter" && matches[0]) {
+                  e.preventDefault();
+                  pick(`${matches[0].provider}::${matches[0].model}`);
+                } else if (e.key === "Escape") {
+                  onOpenChange(false);
+                  setSub(null);
+                }
+              }}
+              placeholder="Type to find a model…"
+              aria-label="Find a model"
+              ref={filterRef}
+              className="mb-1 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent/40"
+            />
+            {/* The rows: the part of the menu that scrolls (the filter box
+                above and "Make this my default" below stay put). */}
+            <div ref={listRef} data-testid="model-menu-list" className={MODEL_MENU_LIST}>
+              {filter.trim() && companies ? (
+                companyMatches.length === 0 ? (
+                  <p className="px-2.5 py-1.5 text-[12px] text-zinc-500">No model matches.</p>
                 ) : (
-                  <div
-                    key={`company-${entry.id}`}
-                    role="group"
-                    aria-label={entry.label}
-                    data-testid="model-company"
-                    data-company={entry.id}
-                  >
-                    <p aria-hidden className="px-2.5 pb-0.5 pt-1.5 text-[11px] font-medium text-zinc-400">
-                      {entry.label}
-                    </p>
-                    {entry.ways.map((w) => (w.accounts ? accountWay(w, w.accounts) : wayRow(w)))}
-                  </div>
-                ),
-              )}
-            </>
-          ) : (
-            <>
-              {recent.length > 0 && (
-                <div data-testid="model-recent" className="mb-1 border-b border-white/[0.06] pb-1">
-                  <p className="px-2.5 pb-0.5 text-[10px] uppercase tracking-wide text-zinc-600">Recent</p>
-                  {recent.map((v) => {
-                    const { provider, model } = splitChoice(v);
-                    const row = models.find((m) => m.provider === provider && m.model === model);
-                    if (!row) return null;
+                  companyMatches.map((m) => matchRow(m, "model-match"))
+                )
+              ) : filter.trim() ? (
+                matches.length === 0 ? (
+                  <p className="px-2.5 py-1.5 text-[12px] text-zinc-500">No model matches.</p>
+                ) : (
+                  matches.map((m) => {
+                    const v = `${m.provider}::${m.model}`;
                     return (
                       <button
-                        key={`recent-${v}`}
+                        key={`match-${v}`}
                         type="button"
+                        data-testid="model-match"
                         onClick={() => pick(v)}
-                        disabled={row.available === false}
+                        disabled={m.available === false}
+                        title={m.available === false ? `${modelGroupName(m)} isn't connected` : undefined}
                         className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
                           choice === v ? "text-accent-soft" : "text-zinc-300"
                         }`}
                       >
-                        <span className="min-w-0 truncate" title={modelTitle(row, models)}>
-                          {modelText(row, models)}
+                        <span className="min-w-0 truncate" title={modelTitle(m, models)}>
+                          {modelText(m, models)}
                         </span>
-                        <ModelRowChips m={row} />
-                        <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">{modelGroupName(row)}</span>
+                        <ModelRowChips m={m} />
+                        <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">{modelGroupName(m)}</span>
                       </button>
                     );
-                  })}
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={() => pick("")}
-                className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] ${
-                  !choice ? "text-accent-soft" : "text-zinc-300"
-                }`}
-              >
-                default model
-              </button>
-              {providers.map((p) => providerRow(p))}
-            </>
-          )}
-          {onMakeDefault && splitChoice(choice).provider && (
-            <div className="mt-1 border-t border-white/[0.06] pt-1">
-              <button
-                type="button"
-                data-testid="model-make-default"
-                onClick={() => onMakeDefault()}
-                className="w-full rounded-lg px-2.5 py-1.5 text-left text-[12px] text-zinc-300 hover:bg-white/[0.06]"
-              >
-                Make this my default
-              </button>
-              {defaultNote && (
-                <p role="status" className="px-2.5 pb-1 text-[11px] text-zinc-500">
-                  {defaultNote}
-                </p>
+                  })
+                )
+              ) : companies ? (
+                /* v1.376.0 (IJ harness): Recent on its accounts, the default
+                   model, then one group per COMPANY — the ways to reach it, and
+                   its Iron-Proxy accounts — and every other provider as in the
+                   chat. */
+                <>
+                  {companyRecent.length > 0 && (
+                    <div data-testid="model-recent" className="mb-1 border-b border-white/[0.06] pb-1">
+                      <p className="px-2.5 pb-0.5 text-[10px] uppercase tracking-wide text-zinc-600">Recent</p>
+                      {companyRecent.map((m) => matchRow(m, "model-recent-row"))}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => pick("")}
+                    className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] ${
+                      !chosen ? "text-accent-soft" : "text-zinc-300"
+                    }`}
+                  >
+                    default model
+                  </button>
+                  {companies.entries.map((entry) =>
+                    entry.type === "provider" ? (
+                      providerRow(entry.row)
+                    ) : (
+                      <div
+                        key={`company-${entry.id}`}
+                        role="group"
+                        aria-label={entry.label}
+                        data-testid="model-company"
+                        data-company={entry.id}
+                      >
+                        <p aria-hidden className="px-2.5 pb-0.5 pt-1.5 text-[11px] font-medium text-zinc-400">
+                          {entry.label}
+                        </p>
+                        {entry.ways.map((w) => (w.accounts ? accountWay(w, w.accounts) : wayRow(w)))}
+                      </div>
+                    ),
+                  )}
+                </>
+              ) : (
+                <>
+                  {recent.length > 0 && (
+                    <div data-testid="model-recent" className="mb-1 border-b border-white/[0.06] pb-1">
+                      <p className="px-2.5 pb-0.5 text-[10px] uppercase tracking-wide text-zinc-600">Recent</p>
+                      {recent.map((v) => {
+                        const { provider, model } = splitChoice(v);
+                        const row = models.find((m) => m.provider === provider && m.model === model);
+                        if (!row) return null;
+                        return (
+                          <button
+                            key={`recent-${v}`}
+                            type="button"
+                            onClick={() => pick(v)}
+                            disabled={row.available === false}
+                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
+                              choice === v ? "text-accent-soft" : "text-zinc-300"
+                            }`}
+                          >
+                            <span className="min-w-0 truncate" title={modelTitle(row, models)}>
+                              {modelText(row, models)}
+                            </span>
+                            <ModelRowChips m={row} />
+                            <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">{modelGroupName(row)}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => pick("")}
+                    className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] ${
+                      !choice ? "text-accent-soft" : "text-zinc-300"
+                    }`}
+                  >
+                    default model
+                  </button>
+                  {providers.map((p) => providerRow(p))}
+                </>
               )}
             </div>
-          )}
-        </div>
-      )}
+            {onMakeDefault && splitChoice(choice).provider && (
+              <div className="mt-1 border-t border-white/[0.06] pt-1">
+                <button
+                  type="button"
+                  data-testid="model-make-default"
+                  onClick={() => onMakeDefault()}
+                  className="w-full rounded-lg px-2.5 py-1.5 text-left text-[12px] text-zinc-300 hover:bg-white/[0.06]"
+                >
+                  Make this my default
+                </button>
+                {defaultNote && (
+                  <p role="status" className="px-2.5 pb-1 text-[11px] text-zinc-500">
+                    {defaultNote}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

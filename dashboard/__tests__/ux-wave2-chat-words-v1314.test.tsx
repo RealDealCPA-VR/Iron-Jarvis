@@ -381,12 +381,17 @@ describe("composer footer speaks plainly (composer-footer-jargon)", () => {
 
 const FIRST_CHIP = "What can you do?";
 const DOOR_SUB = /I already pay/;
+// The connect doors are a next/dynamic chunk of the chat page: on a loaded
+// runner (the full suite, the Release gate) importing it can take seconds,
+// so every wait for them carries this bound — never vitest's per-test
+// budget (15 s), so a miss still says what it waited for.
+const DOORS_WAIT = { timeout: 10_000 };
 
 describe("chat empty state: starters reach the fold (empty-state-doors-push-starters-below-fold)", () => {
   it("on chat the three doors are a 3-up row from sm, inside a card wider than max-w-md", async () => {
     setHealth(NOTHING_CONNECTED, "mock");
     render(<ChatPage />);
-    const sub = await screen.findByRole("button", { name: DOOR_SUB });
+    const sub = await screen.findByRole("button", { name: DOOR_SUB }, DOORS_WAIT);
     const grid = sub.parentElement as HTMLElement;
     expect(within(grid).getByRole("button", { name: /Free & private/ })).toBeTruthy();
     expect(within(grid).getByRole("button", { name: /API key/ })).toBeTruthy();
@@ -417,7 +422,7 @@ describe("chat empty state: starters reach the fold (empty-state-doors-push-star
     setHealth(NOTHING_CONNECTED, "mock");
     render(<ChatPage />);
     const chip = await screen.findByRole("button", { name: FIRST_CHIP });
-    const sub = await screen.findByRole("button", { name: DOOR_SUB });
+    const sub = await screen.findByRole("button", { name: DOOR_SUB }, DOORS_WAIT);
     expect(sub.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(chip);
     const box = (await screen.findByPlaceholderText(/Message Iron Jarvis/)) as HTMLTextAreaElement;

@@ -220,6 +220,11 @@ function resetApi() {
 
 const FIRST_CHIP = "What can you do?"; // CHAT_EXAMPLES[0], the pinned anchor
 const DOOR_SUB = /I already pay/;
+// The connect doors are a next/dynamic chunk of the chat page: on a loaded
+// runner (the full suite, the Release gate) importing it can take seconds,
+// so every wait for them carries this bound — never vitest's per-test
+// budget (15 s), so a miss still says what it waited for.
+const DOORS_WAIT = { timeout: 10_000 };
 
 beforeEach(() => {
   resetApi();
@@ -240,7 +245,7 @@ describe("chat empty state — connect doors when no real model answers", () => 
   it("no model connected: the connect doors render ABOVE the example chips", async () => {
     render(<ChatPage />);
     const chip = await screen.findByRole("button", { name: FIRST_CHIP });
-    const sub = await screen.findByRole("button", { name: DOOR_SUB });
+    const sub = await screen.findByRole("button", { name: DOOR_SUB }, DOORS_WAIT);
     expect(screen.getByRole("button", { name: /Free & private/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /API key/ })).toBeTruthy();
     // Above the chips: the way forward comes before the demo prompts.
@@ -251,11 +256,11 @@ describe("chat empty state — connect doors when no real model answers", () => 
     setHealth(CLAUDE_SIGNED_IN, "mock");
     render(<ChatPage />);
     await screen.findByRole("button", { name: FIRST_CHIP });
-    const sub = await screen.findByRole("button", { name: DOOR_SUB });
+    const sub = await screen.findByRole("button", { name: DOOR_SUB }, DOORS_WAIT);
     // The press may sit inside the subscription door: open it when it isn't
     // already on screen.
     if (!screen.queryByRole("button", { name: /for answers/i })) fireEvent.click(sub);
-    fireEvent.click(await screen.findByRole("button", { name: /for answers/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /for answers/i }, DOORS_WAIT));
     await waitFor(() =>
       expect(H.posts.find((p) => p.path === "/onboarding/use-model")).toBeTruthy(),
     );
@@ -267,6 +272,10 @@ describe("chat empty state — connect doors when no real model answers", () => 
     setHealth(CLAUDE_SIGNED_IN, "anthropic");
     render(<ChatPage />);
     await screen.findByRole("button", { name: FIRST_CHIP });
+    // The heading over the doors is drawn by the page with the gate (the
+    // doors themselves arrive later, as a chunk): its absence is the
+    // gate's answer even while a chunk would still be loading.
+    expect(screen.queryByText("Connect a model for real answers")).toBeNull();
     expect(screen.queryByRole("button", { name: DOOR_SUB })).toBeNull();
     expect(screen.queryByRole("button", { name: /for answers/i })).toBeNull();
   });

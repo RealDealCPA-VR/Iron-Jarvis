@@ -253,6 +253,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// The connect doors are a next/dynamic chunk of the chat page: on a loaded
+// runner (the full suite, the Release gate) importing it can take seconds,
+// so every wait for them carries this bound — never vitest's per-test
+// budget (15 s), so a miss still says what it waited for.
+const DOORS_WAIT = { timeout: 10_000 };
+
 /* ================================================================ G35 === */
 
 describe("G35 — the choice is confirmed on the home, in the words pressed", () => {
@@ -264,7 +270,7 @@ describe("G35 — the choice is confirmed on the home, in the words pressed", ()
     await screen.findByRole("button", { name: FIRST_CHIP });
     expect(screen.queryByTestId("home-chosen")).toBeNull(); // nothing claimed before the press
     fireEvent.click(
-      await screen.findByRole("button", { name: "Use Claude (your Claude Code sign-in) for answers" }),
+      await screen.findByRole("button", { name: "Use Claude (your Claude Code sign-in) for answers" }, DOORS_WAIT),
     );
     const done = await screen.findByTestId("home-chosen");
     expect(done.textContent).toBe("Done — Claude (your Claude Code sign-in) answers you now. Ask anything below.");
@@ -280,7 +286,7 @@ describe("G35 — the choice is confirmed on the home, in the words pressed", ()
     H.postResponses["/onboarding/use-model"] = { promoted: null, reason: "You already chose Codex." };
     render(<ChatPage />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Use Claude (your Claude Code sign-in) for answers" }),
+      await screen.findByRole("button", { name: "Use Claude (your Claude Code sign-in) for answers" }, DOORS_WAIT),
     );
     await screen.findByText("You already chose Codex.");
     expect(screen.queryByTestId("home-chosen")).toBeNull();

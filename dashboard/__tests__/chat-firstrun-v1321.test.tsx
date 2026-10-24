@@ -227,6 +227,11 @@ function resetApi() {
 
 const FIRST_CHIP = "What can you do?"; // CHAT_EXAMPLES[0], the pinned anchor
 const DOOR_SUB = /I already pay/;
+// The connect doors are a next/dynamic chunk of the chat page: on a loaded
+// runner (the full suite, the Release gate) importing it can take seconds,
+// so every wait for them carries this bound — never vitest's per-test
+// budget (15 s), so a miss still says what it waited for.
+const DOORS_WAIT = { timeout: 10_000 };
 
 beforeEach(() => {
   resetApi();
@@ -267,7 +272,7 @@ describe("first run with no blocking screen (redesign S9, AUDIT Q7)", () => {
     setHealth(CLAUDE_SIGNED_IN, "mock");
     render(<ChatPage />);
     // Before the first message the empty state's doors make the offer (once).
-    await screen.findByRole("button", { name: DOOR_SUB });
+    await screen.findByRole("button", { name: DOOR_SUB }, DOORS_WAIT);
     expect(screen.queryByTestId("model-suggest")).toBeNull();
     await sendOne();
     const chip = await screen.findByTestId("model-suggest");

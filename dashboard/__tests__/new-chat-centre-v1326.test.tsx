@@ -182,6 +182,12 @@ function restingFills(el: Element): string[] {
 
 const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
+// The connect doors are a next/dynamic chunk of the chat page: on a loaded
+// runner (the full suite, the Release gate) importing it can take seconds,
+// so every wait for them carries this bound — never vitest's per-test
+// budget (15 s), so a miss still says what it waited for.
+const DOORS_WAIT = { timeout: 10_000 };
+
 const box = async () => (await screen.findByRole("textbox", { name: "Message" })) as HTMLTextAreaElement;
 const card = () => screen.getByTestId("chat-composer");
 const toolbar = () => screen.getByTestId("composer-toolbar");
@@ -359,7 +365,7 @@ describe("a new chat: one centred group", () => {
     };
     render(<ChatPage />);
     await box();
-    const sub = await screen.findByRole("button", { name: /I already pay/ });
+    const sub = await screen.findByRole("button", { name: /I already pay/ }, DOORS_WAIT);
     const foot = screen.getByTestId("chat-hero-foot");
     expect(foot.contains(sub)).toBe(true);
     expect(follows(card(), sub)).toBe(true);

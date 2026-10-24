@@ -13,14 +13,26 @@
  * grows upward, its height capped at the room there; with too little room
  * above and more below, it opens downward from the row's top instead. The
  * list scrolls inside either way. Pure layout: no new look.
+ *
+ * `float` (the model menu fits the window, 2026-10-24): the menu's rows now
+ * scroll inside the menu, and a scrolling box clips anything that hangs out
+ * of it — this panel hangs out to the menu's left. A floating panel is
+ * `position: fixed` at its row instead (beside it on the left, as before; when
+ * the window has no room there, shifted to stay inside it), follows the row
+ * when the list scrolls, and keeps below the app's title bar. Under
+ * `inlineQuery` (the IJ harness's phone sheet) it stays in the flow, under
+ * its row, exactly as before.
  */
 
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { appTopLimit, menuViewport } from "@/lib/modelMenuPlacement";
 
 /** Below this much room above the row, opening downward is tried. */
 export const MIN_ROOM_PX = 160;
 /** Space kept between the panel and the window's edge. */
 export const EDGE_PX = 8;
+/** The gap between a floating panel and its row (the panel's `mr-1`). */
+export const FLOAT_GAP_PX = 4;
 
 export interface FitPlacement {
   /** "up" = bottom-anchored to the row (grows up); "down" = top-anchored. */
@@ -29,9 +41,17 @@ export interface FitPlacement {
 }
 
 /** Where the panel goes for an anchor row at `rowTop`..`rowBottom` in a
- *  window `viewportH` tall, with at most `cap` pixels of height. Pure. */
-export function fitPlacement(rowTop: number, rowBottom: number, viewportH: number, cap: number): FitPlacement {
-  const above = Math.floor(rowBottom - EDGE_PX);
+ *  window `viewportH` tall, with at most `cap` pixels of height. `topLimit`:
+ *  where the room above begins (the app's title bar; 0 = the window's top).
+ *  Pure. */
+export function fitPlacement(
+  rowTop: number,
+  rowBottom: number,
+  viewportH: number,
+  cap: number,
+  topLimit = 0,
+): FitPlacement {
+  const above = Math.floor(rowBottom - Math.max(0, topLimit) - EDGE_PX);
   const below = Math.floor(viewportH - rowTop - EDGE_PX);
   if (above >= Math.min(cap, MIN_ROOM_PX) || above >= below) {
     return { side: "up", maxHeight: Math.max(0, Math.min(cap, above)) };
@@ -39,20 +59,68 @@ export function fitPlacement(rowTop: number, rowBottom: number, viewportH: numbe
   return { side: "down", maxHeight: Math.max(0, Math.min(cap, below)) };
 }
 
+/** A floating panel's fixed edges for a row at `row`, in a window `vw` × `vh`,
+ *  `width` wide. Beside the row on its left (its right edge `FLOAT_GAP_PX`
+ *  left of the row, which the panel's `mr-1` makes); shifted to stay inside
+ *  the window when the left has no room for it. Pure. */
+export function floatEdges(
+  row: { top: number; bottom: number; left: number },
+  place: FitPlacement,
+  vw: number,
+  vh: number,
+  width: number,
+): { top?: number; bottom?: number; left?: number; right?: number; align: "beside" | "shifted" } {
+  const vertical = place.side === "up" ? { bottom: Math.round(vh - row.bottom) } : { top: Math.round(row.top) };
+  if (row.left - FLOAT_GAP_PX - width >= EDGE_PX) {
+    return { ...vertical, right: Math.round(vw - row.left), align: "beside" };
+  }
+  const left = Math.max(EDGE_PX, Math.min(row.left - FLOAT_GAP_PX - width, vw - EDGE_PX - width));
+  return { ...vertical, left: Math.round(left), align: "shifted" };
+}
+
+/** An inline panel's most height: what its scrolling list shows, less its
+ *  row and the panel's top margin. No scrolling list (or one not laid out):
+ *  no limit beyond the panel's own. */
+function inlineRoom(el: HTMLElement, anchor: HTMLElement): number {
+  let list: HTMLElement | null = anchor.parentElement;
+  while (list && !/(auto|scroll)/.test(getComputedStyle(list).overflowY)) list = list.parentElement;
+  if (!list || list.clientHeight <= 0) return Infinity;
+  const row = anchor.firstElementChild as HTMLElement | null;
+  const rowHeight = row && row !== el ? row.offsetHeight : 0;
+  return Math.max(0, list.clientHeight - rowHeight - INLINE_GAP_PX);
+}
+
+/** The space an inline panel keeps under its row (its `mt-0.5`, and a hair). */
+export const INLINE_GAP_PX = 4;
+
 export function FitPanel({
   className,
   cap = 384,
   children,
   testId,
+  float = false,
+  inlineQuery,
+  refitKey,
 }: {
   /** Everything but the vertical anchor (no bottom-0/top-0, no max-h). */
   className: string;
   cap?: number;
   children: ReactNode;
   testId?: string;
+  /** Fixed to the window at its row (a panel inside a scrolling list). */
+  float?: boolean;
+  /** A media query under which a floating panel stays in the flow instead. */
+  inlineQuery?: string;
+  /** Changes when what the row sits in moved (the model menu was placed
+   *  again): the panel is placed again in that same commit, after the move.
+   *  The panel listens for scrolls and resizes; a menu that follows its chip
+   *  with no such event (the demo strip going away) gave it nothing to hear,
+   *  and left it where its row had been. */
+  refitKey?: unknown;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [place, setPlace] = useState<FitPlacement | null>(null);
+  const [edges, setEdges] = useState<ReturnType<typeof floatEdges> | null>(null);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -60,21 +128,58 @@ export function FitPanel({
     if (!el || !anchor || typeof window === "undefined") return;
     const fit = () => {
       const r = anchor.getBoundingClientRect();
-      setPlace(fitPlacement(r.top, r.bottom, window.innerHeight, cap));
+      const inline = !!inlineQuery && !!window.matchMedia?.(inlineQuery)?.matches;
+      if (!float || inline) {
+        const box = fitPlacement(r.top, r.bottom, window.innerHeight, cap);
+        // Inline, under its row inside a scrolling list (a phone): the panel
+        // AND its row fit in what the list shows, or the panel's last rows sat
+        // under the list's edge with the row scrolled away above it (measured
+        // at 390 px: 84 px of OpenRouter's models out of sight).
+        const room = inline ? inlineRoom(el, anchor) : Infinity;
+        setPlace(room < box.maxHeight ? { ...box, maxHeight: room } : box);
+        setEdges(null);
+        return;
+      }
+      const vp = menuViewport();
+      const next = fitPlacement(r.top, r.bottom, vp.height, cap, appTopLimit());
+      setPlace(next);
+      setEdges(floatEdges(r, next, vp.width, vp.height, el.offsetWidth || 224));
     };
     fit();
+    // A floating panel follows its row when anything scrolls (the menu's
+    // list, the page) — but not when its own list does.
+    const onScroll = (e: Event) => {
+      if (e.target instanceof Node && el.contains(e.target)) return;
+      fit();
+    };
     window.addEventListener("resize", fit);
-    return () => window.removeEventListener("resize", fit);
-  }, [cap]);
+    if (float) window.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.removeEventListener("resize", fit);
+      if (float) window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [cap, float, inlineQuery, refitKey]);
 
   const side = place?.side ?? "up";
+  const style: CSSProperties = { maxHeight: place ? place.maxHeight : cap };
+  if (edges) {
+    style.position = "fixed";
+    if (edges.top !== undefined) style.top = edges.top;
+    if (edges.bottom !== undefined) style.bottom = edges.bottom;
+    if (edges.right !== undefined) style.right = edges.right;
+    if (edges.left !== undefined) {
+      style.left = edges.left;
+      style.right = "auto";
+    }
+  }
   return (
     <div
       ref={ref}
       data-testid={testId}
       data-side={side}
+      data-align={edges?.align}
       className={`${className} ${side === "up" ? "bottom-0" : "top-0"} overflow-y-auto`}
-      style={{ maxHeight: place ? place.maxHeight : cap }}
+      style={style}
     >
       {children}
     </div>
