@@ -1,0 +1,2 @@
+Decoy (review): chained month by month with the well-known "end of month stays end of month" rule, so a series that lands on a short month's last day jumps to the next month's last day (January 29 -> February 28 -> March 31).
+Breaks README.md "monthly": "It is the START date's day that counts, not 'the last day of the month'" and "A series starting January 30 falls on February 28 (or 29), then March 30".

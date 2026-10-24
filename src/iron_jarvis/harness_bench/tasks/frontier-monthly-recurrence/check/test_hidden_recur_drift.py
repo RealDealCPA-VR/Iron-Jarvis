@@ -76,6 +76,20 @@ class NoDrift(unittest.TestCase):
         self.assertEqual(monthly(date(2025, 1, 29), 4), days("2025-01-29", "2025-02-28", "2025-03-29", "2025-04-29"))
         self.assertEqual(monthly(date(2024, 1, 29), 4), days("2024-01-29", "2024-02-29", "2024-03-29", "2024-04-29"))
 
+    def test_century_years_follow_the_real_calendar(self):
+        # 2100 and 1900 are not leap years, 2000 is: February's last day is
+        # whatever datetime.date says it is (README: "In a month without that
+        # day, it falls on the month's last day").
+        self.assertEqual(monthly(date(2100, 1, 31), 3), days("2100-01-31", "2100-02-28", "2100-03-31"))
+        self.assertEqual(monthly(date(1900, 1, 29), 3), days("1900-01-29", "1900-02-28", "1900-03-29"))
+        self.assertEqual(monthly(date(2000, 1, 31), 3), days("2000-01-31", "2000-02-29", "2000-03-31"))
+        self.assertEqual(monthly(date(2099, 8, 31), 2, interval=6), days("2099-08-31", "2100-02-28"))
+        self.assertEqual(
+            last_business_days(2100),
+            days("2100-01-29", "2100-02-26", "2100-03-31", "2100-04-30", "2100-05-31", "2100-06-30",
+                 "2100-07-30", "2100-08-31", "2100-09-30", "2100-10-29", "2100-11-30", "2100-12-31"),
+        )
+
     def test_it_is_the_start_day_that_counts(self):
         self.assertEqual(monthly(date(2025, 2, 28), 4), days("2025-02-28", "2025-03-28", "2025-04-28", "2025-05-28"))
         self.assertEqual(monthly(date(2025, 4, 30), 4), days("2025-04-30", "2025-05-30", "2025-06-30", "2025-07-30"))

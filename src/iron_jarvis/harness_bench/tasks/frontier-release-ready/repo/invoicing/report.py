@@ -4,8 +4,8 @@ The export is a CSV file with a header row ``customer,category,amount``. It is
 written by our billing system with the standard CSV rules: a field that holds
 a comma, a quote or a line break is wrapped in double quotes, and a quote
 inside such a field is written twice (``"Paint ""Pro"""`` is ``Paint "Pro"``).
-Amounts are exact decimal numbers such as ``19.99`` or ``-5.00``. Blank lines
-are ignored.
+Amounts are exact decimal numbers such as ``19.99``, ``-5.00`` or ``5``. Blank
+lines (empty, or holding only spaces or tabs) are ignored.
 
 ``summarize(path)`` returns ``{category: total}``, the totals as strings with
 exactly two decimal places (``"123.40"``), computed exactly (never with

@@ -68,6 +68,17 @@ class ReadsExportsAsDocumented(unittest.TestCase):
         self.assertEqual(summarize(os.path.join(HERE, "data", "sample.csv")),
                          {"Paint": "61.48", "Hardware": "12.50", "Garden": "100.00"})
 
+    def test_a_blank_line_may_hold_spaces_or_tabs(self):
+        # The docstring: "Blank lines (empty, or holding only spaces or tabs) are ignored."
+        self.assertEqual(self.total("customer,category,amount\nA,X,1.10\n \n\t\nB,X,2.20\n  \t \n"), {"X": "3.30"})
+        self.assertEqual(self.total("customer,category,amount\r\n   \r\nA,X,1.10\r\n\r\n\t\r\nB,Y,2.00\r\n"),
+                         {"X": "1.10", "Y": "2.00"})
+
+    def test_every_total_has_exactly_two_decimal_places(self):
+        # The docstring: totals "as strings with exactly two decimal places".
+        got = self.total("customer,category,amount\nA,Gift,5\nB,Gift,10\nC,Tip,1.5\nD,Tip,2\nE,Fee,-3\n")
+        self.assertEqual(got, {"Gift": "15.00", "Tip": "3.50", "Fee": "-3.00"})
+
     def test_the_command_line(self):
         out = subprocess.run([sys.executable, "-m", "invoicing.report", os.path.join("data", "sample.csv")],
                              cwd=HERE, capture_output=True, text=True, timeout=60)
