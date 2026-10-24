@@ -37,6 +37,8 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
+from ..iron_proxy import accounts as _acc
+
 log = logging.getLogger(__name__)
 
 #: vendor -> (Iron Jarvis provider, Iron-Proxy provider, the group's name).
@@ -222,7 +224,7 @@ def row_of(profile: Mapping[str, Any], state: Mapping[str, Any] | None, *,
     if not _is_on(profile, st):
         row["status"] = OFF
         return row
-    if st.get("status") == "unauthenticated" or _reason_kind(st) == "auth-expired":
+    if _acc.needs_sign_in(st):
         row["status"] = NEEDS_SIGN_IN
         return row
     parked, until = _parked_until(st, now)

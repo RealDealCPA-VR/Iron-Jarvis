@@ -66,6 +66,7 @@ import logging
 import os
 import re
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -348,11 +349,34 @@ def _local_time(iso: str) -> tuple[str, float | None]:
 _USAGE_KINDS = ("quota-exhausted", "billing")
 
 
+def needs_sign_in(state: Any) -> bool:
+    """Whether an account must sign in again — Iron-Proxy's own rule.
+
+    An ``auth-expired`` signal sets ``status: "unauthenticated"``; Iron-Proxy's
+    refresh sets ``"ready"`` again once the CLI is signed in and LEAVES the old
+    ``parkedReason`` behind (only a sign-in it runs itself, or an unpark,
+    deletes it), and its own ``availability`` hands a ``ready`` account out.
+    So the status decides: ``unauthenticated`` needs a sign-in; ``ready`` /
+    ``active`` / ``disabled`` never do, whatever note is left over (v1.382.0:
+    two signed-in accounts read "needs to sign in again" for days because of
+    that note). Only a state with no settled status — a bare signal — or a
+    parked one falls back to the note's kind."""
+    if not isinstance(state, Mapping):
+        return False
+    status = state.get("status")
+    if status == "unauthenticated":
+        return True
+    if status in ("ready", "active", "disabled"):
+        return False
+    reason = state.get("parkedReason")
+    return isinstance(reason, Mapping) and reason.get("kind") == "auth-expired"
+
+
 def _account_kind(state: dict[str, Any]) -> str:
     """``signin`` / ``usage`` / ``rate`` / ``busy`` / ``other`` for one state."""
     reason = state.get("parkedReason") if isinstance(state.get("parkedReason"), dict) else {}
     kind = str(reason.get("kind") or "")
-    if state.get("status") == "unauthenticated" or kind == "auth-expired":
+    if needs_sign_in(state):
         return "signin"
     if kind in _USAGE_KINDS:
         return "usage"

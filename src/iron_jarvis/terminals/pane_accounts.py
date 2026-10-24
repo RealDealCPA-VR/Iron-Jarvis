@@ -376,7 +376,7 @@ def _pick_explicit(
     if prof.get("enabled") is False:
         raise _refuse_disabled(spec, title)
     st = states.get(pid) if isinstance(states.get(pid), Mapping) else {}
-    if st.get("status") == "unauthenticated" or _reason_kind(st) == "auth-expired":
+    if _acc.needs_sign_in(st):
         raise _refuse_signin(spec, title)
     if st.get("status") == "disabled":
         raise _refuse_disabled(spec, title)
@@ -697,7 +697,7 @@ def _state_of(rec: Mapping[str, Any], cache: Any) -> dict[str, Any]:
     st = states.get(pid) if isinstance(states.get(pid), Mapping) else {}
     if prof.get("enabled") is False or st.get("status") == "disabled":
         return {"state": "missing", "reason": "disabled"}
-    if st.get("status") == "unauthenticated" or _reason_kind(st) == "auth-expired":
+    if _acc.needs_sign_in(st):
         return {"state": "needs-sign-in"}
     if _parked_now(st):
         out: dict[str, Any] = {"state": "parked"}
