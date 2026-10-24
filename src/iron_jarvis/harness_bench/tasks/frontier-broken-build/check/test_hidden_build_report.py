@@ -1,7 +1,11 @@
 # IJ-BENCH-HIDDEN-CHECK frontier-broken-build
 """Hidden check: the report builds, with the required dependency versions,
-the same way every time, in a plain isolated Python; nothing vendored changed."""
+the same way every time, in a plain isolated Python (no site-packages at all:
+nothing extra installed is ever reachable); nothing vendored changed; every
+minimark / tinylex module the build imports is the vendored release, byte for
+byte, wherever the build reads it from."""
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -19,6 +23,11 @@ ZIP_REL = "vendor/archives/tinylex-0.4.2.zip"
 #: Hash seeds for the builds: a report that depends on chance (a set's order)
 #: comes out differently under them.
 SEEDS = ("11", "29", "4242")
+#: How every build runs: -s and -S (no user or system site-packages, so a
+#: library that happens to be installed in the grading Python is never
+#: importable: task.md and README.md ask for "a plain Python 3.12 that has
+#: nothing extra installed"), and _env() strips every PYTHON* variable.
+PLAIN = ("-s", "-S")
 
 EXPECTED_SHA = "a2cb5c6801906c49b665ec52686537c4681ef6710bb24e23fe0da73e28318408"
 EXPECTED_REPORT = '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Quarterly Report — Q3 2026</title>\n</head>\n<body>\n<h1>Quarterly Report — Q3 2026</h1>\n<p class="tags">Tags: compliance, finance, hiring, planning, regions, risk, sales, summary, supply</p>\n<section>\n<h2>Overview</h2>\n<p>The third quarter closed <strong>ahead of plan</strong>. Revenue grew 8% on the second quarter, and R&amp;D spending stayed below 12% of revenue for the first time this year.</p>\n<p>The full numbers are in <code>results.csv</code> on the <a href="https://example.com/finance?q=3&amp;view=full">finance dashboard</a>.</p>\n</section>\n<section>\n<h2>Results</h2>\n<p>Sales by region, in thousands of dollars:</p>\n<table>\n<thead>\n<tr><th>Region</th><th style="text-align:right">Q2</th><th style="text-align:right">Q3</th><th style="text-align:center">Change</th></tr>\n</thead>\n<tbody>\n<tr><td>North</td><td style="text-align:right">1,204</td><td style="text-align:right">1,310</td><td style="text-align:center">+8.8%</td></tr>\n<tr><td>South</td><td style="text-align:right">980</td><td style="text-align:right">1,052</td><td style="text-align:center">+7.3%</td></tr>\n<tr><td>West &amp; Coast</td><td style="text-align:right">1,442</td><td style="text-align:right">1,515</td><td style="text-align:center">+5.1%</td></tr>\n</tbody>\n</table>\n<p>Every region grew. <em>West &amp; Coast</em> is still the largest region, but its growth was &lt; 6%.</p>\n</section>\n<section>\n<h2>Risks</h2>\n<h3>What could go wrong</h3>\n<ul>\n<li>Supply delays: lead times for the &quot;core&quot; boards are up to 14 weeks.</li>\n<li>A new data rule: exports must not contain &lt;email&gt; addresses.</li>\n<li>Currency: a 5% swing in EUR moves revenue by about $0.4M.</li>\n</ul>\n<h3>What we are doing</h3>\n<p>We moved two suppliers to <em>quarterly</em> contracts and added a check to the <code>export</code> job.</p>\n</section>\n<section>\n<h2>Next steps</h2>\n<ul>\n<li>Hire four engineers for <strong>Q&amp;A</strong> and tooling.</li>\n<li>Close the Lisbon office move by November.</li>\n<li>Publish the Q4 plan on the <a href="https://example.com/plan">planning page</a>.</li>\n</ul>\n</section>\n<p class="footer">Last updated: 2026-09-30</p>\n</body>\n</html>\n'
@@ -91,10 +100,30 @@ print("IJCHECK " + json.dumps({"code": code, "modules": mods}))
 """
 
 
-def _inside(path, folder):
-    path = os.path.normcase(os.path.normpath(os.path.abspath(path)))
-    folder = os.path.normcase(os.path.normpath(os.path.abspath(folder)))
-    return path.startswith(folder + os.sep)
+#: The releases requirements.txt asks for, as vendored.
+RELEASES = {"minimark": "minimark 2.1.0", "tinylex": "tinylex 0.4.2"}
+MINIMARK_TREE = "vendor/minimark-2.1/"
+
+
+def _release_files():
+    """``{"minimark/document.py": sha256, "tinylex/_tokens.py": sha256, ...}``:
+    every module file of the two vendored releases. minimark's from the pinned
+    hashes of its vendored tree; tinylex's from the vendored archive, after
+    checking the archive itself is the pinned one."""
+    files = {
+        rel[len(MINIMARK_TREE):]: digest
+        for rel, digest in UNCHANGED.items()
+        if rel.startswith(MINIMARK_TREE + "minimark/") and rel.endswith(".py")
+    }
+    with open(os.path.join(HERE, *ZIP_REL.split("/")), "rb") as fh:
+        archive = fh.read()
+    if hashlib.sha256(archive).hexdigest() != UNCHANGED[ZIP_REL]:
+        raise AssertionError(f"{ZIP_REL} is not the vendored tinylex 0.4.2 archive")
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+        for name in zf.namelist():
+            if name.startswith("tinylex/") and name.endswith(".py"):
+                files[name] = hashlib.sha256(zf.read(name).replace(CRLF, LF)).hexdigest()
+    return files
 
 
 class HiddenBuildReport(unittest.TestCase):
@@ -102,7 +131,7 @@ class HiddenBuildReport(unittest.TestCase):
         for seed in SEEDS:
             with self.subTest(hash_seed=seed):
                 shutil.rmtree(os.path.join(HERE, "dist"), ignore_errors=True)
-                result = _run([sys.executable, "-s", "build.py"], seed)
+                result = _run([sys.executable, *PLAIN, "build.py"], seed)
                 self.assertEqual(
                     result.returncode, 0,
                     "python build.py failed in a plain isolated Python:\n" + _text(result.stderr)[-2000:],
@@ -120,7 +149,7 @@ class HiddenBuildReport(unittest.TestCase):
                     )
 
     def test_2_the_build_imports_the_required_versions(self):
-        result = _run([sys.executable, "-s", "-c", WRAPPER], "7")
+        result = _run([sys.executable, *PLAIN, "-c", WRAPPER], "7")
         out = _text(result.stdout)
         marked = [line for line in out.splitlines() if line.startswith("IJCHECK ")]
         self.assertTrue(marked, "the build did not run:\n" + _text(result.stderr)[-2000:])
@@ -129,31 +158,34 @@ class HiddenBuildReport(unittest.TestCase):
         mods = info["modules"]
         self.assertIn("minimark", mods, "the build never imported minimark")
         self.assertEqual(mods["minimark"]["version"], "2.1.0", "the build used the wrong minimark")
-        self.assertTrue(
-            _inside(mods["minimark"]["file"], os.path.join(HERE, "vendor", "minimark-2.1")),
-            f"minimark was not imported from vendor/minimark-2.1: {mods['minimark']['file']}",
-        )
         self.assertIn("tinylex", mods, "the build never imported tinylex")
         self.assertEqual(mods["tinylex"]["version"], "0.4.2", "the build used the wrong tinylex")
-        with zipfile.ZipFile(os.path.join(HERE, *ZIP_REL.split("/"))) as zf:
-            members = {name: zf.read(name).replace(CRLF, LF) for name in zf.namelist()}
-        for name, mod in mods.items():
-            if not name.startswith("tinylex"):
-                continue
+        # The SAME rule for both libraries: every module the build imported
+        # from them is a file of the vendored release, byte for byte, wherever
+        # the build read it from (the vendored tree or archive, or an unmodified
+        # copy of either, a zip included). A changed or extra file is not the
+        # release requirements.txt asks for (vendor/README.md: unmodified).
+        release = _release_files()
+        for name, mod in sorted(mods.items()):
             path = mod["file"]
             if not path:
                 continue  # no file to compare (its version and the report are checked)
+            top = name.split(".")[0]
+            label = RELEASES[top]
             norm = path.replace("\\", "/")
-            self.assertNotIn("tinylex-0.3", norm, f"{name} came from the old tinylex-0.3: {path}")
-            if ".zip/" in norm:
-                continue  # imported straight from the release archive
             parts = norm.split("/")
-            self.assertIn("tinylex", parts, f"{name}: unexpected file {path}")
-            member = "/".join(parts[len(parts) - 1 - parts[::-1].index("tinylex"):])
-            self.assertIn(member, members, f"{name}: {path} is not part of tinylex 0.4.2")
-            with open(path, "rb") as fh:
-                data = fh.read().replace(CRLF, LF)
-            self.assertEqual(data, members[member], f"{name}: {path} differs from the 0.4.2 release")
+            self.assertIn(top, parts[:-1], f"{name}: unexpected file {path}")
+            key = "/".join(parts[len(parts) - 1 - parts[::-1].index(top):])
+            self.assertIn(key, release, f"{name}: {path} is not part of {label}")
+            if ".zip/" in norm:
+                archive, member = norm.split(".zip/", 1)
+                with zipfile.ZipFile(archive + ".zip") as zf:
+                    data = zf.read(member)
+            else:
+                with open(path, "rb") as fh:
+                    data = fh.read()
+            digest = hashlib.sha256(data.replace(CRLF, LF)).hexdigest()
+            self.assertEqual(digest, release[key], f"{name}: {path} differs from the {label} release")
 
     def test_3_vendor_content_and_requirements_are_unchanged(self):
         seen = {}

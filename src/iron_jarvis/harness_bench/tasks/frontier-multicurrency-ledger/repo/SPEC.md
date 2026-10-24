@@ -199,8 +199,9 @@ Balances are kept per account per currency.
 
 ### 7.5 Exchange rates (`rates.py`)
 
-A rates file is UTF-8 CSV with the columns `base`, `currency` and `rate`, read
-with the same rules as a transactions file (header in any case and any order,
+A rates file is UTF-8 CSV (a byte-order mark is allowed) with the columns
+`base`, `currency` and `rate`, read with the same rules as a transactions file
+(header in any case and any order, a missing, unknown or duplicate column,
 skipped rows, stripped cells, short and long rows, line numbers). Each row
 says: one unit of `currency` is worth `rate` units of `base`.
 

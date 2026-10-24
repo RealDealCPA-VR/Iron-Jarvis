@@ -80,6 +80,27 @@ ORDER_REPORT = (
 )
 
 
+# The Grand total line is the widest line of this table (label AND amount):
+# SPEC 7.6 says the widths are computed over every line, the Grand total line
+# included.
+WIDE_GRAND = """date,account,amount,currency
+2024-01-01,A,900.00,EUR
+2024-01-02,B,900.00,USD
+"""
+WIDE_GRAND_REPORT = (
+    "Ledger report\n"
+    "=============\n"
+    "\n"
+    "A            EUR      900.00\n"
+    "B            USD      900.00\n"
+    "----------------------------\n"
+    "Total        EUR      900.00\n"
+    "Total        USD      900.00\n"
+    "----------------------------\n"
+    "Grand total  USD  900,900.00\n"
+)
+
+
 def _ledger(name):
     return importlib.import_module(f"ledger.{name}")
 
@@ -127,7 +148,7 @@ class HiddenMoney(unittest.TestCase):
 
     def test_bad_codes_are_refused(self):
         Money = _ledger("money").Money
-        for code in ("EURO", "EU", "E1R", "", " EUR", "€UR"):
+        for code in ("EURO", "EU", "E1R", "", " EUR", "€UR", "ÉUR", "ДОЛ", "eür"):
             with self.subTest(code=code):
                 with self.assertRaises(ValueError):
                     Money("1", code)
@@ -192,7 +213,7 @@ class HiddenParse(unittest.TestCase):
 
     def test_a_bad_currency_is_a_parse_error_on_its_line(self):
         ParseError = _ledger("errors").ParseError
-        for code in ("EURO", "E1R", "€", "US"):
+        for code in ("EURO", "E1R", "€", "US", "äöü", "ÉUR"):
             with self.subTest(code=code):
                 text = f"date,account,amount,currency\n2024-01-01,Cash,1,EUR\n2024-01-02,Cash,2,{code}\n"
                 with self.assertRaises(ParseError) as caught:
@@ -284,6 +305,38 @@ class HiddenRates(unittest.TestCase):
                     _ledger("rates").parse_rates("base,currency,rate\n" + rows)
                 self.assertEqual(str(caught.exception), f"line {line}: {problem}")
 
+    def test_rates_files_follow_the_transactions_file_rules(self):
+        ParseError = _ledger("errors").ParseError
+        head = "base,currency,rate\n"
+        cases = [
+            (head + ",EUR,1.5\n", 2, "bad currency ''"),
+            (head + "USD,,1.5\n", 2, "bad currency ''"),
+            (head + "USD,EUR,\n", 2, "bad rate ''"),
+            (head + "USD,EUR\n", 2, "bad rate ''"),
+            (head + "USD,EUR,1.5,9\n", 2, "expected 3 cells, found 4"),
+            ("# rates\n\n" + head + "USD,GBP,1.27\n\nUSD,EUR,1.5,9\n", 6, "expected 3 cells, found 4"),
+            ("base,currency\nUSD,EUR\n", 1, "missing column 'rate'"),
+            ("base,currency,rate,note\nUSD,EUR,1.5,x\n", 1, "unknown column 'note'"),
+            ("base,currency,rate,Base\n", 1, "duplicate column 'base'"),
+            (head + "USD,EUR,0.00\n", 2, "bad rate '0.00'"),
+            (head + "EURO,USD,0\n", 2, "bad currency 'EURO'"),
+            (head + "USD,EURO,0\n", 2, "bad currency 'EURO'"),
+        ]
+        for text, line, problem in cases:
+            with self.subTest(text=text):
+                with self.assertRaises(ParseError) as caught:
+                    _ledger("rates").parse_rates(text)
+                self.assertEqual(caught.exception.line, line)
+                self.assertEqual(str(caught.exception), f"line {line}: {problem}")
+
+    def test_load_rates_reads_a_file_with_a_byte_order_mark(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "bom.csv")
+            with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+                fh.write("base,currency,rate\r\nUSD,EUR,1.5\r\n")
+            table = _ledger("rates").load_rates(path)
+        self.assertEqual(table.rate("USD", "EUR"), Decimal("1.5"))
+
     def test_load_rates_reads_a_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             table = _ledger("rates").load_rates(_write(tmp, "r.csv", "base,currency,rate\nUSD,CHF,1.1250\n"))
@@ -319,6 +372,11 @@ class HiddenReport(unittest.TestCase):
         report = _ledger("report")
         table = _ledger("rates").parse_rates(RATES)
         self.assertEqual(report.render(_book(MIXED), "usd", table), MIXED_TABLE + MIXED_GRAND)
+
+    def test_the_grand_total_line_counts_for_the_widths(self):
+        report = _ledger("report")
+        table = _ledger("rates").parse_rates("base,currency,rate\nUSD,EUR,1000\n")
+        self.assertEqual(report.render(_book(WIDE_GRAND), "USD", table), WIDE_GRAND_REPORT)
 
     def test_grand_total_rounds_each_balance_before_adding(self):
         report = _ledger("report")
@@ -411,6 +469,19 @@ class HiddenCli(unittest.TestCase):
         done = _cli("report", bad)
         self.assertEqual((done.returncode, done.stdout), (1, ""))
         self.assertEqual(done.stderr, "error: line 3: bad currency 'EURO'\n")
+
+    def test_a_rates_file_that_cannot_be_read_exits_with_1(self):
+        for extra in ((), ("--rates", os.path.join(self.tmp, "no-such-rates.csv"))):
+            with self.subTest(rates=extra):
+                done = _cli("report", self.csv, "--base", "USD", *extra)
+                self.assertEqual((done.returncode, done.stdout), (1, ""), done.stderr)
+                self.assertTrue(done.stderr.startswith("error: "), done.stderr)
+                self.assertEqual(done.stderr.count(chr(10)), 1, done.stderr)
+
+    def test_balance_lists_a_currency_whose_balance_is_now_zero(self):
+        path = _write(self.tmp, "order.csv", ORDER)
+        done = _cli("balance", path, "Assets:Bank")
+        self.assertEqual((done.returncode, done.stdout), (0, "EUR 3.50\nGBP 0.00\nUSD 10.00\n"))
 
     def test_a_bad_base_is_a_usage_error(self):
         _write(self.tmp, "rates.csv", RATES)

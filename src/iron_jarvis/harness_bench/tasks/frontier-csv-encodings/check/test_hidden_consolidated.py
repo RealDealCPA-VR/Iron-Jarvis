@@ -20,26 +20,26 @@ sys.path.insert(0, HERE)
 
 CRLF = bytes([13, 10])
 LF = bytes([10])
-EXPECTED_ORDERS_SHA = "2a1e7f97d4638d2ee348cf9b5445b68ed02ba69d0cb2cc41dfdf247f35f89445"
-EXPECTED_ORDER_COUNT = 463
+EXPECTED_ORDERS_SHA = "7e16a1c64c372e0b2a0d7f02b2107f365d8784430f19053a09ff2c5d58e8a85a"
+EXPECTED_ORDER_COUNT = 469
 EXPECTED_SUMMARY = {
     "duplicates": 5,
     "offices": {
         "berlin": {
-            "orders": 98,
-            "total": "205690.83"
+            "orders": 99,
+            "total": "206940.83"
         },
         "boston": {
-            "orders": 94,
-            "total": "244444.13"
+            "orders": 96,
+            "total": "245166.53"
         },
         "lisbon": {
-            "orders": 66,
-            "total": "124376.35"
+            "orders": 68,
+            "total": "124529.05"
         },
         "london": {
-            "orders": 90,
-            "total": "179075.49"
+            "orders": 91,
+            "total": "179320.59"
         },
         "madrid": {
             "orders": 90,
@@ -50,7 +50,7 @@ EXPECTED_SUMMARY = {
             "total": "60304.51"
         }
     },
-    "skipped_rows": 6
+    "skipped_rows": 10
 }
 EXPORTS = {
     'berlin_2026-01.csv': 'ac493908364154e25d6d704047a7f523c3d3d6ba13e49c295d418615d96071b3',
@@ -58,12 +58,12 @@ EXPORTS = {
     'berlin_2026-03.csv': '2af19965e7841223efddd223dadc853ae14515ea4f421e3298847681beb82952',
     'berlin_2026-04.csv': 'def46a011bebd2583e509e13f3591f0ab38e33466128798f24cf73af92e7dda8',
     'berlin_2026-05.csv': 'dd87005e0f498912cfbc71b76be4908c61ec71fe424670ff95de2e2292f465db',
-    'berlin_2026-06.csv': 'eaab2264e0be6f1b63d02dac012cc2d729c7efb655adc846e35f81b8f12299be',
+    'berlin_2026-06.csv': '58b539a2bb63a99fbbe1a6ca3466ea94637ab65292bd5989912de53ae6d8c2c8',
     'berlin_2026-07.csv': 'd754f6725eaabdd9eb0671b404a9ecf0fe03ad6f58b3c7c06c57542dd22bb365',
     'berlin_2026-08.csv': '865078522e7a44b9329328f1826fb451764cc86f1182d18fff70fb724eacda50',
     'berlin_2026-09.csv': 'e3b594436d5c6a1099225731418d368651d956f5eb701aa40cfc0fecf8e45066',
     'berlin_2026-10.csv': 'c827d8f737e0cf9054209a06d5f9257a907e318bf02f347790ef6e38af532bd0',
-    'berlin_2026-11.csv': '8e83fe5778ab3d5cdaafba5b270a7ddaa418dffa70b0c7c92ab112d53879e681',
+    'berlin_2026-11.csv': '1a3d3a5712afa9c67227a167b048f71db2df9ac25f88e8f22b0a7e1c312f7fb4',
     'berlin_2026-12.csv': '641e043c22ba7c4d01b5eab2e116538df4280707e1d12f3e4560d0924f758374',
     'boston_2026-01.csv': 'b42e7759d075bbca08dfe86ab49836620b8cc9287bdd1c32b57a4b0d5d45cb03',
     'boston_2026-02.csv': 'd175329845ad5f0334d27bd92c5d743afe1c9498350d0cd8850c2506e6ba391a',
@@ -73,29 +73,29 @@ EXPORTS = {
     'boston_2026-05_resend.csv': '3f7d98979abc63a59d56485e86e4227b09dabdc0823f73528b8f3e93c5dc4857',
     'boston_2026-06.csv': '0b2aff002ff68871786e17831ab6bc899b1db8be1af6efd0ee32da73bbed5aa7',
     'boston_2026-07.csv': '0cf504b97ff0c663a6a126828cb2ffea708c95fe04e7b4393916a42c35d925d3',
-    'boston_2026-08.csv': '196cf17249b9f5f82f1182cefa7fa42fa2ff88dfcee06fcef793db0a6b442739',
-    'boston_2026-09.csv': 'a4236b91d5fde8975a37b2eae42cda0cc5dd2c70a35f061be16ebdbfd25b26f4',
-    'boston_2026-10.csv': '5247f0286ec2f3a800db7b85bb7aad9afad31743de4112e10e350e9f818a3fa9',
-    'boston_2026-11.csv': '4d1006599266171435f62cc48803de51415ab6b910f55faea826e7177ff10a5d',
+    'boston_2026-08.csv': '20ae1670a5927dfd7592758f7282744b089b35a09486f8a01ee268a2d1e23626',
+    'boston_2026-09.csv': 'ae4c79e834a873e0215af8c4b1b58df97e5aa513c7ff6e1e0b476fa80b9a2f35',
+    'boston_2026-10.csv': '86fdf333ae57748f45081f16bb7e07f4e8411590eca0708d480b7633f7582923',
+    'boston_2026-11.csv': '79bfeeb6e977d35a0f55c0d34f864be3dbcda7b51586dcc4a6fa441bd0fc1e06',
     'boston_2026-12.csv': '7598669ea75d65e90620070e8c736a7d58e6478d11629e5236670dbd3b209c00',
     'lisbon_2026-05.csv': '6535b4106b2f792c7b3e4dd58cb24017612bb1bc797bc466a889e1894b7aa9e4',
     'lisbon_2026-06.csv': '2eed2815abea51155924868a5752b5c12ed0525583bccb6fe66baea010a2c57a',
     'lisbon_2026-07.csv': '6173319fdb6a51c2c5355f86026fa675ef002f77fed50760226adfc24f4ddfcc',
-    'lisbon_2026-08.csv': '6d6d07b5a2e8e20916e99388e6792fe52dc2f7976c9a17fd77a93df386528c6a',
+    'lisbon_2026-08.csv': 'e8096b62a0641b9eac48e18b6772db9c360fce4d228ae8a09d40da5cb654b9f4',
     'lisbon_2026-09.csv': '0b17d8b4ee9c528bf16719cc5df7058f19b7762ef001214be23bfe5a81f7be1d',
     'lisbon_2026-10.csv': '344a3c7ae5bc055dd64c3262d43d2b4ec8b2f13dc20a389bbf48d2e1851dde05',
-    'lisbon_2026-11.csv': 'fc2f0baa2ef81544995d2950725437df070d83ebc8039bf29410e07843b0bbcc',
+    'lisbon_2026-11.csv': 'c77297394febf92d7d96869265d24627060785727703edbf87cd5293495c57b6',
     'lisbon_2026-12.csv': '5fa43fec85800c6e0b885726e9a49146e7a3e6fc406d6fbee12b3f8224ec6d7b',
     'london_2026-01.csv': '6099ceb98257a3a1ca270b10ffddf99e1f009b84e50c0776a17ce51f7910db58',
     'london_2026-02.csv': 'ba75e8fe641dfb1eebf3229c813ae92b8a0a62ce78bc6a203657124ead633a8c',
     'london_2026-03.csv': '880f86aafcf44ef9e3d0af46bb5f592e694ff8e5c6a031427f37c89c53796ee8',
-    'london_2026-04.csv': 'ac613116844b1051bff90f5821b8c0b31b03d7a116ae8875d57f75fb24fed11c',
+    'london_2026-04.csv': 'ca521b4cda210624c41026a592ddac36304fe121f63af50cd423790c87659fe3',
     'london_2026-05.csv': 'b3af597e9a53bdd3b3534a0bbf56d481b41839e3d601d238e217905b5fee8325',
     'london_2026-06.csv': '673d181e00ee7bb3a2c3253866ecf0f88425376ebf032c88afad59592d2aaf22',
     'london_2026-07.csv': 'e8e34375ee063eb6da832f67da634fb458687dce5de4d0539b167b30e4a118ea',
     'london_2026-08.csv': '71264a412eb48659fd57b36b6f5a20bc9cc6d915463596ff5138d1a8cfb0c556',
     'london_2026-09.csv': '564a34124f91683332c36b6489c7e33dc48ae944867c2161ef162f97d3e2e09d',
-    'london_2026-10.csv': 'd98fc2215069bce9cbe7616a01a2af2f3ceb5378a525df5038802e2be1e49eb1',
+    'london_2026-10.csv': '8e03300577c9b6f80322fc1ee418565ce0307224aa3f016a4f8284aa304a9d49',
     'london_2026-11.csv': 'f9a8d63bbe31d57f31f5c1f24b28a9c889fecf62263155218f0d495665a5a570',
     'london_2026-12.csv': 'c977467c0e99d014b71f5d22cad0daa3b35c8a3499e13d351c93c0b35627f0e7',
     'madrid_2026-01.csv': '13457e5c32e29602153f3bbb3359c772f1c664de2d6f27b6c6a97ea2c950c202',
