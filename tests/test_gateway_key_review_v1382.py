@@ -431,7 +431,7 @@ def test_no_keyed_caller_follows_a_redirect_to_another_server(tmp_path, monkeypa
 # --------------------------------------------------------------------------- #
 # 3. Volume: a keyed request that cannot teach anything is not repeated
 # --------------------------------------------------------------------------- #
-def _sampler_at(gateway, *, kind="litellm"):
+def _sampler_at(gateway, home, *, kind="litellm"):
     from types import SimpleNamespace
 
     from iron_jarvis.fleet.models import FleetNode
@@ -440,7 +440,8 @@ def _sampler_at(gateway, *, kind="litellm"):
     from iron_jarvis.fleet.upstreams import read_routes
 
     node = FleetNode(id="gw", base_url=gateway.base + "/v1", kind=kind, api_key_name="gw_key", routable=True)
-    cfg = SimpleNamespace(home=".", fleet_nodes=[node.model_dump()], custom_base_url="",
+    # the registry saves the routing table under home: never the working folder
+    cfg = SimpleNamespace(home=str(home), fleet_nodes=[node.model_dump()], custom_base_url="",
                           custom_model="", ollama_base_url="")
     reg = FleetRegistry(cfg, persist=lambda *a, **k: None)
     reg.set_secret_resolver({"gw_key": KEY}.get)
@@ -460,7 +461,7 @@ def _hour(sampler, now, interval: float, seconds: float = 3600.0) -> None:
         t += interval
 
 
-def test_a_proxy_without_metrics_is_not_asked_for_them_every_pass():
+def test_a_proxy_without_metrics_is_not_asked_for_them_every_pass(tmp_path):
     """The user's proxy has no ``/metrics``; once the sampler carries the key
     every pass used to ask anyway and get a keyed 404 — 1,800 an hour while
     the Fleet page is open (measured). A 404 is remembered for 10 minutes;
@@ -468,7 +469,7 @@ def test_a_proxy_without_metrics_is_not_asked_for_them_every_pass():
     gateway = FakeGateway(KEY)
     gateway.start()
     try:
-        sampler, now = _sampler_at(gateway)
+        sampler, now = _sampler_at(gateway, tmp_path)
         _hour(sampler, now, 2.0)
         paths = gateway.paths()
         metrics = paths.count("GET /metrics")
@@ -483,14 +484,14 @@ def test_a_proxy_without_metrics_is_not_asked_for_them_every_pass():
         gateway.stop()
 
 
-def test_a_refresh_or_re_detect_asks_for_metrics_again():
+def test_a_refresh_or_re_detect_asks_for_metrics_again(tmp_path):
     """The remembered 404 never outlives the user asking: a forced Refresh
     (and Re-detect, which calls the same forget) asks ``/metrics`` again — a
     user who just turned metrics on is not told "not enabled" for 10 minutes."""
     gateway = FakeGateway(KEY)
     gateway.start()
     try:
-        sampler, now = _sampler_at(gateway)
+        sampler, now = _sampler_at(gateway, tmp_path)
         sampler.sample_once()
         sampler.sample_once()
         assert gateway.paths().count("GET /metrics") == 1
@@ -1002,7 +1003,7 @@ def test_opencodes_read_of_another_server_carries_no_key(tmp_path, monkeypatch):
         other.stop()
 
 
-def test_a_proxys_backends_are_never_sent_the_proxys_key():
+def test_a_proxys_backends_are_never_sent_the_proxys_key(tmp_path):
     """The sampler absorbs a LiteLLM proxy's backends as topology children
     and probes them at THEIR addresses — another server, which never gets the
     proxy's key (a recording backend hears no auth header)."""
@@ -1010,7 +1011,7 @@ def test_a_proxys_backends_are_never_sent_the_proxys_key():
     gateway = FakeGateway(KEY, backend=backend.base)
     gateway.start()
     try:
-        sampler, now = _sampler_at(gateway)
+        sampler, now = _sampler_at(gateway, tmp_path)
         sampler.sample_once()
         now[0] += 30.0
         sampler.sample_once()
