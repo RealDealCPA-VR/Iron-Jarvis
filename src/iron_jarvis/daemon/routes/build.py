@@ -1601,6 +1601,21 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         command_rule = await asyncio.to_thread(
             _command_rule, row, setup, command_entry, continuation,
         )
+        if command_entry is not None:
+            # Kept on the session, so a LATER turn's command that runs one of
+            # these lines asks too (the expansion stays in the history the
+            # model reads). The session's own write — never a client's (a
+            # PATCH has no field for it). Written BEFORE anything starts (no
+            # generator is open yet); a turn refused after this leaves a record
+            # that only ever asks more. A failed write never stops this turn,
+            # which asks for every command anyway.
+            try:
+                await asyncio.to_thread(
+                    S.update, platform.engine, thread_id,
+                    setup={_cmd_shell.SETUP_KEY: _cmd_shell.recorded_with(setup, command_entry)},
+                )
+            except Exception:  # noqa: BLE001
+                log.warning("recording the shell lines of /%s failed", command_entry.name, exc_info=True)
         chat_body = ChatBody(
             messages=[*history, ChatMessageBody(role="user", content=model_text)],
             provider=account_provider or str(setup.get("provider") or ""),
@@ -1697,15 +1712,6 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 with contextlib.suppress(Exception):
                     await gen.aclose()
                 raise HTTPException(status_code=404, detail="no such Build session")
-            if command_entry is not None:
-                # v1.381.0: kept on the session, so a LATER turn's command
-                # that runs one of these lines asks too (the expansion stays
-                # in the history the model reads). The session's own write —
-                # never a client's (a PATCH has no field for it).
-                await asyncio.to_thread(
-                    S.update, platform.engine, thread_id,
-                    setup={_cmd_shell.SETUP_KEY: _cmd_shell.recorded_with(setup, command_entry)},
-                )
             lg = logs.start(turn_id, thread_id, recorded_turn(
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
             ))

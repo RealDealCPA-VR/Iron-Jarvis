@@ -525,6 +525,25 @@ def test_a_helpers_task_is_created_with_the_turns_rule_whatever_the_context_held
         K.reset_turn_rule(token)
 
 
+async def test_work_an_event_handler_starts_is_not_the_commands_turn():
+    """A helper is finalized INSIDE the turn; a ``session.completed`` handler
+    that schedules work (the skill sweep) must not carry the rule into it —
+    the event bus drops it in the handlers' copy, like the hold and the pin."""
+    from iron_jarvis.core.events import EventBus
+
+    bus = EventBus()
+    seen: list = []
+    bus.add_handler(lambda event: seen.append(K.current()))
+    rule = K.TurnRule(started_by=_entry())
+    token = K.set_turn_rule(rule)
+    try:
+        await bus.publish("session.completed", {})
+        assert K.current() is rule, "the turn itself keeps it"
+    finally:
+        K.reset_turn_rule(token)
+    assert seen == [None]
+
+
 def test_the_helper_base_reads_the_turns_rule():
     from iron_jarvis.daemon.chat_turn import helper_base
 
@@ -576,6 +595,7 @@ async def test_a_continuation_of_the_commands_turn_asks_for_every_command(app, w
     # work, so every command it runs asks — not only the recorded line.
     wire(app, Script([bash("q1", "echo IJ-CARRY-ON"), "Done."]))
     lg = await start_build_turn(app.state.d, sid, CONTINUE_TEXT, "cs-cont-1", continuation=True)
+    assert K.current() is None, "armed for the turn's own task only: the caller's context is clean again"
     card = await nth_card(app, "cs-cont-1", 0)
     assert_command_card(card)
     await answer(app, card, "deny")
