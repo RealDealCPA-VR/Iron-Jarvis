@@ -306,6 +306,58 @@ def test_an_old_ollama_that_answers_404_is_still_asked_its_own_address(monkeypat
     assert not any(u.endswith("/api/tags") for u in asked)
 
 
+def test_the_typed_address_ladder_leaves_ollamas_address_out_for_a_known_proxy(monkeypatch):
+    from iron_jarvis.daemon.routes.connections import _model_list_urls
+
+    assert _model_list_urls("http://gw:4000/v1")[-1] == "http://gw:4000/api/tags"
+    assert not any(u.endswith("/api/tags") for u in _model_list_urls("http://gw:4000/v1", ollama_ok=False))
+    asked = []
+
+    def fake_get(url, headers):
+        asked.append(url)
+        req = httpx.Request("GET", url)
+        raise httpx.HTTPStatusError("404", request=req, response=httpx.Response(404, request=req))
+
+    monkeypatch.setattr(discovery, "_get_json", fake_get)
+    with pytest.raises(httpx.HTTPStatusError):
+        discovery.list_endpoint_models("http://gw:4000/v1", KEY, ollama_ok=False)
+    assert asked == ["http://gw:4000/v1/models"]
+
+
+def test_the_liveness_probe_carries_the_adapters_own_key():
+    """The router's pre-probe used to GET ``/v1/models`` bare on every turn's
+    first call; it now carries the key the adapter's chat calls send — the
+    Bearer token for an OpenAI-compatible node, ``x-api-key`` for an
+    Anthropic-compatible one."""
+    from iron_jarvis.fleet.adapter import adapter_for
+    from iron_jarvis.providers.router import ModelRouter
+
+    class _Client:
+        def __init__(self):
+            self.calls = []
+
+        async def get(self, url, timeout=None, headers=None):
+            self.calls.append((url, dict(headers or {})))
+            return httpx.Response(200)
+
+    for protocol, want in (
+        ("openai", {"Authorization": f"Bearer {KEY}"}),
+        ("anthropic", {"x-api-key": KEY, "anthropic-version": "2023-06-01"}),
+    ):
+        node = FleetNode(id="gw", base_url="http://gw:4000/v1", protocol=protocol, routable=True)
+        adapter = adapter_for(node, credential=lambda: KEY)
+        client = _Client()
+        adapter._http = client
+        router = ModelRouter.__new__(ModelRouter)
+        router._answered_at = {}
+        router._clock = time.monotonic
+        assert asyncio.run(router._local_liveness(adapter)) is None
+        assert client.calls and client.calls[0][1] == want, protocol
+        assert adapter.probe_headers() == want
+    keyless = adapter_for(FleetNode(id="lan", base_url="http://lan:8000/v1"))
+    assert keyless.probe_headers() == {}
+
+
 def test_the_seed_reads_the_gateways_own_capabilities_and_never_api_show(gateway):
     from iron_jarvis.envelope.seed import seed_profile
 
