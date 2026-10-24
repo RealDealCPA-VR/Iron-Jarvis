@@ -218,10 +218,13 @@ class SandboxedShellTool(Tool):
         commit`` / ``git push`` / ``gh pr create`` (and the rest of
         ``harness/git_guard``'s list) asks first in every posture, once per
         call, and a command the tool refuses shows no card; None otherwise —
-        the ordinary permission verdict decides, exactly as before."""
-        from ..harness.git_guard import guard_check
+        the ordinary permission verdict decides, exactly as before.
+        v1.381.0: and in a turn a PROJECT's or a PLUGIN's Claude Code command
+        started with shell lines (or a later turn running one of its lines),
+        the command asks first the same way (``harness/command_shell``)."""
+        from ..harness.command_shell import tool_check
 
-        return guard_check(args.get("command") if isinstance(args, dict) else "")
+        return tool_check(args.get("command") if isinstance(args, dict) else "")
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         # v1.375.0: git the plan rules out on a session's branch (a force

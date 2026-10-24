@@ -779,6 +779,17 @@ SHELL_LINES_NOTE = (
     "This command has shell lines (written as !`…` or in a ```! block). Iron Jarvis did not run "
     "them. Run each one yourself with your shell tool first, then use what it prints."
 )
+#: v1.381.0 (the user's decision, 2026-10-23): a PROJECT's or a PLUGIN's
+#: command is not the user's words, so its shell lines always ask first
+#: (``harness/command_shell``) — the model is told so, after
+#: :data:`SHELL_LINES_NOTE` ("{where}": "this project's command files" / "the
+#: <plugin> plugin"). A personal command keeps the note alone.
+ASKS_FIRST_NOTE = (
+    "This command comes from {where}, not from the user, so the user is asked before each shell "
+    "command you run in this turn, and before these lines run in any later turn, whatever this "
+    "session's approval setting. Wait for that answer; if the user declines, say what you could "
+    "not do."
+)
 
 #: ``@path`` in a command's text: a file it wants read (not an e-mail address).
 _AT_RX = re.compile(r"(?<![\w@`])@([^\s`'\"<>()\[\]{},;|]+)")
@@ -914,15 +925,53 @@ def _marked_refs(marked: str) -> list[str]:
     return out
 
 
-def _command_shell_lines(marked: str) -> bool:
-    """Shell lines in the COMMAND's own text — a value the words filled in is
-    read as plain letters, so a ``!`…``` the user typed is never one."""
+def _masked(marked: str) -> str:
+    """``marked`` with every letter a value of the WORDS filled in read as
+    ``x`` (the span characters kept, so positions line up with ``marked``)."""
     chars = list(marked)
     for a, b in _spans(marked):
         for i in range(a + 1, b):
             if not chars[i].isspace():
                 chars[i] = "x"
-    return has_shell_lines(_unmark("".join(chars)))
+    return "".join(chars)
+
+
+def _command_shell_lines(marked: str) -> bool:
+    """Shell lines in the COMMAND's own text — a value the words filled in is
+    read as plain letters, so a ``!`…``` the user typed is never one."""
+    return has_shell_lines(_unmark(_masked(marked)))
+
+
+#: How many shell lines of one command are kept (v1.381.0), and how long one.
+MAX_SHELL_LINES = 20
+MAX_SHELL_LINE_CHARS = 400
+
+
+def _command_shell_texts(marked: str) -> list[str]:
+    """v1.381.0: the COMMAND's own shell lines as the model would run them —
+    found in the command's text (never in the words typed after its name),
+    read back with those words filled in. A ``!`…``` gives its command; a
+    ```` ```! ```` block gives each of its lines. In order, each once, at most
+    :data:`MAX_SHELL_LINES`, each at most :data:`MAX_SHELL_LINE_CHARS`."""
+    masked = _masked(marked)
+    found: list[tuple[int, list[str]]] = []
+    for m in _BANG_INLINE_RX.finditer(masked):
+        raw = _unmark(marked[m.start():m.end()])
+        found.append((m.start(), [raw.strip()[2:-1]]))
+    for m in _BANG_BLOCK_RX.finditer(masked):
+        raw = _unmark(marked[m.start():m.end()])
+        body = re.sub(r"^```!", "", raw)
+        body = re.sub(r"```$", "", body)
+        found.append((m.start(), body.split("\n")))
+    out: list[str] = []
+    for _at, lines in sorted(found, key=lambda f: f[0]):
+        for line in lines:
+            line = line.strip()
+            if line and line not in out:
+                out.append(line[:MAX_SHELL_LINE_CHARS])
+            if len(out) >= MAX_SHELL_LINES:
+                return out
+    return out
 
 
 def at_paths(text: str) -> list[str]:
@@ -954,6 +1003,25 @@ class Expanded:
     scanned: bool = False
     #: Frontmatter the app read and did not obey (``allowed-tools``, ``model``).
     ignored: list[str] = field(default_factory=list)
+    #: v1.381.0: the command's own shell lines, as the model would run them
+    #: (:func:`_command_shell_texts`) — [] when it has none.
+    lines: list[str] = field(default_factory=list)
+
+    @property
+    def asks_first(self) -> bool:
+        """v1.381.0: a PROJECT's or a PLUGIN's command with shell lines —
+        every command the turn runs asks first, whatever the posture
+        (``harness/command_shell``). A personal command never does."""
+        return bool(self.shell_lines and self.source in SCANNED_SOURCES)
+
+
+def asks_first_note(source: str, plugin: str) -> str:
+    """:data:`ASKS_FIRST_NOTE` for a command of ``source`` (project or
+    plugin)."""
+    where = f"the {plugin} plugin" if source == SOURCE_PLUGIN and plugin else (
+        "a plugin" if source == SOURCE_PLUGIN else "this project's command files"
+    )
+    return ASKS_FIRST_NOTE.format(where=where)
 
 
 def expand(cmd: Command, args: str, *, folder: str, read_room: int,
@@ -1002,8 +1070,13 @@ def expand(cmd: Command, args: str, *, folder: str, read_room: int,
     # "argument values aren't re-expanded").
     shell = _command_shell_lines(marked)
     refs = _marked_refs(marked)
+    lines = _command_shell_texts(marked) if shell else []
     if shell:
         text = f"{text}\n\n{SHELL_LINES_NOTE}"
+        if scanned:
+            # v1.381.0: the model is told the truth — a project's or a
+            # plugin's shell lines ask the user first, in every posture.
+            text = f"{text} {asks_first_note(cmd.source, cmd.plugin)}"
     files: list[str] = []
     left: list[str] = []
     if folder:
@@ -1027,11 +1100,12 @@ def expand(cmd: Command, args: str, *, folder: str, read_room: int,
         left = refs
     return Expanded(
         name=cmd.name, source=cmd.source, plugin=cmd.plugin, text=text, files=files, left=left,
-        shell_lines=shell, scanned=scanned, ignored=ignored,
+        shell_lines=shell, scanned=scanned, ignored=ignored, lines=lines,
     )
 
 
 __all__ = [
+    "ASKS_FIRST_NOTE",
     "Command",
     "CommandRefused",
     "Expanded",
@@ -1040,6 +1114,7 @@ __all__ = [
     "MAX_COMMAND_BYTES",
     "SHELL_LINES_NOTE",
     "SkillAlias",
+    "asks_first_note",
     "at_paths",
     "config_dir",
     "discover",

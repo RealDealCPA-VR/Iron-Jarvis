@@ -140,6 +140,10 @@ export function LiveHelperRow({ helper }: { helper: HelperView }) {
                 timeoutS: 0,
                 ...(helper.ask.count ? { count: helper.ask.count, examples: helper.ask.examples } : {}),
                 ...(helper.ask.costNote ? { costNote: helper.ask.costNote } : {}),
+                // v1.381.0: an ask answered once, every time (the daemon
+                // reads a wider answer as once) — the card says so.
+                ...(helper.ask.onceOnly ? { onceOnly: true } : {}),
+                ...(helper.ask.onceReason ? { onceReason: helper.ask.onceReason } : {}),
               }}
             />
           </div>

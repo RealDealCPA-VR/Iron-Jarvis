@@ -1332,6 +1332,23 @@ class WaitEnded(Exception):
     pass took it. Nothing was started."""
 
 
+def _command_rule(row: Any, setup: "dict[str, Any]", started: Any, continuation: bool) -> Any:
+    """v1.381.0: this turn's :class:`~iron_jarvis.harness.command_shell.
+    TurnRule` (None = nothing to ask about). BLOCKING (parses the transcript
+    for a continuation): called through ``asyncio.to_thread``. A transcript
+    that cannot be read is no continuation of anything — the recorded lines
+    still apply."""
+    from ...harness import command_shell as _cmd_shell
+
+    messages: list[Any] = []
+    if continuation and started is None:
+        try:
+            messages = S._messages(row)
+        except Exception:  # noqa: BLE001
+            messages = []
+    return _cmd_shell.rule_for_turn(setup, messages, started=started, continuation=continuation)
+
+
 async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            attachments: "list[str] | None" = None,
                            preview_url: str = "",
@@ -1485,6 +1502,12 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         model_text = text
         content = text
         line_extra: dict[str, Any] = {}
+        # v1.381.0: a PROJECT's or a PLUGIN's command with shell lines — every
+        # command this turn runs asks first, in every posture
+        # (harness/command_shell); None for anything else.
+        from ...harness import command_shell as _cmd_shell
+
+        command_entry: "_cmd_shell.CommandLines | None" = None
         if command:
             from ...harness import claude_commands as CC
 
@@ -1502,6 +1525,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             picked += [f for f in expanded.files if f not in picked]
             content = f"/{cmd.name}" + (f" {text}" if text else "")
             line_extra = {"command": cmd.name, "commandText": expanded.text[:S.MAX_COMMAND_TEXT]}
+            command_entry = _cmd_shell.from_expansion(expanded, turn_id)
         elif not text and not attachments and not picked and (folder_skill or str(skill or "").strip()):
             # v1.379.0: a skill picked with "/" and nothing else is a message.
             model_text = S.SKILL_ALONE.format(name=folder_skill or str(skill).strip())
@@ -1567,6 +1591,16 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
 
         _history, _summary = await asyncio.to_thread(_compact.history_for_turn, row)
         history = [ChatMessageBody(**m) for m in _history]
+        # v1.381.0: what this turn's command-running calls must ask about
+        # (harness/command_shell) — every command when a project's or a
+        # plugin's command with shell lines starts it (or it CONTINUES such a
+        # turn), else a later command that runs one of the session's recorded
+        # lines; None when the session has none (every turn exactly as
+        # before). Armed below with the pin and the hold: the driver task
+        # copies it, and so does every helper the turn starts.
+        command_rule = await asyncio.to_thread(
+            _command_rule, row, setup, command_entry, continuation,
+        )
         chat_body = ChatBody(
             messages=[*history, ChatMessageBody(role="user", content=model_text)],
             provider=account_provider or str(setup.get("provider") or ""),
@@ -1619,6 +1653,8 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         from ...providers import failure_words as _failure_words
 
         surface_token = _failure_words.set_build_surface()
+        # v1.381.0: the command rule (read above), armed last and reset first.
+        command_token = _cmd_shell.set_turn_rule(command_rule)
         try:
             try:
                 gen = await stream_chat_turn(
@@ -1661,11 +1697,21 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 with contextlib.suppress(Exception):
                     await gen.aclose()
                 raise HTTPException(status_code=404, detail="no such Build session")
+            if command_entry is not None:
+                # v1.381.0: kept on the session, so a LATER turn's command
+                # that runs one of these lines asks too (the expansion stays
+                # in the history the model reads). The session's own write —
+                # never a client's (a PATCH has no field for it).
+                await asyncio.to_thread(
+                    S.update, platform.engine, thread_id,
+                    setup={_cmd_shell.SETUP_KEY: _cmd_shell.recorded_with(setup, command_entry)},
+                )
             lg = logs.start(turn_id, thread_id, recorded_turn(
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
             ))
             started = True
         finally:
+            _cmd_shell.reset_turn_rule(command_token)
             _failure_words.reset_surface(surface_token)
             _branches.reset_turn_branch(branch_token)
             _compact.reset_summary(summary_token)
@@ -2514,6 +2560,10 @@ def register(app: FastAPI, d: Any) -> None:
             k: setup[k] for k in (
                 "provider", "model", "reasoning", "approval_mode", "local_only", "account",
                 "account_name", "preview_url",
+                # v1.381.0: the branch's history holds the same commands'
+                # expansions, so their shell lines still ask there
+                # (harness/command_shell).
+                "command_shell",
             ) if setup.get(k) not in (None, "", [])
         }
         branched = {"thread_id": thread_id, "title": row.title or "", "turn_id": turn_id, "at": at}

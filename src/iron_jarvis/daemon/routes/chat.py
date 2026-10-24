@@ -1078,6 +1078,19 @@ def _clean_setup(raw: Any) -> str:
     # (``harness/sessions.set_work_folder``). Stored ONLY as a real true.
     if raw.get("no_folder") is True:
         out["no_folder"] = True
+    # IJ HARNESS (v1.381.0): the project's or plugin's Claude Code commands
+    # whose shell lines this Build session ran — a later turn's command that
+    # runs one of those lines asks first in every posture
+    # (``harness/command_shell``). By its own whitelist; ONLY
+    # ``routes/build.start_build_turn`` writes it (and Branch from here
+    # copies it) — a session PATCH has no field for it, a chat PUT refuses a
+    # session, and nothing reads it from a chat thread.
+    from ...harness.command_shell import SETUP_KEY as _CMD_SHELL_KEY
+    from ...harness.command_shell import clean_record as _clean_command_shell
+
+    command_shell = _clean_command_shell(raw.get(_CMD_SHELL_KEY))
+    if command_shell:
+        out[_CMD_SHELL_KEY] = command_shell
     return json.dumps(out, separators=(",", ":")) if out else ""
 
 

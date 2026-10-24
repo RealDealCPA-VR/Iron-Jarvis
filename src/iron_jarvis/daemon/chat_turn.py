@@ -5137,6 +5137,7 @@ def helper_base(
     their parent row exactly as before)."""
     if harness is None:
         return None
+    from ..harness.command_shell import current as _command_rule_current
     from ..harness.helpers import HelperParent
     from ..iron_proxy.pin import current as _pin_current
 
@@ -5148,6 +5149,10 @@ def helper_base(
         project_id=project_id or None,
         pin=_pin_current(),
         local_only=bool(_egress.current_scope().on),
+        # v1.381.0: a project's or a plugin's command's shell lines ask in a
+        # helper's run too (harness/command_shell) — read in the turn's own
+        # context, carried explicitly like the pin.
+        command_rule=_command_rule_current(),
     )
 
 

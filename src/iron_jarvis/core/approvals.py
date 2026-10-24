@@ -155,6 +155,8 @@ class ChatApprovals:
         count: int = 1,
         examples: "list[Any] | None" = None,
         cost_note: str | None = None,
+        once_only: bool = False,
+        once_reason: str = "",
     ) -> tuple[str, "asyncio.Future[str]"]:
         """File one request; returns ``(id, future)``. The future resolves to a
         DECISIONS value. ``tool``/``args`` are kept only as display/matching
@@ -190,6 +192,15 @@ class ChatApprovals:
         _cost = _cost_sentence(cost_note)
         if _cost:
             self._meta[approval_id]["cost_note"] = _cost
+        # v1.381.0: an ask answered ONCE, every time (a once-only spend check:
+        # a commit / push on a Build session's branch, a project's or a
+        # plugin's command's shell), and WHY (a short id — "git", "command"
+        # — never a sentence). Recorded only when set.
+        if once_only is True:
+            self._meta[approval_id]["once_only"] = True
+            reason = str(once_reason or "").strip()
+            if reason and len(reason) <= 32 and reason.isidentifier():
+                self._meta[approval_id]["once_reason"] = reason
         return approval_id, fut
 
     def pending_for(self, session_id: str | None) -> list[dict[str, Any]]:
@@ -217,6 +228,9 @@ class ChatApprovals:
                 ),
                 # v1.356.0 (G79): present only on a priced ask.
                 **({"cost_note": m["cost_note"]} if m.get("cost_note") else {}),
+                # v1.381.0: present only on an ask answered once, every time.
+                **({"once_only": True} if m.get("once_only") is True else {}),
+                **({"once_reason": m["once_reason"]} if m.get("once_reason") else {}),
             }
             for m in self._meta.values()
             if m.get("session_id") == sid

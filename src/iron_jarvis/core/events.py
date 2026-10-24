@@ -329,6 +329,14 @@ def _drop_build_turn_scope() -> None:
         ACCOUNT_PIN.set(None)
     except Exception:  # noqa: BLE001
         pass
+    try:
+        # v1.381.0: and its command rule (harness/command_shell) — work a
+        # handler starts is not the command's turn.
+        from ..harness.command_shell import TURN_RULE
+
+        TURN_RULE.set(None)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class EventBus:

@@ -407,10 +407,12 @@ class ProcessStartTool(Tool):
 
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> Any:
         """v1.375.0 (``harness/git_guard``): a commit / push / pull request
-        started this way asks first, every time, on a session's branch."""
-        from .git_guard import guard_check
+        started this way asks first, every time, on a session's branch.
+        v1.381.0: and any program a project's or a plugin's command turn
+        starts (``harness/command_shell``)."""
+        from .command_shell import tool_check
 
-        return guard_check(args.get("command") if isinstance(args, dict) else "")
+        return tool_check(args.get("command") if isinstance(args, dict) else "")
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         command = str(args.get("command") or "").strip()
@@ -605,10 +607,11 @@ class ProcessWriteTool(Tool):
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> Any:
         """v1.375.0 (``harness/git_guard``): a commit / push / pull request
         TYPED into a running shell asks first, every time, on a session's
-        branch."""
-        from .git_guard import guard_check
+        branch. v1.381.0: and anything typed into a program during a
+        project's or a plugin's command turn (``harness/command_shell``)."""
+        from .command_shell import tool_check
 
-        return guard_check(args.get("input") if isinstance(args, dict) else "")
+        return tool_check(args.get("input") if isinstance(args, dict) else "")
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from ..tools.builtins import _bool_arg
