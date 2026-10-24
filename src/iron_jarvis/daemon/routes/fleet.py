@@ -665,6 +665,14 @@ def register(app: FastAPI, d) -> None:
             lambda: detect_kind(node.base_url, **_auth_kw(node))
         )
         updated = d.fleet.update(node_id, kind=kind, kind_detected_at=time.time())
+        # The gateway-key review: a remembered "/metrics is not there" is
+        # asked again after a Re-detect.
+        forget = getattr(getattr(d, "fleet_sampler", None), "forget_metrics", None)
+        if callable(forget):
+            try:
+                forget(node)
+            except Exception:  # noqa: BLE001 — a memo is never worth a failed detect
+                pass
         return {
             "node": _dump(updated or d.fleet.get(node_id)),
             "kind": kind,

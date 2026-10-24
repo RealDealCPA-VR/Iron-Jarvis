@@ -426,3 +426,135 @@ def test_no_keyed_caller_follows_a_redirect_to_another_server(tmp_path, monkeypa
         discovery.clear_cache()
         red.stop()
         catcher.stop()
+
+
+# --------------------------------------------------------------------------- #
+# 3. Volume: a keyed request that cannot teach anything is not repeated
+# --------------------------------------------------------------------------- #
+def _sampler_at(gateway, *, kind="litellm"):
+    from types import SimpleNamespace
+
+    from iron_jarvis.fleet.models import FleetNode
+    from iron_jarvis.fleet.registry import FleetRegistry
+    from iron_jarvis.fleet.sampler import FleetSampler
+    from iron_jarvis.fleet.upstreams import read_routes
+
+    node = FleetNode(id="gw", base_url=gateway.base + "/v1", kind=kind, api_key_name="gw_key", routable=True)
+    cfg = SimpleNamespace(home=".", fleet_nodes=[node.model_dump()], custom_base_url="",
+                          custom_model="", ollama_base_url="")
+    reg = FleetRegistry(cfg, persist=lambda *a, **k: None)
+    reg.set_secret_resolver({"gw_key": KEY}.get)
+    now = [1000.0]
+    sampler = FleetSampler(
+        reg, clock=lambda: now[0],
+        route_reader=lambda n: read_routes(n, headers=reg.headers_for(n)),
+    )
+    return sampler, now
+
+
+def _hour(sampler, now, interval: float, seconds: float = 3600.0) -> None:
+    t = 0.0
+    while t < seconds:
+        sampler.sample_once()
+        now[0] += interval
+        t += interval
+
+
+def test_a_proxy_without_metrics_is_not_asked_for_them_every_pass():
+    """The user's proxy has no ``/metrics``; once the sampler carries the key
+    every pass used to ask anyway and get a keyed 404 — 1,800 an hour while
+    the Fleet page is open (measured). A 404 is remembered for 10 minutes;
+    the routing table read keeps its own 60 s clock under the 2 s cadence."""
+    gateway = FakeGateway(KEY)
+    gateway.start()
+    try:
+        sampler, now = _sampler_at(gateway)
+        _hour(sampler, now, 2.0)
+        paths = gateway.paths()
+        metrics = paths.count("GET /metrics")
+        assert 1 <= metrics <= 7, f"/metrics asked {metrics} times in an hour"
+        # the probe's own read (liveness + topology, every pass) and the
+        # routing-table read (60 s TTL): 1,800 + 60
+        assert paths.count("GET /model/info") <= 1800 + 61, paths.count("GET /model/info")
+        assert gateway.unkeyed() == []
+        snap = next(s for s in sampler.snapshots() if s.node.id == "gw")
+        assert snap.metrics_reason == "LiteLLM /metrics is not enabled on this proxy"
+    finally:
+        gateway.stop()
+
+
+def test_a_refresh_or_re_detect_asks_for_metrics_again():
+    """The remembered 404 never outlives the user asking: a forced Refresh
+    (and Re-detect, which calls the same forget) asks ``/metrics`` again — a
+    user who just turned metrics on is not told "not enabled" for 10 minutes."""
+    gateway = FakeGateway(KEY)
+    gateway.start()
+    try:
+        sampler, now = _sampler_at(gateway)
+        sampler.sample_once()
+        sampler.sample_once()
+        assert gateway.paths().count("GET /metrics") == 1
+        sampler.sample_once(force=True)
+        assert gateway.paths().count("GET /metrics") == 2
+        sampler.forget_metrics(sampler.registry.get("gw"))
+        sampler.sample_once()
+        assert gateway.paths().count("GET /metrics") == 3
+        now[0] += 601.0
+        sampler.sample_once()
+        assert gateway.paths().count("GET /metrics") == 4
+    finally:
+        gateway.stop()
+
+
+def test_a_proxy_whose_metrics_answer_is_not_a_404_is_still_asked_each_pass(monkeypatch):
+    """Only a 404 (the endpoint does not exist) is remembered: a refused key
+    or a server error is asked again next pass, as before."""
+    from iron_jarvis.fleet import probes
+    from iron_jarvis.fleet.models import FleetNode
+
+    calls: list[str] = []
+
+    class R:
+        def __init__(self, code, body=None):
+            self.status_code = code
+            self._body = body or {}
+            self.text = ""
+
+        def json(self):
+            return self._body
+
+    def get(url, headers=None):
+        calls.append(url.rsplit("/", 1)[-1])
+        if url.endswith("/model/info"):
+            return R(200, {"data": []})
+        return R(503)
+
+    memo = probes.MetricsMemo(clock=lambda: 0.0)
+    node = FleetNode(id="gw", base_url="http://gw:4000", kind="litellm")
+    for _ in range(3):
+        probes.probe_node(node, get=get, metrics_memo=memo)
+    assert calls.count("metrics") == 3
+
+
+def test_re_detect_on_the_fleet_page_asks_for_metrics_again(tmp_path):
+    from fastapi.testclient import TestClient
+
+    gateway = FakeGateway(KEY)
+    gateway.start()
+    try:
+        app = _scratch_app(tmp_path, {
+            "custom_base_url": gateway.base + "/v1", "custom_model": "vision",
+            "fleet_nodes": [{"id": "gw", "base_url": gateway.base, "kind": "litellm",
+                             "api_key_name": "custom_api_key", "routable": True}],
+        })
+        d = app.state.d
+        with TestClient(app) as client:
+            d.fleet_sampler.sample_once()
+            d.fleet_sampler.sample_once()
+            assert gateway.paths().count("GET /metrics") == 1
+            assert client.post("/fleet/nodes/gw/detect").json()["kind"] == "litellm"
+            d.fleet_sampler.sample_once()
+            assert gateway.paths().count("GET /metrics") == 2
+        assert gateway.unkeyed() == []
+    finally:
+        gateway.stop()

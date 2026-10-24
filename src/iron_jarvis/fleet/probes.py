@@ -20,6 +20,7 @@ so and offer the one command that would change it.
 from __future__ import annotations
 
 import ipaddress
+import threading
 import time
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -471,16 +472,67 @@ def _probe_vllm(node: FleetNode, root: str, get: Getter) -> NodeSnapshot:
     )
 
 
-def _litellm_metrics_reason(root: str, get: Getter) -> str:
+#: How long a proxy whose ``/metrics`` answered 404 is not asked again (the
+#: gateway-key review). The endpoint either exists or it does not; asking a
+#: proxy that has none on every sampler pass — every 2 s while the Fleet page
+#: is open — was 1,800 keyed 404s an hour against the user's gateway.
+METRICS_404_TTL_S = 600.0
+
+_METRICS_NOT_ENABLED = "LiteLLM /metrics is not enabled on this proxy"
+
+
+class MetricsMemo:
+    """Remembers, per proxy root, that ``/metrics`` answered 404 — for
+    :data:`METRICS_404_TTL_S` on *clock*. ONLY a 404 is remembered (a refused
+    key or a server error is asked again next pass). The fleet sampler holds
+    one and forgets a node on a forced Refresh or a Re-detect, so the user
+    asking always asks the server. Thread-safe (sampler passes run in worker
+    threads)."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic, ttl: float = METRICS_404_TTL_S) -> None:
+        self._clock = clock
+        self._ttl = float(ttl)
+        self._until: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def missing(self, root: str) -> bool:
+        with self._lock:
+            until = self._until.get(root)
+            if until is None:
+                return False
+            if self._clock() >= until:
+                self._until.pop(root, None)
+                return False
+            return True
+
+    def remember_missing(self, root: str) -> None:
+        with self._lock:
+            self._until[root] = self._clock() + self._ttl
+
+    def forget(self, root: str | None = None) -> None:
+        with self._lock:
+            if root is None:
+                self._until.clear()
+            else:
+                self._until.pop(root, None)
+
+
+def _litellm_metrics_reason(root: str, get: Getter, memo: MetricsMemo | None = None) -> str:
     """Probe ``/metrics`` ONCE to learn the real reason, instead of guessing.
-    The user's proxy 404s here; other deployments enable it."""
+    The user's proxy 404s here; other deployments enable it. A 404 is
+    remembered in *memo* (when the caller keeps one), so it is not asked
+    again for :data:`METRICS_404_TTL_S`."""
+    if memo is not None and memo.missing(root):
+        return _METRICS_NOT_ENABLED
     try:
         resp = get(f"{root}/metrics", headers=None)
     except Exception as exc:  # noqa: BLE001
         return f"LiteLLM /metrics could not be read ({_human_error(exc)})"
     code = int(getattr(resp, "status_code", 0) or 0)
     if code == 404:
-        return "LiteLLM /metrics is not enabled on this proxy"
+        if memo is not None:
+            memo.remember_missing(root)
+        return _METRICS_NOT_ENABLED
     if not 200 <= code < 300:
         return f"LiteLLM /metrics returned http {code}"
     return (
@@ -518,7 +570,7 @@ def _health_sets(
 
 
 def _probe_litellm(
-    node: FleetNode, root: str, get: Getter
+    node: FleetNode, root: str, get: Getter, memo: MetricsMemo | None = None
 ) -> tuple[NodeSnapshot, list[FleetNode]]:
     """The proxy is the only node that knows the SHAPE of the fleet: every
     alias, and the upstream URL it routes to. Those upstreams become topology
@@ -557,7 +609,7 @@ def _probe_litellm(
         status="online",
         evidence="direct",
         metrics_supported=False,
-        metrics_reason=_litellm_metrics_reason(root, get),
+        metrics_reason=_litellm_metrics_reason(root, get, memo),
         metrics=None,
         rates=None,
         models=models,
@@ -646,7 +698,11 @@ def _probe_anthropic(node: FleetNode, root: str, get: Getter) -> NodeSnapshot:
 # public probe
 # --------------------------------------------------------------------------- #
 def probe_node(
-    node: FleetNode, *, get: Getter = _get, headers: dict[str, str] | None = None
+    node: FleetNode,
+    *,
+    get: Getter = _get,
+    headers: dict[str, str] | None = None,
+    metrics_memo: MetricsMemo | None = None,
 ) -> tuple[NodeSnapshot, list[FleetNode]]:
     """One sampling pass. Returns ``(snapshot, discovered_children)`` — children
     are only ever produced by a LiteLLM proxy, every other kind returns ``[]``.
@@ -658,6 +714,10 @@ def probe_node(
     saved key from ``FleetRegistry.headers_for`` (``fleet/endpoint_auth``).
     The sampler, the add-node route and the probe form pass them; a keyed
     proxy used to be asked with none, every 30 s, and answered 401.
+
+    *metrics_memo* (the gateway-key review): the sampler's
+    :class:`MetricsMemo`, so a proxy with no ``/metrics`` is not asked for it
+    on every pass. None (every other caller) asks, as before.
     """
     get = _keyed(get, headers)
     started = time.perf_counter()
@@ -703,7 +763,7 @@ def probe_node(
         elif node.kind == "vllm":
             snap = _probe_vllm(node, root, get)
         elif node.kind == "litellm":
-            snap, children = _probe_litellm(node, root, get)
+            snap, children = _probe_litellm(node, root, get, metrics_memo)
         elif node.kind == "openai-compat":
             snap = _probe_openai_compat(node, root, get)
         else:

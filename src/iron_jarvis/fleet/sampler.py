@@ -40,6 +40,7 @@ sleeps, no network.
 from __future__ import annotations
 
 import asyncio
+import functools
 import threading
 import time
 from collections import deque
@@ -50,7 +51,7 @@ from typing import Any, Callable, Deque, Iterable
 
 from ..core.logging import get_logger
 from .models import FleetNode, NodeMetrics, NodeRates, NodeSnapshot
-from .probes import probe_node
+from .probes import MetricsMemo, normalize_root, probe_node
 from .upstreams import NOT_A_PROXY, NOT_A_PROXY_TTL_S, ROUTES_TTL_S, RouteTable
 
 log = get_logger("fleet.sampler")
@@ -250,6 +251,14 @@ class FleetSampler:
         #: LOGICAL time source (rates, lease, retention, backoff). Real waits
         #: use time.monotonic() directly — an injected test clock does not tick.
         self._clock = clock
+        #: The gateway-key review: a proxy whose ``/metrics`` answered 404 is
+        #: not asked again for ``probes.METRICS_404_TTL_S`` (on the LOGICAL
+        #: clock). Handed to the default probe only — an injected test probe
+        #: is called exactly as before. Forgotten on a forced pass and on a
+        #: Re-detect (:meth:`forget_metrics`).
+        self._metrics_memo = MetricsMemo(clock=clock)
+        if probe is probe_node:
+            probe = functools.partial(probe_node, metrics_memo=self._metrics_memo)
         self._probe = probe
         self._state: dict[str, _NodeState] = {}
         #: sample_once() runs in FastAPI's threadpool while _loop() runs on the
@@ -411,6 +420,10 @@ class FleetSampler:
         due = self._nodes() if force else self._due_nodes()
         if not due:
             return self.snapshots()
+        if force:
+            # The user asked: a remembered "/metrics is not there" is asked again.
+            for node in due:
+                self.forget_metrics(node)
 
         pool = ThreadPoolExecutor(
             max_workers=min(8, len(due)), thread_name_prefix="fleet-probe"
@@ -547,6 +560,17 @@ class FleetSampler:
         if headers:
             return self._probe(node, headers=headers)
         return self._probe(node)
+
+    def forget_metrics(self, node: FleetNode | None = None) -> None:
+        """Ask *node*'s ``/metrics`` again on its next pass (every node when
+        None) — a forced Refresh and a Re-detect, so a user who just turned
+        metrics on is never told "not enabled" from memory."""
+        if node is None:
+            self._metrics_memo.forget()
+            return
+        root = normalize_root(getattr(node, "base_url", "") or "")
+        if root:
+            self._metrics_memo.forget(root)
 
     # -- bookkeeping -------------------------------------------------------
     def _nodes(self) -> list[FleetNode]:
