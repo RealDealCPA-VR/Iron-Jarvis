@@ -82,6 +82,13 @@ async def _long_turn(app, sid: str, clock: Clock, turn_id: str, seconds: float) 
     task = asyncio.create_task(open_turn(app, sid, {"text": "do the long thing", "turn_id": turn_id}, drop=drop))
     lg = await until(lambda: app.state.platform.turn_logs.get(turn_id) if getattr(app.state.platform, "turn_logs", None) else None)
     assert lg is not None
+    # v1.380.0: the log exists BEFORE recorded_turn has run its first line —
+    # that is where the turn stamps its start (`_ReplyWatch.started_at`). On a
+    # loaded runner the clock moved first, the turn measured ~0 s and was
+    # rightly never announced (v1.379.0's Release gate; a 0.5 s delay at the
+    # top of recorded_turn reproduces it). Every frame in the log has passed
+    # through recorded_turn, so its first words mean the start is stamped.
+    assert await until(lambda: any(ev == "token" for ev, _ in lg.frames)), "the turn never streamed"
     clock.offset += seconds
     gate.set()
     await until(lambda: lg.status != "running")

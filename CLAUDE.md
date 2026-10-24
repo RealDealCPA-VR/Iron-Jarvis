@@ -3675,12 +3675,20 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/ij-harness-{slash-commands,no-folder,
   slash-nofolder-review,new-folder-nofolder-review}-v1379.test.tsx`; four
   `ij-harness-slash-at-v1373` pins moved on purpose (new command rows).
-  SAME RELEASE (test-only): `test_build_turn_finished_v1374`'s long-turn test
-  read the notice right after the follower returned, but `recorded_turn`
-  publishes it AFTER the last frame (and its sync handler runs on a worker):
-  three loaded full runs read "not enough values to unpack (expected 1, got
-  0)". It now `until`s the event and the handler's verdict; a 0.5 s delay
-  before the notice's row read reproduces the old shape's exact error. ALSO:
+  v1.379.0 WAS NOT PUBLISHED (its Release gate went red; v1.380.0 carries
+  all of it). `test_build_turn_finished_v1374`'s long-turn test failed there
+  and in three loaded local runs with "not enough values to unpack (expected
+  1, got 0)", and the first fix (wait for the event) was only half of it:
+  (1) the test moved its fake clock as soon as the turn LOG existed, but the
+  log exists before `recorded_turn` runs its first line, which is where the
+  turn stamps its start (`_ReplyWatch.started_at`) — on a loaded runner the
+  clock moved first, the turn measured ~0 s and was RIGHTLY never announced
+  (a 0.5 s delay at the top of `recorded_turn` reproduces it, even with the
+  event wait); `_long_turn` now waits for the turn's first token in
+  `lg.frames` (every frame there has passed through `recorded_turn`); (2) the
+  notice is published AFTER the last frame and its sync handler runs on a
+  worker, so the test `until`s the event and the handler's verdict (a 0.5 s
+  delay before the notice's row read reproduces that half). ALSO:
   the v1343 "real files untouched" guards errored ONCE on the user's
   `~/.claude.json` (its `mcpServers` view changed at 19:02:49 mid-run); every
   test that reads Claude Code's settings (21 files, 672 tests) left the file

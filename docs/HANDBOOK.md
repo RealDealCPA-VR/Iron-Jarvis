@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.379.0 (2026-10-23).*
+holds itself to. Current as of v1.380.0 (2026-10-23).*
 
 ---
 
@@ -1905,7 +1905,7 @@ tray icon and the installer, each drawn from a size made for it (16 to 256
 pixels). After the update installs, Windows may keep showing the old picture
 on a shortcut for a while; signing out and back in refreshes it.
 
-## Claude Code's `/` commands, and sessions with no folder (v1.379.0)
+## Claude Code's `/` commands, and sessions with no folder (v1.380.0)
 
 **Type `/name` and your words, then press Enter**, in a Build session's box
 (IJ harness) — the way Claude Code works. `/pixio-skill draw a cat` runs that
