@@ -87,6 +87,14 @@ RUNNING_SENTENCE = (
     "This session is still answering. Steer it, queue your message, or stop it first."
 )
 ARCHIVED_SENTENCE = "This session is archived. Bring it back before you continue it."
+#: v1.381.0 review: a project's or a plugin's command whose shell lines could
+#: not be kept on the session is not started — its carry-on (and every later
+#: turn's match) reads ONLY that record, so a turn that ran without it would
+#: hand the carry-on every command with no card.
+COMMAND_RECORD_SENTENCE = (
+    "Iron Jarvis could not keep this command's shell lines on the session, so it did not start "
+    "/{name}. Nothing ran. Try again."
+)
 
 #: Sessions whose turn is being started right now (between the "nothing is
 #: running" check and ``TurnLogs.start``) — on the loop thread only, so two
@@ -1607,8 +1615,10 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # model reads). The session's own write — never a client's (a
             # PATCH has no field for it). Written BEFORE anything starts (no
             # generator is open yet); a turn refused after this leaves a record
-            # that only ever asks more. A failed write never stops this turn,
-            # which asks for every command anyway.
+            # that only ever asks more. v1.381.0 review: a write that FAILS
+            # stops the command here — its turn would ask for every command
+            # anyway, but a carry-on of that turn reads only the record and
+            # would ask for none (``COMMAND_RECORD_SENTENCE``).
             try:
                 await asyncio.to_thread(
                     S.update, platform.engine, thread_id,
@@ -1616,6 +1626,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 )
             except Exception:  # noqa: BLE001
                 log.warning("recording the shell lines of /%s failed", command_entry.name, exc_info=True)
+                raise HTTPException(
+                    status_code=503, detail=COMMAND_RECORD_SENTENCE.format(name=command_entry.name),
+                ) from None
         chat_body = ChatBody(
             messages=[*history, ChatMessageBody(role="user", content=model_text)],
             provider=account_provider or str(setup.get("provider") or ""),

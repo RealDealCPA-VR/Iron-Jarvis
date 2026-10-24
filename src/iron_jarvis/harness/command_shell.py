@@ -49,16 +49,38 @@ into the helper's task, like the pin):
   command file.
 
 A command WITHOUT shell lines, and every personal command, change nothing.
-Low trust (the shell is kept away and refused) and Local only (its own
-"Allow once" card) are unchanged. ``run_code`` / ``repl`` / the terminal
-tools are not reachable from a harness turn (``harness/mode.CODING_TOOLS``),
-nor from its helpers (``helpers.helper_definition`` bounds them by the
-turn's tools).
+Low trust (the shell is kept away and refused) is unchanged; under Local only
+the card is still its "Allow once" card, and (review) it now says THIS reason
+(``once_reason`` "command"), so the screen treats it as a safety card.
+``run_code`` / ``repl`` / the terminal tools are not reachable from a harness
+turn (``harness/mode.CODING_TOOLS``), nor from its helpers
+(``helpers.helper_definition`` bounds them by the turn's tools); a Build turn
+arms no app (MCP) pack tool (its body names no connector).
+
+v1.381.0 REVIEW (each pinned in ``tests/test_build_command_shell_review_
+v1381.py``): a carry-on continues the newest question the USER sent — a steer
+note is skipped (:func:`continued_turn`; it carries the turn it steered, and
+in a carry-on that is the carry-on's id); a command whose record cannot be
+written does not start (``routes/build.COMMAND_RECORD_SENTENCE``) — its
+carry-on reads only the record; a command whose shell lines are all empty
+keeps a record with no lines (for its carry-on; it matches nothing later);
+the same command again replaces its older copy, so 16 runs of one command
+never push another's lines out; a folder's plugin check whose command would
+ask is not run on its own (``chat_turn.harness_check_runner`` — the model is
+told to run it, and its own call asks); a line continued onto the next one
+reads as one line; a later turn's card names the line that matched.
+
+THE SCREEN: Enter never allows this card (``dashboard/lib/dockAsk.
+enterAllows`` — "Click Allow once to run it · Esc to decline"); an Enter
+typed twice for the composer allowed one in the live check.
 
 HONEST LIMITS: matching a LATER turn reads the command's text — a line the
-model rewrites (other words, a script file) is not caught there; the
-command's own turn and its continuations card every command. A guardrail for
-a careless or a misled model, not a sandbox.
+model rewrites (other words, PowerShell for bash, a script file, a line
+split over several writes to a program) is not caught there; the command's
+own turn and its continuations card every command. Only shell LINES count: a
+project's command that asks in prose ("run npm test") is not one, and a
+folder's or a plugin's SKILL is not a command file. A guardrail for a
+careless or a misled model, not a sandbox.
 """
 
 from __future__ import annotations
@@ -157,7 +179,11 @@ def _one(raw: Any) -> "CommandLines | None":
                 lines.append(text)
         if len(lines) >= MAX_LINES:
             break
-    if not lines:
+    if not lines and not turn_id:
+        # v1.381.0 review: a command whose shell lines are all empty (an
+        # empty ```! block) still asked in its turn — and its record has to
+        # say so, or that turn's CONTINUATION runs with no card. With no
+        # lines it matches nothing later; with no turn either it is nothing.
         return None
     return CommandLines(name=name, source=source, plugin=plugin, turn_id=turn_id, lines=tuple(lines))
 
@@ -183,8 +209,19 @@ def recorded_with(setup: "dict[str, Any] | None", entry: CommandLines) -> list[d
     """The session's record with ``entry`` added (newest last, at most
     :data:`MAX_RECORDED`)."""
     have = entries((setup or {}).get(SETUP_KEY))
-    have = [e for e in have if not (e.turn_id and e.turn_id == entry.turn_id)]
+    # v1.381.0 review: the SAME command again (same source, name and lines)
+    # replaces its older copy — run 16 times, it used to fill every place and
+    # push another command's lines out of the record, and a later turn
+    # running those lines no longer asked. The newest copy keeps its turn: a
+    # carry-on only ever continues the newest question.
+    same = _identity(entry)
+    have = [e for e in have
+            if not (e.turn_id and e.turn_id == entry.turn_id) and _identity(e) != same]
     return [e.record() for e in [*have, entry][-MAX_RECORDED:]]
+
+
+def _identity(entry: CommandLines) -> tuple[str, str, str, tuple[str, ...]]:
+    return (entry.source, entry.plugin.lower(), entry.name.lower(), entry.lines)
 
 
 def from_expansion(expanded: Any, turn_id: str) -> "CommandLines | None":
@@ -205,6 +242,23 @@ def from_expansion(expanded: Any, turn_id: str) -> "CommandLines | None":
     )
 
 
+def continued_turn(messages: Iterable[Any]) -> str:
+    """The turn a daemon's carry-on continues: the newest question the USER
+    sent — neither a continuation (the daemon's own "carry on") nor a steer
+    note. v1.381.0 review: a steer note typed into a carry-on is saved as a
+    user line carrying THAT carry-on's turn id, so the next carry-on found
+    it, matched no command and ran every command with no card. A steer note
+    always belongs to the turn it steered, whose own question comes first.
+    "" when there is none."""
+    for line in reversed(list(messages or [])):
+        if not isinstance(line, dict) or line.get("role") != "user":
+            continue
+        if line.get("continuation") or line.get("steer"):
+            continue
+        return str(line.get("turnId") or "")
+    return ""
+
+
 def rule_for_turn(setup: "dict[str, Any] | None", messages: Iterable[Any], *,
                   started: "CommandLines | None" = None, continuation: bool = False) -> "TurnRule | None":
     """This turn's rule (None = nothing to ask about: the turn is exactly as
@@ -215,12 +269,7 @@ def rule_for_turn(setup: "dict[str, Any] | None", messages: Iterable[Any], *,
     earlier = tuple(entries((setup or {}).get(SETUP_KEY)))
     started_by = started
     if started_by is None and continuation:
-        last = None
-        for line in reversed(list(messages or [])):
-            if isinstance(line, dict) and line.get("role") == "user" and not line.get("continuation"):
-                last = line
-                break
-        turn = str((last or {}).get("turnId") or "")
+        turn = continued_turn(messages)
         if turn:
             started_by = next((e for e in reversed(earlier) if e.turn_id == turn), None)
     if started_by is None and not earlier:
@@ -240,11 +289,18 @@ _SYNTAX_ONLY = frozenset({
 })
 
 
+#: A line continued onto the next (bash ``\``, cmd ``^``, PowerShell `````).
+_CONTINUED = re.compile(r"[\\^`][ \t]*\r?\n")
+
+
 def normalize(text: Any) -> str:
     """A command's text as matching reads it: lower case, a backslash before
     a quote dropped, every quote (``"``, ``'``, `````) dropped, runs of white
     space one space."""
     t = str(text or "")
+    # v1.381.0 review: a line continued onto the next one — bash's ``\``,
+    # cmd's ``^``, PowerShell's backtick at a line's end — is one line.
+    t = _CONTINUED.sub(" ", t)
     t = re.sub(r"\\(?=[\"'`])", "", t)
     t = re.sub(r"[\"'`]", "", t)
     return " ".join(t.split()).lower()
@@ -257,18 +313,24 @@ def _matchable(line: str) -> str:
     return n
 
 
-def runs_a_line(command: Any, entry: CommandLines) -> bool:
-    """Whether ``command`` (a shell line, a program's command, text typed into
-    one) contains one of ``entry``'s shell lines — on word boundaries, after
-    :func:`normalize`."""
+def matched_line(command: Any, entry: CommandLines) -> str:
+    """The first of ``entry``'s shell lines that ``command`` (a shell line, a
+    program's command, text typed into one) contains — on word boundaries,
+    after :func:`normalize` — or ""."""
     text = normalize(command)
     if not text:
-        return False
+        return ""
     for line in entry.lines:
         n = _matchable(line)
         if n and re.search(r"(?<!\w)" + re.escape(n) + r"(?!\w)", text):
-            return True
-    return False
+            return line
+    return ""
+
+
+def runs_a_line(command: Any, entry: CommandLines) -> bool:
+    """Whether ``command`` contains one of ``entry``'s shell lines
+    (:func:`matched_line`)."""
+    return bool(matched_line(command, entry))
 
 
 # --------------------------------------------------------------------------- #
@@ -286,16 +348,36 @@ def whose(entry: CommandLines) -> str:
     return f"{owner} /{entry.name} command"
 
 
+#: How much of a matched line the card quotes.
+QUOTE_CHARS = 80
+
+
 def turn_words(entry: CommandLines) -> str:
-    """The card's line for a command-running call of the command's own turn."""
-    return (f"This step comes from {whose(entry)}, which asks to run shell commands. "
-            "Those always ask you first.")
+    """The card's line for a command-running call of the command's own turn
+    (and of its carry-on). The card's own rule line says the rule; this one
+    says why THIS call asks — every command of the turn, not only the
+    command's lines (the model may reword a line)."""
+    return (f"This turn runs {whose(entry)}, which has shell lines, so every command in it "
+            "asks you first.")
 
 
-def line_words(entry: CommandLines) -> str:
-    """The card's line for a later turn's call that runs one of its lines."""
-    return (f"This runs a shell line from {whose(entry)}. Shell lines from a project's or a "
-            "plugin's command always ask you first.")
+def line_words(entry: CommandLines, line: str = "") -> str:
+    """The card's line for a later turn's call that runs one of the
+    command's lines: WHICH line matched (masked, cut to
+    :data:`QUOTE_CHARS`), so the user sees why a command they did not
+    expect to be asked about is."""
+    shown = " ".join(str(line or "").split())
+    try:
+        from ..detections.redact import mask
+
+        shown = mask(shown)
+    except Exception:  # noqa: BLE001 — wording only
+        pass
+    if len(shown) > QUOTE_CHARS:
+        shown = shown[: QUOTE_CHARS - 1].rstrip() + "\u2026"
+    if not shown:
+        return f"This runs a shell line from {whose(entry)}."
+    return f"This runs \u201c{shown}\u201d, a shell line from {whose(entry)}."
 
 
 def command_check(command: Any) -> Any:
@@ -316,8 +398,9 @@ def command_check(command: Any) -> Any:
         return SpendCheck(ask=True, words=turn_words(rule.started_by), cost_note=COST_NOTE,
                           once_only=True, reason=REASON)
     for entry in reversed(rule.earlier):
-        if runs_a_line(command, entry):
-            return SpendCheck(ask=True, words=line_words(entry), cost_note=COST_NOTE,
+        line = matched_line(command, entry)
+        if line:
+            return SpendCheck(ask=True, words=line_words(entry, line), cost_note=COST_NOTE,
                               once_only=True, reason=REASON)
     return None
 
@@ -334,7 +417,8 @@ def tool_check(command: Any) -> Any:
 
 __all__ = [
     "COST_NOTE", "CommandLines", "MAX_RECORDED", "REASON", "SETUP_KEY", "TURN_RULE", "TurnRule",
-    "clean_record", "command_check", "current", "entries", "from_expansion", "line_words",
-    "normalize", "recorded_with", "reset_turn_rule", "rule_for_turn", "runs_a_line",
+    "clean_record", "command_check", "continued_turn", "current", "entries", "from_expansion",
+    "line_words", "matched_line", "normalize", "recorded_with", "reset_turn_rule", "rule_for_turn",
+    "runs_a_line",
     "set_turn_rule", "tool_check", "turn_words", "whose",
 ]

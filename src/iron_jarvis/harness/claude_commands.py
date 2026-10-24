@@ -785,10 +785,14 @@ SHELL_LINES_NOTE = (
 #: :data:`SHELL_LINES_NOTE` ("{where}": "this project's command files" / "the
 #: <plugin> plugin"). A personal command keeps the note alone.
 ASKS_FIRST_NOTE = (
-    "This command comes from {where}, not from the user, so the user is asked before each shell "
-    "command you run in this turn, and before these lines run in any later turn, whatever this "
-    "session's approval setting. Wait for that answer; if the user declines, say what you could "
-    "not do."
+    # v1.381.0 review: exactly what the match does — every command of this
+    # turn (a helper's too), and in a later turn only a command whose text
+    # contains one of these lines ("before these lines run in any later
+    # turn" promised more than a text match can keep).
+    "This command comes from {where}, not from the user, so the user is asked before each command "
+    "run in this turn, and in a later turn before any command that contains one of these lines, "
+    "whatever this session's approval setting. Wait for that answer; if the user declines, say "
+    "what you could not do."
 )
 
 #: ``@path`` in a command's text: a file it wants read (not an e-mail address).
@@ -942,6 +946,10 @@ def _command_shell_lines(marked: str) -> bool:
     return has_shell_lines(_unmark(_masked(marked)))
 
 
+#: A line continued onto the next one (bash ``\\``, cmd ``^``, PowerShell
+#: `````) — the same rule ``harness/command_shell.normalize`` reads.
+_CONTINUED_RX = re.compile(r"[ \t]*[\\^`][ \t]*\r?\n[ \t]*")
+
 #: How many shell lines of one command are kept (v1.381.0), and how long one.
 MAX_SHELL_LINES = 20
 MAX_SHELL_LINE_CHARS = 400
@@ -962,6 +970,11 @@ def _command_shell_texts(marked: str) -> list[str]:
         raw = _unmark(marked[m.start():m.end()])
         body = re.sub(r"^```!", "", raw)
         body = re.sub(r"```$", "", body)
+        # v1.381.0 review: a command continued onto the next line (bash's
+        # backslash, cmd's caret, PowerShell's backtick at the end) is ONE
+        # line — kept as two pieces, neither matched the command a later
+        # turn runs in one line.
+        body = _CONTINUED_RX.sub(" ", body)
         found.append((m.start(), body.split("\n")))
     out: list[str] = []
     for _at, lines in sorted(found, key=lambda f: f[0]):

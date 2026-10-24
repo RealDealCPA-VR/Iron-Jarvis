@@ -168,8 +168,10 @@ def resolved_of(app, turn_id: str) -> list[str]:
     return [d["decision"] for e, d in turn_frames(app, turn_id) if e == "approval_resolved"]
 
 
-PROJECT_WORDS = ("This step comes from the project's /deploy command, which asks to run shell "
-                 "commands. Those always ask you first.")
+# v1.381.0 review: the card's line says why THIS call asks; the card's own
+# rule line says the rule (the two used to repeat "always ask").
+PROJECT_WORDS = ("This turn runs the project's /deploy command, which has shell lines, so every "
+                 "command in it asks you first.")
 
 
 def assert_command_card(card: dict, tool: str = "shell", words: str = PROJECT_WORDS) -> None:
@@ -244,8 +246,9 @@ def test_a_later_turn_asks_only_for_a_command_that_runs_a_recorded_line(command,
         K.reset_turn_rule(token)
     if asks:
         assert check.ask is True and check.once_only is True and check.reason == "command"
-        assert check.words == ("This runs a shell line from the project's /deploy command. Shell lines from a "
-                               "project's or a plugin's command always ask you first.")
+        # v1.381.0 review: the card names the line that matched.
+        assert check.words.startswith("This runs \u201c")
+        assert check.words.endswith("\u201d, a shell line from the project's /deploy command.")
     else:
         assert check is None
 
@@ -256,8 +259,8 @@ def test_the_commands_own_turn_asks_for_every_command_and_no_rule_asks_for_none(
     try:
         check = K.command_check("python -c 1")
         assert check.ask and check.once_only and check.reason == "command"
-        assert check.words == ("This step comes from the tools plugin's /deploy command, which asks to run "
-                               "shell commands. Those always ask you first.")
+        assert check.words == ("This turn runs the tools plugin's /deploy command, which has shell lines, "
+                               "so every command in it asks you first.")
         assert K.command_check("   ") is None, "a call with no command runs nothing"
     finally:
         K.reset_turn_rule(token)
@@ -387,8 +390,8 @@ async def test_a_plugins_command_asks_the_same_way_and_names_the_plugin(app, cc,
     wire(app, Script([bash("p1", "echo IJ-PLUGIN"), "Done."]))
     drop, task = await start(app, sid, "cs-plugin", command="tools:deploy")
     card = await nth_card(app, "cs-plugin", 0)
-    assert_command_card(card, words=("This step comes from the tools plugin's /tools:deploy command, which "
-                                     "asks to run shell commands. Those always ask you first."))
+    assert_command_card(card, words=("This turn runs the tools plugin's /tools:deploy command, which has "
+                                     "shell lines, so every command in it asks you first."))
     await answer(app, card, "deny")
     await finish(app, "cs-plugin", drop, task)
     assert not ran(app, "IJ-PLUGIN")
@@ -574,8 +577,8 @@ async def test_a_later_turn_asks_for_the_commands_own_line_and_nothing_else(app,
     drop, task = await start(app, sid, "cs-later-1", text="now run its status line")
     card = await nth_card(app, "cs-later-1", 0)
     assert card["tool"] == "shell" and card["once_only"] is True and card["once_reason"] == "command"
-    assert card["cost_note"] == ("This runs a shell line from the project's /deploy command. Shell lines from "
-                                 "a project's or a plugin's command always ask you first.")
+    assert card["cost_note"] == ("This runs \u201cecho IJ-STATUS\u201d, a shell line from the project's "
+                                 "/deploy command.")
     await answer(app, card, "once")
     await finish(app, "cs-later-1", drop, task)
     assert len(cards_of(app, "cs-later-1")) == 1, "the other command did not ask"
@@ -705,7 +708,10 @@ async def test_local_only_keeps_its_own_allow_once_card(app, work):
         K.reset_turn_rule(token)
     cards = [d for e, d in frames if e == "approval"]
     assert len(cards) == 1 and cards[0]["once_only"] is True
-    assert "once_reason" not in cards[0], "the card keeps the local-only line"
+    # v1.381.0 review: the card says WHY it asks every time under Local only
+    # too (the local-only line used to hide it, and the screen then let Enter
+    # allow a project's command's shell like any local-only card).
+    assert cards[0].get("once_reason") == "command"
     assert not ran(app, "IJ-LOCAL")
 
 

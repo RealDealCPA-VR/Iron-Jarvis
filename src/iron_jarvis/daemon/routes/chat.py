@@ -5015,10 +5015,15 @@ async def chat_stream(
                                 # read as once below. v1.367.0: the plan
                                 # door's card too.
                                 _frame["once_only"] = True
-                                if _sc is not None and getattr(_sc, "reason", "") and not _local_ask:
+                                if _sc is not None and getattr(_sc, "reason", "") and _spend_once(tc):
                                     # v1.375.0: WHY it asks every time (the
                                     # card says so in its own words — "git":
                                     # a commit / push on a session's branch).
+                                    # v1.381.0 review: under Local only too —
+                                    # the local-only line hid a project's
+                                    # command's (or the git guard's) reason,
+                                    # so the screen could not treat it as the
+                                    # safety card it is (its Enter allowed it).
                                     _frame["once_reason"] = _sc.reason
                             if _count > 1:
                                 _examples = [
