@@ -2343,9 +2343,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 skey = platform.secrets.get("voice_transcribe_key")
             except Exception:  # noqa: BLE001
                 skey = None
-            # Fall back to the custom endpoint's key if the STT endpoint shares it.
+            # No key of its own: the key saved for THIS server, when it is one
+            # the user saved (the custom gateway serving speech too). The
+            # gateway-key review: this used to take the custom endpoint's key
+            # whatever server the speech endpoint was — another machine, or a
+            # cloud service — and send it there.
             if not skey:
-                skey = _custom_slot_key()
+                skey = _saved_key_for(stt)
             return ("stt", _v1(stt) + "/audio/transcriptions", skey)
         # (2) OpenAI key.
         try:
@@ -2366,6 +2370,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
         read. None when there is none or the vault cannot answer."""
         try:
             return platform.fleet.slot_key("custom") or None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _saved_key_for(url: str) -> str | None:
+        """The saved key of the endpoint that IS *url*'s server
+        (``FleetRegistry.key_for_url``), else None — a key only ever goes to
+        the server it was saved for."""
+        try:
+            return platform.fleet.key_for_url(url) or None
         except Exception:  # noqa: BLE001
             return None
 

@@ -178,3 +178,60 @@ def test_the_e2e_and_scratch_launchers_point_opencode_at_a_scratch_folder():
     sh = _text(REPO / "scripts" / "verify_browser_addon.sh")
     serve_line = next(line for line in sh.splitlines() if "ironjarvis serve" in line and "uv run" in line)
     assert f'{CONFIG_DIR_ENV}="$ROOT/' in serve_line
+
+
+# --------------------------------------------------------------------------- #
+# 2. The key goes ONLY to the server it was saved for
+# --------------------------------------------------------------------------- #
+def _scratch_app(tmp_path, values: dict, *, key: str = KEY):
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.core.config import persist_config_values, resolve_home
+    from iron_jarvis.daemon.app import create_app
+
+    home = resolve_home(Path(tmp_path).resolve())
+    home.mkdir(parents=True, exist_ok=True)
+    persist_config_values(home, {"fleet_sampling_enabled": False, **values})
+    app = create_app(str(tmp_path))
+    if key:
+        r = TestClient(app).post("/connections/custom/key", json={"key": key})
+        assert r.status_code == 200, r.status_code
+    return app
+
+
+def test_voice_never_hands_the_gateway_key_to_a_different_speech_server(tmp_path):
+    """A dedicated speech-to-text server with no key of its own used to be
+    sent the CUSTOM endpoint's key ("if the STT endpoint shares it") — a
+    different server, possibly a cloud one (the setting names Groq). It now
+    gets the key saved for ITS server only; the same gateway still gets it."""
+    import base64
+
+    from fastapi.testclient import TestClient
+
+    gateway = FakeGateway(KEY)
+    gateway.start()
+    stt = FakeGateway("stt-own-key-not-real")
+    stt.start()
+    try:
+        audio = {"audio_b64": base64.b64encode(b"RIFF....").decode(), "mime": "audio/wav"}
+        app = _scratch_app(tmp_path / "a", {
+            "custom_base_url": gateway.base + "/v1", "custom_model": "glm-5.3-flash",
+            "voice_transcribe_base_url": stt.base + "/v1",
+        })
+        with TestClient(app) as client:
+            client.post("/voice/transcribe", json=audio)
+        assert stt.paths(), "the speech server was never asked"
+        sent_auth = [p for p, r in zip(stt.paths(), stt.log()) if r["any_auth"]]
+        assert sent_auth == [], f"a key went to another server: {sent_auth}"
+        # the SAME gateway as the STT endpoint: its saved key goes along
+        app = _scratch_app(tmp_path / "b", {
+            "custom_base_url": gateway.base + "/v1", "custom_model": "glm-5.3-flash",
+            "voice_transcribe_base_url": gateway.base + "/v1",
+        })
+        with TestClient(app) as client:
+            got = client.post("/voice/transcribe", json=audio).json()
+        assert got.get("text") == "hello from the stand-in"
+        assert gateway.unkeyed() == []
+    finally:
+        gateway.stop()
+        stt.stop()
