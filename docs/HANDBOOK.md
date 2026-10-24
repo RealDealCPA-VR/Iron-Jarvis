@@ -1899,6 +1899,22 @@ reads; it never writes, runs commands, or starts work on its own.
 
 ## Fixes in v1.382.0
 
+- **Your model server's key goes with every request — and only to it.** When
+  a model server (for example a LiteLLM gateway) needs a key, Iron Jarvis now
+  sends the key you saved for it on every request, including the background
+  checks that see whether it is up, what models it has and what each model can
+  do. Those checks used to go without the key, and the server refused them.
+  The key is only ever sent to the exact server it was saved for (same
+  address and port) — never to another server, never along a redirect, and a
+  server that repeats it back in an error never gets it shown in chat or the
+  logs. Voice no longer sends your model server's key to a separate speech
+  server.
+- **What a model can do is read from the server.** For a LiteLLM gateway,
+  whether a model can look at pictures or use tools, and how much text it
+  takes, now come from the gateway's own model list, so a vision model is no
+  longer reported as unable to see. Iron Jarvis no longer tries Ollama-only
+  addresses on servers that are not Ollama.
+
 - **"Needs to sign in again" no longer sticks.** An Iron-Proxy account you
   had signed in to again could keep saying "Needs to sign in again" in the IJ
   harness model menu and on a Build terminal's account chip — even while it

@@ -3569,6 +3569,73 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **Every request to a saved endpoint carries ITS saved key, and only to
+  that server; nothing reaches a LiteLLM gateway the Ollama way** (v1.382.0,
+  a USER BUG from the user's gateway log: ~139 keyless `GET /model/info` (and
+  `/v1/models`) per hour, ~51,000 since the gateway started requiring a key on
+  2026-10-21, all 401; plus `/api/tags|show|version` 404s; and "no vision" for
+  its `vision` model; a doer + a reviewer that found 4 more defects, each red
+  first and mutation-checked). THE MAIN SOURCE was not the sampler (it backs
+  off to ~6/h after 3 failures) but `providers/opencode._passthrough_aliases`:
+  the user's OpenCode config lists the gateway with no apiKey, and EVERY app
+  start (`warm_opencode`) read `/model/info` keyless — the test suite starts
+  the app ~440 times per run, so agents running tests all day were most of
+  the 51,000. ONE lookup: `fleet/endpoint_auth.py` — `node_key(node,
+  resolver)` (the vault's `api_key_name`; a proxy-reported CHILD never gets a
+  key), `auth_headers(key, protocol)` (Bearer; `x-api-key` +
+  `anthropic-version` for anthropic-compatible), `root_key(url)` (ONE server
+  = same scheme, case-folded host, port with its default filled in, and path
+  above `/v1`; `localhost` ≠ `127.0.0.1`; userinfo/fragment/query/backslash/
+  %2f get no key — a property pin over 12,000+ crafted addresses agrees with
+  where httpx connects); `FleetRegistry.key_for/headers_for/node_for_url/
+  headers_for_url/key_for_url/slot_key/ollama_style_ok/model_caps`, the vault
+  resolver set in `platform.py`. Every caller goes through it: the sampler's
+  `probe_node` (+ LiteLLM pass, `/health`), the route reader, `detect_kind`
+  (LiteLLM FIRST, stops at 401/403 with "the server asked for an API key"),
+  the catalog's node job, discovery (`/api/tags` only for a known Ollama or
+  after a 404 — never after a 401), both fetch-models routes (the SAVED key
+  for the same server when none is typed), the envelope seed (LiteLLM
+  `/model/info` first), the router's liveness (`probe_headers()`), OpenCode's
+  read (keyed only when an Iron Jarvis endpoint is the same server), doctor,
+  voice (`key_for_url(stt)` — it used to hand the CUSTOM gateway's key to a
+  DIFFERENT speech server, e.g. Groq). A saved node with no key name of its
+  own uses the key saved for the SAME server (chat too). NO keyed call follows
+  redirects (httpx strips Authorization cross-origin but NOT x-api-key;
+  pinned end to end with a 307 to a second recording server).
+  `adapters.base.scrub_sent_credentials` removes every credential header
+  value a request carried (incl. a half key cut at 300 chars) from provider
+  error text (OpenAI-compatible, Google, Grok, Anthropic-compatible, voice) — a
+  server that ECHOES the key in its 401 put it in chat, `provider.failed` and
+  the log. CAPABILITIES: `upstreams.parse_model_info` reads
+  `model_info.supports_vision / supports_function_calling / max_input_tokens`
+  by `model_name` (wildcards as routing does; deployments must agree; the
+  smallest window), saved in `fleet-routes.json` (never `api_base` or an
+  upstream address — pinned); `fleet/adapter.node_capabilities` believes a
+  stated YES, a stated NO leaves the node record's answer; the window ladder's
+  "endpoint" step (`chat_turn._ladder_window_source`) reads `max_input_tokens`
+  where the fleet probe sat (below the pin and the measured envelope, above
+  the default; the v1.335.0 learned window still wins when smaller). VOLUME:
+  `probes.MetricsMemo` remembers a settled `/metrics` answer (2xx/401/403/404)
+  for 600 s (a 5xx or no answer re-asks; Refresh / Re-detect forget it) —
+  1,800/h → 6/h with the Fleet page open (the user's proxy answers `/metrics`
+  401 keyless, so it EXISTS behind the key). TESTS NEVER TOUCH THE USER'S
+  GATEWAY: `IRONJARVIS_OPENCODE_CONFIG_DIR` (`opencode.CONFIG_DIR_ENV`) is the
+  only folder OpenCode's config is read from when set; `tests/conftest.py` sets
+  it in `os.environ` for the session (subprocess daemons — the update
+  rehearsal — inherit it), and `dashboard/playwright.config.ts` and
+  `scripts/verify_browser_addon.sh` set it for their daemons. OPEN: an
+  OpenCode-proxied alias whose proxy cannot be read (401 with no Iron Jarvis
+  key for it) reads as LOCAL (an empty passthrough set) — a cloud passthrough
+  like `frontier` would pass Local only there; a decision for the user. A
+  LiteLLM pass reads `/model/info` twice a minute (probe + route reader);
+  `POST /fleet/probe` sends the vault secret named in the form's
+  `api_key_name` to the typed address (token-gated); the custom adapter's
+  default vision claim moves a glm picture to the same gateway's `custom`
+  provider (disclosed failover, unchanged). Pins:
+  `tests/test_gateway_key{,_review}_v1382.py` (+
+  `tests/fixtures/fake_litellm_gateway_v1382.py`, records path + whether the
+  key came, never the value).
+
 - **An account Iron-Proxy says is READY is never "needs to sign in again"
   because of an old note** (v1.382.0, a USER BUG: the IJ harness model menu
   and a Build terminal's account chip said "Needs to sign in again" for two
