@@ -37,6 +37,19 @@ Every model call it observes is entered in the run's ledger rollout
 
 Both CLIs run through ``core/procs`` with a time limit (the tree dies with it)
 and without the parent Claude Code session's markers in their environment.
+
+THE EXACT MODEL (v1.383.0, IJ harness part 3 Phase 1). A record used to say
+"default" for a CLI's model, and the user's Claude settings changed between
+two runs, so nobody could say which model ran. Every runner is now given its
+model and its effort EXPLICITLY (Claude Code ``--model`` / ``--effort``;
+Codex ``-m`` / ``-c model_reasoning_effort="…"``; Jarvis the provider and
+model on the turn, and the reasoning level only where
+``providers.reasoning`` offers that level for that pair — otherwise none is
+sent and the record says "not offered"), and keeps what the run REPORTS back:
+Claude Code's ``system/init`` event names its model, Jarvis's route names
+provider, model and reasoning, and Codex's events are read for a model only
+if they carry one (never invented). See :meth:`passed_facts` and
+``RunOutcome.model_reported``.
 """
 
 from __future__ import annotations
@@ -112,6 +125,12 @@ PROMPT_TEMPLATE = (
 #: Seconds a runner gets past its task's time limit to wind down before the
 #: bench stops waiting for it.
 _GRACE_S = 60.0
+#: v1.383.0: the efforts ``--effort`` takes (the reasoning vocabulary every
+#: runner speaks: ``providers.reasoning.LEVELS``).
+EFFORTS: tuple[str, ...] = ("low", "medium", "high")
+#: What a Jarvis record says when the pair it ran on offers no reasoning
+#: level (nothing was sent).
+NOT_OFFERED = "not offered"
 #: How much of a final reply a record keeps.
 REPLY_CHARS = 2000
 
@@ -148,6 +167,12 @@ class RunOutcome:
     #: What the runner OBSERVED, as plain facts (``failures.FACT_KEYS``) —
     #: :func:`failures.classify_failure` decides whose failure it was.
     facts: dict[str, Any] = field(default_factory=dict)
+    #: v1.383.0: the model the run REPORTED it ran on (Claude Code's init
+    #: event, Jarvis's route), ``None`` when it reported none — never guessed.
+    model_reported: str | None = None
+    #: The reasoning level the run reported it applied (Jarvis's route), or
+    #: ``None`` when it reported none.
+    effort_reported: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -370,12 +395,17 @@ class JarvisRunner:
 
     def __init__(self, platform: Any, *, provider: str = "", model: str = "",
                  round_budget: int = DEFAULT_ROUNDS, dialect: str = DEFAULT_DIALECT,
-                 layer_dir: "Path | str | None" = None) -> None:
+                 layer_dir: "Path | str | None" = None, effort: str = "") -> None:
         from ..daemon.chat_turn import turn_harness, turn_round_budget
 
         self.platform = platform
         self.provider = provider or ""
         self.model = model or ""
+        #: v1.383.0: the effort the bench was asked for ("" = none asked —
+        #: the refine loop and older callers; nothing is sent, as before).
+        self.effort = (effort or "").strip().lower()
+        if self.effort and self.effort not in EFFORTS:
+            raise ValueError(f"effort must be one of {', '.join(EFFORTS)}")
         self.round_budget = turn_round_budget(int(round_budget))
         # "auto" or a dialect id; anything else is refused before any run.
         self.dialect = turn_harness(dialect or DEFAULT_DIALECT) or DEFAULT_DIALECT
@@ -384,6 +414,24 @@ class JarvisRunner:
         #: the task copy's own (``components.LAYER_SOURCE``). None = the
         #: default harness, exactly as before.
         self.layer_dir = Path(layer_dir) if layer_dir else None
+
+    def reasoning(self) -> str:
+        """The reasoning level the turn SENDS: the asked effort when
+        ``providers.reasoning`` offers it for this (provider, model) pair,
+        else ``""`` (nothing sent — a level the pair does not take is never
+        put on the wire)."""
+        from ..providers.reasoning import supports
+
+        return self.effort if self.effort and supports(self.provider, self.model, self.effort) else ""
+
+    def passed_facts(self) -> dict[str, Any]:
+        """What this runner passes: the model as named, and the effort as
+        sent (``"not offered"`` when the pair takes no level; ``None`` when no
+        effort was asked)."""
+        return {
+            "model_passed": self.model,
+            "effort_passed": (self.reasoning() or NOT_OFFERED) if self.effort else None,
+        }
 
     def _layer(self) -> Any:
         from ..harness import components
@@ -454,6 +502,9 @@ class JarvisRunner:
             # v1.378.0: the turn runs as a Build session (its shell's
             # environment, the held model).
             "session": "build",
+            # v1.383.0: the reasoning level the turn sends (absent when no
+            # effort was asked, so every earlier configuration keeps its key).
+            **({"reasoning": self.reasoning() or NOT_OFFERED} if self.effort else {}),
             # v1.370.0: a refine probe's candidate layer (absent for the
             # default harness, so every earlier configuration keeps its key).
             **({"layer_sha256": layer_tree_hash(self.layer_dir), "layer_used": bool(turn.layer.used)}
@@ -477,6 +528,8 @@ class JarvisRunner:
             messages=[ChatMessageBody(role="user", content=render_prompt(task, workspace))],
             provider=self.provider, model=self.model,
             workspace_dir=str(workspace), approval_mode=JARVIS_APPROVAL_MODE,
+            # v1.383.0: the level only where the pair offers it.
+            **({"reasoning": self.reasoning()} if self.reasoning() else {}),
         )
         deadline = time.monotonic() + float(timeout_s)
         approvals = _approvals(SimpleNamespace(platform=self.platform))
@@ -599,6 +652,13 @@ class JarvisRunner:
         out.facts["acted"] = tools > 0 or any(c.complete for c in rollout.calls)
         if error_fix_kind:
             out.facts["fix_kind"] = error_fix_kind
+        # v1.383.0: the model the turn REPORTED — its done receipt, else the
+        # last model call that answered (a turn that failed part-way).
+        answered = [c for c in rollout.calls if c.complete and c.model]
+        out.model_reported = (
+            str(done.get("model") or "") or None if done is not None
+            else (answered[-1].model if answered else None)
+        )
         if done is None:
             out.error = error or (
                 f"stopped at the {timeout_s:g} s time limit" if timed_out
@@ -612,6 +672,8 @@ class JarvisRunner:
             return out
         usage = done.get("usage") or {}
         route = done.get("route") or {}
+        # The reasoning level the route says was APPLIED ("" = none).
+        out.effort_reported = str(route.get("reasoning") or "") or None
         out.answered_provider = str(done.get("provider") or "")
         out.answered_model = str(done.get("model") or "")
         out.final_reply = str(done.get("reply") or "")[:REPLY_CHARS]
@@ -735,9 +797,14 @@ def parse_claude_stream(stdout: str) -> dict[str, Any]:
     tool_ids: list[str] = []
     answered = 0
     result: dict[str, Any] | None = None
+    reported: str | None = None
     for obj in _json_lines(stdout):
         kind = obj.get("type")
-        if kind == "assistant":
+        if kind == "system" and obj.get("subtype") == "init" and isinstance(obj.get("model"), str):
+            # v1.383.0: Claude Code's init event names the model it runs on
+            # (read from 2.1.309's own init builder: ``model: e.model``).
+            reported = obj["model"].strip() or reported
+        elif kind == "assistant":
             message = obj.get("message") or {}
             if not obj.get("isApiErrorMessage") and message.get("content"):
                 answered += 1
@@ -748,7 +815,9 @@ def parse_claude_stream(stdout: str) -> dict[str, Any]:
                         tool_ids.append(bid)
         elif kind == "result":
             result = obj
-    parsed: dict[str, Any] = {"tool_calls": len(tool_ids), "answered": answered, "result": result}
+    parsed: dict[str, Any] = {
+        "tool_calls": len(tool_ids), "answered": answered, "result": result, "model_reported": reported,
+    }
     if result is None:
         return parsed
     usage = result.get("usage") or {}
@@ -792,8 +861,15 @@ def parse_codex_events(stdout: str, model: str = "", billing: str = "list_price"
     turns: list[dict[str, Any]] = []
     error = ""
     reply = ""
+    reported: str | None = None
     for obj in _json_lines(stdout):
         kind = obj.get("type")
+        # v1.383.0: a model only if an EVENT itself names one (top level, or
+        # its thread / turn object) — never read out of an item, whose text
+        # is the model's own words, and never invented.
+        for holder in (obj, obj.get("thread"), obj.get("turn")):
+            if isinstance(holder, dict) and isinstance(holder.get("model"), str) and holder["model"].strip():
+                reported = holder["model"].strip()
         if kind == "item.completed":
             items += 1
             item = obj.get("item") or {}
@@ -832,7 +908,8 @@ def parse_codex_events(stdout: str, model: str = "", billing: str = "list_price"
             "tokens_in": tin, "tokens_out": tout, "tokens_cached": cached,
             "cost_metered_usd": metered_cost, "cost_list_price_usd": list_cost,
         })
-    return {"tool_calls": tools, "items": items, "turns": entries, "error": error, "reply": reply}
+    return {"tool_calls": tools, "items": items, "turns": entries, "error": error, "reply": reply,
+            "model_reported": reported}
 
 
 #: Environment names under which ``codex exec`` bills an API account.
@@ -894,11 +971,20 @@ class _CliRunner:
     binary_name = ""
     display = ""
 
-    def __init__(self, *, model: str = "", binary: str | None = None) -> None:
+    def __init__(self, *, model: str = "", binary: str | None = None, effort: str = "") -> None:
         self.provider = self.name
         self.model = model or ""
+        #: v1.383.0: passed on the command line when set ("" = not asked).
+        self.effort = (effort or "").strip().lower()
+        if self.effort and self.effort not in EFFORTS:
+            raise ValueError(f"effort must be one of {', '.join(EFFORTS)}")
         self.binary = binary or find_cli(self.binary_name)
         self._version: str | None = None
+
+    def passed_facts(self) -> dict[str, Any]:
+        """What this runner passes on the command line: the model and the
+        effort (``None`` when none was asked)."""
+        return {"model_passed": self.model, "effort_passed": self.effort or None}
 
     def argv(self, workspace: Path) -> list[str]:  # pragma: no cover - overridden
         raise NotImplementedError
@@ -952,6 +1038,8 @@ class ClaudeRunner(_CliRunner):
         ]
         if self.model:
             out += ["--model", self.model]
+        if self.effort:
+            out += ["--effort", self.effort]
         return out
 
     def child_env(self) -> dict[str, str]:
@@ -976,6 +1064,7 @@ class ClaudeRunner(_CliRunner):
         stderr = procs.text(result.stderr or b"", "utf-8")
         parsed = parse_claude_stream(stdout)
         out.tool_calls = parsed["tool_calls"]
+        out.model_reported = parsed.get("model_reported")
         out.extra["exit_code"] = result.returncode
         out.facts["timed_out"] = bool(result.timed_out)
         out.facts["acted"] = parsed["tool_calls"] > 0 or parsed["answered"] > 0
@@ -1028,8 +1117,8 @@ class CodexRunner(_CliRunner):
     binary_name = "codex"
     display = "Codex"
 
-    def __init__(self, *, model: str = "", binary: str | None = None) -> None:
-        super().__init__(model=model, binary=binary)
+    def __init__(self, *, model: str = "", binary: str | None = None, effort: str = "") -> None:
+        super().__init__(model=model, binary=binary, effort=effort)
         self._billing: tuple[str, str] | None = None
 
     def billing(self) -> tuple[str, str]:
@@ -1051,6 +1140,10 @@ class CodexRunner(_CliRunner):
         ]
         if self.model:
             out += ["-m", self.model]
+        if self.effort:
+            # A TOML string (``codex exec --help``: "The `value` portion is
+            # parsed as TOML"); Codex's own config key for the level.
+            out += ["-c", f'model_reasoning_effort="{self.effort}"']
         return out + ["-"]
 
     async def run(self, task: Task, workspace: Path, rollout: Rollout, *, timeout_s: float) -> RunOutcome:
@@ -1072,6 +1165,7 @@ class CodexRunner(_CliRunner):
         stderr = procs.text(result.stderr or b"", "utf-8")
         parsed = parse_codex_events(stdout, self.model, billing)
         out.tool_calls = parsed["tool_calls"]
+        out.model_reported = parsed.get("model_reported")
         out.final_reply = parsed["reply"][:REPLY_CHARS]
         out.extra["exit_code"] = result.returncode
         out.extra["turns"] = len(parsed["turns"])

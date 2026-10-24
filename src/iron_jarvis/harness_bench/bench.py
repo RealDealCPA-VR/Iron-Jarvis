@@ -5,7 +5,8 @@ folder per configuration)::
 
     <runner>-<provider>-<model>-<key>/     one CONFIGURATION
         config.json                        what it is; refuses an incompatible resume
-        runs/<task_id>/
+        runs/<task_id>/                    a task's run (repeat 1)
+        runs/<task_id>.r<k>/               the same task's repeat k (``--repeats``, k ≥ 2)
             work/                          the agent's fresh copy of the task's repo
             prompt.txt                     what it was told
             grade/                         work + the hidden check, made AFTER the run
@@ -27,6 +28,23 @@ of the task — is run again from a fresh copy.
 The configuration's KEY covers the same identity, so a different model,
 harness or version lands in a different folder; ``config.json`` additionally
 holds the seed, and a resume with a different seed is refused in plain words.
+
+v1.383.0 (IJ harness part 3, Phase 1):
+
+* REPEATS. ``--repeats N`` (1 to 10) runs every task N times. Each repeat is
+  its own run with the repeat number in its identity (its fingerprint, its
+  folder ``runs/<task_id>.r<k>``, its ledger key), so resume and reuse work
+  per repeat. Repeat 1 IS the one-run case, byte for byte: same folder, same
+  fingerprint formula, no repeat field in its record or marker — a folder a
+  one-run invocation wrote is reused by repeat 1 of any later one. Every
+  task's repeat 1 runs before any repeat 2 starts, in the seed's order, so a
+  run cut short still holds whole repeats.
+* THE EXACT MODEL. A run is refused before any task starts unless the
+  runner was given its model (:data:`MODEL_REQUIRED`); the effort joins the
+  configuration's identity; every record carries ``model_passed``,
+  ``effort_passed`` and ``model_reported`` (``None`` = the run named none).
+* A task's SETUP step (:mod:`.setup_step`) makes its tree after the copy and
+  before the tripwire; a step that fails is "did not run", never a fail.
 """
 
 from __future__ import annotations
@@ -46,9 +64,10 @@ from .. import __version__
 from .catalog import TASKS_DIR, Task, TaskError, load_tasks, materialize, select_tasks, tree_hash
 from .failures import INFRASTRUCTURE, Failure, classify_failure
 from .grading import Grade, _remove_tree, grade
-from .ledger import BudgetLedger, BudgetMismatch
+from .ledger import BudgetLedger, BudgetMismatch, record_key, run_key
 from .report import combined_report, config_report
-from .runners import DEFAULT_ROUNDS, RUNNERS, RunOutcome, render_prompt
+from .runners import DEFAULT_ROUNDS, EFFORTS, RUNNERS, RunOutcome, render_prompt
+from .setup_step import SetupFailed, run_setup
 from .tripwire import HiddenCheckLeak, assert_context_clean
 
 BENCH_DIRNAME = "harness-bench"
@@ -59,6 +78,16 @@ RESULT_NAME = "result.json"
 STARTED_NAME = "started.json"
 #: v1.370.0: what the agent did, step by step (the refine loop's evidence).
 TRAJECTORY_NAME = "trajectory.json"
+#: v1.383.0: ``--repeats`` runs every task this many times at most.
+MAX_REPEATS = 10
+#: Said before any task starts when a runner was given no model (a record
+#: that cannot say which model ran is not a measurement).
+MODEL_REQUIRED = "Name the model with --model, so the record says which one ran."
+#: … and when the Jarvis runner was given no provider.
+PROVIDER_REQUIRED = (
+    "Name the provider with --provider (for example --provider claude-cli), so the record says "
+    "which one answered."
+)
 
 
 class BenchRefused(RuntimeError):
@@ -101,11 +130,15 @@ class Configuration:
     model: str
     harness: dict[str, Any]
     version: str = __version__
+    #: v1.383.0: the effort asked for ("" = none — absent from the identity,
+    #: so a configuration that never had one keeps its key).
+    effort: str = ""
 
     def identity(self) -> dict[str, Any]:
         return {
             "runner": self.runner, "provider": self.provider, "model": self.model,
             "harness": self.harness, "version": self.version,
+            **({"effort": self.effort} if self.effort else {}),
         }
 
     @property
@@ -116,9 +149,12 @@ class Configuration:
     def folder_name(self) -> str:
         return f"{self.runner}-{_slug(self.provider)}-{_slug(self.model)}-{self.key[:12]}"
 
-    def fingerprint(self, task: Task) -> str:
-        """The run fingerprint: this configuration + the task's content."""
-        return _sha(self.key + ":" + task.content_hash)
+    def fingerprint(self, task: Task, repeat: int = 1) -> str:
+        """The run fingerprint: this configuration + the task's content (+
+        the repeat number from repeat 2 on — repeat 1 keeps the one-run
+        formula, so a one-run result is repeat 1's)."""
+        base = self.key + ":" + task.content_hash
+        return _sha(base if int(repeat or 1) <= 1 else f"{base}:repeat:{int(repeat)}")
 
 
 def bench_root(home: Path) -> Path:
@@ -208,18 +244,41 @@ def _verdict(failure: Failure, grade_: Grade | None) -> tuple[bool | None, str, 
     return grade_.passed, grade_.reason, ("grader" if grade_.passed is None else None)
 
 
+def passed_facts(runner: Any, config: Configuration) -> dict[str, Any]:
+    """``{"model_passed", "effort_passed"}`` — what the runner passes (its
+    own :meth:`passed_facts`), else the configuration's model and effort."""
+    own = getattr(runner, "passed_facts", None)
+    if callable(own):
+        try:
+            facts = dict(own())
+            return {"model_passed": facts.get("model_passed"), "effort_passed": facts.get("effort_passed")}
+        except Exception:  # noqa: BLE001 — a stub without it reads the configuration
+            pass
+    return {"model_passed": config.model, "effort_passed": config.effort or None}
+
+
 def _record(
     task: Task, config: Configuration, fingerprint: str, outcome: RunOutcome, grade_: Grade | None,
     *, wall_s: float, started: str, files_outside: list[str], model_calls: int,
-    failure: Failure | None = None,
+    failure: Failure | None = None, passed_as: Mapping[str, Any] | None = None, repeat: int = 1,
 ) -> dict[str, Any]:
     failure = failure if failure is not None else classify_failure(
         config.runner, outcome.ok_run, outcome.facts, outcome.error
     )
     passed, grade_reason, unscored_by = _verdict(failure, grade_)
+    passed_as = dict(passed_as or {"model_passed": config.model, "effort_passed": config.effort or None})
     return {
         "task_id": task.id, "title": task.title, "category": task.category, "tier": task.tier,
+        # v1.383.0: the repeat number, from repeat 2 on (repeat 1's record is
+        # a one-run record, unchanged).
+        **({"repeat": int(repeat)} if int(repeat or 1) > 1 else {}),
         "runner": config.runner, "provider": config.provider, "model": config.model,
+        # v1.383.0: the model and effort as PASSED to the runner, and the
+        # model the run REPORTED (None = it named none; never "default").
+        "model_passed": passed_as.get("model_passed"),
+        "effort_passed": passed_as.get("effort_passed"),
+        "model_reported": outcome.model_reported,
+        "effort_reported": outcome.effort_reported,
         "answered_provider": outcome.answered_provider, "answered_model": outcome.answered_model,
         "ok_run": outcome.ok_run, "error": outcome.error,
         "failure_kind": failure.kind, "failure_reason": failure.reason,
@@ -252,28 +311,34 @@ def _record(
     }
 
 
-def _fresh_run_folder(task: Task, run_dir: Path, runs: Path) -> tuple[Path, str]:
-    """A clean ``run_dir`` with a fresh copy of the task's repo and the prompt
-    the runner will be given. A stale folder (no usable marker) is removed —
-    it is the bench's own disposable copy, inside its own ``runs`` folder."""
+def _fresh_run_folder(task: Task, run_dir: Path, runs: Path, repeat: int = 1) -> tuple[Path, str]:
+    """A clean ``run_dir`` with a fresh copy of the task's repo — SET UP when
+    the task declares a setup step — and the prompt the runner will be
+    given. A stale folder (no usable marker) is removed — it is the bench's
+    own disposable copy, inside its own ``runs`` folder. Raises
+    :class:`SetupFailed` when the setup step did not make the tree."""
     if run_dir.exists():
         _remove_tree(run_dir, runs)
     run_dir.mkdir(parents=True)
     _write_json(run_dir / STARTED_NAME, {
         "task_id": task.id, "title": task.title, "category": task.category, "tier": task.tier,
+        **({"repeat": int(repeat)} if int(repeat or 1) > 1 else {}),
         "started_at": _now(),
     })
     work = materialize(task, run_dir / "work")
+    run_setup(task, work)
     prompt = render_prompt(task, work)
     (run_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
     return work, prompt
 
 
-def _write_marker(run_dir: Path, work: Path, fingerprint: str, config: Configuration, task: Task) -> None:
+def _write_marker(run_dir: Path, work: Path, fingerprint: str, config: Configuration, task: Task,
+                  repeat: int = 1) -> None:
     _write_json(run_dir / MARKER_NAME, {
         "fingerprint": fingerprint,
         "configuration": config.identity(),
         "task_hash": task.content_hash,
+        **({"repeat": int(repeat)} if int(repeat or 1) > 1 else {}),
         "work_tree": tree_hash(work),
         "written_at": _now(),
     })
@@ -281,14 +346,20 @@ def _write_marker(run_dir: Path, work: Path, fingerprint: str, config: Configura
 
 async def run_task(
     task: Task, runner: Any, config: Configuration, cfg_dir: Path, ledger: BudgetLedger,
-    *, echo: Callable[[str], None] = lambda _s: None,
+    *, echo: Callable[[str], None] = lambda _s: None, repeat: int = 1, label: str | None = None,
 ) -> dict[str, Any]:
-    """Run (or reuse) one task for one configuration and return its record."""
+    """Run (or reuse) one task — its repeat ``repeat`` — for one
+    configuration and return its record. ``label`` is how the progress lines
+    name it (the task id by default)."""
     # Every file step below runs off the event loop (the CLAUDE.md rule): the
     # Jarvis runner's turn lives on this same loop.
+    repeat = int(repeat or 1)
+    name = label or task.id
     runs = cfg_dir / "runs"
-    run_dir = runs / task.id
-    fingerprint = config.fingerprint(task)
+    key = run_key(task.id, repeat)
+    run_dir = runs / key
+    fingerprint = config.fingerprint(task, repeat)
+    passed_as = passed_facts(runner, config)
     stored = await asyncio.to_thread(reusable_result, run_dir, fingerprint)
     if stored is not None:
         if stored.get("passed") is None and stored.get("unscored_by") != INFRASTRUCTURE:
@@ -302,11 +373,25 @@ async def run_task(
             })
             await asyncio.to_thread(_write_json, run_dir / RESULT_NAME, stored)
         word = {True: "passed", False: "failed"}.get(stored.get("passed"), "unscored")
-        echo(f"  {task.id}: reused ({word})")
+        echo(f"  {name}: reused ({word})")
         return {**stored, "reused": True}
-    work, prompt = await asyncio.to_thread(_fresh_run_folder, task, run_dir, runs)
-    rollout = ledger.begin(task.id, runner.name)
     started = _now()
+    try:
+        work, prompt = await asyncio.to_thread(_fresh_run_folder, task, run_dir, runs, repeat)
+    except SetupFailed as exc:
+        # The tree the agent was to start from was never made: "did not
+        # run" (infrastructure), no marker, and the runner never starts.
+        rollout = ledger.begin(key, runner.name)
+        outcome = RunOutcome(error=str(exc), tokens_in=0, tokens_out=0,
+                             cost_metered_usd=0.0, cost_list_price_usd=0.0,
+                             facts={"setup_failed": str(exc)})
+        record = _record(task, config, fingerprint, outcome, None, wall_s=0.0, started=started,
+                         files_outside=[], model_calls=0, passed_as=passed_as, repeat=repeat)
+        ledger.verify_record(record, rollout)
+        await asyncio.to_thread(_write_json, run_dir / RESULT_NAME, record)
+        echo(f"  {name}: did not run ({exc})")
+        return record
+    rollout = ledger.begin(key, runner.name)
     try:
         await asyncio.to_thread(assert_context_clean, task, work, prompt)
     except HiddenCheckLeak as exc:
@@ -314,14 +399,14 @@ async def run_task(
                              cost_metered_usd=0.0, cost_list_price_usd=0.0,
                              facts={"refused": "the agent would have seen the grader"})
         record = _record(task, config, fingerprint, outcome, None, wall_s=0.0, started=started,
-                         files_outside=[], model_calls=0)
+                         files_outside=[], model_calls=0, passed_as=passed_as, repeat=repeat)
         ledger.verify_record(record, rollout)
         await asyncio.to_thread(_write_json, run_dir / RESULT_NAME, record)
-        echo(f"  {task.id}: refused. {exc}")
+        echo(f"  {name}: refused. {exc}")
         return record
     before = await asyncio.to_thread(_snapshot, cfg_dir, work)
     t0 = time.monotonic()
-    echo(f"  {task.id}: running...")
+    echo(f"  {name}: running...")
     try:
         outcome = await runner.run(task, work, rollout, timeout_s=task.timeout_s)
     except Exception as exc:  # noqa: BLE001 — a runner bug is a recorded failure, not a crash
@@ -344,7 +429,8 @@ async def run_task(
     g = await asyncio.to_thread(grade, task, work, run_dir / "grade")
     failure = classify_failure(config.runner, outcome.ok_run, outcome.facts, outcome.error)
     record = _record(task, config, fingerprint, outcome, g, wall_s=wall, started=started,
-                     files_outside=outside, model_calls=len(rollout.calls), failure=failure)
+                     files_outside=outside, model_calls=len(rollout.calls), failure=failure,
+                     passed_as=passed_as, repeat=repeat)
     ledger_ok = True
     try:
         ledger.verify_record(record, rollout)
@@ -358,20 +444,50 @@ async def run_task(
         # runner return, and only for a run that MEASURED the agent (it
         # finished, or stopped on its own: a time or round limit, part-way) and whose
         # budget added up. An infrastructure failure runs again next time.
-        await asyncio.to_thread(_write_marker, run_dir, work, fingerprint, config, task)
+        await asyncio.to_thread(_write_marker, run_dir, work, fingerprint, config, task, repeat)
     if failure.infrastructure:
-        echo(f"  {task.id}: did not run ({failure.reason})")
+        echo(f"  {name}: did not run ({failure.reason})")
     else:
         word = "passed" if record["passed"] else "failed" if record["passed"] is False else "unscored"
-        echo(f"  {task.id}: {word} in {wall:.1f} s" + (f" ({outcome.error})" if outcome.error else ""))
+        echo(f"  {name}: {word} in {wall:.1f} s" + (f" ({outcome.error})" if outcome.error else ""))
     return record
+
+
+def check_effort(effort: str) -> str:
+    """The effort, lowered — or :class:`BenchRefused` in plain words."""
+    value = (effort or "").strip().lower()
+    if value not in EFFORTS:
+        raise BenchRefused(f"--effort must be one of {', '.join(EFFORTS)}.")
+    return value
+
+
+def check_repeats(repeats: Any) -> int:
+    """``repeats`` as a whole number from 1 to :data:`MAX_REPEATS`, or
+    :class:`BenchRefused` in plain words."""
+    try:
+        n = int(repeats)
+    except (TypeError, ValueError):
+        n = 0
+    if isinstance(repeats, bool) or n != repeats or not 1 <= n <= MAX_REPEATS:
+        raise BenchRefused(f"--repeats must be a whole number from 1 to {MAX_REPEATS}.")
+    return n
+
+
+def require_model(runner_name: str, provider: str, model: str) -> None:
+    """:class:`BenchRefused` (one plain sentence) unless the model — and, for
+    the Jarvis runner, the provider — was named."""
+    if not (model or "").strip():
+        raise BenchRefused(MODEL_REQUIRED)
+    if runner_name == "jarvis" and not (provider or "").strip():
+        raise BenchRefused(PROVIDER_REQUIRED)
 
 
 def make_runner(runner: str, *, root: str, provider: str = "", model: str = "",
                 rounds: int = DEFAULT_ROUNDS, binary: str | None = None,
-                dialect: str = "auto") -> Any:
+                dialect: str = "auto", effort: str = "") -> Any:
     if runner not in RUNNERS:
         raise BenchRefused(f"--runner must be one of: {', '.join(RUNNERS)}")
+    effort = check_effort(effort) if effort else ""
     if runner == "jarvis":
         from ..daemon.chat_turn import turn_harness
         from ..platform import build_platform
@@ -383,12 +499,13 @@ def make_runner(runner: str, *, root: str, provider: str = "", model: str = "",
         platform = build_platform(root)
         return RUNNERS["jarvis"](
             platform, provider=provider, model=model, round_budget=rounds, dialect=dialect or "auto",
+            effort=effort,
         )
     if dialect and dialect != "auto":
         raise BenchRefused("--dialect applies to the jarvis runner only (Claude Code and Codex speak their own)")
     if provider and provider != runner:
         raise BenchRefused(f"--provider does not apply to the {runner} runner (it is always {runner})")
-    return RUNNERS[runner](model=model, binary=binary)
+    return RUNNERS[runner](model=model, binary=binary, effort=effort)
 
 
 def answer_key_root() -> Path:
@@ -444,37 +561,57 @@ async def run_bench(
     echo: Callable[[str], None] = lambda _s: None,
     tier: str = "all",
     ledger: BudgetLedger | None = None,
+    repeats: int = 1,
 ) -> BenchResult:
-    """Run one configuration over the selected tasks. ``ledger`` (v1.370.0):
-    the refine loop passes its own, to enter this probe's rollouts in its
-    stage; omitted, a fresh one (as before)."""
+    """Run one configuration over the selected tasks, ``repeats`` times each
+    (v1.383.0; every task's repeat 1 before any repeat 2). ``ledger``
+    (v1.370.0): the refine loop passes its own, to enter this probe's
+    rollouts in its stage; omitted, a fresh one (as before). A real run (not
+    a dry run) is refused before any task starts when the runner has no
+    model (:data:`MODEL_REQUIRED`)."""
+    repeats = check_repeats(repeats)
+    if not dry_run:
+        require_model(runner.name, str(getattr(runner, "provider", "") or ""),
+                      str(getattr(runner, "model", "") or ""))
     all_tasks = list(tasks) if tasks is not None else await asyncio.to_thread(load_tasks)
     try:
         identity = await asyncio.to_thread(runner.identity)
     except Exception as exc:  # noqa: BLE001 — e.g. the CLI is not installed
         raise BenchRefused(f"could not read the {runner.name} runner's setup ({exc})") from exc
-    config = Configuration(runner=runner.name, provider=runner.provider, model=runner.model, harness=identity)
+    config = Configuration(runner=runner.name, provider=runner.provider, model=runner.model, harness=identity,
+                           effort=str(getattr(runner, "effort", "") or ""))
     cfg_dir = bench_root(home) / config.folder_name
     use_seed = await asyncio.to_thread(check_saved_config, cfg_dir, config, seed)
     try:
         selected = select_tasks(all_tasks, names=names, seed=use_seed, max_tasks=max_tasks, tier=tier)
     except TaskError as exc:
         raise BenchRefused(str(exc)) from exc
-    result = BenchResult(config_dir=cfg_dir, config=config, planned=[t.id for t in selected], dry_run=dry_run)
+    plan = [(t, k) for k in range(1, repeats + 1) for t in selected]
+    result = BenchResult(config_dir=cfg_dir, config=config, planned=[run_key(t.id, k) for t, k in plan],
+                         dry_run=dry_run)
     if dry_run:
-        result.plan_lines.append(f"{config.folder_name} (seed {use_seed}), {len(selected)} task(s):")
-        for t in selected:
-            stored = await asyncio.to_thread(reusable_result, cfg_dir / "runs" / t.id, config.fingerprint(t))
+        result.plan_lines.append(
+            f"{config.folder_name} (seed {use_seed}), {len(selected)} task(s)"
+            + (f", {repeats} repeats each:" if repeats > 1 else ":")
+        )
+        for t, k in plan:
+            stored = await asyncio.to_thread(
+                reusable_result, cfg_dir / "runs" / run_key(t.id, k), config.fingerprint(t, k)
+            )
             result.plan_lines.append(
-                f"  {t.id} [{t.tier}, {t.category}]: " + ("would reuse the stored result" if stored else "would run")
+                f"  {t.id} [{t.tier}, {t.category}]" + (f" repeat {k}" if repeats > 1 else "") + ": "
+                + ("would reuse the stored result" if stored else "would run")
             )
         return result
     await asyncio.to_thread(_save_config, cfg_dir, config, use_seed)
     ledger = ledger if ledger is not None else BudgetLedger()
-    echo(f"{config.folder_name}: {len(selected)} task(s), seed {use_seed}")
-    for task in selected:
-        result.records.append(await run_task(task, runner, config, cfg_dir, ledger, echo=echo))
-    reused = [r["task_id"] for r in result.records if r.get("reused")]
+    echo(f"{config.folder_name}: {len(selected)} task(s), seed {use_seed}"
+         + (f", {repeats} repeats" if repeats > 1 else ""))
+    for task, k in plan:
+        label = f"{task.id} (repeat {k} of {repeats})" if repeats > 1 else task.id
+        result.records.append(await run_task(task, runner, config, cfg_dir, ledger, echo=echo,
+                                             repeat=k, label=label))
+    reused = [record_key(r) for r in result.records if r.get("reused")]
     try:
         ledger.verify_plan(result.planned, reused, result.records)
     finally:
@@ -491,6 +628,22 @@ def _save_config(cfg_dir: Path, config: Configuration, seed: int) -> None:
         "key": config.key, "folder": config.folder_name, "seed": seed,
         **config.identity(), "created_at": created,
     })
+
+
+_REPEAT_DIR = re.compile(r"^(?P<task>.+)\.r(?P<k>[0-9]+)$")
+
+
+def _run_dir_identity(run_dir: Path, started: Mapping[str, Any]) -> tuple[str, int]:
+    """``(task_id, repeat)`` of a run folder that holds no record: from its
+    ``started.json``, else from the folder's name (``<task>.r<k>``)."""
+    task_id = str(started.get("task_id") or "")
+    repeat = int(started.get("repeat") or 0)
+    m = _REPEAT_DIR.match(run_dir.name)
+    if not task_id:
+        task_id = m.group("task") if m else run_dir.name
+    if not repeat:
+        repeat = int(m.group("k")) if m else 1
+    return task_id, repeat
 
 
 def _write_outputs(
@@ -520,8 +673,10 @@ def _latest_records(cfg_dir: Path) -> list[dict[str, Any]]:
             # Started and never recorded: the process was killed part-way.
             # Listed as INTERRUPTED rather than left out of the report.
             started = _read_json(run_dir / STARTED_NAME) or {}
+            task_id, repeat = _run_dir_identity(run_dir, started)
             out.append({
-                "task_id": run_dir.name, "title": started.get("title", ""),
+                "task_id": task_id, **({"repeat": repeat} if repeat > 1 else {}),
+                "title": started.get("title", ""),
                 "category": started.get("category", ""), "tier": started.get("tier", "core"),
                 "interrupted": True,
                 "passed": None, "unscored_by": "interrupted", "ok_run": False,
@@ -539,7 +694,7 @@ def write_config_outputs(cfg_dir: Path, reused: Sequence[str] = ()) -> Path:
     config = _read_json(cfg_dir / "config.json") or {}
     taken = set(reused)
     records = [
-        {**r, "reused": True} if r.get("task_id") in taken else r
+        {**r, "reused": True} if record_key(r) in taken else r
         for r in _latest_records(cfg_dir)
     ]
     _write_json(cfg_dir / "results.json", {"config": config, "records": records})

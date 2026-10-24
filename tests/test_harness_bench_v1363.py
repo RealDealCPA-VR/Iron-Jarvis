@@ -70,6 +70,7 @@ from iron_jarvis.harness_bench.runners import (
     parse_codex_events,
     render_prompt,
 )
+from iron_jarvis.harness_bench.setup_step import prepare_workspace
 from iron_jarvis.harness_bench.tripwire import HiddenCheckLeak, assert_context_clean, leaks
 from iron_jarvis.platform import build_platform
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
@@ -137,11 +138,14 @@ def test_the_task_set_covers_the_plan():
 
 @pytest.mark.parametrize("task_id", sorted(TASKS))
 def test_every_task_is_gradeable_both_ways(task_id, tmp_path):
+    # v1.383.0: the copy is SET UP as the bench sets it up (a frontier task's
+    # generated tree, its repository in the middle of a merge); a task without
+    # a setup step is exactly ``materialize``.
     task = TASKS[task_id]
-    untouched = materialize(task, tmp_path / "untouched")
+    untouched = prepare_workspace(task, tmp_path / "untouched")
     g = grade(task, untouched, tmp_path / "grade-untouched")
     assert g.passed is False, (g.reason, g.output[-1500:])
-    solved = materialize(task, tmp_path / "solved")
+    solved = prepare_workspace(task, tmp_path / "solved")
     apply_solution(task_id, solved)
     g = grade(task, solved, tmp_path / "grade-solved")
     assert g.passed is True, (g.reason, g.output[-1500:])
@@ -186,14 +190,16 @@ def test_the_tier_chooses_the_tasks():
     tasks = list(TASKS.values())
     hard = [t.id for t in select_tasks(tasks, tier="hard", seed=5)]
     core = [t.id for t in select_tasks(tasks, tier="core", seed=5)]
+    frontier = [t.id for t in select_tasks(tasks, tier="frontier", seed=5)]
     every = [t.id for t in select_tasks(tasks, tier="all", seed=5)]
     assert sorted(hard) == HARD
-    assert core and not set(core) & set(hard) and sorted(core + hard) == sorted(TASKS)
+    assert core and frontier and not set(core) & set(hard) and not set(frontier) & (set(core) | set(hard))
+    assert sorted(core + hard + frontier) == sorted(TASKS)
     assert every == [t.id for t in select_tasks(tasks, seed=5)] and sorted(every) == sorted(TASKS)
     assert hard == [i for i in every if i in set(hard)]
     picked = select_tasks(tasks, names=["bugfix-leap-year", HARD[0]], tier="hard")
     assert [t.id for t in picked] == [HARD[0]]
-    with pytest.raises(TaskError, match="--tier must be one of core, hard, all"):
+    with pytest.raises(TaskError, match="--tier must be one of core, hard, frontier, all"):
         select_tasks(tasks, tier="medium")
 
 
@@ -256,7 +262,7 @@ def test_a_malformed_task_is_refused(tmp_path):
 
 def test_a_fresh_copy_holds_no_hidden_file_and_passes_the_tripwire(tmp_path):
     for task in TASKS.values():
-        work = materialize(task, tmp_path / task.id)
+        work = prepare_workspace(task, tmp_path / task.id)
         names = {p.name for p in work.rglob("*")}
         assert not names & {p.name for p in task.hidden_files()}, task.id
         assert_context_clean(task, work, render_prompt(task, work))
@@ -690,7 +696,7 @@ def test_the_command_line_takes_the_tier(tmp_path):
     assert [line.split(" [")[0].strip() for line in out.output.splitlines() if "would run" in line] == [
         "bugfix-leap-year"]
     out = CliRunner().invoke(bench_app, [*base, "--tier", "medium"])
-    assert out.exit_code == 2 and "--tier must be one of core, hard, all" in out.output
+    assert out.exit_code == 2 and "--tier must be one of core, hard, frontier, all" in out.output
 
 
 def test_the_bench_never_uses_the_apps_own_folder(tmp_path, monkeypatch):
@@ -1141,7 +1147,7 @@ async def test_a_stray_key_never_bills_or_reroutes_a_claude_run(tmp_path, monkey
                         ("ANTHROPIC_BASE_URL", "http://127.0.0.1:9/elsewhere"),
                         ("CLAUDE_CODE_USE_BEDROCK", "1"), ("CLAUDE_CODE_EXTRA_BODY", "{}")):
         monkeypatch.setenv(name, value)
-    runner = ClaudeRunner(binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
+    runner = ClaudeRunner(model="fake-model", binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
     res = await run_bench(runner=runner, home=tmp_path / "home", tasks=list(TASKS.values()), names=["bugfix-pagination"])
     rec = res.records[0]
     seen = json.loads(record.read_text(encoding="utf-8"))
@@ -1153,7 +1159,7 @@ async def test_a_stray_key_never_bills_or_reroutes_a_claude_run(tmp_path, monkey
 @pytest.mark.parametrize("scenario", ["error", "dead"])
 async def test_a_claude_run_that_did_not_finish_is_recorded_not_marked(tmp_path, monkeypatch, scenario):
     _fake_env(monkeypatch, tmp_path, scenario)
-    runner = ClaudeRunner(binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
+    runner = ClaudeRunner(model="fake-model", binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
     res = await run_bench(runner=runner, home=tmp_path / "home", tasks=list(TASKS.values()), names=["bugfix-pagination"])
     rec = res.records[0]
     assert rec["ok_run"] is False and rec["error"]
@@ -1169,7 +1175,7 @@ async def test_a_hung_cli_is_stopped_at_the_time_limit(tmp_path, monkeypatch):
     _fake_env(monkeypatch, tmp_path, "hang")
     task = TASKS["bugfix-pagination"]
     quick = type(task)(**{**task.__dict__, "timeout_s": 3.0})
-    runner = ClaudeRunner(binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
+    runner = ClaudeRunner(model="fake-model", binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
     t0 = time.monotonic()
     res = await run_bench(runner=runner, home=tmp_path / "home", tasks=[quick], names=["bugfix-pagination"])
     assert time.monotonic() - t0 < 60
@@ -1183,7 +1189,7 @@ async def test_a_hung_cli_is_stopped_at_the_time_limit(tmp_path, monkeypatch):
 
 async def test_a_write_outside_the_copy_is_reported(tmp_path, monkeypatch):
     _fake_env(monkeypatch, tmp_path, "outside")
-    runner = ClaudeRunner(binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
+    runner = ClaudeRunner(model="fake-model", binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
     res = await run_bench(runner=runner, home=tmp_path / "home", tasks=list(TASKS.values()), names=["bugfix-pagination"])
     assert res.records[0]["files_outside"] == ["runs/bugfix-pagination/stray.txt"]
     assert "outside its folder" in (res.config_dir / "report.md").read_text(encoding="utf-8")
@@ -1219,7 +1225,7 @@ async def test_a_codex_run_that_failed_is_recorded_with_its_words(tmp_path, monk
     the ACCOUNT's failure, not the agent's — UNSCORED (out of the pass rate,
     "did not run" in the report) with Codex's own words kept."""
     _fake_env(monkeypatch, tmp_path, "fail")
-    runner = CodexRunner(binary=_shim(tmp_path, "codex", FIXTURES / "fake_codex_bench_v1363.py"))
+    runner = CodexRunner(model="fake-model", binary=_shim(tmp_path, "codex", FIXTURES / "fake_codex_bench_v1363.py"))
     res = await run_bench(runner=runner, home=tmp_path / "home", tasks=list(TASKS.values()), names=["bugfix-pagination"])
     rec = res.records[0]
     assert rec["ok_run"] is False and "usage limit" in rec["error"]
@@ -1286,7 +1292,7 @@ async def test_every_runner_sends_the_guardrail(tmp_path, monkeypatch):
         record = _fake_env(monkeypatch, tmp_path / name, "solve")
         (tmp_path / name).mkdir(exist_ok=True)
         fake = FIXTURES / f"fake_{name}_bench_v1363.py"
-        runner = runner_cls(binary=_shim(tmp_path / name, name, fake))
+        runner = runner_cls(model="fake-model", binary=_shim(tmp_path / name, name, fake))
         await run_bench(runner=runner, home=tmp_path / name / "home", tasks=list(TASKS.values()),
                         names=["bugfix-pagination"])
         assert GUARDRAIL in json.loads(record.read_text(encoding="utf-8"))["prompt"], name
@@ -1372,7 +1378,7 @@ def test_a_time_limit_hit_while_the_account_was_refused_is_still_the_agents():
 ])
 async def test_the_claude_runner_reports_the_facts_the_table_reads(tmp_path, monkeypatch, scenario, kind, words):
     _fake_env(monkeypatch, tmp_path, scenario)
-    runner = ClaudeRunner(binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
+    runner = ClaudeRunner(model="fake-model", binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
     res = await run_bench(runner=runner, home=tmp_path / "home", tasks=list(TASKS.values()), names=["bugfix-pagination"])
     rec = res.records[0]
     assert rec["failure_kind"] == kind and words in rec["failure_reason"], rec["failure_reason"]
@@ -1396,7 +1402,7 @@ async def test_a_codex_sandbox_refusal_is_never_the_models_failure(tmp_path, mon
     said it could not edit, and the row scored 0/3. Those ERROR lines now make
     the run infrastructure — unscored, run again — with the count kept."""
     _fake_env(monkeypatch, tmp_path, "sandbox")
-    runner = CodexRunner(binary=_shim(tmp_path, "codex", FIXTURES / "fake_codex_bench_v1363.py"))
+    runner = CodexRunner(model="fake-model", binary=_shim(tmp_path, "codex", FIXTURES / "fake_codex_bench_v1363.py"))
     res = await run_bench(runner=runner, home=tmp_path / "home", tasks=list(TASKS.values()), names=["bugfix-leap-year"])
     rec = res.records[0]
     assert rec["passed"] is None and rec["unscored_by"] == "infrastructure"
@@ -1422,7 +1428,7 @@ async def test_a_hung_codex_is_the_agents_time_limit(tmp_path, monkeypatch):
     _fake_env(monkeypatch, tmp_path, "hang")
     task = TASKS["bugfix-pagination"]
     quick = type(task)(**{**task.__dict__, "timeout_s": 3.0})
-    runner = CodexRunner(binary=_shim(tmp_path, "codex", FIXTURES / "fake_codex_bench_v1363.py"))
+    runner = CodexRunner(model="fake-model", binary=_shim(tmp_path, "codex", FIXTURES / "fake_codex_bench_v1363.py"))
     res = await run_bench(runner=runner, home=tmp_path / "home", tasks=[quick], names=["bugfix-pagination"])
     rec = res.records[0]
     assert rec["failure_kind"] == "agent" and rec["passed"] is False
@@ -1564,7 +1570,7 @@ async def test_a_claude_run_that_did_its_work_then_died_is_graded(tmp_path, monk
     """``silent``: Claude Code wrote the fix, then died with no result line.
     It had its go — the folder is graded (here it passes) and marked."""
     _fake_env(monkeypatch, tmp_path, "silent")
-    runner = ClaudeRunner(binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
+    runner = ClaudeRunner(model="fake-model", binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
     res = await run_bench(runner=runner, home=tmp_path / "home", tasks=list(TASKS.values()), names=["bugfix-pagination"])
     rec = res.records[0]
     assert rec["failure_kind"] == "agent" and "part-way" in rec["failure_reason"]
@@ -1602,7 +1608,7 @@ async def test_a_codex_prompt_echoed_into_stderr_is_never_read_as_its_failure(tm
     (copy / "task.md").write_text(base.prompt + "\nThe customer's credit balance is not your concern.\n",
                                   encoding="utf-8")
     task = load_task(copy)
-    runner = CodexRunner(binary=_shim(tmp_path, "codex", FIXTURES / "fake_codex_bench_v1363.py"))
+    runner = CodexRunner(model="fake-model", binary=_shim(tmp_path, "codex", FIXTURES / "fake_codex_bench_v1363.py"))
     res = await run_bench(runner=runner, home=tmp_path / "home", tasks=[task], names=[base.id])
     rec = res.records[0]
     assert "credit" not in rec["failure_reason"], rec["failure_reason"]
@@ -1617,7 +1623,7 @@ async def test_a_claude_answer_is_never_read_as_its_failure(tmp_path, monkeypatc
     agent's ANSWER ("Fixed the retry on a 503.") — reading it for words made
     the run "the model service was overloaded" and dropped it from the rate."""
     _fake_env(monkeypatch, tmp_path, "exit1")
-    runner = ClaudeRunner(binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
+    runner = ClaudeRunner(model="fake-model", binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
     res = await run_bench(runner=runner, home=tmp_path / "home", tasks=list(TASKS.values()), names=["bugfix-pagination"])
     rec = res.records[0]
     assert "503" not in rec["error"], rec["error"]

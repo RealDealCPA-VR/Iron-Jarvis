@@ -1,0 +1,9 @@
+category = "feature"
+tier = "frontier"
+title = "A search box and a stock filter on a web page, checked in a browser"
+timeout_s = 1800
+# The check serves the page and drives it in a headless browser (Playwright
+# with the installed Microsoft Edge). When no browser can start, it exits 3:
+# unscored, never a pass or a fail.
+check = ["{python}", "-I", "test_hidden_inventory_page.py"]
+check_timeout_s = 240

@@ -1,0 +1,10 @@
+# Every file that ships in a release (see RELEASE.md).
+CHANGELOG.md
+MANIFEST.txt
+README.md
+RELEASE.md
+data/sample.csv
+invoicing/__init__.py
+invoicing/report.py
+release_check.py
+test_report.py

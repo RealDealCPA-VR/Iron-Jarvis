@@ -1,0 +1,6 @@
+category = "trap"
+tier = "frontier"
+title = "A retry that must not charge a customer twice"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 240

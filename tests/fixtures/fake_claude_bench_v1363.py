@@ -14,6 +14,11 @@ usage limit), ``auth`` (not signed in), ``max_turns`` (``error_max_turns``),
 ``hang`` (never answers), ``outside`` (also writes a file next to its working
 folder), ``silent`` (does its work, then dies with no result line), ``dead``
 (dies before doing anything).
+
+v1.383.0: like the real one, its ``system/init`` line names the model it runs
+on — the full id an alias stands for (``--model sonnet`` reports
+``claude-sonnet-4-6``), the ``--model`` value itself otherwise, or
+``FAKE_BENCH_REPORTED_MODEL`` when set (a run that answered on another model).
 NO NETWORK.
 """
 
@@ -30,6 +35,10 @@ MARKERS = (
     "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_EXTRA_BODY",
 )
+
+
+#: What an alias stands for (as Claude Code resolves ``--model sonnet``).
+ALIASES = {"sonnet": "claude-sonnet-4-6", "opus": "claude-opus-4-6", "haiku": "claude-haiku-4-5"}
 
 
 def emit(obj: dict) -> None:
@@ -50,7 +59,11 @@ def main() -> int:
                 "argv": sys.argv[1:], "cwd": os.getcwd(), "prompt": prompt,
                 "env": {k: os.environ.get(k) for k in MARKERS},
             }, fh)
-    emit({"type": "system", "subtype": "init", "session_id": "fake", "tools": ["Read", "Write"]})
+    argv = sys.argv[1:]
+    passed = argv[argv.index("--model") + 1] if "--model" in argv else "claude-default-fake"
+    reported = os.environ.get("FAKE_BENCH_REPORTED_MODEL") or ALIASES.get(passed, passed)
+    emit({"type": "system", "subtype": "init", "session_id": "fake", "tools": ["Read", "Write"],
+          "model": reported})
     if scenario == "hang":
         time.sleep(600)
         return 0

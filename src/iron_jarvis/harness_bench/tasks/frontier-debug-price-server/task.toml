@@ -1,0 +1,6 @@
+category = "process"
+tier = "frontier"
+title = "Debug a price server while it runs: a cache keyed on too little"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 240

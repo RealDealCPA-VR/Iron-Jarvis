@@ -1,0 +1,8 @@
+order_id,customer,amount,date
+BOS-100008,Beacon Hill Books,468.52,2026-01-23
+BOS-100013,Beacon Hill Books,60.43,2026-01-17
+BOS-100011,"Charles River Labs, LLC",34.11,2026-01-20
+BOS-100014,Fenway Sports Co.,-134.74,2026-01-05
+BOS-100012,  Back Bay Florist  ,833.37,2026-01-21
+BOS-100004,Cutler Hardware,608.46,2026-01-13
+BOS-100003,Quincy Market Stall 7,601.54,2026-01-18

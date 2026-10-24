@@ -1,0 +1,146 @@
+[
+  {
+    "sku": "HB-M6",
+    "name": "Hex bolt M6",
+    "qty": 120,
+    "reorder_at": 100
+  },
+  {
+    "sku": "HB-M8",
+    "name": "Hex bolt M8",
+    "qty": 40,
+    "reorder_at": 50
+  },
+  {
+    "sku": "CB-10",
+    "name": "Carriage Bolt 10mm",
+    "qty": 8,
+    "reorder_at": 5
+  },
+  {
+    "sku": "BOLT-ANC-1",
+    "name": "Anchor sleeve",
+    "qty": 25,
+    "reorder_at": 25
+  },
+  {
+    "sku": "NT-M6",
+    "name": "Nut M6",
+    "qty": 300,
+    "reorder_at": 200
+  },
+  {
+    "sku": "NT-M8",
+    "name": "Nut M8",
+    "qty": 3,
+    "reorder_at": 5
+  },
+  {
+    "sku": "WS-M6",
+    "name": "Flat washer M6",
+    "qty": 500,
+    "reorder_at": 100
+  },
+  {
+    "sku": "WS-M8",
+    "name": "Spring Washer M8",
+    "qty": 9,
+    "reorder_at": 10
+  },
+  {
+    "sku": "SC-35",
+    "name": "Wood screw 3.5x30",
+    "qty": 1000,
+    "reorder_at": 400
+  },
+  {
+    "sku": "SC-40",
+    "name": "Wood screw 4x40",
+    "qty": 350,
+    "reorder_at": 400
+  },
+  {
+    "sku": "DW-6",
+    "name": "Wall plug 6mm",
+    "qty": 0,
+    "reorder_at": 20
+  },
+  {
+    "sku": "DW-8",
+    "name": "Wall plug 8mm",
+    "qty": 75,
+    "reorder_at": 20
+  },
+  {
+    "sku": "RV-4",
+    "name": "Blind rivet 4mm",
+    "qty": 7,
+    "reorder_at": 2
+  },
+  {
+    "sku": "HG-1",
+    "name": "Hinge, brass",
+    "qty": 12,
+    "reorder_at": 12
+  },
+  {
+    "sku": "HG-2",
+    "name": "Hinge, steel",
+    "qty": 60,
+    "reorder_at": 12
+  },
+  {
+    "sku": "BR-L",
+    "name": "L bracket",
+    "qty": 15,
+    "reorder_at": 20
+  },
+  {
+    "sku": "BR-T",
+    "name": "T bracket",
+    "qty": 4,
+    "reorder_at": 4
+  },
+  {
+    "sku": "CH-3",
+    "name": "Chain, 3mm (per m)",
+    "qty": 30,
+    "reorder_at": 10
+  },
+  {
+    "sku": "HK-S",
+    "name": "S hook",
+    "qty": 6,
+    "reorder_at": 3
+  },
+  {
+    "sku": "TB-ELB",
+    "name": "Elbow bolt",
+    "qty": 22,
+    "reorder_at": 30
+  },
+  {
+    "sku": "GL-W",
+    "name": "Wood glue",
+    "qty": 11,
+    "reorder_at": 5
+  },
+  {
+    "sku": "TP-D",
+    "name": "Duct tape",
+    "qty": 2,
+    "reorder_at": 6
+  },
+  {
+    "sku": "SL-B",
+    "name": "Bolt sealant",
+    "qty": 14,
+    "reorder_at": 10
+  },
+  {
+    "sku": "MG-N",
+    "name": "Magnet, neodymium",
+    "qty": 9,
+    "reorder_at": 9
+  }
+]

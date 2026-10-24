@@ -452,8 +452,13 @@ def test_the_command_line_runs_refine_and_refuses_other_runners(tmp_path, monkey
     assert "sequential, k=2" in out.output and "Nothing was run (dry run)." in out.output
     out = cli.invoke(bench_app, ["run", "--runner", "claude", "--refine", "--root", root])
     assert out.exit_code == 2 and "--runner jarvis" in out.output
-    out = cli.invoke(bench_app, ["run", "--runner", "jarvis", "--refine", "--mode", "wide", "--root", root])
+    # (v1.383.0: a run must name its model first — refused before anything
+    # else — so the bad --mode is reached with one named.)
+    out = cli.invoke(bench_app, ["run", "--runner", "jarvis", "--provider", "scripted", "--model", "s1",
+                                 "--refine", "--mode", "wide", "--root", root])
     assert out.exit_code == 2 and "--mode must be" in out.output
+    out = cli.invoke(bench_app, ["run", "--runner", "jarvis", "--refine", "--mode", "wide", "--root", root])
+    assert out.exit_code == 2 and "Name the model with --model" in out.output
 
 
 def test_adopt_copies_into_a_project_and_never_overwrites_a_different_file(tmp_path):

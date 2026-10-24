@@ -1,0 +1,14 @@
+order_id,customer,amount,notes
+LIS-139729,Açores Pescas,3556.25,
+LIS-139734,Pastelaria Belém,645.51,urgente
+LIS-139725,"Conceição & Filhos, Lda",964.39,entregar até sexta
+LIS-139737,Livraria Gonçalves,758.57,urgente
+LIS-139753,Pastelaria Belém,724.26,"two, items"
+LIS-139741,"Conceição & Filhos, Lda",386.94,"two, items"
+LIS-139733,Pastelaria Belém,-123.04,entregar até sexta
+LIS-139746,"Conceição & Filhos, Lda",688.32,"line one
+line two"
+LIS-139743,Câmara Têxtil,40.52,"line one
+line two"
+LIS-139757,João Silva,6557.29,urgente
+LIS-139749,Açores Pescas,986.62,"two, items"

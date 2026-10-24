@@ -14,7 +14,11 @@ Codex's own sandbox — the ERROR line 0.157.0 printed on Windows under
 ``--sandbox workspace-write`` — then a completed turn whose message says it
 could not edit). ``codex login
 status`` answers "Logged in using ChatGPT", or — with ``FAKE_CODEX_LOGIN=api``
-— an API-key login with part of a (fake) key in it. NO NETWORK.
+— an API-key login with part of a (fake) key in it.
+
+v1.383.0: like codex-cli 0.157.0, its events name NO model; with
+``FAKE_CODEX_REPORTS_MODEL`` set, its ``thread.started`` event carries that
+model (a later Codex that reports one). NO NETWORK.
 """
 
 from __future__ import annotations
@@ -49,7 +53,10 @@ def main() -> int:
         with open(record, "w", encoding="utf-8") as fh:
             json.dump({"argv": argv, "cwd": os.getcwd(), "prompt": prompt,
                        "env": {"CLAUDECODE": os.environ.get("CLAUDECODE")}}, fh)
-    emit({"type": "thread.started", "thread_id": "fake-thread"})
+    started = {"type": "thread.started", "thread_id": "fake-thread"}
+    if os.environ.get("FAKE_CODEX_REPORTS_MODEL"):
+        started["model"] = os.environ["FAKE_CODEX_REPORTS_MODEL"]
+    emit(started)
     emit({"type": "turn.started"})
     if os.environ.get("FAKE_BENCH_SCENARIO", "solve") == "hang":
         time.sleep(600)

@@ -1,0 +1,11 @@
+order_id,customer,amount,date
+BOS-100209,"Joe's ""Best"" Pizza",9329.46,2026-10-23
+BOS-100206,"Charles River Labs, LLC",60.13,2026-10-11
+BOS-100216,Bob's Diner,978.77,2026-10-22
+BOS-100213,Beacon Hill Books,449.88,2026-10-03
+BOS-100218,"Acme, Inc.",772.16,2026-10-03
+BOS-100205,"Acme, Inc.","7,650.77",2026-10-05
+BOS-100208,Cutler Hardware,"8,308.39",2026-10-01
+BOS-100203,  Back Bay Florist  ,645.29,2026-10-23
+BOS-100214,Bob's Diner,359.54,2026-10-16
+BOS-100217,Quincy Market Stall 7,4068.88,2026-10-28
