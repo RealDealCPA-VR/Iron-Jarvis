@@ -330,6 +330,28 @@ def _isolate_opencode_store():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _isolate_opencode_config():
+    """No test reads the developer's REAL OpenCode config (the gateway-key fix).
+
+    Every app a test starts runs ``warm_opencode`` in its lifespan, which
+    resolves OpenCode's local models from ``~/.config/opencode/opencode.json(c)``.
+    On the user's PC that config points at their LiteLLM gateway, so EVERY
+    ``with TestClient(create_app(...))`` sent ``GET <gateway>/model/info`` with
+    no key (a fresh test home knows none) and ran the real ``opencode`` binary
+    — measured: one bare lifespan, one unkeyed request to the gateway. CI has
+    no such config, so it never saw this. The config path list is empty for
+    the session; tests that exercise the parser pass explicit paths."""
+    from iron_jarvis.providers import opencode as _oc
+
+    original = _oc._config_paths
+    _oc._config_paths = lambda: []
+    try:
+        yield
+    finally:
+        _oc._config_paths = original
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_pi_store():
     """Keep the developer's REAL Pi session store out of every test (v1.213.0).
 

@@ -248,6 +248,20 @@ class OpenAIAdapter(LLMAdapter):
             self._http = httpx.AsyncClient(timeout=60.0)
         return self._http
 
+    def probe_headers(self) -> dict[str, str]:
+        """The headers a background read of this endpoint carries — the
+        router's liveness probe (the gateway-key fix). This adapter's OWN key
+        (``_resolve_key``: the very credential its chat calls send), as a
+        Bearer token; ``{}`` for a keyless endpoint. BLOCKING (the credential
+        may read the vault): callers hop off the loop. Never raises."""
+        from ...fleet.endpoint_auth import auth_headers
+
+        try:
+            key = self._resolve_key() or ""
+        except Exception:  # noqa: BLE001 — no key, never a crash
+            key = ""
+        return auth_headers(key, "openai")
+
     # -- request shaping ----------------------------------------------------
     @staticmethod
     def _to_openai_messages(

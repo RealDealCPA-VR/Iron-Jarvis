@@ -1474,9 +1474,24 @@ class ModelRouter:
             get = getattr(client, "get", None)
             if not callable(get):
                 return None
-            await asyncio.wait_for(
-                get(url, timeout=_LIVENESS_TIMEOUT_S), timeout=_LIVENESS_TIMEOUT_S + 0.5
+            # THE GATEWAY-KEY FIX: the probe carries the adapter's OWN key
+            # (``probe_headers`` — the credential its chat calls send). It
+            # used to go out bare, so a keyed gateway logged a 401 for every
+            # turn's first call. Headers are passed only when there are some,
+            # so a keyless box (and a test's fake client) sees the same call.
+            headers: dict[str, str] = {}
+            probe_headers = getattr(inner, "probe_headers", None)
+            if callable(probe_headers):
+                try:
+                    headers = dict(await asyncio.to_thread(probe_headers) or {})
+                except Exception:  # noqa: BLE001 — no key: probe as before
+                    headers = {}
+            call = (
+                get(url, timeout=_LIVENESS_TIMEOUT_S, headers=headers)
+                if headers
+                else get(url, timeout=_LIVENESS_TIMEOUT_S)
             )
+            await asyncio.wait_for(call, timeout=_LIVENESS_TIMEOUT_S + 0.5)
             self._answered_at[url] = self._clock()
             return None
         except (asyncio.TimeoutError, TimeoutError):

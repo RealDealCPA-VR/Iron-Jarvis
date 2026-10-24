@@ -349,6 +349,7 @@ class AnthropicFleetAdapter(LLMAdapter):
         credential: Callable[[], str | None] | None = None,
         http: Any = None,
         max_tokens: int = 4096,
+        caps: Callable[[str], dict] | None = None,
     ) -> None:
         self.node = node
         self.model = model or node.default_model or "default"
@@ -356,6 +357,7 @@ class AnthropicFleetAdapter(LLMAdapter):
         self.max_tokens = max_tokens
         self._credential = credential
         self._http = http
+        self._caps = caps
         self._base = messages_base(node.base_url)
         #: Read by the router's liveness pre-probe: ``{base}/models`` is what
         #: ``ModelRouter._models_url`` makes of it (any answer = alive).
@@ -363,10 +365,20 @@ class AnthropicFleetAdapter(LLMAdapter):
 
     # -- capability honesty (same contract as FleetAdapter) ------------------
     def capabilities(self) -> dict[str, Any]:
+        from .adapter import node_capabilities
+
         caps = super().capabilities()
-        caps["tool_use"] = bool(self.node.tool_use)
-        caps["vision"] = bool(self.node.vision)
+        caps.update(node_capabilities(self.node, self.model, self._caps))
         return caps
+
+    def probe_headers(self) -> dict[str, str]:
+        """The headers a background read of this node carries (the router's
+        liveness probe — the gateway-key fix): this adapter's OWN key, the one
+        its chat calls send, spelt the Anthropic way. BLOCKING (a vault read):
+        callers hop off the loop."""
+        from .endpoint_auth import auth_headers
+
+        return auth_headers(self._key(), "anthropic")
 
     # -- transport ------------------------------------------------------------
     def _client(self) -> Any:

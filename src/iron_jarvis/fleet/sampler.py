@@ -527,7 +527,25 @@ class FleetSampler:
         )
 
     def _probe_one(self, node: FleetNode) -> tuple[NodeSnapshot, list[FleetNode]]:
-        """Call the injected probe. Runs in a worker thread — never on the loop."""
+        """Call the injected probe. Runs in a worker thread — never on the loop.
+
+        THE GATEWAY-KEY FIX: the probe carries the node's saved key
+        (``registry.headers_for`` — ``fleet/endpoint_auth``). This pass runs
+        every 30 s (2 s while the Fleet page is open) and used to ask a keyed
+        LiteLLM gateway with no ``Authorization`` at all; every answer was a
+        401, the node read offline, and its routing table (read only for an
+        online node) was never refreshed. Headers are passed only when there
+        are some, so a keyless node and an injected test probe see the same
+        call as before."""
+        headers: dict[str, str] = {}
+        lookup = getattr(self.registry, "headers_for", None)
+        if callable(lookup):
+            try:
+                headers = dict(lookup(node) or {})
+            except Exception:  # noqa: BLE001 — no key: probe as before
+                headers = {}
+        if headers:
+            return self._probe(node, headers=headers)
         return self._probe(node)
 
     # -- bookkeeping -------------------------------------------------------

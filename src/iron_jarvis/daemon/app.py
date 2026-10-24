@@ -689,18 +689,20 @@ def _route_reader_for(platform):
     """The fleet sampler's routing-table reader (v1.365.2): ``read_routes``
     with the node's own API key from the vault (``FleetNode.api_key_name`` —
     the custom slot's is ``custom_api_key``). Runs in the sampler's worker
-    thread. A vault that cannot answer means no key, never a crash."""
+    thread. A vault that cannot answer means no key, never a crash.
+
+    The gateway-key fix: the headers come from THE one helper
+    (``FleetRegistry.headers_for`` → ``fleet/endpoint_auth``), not a second
+    copy of the vault read."""
     from ..fleet.upstreams import read_routes
 
     def reader(node):
-        key = ""
-        name = getattr(node, "api_key_name", "") or ""
-        if name:
-            try:
-                key = platform.secrets.get(name) or ""
-            except Exception:  # noqa: BLE001 — read without a key
-                key = ""
-        return read_routes(node, key=key)
+        headers: dict = {}
+        try:
+            headers = dict(platform.fleet.headers_for(node) or {})
+        except Exception:  # noqa: BLE001 — read without a key
+            headers = {}
+        return read_routes(node, headers=headers)
 
     return reader
 
@@ -2343,10 +2345,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 skey = None
             # Fall back to the custom endpoint's key if the STT endpoint shares it.
             if not skey:
-                try:
-                    skey = platform.secrets.get("custom_api_key")
-                except Exception:  # noqa: BLE001
-                    skey = None
+                skey = _custom_slot_key()
             return ("stt", _v1(stt) + "/audio/transcriptions", skey)
         # (2) OpenAI key.
         try:
@@ -2358,12 +2357,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # (3) the custom chat endpoint (may or may not serve transcription).
         base = (getattr(platform.config, "custom_base_url", None) or "").strip()
         if base:
-            try:
-                ckey = platform.secrets.get("custom_api_key")
-            except Exception:  # noqa: BLE001
-                ckey = None
-            return ("custom", _v1(base) + "/audio/transcriptions", ckey)
+            return ("custom", _v1(base) + "/audio/transcriptions", _custom_slot_key())
         return None
+
+    def _custom_slot_key() -> str | None:
+        """The custom endpoint's saved key through THE one helper (the
+        gateway-key fix: ``FleetRegistry.slot_key``), never a second vault
+        read. None when there is none or the vault cannot answer."""
+        try:
+            return platform.fleet.slot_key("custom") or None
+        except Exception:  # noqa: BLE001
+            return None
 
     # --- Bundled OFFLINE speech-to-text (Vosk streaming) --------------------
     # A fully local, real-time dictation backend that ships WITH the desktop app:

@@ -391,6 +391,20 @@ def register(app: FastAPI, d) -> None:
             },
         }
 
+    def _auth_kw(node) -> dict[str, Any]:
+        """``{"headers": …}`` carrying *node*'s saved key for a probe or a
+        detection (the gateway-key fix: ``FleetRegistry.headers_for``), or
+        ``{}`` for a keyless node — the call is then exactly the old one.
+        BLOCKING (a vault read): call it inside the worker thread."""
+        lookup = getattr(d.fleet, "headers_for", None)
+        if not callable(lookup):
+            return {}
+        try:
+            headers = dict(lookup(node) or {})
+        except Exception:  # noqa: BLE001 — probe without a key
+            return {}
+        return {"headers": headers} if headers else {}
+
     def _node_for_provider(provider: str):
         """The routable node a provider name refers to (``fleet-<id>``, or the
         bare id). ``None`` when nothing routable matches."""
@@ -496,7 +510,17 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=400, detail="base_url is required")
         protocol = _protocol_or_400(body.protocol or "openai", base_url) or "openai"
 
-        kind, _reason = await asyncio.to_thread(detect_kind, base_url)
+        # The gateway-key fix: detection is asked WITH the key the node is
+        # being saved with, so a keyed gateway is read as what it is.
+        unsaved = FleetNode(
+            id="new",
+            base_url=base_url,
+            api_key_name=(body.api_key_name or "").strip(),
+            protocol=protocol,
+        )
+        kind, _reason = await asyncio.to_thread(
+            lambda: detect_kind(base_url, **_auth_kw(unsaved))
+        )
         node = FleetNode(
             id=(body.id or "").strip() or _derive_id(d.fleet, base_url, body.label),
             label=(body.label or "").strip(),
@@ -522,7 +546,9 @@ def register(app: FastAPI, d) -> None:
                 pass
         _catalog_changed(node.id)
 
-        snapshot, children = await asyncio.to_thread(probe_node, node)
+        snapshot, children = await asyncio.to_thread(
+            lambda: probe_node(node, **_auth_kw(node))
+        )
         if children:
             # A LiteLLM proxy names its own backends; adopt them so the fleet
             # shows the real topology instead of one opaque box.
@@ -635,7 +661,9 @@ def register(app: FastAPI, d) -> None:
         _refuse_child(node)
         from ...fleet.probes import detect_kind
 
-        kind, reason = await asyncio.to_thread(detect_kind, node.base_url)
+        kind, reason = await asyncio.to_thread(
+            lambda: detect_kind(node.base_url, **_auth_kw(node))
+        )
         updated = d.fleet.update(node_id, kind=kind, kind_detected_at=time.time())
         return {
             "node": _dump(updated or d.fleet.get(node_id)),
@@ -876,14 +904,18 @@ def register(app: FastAPI, d) -> None:
             from ...fleet.models import FleetNode
             from ...fleet.probes import detect_kind, probe_node
 
-            kind, reason = await asyncio.to_thread(detect_kind, base_url)
-            node = FleetNode(
-                id="probe",
-                base_url=base_url,
-                kind=kind,
-                api_key_name=(body.api_key_name or "").strip(),
+            # The gateway-key fix: an unsaved address is asked with the key
+            # the form names (api_key_name), the same lookup a saved node uses.
+            unsaved = FleetNode(
+                id="probe", base_url=base_url, api_key_name=(body.api_key_name or "").strip()
             )
-            snapshot, children = await asyncio.to_thread(probe_node, node)
+            kind, reason = await asyncio.to_thread(
+                lambda: detect_kind(base_url, **_auth_kw(unsaved))
+            )
+            node = unsaved.model_copy(update={"kind": kind})
+            snapshot, children = await asyncio.to_thread(
+                lambda: probe_node(node, **_auth_kw(node))
+            )
         except Exception as exc:  # noqa: BLE001 — an odd server can't 500 the form
             return {
                 "kind": "unknown",

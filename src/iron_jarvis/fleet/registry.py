@@ -493,6 +493,145 @@ class FleetRegistry:
         except Exception:  # noqa: BLE001 — fail closed
             return PLACE_CLOUD
 
+    # -- the saved key for a configured endpoint (the gateway-key fix) --------
+
+    def set_secret_resolver(self, resolver: Any) -> None:
+        """The vault read (``secrets.get``) every key lookup below uses. The
+        platform hands it over at boot (also via :meth:`register_providers`)."""
+        self._secret_resolver = resolver
+
+    def key_for(self, node: FleetNode | None) -> str:
+        """THE key lookup for a configured endpoint: the node's
+        ``api_key_name`` read from the vault (``endpoint_auth.node_key``) —
+        the same lookup the node's chat adapter uses (:meth:`register_providers`
+        hands it this method), so a background read sends exactly the key a
+        chat call sends. ``""`` for a keyless node or a topology child.
+
+        A top-level node that names no key of its own takes the key saved for
+        the SAME server by another endpoint (``endpoint_auth.root_key``): the
+        user's gateway saved once as the custom slot (keyed) and once as a
+        fleet node (no key name) is one server with one key, and the second
+        entry used to be asked with none. A key never goes to another server."""
+        from .endpoint_auth import node_key, root_key
+
+        resolver = getattr(self, "_secret_resolver", None)
+        own = node_key(node, resolver)
+        if own or node is None or getattr(node, "parent_id", ""):
+            return own
+        want = root_key(getattr(node, "base_url", "") or "")
+        if not want:
+            return ""
+        try:
+            others = list(self._top_level().values())
+        except Exception:  # noqa: BLE001 — no key, never a crash
+            return ""
+        for other in others:
+            if other.id == node.id or root_key(other.base_url) != want:
+                continue
+            key = node_key(other, resolver)
+            if key:
+                return key
+        return ""
+
+    def headers_for(self, node: FleetNode | None) -> dict[str, str]:
+        """The request headers that carry :meth:`key_for` (Bearer, or
+        ``x-api-key`` for an Anthropic-compatible node). ``{}`` when the node
+        has no key — a keyless server is asked exactly as before."""
+        from .endpoint_auth import auth_headers
+
+        if node is None:
+            return {}
+        return auth_headers(self.key_for(node), str(getattr(node, "protocol", "openai") or "openai"))
+
+    def node_for_url(self, url: str) -> FleetNode | None:
+        """The top-level endpoint (a settings slot or a saved node) whose
+        address is the same server as *url* (``endpoint_auth.root_key``), or
+        ``None``. When several share the server, one with a saved key wins.
+        A topology child is never answered: its address is another server's
+        and it holds no key."""
+        from .endpoint_auth import root_key
+
+        want = root_key(url)
+        if not want:
+            return None
+        try:
+            matches = [n for n in self._top_level().values() if root_key(n.base_url) == want]
+        except Exception:  # noqa: BLE001 — no match, never a crash
+            return None
+        if not matches:
+            return None
+        keyed = [n for n in matches if self.key_for(n)]
+        return (keyed or matches)[0]
+
+    def headers_for_url(self, url: str) -> dict[str, str]:
+        """:meth:`headers_for` the saved endpoint that owns *url* — for a
+        caller that holds only an address (OpenCode's provider list, a typed
+        form address, the envelope seed). ``{}`` when no saved endpoint is
+        that server: a key only ever goes to the server it was saved for."""
+        return self.headers_for(self.node_for_url(url))
+
+    def key_for_url(self, url: str) -> str:
+        """:meth:`key_for` the saved endpoint that owns *url*, or ``""``."""
+        return self.key_for(self.node_for_url(url))
+
+    def slot_key(self, slot: str) -> str:
+        """The saved key of a settings slot (``custom`` / ``ollama``), or
+        ``""`` when the slot is empty or keyless. The doctor and voice read
+        the custom endpoint's key through this, not their own vault read."""
+        seed = next((n for n in self.seeded() if n.id == slot), None)
+        return self.key_for(seed)
+
+    #: Kinds that are known NOT to be Ollama: a server of one of these is
+    #: never asked Ollama's own addresses (``/api/tags``, ``/api/show``,
+    #: ``/api/version``) — a LiteLLM gateway 404s them all.
+    _NOT_OLLAMA_KINDS = frozenset({"litellm", "vllm", "openai-compat"})
+
+    def ollama_style_ok(self, url: str) -> bool | None:
+        """May *url* be asked Ollama's native addresses?
+
+        ``True`` for the Ollama settings slot and a node detected as Ollama;
+        ``False`` for a node known to be something else (detected LiteLLM /
+        vLLM / OpenAI-compatible, or a model proxy whose routing table was
+        read); ``None`` when nothing is known (no saved endpoint is that
+        server, or its kind was never detected) — the caller then asks
+        Ollama's addresses only after the server said 404, never after an
+        auth refusal (Ollama has no keys)."""
+        from .endpoint_auth import root_key
+
+        want = root_key(url)
+        if not want:
+            return None
+        verdict: bool | None = None
+        try:
+            for node in self._top_level().values():
+                if root_key(node.base_url) != want:
+                    continue
+                if (node.id == "ollama" and node.source == "config") or node.kind == "ollama":
+                    return True
+                if node.kind in self._NOT_OLLAMA_KINDS or self.routes_for(node.id) is not None:
+                    verdict = False
+        except Exception:  # noqa: BLE001 — unknown, never a crash
+            return None
+        return verdict
+
+    def model_caps(self, provider: str, model: str) -> dict[str, Any]:
+        """What the model PROXY behind *provider* states *model* can do, from
+        its own ``/model/info`` (``RouteTable.caps``): ``{"vision",
+        "tool_use", "context_window"}``, each ``None`` when nothing says.
+        NEVER a network call (the table is read in the background by the
+        sampler, with the node's key). Never raises."""
+        unknown: dict[str, Any] = {"vision": None, "tool_use": None, "context_window": None}
+        try:
+            node_id = self._node_id_for(provider)
+            if not node_id:
+                return unknown
+            table = self.routes_for(node_id)
+            if table is None:
+                return unknown
+            return table.caps(model)
+        except Exception:  # noqa: BLE001 — unknown, never a guess
+            return unknown
+
     # -- reachability (routing hot path) -------------------------------------
 
     def set_reachable(self, node_id: str, ok: bool) -> None:
@@ -538,25 +677,26 @@ class FleetRegistry:
         """
         if secret_resolver is not None:
             self._secret_resolver = secret_resolver
-        resolver = getattr(self, "_secret_resolver", None)
         count = 0
         for node in self.routable_nodes():
             try:
 
                 def _cred(n=node):  # noqa: ANN202 — adapter credential thunk
-                    if not n.api_key_name or resolver is None:
-                        return None
-                    try:
-                        return resolver(n.api_key_name)
-                    except Exception:  # noqa: BLE001 — a vault fault ≠ a crash
-                        return None
+                    # The gateway-key fix: THE key lookup (key_for), shared
+                    # with every background read of this node.
+                    return self.key_for(n) or None
+
+                def _caps(model, nid=node.id):  # noqa: ANN001, ANN202
+                    # What the proxy's own /model/info says this model can
+                    # do (vision, tools, window); read live, never a request.
+                    return self.model_caps(provider_name(nid), model)
 
                 # v1.329.0: the node's PROTOCOL picks the adapter (OpenAI
                 # chat-completions, or the Anthropic Messages API).
                 manager.register(
                     provider_name(node.id),
-                    lambda model=None, n=node, c=_cred: adapter_for(
-                        n, model=model, credential=c
+                    lambda model=None, n=node, c=_cred, k=_caps: adapter_for(
+                        n, model=model, credential=c, caps=k
                     ),
                 )
                 count += 1
