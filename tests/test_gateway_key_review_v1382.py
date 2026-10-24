@@ -235,3 +235,194 @@ def test_voice_never_hands_the_gateway_key_to_a_different_speech_server(tmp_path
     finally:
         gateway.stop()
         stt.stop()
+
+
+class _Catcher:
+    """A second server: records every request that reaches it (path and
+    whether ANY auth header came — never a value)."""
+
+    def __init__(self) -> None:
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.requests: list[tuple[str, bool]] = []
+        catcher = self
+
+        class H(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *_a):
+                return
+
+            def _any(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                if n:
+                    self.rfile.read(n)
+                auth = bool(self.headers.get("Authorization") or self.headers.get("x-api-key"))
+                catcher.requests.append((f"{self.command} {self.path.split('?')[0]}", auth))
+                raw = b'{"data": [], "object": "list"}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            do_GET = do_POST = _any
+
+        self._srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self._srv.daemon_threads = True
+        threading.Thread(target=self._srv.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self._srv.server_address[1]}"
+
+    def stop(self) -> None:
+        self._srv.shutdown()
+        self._srv.server_close()
+
+
+class _Redirector:
+    """A "gateway" that answers EVERY request with 307 to the catcher (same
+    path) — a hijacked or misconfigured server. Records what it received."""
+
+    def __init__(self, to: str) -> None:
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.requests: list[tuple[str, bool]] = []
+        red = self
+
+        class H(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *_a):
+                return
+
+            def _any(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                if n:
+                    self.rfile.read(n)
+                auth = bool(self.headers.get("Authorization") or self.headers.get("x-api-key"))
+                red.requests.append((f"{self.command} {self.path.split('?')[0]}", auth))
+                self.send_response(307)
+                self.send_header("Location", to + self.path)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            do_GET = do_POST = _any
+
+        self._srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self._srv.daemon_threads = True
+        threading.Thread(target=self._srv.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self._srv.server_address[1]}"
+
+    def stop(self) -> None:
+        self._srv.shutdown()
+        self._srv.server_close()
+
+
+def test_no_keyed_caller_follows_a_redirect_to_another_server(tmp_path, monkeypatch):
+    """httpx strips ``Authorization`` on a cross-origin redirect but NOT
+    ``x-api-key``: a keyed call that followed redirects would hand an
+    Anthropic-style key to whatever server the gateway (or anyone who took
+    over its address) pointed at. EVERY keyed caller is driven against a
+    gateway that redirects everything to a second server, which must hear
+    NOTHING."""
+    import asyncio
+    import base64
+    import functools
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.routes import connections as conn_routes
+    from iron_jarvis.daemon.routes import envelope as envelope_routes
+    from iron_jarvis.envelope.profile import CapabilityProfile
+    from iron_jarvis.envelope.seed import seed_profile
+    from iron_jarvis.fleet import probes
+    from iron_jarvis.fleet.adapter import adapter_for
+    from iron_jarvis.fleet.endpoint_auth import auth_headers
+    from iron_jarvis.fleet.models import FleetNode
+    from iron_jarvis.fleet.upstreams import read_routes
+    from iron_jarvis.providers import discovery
+    from iron_jarvis.providers import opencode as oc
+    from iron_jarvis.providers.adapters.base import LLMMessage
+    from iron_jarvis.providers.router import ModelRouter
+
+    catcher = _Catcher()
+    red = _Redirector(catcher.base)
+    seeded: list[str] = []
+
+    async def fake_battery(profile, transport, **kw):
+        seeded.append(profile.model_id)
+        return CapabilityProfile(model_id=profile.model_id, provider=profile.provider, source="probed")
+
+    monkeypatch.setattr(envelope_routes, "run_quick_battery", fake_battery)
+    discovery.clear_cache()
+    try:
+        bearer, xkey = auth_headers(KEY), auth_headers(KEY, "anthropic")
+        # -- the readers, each with its own transport -------------------------
+        for kind in ("litellm", "unknown", "vllm", "ollama", "openai-compat"):
+            probes.probe_node(FleetNode(id="r", base_url=red.base + "/v1", kind=kind), headers=bearer)
+        probes.probe_node(FleetNode(id="a", base_url=red.base, protocol="anthropic"), headers=xkey)
+        probes.detect_kind(red.base, headers=bearer)
+        read_routes(FleetNode(id="r", base_url=red.base), headers=bearer)
+        discovery._fetch("fleet-a", lambda: KEY, red.base, "anthropic")
+        discovery._fetch("fleet-r", lambda: KEY, red.base + "/v1", "openai", True)
+        discovery._fetch("custom", lambda: KEY, red.base + "/v1", "openai")
+        try:
+            discovery.list_endpoint_models(red.base + "/v1", KEY, ollama_ok=True)
+        except Exception:  # noqa: BLE001 — a 307 is not a listing
+            pass
+        asyncio.run(seed_profile("custom", "vision", red.base + "/v1", headers=bearer))
+        asyncio.run(seed_profile("fleet-a", "m", red.base, headers=xkey, ollama=True))
+        oc._passthrough_aliases(red.base + "/v1", None, bearer)
+        conn_routes._probe_endpoint_models(red.base + "/v1", KEY, timeout_s=5.0)
+        conn_routes._probe_anthropic_models(red.base, KEY, timeout_s=5.0)
+        # -- the router's liveness probe, through each adapter's own client --
+        for protocol in ("openai", "anthropic"):
+            adapter = adapter_for(
+                FleetNode(id="r", base_url=red.base + "/v1", protocol=protocol, routable=True),
+                credential=lambda: KEY,
+            )
+            router = ModelRouter.__new__(ModelRouter)
+            router._answered_at = {}
+            router._clock = time.monotonic
+            asyncio.run(router._local_liveness(adapter))
+        # -- the app's own doors, configured at the redirecting gateway -------
+        app = _scratch_app(tmp_path, {
+            "custom_base_url": red.base + "/v1", "custom_model": "vision",
+            "default_provider": "custom", "default_model": "vision",
+            "fleet_nodes": [{"id": "anth", "base_url": red.base, "protocol": "anthropic",
+                             "api_key_name": "custom_api_key", "routable": True}],
+        })
+        d = app.state.d
+        with TestClient(app) as client:
+            d.fleet_sampler.sample_once(force=True)
+            client.post("/fleet/nodes/custom/detect")
+            client.post("/fleet/probe", json={"base_url": red.base})
+            client.get("/models")
+            client.post("/connections/endpoints/models", json={"base_url": red.base + "/v1"})
+            client.post("/connections/endpoints/models", json={"base_url": red.base, "protocol": "anthropic"})
+            client.post("/providers/endpoint-models", json={"base_url": red.base + "/v1", "api_key": ""})
+            assert client.post("/envelope/custom/vision/probe").status_code == 200
+            end = time.monotonic() + 20
+            while not seeded and time.monotonic() < end:
+                time.sleep(0.05)
+            client.post("/chat", json={"messages": [{"role": "user", "content": "hi"}],
+                                       "provider": "custom", "model": "vision"})
+            importlib.import_module("iron_jarvis.onboarding.doctor").runtime_checks(d.platform)
+            client.post("/voice/transcribe", json={
+                "audio_b64": base64.b64encode(b"RIFF....").decode(), "mime": "audio/wav"})
+            try:
+                client.portal.call(functools.partial(
+                    d.platform.router.complete, provider="fleet-anth", model="m",
+                    system="", messages=[LLMMessage(role="user", content="hi")], tools=[]))
+            except Exception:  # noqa: BLE001 — a 307 is not an answer
+                pass
+        keyed = [p for p, auth in red.requests if auth]
+        assert len(keyed) >= 20, f"too few keyed requests reached the gateway to prove anything: {len(keyed)}"
+        assert any(p.startswith("POST") for p, auth in red.requests if auth)
+        assert catcher.requests == [], f"a redirect was followed to another server: {catcher.requests}"
+    finally:
+        discovery.clear_cache()
+        red.stop()
+        catcher.stop()
