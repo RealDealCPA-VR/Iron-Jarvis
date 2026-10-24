@@ -300,7 +300,9 @@ export function ApprovalCard({
           : Object.keys(args).length > 0 && <ApprovalPreview tool={approval.tool} args={args} />}
 
       {approval.costNote && (
-        <p data-testid="approval-cost" className="text-[11px] leading-relaxed text-zinc-400">
+        // v1.381.0 review: a long word (a quoted shell line, a path) wraps
+        // instead of widening the card past a phone's 390 px.
+        <p data-testid="approval-cost" className="text-[11px] leading-relaxed text-zinc-400 [overflow-wrap:anywhere]">
           {approval.costNote}
         </p>
       )}

@@ -24,6 +24,7 @@ import type { PendingApproval } from "@/lib/useChatStream";
 import type { McpAsk, McpElicitationAsk, McpSamplingAsk } from "@/lib/mcpInteract";
 import type { CloudAsk } from "@/lib/localOnly";
 import type { AskUserAsk } from "@/lib/buildSessions";
+import { onceReasonOf } from "@/lib/onceReason";
 
 export type DockAskItem =
   | { kind: "approval"; id: string; approval: PendingApproval }
@@ -81,8 +82,34 @@ export function withHeadFirst(list: readonly DockAskItem[], headId: string | nul
   return [list[i], ...list.slice(0, i), ...list.slice(i + 1)];
 }
 
-/** The keys line under the card while a question is in the composer's place. */
-export function dockAskKeyHint(kind: DockAskItem["kind"]): string {
+/** v1.381.0 review: whether Enter may press this question's main answer.
+ *
+ *  NOT on an approval that asks ONCE, every time, for a SAFETY reason — a
+ *  shell step a project's or a plugin's slash command asked for, a commit or
+ *  push on a Build session's own branch, a click in the agent's browser that
+ *  reads as deleting, sending or paying (`once_reason`, lib/onceReason). In
+ *  the live check the user typed `/status`, pressed Enter twice, and the
+ *  second Enter — meant for the composer, before the card was read — ran
+ *  the project's command. The first-moment guard (DOCK_KEY_ARM_MS) is not
+ *  enough: a model can put the card up later than that. Such a card is
+ *  answered by a click (or Tab to "Allow once", then Enter or Space on the
+ *  button itself — a deliberate press); Esc still declines. Every other
+ *  question keeps Enter exactly as before, a local-only card and the plan
+ *  door included. */
+export function enterAllows(item: DockAskItem | null | undefined): boolean {
+  if (!item || item.kind !== "approval") return true;
+  const a = item.approval;
+  return !(a.onceOnly === true && onceReasonOf(a.onceReason) !== undefined);
+}
+
+/** The keys line for a card whose Enter does not allow it (enterAllows). */
+export const CLICK_TO_ALLOW_HINT = "Click Allow once to run it · Esc to decline";
+
+/** The keys line under the card while a question is in the composer's place.
+ *  `item` (v1.381.0 review): the question itself, so a card Enter does not
+ *  allow says so instead of promising "Enter to allow". */
+export function dockAskKeyHint(kind: DockAskItem["kind"], item?: DockAskItem | null): string {
+  if (item && !enterAllows(item)) return CLICK_TO_ALLOW_HINT;
   if (kind === "cloud") return "Enter to send once · Esc to keep it local";
   if (kind === "question") return "Enter to send · Esc to skip";
   return kind === "elicitation" ? "Enter to send · Esc to decline" : "Enter to allow · Esc to decline";
