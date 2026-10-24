@@ -506,19 +506,26 @@ def test_a_refresh_or_re_detect_asks_for_metrics_again():
         gateway.stop()
 
 
-def test_a_proxy_whose_metrics_answer_is_not_a_404_is_still_asked_each_pass(monkeypatch):
-    """Only a 404 (the endpoint does not exist) is remembered: a refused key
-    or a server error is asked again next pass, as before."""
+@pytest.mark.parametrize(
+    ("code", "asked"),
+    [(404, 1), (200, 1), (401, 1), (403, 1), (503, 3), (None, 3)],
+)
+def test_a_settled_metrics_answer_is_remembered_and_a_failure_is_not(code, asked):
+    """The user's proxy answers ``/metrics`` 401 to a caller with no key and
+    an unknown address 404 (read live, keyless): the route is THERE, behind
+    the key — so with the key a pass may download a whole Prometheus page
+    just to print "enabled". Any settled answer (2xx, 401, 403, 404) is
+    remembered; a server error or no answer is asked again next pass."""
     from iron_jarvis.fleet import probes
     from iron_jarvis.fleet.models import FleetNode
 
     calls: list[str] = []
 
     class R:
-        def __init__(self, code, body=None):
-            self.status_code = code
+        def __init__(self, status, body=None):
+            self.status_code = status
             self._body = body or {}
-            self.text = ""
+            self.text = "litellm_requests_metric_total 1 " * 50
 
         def json(self):
             return self._body
@@ -527,13 +534,15 @@ def test_a_proxy_whose_metrics_answer_is_not_a_404_is_still_asked_each_pass(monk
         calls.append(url.rsplit("/", 1)[-1])
         if url.endswith("/model/info"):
             return R(200, {"data": []})
-        return R(503)
+        if code is None:
+            raise ConnectionError("refused")
+        return R(code)
 
     memo = probes.MetricsMemo(clock=lambda: 0.0)
     node = FleetNode(id="gw", base_url="http://gw:4000", kind="litellm")
-    for _ in range(3):
-        probes.probe_node(node, get=get, metrics_memo=memo)
-    assert calls.count("metrics") == 3
+    reasons = {probes.probe_node(node, get=get, metrics_memo=memo)[0].metrics_reason for _ in range(3)}
+    assert calls.count("metrics") == asked
+    assert len(reasons) == 1  # a remembered answer reads exactly as the asked one
 
 
 def test_re_detect_on_the_fleet_page_asks_for_metrics_again(tmp_path):

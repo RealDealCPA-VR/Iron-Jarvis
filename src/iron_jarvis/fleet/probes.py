@@ -472,73 +472,85 @@ def _probe_vllm(node: FleetNode, root: str, get: Getter) -> NodeSnapshot:
     )
 
 
-#: How long a proxy whose ``/metrics`` answered 404 is not asked again (the
-#: gateway-key review). The endpoint either exists or it does not; asking a
-#: proxy that has none on every sampler pass — every 2 s while the Fleet page
-#: is open — was 1,800 keyed 404s an hour against the user's gateway.
-METRICS_404_TTL_S = 600.0
+#: How long a proxy's ``/metrics`` answer is remembered before it is asked
+#: again (the gateway-key review). The answer only feeds a sentence on the
+#: Fleet page ("not enabled" / "enabled, but proxy counters are not engine
+#: metrics"), and it does not change pass to pass; asking on EVERY sampler
+#: pass — every 2 s while the Fleet page is open — was 1,800 keyed requests an
+#: hour against the user's gateway, each one a whole Prometheus page when
+#: metrics are on (the user's proxy answers /metrics 401 to a caller with no
+#: key, and an unknown address 404: the route is there, behind the key).
+METRICS_TTL_S = 600.0
+
+#: Answers that say what ``/metrics`` IS (there, not there, behind other
+#: auth). A server error or no answer is asked again next pass.
+_METRICS_SETTLED = (401, 403, 404)
 
 _METRICS_NOT_ENABLED = "LiteLLM /metrics is not enabled on this proxy"
 
 
 class MetricsMemo:
-    """Remembers, per proxy root, that ``/metrics`` answered 404 — for
-    :data:`METRICS_404_TTL_S` on *clock*. ONLY a 404 is remembered (a refused
-    key or a server error is asked again next pass). The fleet sampler holds
-    one and forgets a node on a forced Refresh or a Re-detect, so the user
-    asking always asks the server. Thread-safe (sampler passes run in worker
-    threads)."""
+    """Remembers, per proxy root, the sentence a settled ``/metrics`` answer
+    gave (a 2xx, 401, 403 or 404) for :data:`METRICS_TTL_S` on *clock*. A
+    server error or a transport failure is never remembered. The fleet sampler
+    holds one and forgets a node on a forced Refresh or a Re-detect, so the
+    user asking always asks the server. Thread-safe (sampler passes run in
+    worker threads)."""
 
-    def __init__(self, clock: Callable[[], float] = time.monotonic, ttl: float = METRICS_404_TTL_S) -> None:
+    def __init__(self, clock: Callable[[], float] = time.monotonic, ttl: float = METRICS_TTL_S) -> None:
         self._clock = clock
         self._ttl = float(ttl)
-        self._until: dict[str, float] = {}
+        self._held: dict[str, tuple[float, str]] = {}
         self._lock = threading.Lock()
 
-    def missing(self, root: str) -> bool:
+    def recall(self, root: str) -> str | None:
         with self._lock:
-            until = self._until.get(root)
-            if until is None:
-                return False
-            if self._clock() >= until:
-                self._until.pop(root, None)
-                return False
-            return True
+            held = self._held.get(root)
+            if held is None:
+                return None
+            if self._clock() >= held[0]:
+                self._held.pop(root, None)
+                return None
+            return held[1]
 
-    def remember_missing(self, root: str) -> None:
+    def remember(self, root: str, reason: str) -> None:
         with self._lock:
-            self._until[root] = self._clock() + self._ttl
+            self._held[root] = (self._clock() + self._ttl, reason)
 
     def forget(self, root: str | None = None) -> None:
         with self._lock:
             if root is None:
-                self._until.clear()
+                self._held.clear()
             else:
-                self._until.pop(root, None)
+                self._held.pop(root, None)
 
 
 def _litellm_metrics_reason(root: str, get: Getter, memo: MetricsMemo | None = None) -> str:
     """Probe ``/metrics`` ONCE to learn the real reason, instead of guessing.
-    The user's proxy 404s here; other deployments enable it. A 404 is
-    remembered in *memo* (when the caller keeps one), so it is not asked
-    again for :data:`METRICS_404_TTL_S`."""
-    if memo is not None and memo.missing(root):
-        return _METRICS_NOT_ENABLED
+    Some proxies 404 here; others enable it. A settled answer is remembered in
+    *memo* (when the caller keeps one), so it is not asked again for
+    :data:`METRICS_TTL_S`."""
+    if memo is not None:
+        held = memo.recall(root)
+        if held is not None:
+            return held
     try:
         resp = get(f"{root}/metrics", headers=None)
     except Exception as exc:  # noqa: BLE001
         return f"LiteLLM /metrics could not be read ({_human_error(exc)})"
     code = int(getattr(resp, "status_code", 0) or 0)
     if code == 404:
-        if memo is not None:
-            memo.remember_missing(root)
-        return _METRICS_NOT_ENABLED
-    if not 200 <= code < 300:
-        return f"LiteLLM /metrics returned http {code}"
-    return (
-        "LiteLLM /metrics is enabled, but proxy counters are not engine "
-        "metrics. Per-node numbers come from the servers behind it."
-    )
+        reason = _METRICS_NOT_ENABLED
+    elif not 200 <= code < 300:
+        reason = f"LiteLLM /metrics returned http {code}"
+    else:
+        reason = (
+            "LiteLLM /metrics is enabled, but proxy counters are not engine "
+            "metrics. Per-node numbers come from the servers behind it."
+        )
+    if memo is not None and (200 <= code < 300 or code in _METRICS_SETTLED):
+        memo.remember(root, reason)
+    return reason
 
 
 def _health_sets(

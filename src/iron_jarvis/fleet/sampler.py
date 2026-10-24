@@ -251,9 +251,10 @@ class FleetSampler:
         #: LOGICAL time source (rates, lease, retention, backoff). Real waits
         #: use time.monotonic() directly — an injected test clock does not tick.
         self._clock = clock
-        #: The gateway-key review: a proxy whose ``/metrics`` answered 404 is
-        #: not asked again for ``probes.METRICS_404_TTL_S`` (on the LOGICAL
-        #: clock). Handed to the default probe only — an injected test probe
+        #: The gateway-key review: a proxy's settled ``/metrics`` answer (there,
+        #: not there, behind other auth) is not asked again for
+        #: ``probes.METRICS_TTL_S`` (on the LOGICAL clock) — it only feeds a
+        #: sentence. Handed to the default probe only — an injected test probe
         #: is called exactly as before. Forgotten on a forced pass and on a
         #: Re-detect (:meth:`forget_metrics`).
         self._metrics_memo = MetricsMemo(clock=clock)
