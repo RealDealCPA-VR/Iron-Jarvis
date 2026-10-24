@@ -517,7 +517,11 @@ export function ModelMenu({
     if (!sub || typeof window === "undefined") return;
     if (!window.matchMedia?.(PHONE_QUERY)?.matches) return;
     const panel = menuRef.current?.querySelector<HTMLElement>('[data-testid="model-sub"]');
-    panel?.scrollIntoView?.({ block: "nearest" });
+    // The row AND its panel (the panel is capped to fit under its row in
+    // what the list shows — components/chat/FitPanel), not the panel alone,
+    // which scrolled the row it belongs to out of sight.
+    const rowAndPanel = panel?.parentElement ?? panel;
+    rowAndPanel?.scrollIntoView?.({ block: "nearest" });
   }, [sub]);
   useEffect(() => {
     if (!open) return;

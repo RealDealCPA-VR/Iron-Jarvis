@@ -30,7 +30,7 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ModelMenu, modelTriggerOf } from "@/components/chat/ModelMenu";
-import { EDGE_PX, FLOAT_GAP_PX, FitPanel, fitPlacement, floatEdges } from "@/components/chat/FitPanel";
+import { EDGE_PX, FLOAT_GAP_PX, FitPanel, INLINE_GAP_PX, fitPlacement, floatEdges } from "@/components/chat/FitPanel";
 import { companyMenu } from "@/lib/harnessModelMenu";
 import {
   MENU_EDGE_PX,
@@ -148,6 +148,8 @@ const L = {
    *  browser does: the row moves when the menu's style has changed, not
    *  before (review: the side panel read its row before the menu moved). */
   rowsInMenu: new Map<string, (menu: HTMLElement) => Box>(),
+  /** What the menu's scrolling list shows (its client height); 0 = not laid out. */
+  listShows: 0,
 };
 const asRect = (b: Box) =>
   ({ ...b, width: b.right - b.left, height: b.bottom - b.top, x: b.left, y: b.top, toJSON: () => ({}) }) as DOMRect;
@@ -185,7 +187,7 @@ function defineLayout() {
     el.getAttribute("data-testid") === "model-menu" ? MENU_WIDTH_PX : el.getAttribute("data-testid") === "model-sub" ? 224 : undefined,
   );
   define("scrollHeight", (el) => (list(el) ? 28 * el.querySelectorAll("button").length : undefined));
-  define("clientHeight", (el) => (list(el) ? 0 : undefined));
+  define("clientHeight", (el) => (list(el) ? L.listShows : undefined));
   setWindow(L.vw, L.vh);
 }
 function setWindow(w: number, h: number) {
@@ -258,6 +260,7 @@ describe("ModelMenu — the menu is on the top layer, capped to the room, its ro
     L.bar = null;
     L.rows.clear();
     L.rowsInMenu.clear();
+    L.listShows = 0;
     defineLayout();
   });
   afterEach(() => {
@@ -544,6 +547,7 @@ describe("ModelMenu review — it stays with its chip, keeps its keys, and its p
     L.bar = null;
     L.rows.clear();
     L.rowsInMenu.clear();
+    L.listShows = 0;
     defineLayout();
   });
   afterEach(() => {
@@ -678,17 +682,25 @@ describe("ModelMenu review — it stays with its chip, keeps its keys, and its p
     try {
       render(<Menu models={TALL} />);
       const menu = openMenu();
+      // The list, laid out: it scrolls and shows 300 px of rows.
+      const list = within(menu).getByTestId("model-menu-list");
+      list.style.overflowY = "auto";
+      L.listShows = 300;
       const claude = within(menu)
         .getAllByRole("button")
         .find((b) => b.getAttribute("aria-expanded") !== null && b.textContent?.startsWith("Claude Code")) as HTMLElement;
       fireEvent.click(claude);
       const sub = screen.getByTestId("model-sub");
+      // The row AND its panel fit in what the list shows: never taller than
+      // the list less the row (0 px here) and the gap under it.
+      expect(sub.style.maxHeight).toBe(`${300 - 0 - INLINE_GAP_PX}px`);
       expect(sub.style.position).toBe("");
       expect(sub.dataset.align).toBeUndefined();
       expect(sub.className.split(/\s+/)).toEqual(expect.arrayContaining(["max-sm:static", "max-sm:w-full"]));
       expect(within(menu).getByTestId("model-menu-list").contains(sub)).toBe(true);
       // Brought into view inside the list.
-      expect(scrolled).toContain(sub);
+      // The row with its panel is brought into view, not the panel alone.
+      expect(scrolled).toContain(sub.parentElement);
     } finally {
       if (had) Object.defineProperty(Element.prototype, "scrollIntoView", had);
       else delete (Element.prototype as unknown as Record<string, unknown>).scrollIntoView;

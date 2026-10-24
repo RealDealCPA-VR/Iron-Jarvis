@@ -29,9 +29,14 @@ the IJ harness (an empty session and one with a reply), at 1406 × 857,
 1280 × 720, 1024 × 640 and 390 × 844: the menu's box is inside the window, the
 browser hits it at its top and bottom edges (no parent clips it), the filter
 box is on screen and takes the focus, the last row is reachable, nothing pans
-sideways, and (the chat) a long provider's side panel fits too. Every check is
-soft, so one run reports every case; `IJ_MENU_FIT_OUT=<folder>` also writes
-each case's measurements (JSON) and a screenshot.
+sideways, and (the chat) a long provider's side panel fits too — on a phone
+under its row, inside what the list shows. Every check is soft, so one run
+reports every case; `IJ_MENU_FIT_OUT=<folder>` also writes each case's
+measurements (JSON) and a screenshot. Its review cases (1406 × 857): the menu
+follows its chip when the demo strip goes away, an open provider panel
+follows the menu when the composer moves, an ancestor with a `transform` /
+`backdrop-filter` cannot move the menu (the portal), the app's palette covers
+an open menu, and the IJ harness's Ctrl+K from a row of the menu stays in it.
 
 Run from `dashboard/`:
 

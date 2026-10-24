@@ -305,6 +305,10 @@ async function checkSidePanel(page: Page, label: string) {
     const el = document.querySelector('[data-testid="model-sub"]') as HTMLElement;
     const r = el.getBoundingClientRect();
     const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 4);
+    // Review: on a phone the panel opens under its row, inside what the
+    // menu's list shows (beside the menu it was shifted over the rows).
+    const list = document.querySelector('[data-testid="model-menu-list"]') as HTMLElement;
+    const lr = list.getBoundingClientRect();
     return {
       vw: window.innerWidth,
       vh: window.innerHeight,
@@ -313,6 +317,12 @@ async function checkSidePanel(page: Page, label: string) {
       left: r.left,
       right: r.right,
       topHit: !!hit && el.contains(hit),
+      inList:
+        list.contains(el) &&
+        r.top >= lr.top - 0.5 &&
+        r.bottom <= lr.bottom + 0.5 &&
+        r.left >= lr.left - 0.5 &&
+        r.right <= lr.right + 0.5,
     };
   });
   expect.soft(p.top, `${label}: side panel top`).toBeGreaterThanOrEqual(0);
@@ -320,6 +330,7 @@ async function checkSidePanel(page: Page, label: string) {
   expect.soft(p.left, `${label}: side panel left`).toBeGreaterThanOrEqual(0);
   expect.soft(p.right, `${label}: side panel right`).toBeLessThanOrEqual(p.vw);
   expect.soft(p.topHit, `${label}: side panel's top on screen`).toBe(true);
+  if (p.vw < 640) expect.soft(p.inList, `${label}: on a phone the panel is under its row, inside the list`).toBe(true);
   // Left open: typing in the filter next replaces the provider rows (and
   // with them the panel). On a phone the panel is shifted over the menu.
   return { reached, ...p };
@@ -422,3 +433,168 @@ for (const size of SIZES) {
     }
   });
 }
+
+/* ------------------------------------------------------------- the review */
+
+/** The menu against its chip, and an open provider panel against its row:
+ *  `gap` is the space between the chip and the menu on the menu's side (6 px
+ *  when attached); `panelGap` the space between the panel and its row (4 px);
+ *  `panelEdge` how far the panel's anchored edge is from its row's (0). */
+async function attached(page: Page) {
+  return page.evaluate(() => {
+    const menu = document.querySelector('[data-testid="model-menu"]') as HTMLElement | null;
+    const chip = document.querySelector('[title="Switch model"][aria-expanded="true"]') as HTMLElement | null;
+    if (!menu || !chip) return null;
+    const m = menu.getBoundingClientRect();
+    const c = chip.getBoundingClientRect();
+    const sub = document.querySelector('[data-testid="model-sub"]') as HTMLElement | null;
+    const row = sub?.parentElement?.getBoundingClientRect();
+    const s = sub?.getBoundingClientRect();
+    return {
+      gap: menu.dataset.side === "below" ? m.top - c.bottom : c.top - m.bottom,
+      chipTop: c.top,
+      panelGap: s && row ? row.left - s.right : null,
+      panelEdge: s && row ? (sub?.dataset.side === "down" ? s.top - row.top : row.bottom - s.bottom) : null,
+    };
+  });
+}
+
+test.describe("review: the menu stays with its chip (1406 × 857)", () => {
+  test.use({ viewport: { width: 1406, height: 857 } });
+
+  /** A new chat: the composer sits in the middle, under the demo strip the
+   *  scratch daemon's demo model puts up. */
+  async function heroMenu(page: Page) {
+    await seed(page);
+    await page.goto("/?new=1");
+    await expect(page.getByTestId("chat-greeting")).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByTestId("simulated-banner")).toBeVisible({ timeout: 30_000 });
+    return openMenu(page, "Claude Code");
+  }
+
+  /** What "Make this my default" does to the page: the demo strip goes, and
+   *  the new chat's centred composer moves up — the window keeps its size. */
+  async function stripGoes(page: Page) {
+    const before = (await attached(page))?.chipTop ?? 0;
+    await page.getByTestId("simulated-banner").evaluate((el) => {
+      (el as HTMLElement).style.display = "none";
+    });
+    await expect
+      .poll(async () => Math.abs(((await attached(page))?.chipTop ?? before) - before), {
+        message: "the chip moved when the strip went",
+      })
+      .toBeGreaterThan(10);
+  }
+
+  test("the demo strip goes away: the menu follows its chip", async ({ page }) => {
+    await heroMenu(page);
+    expect((await attached(page))?.gap).toBeCloseTo(6, 0);
+    await stripGoes(page);
+    await expect
+      .poll(async () => (await attached(page))?.gap ?? -1, { message: "the menu's gap to its chip" })
+      .toBeCloseTo(6, 0);
+  });
+
+  test("a provider's open panel moves with the menu", async ({ page }) => {
+    await heroMenu(page);
+    await page.getByTestId("model-menu").getByRole("button", { name: /^OpenRouter/ }).click();
+    await expect(page.getByTestId("model-sub")).toBeVisible();
+    const before = await attached(page);
+    expect(before?.panelGap).toBeCloseTo(4, 0);
+    expect(before?.panelEdge).toBeCloseTo(0, 0);
+    // Something above the new chat's composer grows (a notice, a longer
+    // greeting): the centred composer moves and nothing scrolls. (The strip
+    // going away comes with scroll events, which re-placed the panel on
+    // their own — measured: that case could not tell whether the panel
+    // follows its menu.)
+    const chipBefore = before?.chipTop ?? 0;
+    await page.getByTestId("chat-greeting").evaluate((el) => {
+      (el as HTMLElement).style.paddingTop = "80px";
+    });
+    await expect
+      .poll(async () => Math.abs(((await attached(page))?.chipTop ?? chipBefore) - chipBefore), {
+        message: "the chip moved",
+      })
+      .toBeGreaterThan(10);
+    await expect
+      .poll(async () => (await attached(page))?.panelEdge ?? -99, { message: "the panel's edge against its row" })
+      .toBeCloseTo(0, 0);
+    expect((await attached(page))?.panelGap).toBeCloseTo(4, 0);
+  });
+
+  test("an ancestor that makes `fixed` relative to itself (a transform, a backdrop filter) cannot move the menu", async ({
+    page,
+  }) => {
+    await seed(page);
+    await page.goto(`/chat?thread=${threadId}`);
+    await expect(page.getByText("Question 10?")).toBeVisible({ timeout: 90_000 });
+    // What Mark 8's glass or an animating wrapper does to a `position: fixed`
+    // box inside it: the box is placed in that ancestor, not in the window.
+    // The menu lives on the page's top layer (a portal), out of its reach.
+    await page.getByTestId("chat-composer").evaluate((el) => {
+      const host = el.parentElement as HTMLElement;
+      host.style.transform = "translateZ(0)";
+      host.style.backdropFilter = "blur(1px)";
+    });
+    await openMenu(page, "Claude Code");
+    const m = await measure(page);
+    expect.soft(m.menu.top, "menu top").toBeGreaterThanOrEqual(0);
+    expect.soft(m.menu.bottom, "menu bottom").toBeLessThanOrEqual(m.vh);
+    expect.soft(m.topHit && m.bottomHit && m.filterHit, "the menu is on screen where it is drawn").toBe(true);
+    expect((await attached(page))?.gap, "the menu at its chip").toBeCloseTo(6, 0);
+  });
+
+  test("the app's palette opened over an open menu covers it, never the other way round", async ({ page }) => {
+    await seed(page);
+    await page.goto(`/chat?thread=${threadId}`);
+    await expect(page.getByText("Question 10?")).toBeVisible({ timeout: 90_000 });
+    await openMenu(page, "Claude Code");
+    // Opened the way the title bar's search opens it (open, never toggle):
+    // the palette is a chunk loaded when the page is idle, and a Ctrl+K
+    // pressed before it arrived would open nothing.
+    const dialog = page.getByRole("dialog", { name: "Search Iron Jarvis" });
+    await expect
+      .poll(async () => {
+        if ((await dialog.count()) === 0) await page.evaluate(() => window.dispatchEvent(new CustomEvent("ij:open-palette")));
+        return dialog.count();
+      }, { message: "the palette opened" })
+      .toBe(1);
+    await expect(page.getByTestId("model-menu")).toBeVisible();
+    const top = await page.evaluate(() => {
+      const menu = document.querySelector('[data-testid="model-menu"]') as HTMLElement | null;
+      if (!menu) return "closed";
+      const r = menu.getBoundingClientRect();
+      const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return el && menu.contains(el) ? "menu" : "palette";
+    });
+    expect(top).not.toBe("menu");
+  });
+});
+
+test.describe("review: the IJ harness's Ctrl+K from a row of the menu", () => {
+  test.use({ viewport: { width: 1406, height: 857 } });
+  test("stays in the menu; the app's palette does not open", async ({ page }) => {
+    await seed(page);
+    await page.goto(`/terminals?session=${emptySession}`);
+    await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+    // The palette is a chunk loaded when the page is idle: prove it is here
+    // (open it, close it), or a Ctrl+K it would have taken proves nothing.
+    const dialog = page.getByRole("dialog", { name: "Search Iron Jarvis" });
+    await expect
+      .poll(async () => {
+        if ((await dialog.count()) === 0) await page.evaluate(() => window.dispatchEvent(new CustomEvent("ij:open-palette")));
+        return dialog.count();
+      }, { message: "the palette is loaded" })
+      .toBe(1);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    const menu = await openMenu(page, "Claude Code");
+    await menu.getByText("default model", { exact: true }).focus();
+    await page.keyboard.press("Control+k");
+    // An absence: give a palette that WOULD open (it opens on the key, within
+    // a frame — measured before the fix) the time to show, then look.
+    await page.waitForTimeout(600);
+    await expect(page.getByTestId("model-menu")).toBeVisible();
+    await expect(dialog).toHaveCount(0);
+  });
+});

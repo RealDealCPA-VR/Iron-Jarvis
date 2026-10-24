@@ -78,6 +78,21 @@ export function floatEdges(
   return { ...vertical, left: Math.round(left), align: "shifted" };
 }
 
+/** An inline panel's most height: what its scrolling list shows, less its
+ *  row and the panel's top margin. No scrolling list (or one not laid out):
+ *  no limit beyond the panel's own. */
+function inlineRoom(el: HTMLElement, anchor: HTMLElement): number {
+  let list: HTMLElement | null = anchor.parentElement;
+  while (list && !/(auto|scroll)/.test(getComputedStyle(list).overflowY)) list = list.parentElement;
+  if (!list || list.clientHeight <= 0) return Infinity;
+  const row = anchor.firstElementChild as HTMLElement | null;
+  const rowHeight = row && row !== el ? row.offsetHeight : 0;
+  return Math.max(0, list.clientHeight - rowHeight - INLINE_GAP_PX);
+}
+
+/** The space an inline panel keeps under its row (its `mt-0.5`, and a hair). */
+export const INLINE_GAP_PX = 4;
+
 export function FitPanel({
   className,
   cap = 384,
@@ -115,7 +130,13 @@ export function FitPanel({
       const r = anchor.getBoundingClientRect();
       const inline = !!inlineQuery && !!window.matchMedia?.(inlineQuery)?.matches;
       if (!float || inline) {
-        setPlace(fitPlacement(r.top, r.bottom, window.innerHeight, cap));
+        const box = fitPlacement(r.top, r.bottom, window.innerHeight, cap);
+        // Inline, under its row inside a scrolling list (a phone): the panel
+        // AND its row fit in what the list shows, or the panel's last rows sat
+        // under the list's edge with the row scrolled away above it (measured
+        // at 390 px: 84 px of OpenRouter's models out of sight).
+        const room = inline ? inlineRoom(el, anchor) : Infinity;
+        setPlace(room < box.maxHeight ? { ...box, maxHeight: room } : box);
         setEdges(null);
         return;
       }
