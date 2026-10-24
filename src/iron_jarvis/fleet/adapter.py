@@ -24,6 +24,37 @@ from ..providers.adapters.openai import OpenAIAdapter
 from ..providers.manager import _normalize_ollama_url
 from .models import FleetNode
 
+#: ``model -> {"vision", "tool_use", "context_window"}`` as the model proxy's
+#: own ``/model/info`` states them (``FleetRegistry.model_caps``); ``None``
+#: values = not stated.
+CapsReader = Callable[[str], dict]
+
+
+def node_capabilities(node: FleetNode, model: str, caps: CapsReader | None) -> dict[str, bool]:
+    """The ``tool_use``/``vision`` a fleet node's adapter reports for *model*.
+
+    The node RECORD speaks first (``None`` — never verified — reads False:
+    claiming a capability we have not confirmed is what produces the silent
+    stall described above). THE GATEWAY-KEY FIX: a model proxy that STATES a
+    capability for this model in its own ``/model/info``
+    (``supports_vision`` / ``supports_function_calling`` true) is believed —
+    the user's LiteLLM gateway serves a ``vision`` model, and the Ollama-way
+    read never found it, so a picture sent to it was rerouted or refused. A
+    table that says False, or says nothing, changes nothing: the record's
+    answer stands (unknown stays unknown, never guessed)."""
+    out = {"tool_use": bool(node.tool_use), "vision": bool(node.vision)}
+    if caps is None:
+        return out
+    try:
+        stated = caps(model) or {}
+    except Exception:  # noqa: BLE001 — a table fault leaves the record's answer
+        return out
+    if stated.get("vision") is True:
+        out["vision"] = True
+    if stated.get("tool_use") is True:
+        out["tool_use"] = True
+    return out
+
 
 class FleetAdapter(OpenAIAdapter):
     """An OpenAI-compatible local endpoint with honestly-declared capabilities."""
@@ -34,6 +65,7 @@ class FleetAdapter(OpenAIAdapter):
         node: FleetNode,
         model: str | None = None,
         credential: Callable[[], str | None] | None = None,
+        caps: CapsReader | None = None,
     ) -> None:
         super().__init__(
             model=model or node.default_model or "default",
@@ -42,16 +74,13 @@ class FleetAdapter(OpenAIAdapter):
             provider_name=f"fleet-{node.id}",
         )
         self.node = node
+        self._caps = caps
 
     def capabilities(self) -> dict[str, Any]:
-        """Capabilities asserted by the node record — never assumed.
-
-        ``None`` (never verified) becomes ``False``: claiming a capability we
-        have not confirmed is what produces the silent stall described above.
-        """
+        """Capabilities asserted by the node record — never assumed — or
+        stated for this model by the proxy itself (:func:`node_capabilities`)."""
         caps = super().capabilities()
-        caps["tool_use"] = bool(self.node.tool_use)
-        caps["vision"] = bool(self.node.vision)
+        caps.update(node_capabilities(self.node, self.model, self._caps))
         return caps
 
 
@@ -59,6 +88,7 @@ def adapter_for(
     node: FleetNode,
     model: str | None = None,
     credential: Callable[[], str | None] | None = None,
+    caps: CapsReader | None = None,
 ) -> Any:
     """The adapter that speaks *node*'s protocol (v1.329.0).
 
@@ -67,9 +97,10 @@ def adapter_for(
     (the OpenAI chat-completions shape every node spoke before the field
     existed). Both report the node's recorded capabilities and both are named
     ``fleet-<id>``, so a failing node refuses under its own name like any
-    other local provider; nothing here ever substitutes another provider."""
+    other local provider; nothing here ever substitutes another provider.
+    ``caps`` (the gateway-key fix) is the proxy's own per-model statement."""
     if getattr(node, "protocol", "openai") == "anthropic":
         from .anthropic_compat import AnthropicFleetAdapter
 
-        return AnthropicFleetAdapter(node=node, model=model, credential=credential)
-    return FleetAdapter(node=node, model=model, credential=credential)
+        return AnthropicFleetAdapter(node=node, model=model, credential=credential, caps=caps)
+    return FleetAdapter(node=node, model=model, credential=credential, caps=caps)

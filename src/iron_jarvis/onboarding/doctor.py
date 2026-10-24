@@ -954,12 +954,13 @@ def _runtime_checks(platform, *, probe: bool) -> list[dict]:
         if base and model and probe:
             import httpx
 
-            key = None
+            # The gateway-key fix: THE one helper (the custom slot's saved
+            # key, as its chat calls send it), never a second vault read.
+            headers: dict[str, str] = {}
             try:
-                key = platform.secrets.get("custom_api_key")
-            except Exception:  # noqa: BLE001
-                key = None
-            headers = {"Authorization": f"Bearer {key}"} if key else {}
+                headers = dict(platform.fleet.headers_for_url(base) or {})
+            except Exception:  # noqa: BLE001 — ask without a key
+                headers = {}
             r = httpx.get(base.rstrip("/") + "/models", headers=headers, timeout=5)
             if r.status_code == 200:
                 ids = [

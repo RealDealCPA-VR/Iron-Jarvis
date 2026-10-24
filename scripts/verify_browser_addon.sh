@@ -51,7 +51,9 @@ grep -q "ws://127.0.0.1:$PORT/browser/ws" "$ADDON/dist/background.js" || { echo 
 
 # --- isolated daemon -----------------------------------------------------------
 cd "$REPO"
-IRONJARVIS_TOKEN= uv run ironjarvis serve --host 127.0.0.1 --port "$PORT" --root "$ROOT" > "$LOG" 2>&1 &
+# The scratch daemon reads no OpenCode config: the developer's points at
+# their real model gateway (the gateway-key review).
+IRONJARVIS_TOKEN= IRONJARVIS_OPENCODE_CONFIG_DIR="$ROOT/no-opencode-config" uv run ironjarvis serve --host 127.0.0.1 --port "$PORT" --root "$ROOT" > "$LOG" 2>&1 &
 DPID=$!
 for i in $(seq 1 60); do curl -s -m 2 "$BASE/health" > /dev/null 2>&1 && break; sleep 1; done
 curl -s -m 3 "$BASE/health" > /dev/null || { echo "daemon never answered"; kill $DPID 2>/dev/null; exit 1; }

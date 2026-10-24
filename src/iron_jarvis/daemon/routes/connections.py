@@ -366,15 +366,30 @@ def build_selectable_models(d, *, providers: Any = None) -> list[dict[str, Any]]
 
     def _node_job(node: Any) -> Callable[[], Any]:
         def _cred(n=node):  # noqa: ANN202 — the node's vault key, read when asked
-            return d.platform.secrets.get(n.api_key_name) if n.api_key_name else None
+            # The gateway-key fix: THE key lookup (endpoint_auth.node_key,
+            # through the registry when it has one — the chat adapter's own).
+            lookup = getattr(d.fleet, "key_for", None)
+            if callable(lookup):
+                return lookup(n) or None
+            from ...fleet.endpoint_auth import node_key
+
+            return node_key(n, d.platform.secrets.get) or None
 
         protocol = getattr(node, "protocol", "openai") or "openai"
-        if protocol == "openai":
-            return lambda: _discovery.discover_models(
-                f"fleet-{node.id}", _cred, base_url=node.base_url
-            )
+        extra: dict[str, Any] = {}
+        if protocol != "openai":
+            extra["protocol"] = protocol
+        # The gateway-key fix: a node known NOT to be Ollama (a LiteLLM
+        # gateway) is never asked Ollama's /api/tags when its listing fails.
+        # Passed only when known, so the call is unchanged otherwise.
+        try:
+            ollama_ok = d.fleet.ollama_style_ok(node.base_url)
+        except Exception:  # noqa: BLE001 — unknown (an older registry)
+            ollama_ok = None
+        if ollama_ok is not None:
+            extra["ollama_ok"] = ollama_ok
         return lambda: _discovery.discover_models(
-            f"fleet-{node.id}", _cred, base_url=node.base_url, protocol=protocol
+            f"fleet-{node.id}", _cred, base_url=node.base_url, **extra
         )
 
     answers = _run_concurrently(
@@ -693,6 +708,28 @@ class EndpointModelsProbeBody(BaseModel):
     protocol: str = "openai"
 
 
+def _saved_endpoint_auth(d, url: str, typed_key: str) -> tuple[str, bool | None]:
+    """``(key, ollama_ok)`` for a typed endpoint address (the gateway-key fix).
+
+    The key is the one the user typed, else the saved key of the endpoint
+    that IS this server (``FleetRegistry.key_for_url`` — a key only ever goes
+    to the server it was saved for). ``ollama_ok`` is whether Ollama's own
+    address may be asked (``FleetRegistry.ollama_style_ok``). BLOCKING (a
+    vault read); never raises — an older or broken registry answers
+    ``(typed_key, None)``, exactly the old call."""
+    fleet = getattr(d, "fleet", None) or getattr(getattr(d, "platform", None), "fleet", None)
+    key = typed_key
+    ollama_ok: bool | None = None
+    try:
+        if not key and fleet is not None and callable(getattr(fleet, "key_for_url", None)):
+            key = fleet.key_for_url(url) or ""
+        if fleet is not None and callable(getattr(fleet, "ollama_style_ok", None)):
+            ollama_ok = fleet.ollama_style_ok(url)
+    except Exception:  # noqa: BLE001 — the old call, never a crash
+        return typed_key, None
+    return key, ollama_ok
+
+
 def _probe_words(kind: str) -> str:
     """The one sentence the form shows for a failed probe. Never the URL or
     the key, never an exception's text (it can carry either)."""
@@ -719,12 +756,14 @@ def _probe_fail(kind: str) -> dict[str, Any]:
     return {"models": [], "error": _probe_words(kind), "reason": kind}
 
 
-def _model_list_urls(base_url: str) -> list[str]:
+def _model_list_urls(base_url: str, *, ollama_ok: bool | None = None) -> list[str]:
     """Where a server keeps its model list, most likely first: the
     OpenAI-compatible ``<base>/v1/models`` (or ``<base>/models`` when the base
     already ends in /v1), then ``<base>/models``, then Ollama's own
     ``/api/tags`` for a host that predates its /v1 shim. A pasted chat or
-    models URL is cut back to its base first."""
+    models URL is cut back to its base first. The gateway-key fix: Ollama's
+    address is left out for a server known NOT to be Ollama (``ollama_ok``
+    False — a saved LiteLLM gateway 404s every ``/api/*`` address)."""
     u = base_url.strip().rstrip("/")
     for suffix in ("/chat/completions", "/completions", "/models"):
         if u.endswith(suffix):
@@ -736,7 +775,8 @@ def _model_list_urls(base_url: str) -> list[str]:
     else:
         host = u
         urls = [f"{u}/v1/models", f"{u}/models"]
-    urls.append(f"{host}/api/tags")
+    if ollama_ok is not False:
+        urls.append(f"{host}/api/tags")
     return list(dict.fromkeys(urls))
 
 
@@ -777,7 +817,9 @@ def _model_ids(payload: Any) -> list[str] | None:
     return out
 
 
-def _probe_endpoint_models(base_url: str, key: str, *, timeout_s: float) -> dict[str, Any]:
+def _probe_endpoint_models(
+    base_url: str, key: str, *, timeout_s: float, ollama_ok: bool | None = None
+) -> dict[str, Any]:
     """BLOCKING: ask one server for its model list (the route runs this in a
     worker thread). Stops at the first decisive answer: unreachable, timed
     out, or a refused key end the probe; a 404 / not-JSON / not-a-listing
@@ -785,13 +827,13 @@ def _probe_endpoint_models(base_url: str, key: str, *, timeout_s: float) -> dict
     never travels to a host the user did not type."""
     import httpx
 
+    from ...fleet.endpoint_auth import auth_headers
+
     deadline = time.monotonic() + timeout_s
-    headers = {"Accept": "application/json"}
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
+    headers = {"Accept": "application/json", **auth_headers(key)}
     saw: set[str] = set()
     with _http.client(follow_redirects=False) as client:  # v1.332.0: shared TLS context
-        for url in _model_list_urls(base_url):
+        for url in _model_list_urls(base_url, ollama_ok=ollama_ok):
             left = deadline - time.monotonic()
             if left <= 0:
                 return _probe_fail("timeout")
@@ -881,10 +923,10 @@ def _probe_anthropic_models(base_url: str, key: str, *, timeout_s: float) -> dic
     must never read as the whole list)."""
     import httpx
 
+    from ...fleet.endpoint_auth import auth_headers
+
     deadline = time.monotonic() + timeout_s
-    headers = {"Accept": "application/json", "anthropic-version": _ANTHROPIC_VERSION}
-    if key:
-        headers["x-api-key"] = key
+    headers = {"Accept": "application/json", **auth_headers(key, "anthropic")}
     url = _anthropic_models_url(base_url)
     ids: list[str] = []
     seen: set[str] = set()
@@ -1296,8 +1338,9 @@ def register(app: FastAPI, d) -> None:
         honest ``error`` (the form shows it and keeps manual entry)."""
         from ...providers.discovery import list_endpoint_models
 
+        key, ollama_ok = _saved_endpoint_auth(d, body.base_url, body.api_key.strip())
         try:
-            models = list_endpoint_models(body.base_url, body.api_key.strip())
+            models = list_endpoint_models(body.base_url, key, ollama_ok=ollama_ok)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except Exception as exc:  # noqa: BLE001 — unreachable/odd server, be honest
@@ -1336,20 +1379,30 @@ def register(app: FastAPI, d) -> None:
                 status_code=400,
                 detail="Models can be listed for OpenAI-compatible or Anthropic-compatible servers only.",
             )
-        probe = _probe_anthropic_models if protocol == "anthropic" else _probe_endpoint_models
         key = (body.api_key or "").strip()
         if len(key) > 8192 or any(not 32 <= ord(c) < 127 for c in key):
             raise HTTPException(
                 status_code=400,
                 detail="That key has characters a web request cannot carry. Paste it again.",
             )
+        # The gateway-key fix: an address the user saved, asked with no key
+        # typed, is asked with ITS saved key (the box never shows a saved
+        # key, so "Fetch available models" on a saved keyed gateway used to
+        # 401). A typed key always wins. Off the loop: a vault read.
+        key, ollama_ok = await asyncio.to_thread(_saved_endpoint_auth, d, url, key)
+        if protocol == "anthropic":
+            probe = _probe_anthropic_models
+            kw: dict[str, Any] = {}
+        else:
+            probe = _probe_endpoint_models
+            kw = {"ollama_ok": ollama_ok} if ollama_ok is not None else {}
         timeout_s = _ENDPOINT_PROBE_TIMEOUT_S
         try:
             # The thread's own per-request timeouts already sum under the
             # bound; this outer one is the backstop, and only ITS expiry earns
             # the timeout words.
             async with asyncio.timeout(timeout_s + 1.0) as cm:
-                return await asyncio.to_thread(probe, url, key, timeout_s=timeout_s)
+                return await asyncio.to_thread(probe, url, key, timeout_s=timeout_s, **kw)
         except TimeoutError:
             if cm.expired():
                 return _probe_fail("timeout")

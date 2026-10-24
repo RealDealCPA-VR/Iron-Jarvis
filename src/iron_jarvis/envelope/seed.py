@@ -89,13 +89,56 @@ async def _seed_from_ollama(
     return True
 
 
+async def _seed_from_litellm(
+    client: httpx.AsyncClient,
+    root: str,
+    model_id: str,
+    profile: CapabilityProfile,
+    headers: dict[str, str],
+) -> str:
+    """Fill ``profile`` from a LiteLLM proxy's OWN answer, ``GET /model/info``
+    (the gateway-key fix): ``supports_vision``, ``supports_function_calling``
+    and ``max_input_tokens`` for the entry whose ``model_name`` is
+    *model_id* (wildcards the way ``fleet/upstreams`` treats them). A field
+    the proxy does not state stays the floor default — never guessed.
+
+    Answers ``"litellm"`` (it is a proxy; the profile took what it said),
+    ``"refused"`` (401/403: a keyed server — so NOT Ollama, which has no
+    keys), or ``"no"`` (not a proxy, or no answer)."""
+    from ..fleet.upstreams import parse_model_info
+
+    resp = await client.get(f"{root}/model/info", headers=headers)
+    if resp.status_code in (401, 403):
+        return "refused"
+    if resp.status_code < 200 or resp.status_code >= 300:
+        return "no"
+    table = parse_model_info(resp.json())
+    if table is None:
+        return "no"
+    caps = table.caps(model_id)
+    window = caps.get("context_window")
+    if window:
+        profile.context_window = int(window)
+        profile.honest_context = min(int(window), _UNMEASURED_HONEST_CAP)
+    if caps.get("vision") is not None:
+        profile.vision = bool(caps["vision"])
+    if caps.get("tool_use") is True:
+        # the same usable seed Ollama's "tools" capability gives
+        profile.tool_protocols = {"native": 0.95}
+    return "litellm"
+
+
 async def _seed_from_openai_compat(
-    client: httpx.AsyncClient, root: str, model_id: str, profile: CapabilityProfile
+    client: httpx.AsyncClient,
+    root: str,
+    model_id: str,
+    profile: CapabilityProfile,
+    headers: dict[str, str] | None = None,
 ) -> bool:
     """Fallback introspection: ``GET /v1/models`` presence only. A generic
     OpenAI-compatible server owes us nothing more; ``max_model_len`` is read
     when the listing happens to carry it (vLLM does)."""
-    resp = await client.get(f"{root}/v1/models")
+    resp = await client.get(f"{root}/v1/models", headers=headers or {})
     if resp.status_code < 200 or resp.status_code >= 300:
         return False
     body = resp.json()
@@ -121,31 +164,59 @@ async def seed_profile(
     base_url: str,
     *,
     client: httpx.AsyncClient | None = None,
+    headers: dict[str, str] | None = None,
+    ollama: bool | None = None,
 ) -> CapabilityProfile | None:
     """Introspect ``base_url`` into a provisional ``source="seeded"`` profile,
-    or ``None`` when the endpoint answered neither introspection call.
+    or ``None`` when the endpoint answered no introspection call.
 
     Pure of side effects (nothing is saved — the seed is provisional by
     contract) and NEVER raises. ``client`` is injectable so the offline suite
     seeds against ``httpx.MockTransport``; the caller keeps ownership of an
     injected client, while the default one is closed here.
+
+    THE GATEWAY-KEY FIX: every request carries *headers* (the endpoint's
+    saved key, ``fleet/endpoint_auth``), and the ORDER follows what the
+    endpoint is. *ollama* is ``True`` for the Ollama slot / a node detected
+    as Ollama (Ollama's ``/api/show`` first, as before), ``False`` for a
+    server known not to be Ollama (never asked ``/api/show``), ``None`` when
+    unknown. A non-Ollama endpoint is asked LiteLLM's own ``/model/info``
+    first — the proxy states vision, tools and the window per model, which
+    the Ollama-way read never found (the user's gateway serves a ``vision``
+    model that read as blind). An auth refusal there means a keyed server
+    whose key we lack: nothing more is asked (every other door would refuse
+    too) and the seed answers ``None`` — nothing is guessed.
     """
     root = _root(base_url)
     if not root:
         return None
     profile = CapabilityProfile(model_id=model_id, provider=provider, source="seeded")
     own_client = client is None
+    hdrs = dict(headers or {})
     from ..core import http as _http  # v1.332.0: the shared TLS context
 
     active = client or _http.async_client(timeout=_TIMEOUT)
     try:
-        try:
-            if await _seed_from_ollama(active, root, model_id, profile):
+        if ollama is not True:
+            try:
+                said = await _seed_from_litellm(active, root, model_id, profile, hdrs)
+            except Exception:  # noqa: BLE001 — best-effort introspection, try the next door
+                said = "no"
+            if said == "litellm":
                 return profile
-        except Exception:  # noqa: BLE001 — best-effort introspection, try the next door
-            pass
+            if said == "refused":
+                # A keyed server that refused the key we have (or that we
+                # have none for): every other door would be refused too, so
+                # nothing more is asked and nothing is guessed.
+                return None
+        if ollama is not False:
+            try:
+                if await _seed_from_ollama(active, root, model_id, profile):
+                    return profile
+            except Exception:  # noqa: BLE001 — best-effort introspection, try the next door
+                pass
         try:
-            if await _seed_from_openai_compat(active, root, model_id, profile):
+            if await _seed_from_openai_compat(active, root, model_id, profile, hdrs):
                 return profile
         except Exception:  # noqa: BLE001
             pass

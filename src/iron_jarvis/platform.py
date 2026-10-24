@@ -770,13 +770,19 @@ def build_platform(
     from .fleet.registry import FleetRegistry
 
     fleet_registry = FleetRegistry(config)
+    # The gateway-key fix: THE vault read every saved endpoint's key comes
+    # through (chat adapters, the sampler, detection, discovery, the seed,
+    # OpenCode's proxy read, the doctor, voice) — set before anything asks.
+    fleet_registry.set_secret_resolver(secrets.get)
 
     def _opencode_allowed() -> list[str]:
         """LOCAL OpenCode models only — never its hosted tier, never a paid
-        passthrough alias sitting behind a local-looking proxy."""
+        passthrough alias sitting behind a local-looking proxy. The proxy's
+        routing table is read with the saved key of the endpoint that IS that
+        server (the gateway-key fix: ``FleetRegistry.headers_for_url``)."""
         from .providers.opencode import allowed_models
 
-        return allowed_models(config)
+        return allowed_models(config, headers_for=fleet_registry.headers_for_url)
 
     providers = ProviderManager(
         vault=vault,

@@ -40,6 +40,7 @@ sleeps, no network.
 from __future__ import annotations
 
 import asyncio
+import functools
 import threading
 import time
 from collections import deque
@@ -50,7 +51,7 @@ from typing import Any, Callable, Deque, Iterable
 
 from ..core.logging import get_logger
 from .models import FleetNode, NodeMetrics, NodeRates, NodeSnapshot
-from .probes import probe_node
+from .probes import MetricsMemo, normalize_root, probe_node
 from .upstreams import NOT_A_PROXY, NOT_A_PROXY_TTL_S, ROUTES_TTL_S, RouteTable
 
 log = get_logger("fleet.sampler")
@@ -250,6 +251,15 @@ class FleetSampler:
         #: LOGICAL time source (rates, lease, retention, backoff). Real waits
         #: use time.monotonic() directly — an injected test clock does not tick.
         self._clock = clock
+        #: The gateway-key review: a proxy's settled ``/metrics`` answer (there,
+        #: not there, behind other auth) is not asked again for
+        #: ``probes.METRICS_TTL_S`` (on the LOGICAL clock) — it only feeds a
+        #: sentence. Handed to the default probe only — an injected test probe
+        #: is called exactly as before. Forgotten on a forced pass and on a
+        #: Re-detect (:meth:`forget_metrics`).
+        self._metrics_memo = MetricsMemo(clock=clock)
+        if probe is probe_node:
+            probe = functools.partial(probe_node, metrics_memo=self._metrics_memo)
         self._probe = probe
         self._state: dict[str, _NodeState] = {}
         #: sample_once() runs in FastAPI's threadpool while _loop() runs on the
@@ -411,6 +421,10 @@ class FleetSampler:
         due = self._nodes() if force else self._due_nodes()
         if not due:
             return self.snapshots()
+        if force:
+            # The user asked: a remembered "/metrics is not there" is asked again.
+            for node in due:
+                self.forget_metrics(node)
 
         pool = ThreadPoolExecutor(
             max_workers=min(8, len(due)), thread_name_prefix="fleet-probe"
@@ -527,8 +541,37 @@ class FleetSampler:
         )
 
     def _probe_one(self, node: FleetNode) -> tuple[NodeSnapshot, list[FleetNode]]:
-        """Call the injected probe. Runs in a worker thread — never on the loop."""
+        """Call the injected probe. Runs in a worker thread — never on the loop.
+
+        THE GATEWAY-KEY FIX: the probe carries the node's saved key
+        (``registry.headers_for`` — ``fleet/endpoint_auth``). This pass runs
+        every 30 s (2 s while the Fleet page is open) and used to ask a keyed
+        LiteLLM gateway with no ``Authorization`` at all; every answer was a
+        401, the node read offline, and its routing table (read only for an
+        online node) was never refreshed. Headers are passed only when there
+        are some, so a keyless node and an injected test probe see the same
+        call as before."""
+        headers: dict[str, str] = {}
+        lookup = getattr(self.registry, "headers_for", None)
+        if callable(lookup):
+            try:
+                headers = dict(lookup(node) or {})
+            except Exception:  # noqa: BLE001 — no key: probe as before
+                headers = {}
+        if headers:
+            return self._probe(node, headers=headers)
         return self._probe(node)
+
+    def forget_metrics(self, node: FleetNode | None = None) -> None:
+        """Ask *node*'s ``/metrics`` again on its next pass (every node when
+        None) — a forced Refresh and a Re-detect, so a user who just turned
+        metrics on is never told "not enabled" from memory."""
+        if node is None:
+            self._metrics_memo.forget()
+            return
+        root = normalize_root(getattr(node, "base_url", "") or "")
+        if root:
+            self._metrics_memo.forget(root)
 
     # -- bookkeeping -------------------------------------------------------
     def _nodes(self) -> list[FleetNode]:

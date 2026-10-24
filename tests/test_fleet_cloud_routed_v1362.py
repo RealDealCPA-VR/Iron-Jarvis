@@ -757,17 +757,31 @@ def test_a_keyed_proxy_is_read_with_the_nodes_own_key():
     assert seen[0] == {} and seen[1] == {"Authorization": "Bearer sk-test-key"}
 
 
-def test_the_daemons_reader_takes_the_key_from_the_vault(monkeypatch):
+def test_the_daemons_reader_takes_the_key_from_the_vault(monkeypatch, tmp_path):
+    """The gateway-key fix moved this read onto THE one helper: the reader
+    hands ``read_routes`` the registry's ``headers_for(node)`` (the node's
+    vault key), never its own vault read."""
     from iron_jarvis.daemon import app as appmod
     from iron_jarvis.fleet import upstreams as up
 
     calls = []
-    monkeypatch.setattr(up, "read_routes", lambda node, key="": calls.append((node.id, key)) or UNREAD)
+    monkeypatch.setattr(
+        up, "read_routes", lambda node, headers=None, **kw: calls.append((node.id, dict(headers or {}))) or UNREAD
+    )
     vault = {"custom_api_key": "sk-from-vault"}
-    platform = SimpleNamespace(secrets=SimpleNamespace(get=lambda n: vault.get(n)))
-    reader = appmod._route_reader_for(platform)
+
+    def _platform(get):
+        reg = FleetRegistry(SimpleNamespace(home=str(tmp_path), fleet_nodes=[]), persist=lambda *a, **k: None)
+        reg.set_secret_resolver(get)
+        return SimpleNamespace(fleet=reg)
+
+    reader = appmod._route_reader_for(_platform(vault.get))
     reader(FleetNode(id="custom", base_url=PROXY, api_key_name="custom_api_key"))
     reader(FleetNode(id="box", base_url="http://192.168.1.9:8000"))
-    broken = appmod._route_reader_for(SimpleNamespace(secrets=SimpleNamespace(get=lambda n: 1 / 0)))
+    broken = appmod._route_reader_for(_platform(lambda n: 1 / 0))
     broken(FleetNode(id="custom", base_url=PROXY, api_key_name="custom_api_key"))
-    assert calls == [("custom", "sk-from-vault"), ("box", ""), ("custom", "")]
+    assert calls == [
+        ("custom", {"Authorization": "Bearer sk-from-vault"}),
+        ("box", {}),
+        ("custom", {}),
+    ]

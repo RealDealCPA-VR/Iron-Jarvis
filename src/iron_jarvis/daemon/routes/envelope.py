@@ -184,6 +184,40 @@ def _endpoint_base_url(d, provider: str) -> str | None:
     return None
 
 
+def _seed_kwargs(d, provider: str, base_url: str) -> dict[str, Any]:
+    """``seed_profile``'s keyword arguments for one endpoint (the gateway-key
+    fix): ``headers`` (its saved key, ``FleetRegistry.headers_for``) and
+    ``ollama`` (whether it may be asked Ollama's ``/api/show``) — each passed
+    ONLY when known, so a seed of an endpoint nothing is known about is the
+    old call. The Ollama slot is Ollama; a fleet node answers by its kind; the
+    custom slot by what is known about its server. BLOCKING (a vault read):
+    called inside the background probe's worker hop. Never raises."""
+    kw: dict[str, Any] = {}
+    fleet = getattr(d, "fleet", None) or getattr(d.platform, "fleet", None)
+    if fleet is None:
+        return kw
+    try:
+        node = None
+        if provider in ("ollama", "custom"):
+            node = next((n for n in fleet.seeded() if n.id == provider), None)
+        elif provider.startswith(_FLEET_PREFIX):
+            node = fleet.get(provider[len(_FLEET_PREFIX):])
+        lookup = getattr(fleet, "headers_for", None)
+        headers = dict(lookup(node) or {}) if callable(lookup) and node is not None else {}
+        if headers:
+            kw["headers"] = headers
+        if provider == "ollama":
+            kw["ollama"] = True
+        else:
+            ask = getattr(fleet, "ollama_style_ok", None)
+            verdict = ask(base_url) if callable(ask) else None
+            if verdict is not None:
+                kw["ollama"] = verdict
+    except Exception:  # noqa: BLE001 — the old call, never a failed probe
+        return {}
+    return kw
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
@@ -217,8 +251,12 @@ def register(app: FastAPI, d) -> None:
             if base is None:
                 # seed_profile never raises by contract and answers None when
                 # the endpoint ignored both introspection calls — the floor
-                # default then keeps the job, honestly labeled.
-                base = await seed_profile(provider, model, base_url)
+                # default then keeps the job, honestly labeled. The
+                # gateway-key fix: with the endpoint's saved key, asked the
+                # way that endpoint is (never Ollama's /api/show for a
+                # LiteLLM gateway).
+                seed_kw = await asyncio.to_thread(_seed_kwargs, d, provider, base_url)
+                base = await seed_profile(provider, model, base_url, **seed_kw)
             if base is None:
                 base = CapabilityProfile(model_id=model, provider=provider)
             adapter = d.platform.providers.get(provider, model)

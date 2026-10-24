@@ -89,15 +89,72 @@ def upstream_place(model: str, api_base: str) -> str:
         return PLACE_CLOUD
 
 
+#: What a LiteLLM entry's ``model_info`` says a served name can do (the
+#: gateway-key fix): ``supports_vision``, ``supports_function_calling`` and
+#: ``max_input_tokens``, read only when the proxy states them. ``None`` =
+#: the proxy did not say, which stays unknown — never guessed.
+CAP_KEYS = ("vision", "tool_use", "context_window")
+
+
+def _flag(value: Any) -> bool | None:
+    """A capability flag as the proxy stated it: a real boolean, else None."""
+    return value if isinstance(value, bool) else None
+
+
+def _window(value: Any) -> int | None:
+    """A positive token count, else None (``null``, 0, text, a bool)."""
+    if isinstance(value, bool):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _merge_flag(a: bool | None, b: bool | None) -> bool | None:
+    """Two deployments of one name: a flag both state the same way, else
+    unknown (a request may land on either, so neither claim holds alone)."""
+    return a if a is not None and a == b else None
+
+
+def _merge_window(a: int | None, b: int | None) -> int | None:
+    """The smaller of two stated windows; unknown when either is unknown."""
+    if a is None or b is None:
+        return None
+    return min(a, b)
+
+
 @dataclass(frozen=True)
 class Upstream:
     """One name a proxy serves and where it goes. No ``api_base`` is kept:
     only the verdict is needed after the read, and an address can carry a
-    query string nobody should have to see in a saved file."""
+    query string nobody should have to see in a saved file.
+
+    The capability fields (the gateway-key fix) are what the proxy's own
+    ``model_info`` states for the name; ``None`` = it did not say."""
 
     alias: str
     model: str
     place: str
+    vision: bool | None = None
+    tool_use: bool | None = None
+    context_window: int | None = None
+
+    def caps(self) -> dict[str, Any]:
+        return {"vision": self.vision, "tool_use": self.tool_use, "context_window": self.context_window}
+
+
+def _merge_caps(entries: "list[Upstream]") -> dict[str, Any]:
+    """The capabilities several deployments share (see the two merges)."""
+    if not entries:
+        return {k: None for k in CAP_KEYS}
+    vision, tools, window = entries[0].vision, entries[0].tool_use, entries[0].context_window
+    for e in entries[1:]:
+        vision = _merge_flag(vision, e.vision)
+        tools = _merge_flag(tools, e.tool_use)
+        window = _merge_window(window, e.context_window)
+    return {"vision": vision, "tool_use": tools, "context_window": window}
 
 
 @dataclass(frozen=True)
@@ -130,18 +187,48 @@ class RouteTable:
         except Exception:  # noqa: BLE001 — fail closed
             return PLACE_CLOUD
 
-    def signature(self) -> tuple[tuple[str, str, str], ...]:
+    def caps(self, model: str) -> dict[str, Any]:
+        """What the proxy's ``model_info`` states *model* can do:
+        ``{"vision", "tool_use", "context_window"}``, each ``None`` when the
+        table does not say. Matched on the served name; wildcard entries the
+        way :meth:`place` treats them (every matching deployment must agree);
+        a name the table does not list stays unknown — never guessed. Never
+        raises."""
+        unknown = {k: None for k in CAP_KEYS}
+        try:
+            name = str(model or "").strip()
+            if not name or not self.entries:
+                return unknown
+            exact = [e for e in self.entries if e.alias == name]
+            if exact:
+                return _merge_caps(exact)
+            hits = [
+                e for e in self.entries if "*" in e.alias and fnmatch.fnmatchcase(name, e.alias)
+            ]
+            return _merge_caps(hits) if hits else unknown
+        except Exception:  # noqa: BLE001 — unknown, never a guess
+            return unknown
+
+    def signature(self) -> tuple[tuple[Any, ...], ...]:
         """What the verdicts depend on (the read time is not part of it)."""
-        return tuple((e.alias, e.model, e.place) for e in self.entries)
+        return tuple(
+            (e.alias, e.model, e.place, e.vision, e.tool_use, e.context_window) for e in self.entries
+        )
 
     def cloud_names(self) -> list[str]:
         return [e.alias for e in self.entries if e.place != PLACE_LOCAL]
 
     def to_json(self) -> dict[str, Any]:
-        return {
-            "read_at": self.read_at,
-            "entries": [{"alias": e.alias, "model": e.model, "place": e.place} for e in self.entries],
-        }
+        rows: list[dict[str, Any]] = []
+        for e in self.entries:
+            row: dict[str, Any] = {"alias": e.alias, "model": e.model, "place": e.place}
+            # Only what the proxy stated (a saved table from before the
+            # gateway-key fix has none of these keys and loads as unknown).
+            for key, value in e.caps().items():
+                if value is not None:
+                    row[key] = value
+            rows.append(row)
+        return {"read_at": self.read_at, "entries": rows}
 
     @classmethod
     def from_json(cls, raw: Any) -> "RouteTable | None":
@@ -158,6 +245,9 @@ class RouteTable:
                 alias=str(e["alias"]).strip(),
                 model=str(e.get("model") or ""),
                 place=PLACE_LOCAL if place == PLACE_LOCAL else PLACE_CLOUD,
+                vision=_flag(e.get("vision")),
+                tool_use=_flag(e.get("tool_use")),
+                context_window=_window(e.get("context_window")),
             ))
         try:
             read_at = float(raw.get("read_at") or 0.0)
@@ -194,21 +284,41 @@ def parse_model_info(payload: Any) -> RouteTable | None:
         params = e.get("litellm_params") if isinstance(e.get("litellm_params"), dict) else {}
         model = str(params.get("model") or "")
         place = upstream_place(model, str(params.get("api_base") or ""))
+        info = e.get("model_info") if isinstance(e.get("model_info"), dict) else {}
+        vision = _flag(info.get("supports_vision"))
+        tools = _flag(info.get("supports_function_calling"))
+        window = _window(info.get("max_input_tokens"))
         # One name can be served by several deployments (LiteLLM load-balances
-        # them): if ANY of them is cloud, a request may go there.
+        # them): if ANY of them is cloud, a request may go there. A capability
+        # holds only when every deployment states it the same way.
         if alias in seen:
             i = seen[alias]
             prev = out[i]
-            if prev.place == PLACE_LOCAL and place != PLACE_LOCAL:
-                out[i] = Upstream(alias=alias, model=model, place=PLACE_CLOUD)
+            out[i] = Upstream(
+                alias=alias,
+                model=prev.model if prev.place != PLACE_LOCAL or place == PLACE_LOCAL else model,
+                place=PLACE_CLOUD if PLACE_CLOUD in (prev.place, place) else PLACE_LOCAL,
+                vision=_merge_flag(prev.vision, vision),
+                tool_use=_merge_flag(prev.tool_use, tools),
+                context_window=_merge_window(prev.context_window, window),
+            )
             continue
         seen[alias] = len(out)
-        out.append(Upstream(alias=alias, model=model, place=place))
+        out.append(
+            Upstream(
+                alias=alias, model=model, place=place,
+                vision=vision, tool_use=tools, context_window=window,
+            )
+        )
     return RouteTable(entries=tuple(out), read_at=time.time())
 
 
 def read_routes(
-    node: FleetNode, *, get: probes.Getter = probes._get, key: str = ""
+    node: FleetNode,
+    *,
+    get: probes.Getter = probes._get,
+    key: str = "",
+    headers: dict[str, str] | None = None,
 ) -> "RouteTable | str":
     """Read one node's routing table: a :class:`RouteTable`,
     :data:`NOT_A_PROXY`, or :data:`UNREAD`. BLOCKING (one HTTP GET with the
@@ -218,12 +328,17 @@ def read_routes(
     *key* (v1.365.2): the node's own saved API key, sent as a Bearer token —
     a proxy with a master key answers ``/model/info`` 401 without it, and the
     table (and with it the cloud verdict) would then never be read. The key
-    goes in the request header only; it is never logged or stored here."""
+    goes in the request header only; it is never logged or stored here.
+    *headers* (the gateway-key fix) wins when given: the registry's
+    ``headers_for(node)``, the one helper every gateway read goes through."""
     try:
         root = probes.normalize_root(getattr(node, "base_url", "") or "")
         if not root:
             return NOT_A_PROXY
-        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        if headers is None:
+            from .endpoint_auth import auth_headers
+
+            headers = auth_headers(key)
         try:
             resp = get(f"{root}/model/info", headers=headers)
         except Exception:  # noqa: BLE001 — no answer: keep what we had

@@ -33,7 +33,14 @@ export default defineConfig({
       url: `http://127.0.0.1:${DAEMON}/health`,
       timeout: 180_000,
       reuseExistingServer: false,
-      env: { DOCKER_HOST: "tcp://127.0.0.1:1" },
+      // IRONJARVIS_OPENCODE_CONFIG_DIR: the scratch daemon must not read the
+      // developer's own OpenCode config, which points at their real model
+      // gateway (it asked that gateway /model/info with no key at every
+      // start). An empty folder inside the fresh home: nothing to read.
+      env: {
+        DOCKER_HOST: "tcp://127.0.0.1:1",
+        IRONJARVIS_OPENCODE_CONFIG_DIR: "e2e/.home/no-opencode-config",
+      },
     },
     {
       command: `npx next dev -p ${WEB}`,

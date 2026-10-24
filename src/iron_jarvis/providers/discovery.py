@@ -117,24 +117,60 @@ def _openai_compatible_models(base_url: str, key: str = "") -> list[str]:
     return [str(m.get("id")) for m in data.get("data", []) if m.get("id")]
 
 
-def list_endpoint_models(base_url: str, key: str = "") -> list[str]:
+def _status_of(exc: BaseException) -> int:
+    """The HTTP status an ``httpx.HTTPStatusError`` carries, else 0."""
+    resp = getattr(exc, "response", None)
+    try:
+        return int(getattr(resp, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def ollama_fallback_allowed(exc: BaseException, ollama_ok: bool | None) -> bool:
+    """May a listing that failed with *exc* be retried at Ollama's native
+    ``/api/tags`` (the gateway-key fix)?
+
+    * ``ollama_ok`` True (the Ollama settings slot, a node detected as Ollama)
+      → yes;
+    * False (a server known to be LiteLLM / vLLM / OpenAI-compatible) → never:
+      a LiteLLM gateway 404s every ``/api/*`` address;
+    * None (nothing known) → only when the server ANSWERED 404 — an Ollama old
+      enough to predate its ``/v1`` shim. Never after an auth refusal
+      (401/403: Ollama has no keys, so that server is not Ollama) and never
+      after a transport failure (a dead host is asked once, not twice)."""
+    if ollama_ok is True:
+        return True
+    if ollama_ok is False:
+        return False
+    return _status_of(exc) == 404
+
+
+def _ollama_host(base_url: str) -> str:
+    host = (base_url or "").strip().rstrip("/")
+    for suffix in ("/v1/chat/completions", "/chat/completions", "/v1"):
+        if host.endswith(suffix):
+            host = host[: -len(suffix)].rstrip("/")
+            break
+    return host
+
+
+def list_endpoint_models(base_url: str, key: str = "", *, ollama_ok: bool | None = None) -> list[str]:
     """UNCACHED model listing for a user-entered endpoint (the setup form's
     probe — the user shouldn't have to know their server's model ids by
     heart). Tries the OpenAI-compatible ``/v1/models`` first, then Ollama's
     native ``/api/tags``; raises the original error when both fail so the
-    caller can surface it honestly."""
+    caller can surface it honestly. The gateway-key fix: never Ollama's
+    address for a server known not to be Ollama (``ollama_ok`` False), nor
+    after an auth refusal (401/403 — Ollama has no keys)."""
     if not (base_url or "").strip():
         raise ValueError("base_url is required")
     try:
         return _openai_compatible_models(base_url, key)
-    except Exception:
+    except Exception as exc:
+        if ollama_ok is False or _status_of(exc) in (401, 403):
+            raise
         # Bare Ollama hosts may predate the /v1 shim — try the native API.
-        host = (base_url or "").strip().rstrip("/")
-        for suffix in ("/v1/chat/completions", "/chat/completions", "/v1"):
-            if host.endswith(suffix):
-                host = host[: -len(suffix)].rstrip("/")
-                break
-        return _ollama_models(host)
+        return _ollama_models(_ollama_host(base_url))
 
 
 _ANTHROPIC_VERSION = "2023-06-01"
@@ -179,12 +215,15 @@ def _anthropic_compatible_models(base_url: str, key: str = "") -> list[str]:
     return ids
 
 
-def _fleet_endpoint_models(base_url: str, key: str, protocol: str) -> list[str]:
+def _fleet_endpoint_models(
+    base_url: str, key: str, protocol: str, ollama_ok: bool | None = None
+) -> list[str]:
     """One fleet endpoint's live model ids, asked the way it chats (v1.332.0):
     ``anthropic`` → the Anthropic Models API; anything else → the
     OpenAI-compatible ``/v1/models``, then Ollama's native ``/api/tags`` only
-    when the server ANSWERED with an error status (a dead host is asked once,
-    not twice)."""
+    when :func:`ollama_fallback_allowed` says so (the gateway-key fix: it used
+    to follow ANY error status — a keyed LiteLLM gateway's 401 included — so
+    the gateway was asked Ollama's address it 404s, on every catalog refresh)."""
     if protocol == "anthropic":
         return _anthropic_compatible_models(base_url, key)
     try:
@@ -194,16 +233,17 @@ def _fleet_endpoint_models(base_url: str, key: str, protocol: str) -> list[str]:
 
         if not isinstance(exc, httpx.HTTPStatusError):
             raise
-        host = (base_url or "").strip().rstrip("/")
-        for suffix in ("/v1/chat/completions", "/chat/completions", "/v1"):
-            if host.endswith(suffix):
-                host = host[: -len(suffix)].rstrip("/")
-                break
-        return _ollama_models(host)
+        if not ollama_fallback_allowed(exc, ollama_ok):
+            raise
+        return _ollama_models(_ollama_host(base_url))
 
 
 def _fetch(
-    provider: str, credential: Callable[[], str | None], base_url: str, protocol: str
+    provider: str,
+    credential: Callable[[], str | None],
+    base_url: str,
+    protocol: str,
+    ollama_ok: bool | None = None,
 ) -> list[str]:
     """Ask the provider NOW. Never raises: a failure is ``[]`` (nothing learned)."""
     ids: list[str] = []
@@ -216,7 +256,7 @@ def _fetch(
             # v1.332.0: a fleet endpoint ("fleet-<id>") is asked for its real
             # list. Before this every one fell through to the key branch below,
             # matched no provider, and listed only its default model.
-            ids = _fleet_endpoint_models(base_url, credential() or "", protocol)
+            ids = _fleet_endpoint_models(base_url, credential() or "", protocol, ollama_ok)
         else:
             key = credential() or ""
             if not key:
@@ -248,6 +288,7 @@ def _refresh_in_background(
     credential: Callable[[], str | None],
     base_url: str,
     protocol: str,
+    ollama_ok: bool | None = None,
 ) -> None:
     """Start ONE refresh thread for ``cache_key`` unless one is running."""
     with _lock:
@@ -258,7 +299,7 @@ def _refresh_in_background(
     def _run() -> None:
         global _generation
         try:
-            ids = _fetch(provider, credential, base_url, protocol)
+            ids = _fetch(provider, credential, base_url, protocol, ollama_ok)
             if _store(cache_key, ids, at=time.monotonic()):
                 with _lock:
                     _generation += 1
@@ -281,6 +322,7 @@ def discover_models(
     *,
     base_url: str = "",
     protocol: str = "openai",
+    ollama_ok: bool | None = None,
 ) -> list[str]:
     """Live model ids for one provider (cached). Empty list = nothing learned
     (caller keeps the curated entries).
@@ -290,7 +332,9 @@ def discover_models(
     behind it, one refresh per key, so a picker never waits on a provider it
     already has an answer from; only a key never asked (or :func:`clear`-ed)
     waits for the fetch. ``protocol`` is a fleet endpoint's
-    (``FleetNode.protocol``)."""
+    (``FleetNode.protocol``); ``ollama_ok`` (the gateway-key fix) is the
+    registry's ``ollama_style_ok`` for its address — whether a failed listing
+    may be retried at Ollama's ``/api/tags``."""
     now = time.monotonic()
     # Key by provider AND endpoint URL: a re-pointed local/custom endpoint is a
     # DIFFERENT server, so its cache entry must miss — with a provider-only key
@@ -305,9 +349,9 @@ def discover_models(
         ids = [m["model"] for m in hit[1]]
         ttl = _CACHE_TTL if ids else _NEGATIVE_TTL
         if now - hit[0] >= ttl:
-            _refresh_in_background(cache_key, provider, credential, base_url, protocol)
+            _refresh_in_background(cache_key, provider, credential, base_url, protocol, ollama_ok)
         return ids
-    ids = _fetch(provider, credential, base_url, protocol)
+    ids = _fetch(provider, credential, base_url, protocol, ollama_ok)
     _store(cache_key, ids, at=now)
     return ids
 

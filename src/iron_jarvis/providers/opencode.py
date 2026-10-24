@@ -97,19 +97,39 @@ def is_local_url(url: str) -> bool:
 # --- OpenCode's own config -----------------------------------------------------
 
 
-def _config_paths() -> list[Path]:
+#: When set (non-blank), the ONLY folder OpenCode's config is read from — for
+#: daemons that must not see the developer's own setup: the test suite and the
+#: processes it starts (``tests/conftest.py``), the end-to-end launcher and the
+#: scratch stacks. The developer's OpenCode config points at their real model
+#: gateway, and reading it makes the daemon ask that gateway ``/model/info``
+#: at every start (the gateway-key review).
+CONFIG_DIR_ENV = "IRONJARVIS_OPENCODE_CONFIG_DIR"
+
+
+def opencode_config_paths(environ: Any = None) -> list[Path]:
+    """Where OpenCode's config is read from: :data:`CONFIG_DIR_ENV` alone when
+    it is set, else ``~/.config/opencode`` and ``$XDG_CONFIG_HOME/opencode``."""
+    env = os.environ if environ is None else environ
+    override = str(env.get(CONFIG_DIR_ENV) or "").strip()
+    if override:
+        base = Path(override)
+        return [base / "opencode.jsonc", base / "opencode.json"]
     home = Path.home()
     out = [
         home / ".config" / "opencode" / "opencode.jsonc",
         home / ".config" / "opencode" / "opencode.json",
     ]
-    xdg = os.environ.get("XDG_CONFIG_HOME")
+    xdg = env.get("XDG_CONFIG_HOME")
     if xdg:
         out += [
             Path(xdg) / "opencode" / "opencode.jsonc",
             Path(xdg) / "opencode" / "opencode.json",
         ]
     return out
+
+
+def _config_paths() -> list[Path]:
+    return opencode_config_paths()
 
 
 def _strip_jsonc(raw: str) -> str:
@@ -165,7 +185,11 @@ def list_models(runner: Callable[..., tuple[int, str, str]] | None = None,
     ]
 
 
-def _passthrough_aliases(base_url: str, http_get: Callable[..., Any] | None = None) -> set[str]:
+def _passthrough_aliases(
+    base_url: str,
+    http_get: Callable[..., Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> set[str]:
     """Aliases a proxy forwards to a REMOTE backend (so: not local).
 
     Reads a LiteLLM-style ``/model/info``. An entry whose backend ``api_base``
@@ -173,6 +197,12 @@ def _passthrough_aliases(base_url: str, http_get: Callable[..., Any] | None = No
     leaves your network even though the proxy in front of it did not.
     Unreadable proxy => empty set, and the caller stays conservative by other
     means (an explicit allowlist).
+
+    *headers* (the gateway-key fix): the saved key of the Iron Jarvis
+    endpoint that IS this server (``FleetRegistry.headers_for_url``). The
+    user's OpenCode points at their keyed LiteLLM gateway, and this read went
+    out bare on every daemon boot — and on every app the test suite started.
+    Passed to *http_get* only when there are some.
     """
     root = base_url.rstrip("/")
     for suffix in ("/v1", "/chat/completions"):
@@ -183,10 +213,11 @@ def _passthrough_aliases(base_url: str, http_get: Callable[..., Any] | None = No
         if http_get is None:
             import httpx
 
-            def http_get(url: str) -> Any:  # type: ignore[misc]
-                return httpx.get(url, timeout=_PROBE_TIMEOUT)
+            def http_get(url: str, headers: dict[str, str] | None = None) -> Any:  # type: ignore[misc]
+                return httpx.get(url, headers=headers or {}, timeout=_PROBE_TIMEOUT)
 
-        resp = http_get(f"{root}/model/info")
+        url = f"{root}/model/info"
+        resp = http_get(url, headers=dict(headers)) if headers else http_get(url)
         data = resp.json() if hasattr(resp, "json") else {}
     except Exception:  # noqa: BLE001 — a proxy that won't answer teaches nothing
         return out
@@ -208,15 +239,25 @@ def local_models(
     which: Callable[[str], str | None] = shutil.which,
     providers: dict[str, str] | None = None,
     http_get: Callable[..., Any] | None = None,
+    headers_for: Callable[[str], dict[str, str]] | None = None,
 ) -> list[str]:
-    """``provider/model`` entries genuinely served by hardware the user owns."""
+    """``provider/model`` entries genuinely served by hardware the user owns.
+
+    ``headers_for`` (the gateway-key fix) answers the saved key's headers for
+    a provider address (``FleetRegistry.headers_for_url``)."""
     provs = providers if providers is not None else config_providers()
     local_provs = {pid: url for pid, url in provs.items() if url and is_local_url(url)}
     if not local_provs:
         return []
     passthrough: dict[str, set[str]] = {}
     for pid, url in local_provs.items():
-        passthrough[pid] = _passthrough_aliases(url, http_get)
+        headers: dict[str, str] = {}
+        if headers_for is not None:
+            try:
+                headers = dict(headers_for(url) or {})
+            except Exception:  # noqa: BLE001 — read without a key
+                headers = {}
+        passthrough[pid] = _passthrough_aliases(url, http_get, headers)
     out: list[str] = []
     for entry in list_models(runner=runner, which=which):
         pid, _, model = entry.partition("/")

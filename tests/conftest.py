@@ -330,6 +330,42 @@ def _isolate_opencode_store():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _isolate_opencode_config():
+    """No test reads the developer's REAL OpenCode config (the gateway-key fix).
+
+    Every app a test starts runs ``warm_opencode`` in its lifespan, which
+    resolves OpenCode's local models from ``~/.config/opencode/opencode.json(c)``.
+    On the user's PC that config points at their LiteLLM gateway, so EVERY
+    ``with TestClient(create_app(...))`` sent ``GET <gateway>/model/info`` with
+    no key (a fresh test home knows none) and ran the real ``opencode`` binary
+    — measured: one bare lifespan, one unkeyed request to the gateway. CI has
+    no such config, so it never saw this. The config path list is empty for
+    the session; tests that exercise the parser pass explicit paths.
+
+    A daemon started in ANOTHER process (the update rehearsal's ``serve``,
+    every test that spawns one) does not see this patch: it gets
+    ``IRONJARVIS_OPENCODE_CONFIG_DIR`` instead — an empty scratch folder,
+    inherited through ``os.environ`` — so it reads no OpenCode config either
+    (the gateway-key review: such a boot asked the gateway ``/model/info``)."""
+    import tempfile
+
+    from iron_jarvis.providers import opencode as _oc
+
+    original = _oc._config_paths
+    _oc._config_paths = lambda: []
+    old_env = os.environ.get(_oc.CONFIG_DIR_ENV)
+    os.environ[_oc.CONFIG_DIR_ENV] = tempfile.mkdtemp(prefix="ij-test-no-opencode-config-")
+    try:
+        yield
+    finally:
+        _oc._config_paths = original
+        if old_env is None:
+            os.environ.pop(_oc.CONFIG_DIR_ENV, None)
+        else:
+            os.environ[_oc.CONFIG_DIR_ENV] = old_env
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_pi_store():
     """Keep the developer's REAL Pi session store out of every test (v1.213.0).
 

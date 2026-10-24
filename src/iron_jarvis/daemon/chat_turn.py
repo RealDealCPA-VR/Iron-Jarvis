@@ -6115,6 +6115,18 @@ def _ladder_window_source(d, provider: str, model: str) -> "tuple[int | None, st
             return int(n), "catalog"
     fleet = getattr(d.platform, "fleet", None)
     if fleet is not None and model:
+        # THE GATEWAY-KEY FIX: a model proxy's own /model/info states each
+        # served name's window (``max_input_tokens``), read in the background
+        # with the node's key (FleetRegistry.model_caps — a cached read, never
+        # a request). Unknown stays unknown: only a stated window answers.
+        caps_of = getattr(fleet, "model_caps", None)
+        if callable(caps_of):
+            try:
+                n = (caps_of(provider, model) or {}).get("context_window")
+            except Exception:  # noqa: BLE001 — budgets fall back to defaults
+                n = None
+            if isinstance(n, int) and not isinstance(n, bool) and n > 0:
+                return n, "endpoint"
         try:  # best-effort probe read — fleet node models may carry the window
             for node in fleet.nodes():
                 for m in getattr(node, "models", None) or []:

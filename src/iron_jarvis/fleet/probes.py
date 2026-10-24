@@ -20,6 +20,7 @@ so and offer the one command that would change it.
 from __future__ import annotations
 
 import ipaddress
+import threading
 import time
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -70,6 +71,24 @@ def _get(url: str, headers: dict[str, str] | None = None) -> Any:
 
 
 Getter = Callable[..., Any]
+
+
+def _keyed(get: Getter, headers: dict[str, str] | None) -> Getter:
+    """*get* with *headers* (the node's saved key, from
+    ``fleet/endpoint_auth``) on EVERY request it makes — the probes' own
+    per-request headers (the Anthropic version) are merged over them. With no
+    headers it is *get* itself, so a keyless node's requests are unchanged."""
+    if not headers:
+        return get
+    base = dict(headers)
+
+    def keyed(url: str, headers: dict[str, str] | None = None) -> Any:
+        merged = dict(base)
+        if headers:
+            merged.update(headers)
+        return get(url, headers=merged)
+
+    return keyed
 
 
 # --------------------------------------------------------------------------- #
@@ -152,7 +171,19 @@ def _slug(text: str) -> str:
 # --------------------------------------------------------------------------- #
 # detection
 # --------------------------------------------------------------------------- #
-def detect_kind(base_url: str, *, get: Getter = _get) -> tuple[NodeKind, str]:
+#: Said when a server answered detection with 401/403: it is a keyed server
+#: (so not Ollama, which has no keys) and nothing more can be learned without
+#: the key. Plain words; the Fleet page shows it as the reason.
+NEEDS_KEY_REASON = "the server asked for an API key"
+
+
+def _auth_refused(resp: Any) -> bool:
+    return int(getattr(resp, "status_code", 0) or 0) in (401, 403)
+
+
+def detect_kind(
+    base_url: str, *, get: Getter = _get, headers: dict[str, str] | None = None
+) -> tuple[NodeKind, str]:
     """Classify a server by what it answers. Returns ``(kind, error)`` — the
     error is the last transport failure, kept verbatim, and is only meaningful
     when the kind is ``unknown``.
@@ -161,35 +192,45 @@ def detect_kind(base_url: str, *, get: Getter = _get) -> tuple[NodeKind, str]:
     A LiteLLM proxy also answers ``/v1/models``, so probing that first would
     classify it as a plain ``openai-compat`` endpoint and the entire topology
     behind it (which servers, which are reachable) would be lost.
+
+    THE GATEWAY-KEY FIX: every request carries *headers* (the node's saved
+    key, ``fleet/endpoint_auth``), and LiteLLM is now asked FIRST — before
+    Ollama's ``/api/version``. A server that answers 401/403 is a keyed server
+    and is never Ollama (Ollama has no keys), so detection stops there with
+    :data:`NEEDS_KEY_REASON` instead of asking it Ollama's addresses or
+    repeating the refused request at three more paths. An Ollama box costs one
+    404 at ``/model/info`` before its own ``/api/version`` answers.
     """
     root = normalize_root(base_url)
     if not root:
         return "unknown", "no base_url"
     last = ""  # last real transport failure
     last_status = ""  # last "host answered, just not this API"
+    refused = False  # a 401/403 — a keyed server: stop asking
+
+    get = _keyed(get, headers)
 
     def _try(path: str) -> Any | None:
-        nonlocal last, last_status
+        nonlocal last, last_status, refused
+        url = f"{root}{path}"
         try:
-            return _fetch(get, f"{root}{path}")
-        except ProbeUnreachable as exc:
-            if exc.phrase.startswith("http "):
-                last_status = exc.detail
-            else:
-                last = exc.detail
+            resp = get(url, headers=None)
+        except Exception as exc:  # noqa: BLE001 — every transport failure is data
+            last = str(exc) or _human_error(exc)
             return None
+        if _auth_refused(resp):
+            refused = True
+            return None
+        code = int(getattr(resp, "status_code", 0) or 0)
+        if not 200 <= code < 300:
+            last_status = f"{url} returned http {code}"
+            return None
+        return resp
 
-    # 1. Ollama — native API, no /metrics, no OpenAI /v1 on older builds.
-    resp = _try("/api/version")
-    if resp is not None:
-        try:
-            if str(_payload(resp).get("version") or ""):
-                return "ollama", ""
-        except ProbeUnreachable:
-            pass
-
-    # 2. LiteLLM — the only server that reports its own upstream topology.
+    # 1. LiteLLM — the only server that reports its own upstream topology.
     resp = _try("/model/info")
+    if refused:
+        return "unknown", NEEDS_KEY_REASON
     if resp is not None:
         try:
             data = _payload(resp).get("data")
@@ -200,13 +241,28 @@ def detect_kind(base_url: str, *, get: Getter = _get) -> tuple[NodeKind, str]:
         ):
             return "litellm", ""
 
+    # 2. Ollama — native API, no /metrics, no OpenAI /v1 on older builds.
+    resp = _try("/api/version")
+    if refused:
+        return "unknown", NEEDS_KEY_REASON
+    if resp is not None:
+        try:
+            if str(_payload(resp).get("version") or ""):
+                return "ollama", ""
+        except ProbeUnreachable:
+            pass
+
     # 3. vLLM — the engine metrics namespace is unmistakable.
     resp = _try("/metrics")
+    if refused:
+        return "unknown", NEEDS_KEY_REASON
     if resp is not None and "vllm:" in str(getattr(resp, "text", "") or ""):
         return "vllm", ""
 
     # 4. Anything else speaking the OpenAI API (LM Studio, llama.cpp, TGI…).
     resp = _try("/v1/models")
+    if refused:
+        return "unknown", NEEDS_KEY_REASON
     if resp is not None:
         try:
             if isinstance(_payload(resp).get("data"), list):
@@ -416,22 +472,85 @@ def _probe_vllm(node: FleetNode, root: str, get: Getter) -> NodeSnapshot:
     )
 
 
-def _litellm_metrics_reason(root: str, get: Getter) -> str:
+#: How long a proxy's ``/metrics`` answer is remembered before it is asked
+#: again (the gateway-key review). The answer only feeds a sentence on the
+#: Fleet page ("not enabled" / "enabled, but proxy counters are not engine
+#: metrics"), and it does not change pass to pass; asking on EVERY sampler
+#: pass — every 2 s while the Fleet page is open — was 1,800 keyed requests an
+#: hour against the user's gateway, each one a whole Prometheus page when
+#: metrics are on (the user's proxy answers /metrics 401 to a caller with no
+#: key, and an unknown address 404: the route is there, behind the key).
+METRICS_TTL_S = 600.0
+
+#: Answers that say what ``/metrics`` IS (there, not there, behind other
+#: auth). A server error or no answer is asked again next pass.
+_METRICS_SETTLED = (401, 403, 404)
+
+_METRICS_NOT_ENABLED = "LiteLLM /metrics is not enabled on this proxy"
+
+
+class MetricsMemo:
+    """Remembers, per proxy root, the sentence a settled ``/metrics`` answer
+    gave (a 2xx, 401, 403 or 404) for :data:`METRICS_TTL_S` on *clock*. A
+    server error or a transport failure is never remembered. The fleet sampler
+    holds one and forgets a node on a forced Refresh or a Re-detect, so the
+    user asking always asks the server. Thread-safe (sampler passes run in
+    worker threads)."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic, ttl: float = METRICS_TTL_S) -> None:
+        self._clock = clock
+        self._ttl = float(ttl)
+        self._held: dict[str, tuple[float, str]] = {}
+        self._lock = threading.Lock()
+
+    def recall(self, root: str) -> str | None:
+        with self._lock:
+            held = self._held.get(root)
+            if held is None:
+                return None
+            if self._clock() >= held[0]:
+                self._held.pop(root, None)
+                return None
+            return held[1]
+
+    def remember(self, root: str, reason: str) -> None:
+        with self._lock:
+            self._held[root] = (self._clock() + self._ttl, reason)
+
+    def forget(self, root: str | None = None) -> None:
+        with self._lock:
+            if root is None:
+                self._held.clear()
+            else:
+                self._held.pop(root, None)
+
+
+def _litellm_metrics_reason(root: str, get: Getter, memo: MetricsMemo | None = None) -> str:
     """Probe ``/metrics`` ONCE to learn the real reason, instead of guessing.
-    The user's proxy 404s here; other deployments enable it."""
+    Some proxies 404 here; others enable it. A settled answer is remembered in
+    *memo* (when the caller keeps one), so it is not asked again for
+    :data:`METRICS_TTL_S`."""
+    if memo is not None:
+        held = memo.recall(root)
+        if held is not None:
+            return held
     try:
         resp = get(f"{root}/metrics", headers=None)
     except Exception as exc:  # noqa: BLE001
         return f"LiteLLM /metrics could not be read ({_human_error(exc)})"
     code = int(getattr(resp, "status_code", 0) or 0)
     if code == 404:
-        return "LiteLLM /metrics is not enabled on this proxy"
-    if not 200 <= code < 300:
-        return f"LiteLLM /metrics returned http {code}"
-    return (
-        "LiteLLM /metrics is enabled, but proxy counters are not engine "
-        "metrics. Per-node numbers come from the servers behind it."
-    )
+        reason = _METRICS_NOT_ENABLED
+    elif not 200 <= code < 300:
+        reason = f"LiteLLM /metrics returned http {code}"
+    else:
+        reason = (
+            "LiteLLM /metrics is enabled, but proxy counters are not engine "
+            "metrics. Per-node numbers come from the servers behind it."
+        )
+    if memo is not None and (200 <= code < 300 or code in _METRICS_SETTLED):
+        memo.remember(root, reason)
+    return reason
 
 
 def _health_sets(
@@ -463,7 +582,7 @@ def _health_sets(
 
 
 def _probe_litellm(
-    node: FleetNode, root: str, get: Getter
+    node: FleetNode, root: str, get: Getter, memo: MetricsMemo | None = None
 ) -> tuple[NodeSnapshot, list[FleetNode]]:
     """The proxy is the only node that knows the SHAPE of the fleet: every
     alias, and the upstream URL it routes to. Those upstreams become topology
@@ -502,7 +621,7 @@ def _probe_litellm(
         status="online",
         evidence="direct",
         metrics_supported=False,
-        metrics_reason=_litellm_metrics_reason(root, get),
+        metrics_reason=_litellm_metrics_reason(root, get, memo),
         metrics=None,
         rates=None,
         models=models,
@@ -546,11 +665,13 @@ _ANTHROPIC_VERSION = "2023-06-01"
 
 def _probe_anthropic(node: FleetNode, root: str, get: Getter) -> NodeSnapshot:
     """An Anthropic-compatible node (v1.329.0): ``GET /v1/models`` the
-    Anthropic way. The sampler holds no keys, and such servers usually list
-    their models only to a keyed caller, so a 401/403 is still a server that
-    ANSWERED: the node is reachable and its model list is simply not readable
-    from here (said in ``metrics_reason``, never shown as an empty list that
-    means "no models"). Any other non-2xx, or no answer, is offline."""
+    Anthropic way, with the node's saved key when it has one (the gateway-key
+    fix: ``probe_node`` adds ``x-api-key`` to every request). Such servers
+    usually list their models only to a keyed caller, so a 401/403 is still a
+    server that ANSWERED: the node is reachable and its model list is simply
+    not readable from here (said in ``metrics_reason``, never shown as an
+    empty list that means "no models"). Any other non-2xx, or no answer, is
+    offline."""
     url = f"{root}/v1/models"
     try:
         resp = get(url, headers={"anthropic-version": _ANTHROPIC_VERSION})
@@ -589,14 +710,28 @@ def _probe_anthropic(node: FleetNode, root: str, get: Getter) -> NodeSnapshot:
 # public probe
 # --------------------------------------------------------------------------- #
 def probe_node(
-    node: FleetNode, *, get: Getter = _get
+    node: FleetNode,
+    *,
+    get: Getter = _get,
+    headers: dict[str, str] | None = None,
+    metrics_memo: MetricsMemo | None = None,
 ) -> tuple[NodeSnapshot, list[FleetNode]]:
     """One sampling pass. Returns ``(snapshot, discovered_children)`` — children
     are only ever produced by a LiteLLM proxy, every other kind returns ``[]``.
 
     Any failure lands in :func:`_unreadable`, so an unreachable node can only
     come back with ``metrics=None`` / ``rates=None``.
+
+    *headers* (the gateway-key fix) ride EVERY request of the pass: the node's
+    saved key from ``FleetRegistry.headers_for`` (``fleet/endpoint_auth``).
+    The sampler, the add-node route and the probe form pass them; a keyed
+    proxy used to be asked with none, every 30 s, and answered 401.
+
+    *metrics_memo* (the gateway-key review): the sampler's
+    :class:`MetricsMemo`, so a proxy with no ``/metrics`` is not asked for it
+    on every pass. None (every other caller) asks, as before.
     """
+    get = _keyed(get, headers)
     started = time.perf_counter()
     root = normalize_root(node.base_url)
     if not root:
@@ -640,7 +775,7 @@ def probe_node(
         elif node.kind == "vllm":
             snap = _probe_vllm(node, root, get)
         elif node.kind == "litellm":
-            snap, children = _probe_litellm(node, root, get)
+            snap, children = _probe_litellm(node, root, get, metrics_memo)
         elif node.kind == "openai-compat":
             snap = _probe_openai_compat(node, root, get)
         else:
@@ -658,13 +793,17 @@ def probe_node(
     return snap, children
 
 
-def litellm_child_health(node: FleetNode, *, get: Getter = _get) -> dict[str, str]:
+def litellm_child_health(
+    node: FleetNode, *, get: Getter = _get, headers: dict[str, str] | None = None
+) -> dict[str, str]:
     """``{child_id: healthy|unhealthy|unknown}`` for one LiteLLM proxy.
 
     ``NodeSnapshot.proxy_health`` lives on the CHILD's snapshot, but only the
     parent can learn it (``/health`` is a proxy endpoint). The sampler applies
-    this map onto child snapshots after probing the parent.
+    this map onto child snapshots after probing the parent. Every request
+    carries *headers* (the proxy's saved key), like :func:`probe_node`.
     """
+    get = _keyed(get, headers)
     root = normalize_root(node.base_url)
     if not root:
         return {}
