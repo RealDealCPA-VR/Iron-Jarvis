@@ -13,7 +13,9 @@ Scenarios (``FAKE_BENCH_SCENARIO``): ``solve`` (default), ``error`` (an
 usage limit), ``auth`` (not signed in), ``max_turns`` (``error_max_turns``),
 ``hang`` (never answers), ``outside`` (also writes a file next to its working
 folder), ``silent`` (does its work, then dies with no result line), ``dead``
-(dies before doing anything).
+(dies before doing anything), ``hang_r2`` (hangs in a task's repeat 2 only),
+``leave_server`` (starts the price task's server in the background and never
+stops it).
 
 v1.383.0: like the real one, its ``system/init`` line names the model it runs
 on — the full id an alias stands for (``--model sonnet`` reports
@@ -64,9 +66,24 @@ def main() -> int:
     reported = os.environ.get("FAKE_BENCH_REPORTED_MODEL") or ALIASES.get(passed, passed)
     emit({"type": "system", "subtype": "init", "session_id": "fake", "tools": ["Read", "Write"],
           "model": reported})
-    if scenario == "hang":
+    if scenario == "hang" or (scenario == "hang_r2" and pathlib.Path.cwd().parent.name.endswith(".r2")):
+        # ``hang_r2`` (v1.383.0 review): only a task's repeat 2 hangs, so a
+        # run can be killed part-way through its second repeat.
         time.sleep(600)
         return 0
+    if scenario == "leave_server":
+        # v1.383.0 review: the agent starts the task's own server in the
+        # background and never stops it (its PID is left in server.pid).
+        import subprocess
+
+        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        kid = subprocess.Popen([sys.executable, "priceserver.py", "--port", "0"], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+        pathlib.Path("server.pid").write_text(str(kid.pid), encoding="utf-8")
+        deadline = time.monotonic() + 30
+        log = pathlib.Path("server.log")
+        while time.monotonic() < deadline and "listening" not in (log.read_text("utf-8") if log.exists() else ""):
+            time.sleep(0.05)
     if scenario == "dead":
         return 3
     written = []

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import random
+import re
 import shutil
 import tomllib
 from dataclasses import dataclass, field
@@ -67,6 +68,10 @@ HIDDEN_CANARY = "IJ-BENCH-HIDDEN-CHECK"
 #: Files and folders that are never part of a task's content (bytecode a local
 #: run of the task's own tests may have left behind).
 _SKIP_NAMES = frozenset({"__pycache__", ".pytest_cache"})
+#: v1.383.0 review: a repeat's run folder and ledger key is ``<task id>.r<k>``
+#: (``ledger.run_key``), so a task whose id ends that way would share them
+#: with another task's repeat — refused when the task is read.
+_REPEAT_LIKE_ID = re.compile(r"\.r\d+$", re.IGNORECASE)
 
 
 class TaskError(ValueError):
@@ -168,6 +173,10 @@ def _as_argv(raw: Any, where: str) -> tuple[str, ...]:
 def load_task(task_dir: Path) -> Task:
     task_dir = Path(task_dir)
     where = f"task {task_dir.name}"
+    if _REPEAT_LIKE_ID.search(task_dir.name):
+        raise TaskError(
+            f"{where}: a task id may not end in .r and a number (that is how a repeat's run is named)"
+        )
     toml_path = task_dir / "task.toml"
     md_path = task_dir / "task.md"
     if not toml_path.is_file() or not md_path.is_file():

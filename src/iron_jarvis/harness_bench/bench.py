@@ -83,6 +83,16 @@ MAX_REPEATS = 10
 #: Said before any task starts when a runner was given no model (a record
 #: that cannot say which model ran is not a measurement).
 MODEL_REQUIRED = "Name the model with --model, so the record says which one ran."
+#: v1.383.0 review: model words that name NO particular model — each means
+#: "whatever the runner's own default is" (Claude Code's ``--model default``;
+#: Iron Jarvis's Claude adapter reads all three that way), which is exactly
+#: the record this phase removed.
+NOT_A_MODEL = frozenset({"default", "subscription", "auto"})
+#: Said, before any task starts, for one of them.
+MODEL_NOT_A_MODEL = (
+    "--model {model} names no particular model (it means the runner's own default), so the record "
+    "could not say which one ran: name the model itself, for example --model sonnet."
+)
 #: … and when the Jarvis runner was given no provider.
 PROVIDER_REQUIRED = (
     "Name the provider with --provider (for example --provider claude-cli), so the record says "
@@ -475,9 +485,12 @@ def check_repeats(repeats: Any) -> int:
 
 def require_model(runner_name: str, provider: str, model: str) -> None:
     """:class:`BenchRefused` (one plain sentence) unless the model — and, for
-    the Jarvis runner, the provider — was named."""
+    the Jarvis runner, the provider — was named. A word that names no model
+    (:data:`NOT_A_MODEL`, "default") is refused like a missing one."""
     if not (model or "").strip():
         raise BenchRefused(MODEL_REQUIRED)
+    if model.strip().lower() in NOT_A_MODEL:
+        raise BenchRefused(MODEL_NOT_A_MODEL.format(model=model.strip()))
     if runner_name == "jarvis" and not (provider or "").strip():
         raise BenchRefused(PROVIDER_REQUIRED)
 

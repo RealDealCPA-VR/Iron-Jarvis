@@ -88,28 +88,43 @@ def repeat_of(r: Mapping[str, Any]) -> int:
 
 #: Words a model name is split into to compare an alias with a full id.
 _WORDS = re.compile(r"[a-z0-9.]+")
-#: A dated snapshot suffix (``-20250929``, ``-2025-09-29``) and Claude's
-#: context-size tag.
-_SNAPSHOT = re.compile(r"(?:-\d{8}|-\d{4}-\d{2}-\d{2})$")
+#: A dated snapshot suffix (``-20250929``, ``-2025-09-29``).
+_SNAPSHOT = re.compile(r"-(\d{8}|\d{4}-\d{2}-\d{2})$")
+#: A version written with a dot between two digits (``4.5``) — the same
+#: version another vendor writes with a dash (``4-5``).
+_DOTTED = re.compile(r"(?<=\d)\.(?=\d)")
 
 
-def _plain_model(name: str) -> str:
+def _plain_model(name: str) -> tuple[str, str]:
+    """``(name, snapshot date)`` of a model id: lowered, without Claude's
+    ``[1m]`` context tag, a provider prefix or an ``-latest`` alias suffix,
+    with dotted versions written with dashes; the date is ``""`` when the id
+    carries none."""
     text = (name or "").strip().lower()
     text = text.removesuffix("[1m]")
     if "/" in text:
         text = text.rsplit("/", 1)[-1]
-    return _SNAPSHOT.sub("", text)
+    text = _DOTTED.sub("-", text).removesuffix("-latest")
+    m = _SNAPSHOT.search(text)
+    if m is None:
+        return text, ""
+    return text[: m.start()], m.group(1).replace("-", "")
 
 
 def model_matches(passed: str | None, reported: str | None) -> bool:
     """Whether the model a run REPORTED is the one it was PASSED: the same
-    name; the same name with a dated snapshot or a provider prefix; or an
-    alias with no version in it (``sonnet``, ``opus``) that is one of the
-    reported id's words (``claude-sonnet-4-6``). A run that reported nothing
-    never "differs" — it is listed as not reported instead."""
+    name; the same name with a dated snapshot or a provider prefix, written
+    with a dot or a dash (``4.5`` / ``4-5``), or behind an ``-latest`` alias;
+    or an alias with no version in it (``sonnet``, ``opus``) that is one of
+    the reported id's words (``claude-sonnet-4-6``). Two DIFFERENT snapshot
+    dates of one name are two models (v1.383.0 review: ``…-20240620`` and
+    ``…-20241022`` used to match). A run that reported nothing never
+    "differs" — it is listed as not reported instead."""
     if not reported or not passed:
         return True
-    a, b = _plain_model(passed), _plain_model(reported)
+    (a, a_date), (b, b_date) = _plain_model(passed), _plain_model(reported)
+    if a_date and b_date and a_date != b_date:
+        return False
     if a == b:
         return True
     if not any(ch.isdigit() for ch in a):
