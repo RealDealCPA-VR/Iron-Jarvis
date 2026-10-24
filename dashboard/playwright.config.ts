@@ -8,9 +8,11 @@ import { defineConfig } from "@playwright/test";
  *
  * Ports 8807/8808 so it never touches the live app (8787/8788) or the
  * everyday scratch stack (8797/8798). See e2e/README.md.
+ * IJ_E2E_DAEMON_PORT / IJ_E2E_WEB_PORT move them (a second run beside one
+ * already using 8807/8808); the specs read the same variable.
  */
-const DAEMON = 8807;
-const WEB = 8808;
+const DAEMON = Number(process.env.IJ_E2E_DAEMON_PORT) || 8807;
+const WEB = Number(process.env.IJ_E2E_WEB_PORT) || 8808;
 
 export default defineConfig({
   testDir: "e2e",

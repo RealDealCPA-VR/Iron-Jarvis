@@ -120,6 +120,10 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
 
   return (
     <header
+      // The strip a menu on the page's top layer must not cover (the drag
+      // region swallows clicks; the native buttons sit over it):
+      // lib/modelMenuPlacement.appTopLimit reads its bottom.
+      data-ij-titlebar=""
       // DRAG REGION. `-webkit-app-region` is the ONLY way to tell a frameless
       // window which pixels move it; Tailwind cannot express it and TS does not
       // know the non-standard property, hence the inline style + cast. Outside

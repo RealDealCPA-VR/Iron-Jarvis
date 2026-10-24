@@ -42,7 +42,7 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  *     opens a new session holding the conversation up to that reply.
  */
 
-const DAEMON = "http://127.0.0.1:8807";
+const DAEMON = `http://127.0.0.1:${process.env.IJ_E2E_DAEMON_PORT || 8807}`;
 
 /** A stubbed cross-origin answer: the page fetches the daemon from another
  *  origin, so the stub answers the preflight and carries the CORS headers. */

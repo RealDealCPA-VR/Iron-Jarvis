@@ -22,6 +22,17 @@ IJ harness view the same way:
 | 390 px | the IJ harness and Terminals views never pan sideways; (v1.373.0) the `/` and `@` lists open above the box, inside the window, and Escape closes them without sending |
 | `/` and `@` (v1.373.0) | on the demo model, a folder skill picked with `/` and a file picked with `@` ride a real turn, and the question the daemon saves names both |
 
+`e2e/model-menu-fit.spec.ts` (the model menu fits the window, 2026-10-24) opens
+the composer's model menu with a `/models` answer as tall as the user's (15
+providers, stubbed in the browser) from a new chat, a chat with messages and
+the IJ harness (an empty session and one with a reply), at 1406 × 857,
+1280 × 720, 1024 × 640 and 390 × 844: the menu's box is inside the window, the
+browser hits it at its top and bottom edges (no parent clips it), the filter
+box is on screen and takes the focus, the last row is reachable, nothing pans
+sideways, and (the chat) a long provider's side panel fits too. Every check is
+soft, so one run reports every case; `IJ_MENU_FIT_OUT=<folder>` also writes
+each case's measurements (JSON) and a screenshot.
+
 Run from `dashboard/`:
 
 ```bash
@@ -36,6 +47,10 @@ Playwright starts both servers itself:
   `e2e/fresh-home.mjs`) — its default model is the offline mock;
 - a Next dev server on **8808**, building into `.next-e2e` (so it never
   collides with an everyday dev server's `.next`).
+
+`IJ_E2E_DAEMON_PORT` / `IJ_E2E_WEB_PORT` move both (a second run beside one
+already holding 8807/8808); the specs that call the daemon read the same
+variable.
 
 It never touches the live app (8787/8788). It uses the Edge installed on
 this PC (`channel: "msedge"`, no browser download); set `IJ_E2E_CHANNEL`
