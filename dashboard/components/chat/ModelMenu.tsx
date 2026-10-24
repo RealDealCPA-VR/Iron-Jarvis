@@ -361,6 +361,10 @@ function AccountState({ state }: { state: MenuAccount["state"] }) {
  *  rows scrolling under it, "Make this my default" at the bottom. */
 const MODEL_MENU =
   "fixed z-50 flex w-60 max-w-[calc(100vw-1rem)] flex-col rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40";
+/** The open menu's id, named by the chip (`aria-controls`): on the page's
+ *  top layer the menu is no longer the element after the chip, so a screen
+ *  reader is told where it is. One menu is open at a time. */
+export const MODEL_MENU_ID = "ij-model-menu";
 /** The rows between the filter box and the footer: the part that scrolls. */
 const MODEL_MENU_LIST = "min-h-0 overflow-y-auto overscroll-contain";
 
@@ -391,7 +395,9 @@ const MODEL_PANEL =
 /** v1.376.0 (IJ harness): below `sm` the panel opens UNDER its row, inside
  *  the menu — beside it, a phone's window has no room on the left (the
  *  menu sits by Send at the right edge), so an account's models could not
- *  be reached. */
+ *  be reached. The chat's menu does the same (review, 2026-10-24): beside
+ *  the menu the panel was shifted back into the window, over the rows it
+ *  belongs to. */
 const MODEL_PANEL_PHONE_INLINE = "max-sm:static max-sm:mr-0 max-sm:mt-0.5 max-sm:w-full";
 
 /** Why a harness filter / Recent row cannot be picked ("" = it can). */
@@ -508,11 +514,11 @@ export function ModelMenu({
     }
   };
   useEffect(() => {
-    if (!companies || !sub || typeof window === "undefined") return;
+    if (!sub || typeof window === "undefined") return;
     if (!window.matchMedia?.(PHONE_QUERY)?.matches) return;
     const panel = menuRef.current?.querySelector<HTMLElement>('[data-testid="model-sub"]');
     panel?.scrollIntoView?.({ block: "nearest" });
-  }, [companies, sub]);
+  }, [sub]);
   useEffect(() => {
     if (!open) return;
     // The menu is portaled: it is not inside the chip's wrapper, so a press
@@ -594,6 +600,13 @@ export function ModelMenu({
   // The menu is fixed to the window: it follows the chip when the page
   // scrolls, is placed again when the window changes size, and closes when
   // the chip goes away under it.
+  //
+  // Review (2026-10-24): a scroll and a resize are not the only things that
+  // move the chip. "Make this my default" ends the demo strip above the page,
+  // a notice comes or goes above the composer — the chip moves, no event
+  // fires, and a fixed menu stays where the chip WAS. So while the menu is
+  // open the chip's box is read once a frame (one read; the menu is placed
+  // again only when the box changed), which also sees the chip go away.
   useEffect(() => {
     if (!open) return;
     const follow = (e: Event) => {
@@ -603,23 +616,30 @@ export function ModelMenu({
     const resized = () => placeMenu(true);
     window.addEventListener("scroll", follow, true);
     window.addEventListener("resize", resized);
-    let ro: ResizeObserver | undefined;
-    const chip = chipRef.current;
-    if (chip && typeof ResizeObserver !== "undefined") {
-      ro = new ResizeObserver(() => {
+    let frame = 0;
+    let last = "";
+    const watch = () => {
+      const chip = chipRef.current;
+      if (chip) {
         const r = chip.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) placeMenu(false);
-        else if (chipSeenRef.current) {
-          onOpenChange(false);
-          setSub(null);
+        const box = `${r.left},${r.top},${r.width},${r.height}`;
+        if (box !== last) {
+          last = box;
+          if (r.width > 0 && r.height > 0) placeMenu(false);
+          else if (chipSeenRef.current) {
+            onOpenChange(false);
+            setSub(null);
+            return;
+          }
         }
-      });
-      ro.observe(chip);
-    }
+      }
+      frame = window.requestAnimationFrame(watch);
+    };
+    if (typeof window.requestAnimationFrame === "function") frame = window.requestAnimationFrame(watch);
     return () => {
       window.removeEventListener("scroll", follow, true);
       window.removeEventListener("resize", resized);
-      ro?.disconnect();
+      if (frame) window.cancelAnimationFrame(frame);
     };
     // `placeMenu` and `onOpenChange` are read at the event; this runs once
     // per opening.
@@ -693,9 +713,10 @@ export function ModelMenu({
        The harness's phone sheet keeps it under its row. */
     <FitPanel
       testId="model-sub"
-      className={companies ? `${MODEL_PANEL} ${MODEL_PANEL_PHONE_INLINE}` : MODEL_PANEL}
+      className={`${MODEL_PANEL} ${MODEL_PANEL_PHONE_INLINE}`}
       float
-      inlineQuery={companies ? PHONE_QUERY : undefined}
+      inlineQuery={PHONE_QUERY}
+      refitKey={place}
     >
       {modelRows(provider, account)}
     </FitPanel>
@@ -847,6 +868,7 @@ export function ModelMenu({
         disabled={disabled}
         aria-expanded={open}
         aria-haspopup="true"
+        aria-controls={open ? MODEL_MENU_ID : undefined}
         title={disabled ? disabledTitle : "Switch model"}
         className={`${composerChipClass(false)} max-w-[11rem] sm:max-w-[16rem]`}
       >
@@ -874,13 +896,25 @@ export function ModelMenu({
         createPortal(
           <div
             ref={menuRef}
+            id={MODEL_MENU_ID}
             data-testid="model-menu"
             data-side={place && place !== "sheet" ? place.side : undefined}
             className={companies ? `${MODEL_MENU} ${MODEL_MENU_PHONE_SHEET}` : MODEL_MENU}
             style={menuStyle(place)}
             onKeyDown={(e) => {
+              // An IME composing a word owns its keys (its Escape drops the word).
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (e.key === "Tab") {
                 tabAcrossTheEdge(e);
+                return;
+              }
+              if (companies && (e.ctrlKey || e.metaKey) && (e.key ?? "").toLowerCase() === "k") {
+                // The IJ harness's Ctrl+K is the model menu (lib/harnessKeys),
+                // never the app's palette: inside the harness the harness took
+                // the key, and the menu is on the page's top layer now — so
+                // the press stops here, from the box or from any row.
+                e.preventDefault();
+                e.stopPropagation();
                 return;
               }
               if (!companies || e.key !== "Escape") return;
@@ -901,6 +935,8 @@ export function ModelMenu({
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               onKeyDown={(e) => {
+                // Enter that finishes an IME word is the IME's, not a pick.
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                 if (companies && e.key === "Enter") {
                   // v1.376.0: the harness's first row, on its account (a row
                   // that cannot be picked is not picked by Enter either).
@@ -915,13 +951,6 @@ export function ModelMenu({
                 } else if (e.key === "Escape") {
                   onOpenChange(false);
                   setSub(null);
-                } else if (companies && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-                  // The IJ harness's Ctrl+K is the model menu (lib/harnessKeys),
-                  // never the app's palette: the box sat inside the harness,
-                  // which took the key, until the menu moved to the page's top
-                  // layer. The menu is already open: the key stops here.
-                  e.preventDefault();
-                  e.stopPropagation();
                 }
               }}
               placeholder="Type to find a model…"

@@ -85,6 +85,7 @@ export function FitPanel({
   testId,
   float = false,
   inlineQuery,
+  refitKey,
 }: {
   /** Everything but the vertical anchor (no bottom-0/top-0, no max-h). */
   className: string;
@@ -95,6 +96,12 @@ export function FitPanel({
   float?: boolean;
   /** A media query under which a floating panel stays in the flow instead. */
   inlineQuery?: string;
+  /** Changes when what the row sits in moved (the model menu was placed
+   *  again): the panel is placed again in that same commit, after the move.
+   *  The panel listens for scrolls and resizes; a menu that follows its chip
+   *  with no such event (the demo strip going away) gave it nothing to hear,
+   *  and left it where its row had been. */
+  refitKey?: unknown;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [place, setPlace] = useState<FitPlacement | null>(null);
@@ -130,7 +137,7 @@ export function FitPanel({
       window.removeEventListener("resize", fit);
       if (float) window.removeEventListener("scroll", onScroll, true);
     };
-  }, [cap, float, inlineQuery]);
+  }, [cap, float, inlineQuery, refitKey]);
 
   const side = place?.side ?? "up";
   const style: CSSProperties = { maxHeight: place ? place.maxHeight : cap };
