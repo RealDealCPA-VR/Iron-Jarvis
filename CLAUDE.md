@@ -6505,6 +6505,21 @@ does not need a bump, stop and bump it.
   order through spies; the behavioural kill test keeps proving the tree
   dies). Rule: a process you mean to own by Job is CREATED SUSPENDED, never
   adopted after the fact.
+  v1.383.1 (test-only, a LEAK the suite made on every run): that pin's spies
+  REPLACED the Windows primitives — `_resume` answered True without
+  resuming, `_win_job_for` handed back a pretend Job, `_win_terminate_job`
+  answered True without ending anything — so its sleeper (really created
+  suspended) never ran, `close()` believed the "Job" ended it, and every
+  full run left one `python -c "import sys, time; time.sleep(30)"` in the
+  Suspended state forever (57 on the user's PC across the main checkout and
+  agent worktrees since 2026-10-21). The spies now record and DELEGATE to the
+  real functions, and `test_a_closed_server_leaves_no_suspended_or_live_child_
+  by_pid` checks every started pid is gone (psutil reads a suspended process
+  as `stopped`); four mutations go red (the old spies, a pretend terminate
+  alone, a failed resume that no longer kills, `close()` skipping its kill).
+  Rule: a spy on a kill, resume or Job primitive RECORDS and calls the real
+  one; a fake that answers "done" without doing it leaves a real process
+  behind, and a test that starts a real child checks by pid that it is gone.
   v1.347.0 (a USER BUG: "the image was generated, but never appeared back
   in the chat"; it was only in the Creative library). Read off the live
   ledger: a NEW chat's first question goes out BEFORE the page's first save
