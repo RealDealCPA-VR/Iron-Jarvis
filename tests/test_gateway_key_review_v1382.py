@@ -919,3 +919,113 @@ def test_the_matching_rule_and_the_sending_client_agree_on_the_host():
         if (parsed.scheme, parsed.host, parsed.port or 80) != ("http", "gw", 4000):
             disagree.append(url)
     assert disagree == [], disagree[:10]
+
+
+# --------------------------------------------------------------------------- #
+# 7. Strengthened: pins that survived a mutation of the doer's own
+# --------------------------------------------------------------------------- #
+class _NotFound(_Catcher):
+    """Answers 404 to everything; records what it heard (and whether keyed)."""
+
+    def __init__(self) -> None:
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.requests = []
+        srv = self
+
+        class H(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *_a):
+                return
+
+            def do_GET(self):
+                auth = bool(self.headers.get("Authorization") or self.headers.get("x-api-key"))
+                srv.requests.append((f"GET {self.path.split('?')[0]}", auth))
+                raw = b'{"detail": "Not Found"}'
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+        self._srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self._srv.daemon_threads = True
+        threading.Thread(target=self._srv.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self._srv.server_address[1]}"
+
+
+def test_opencodes_read_of_another_server_carries_no_key(tmp_path, monkeypatch):
+    """Through the REAL platform wiring (``platform._opencode_allowed`` ->
+    ``FleetRegistry.headers_for_url``): OpenCode lists two local providers,
+    the user's keyed gateway and another server. The gateway's read carries
+    the key; the other server's carries none. (The doer's pin drove one
+    provider on the gateway, so handing the gateway key to ANY address stayed
+    green.)"""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.providers import opencode as oc
+
+    gateway = FakeGateway(KEY)
+    gateway.start()
+    other = _Catcher()
+    try:
+        app = _scratch_app(tmp_path, {"custom_base_url": gateway.base + "/v1", "custom_model": "vision"})
+        d = app.state.d
+        cfg = tmp_path / "opencode.json"
+        cfg.write_text(json.dumps({"provider": {
+            "gw": {"options": {"baseURL": gateway.base + "/v1"}},
+            "box": {"options": {"baseURL": other.base + "/v1"}},
+        }}), "utf-8")
+        with TestClient(app):
+            monkeypatch.setattr(oc, "_config_paths", lambda: [cfg])
+            monkeypatch.setattr(oc, "binary", lambda which=None: "opencode-stand-in")
+            monkeypatch.setattr(oc, "_run", lambda argv, timeout=25.0: (0, "gw/vision\nbox/m\n", ""))
+            d.platform.providers.refresh_opencode()
+            d.platform.providers._opencode_allowed()
+        assert gateway.paths() == ["GET /model/info"] and gateway.unkeyed() == []
+        assert other.requests == [("GET /model/info", False)], other.requests
+    finally:
+        gateway.stop()
+        other.stop()
+
+
+def test_a_proxys_backends_are_never_sent_the_proxys_key():
+    """The sampler absorbs a LiteLLM proxy's backends as topology children
+    and probes them at THEIR addresses — another server, which never gets the
+    proxy's key (a recording backend hears no auth header)."""
+    backend = _Catcher()
+    gateway = FakeGateway(KEY, backend=backend.base)
+    gateway.start()
+    try:
+        sampler, now = _sampler_at(gateway)
+        sampler.sample_once()
+        now[0] += 30.0
+        sampler.sample_once()
+        assert backend.requests, "the children were never probed: the pin proved nothing"
+        assert [p for p, auth in backend.requests if auth] == [], backend.requests
+        assert gateway.unkeyed() == []
+    finally:
+        gateway.stop()
+        backend.stop()
+
+
+def test_the_catalog_never_asks_a_known_proxy_ollamas_address(tmp_path):
+    """A node known to be LiteLLM whose listing fails with a 404 is not then
+    asked Ollama's ``/api/tags`` by the model catalog (``GET /models``): the
+    catalog hands discovery the registry's verdict."""
+    from fastapi.testclient import TestClient
+
+    nf = _NotFound()
+    try:
+        app = _scratch_app(tmp_path, {
+            "fleet_nodes": [{"id": "lite", "base_url": nf.base + "/v1", "kind": "litellm", "routable": True}],
+        }, key="")
+        with TestClient(app) as client:
+            assert client.get("/models").status_code == 200
+        heard = [p for p, _ in nf.requests]
+        assert "GET /v1/models" in heard, heard
+        assert not any(p.startswith("GET /api/") for p in heard), heard
+    finally:
+        nf.stop()
