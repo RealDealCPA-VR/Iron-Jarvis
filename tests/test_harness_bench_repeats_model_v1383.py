@@ -70,8 +70,18 @@ def _order(seed: int = 0) -> list[str]:
     return [t.id for t in select_tasks(list(TASKS.values()), names=NAMES, seed=seed)]
 
 
+#: unittest prints its own wall-clock figure ("Ran 8 tests in 0.000s") into
+#: the check's output; on a loaded machine two identical runs differ there.
+_RAN_IN = re.compile(r"(Ran \d+ tests?) in \d+(?:\.\d+)?s")
+
+
 def _plain(record: dict) -> dict:
-    return {k: v for k, v in record.items() if k not in TIMING}
+    """A record without what the clock decides: its times, and the check's own
+    timing line in ``grade_output``."""
+    out = {k: v for k, v in record.items() if k not in TIMING}
+    if isinstance(out.get("grade_output"), str):
+        out["grade_output"] = _RAN_IN.sub(r"\1 in <time>", out["grade_output"])
+    return out
 
 
 # --------------------------------------------------------------------------- #
