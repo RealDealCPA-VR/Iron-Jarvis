@@ -693,7 +693,8 @@ def test_the_key_never_reaches_a_log_an_event_a_file_or_an_answer(tmp_path, monk
 
     from iron_jarvis.core.models import EventRecord
 
-    gw = FakeGateway(KEY) if server == "accepts" else _EchoGateway()
+    backend = _Catcher()  # the proxy's upstream (api_base) — must never be saved
+    gw = FakeGateway(KEY, backend=backend.base) if server == "accepts" else _EchoGateway()
     if server == "accepts":
         gw.start()
     try:
@@ -706,10 +707,13 @@ def test_the_key_never_reaches_a_log_an_event_a_file_or_an_answer(tmp_path, monk
             answers = _drive_every_door(client, d, gw.base)
             with Session(d.platform.engine) as s:
                 events = [r.payload_json for r in s.exec(select(EventRecord)).all()]
+        routes = list(tmp_path.rglob("fleet-routes.json"))
         if server == "accepts":
             assert gw.log() and gw.unkeyed() == []
-            assert (tmp_path / ".ironjarvis" / "fleet-routes.json").exists() or any(
-                p.name == "fleet-routes.json" for p in tmp_path.rglob("fleet-routes.json"))
+            assert routes, "the routing table was never saved: the file check proved nothing"
+            saved = routes[0].read_text("utf-8")
+            assert '"vision": true' in saved  # the capabilities were saved
+            assert "api_base" not in saved and backend.base.split("//")[1] not in saved
         else:
             assert gw.keyed > 5, "the echoing gateway was never sent the key: the drive proved nothing"
         leaks = []
@@ -726,11 +730,9 @@ def test_the_key_never_reaches_a_log_an_event_a_file_or_an_answer(tmp_path, monk
                 except OSError:
                     pass
         assert leaks == [], f"the key reached: {sorted(set(leaks))}"
-        routes = list(tmp_path.rglob("fleet-routes.json"))
-        for f in routes:
-            assert "api_base" not in f.read_text("utf-8")
     finally:
         gw.stop()
+        backend.stop()
 
 
 def test_an_error_text_never_carries_a_credential_the_request_sent():
