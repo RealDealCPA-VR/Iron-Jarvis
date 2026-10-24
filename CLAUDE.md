@@ -3686,6 +3686,22 @@ does not need a bump, stop and bump it.
   `tests/test_gateway_key{,_review}_v1382.py` (+
   `tests/fixtures/fake_litellm_gateway_v1382.py`, records path + whether the
   key came, never the value).
+  v1.382.1 (test-only; v1.382.0's Tests AND Release gates went red and
+  nothing was published): `test_a_proxy_without_metrics_is_not_asked_for_
+  them_every_pass` simulated a whole hour at the 2 s cadence — about 1,860
+  real loopback connections in one test — and its xdist worker died on both
+  gates ("node down: Not properly terminated", the 300 s timeout's shape;
+  22 s here). On this PC, with Windows' ephemeral ports short (11k loopback
+  sockets in TIME_WAIT, WinError 10048 on connect), most of its probes never
+  reached the fake gateway (the sampler backed off) and its count asserts,
+  upper bounds only, could not see it. Now 12 minutes (360 passes, still
+  crossing the 10-minute memory once; 6 s), `/metrics` asked exactly twice,
+  and a LOWER bound: every pass reaches the gateway. Five mutations red
+  (memo off, memo forever, table read every pass, no key, probes failing
+  after the first pass). Rule: a test that loops real connections asserts
+  what ARRIVED, never only an upper bound, and keeps its connection count
+  small — Windows has 16,384 ephemeral ports and each closed one waits
+  about two minutes.
 
 - **An account Iron-Proxy says is READY is never "needs to sign in again"
   because of an old note** (v1.382.0, a USER BUG: the IJ harness model menu

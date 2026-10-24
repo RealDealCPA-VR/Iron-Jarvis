@@ -465,18 +465,29 @@ def test_a_proxy_without_metrics_is_not_asked_for_them_every_pass(tmp_path):
     """The user's proxy has no ``/metrics``; once the sampler carries the key
     every pass used to ask anyway and get a keyed 404 — 1,800 an hour while
     the Fleet page is open (measured). A 404 is remembered for 10 minutes;
-    the routing table read keeps its own 60 s clock under the 2 s cadence."""
+    the routing table read keeps its own 60 s clock under the 2 s cadence.
+
+    12 minutes at the Fleet page's 2 s cadence (360 passes), not a whole
+    hour: it crosses the 10-minute memory once, which is what is being
+    checked, with a fifth of the real connections. The hour (about 1,860
+    loopback connections in one test) killed its worker on both v1.382.0
+    gates. And on this PC, with Windows' ephemeral ports short (WinError
+    10048), most of its probes never reached the gateway (the sampler backed
+    off) — which its count asserts, upper bounds only, could not see. So
+    every pass must reach the gateway now (the lower bound)."""
     gateway = FakeGateway(KEY)
     gateway.start()
+    passes = 360
     try:
         sampler, now = _sampler_at(gateway, tmp_path)
-        _hour(sampler, now, 2.0)
+        _hour(sampler, now, 2.0, seconds=passes * 2.0)
         paths = gateway.paths()
-        metrics = paths.count("GET /metrics")
-        assert 1 <= metrics <= 7, f"/metrics asked {metrics} times in an hour"
-        # the probe's own read (liveness + topology, every pass) and the
-        # routing-table read (60 s TTL): 1,800 + 60
-        assert paths.count("GET /model/info") <= 1800 + 61, paths.count("GET /model/info")
+        # asked at the start, remembered for 10 minutes, asked once more
+        assert paths.count("GET /metrics") == 2, f"/metrics asked {paths.count('GET /metrics')} times in 12 minutes"
+        # the probe's own read (liveness + topology) on EVERY pass, plus the
+        # routing-table read on its own 60 s clock: 360 + 12 (+1 at a boundary)
+        reads = paths.count("GET /model/info")
+        assert passes < reads <= passes + 13, f"/model/info read {reads} times in {passes} passes"
         assert gateway.unkeyed() == []
         snap = next(s for s in sampler.snapshots() if s.node.id == "gw")
         assert snap.metrics_reason == "LiteLLM /metrics is not enabled on this proxy"
