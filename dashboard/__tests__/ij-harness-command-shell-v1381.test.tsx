@@ -24,8 +24,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// v1.381.0 review: the daemon's words now (command_shell.turn_words).
 const WORDS =
-  "This step comes from the project's /deploy command, which asks to run shell commands. Those always ask you first.";
+  "This turn runs the project's /deploy command, which has shell lines, so every command in it asks you first.";
 
 describe("a shell step a project's or a plugin's slash command asked for", () => {
   it("draws its own rule on the card, Allow once and Deny only", () => {
