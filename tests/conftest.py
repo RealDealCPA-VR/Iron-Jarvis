@@ -340,15 +340,29 @@ def _isolate_opencode_config():
     no key (a fresh test home knows none) and ran the real ``opencode`` binary
     — measured: one bare lifespan, one unkeyed request to the gateway. CI has
     no such config, so it never saw this. The config path list is empty for
-    the session; tests that exercise the parser pass explicit paths."""
+    the session; tests that exercise the parser pass explicit paths.
+
+    A daemon started in ANOTHER process (the update rehearsal's ``serve``,
+    every test that spawns one) does not see this patch: it gets
+    ``IRONJARVIS_OPENCODE_CONFIG_DIR`` instead — an empty scratch folder,
+    inherited through ``os.environ`` — so it reads no OpenCode config either
+    (the gateway-key review: such a boot asked the gateway ``/model/info``)."""
+    import tempfile
+
     from iron_jarvis.providers import opencode as _oc
 
     original = _oc._config_paths
     _oc._config_paths = lambda: []
+    old_env = os.environ.get(_oc.CONFIG_DIR_ENV)
+    os.environ[_oc.CONFIG_DIR_ENV] = tempfile.mkdtemp(prefix="ij-test-no-opencode-config-")
     try:
         yield
     finally:
         _oc._config_paths = original
+        if old_env is None:
+            os.environ.pop(_oc.CONFIG_DIR_ENV, None)
+        else:
+            os.environ[_oc.CONFIG_DIR_ENV] = old_env
 
 
 @pytest.fixture(autouse=True, scope="session")

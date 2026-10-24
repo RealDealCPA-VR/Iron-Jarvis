@@ -97,19 +97,39 @@ def is_local_url(url: str) -> bool:
 # --- OpenCode's own config -----------------------------------------------------
 
 
-def _config_paths() -> list[Path]:
+#: When set (non-blank), the ONLY folder OpenCode's config is read from — for
+#: daemons that must not see the developer's own setup: the test suite and the
+#: processes it starts (``tests/conftest.py``), the end-to-end launcher and the
+#: scratch stacks. The developer's OpenCode config points at their real model
+#: gateway, and reading it makes the daemon ask that gateway ``/model/info``
+#: at every start (the gateway-key review).
+CONFIG_DIR_ENV = "IRONJARVIS_OPENCODE_CONFIG_DIR"
+
+
+def opencode_config_paths(environ: Any = None) -> list[Path]:
+    """Where OpenCode's config is read from: :data:`CONFIG_DIR_ENV` alone when
+    it is set, else ``~/.config/opencode`` and ``$XDG_CONFIG_HOME/opencode``."""
+    env = os.environ if environ is None else environ
+    override = str(env.get(CONFIG_DIR_ENV) or "").strip()
+    if override:
+        base = Path(override)
+        return [base / "opencode.jsonc", base / "opencode.json"]
     home = Path.home()
     out = [
         home / ".config" / "opencode" / "opencode.jsonc",
         home / ".config" / "opencode" / "opencode.json",
     ]
-    xdg = os.environ.get("XDG_CONFIG_HOME")
+    xdg = env.get("XDG_CONFIG_HOME")
     if xdg:
         out += [
             Path(xdg) / "opencode" / "opencode.jsonc",
             Path(xdg) / "opencode" / "opencode.json",
         ]
     return out
+
+
+def _config_paths() -> list[Path]:
+    return opencode_config_paths()
 
 
 def _strip_jsonc(raw: str) -> str:
