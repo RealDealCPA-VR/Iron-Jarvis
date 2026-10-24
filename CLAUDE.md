@@ -3569,6 +3569,29 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **An account Iron-Proxy says is READY is never "needs to sign in again"
+  because of an old note** (v1.382.0, a USER BUG: the IJ harness model menu
+  and a Build terminal's account chip said "Needs to sign in again" for two
+  Claude accounts the user had signed in to the night before, while `claude`
+  worked in that terminal). Read off the live app (read-only): Iron-Proxy's
+  state was `status: "ready"` with a LEFTOVER `parkedReason: {kind:
+  "auth-expired"}` ("Invalid bearer token" on TSI — very likely the scripted
+  401 the v1.367.0 suite leaked to the live proxy — and "Not logged in ·
+  Please run /login" on the adopted login). The vendored bundle's rule: an
+  `auth-expired` signal sets `status: "unauthenticated"`; its refresh sets
+  `"ready"` again and does NOT delete the note (only a sign-in it runs, or an
+  unpark, does); its own `availability` hands out a `ready` account. Three
+  readers (`harness/build_accounts.row_of`, `terminals/pane_accounts._state_of`
+  and `_pick_explicit` — which REFUSED to start a terminal on that account)
+  and the shared `_account_kind` (the by-kind sentences, `continue_on`) read
+  the note alone as "needs sign-in", forever. ONE rule:
+  `iron_proxy.accounts.needs_sign_in(state)` — `unauthenticated` → True;
+  `ready`/`active`/`disabled` → False whatever note is left; only a bare
+  signal or a parked state falls back to the note's kind. The dashboard's
+  Connections card already read status only. Pin:
+  `tests/test_account_signin_state_v1382.py` (13 red on the old code; six
+  mutations red). A NEW reader of an account's state uses that rule.
+
 - **Shell lines from a PROJECT's or PLUGIN's command file always ask — in
   every posture, past every grant; the user's own command files follow the
   posture** (v1.381.0; the user's decision 2026-10-23; a doer + a reviewer

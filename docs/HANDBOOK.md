@@ -1897,6 +1897,15 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Fixes in v1.382.0
+
+- **"Needs to sign in again" no longer sticks.** An Iron-Proxy account you
+  had signed in to again could keep saying "Needs to sign in again" in the IJ
+  harness model menu and on a Build terminal's account chip — even while it
+  worked — because an old note from an earlier sign-in problem was still
+  attached to it. The account's current state now decides, as it already did
+  on the Connections page.
+
 ## Shell lines from a project's or plugin's command always ask (v1.381.0)
 
 A Claude Code command file can contain shell lines (`` !`…` ``). Iron Jarvis
