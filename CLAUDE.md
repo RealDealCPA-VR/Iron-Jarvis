@@ -3569,6 +3569,62 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **Shell lines from a PROJECT's or PLUGIN's command file always ask — in
+  every posture, past every grant; the user's own command files follow the
+  posture** (v1.381.0; the user's decision 2026-10-23; a doer + a reviewer
+  that found 9 more defects, each red first and mutation-checked).
+  `harness/command_shell.py`: a turn-scoped ContextVar rule (`set_turn_rule` /
+  `reset_turn_rule`, armed LAST and reset FIRST in `start_build_turn` beside
+  the pin, hold and branch tokens) + `setup.command_shell` (SETUP_KEY; each
+  project/plugin command's own shell lines, ≤ 16 commands × 20 lines × 400
+  chars, written ONLY by `start_build_turn` BEFORE any generator opens —
+  a failed write refuses the command with 503 `COMMAND_RECORD_SENTENCE`, no
+  model call; whitelisted in `_clean_setup`, ignored by PATCH, a chat PUT
+  409s, copied by Branch from here, kept by Rewind — it can only ask more; a
+  repeat of one command replaces its older copy; a command with only an empty
+  ```! block is kept when it names its turn). `tool_check` (git guard FIRST,
+  then `command_check`) is reached from `spend_check` on `shell` (the
+  registered `SandboxedShellTool`), `process_start`, `process_write` →
+  `SpendCheck(once_only=True, reason=…)` with `once_reason: "command"`. THE
+  COMMAND'S OWN TURN and its daemon continuations (Resume when ready /
+  Continue on another account — `continued_turn` finds the newest
+  non-continuation question, SKIPPING steer notes, which carry the
+  carry-on's turn id) card EVERY command-running call; a LATER user turn
+  cards only a call whose text contains a recorded line (`normalize`:
+  case-folded, quotes stripped, spaces collapsed, `\` / `^` / backtick
+  continuations joined; word boundaries; syntax-only and comment lines never
+  match) and names the matched line (masked, ≤ 80 chars). Rewordings,
+  PowerShell vs bash, script files and input split across process writes are
+  NOT caught in a later turn (stated in the module docstring and the model's
+  note). Helpers inherit (context copy + `HelperParent.command_rule` +
+  `pinned()`); the runtime passes `once_only`/`once_reason` to
+  `approvals.request`, so a helper's card is Allow-once only (this also fixed
+  the git guard's helper card, which offered "Allow for this run" and read it
+  as once); `core/events._drop_build_turn_scope` clears the rule in handlers'
+  context; the POST lane refuses through the once-only path; Local only keeps
+  its own card AND now carries `once_reason`. The folder layer's
+  `plugins.toml` checks (`chat_turn.harness_check_runner`) now ask the
+  carrier tool's spend check first and are NOT run on their own when it would
+  ask (the model is told to run them; that call asks) — the git guard had the
+  same hole (a check that commits/pushes on a session branch no longer runs by
+  itself). Personal = `~/.claude/commands` (`CLAUDE_CONFIG_DIR` honoured; a
+  session folder AT home lists it once, as personal). The model's note says
+  the user is asked before each shell command in this turn and, in a later
+  turn, before any command containing one of these lines. KEYBOARD:
+  `lib/dockAsk.enterAllows` — an approval with `onceOnly` and a SAFETY reason
+  (`command`, `git`, `page`) is NEVER allowed by Enter (DockAsk in chat and the
+  harness, PaneAsk); Esc declines; the keys line reads "Click Allow once to run
+  it · Esc to decline"; ordinary, local-only and plan-door cards still answer
+  Enter (the doer's own live run approved a card with a second Enter right
+  after sending). `lib/onceReason.ts` is the reason whitelist. OPEN: a
+  project command that asks for commands in PROSE (no `!` syntax) gets no
+  card; shell lines inside a folder's/plugin's SKILL are not covered; a typed
+  "continue" after a restart-cut command turn and the act turn after an
+  approved plan are later turns (exact lines only); a short recorded line like
+  `git status` asks on every later run in that session; worst-case record
+  ~140 KB of setup. Pins: `tests/test_build_command_shell_{ask,review}_v1381.py`,
+  `dashboard/__tests__/ij-harness-command-shell{,-review}-v1381.test.tsx`.
+
 - **The app icon is the user's "iU" tile, at every size Windows draws**
   (v1.380.0; the user pasted the artwork). Pasted pictures are not files:
   it was taken from this conversation's own record (the session `.jsonl`'s

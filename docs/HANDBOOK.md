@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.380.0 (2026-10-23).*
+holds itself to. Current as of v1.381.0 (2026-10-23).*
 
 ---
 
@@ -1896,6 +1896,32 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Shell lines from a project's or plugin's command always ask (v1.381.0)
+
+A Claude Code command file can contain shell lines (`` !`…` ``). Iron Jarvis
+never runs them by itself; the agent runs them with its own terminal. From
+now on, when the command comes from the **project** you opened or from a
+**plugin**, those lines always ask you first, whatever the session's approval
+setting — even "approve for me" or "don't ask":
+
+- **In the turn the command starts** (and when that turn carries on, for
+  example after you resume it on another account), every command the agent
+  runs shows a card first: "This turn runs the project's /status command,
+  which has shell lines, so every command in it asks you first." Helpers it
+  starts follow the same rule, and so do the folder's own automatic checks.
+- **In later turns** of that session, a command that contains one of that
+  command file's shell lines asks again ("This runs “echo hello”, a shell
+  line from the project's /status command."). Anything else follows your
+  setting. A line the agent rewrites (other wording, a script file) is not
+  recognised in a later turn.
+- The card offers only **Allow once** and **Deny**, and **Enter does not
+  allow it** — click Allow once (Esc declines), so a quick extra Enter after
+  sending the command never runs anything.
+
+Your **own** command files (`~/.claude/commands`) keep following the
+session's setting, as before. A command with no shell lines asks nothing
+extra.
 
 ## A new app icon (v1.380.0)
 
