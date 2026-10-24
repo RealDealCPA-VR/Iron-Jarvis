@@ -755,3 +755,167 @@ def test_an_error_text_never_carries_a_credential_the_request_sent():
     assert scrub_sent_credentials("text", object()) == "text"
     bare = httpx.Response(401, text="x")
     assert scrub_sent_credentials("text", bare) == "text"
+
+
+# --------------------------------------------------------------------------- #
+# 5. Capabilities: where the proxy's word sits, and what it never overrides
+# --------------------------------------------------------------------------- #
+def test_the_stated_window_sits_below_pin_and_measured_and_a_refusal_still_wins(tmp_path):
+    """The window ladder (CLAUDE.md: pin -> measured envelope -> fleet probe ->
+    default; the v1.335.0 learned window on top whenever smaller): the proxy's
+    stated ``max_input_tokens`` answers ONLY where the fleet probe did, below
+    a pin and a measured envelope — and a provider that refuses a request as
+    too long still teaches the smaller window, so a stated window that is too
+    big cannot keep the planner overfilling the model."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.daemon import chat_turn
+    from iron_jarvis.fleet.registry import FleetRegistry
+    from iron_jarvis.fleet.upstreams import parse_model_info
+    from tests.fixtures.fake_litellm_gateway_v1382 import model_info_body
+
+    cfg = SimpleNamespace(home=str(tmp_path), fleet_nodes=[], custom_base_url="http://gw:4000/v1",
+                          custom_model="", ollama_base_url="", default_provider="custom",
+                          default_model="", model_context_windows={})
+    reg = FleetRegistry(cfg, persist=lambda *a, **k: None)
+    reg.set_routes("custom", parse_model_info(model_info_body()))
+    measured: dict = {}
+    providers = SimpleNamespace(measured_context_window=lambda p, m: measured.get((p, m)),
+                                inherited_from=lambda p: None)
+    d = SimpleNamespace(platform=SimpleNamespace(config=cfg, providers=providers, fleet=reg))
+    src = chat_turn._context_window_source
+    try:
+        assert src(d, "custom", "vision") == (262_144, "endpoint")
+        measured[("custom", "vision")] = 150_000
+        assert src(d, "custom", "vision") == (150_000, "measured")
+        cfg.model_context_windows = {"vision": 100_000}
+        assert src(d, "custom", "vision") == (100_000, "pin")
+        cfg.model_context_windows = {}
+        measured.clear()
+        # the provider refused a request as too long: its own number wins
+        refit = chat_turn._overflow_refit(d, [], "", "custom", "vision", head=0)
+
+        class _TooLong(Exception):
+            pass
+
+        refit(_TooLong("This model's maximum context length is 32768 tokens."), [], "")
+        assert src(d, "custom", "vision") == (32_768, "learned")
+    finally:
+        chat_turn._LEARNED_WINDOWS.clear()
+
+
+def test_the_proxys_no_never_moves_a_picture_off_its_server(tmp_path):
+    """Capabilities from the proxy's own table: ``vision`` (stated yes) can
+    see on the fleet provider; ``glm-5.3-flash`` (stated no — and the node
+    record never verified it) cannot, so the router moves a picture turn for
+    it. FOUND, NOT CHANGED HERE: the move lands on the ``custom`` provider —
+    the SAME gateway and model, disclosed as ``failover`` — because the
+    OpenAI-compatible ``custom`` adapter claims vision by default (unchanged
+    by the gateway-key fix; making it honour a "no" could send the user's
+    local pictures to a cloud vision provider). What is pinned: a stated "no"
+    never sends a picture to ANOTHER server, and a move is disclosed."""
+    import base64
+    import functools
+
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.providers.adapters.base import LLMMessage
+
+    png = base64.b64encode(bytes.fromhex(
+        "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+        "1f15c4890000000d4944415478da63f8cfc0f01f0005000201ad3c5e"
+        "f20000000049454e44ae426082")).decode()
+    gateway = FakeGateway(KEY)
+    gateway.start()
+    try:
+        app = _scratch_app(tmp_path, {
+            "custom_base_url": gateway.base + "/v1", "custom_model": "glm-5.3-flash",
+        })
+        d = app.state.d
+        with TestClient(app) as client:
+            d.fleet_sampler.sample_once(force=True)  # reads the proxy's table, keyed
+            assert d.platform.fleet.model_caps("fleet-custom", "glm-5.3-flash")["vision"] is False
+            assert d.platform.providers.get("fleet-custom", "glm-5.3-flash").capabilities()["vision"] is False
+            assert d.platform.providers.get("fleet-custom", "vision").capabilities()["vision"] is True
+            msg = LLMMessage(role="user", content="what colour?",
+                             images=[{"data_b64": png, "media_type": "image/png"}])
+            res = client.portal.call(functools.partial(
+                d.platform.router.complete, provider="fleet-custom", model="glm-5.3-flash",
+                system="", messages=[msg], tools=[]))
+            assert res.provider in ("custom", "fleet-custom"), res.provider
+            if res.provider != "fleet-custom":
+                assert res.reason == "failover", res.reason
+            res = client.portal.call(functools.partial(
+                d.platform.router.complete, provider="fleet-custom", model="vision",
+                system="", messages=[msg], tools=[]))
+            assert (res.provider, res.model, res.reason) == ("fleet-custom", "vision", "explicit")
+        assert gateway.unkeyed() == []
+    finally:
+        gateway.stop()
+
+
+# --------------------------------------------------------------------------- #
+# 6. The matching rule: scheme + host + port + the path above /v1, EXACTLY
+# --------------------------------------------------------------------------- #
+def test_an_address_borrows_a_saved_key_only_for_exactly_that_server(tmp_path):
+    """Decided and pinned: two addresses are one server only when scheme,
+    host (case-folded), port (default filled in) and the path above ``/v1``
+    all match. ``localhost`` and ``127.0.0.1`` are DIFFERENT (a key goes only
+    to the address it was saved for — the conservative side: the worst case
+    is an unkeyed read the server refuses). Every userinfo / fragment / query
+    / backslash trick that makes a parser see another host gets no key."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.fleet.endpoint_auth import root_key
+    from iron_jarvis.fleet.registry import FleetRegistry
+
+    cfg = SimpleNamespace(home=str(tmp_path), fleet_nodes=[], custom_base_url="http://gw:4000/v1",
+                          custom_model="", ollama_base_url="")
+    reg = FleetRegistry(cfg, persist=lambda *a, **k: None)
+    reg.set_secret_resolver({"custom_api_key": KEY}.get)
+    same = ["http://gw:4000", "http://GW:4000/v1/", "http://gw:4000/v1/chat/completions",
+            " http://gw:4000/v1 ", "http://user:pw@gw:4000/v1", "http://gw:04000/v1"]
+    for url in same:
+        assert reg.key_for_url(url) == KEY, url
+    other = ["https://gw:4000/v1", "http://gw:4001/v1", "http://gw/v1", "http://gw.:4000/v1",
+             "http://other:4000/v1", "http://gw:4000/openai/v1", "http://gw:4000@evil.com/v1",
+             "http://evil.com#@gw:4000/v1", "http://evil.com?@gw:4000", "http://gw:4000\\@evil.com/v1",
+             "http://gw:4000%2f@evil.com", "http://localhost:4000/v1", "http://127.0.0.1:4000/v1", ""]
+    for url in other:
+        assert reg.key_for_url(url) == "", url
+    assert root_key("http://[::1]:4000/v1") == root_key("http://[::1]:4000")
+    assert root_key("http://[::1]:4000") != root_key("http://[::1]:4001")
+
+
+def test_the_matching_rule_and_the_sending_client_agree_on_the_host():
+    """Property: whenever ``root_key`` says an address is the saved server,
+    httpx — the client that SENDS the key — connects to that same scheme,
+    host and port (or refuses the address outright). 12,000+ crafted
+    addresses: userinfo, fragments, queries, backslashes, encodings, IDN
+    look-alikes, zero-width and control characters."""
+    import httpx
+
+    from iron_jarvis.fleet.endpoint_auth import root_key
+
+    target = root_key("http://gw:4000/v1")
+    seps = ["", "\\", "@", "#", "?", "/", " ", "\t", "%40", "%2f", ";", ":", "[", "]",
+            "。", "．", "K", "İ", "\x00", "%00", "%"]
+    hosts = ["gw", "evil.com", "GW", "ｇｗ", "gw.", "g​w"]
+    urls: set[str] = set()
+    for a in seps:
+        for b in seps:
+            for h in hosts:
+                urls |= {f"http://gw:4000{a}{h}{b}", f"http://{h}{a}gw:4000{b}", f"http://gw{a}{h}:4000{b}",
+                         f"http://{h}{a}@gw:4000{b}", f"http://gw:4000{a}@{h}{b}", f"http://{h}{b}:4000"}
+    assert len(urls) > 12_000
+    disagree = []
+    for url in urls:
+        if root_key(url) != target:
+            continue
+        try:
+            parsed = httpx.URL(url.strip())
+        except Exception:  # noqa: BLE001 — httpx refuses it: nothing is sent
+            continue
+        if (parsed.scheme, parsed.host, parsed.port or 80) != ("http", "gw", 4000):
+            disagree.append(url)
+    assert disagree == [], disagree[:10]
