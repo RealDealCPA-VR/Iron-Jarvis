@@ -875,9 +875,12 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
       {/* Spacer pushes actions to the bottom for even card heights */}
       <div className="flex-1" />
 
-      {/* Action row */}
+      {/* Action row. v1.382.0: it WRAPS, and no press breaks its own words —
+          with the switch, Test, Change key and Remove on one unwrapping line,
+          a narrow card squeezed "Change key" onto two lines and pushed Remove
+          past the card's edge ("Remo"). */}
       {c.connected ? (
-        <div className="flex items-center gap-2">
+        <div data-testid={`connector-actions-${c.id}`} className="flex flex-wrap items-center gap-2">
           {/* v1.356.0 (G78): On / Off for an app that runs as a pack. */}
           {c.connect_via === "mcp" && (
             <PackSwitch
@@ -893,7 +896,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
             type="button"
             onClick={runTest}
             disabled={testBusy}
-            className="btn-ghost flex-1 py-1.5 text-xs"
+            className="btn-ghost flex-1 whitespace-nowrap py-1.5 text-xs"
           >
             {testBusy ? (
               <LoaderInline label="Testing…" />
@@ -910,7 +913,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               onClick={() => void openChangeKey()}
               disabled={keyBusy}
               aria-expanded={editRow !== null}
-              className="btn-ghost flex-1 py-1.5 text-xs"
+              className="btn-ghost flex-1 whitespace-nowrap py-1.5 text-xs"
               title={`Paste a new key or token for ${c.name}; it stays connected`}
             >
               {keyBusy ? (
@@ -933,7 +936,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
                 ? `Remove ${c.name} and its saved key (to pause it instead, switch it off)`
                 : `Remove ${c.name}`
             }
-            className="py-1.5"
+            className="shrink-0 whitespace-nowrap py-1.5"
           />
         </div>
       ) : c.connect_via === "memory" ? (
