@@ -21,6 +21,15 @@ Pinned here, each through the real code:
 * NOTHING AN AGENT STARTED OUTLIVES ITS RUN: a CLI agent that starts the
   price task's server in the background and never stops it — the server is
   gone once the run is recorded (checked by process id).
+* NO COMPILED HIDDEN CHECK IS LEFT BEHIND. A check runs ``python -I``, and
+  ``-I`` ignores ``PYTHONDONTWRITEBYTECODE``, so Python wrote
+  ``__pycache__/test_hidden_*.pyc`` into the grading copy — the WHOLE answer
+  key as constants (the 2,000-file task's 62 expected calls, every expected
+  value) — and the v1.370.0 cleanup removed only the ``.py``. The copy sits at
+  ``runs/<task>/grade/``, two folders from where a repeat of the same task (or
+  the same task in another setup) is worked, so a later agent with a shell
+  could read it. The cleanup now removes what was compiled from the hidden
+  files too.
 * THE TASK DATA IS NOT APP CODE: two source scans (raw process spawns, retired
   words) skip ``harness_bench/tasks/``. That is safe only while nothing there
   is importable as part of Iron Jarvis — no ``__init__.py`` makes the folder
@@ -260,3 +269,28 @@ def test_the_task_data_the_source_scans_skip_is_not_importable_app_code():
                     isinstance(node, ast.ImportFrom) and node.module == "tasks" and node.level):
                 importers.append(path.relative_to(pkg).as_posix())
     assert not importers, importers
+
+
+# --------------------------------------------------------------------------- #
+# No compiled hidden check is left behind
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("task_id", ["bugfix-leap-year", "frontier-retry-idempotency"])
+def test_the_grading_copy_keeps_no_compiled_hidden_check(task_id, tmp_path):
+    from iron_jarvis.harness_bench.grading import grade
+    from iron_jarvis.harness_bench.setup_step import prepare_workspace
+    from tests.test_harness_bench_v1363 import apply_solution
+
+    task = TASKS[task_id]
+    work = prepare_workspace(task, tmp_path / "work")
+    apply_solution(task_id, work)
+    g = grade(task, work, tmp_path / "grade")
+    assert g.passed is True, g.reason
+    stems = {p.stem for p in task.check_dir.rglob("*.py")}
+    assert stems
+    left = [p.relative_to(tmp_path / "grade").as_posix() for p in (tmp_path / "grade").rglob("*")
+            if p.is_file() and p.name.split(".")[0] in stems]
+    assert not left, f"grader material left in the grading copy: {left}"
+    # (the agent's own compiled files stay: only the grader's go)
+    assert any((tmp_path / "grade").rglob("*.pyc"))

@@ -108,13 +108,26 @@ def remove_hidden_check(task: Task, grade_dir: Path) -> None:
     been graded (v1.370.0 review). The copy stays for inspection (the
     agent's final work), but the answer key must not sit on disk under the
     bench root, where a LATER run's agent with a shell could read it. Never
-    raises: a file that cannot be removed is logged."""
+    raises: a file that cannot be removed is logged.
+
+    v1.383.0 review: what Python COMPILED from a hidden file goes too. A
+    check runs ``python -I``, which ignores ``PYTHONDONTWRITEBYTECODE``, so
+    ``__pycache__/<hidden>.cpython-*.pyc`` was left beside the agent's work —
+    the whole answer key as constants — two folders from where a repeat of
+    the same task is worked."""
     if not task.check_dir.is_dir():
         return
+    targets: list[Path] = []
     for path in task.check_dir.rglob("*"):
         if not path.is_file() or "__pycache__" in path.parts:
             continue
         target = Path(grade_dir) / path.relative_to(task.check_dir)
+        targets.append(target)
+        if target.suffix == ".py":
+            cache = target.parent / "__pycache__"
+            if cache.is_dir():
+                targets += sorted(cache.glob(f"{target.stem}.*.pyc"))
+    for target in targets:
         try:
             if target.is_file() and not target.is_symlink():
                 os.chmod(target, 0o700)
