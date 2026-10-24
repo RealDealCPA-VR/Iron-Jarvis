@@ -47,20 +47,18 @@ from iron_jarvis.harness import claude_commands as CC
 from iron_jarvis.harness import command_shell as K
 from iron_jarvis.harness import sessions as S
 from iron_jarvis.providers.adapters.base import ToolCall
-from tests.test_build_command_shell_ask_v1381 import (  # noqa: F401 — fixtures
+from iron_jarvis.daemon.app import create_app
+from tests.test_build_command_shell_ask_v1381 import (
     DEPLOY,
     answer,
-    app,
     assert_command_card,
     bash,
     cards_of,
-    cc,
     finish,
     nth_card,
     project_command,
     ran,
     start,
-    work,
     write,
 )
 from tests.test_build_sessions_v1367 import (
@@ -78,6 +76,31 @@ from tests.test_chat_turn_stop_v1241 import _asgi_post
 
 PROJECT_WORDS = ("This turn runs the project's /deploy command, which has shell lines, so every "
                  "command in it asks you first.")
+
+
+@pytest.fixture()
+def cc(tmp_path, monkeypatch) -> Path:
+    """A scratch Claude Code folder (the user's real ~/.claude is never read)."""
+    root = tmp_path / "claude-config"
+    root.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root))
+    monkeypatch.delenv("CLAUDE_CODE_PLUGIN_CACHE_DIR", raising=False)
+    return root
+
+
+@pytest.fixture()
+def app(tmp_path, cc):
+    a = create_app(str(tmp_path / "home"))
+    a.state.platform.config.chat_files_root = str(tmp_path / "chat-files")
+    return a
+
+
+@pytest.fixture()
+def work(tmp_path) -> Path:
+    folder = tmp_path / "work"
+    folder.mkdir()
+    (folder / "app.py").write_bytes(b"x = 1\n")
+    return folder
 
 
 async def _command_turn_denied(app, sid: str, turn_id: str) -> None:
