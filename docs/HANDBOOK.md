@@ -1899,6 +1899,12 @@ reads; it never writes, runs commands, or starts work on its own.
 
 ## Fixes in v1.382.0
 
+- **The model list always fits the window.** The model menu in chat (and in
+  the IJ harness) opens where it fits, is never taller than the window, and
+  scrolls its list inside while the search box stays at the top. It stays
+  with its button if the page shifts, and on a phone a provider's own list
+  opens under its row instead of covering the menu.
+
 - **Your model server's key goes with every request — and only to it.** When
   a model server (for example a LiteLLM gateway) needs a key, Iron Jarvis now
   sends the key you saved for it on every request, including the background

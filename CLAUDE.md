@@ -3569,6 +3569,48 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **The composer's model menu is PORTALED, FIXED at its chip and always
+  inside the window** (v1.382.0, a USER BUG: in a new chat, the centred
+  composer's menu opened upward and its top — the filter box, Recent — was
+  cut off by the window; measured before: 10 of 12 window/page cases off
+  screen, after: 0; a doer + a reviewer that found 5 more defects).
+  `lib/modelMenuPlacement.modelMenuPlacement` (pure): opens ABOVE when the
+  whole menu fits there (as before), else on the side with more room; height
+  capped to that room; the room above ends `MENU_EDGE_PX` below the app's
+  title bar (`appTopLimit` reads `[data-ij-titlebar]`, so the menu never
+  covers the desktop's drag region). `components/chat/ModelMenu` renders into
+  `document.body` (`position: fixed` — a `transform`/`backdrop-filter`
+  ancestor, e.g. Mark 8, would otherwise make it relative to that ancestor;
+  pinned in vitest AND the e2e), only the ROWS scroll (filter + local-only
+  line pinned on top, "Make this my default" at the bottom), re-placed on
+  open / resize / model list change, keeps its side while typing, and reads
+  its chip's rect ONCE PER FRAME while open so it follows a chip that moves
+  without a scroll or resize (the demo strip leaving after "Make this my
+  default": 38 px gap before, 6 after) and closes when the chip goes.
+  `FitPanel` floats fixed beside its row and re-places with the menu; on a
+  phone it opens UNDER its row inside the menu (it covered the list), height
+  capped to what the list shows. Ctrl+K in the harness stops at the menu
+  itself (from a row it opened the palette); the filter ignores IME
+  composition; the chip carries `aria-controls`. The chat menu's rows/order/
+  words are unchanged (`chat-model-menu-v1376.json` regenerated: id + phone
+  panel classes only). TESTS: `dashboard/__tests__/model-menu-fits-window.test.tsx`
+  (31), `dashboard/e2e/model-menu-fit.spec.ts` (21 cases, 15 providers stubbed,
+  1406×857 / 1280×720 / 1024×640 / 390×844, chat hero, chat thread, harness);
+  the e2e ports move with `IJ_E2E_DAEMON_PORT` / `IJ_E2E_WEB_PORT`. SAME
+  RELEASE (test-only): every chat-page wait for a `next/dynamic` piece that
+  failed on loaded full runs got a 10 s bound — the connect doors
+  (chat-connect-doors, new-chat-centre, chat-firstrun, ux-wave2-chat-words,
+  first-run-home; the CONTROL test there was vacuous and now checks the
+  heading drawn with the doors) and the archive dialog (chat-more-menu-v1329,
+  chat-archive-v1328); a 1.5 s hold-back of each chunk reproduces the loaded
+  failure on an idle machine. vitest's sequencer runs a file that FAILED last
+  time first, at the coldest start — one random failure looks like a streak.
+  Other lazily loaded pieces (chat-sticky-agent, panel-reply-comes-home,
+  mission-followups, batch-card, everything, agents-mission, project-drawer)
+  still wait 1 s and fail on loaded LOCAL full runs (they pass alone and on
+  CI). OPEN: a provider panel can hang below the window after a resize; the
+  chat menu's rows do not close on Escape (only the filter does — pre-existing).
+
 - **Every request to a saved endpoint carries ITS saved key, and only to
   that server; nothing reaches a LiteLLM gateway the Ollama way** (v1.382.0,
   a USER BUG from the user's gateway log: ~139 keyless `GET /model/info` (and
