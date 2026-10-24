@@ -300,7 +300,9 @@ export function ApprovalCard({
           : Object.keys(args).length > 0 && <ApprovalPreview tool={approval.tool} args={args} />}
 
       {approval.costNote && (
-        <p data-testid="approval-cost" className="text-[11px] leading-relaxed text-zinc-400">
+        // v1.381.0 review: a long word (a quoted shell line, a path) wraps
+        // instead of widening the card past a phone's 390 px.
+        <p data-testid="approval-cost" className="text-[11px] leading-relaxed text-zinc-400 [overflow-wrap:anywhere]">
           {approval.costNote}
         </p>
       )}
@@ -364,6 +366,14 @@ export function ApprovalCard({
         <p data-testid="approval-page-once" className="text-[11px] leading-relaxed text-zinc-400">
           In the agent&apos;s browser, a click on something that reads as deleting, sending or
           paying asks you every time.
+        </p>
+      ) : onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "command" ? (
+        // v1.381.0: a shell step a project's or a plugin's slash command
+        // asked for (src/iron_jarvis/harness/command_shell.py). Your own
+        // commands follow the session's approval setting.
+        <p data-testid="approval-command-once" className="text-[11px] leading-relaxed text-zinc-400">
+          Shell steps from a project&apos;s or a plugin&apos;s slash command ask you every time,
+          whatever this session&apos;s approval setting. Your own commands follow the setting.
         </p>
       ) : onceOnly && !planAsk && !buildPlanAsk ? (
         <p data-testid="approval-local-only" className="text-[11px] leading-relaxed text-zinc-400">

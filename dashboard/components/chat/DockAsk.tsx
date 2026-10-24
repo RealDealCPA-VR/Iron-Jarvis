@@ -16,6 +16,11 @@
 // after a question appears is ignored: an Enter typed for the composer must
 // not allow a command the user has not seen yet. Keys press the card's OWN
 // buttons, so a key runs exactly what a click runs (checks included).
+// v1.381.0 review: Enter NEVER allows a once-only SAFETY card — a project's
+// or a plugin's command's shell step, a commit or push on a session's branch,
+// a risky click in the agent's browser (lib/dockAsk.enterAllows): an Enter
+// typed twice for the composer allowed one in the live check. Esc still
+// declines; "Allow once" is a click there (the keys line says so).
 //
 // LETTERS (v1.348.0): an app's question with one fixed set of choices draws
 // them as rows lettered A, B, C… (components/chat/ElicitationCard), and the
@@ -39,7 +44,7 @@ import { Button } from "@/components/ui";
 import { ElicitationCard } from "@/components/chat/ElicitationCard";
 import { AskUserCard, type AskAnswer } from "@/components/chat/AskUserCard";
 import { SamplingCard } from "@/components/chat/SamplingCard";
-import { dockKeyAction, withHeadFirst, type DockAskItem } from "@/lib/dockAsk";
+import { dockKeyAction, enterAllows, withHeadFirst, type DockAskItem } from "@/lib/dockAsk";
 import { choiceKey, findChoice } from "@/lib/letteredChoices";
 import {
   CLOUD_ASK_KEEP,
@@ -168,6 +173,9 @@ export function DockAsk({
   const ordered = withHeadFirst(asks, headRef.current);
   const head = ordered[0] ?? null;
   const headId = head?.id ?? null;
+  // v1.381.0 review: read by `press` (a callback the key listeners keep).
+  const enterAllowsRef = useRef(true);
+  enterAllowsRef.current = enterAllows(head);
 
   // A new question on screen: remember it (it stays first), start the key
   // guard, and take the focus when the composer had it (it is hidden now) or
@@ -196,6 +204,8 @@ export function DockAsk({
   const press = useCallback(
     (which: "primary" | "decline"): boolean => {
       if (Date.now() - shownAtRef.current < armDelayMs) return false;
+      // v1.381.0 review: a once-only safety card is allowed by a click only.
+      if (which === "primary" && !enterAllowsRef.current) return false;
       const btn = wrapRef.current?.querySelector<HTMLButtonElement>(`[data-dock-${which}]`);
       if (!btn || btn.disabled) return false;
       btn.click();

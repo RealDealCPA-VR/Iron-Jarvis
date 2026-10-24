@@ -20,7 +20,7 @@
 
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
-import { dockAskKeyHint, dockKeyAction } from "@/lib/dockAsk";
+import { dockAskKeyHint, dockKeyAction, enterAllows, type DockAskItem } from "@/lib/dockAsk";
 import type { PendingApproval } from "@/lib/useChatStream";
 
 /** How long after a question appears before Enter / Esc answer it. The same
@@ -63,6 +63,11 @@ export function PaneAsk({
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const shownAtRef = useRef(0);
+  // v1.381.0 review: a once-only SAFETY card (a project's or a plugin's
+  // command's shell step, a commit or push on a session's branch) is never
+  // allowed by Enter — the chat dock's rule (lib/dockAsk.enterAllows).
+  const item: DockAskItem = { kind: "approval", id: approval.id, approval };
+  const enterOk = enterAllows(item);
 
   // A new question on screen: start the key guard, and take the focus when
   // the pane is visible and the focus was in this pane (its composer, now
@@ -83,6 +88,7 @@ export function PaneAsk({
    *  click runs. False = nothing happened. */
   function press(which: "primary" | "decline"): boolean {
     if (Date.now() - shownAtRef.current < armDelayMs) return false;
+    if (which === "primary" && !enterOk) return false;
     const btn = wrapRef.current?.querySelector<HTMLButtonElement>(`[data-dock-${which}]`);
     if (!btn || btn.disabled) return false;
     btn.click();
@@ -123,7 +129,7 @@ export function PaneAsk({
       >
         <ApprovalCard key={approval.id} approval={approval} onConversation={onConversation} docked />
       </div>
-      <p className="px-2 text-[11px] text-zinc-500">{dockAskKeyHint("approval")}</p>
+      <p className="px-2 text-[11px] text-zinc-500">{dockAskKeyHint("approval", item)}</p>
     </div>
   );
 }

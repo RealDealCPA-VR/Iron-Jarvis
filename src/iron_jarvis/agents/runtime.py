@@ -2580,6 +2580,17 @@ class AgentRuntime:
             if spend is not None and getattr(spend, "words", "")
             else {}
         )
+        # v1.381.0: an ask that is answered ONCE, every time (a commit / push
+        # on a Build session's branch, a project's or a plugin's command's
+        # shell — a once-only spend check) says so on the registry entry too,
+        # so a surface that draws the run's waiting ask from ``pending_for``
+        # (the Build screen's helper row) offers "Allow once" and Deny only
+        # and names why. Passed only when set (a registry double takes no
+        # kwarg it was never given).
+        if _once_spend(spend):
+            _cost_kw["once_only"] = True
+            if getattr(spend, "reason", ""):
+                _cost_kw["once_reason"] = spend.reason
         if count > 1:
             for c in calls[:_BATCH_EXAMPLES]:
                 ct = self.p.registry.get(c.name)

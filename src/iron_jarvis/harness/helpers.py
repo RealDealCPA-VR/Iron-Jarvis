@@ -176,6 +176,11 @@ class HelperParent:
     #: ask-armed set). A helper works with these and NO others
     #: (:func:`helper_definition`); ``()`` leaves the definition unchanged.
     tools: tuple[str, ...] = ()
+    #: v1.381.0: the turn's ``harness/command_shell.TurnRule`` (a project's or
+    #: a plugin's command with shell lines) — armed EXPLICITLY around the
+    #: helper's task (:func:`pinned`), like the pin, so a helper's commands ask
+    #: exactly as the turn's do whatever a hop did with the context.
+    command_rule: Any = None
     #: v1.372.0 review: NARROWING permission overrides the helper carries —
     #: ``(key, "deny" | "ask")``: the turn's folder rules and low-trust
     #: narrowing, and under Local only an "ask" for every tool that reaches
@@ -361,20 +366,26 @@ def pinned(parent: "HelperParent | None") -> Iterator[None]:
       scope belongs to the ``delegate`` call that is running, so a pack the
       helper calls would otherwise route its question onto that call's
       (hidden) card. A helper is an agent run, and an agent run's pack gets
-      the instant decline every agent run gets."""
+      the instant decline every agent run gets;
+    * v1.381.0: the turn's command rule (``harness/command_shell``), armed
+      EXPLICITLY — a project's or a plugin's shell lines ask in the helper's
+      run exactly as in the turn's."""
     if parent is None:
         yield
         return
     from ..iron_proxy.pin import reset_pin, set_pin
     from ..mcp.interact import MCP_SCOPE
     from ..providers.hold import reset_hold, set_hold
+    from .command_shell import reset_turn_rule, set_turn_rule
 
     scope_token = MCP_SCOPE.set(None)
     token = set_pin(parent.pin) if parent.pin is not None else None
     hold_token = set_hold(parent.provider, parent.model)
+    rule_token = set_turn_rule(parent.command_rule)
     try:
         yield
     finally:
+        reset_turn_rule(rule_token)
         reset_hold(hold_token)
         if token is not None:
             reset_pin(token)
@@ -682,6 +693,14 @@ class HelperCall:
                 ask["examples"] = list(row.get("examples") or [])[:3]
             if row.get("cost_note"):
                 ask["cost_note"] = str(row["cost_note"])
+            # v1.381.0: an ask answered ONCE, every time (a project's or a
+            # plugin's command's shell, a commit / push on the session's
+            # branch): the helper's card offers "Allow once" and Deny only,
+            # and says why — a wider answer is read as once by the runtime.
+            if row.get("once_only") is True:
+                ask["once_only"] = True
+                if row.get("once_reason"):
+                    ask["once_reason"] = str(row["once_reason"])
             self.say(ask=ask)
         elif row is None and self.ask_id:
             self.ask_id = ""

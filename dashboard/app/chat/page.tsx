@@ -13788,7 +13788,7 @@ export default function ChatPage() {
                     )}
                     <span className="hidden sm:inline">
                       {askInDock
-                        ? dockAskKeyHint(dockAsks[0].kind)
+                        ? dockAskKeyHint(dockAsks[0].kind, dockAsks[0])
                         : composerKeyHint(busy, !commMeta, atFilesRoot !== null)}
                     </span>
                   </div>

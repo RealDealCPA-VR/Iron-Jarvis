@@ -61,6 +61,7 @@ import { decodeFolderRules, decodeThreadRefs, type ThreadRefReceipt } from "./tu
 import { decodeApproved, decodeRefit, type ApprovedCall, type TurnRefit } from "./turnRecovery";
 import { stepTarget } from "./workTarget";
 import { capStepDetails, cleanStepDetail, type StepDetail } from "./stepDetail";
+import { onceReasonOf, type OnceReason } from "./onceReason";
 
 // v1.324.0: type-only re-exports (they erase — a mock of this module with a
 // fixed export list is unaffected). The runtime helpers live in mcpInteract.
@@ -640,8 +641,9 @@ export function sseEventFrom(
       // would quietly offer the wider answers again.
       if (data.once_only === true) ev.once_only = true;
       // v1.375.0: the reasons the daemon names ("git"; v1.376.0 review:
-      // "page"), whitelisted.
-      if (data.once_reason === "git" || data.once_reason === "page") ev.once_reason = data.once_reason;
+      // "page"; v1.381.0: "command"), whitelisted (lib/onceReason).
+      const onceReason = onceReasonOf(data.once_reason);
+      if (onceReason) ev.once_reason = onceReason;
       // v1.346.0: the spend words, whitelisted like every field here — a
       // non-empty string only, or the card would quietly say nothing about
       // money on a call that costs some.
@@ -1257,9 +1259,10 @@ export interface PendingApproval {
   onceOnly?: boolean;
   /** v1.375.0: why it asks every time — "git" (a commit or push on a Build
    *  session's own branch); v1.376.0 review: "page" (a click in the agent's
-   *  browser that reads as deleting, sending or paying); absent = a
-   *  local-only chat's card. */
-  onceReason?: "git" | "page";
+   *  browser that reads as deleting, sending or paying); v1.381.0:
+   *  "command" (a shell step a project's or a plugin's slash command asked
+   *  for); absent = a local-only chat's card. */
+  onceReason?: OnceReason;
   /** v1.346.0: what the call would spend, in the daemon's words; present
    *  only when the tool quoted a price (media generation). */
   costNote?: string;
@@ -1633,9 +1636,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 canAlways: ev.can_always === true,
                 argsHash: ev.args_hash,
                 ...(ev.once_only === true ? { onceOnly: true } : {}),
-                ...(ev.once_reason === "git" || ev.once_reason === "page"
-                  ? { onceReason: ev.once_reason as "git" | "page" }
-                  : {}),
+                ...(onceReasonOf(ev.once_reason) ? { onceReason: onceReasonOf(ev.once_reason) } : {}),
                 ...(ev.cost_note ? { costNote: ev.cost_note } : {}),
                 ...(typeof ev.reversible === "boolean" ? { reversible: ev.reversible } : {}),
               });

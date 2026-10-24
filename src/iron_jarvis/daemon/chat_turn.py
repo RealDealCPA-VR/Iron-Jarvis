@@ -5137,6 +5137,7 @@ def helper_base(
     their parent row exactly as before)."""
     if harness is None:
         return None
+    from ..harness.command_shell import current as _command_rule_current
     from ..harness.helpers import HelperParent
     from ..iron_proxy.pin import current as _pin_current
 
@@ -5148,6 +5149,10 @@ def helper_base(
         project_id=project_id or None,
         pin=_pin_current(),
         local_only=bool(_egress.current_scope().on),
+        # v1.381.0: a project's or a plugin's command's shell lines ask in a
+        # helper's run too (harness/command_shell) — read in the turn's own
+        # context, carried explicitly like the pin.
+        command_rule=_command_rule_current(),
     )
 
 
@@ -5365,9 +5370,35 @@ def harness_check_runner(d, ctx, overrides: dict[str, str], grants, gate, trust_
         status = "ran" if data.get("exit_code") == 0 else "failed"
         return status, await fenced("process_start", "\n".join(outputs))
 
+    async def asks_first(name: str, command: str) -> str:
+        """v1.381.0 review: the words when the carrier's OWN spend check says
+        this command asks first, every time — a project's or a plugin's
+        command's shell (``harness/command_shell``), or a commit / push on a
+        session's branch (``harness/git_guard``) — else "". A check runs
+        through the registry, which never reads a spend check, so the
+        folder's ``plugins.toml`` command used to run with the user's grant
+        where every command the model ran asked. It is not run then: the
+        model is told to run it itself, with its own command tool — which
+        asks."""
+        tool = d.platform.registry.get(name)
+        fn = getattr(tool, "spend_check", None) if tool is not None else None
+        if fn is None:
+            return ""
+        try:
+            verdict = await fn({"command": command}, check_ctx)
+        except Exception:  # noqa: BLE001 — no opinion, as in the lanes
+            return ""
+        if verdict is not None and bool(getattr(verdict, "ask", False)):
+            return str(getattr(verdict, "words", "") or "") or "this command asks first"
+        return ""
+
     async def run(command: str, timeout_s: int) -> tuple[str, str]:
         try:
-            if check_carrier(gate) == "process_start":
+            carrier = check_carrier(gate)
+            words = await asks_first(carrier, command)
+            if words:
+                return "refused", words
+            if carrier == "process_start":
                 return await via_process(command, timeout_s)
             return await via_shell(command, timeout_s)
         except Exception as exc:  # noqa: BLE001 — a check never breaks the turn

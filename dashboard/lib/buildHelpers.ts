@@ -19,6 +19,7 @@
 import type { ToolCard, TurnStep } from "@/lib/useChatStream";
 import { agentPhrase, agentRunName, type AgentRunStamp } from "@/lib/agentRun";
 import { readSavedPlan, settlePlan, toSavedPlan, type PlanView, type SavedPlan } from "@/lib/planChecklist";
+import { onceReasonOf, type OnceReason } from "@/lib/onceReason";
 
 export type HelperState = "starting" | "queued" | "running" | "waiting" | "done" | "failed" | "stopped";
 
@@ -40,6 +41,11 @@ export interface HelperAsk {
   count?: number;
   examples?: Record<string, unknown>[];
   costNote?: string;
+  /** v1.381.0: answered ONCE, every time (a project's or a plugin's slash
+   *  command's shell, a commit or push on the session's branch): the card
+   *  offers "Allow once" and Deny only, and says why. */
+  onceOnly?: boolean;
+  onceReason?: OnceReason;
 }
 
 /** One helper while the turn runs. */
@@ -117,6 +123,12 @@ function decodeAsk(raw: unknown): HelperAsk | null {
   }
   const cost = str(r.cost_note, 300);
   if (cost) ask.costNote = cost;
+  // v1.381.0: a real `true` only; the reason through the one whitelist.
+  if (r.once_only === true) {
+    ask.onceOnly = true;
+    const reason = onceReasonOf(r.once_reason);
+    if (reason) ask.onceReason = reason;
+  }
   return ask;
 }
 

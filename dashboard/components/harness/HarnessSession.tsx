@@ -2242,7 +2242,7 @@ export function HarnessSession({
             />
           ) : null}
           {asking ? (
-            <p className="px-2 pt-1 text-[11px] text-zinc-600">{dockAskKeyHint(asks[0].kind)}</p>
+            <p className="px-2 pt-1 text-[11px] text-zinc-600">{dockAskKeyHint(asks[0].kind, asks[0])}</p>
           ) : null}
           {queued.length ? (
             <div data-testid="harness-queued" className="mb-1.5 flex flex-wrap gap-1.5 px-1">
