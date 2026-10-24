@@ -4,75 +4,121 @@
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';" />
     <title>Starting Iron Jarvis…</title>
+    <!--
+      The splash the desktop app shows while it starts (createLoadingWindow in
+      main.js opens it in a small frameless window).
+
+      The lighthouse design is the user's (2026-10-24). Everything is drawn here
+      as inline SVG and CSS, so it is sharp at any display scale and needs no
+      file beside this one (the CSP above allows no images anyway). The art is
+      drawn in the coordinates of the user's mockup (a 661x497 picture whose
+      glass card runs from x 30 to 636 and y 38 to 463), so a point can be
+      checked against the mockup by eye: each SVG below shows a slice of that
+      space and the browser scales it to the card.
+
+      Motion: the arc turns slowly, the light breathes, the dots count. Each
+      moving layer is its own element, so it moves without repainting the
+      rest. With "reduce motion" on in Windows nothing moves and the heading
+      keeps one dot, as in the mockup. tests/test_splash_lighthouse_v1383.py
+      pins the pieces.
+    -->
     <style>
       :root {
-        --bg: #0a0a0f;
-        --crimson: #e11d2a;
-        --crimson-soft: rgba(225, 29, 42, 0.55);
-        --ink: #e8e8ee;
-        --muted: #8a8a97;
+        --night: #041027;
+        --night-top: #0a2456;
+        --card-top: #0d2858;
+        --card-mid: #091a3c;
+        --card-low: #050d1f;
+        --card-edge: rgba(92, 142, 238, 0.2);
+        --ink: #f4f7fd;
+        --muted: #8797b6;
       }
       * { box-sizing: border-box; }
       html, body {
         margin: 0;
         height: 100%;
-        background: radial-gradient(120% 120% at 50% 30%, #14141c 0%, var(--bg) 60%);
+        background:
+          radial-gradient(70% 60% at 50% 0%, var(--night-top) 0%, rgba(10, 36, 86, 0) 72%),
+          linear-gradient(180deg, #051330 0%, var(--night) 55%, #030b1d 100%);
         color: var(--ink);
-        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
         -webkit-user-select: none;
         user-select: none;
         overflow: hidden;
       }
-      .wrap {
-        height: 100%;
+      /* The glass card. */
+      .card {
+        position: absolute;
+        inset: 26px 20px 24px;
+        border-radius: 14px;
+        border: 1px solid var(--card-edge);
+        background:
+          linear-gradient(160deg, rgba(130, 170, 255, 0.05) 0%, rgba(130, 170, 255, 0) 36%),
+          radial-gradient(80% 70% at 50% 30%, var(--card-top) 0%, var(--card-mid) 42%, #060f24 74%, var(--card-low) 100%);
+        box-shadow:
+          inset 0 1px 0 rgba(140, 182, 255, 0.2),
+          0 18px 40px rgba(0, 0, 0, 0.35);
+        overflow: hidden;
         display: flex;
         flex-direction: column;
         align-items: center;
-        justify-content: center;
-        gap: 28px;
       }
-      /* Arc-reactor-ish pulsing core */
-      .reactor {
+      /* The picture: 606x290 of the mockup's space, scaled to the card. */
+      .art {
         position: relative;
-        width: 120px;
-        height: 120px;
-        display: grid;
-        place-items: center;
+        width: 100%;
+        aspect-ratio: 606 / 290;
+        flex: none;
       }
-      .ring {
+      .art svg {
         position: absolute;
-        border-radius: 50%;
-        border: 2px solid var(--crimson-soft);
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
       }
-      .ring.outer { inset: 0; animation: spin 4s linear infinite; border-top-color: var(--crimson); }
-      .ring.mid   { inset: 16px; animation: spin 2.6s linear infinite reverse; border-bottom-color: var(--crimson); }
-      .core {
-        width: 46px;
-        height: 46px;
-        border-radius: 50%;
-        background: radial-gradient(circle at 50% 45%, #ff6b73 0%, var(--crimson) 45%, #5e0a10 100%);
-        box-shadow: 0 0 24px 6px var(--crimson-soft), 0 0 60px 14px rgba(225, 29, 42, 0.25);
-        animation: pulse 1.8s ease-in-out infinite;
+      /* The arc's own box: the 240x240 square around its circle, so it turns
+         about the circle's centre. */
+      .art svg.arc {
+        inset: auto;
+        left: 30.363%;   /* (214 - 30) / 606 */
+        top: 11.379%;    /* (71 - 38) / 290 */
+        width: 39.604%;  /* 240 / 606 */
+        height: 82.759%; /* 240 / 290 */
+        transform-origin: 50% 50%;
+        animation: turn 8s linear infinite;
       }
+      .art svg.light { animation: breathe 3.2s ease-in-out infinite; }
+      .art svg.glint { animation: breathe 2.6s ease-in-out infinite; }
       h1 {
-        margin: 0;
-        font-size: 20px;
-        letter-spacing: 0.5px;
+        position: relative;
+        margin: 4px 0 0;
+        font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, sans-serif;
+        font-size: 23px;
+        line-height: 28px;
+        letter-spacing: 0.1px;
         font-weight: 600;
       }
+      /* The dots hang after the words, so the counting never moves them. */
+      .dots {
+        position: absolute;
+        left: 100%;
+        top: 0;
+      }
       p {
-        margin: 0;
+        margin: 6px 0 0;
         color: var(--muted);
-        font-size: 13px;
+        font-size: 12px;
+        line-height: 16px;
       }
       .dots::after {
         content: "";
         animation: dots 1.4s steps(4, end) infinite;
       }
-      @keyframes spin { to { transform: rotate(360deg); } }
-      @keyframes pulse {
-        0%, 100% { transform: scale(1);    opacity: 0.9; }
-        50%      { transform: scale(1.12); opacity: 1;   }
+      @keyframes turn { to { transform: rotate(360deg); } }
+      @keyframes breathe {
+        0%, 100% { opacity: 0.84; }
+        50%      { opacity: 1; }
       }
       @keyframes dots {
         0%   { content: ""; }
@@ -81,14 +127,300 @@
         75%  { content: "..."; }
         100% { content: ""; }
       }
+      @media (prefers-reduced-motion: reduce) {
+        .art svg.arc,
+        .art svg.light,
+        .art svg.glint,
+        .dots::after { animation: none; }
+        .dots::after { content: "."; }
+      }
     </style>
   </head>
   <body>
-    <div class="wrap">
-      <div class="reactor">
-        <div class="ring outer"></div>
-        <div class="ring mid"></div>
-        <div class="core"></div>
+    <div class="card">
+      <div class="art" aria-hidden="true">
+        <!-- 1. The blue haze behind the lighthouse. -->
+        <svg class="sky" viewBox="30 38 606 290" preserveAspectRatio="xMidYMin meet">
+          <defs>
+            <radialGradient id="haze" cx="334" cy="168" r="240" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#2f72f5" stop-opacity="0.55" />
+              <stop offset="0.3" stop-color="#1e55d0" stop-opacity="0.26" />
+              <stop offset="0.65" stop-color="#12348a" stop-opacity="0.07" />
+              <stop offset="1" stop-color="#0a1c42" stop-opacity="0" />
+            </radialGradient>
+          </defs>
+          <ellipse cx="334" cy="172" rx="250" ry="155" fill="url(#haze)" />
+        </svg>
+
+        <!-- 2. The light: two beams fanning out of the lamp, and its halo. -->
+        <svg class="light" viewBox="30 38 606 290" preserveAspectRatio="xMidYMin meet">
+          <defs>
+            <linearGradient id="beamRight" x1="350" y1="0" x2="615" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#b5e2ff" stop-opacity="1" />
+              <stop offset="0.08" stop-color="#5cb8ff" stop-opacity="0.9" />
+              <stop offset="0.3" stop-color="#2f86f6" stop-opacity="0.5" />
+              <stop offset="0.55" stop-color="#2468e6" stop-opacity="0.14" />
+              <stop offset="0.8" stop-color="#2b6fe0" stop-opacity="0.02" />
+              <stop offset="1" stop-color="#2b6fe0" stop-opacity="0" />
+            </linearGradient>
+            <linearGradient id="beamLeft" x1="317" y1="0" x2="100" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#b5e2ff" stop-opacity="1" />
+              <stop offset="0.1" stop-color="#5cb8ff" stop-opacity="0.86" />
+              <stop offset="0.35" stop-color="#2f86f6" stop-opacity="0.42" />
+              <stop offset="0.62" stop-color="#2f6fe6" stop-opacity="0.14" />
+              <stop offset="0.85" stop-color="#2b6fe0" stop-opacity="0.03" />
+              <stop offset="1" stop-color="#2b6fe0" stop-opacity="0" />
+            </linearGradient>
+            <radialGradient id="halo" cx="333.5" cy="149" r="64" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#e2f1ff" stop-opacity="0.95" />
+              <stop offset="0.08" stop-color="#a6d3ff" stop-opacity="0.8" />
+              <stop offset="0.22" stop-color="#4d98ff" stop-opacity="0.55" />
+              <stop offset="0.5" stop-color="#2c72ee" stop-opacity="0.22" />
+              <stop offset="1" stop-color="#2b6fe0" stop-opacity="0" />
+            </radialGradient>
+            <!-- Soft edges, plus a faint grain: a long fade over dark blue
+                 otherwise shows steps on an 8-bit screen. -->
+            <filter id="soft" x="-10%" y="-30%" width="120%" height="160%" color-interpolation-filters="sRGB">
+              <feGaussianBlur stdDeviation="2.6" result="beam" />
+              <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="1" seed="7" result="noise" />
+              <feColorMatrix in="noise" type="matrix" values="0 0 0 0 0.45  0 0 0 0 0.65  0 0 0 0 1  0 0 0 0.07 0" result="grain" />
+              <feComposite in="grain" in2="beam" operator="in" result="grainOnBeam" />
+              <feMerge>
+                <feMergeNode in="beam" />
+                <feMergeNode in="grainOnBeam" />
+              </feMerge>
+            </filter>
+          </defs>
+          <g filter="url(#soft)">
+            <path d="M350,137.5 L640,72 L640,208 L350,161 Z" fill="url(#beamRight)" />
+            <path d="M317,140 L30,158 L30,284 L317,161 Z" fill="url(#beamLeft)" />
+          </g>
+          <circle cx="333.5" cy="149" r="64" fill="url(#halo)" />
+        </svg>
+
+        <!-- 3. The arc round the lighthouse: a left piece, a bright head at the
+             top right, a right piece. Its own box, so it can turn. -->
+        <svg class="arc" viewBox="214 71 240 240">
+          <defs>
+            <linearGradient id="arcLeft" x1="0" y1="251" x2="0" y2="122" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#3c7be6" stop-opacity="0.05" />
+              <stop offset="0.3" stop-color="#3f80ee" stop-opacity="0.9" />
+              <stop offset="0.75" stop-color="#3f80ee" stop-opacity="0.65" />
+              <stop offset="1" stop-color="#3c7be6" stop-opacity="0" />
+            </linearGradient>
+            <linearGradient id="arcHead" x1="255" y1="0" x2="398" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#3d7de8" stop-opacity="0" />
+              <stop offset="0.5" stop-color="#4d8ff2" stop-opacity="0.32" />
+              <stop offset="0.85" stop-color="#76b2ff" stop-opacity="0.85" />
+              <stop offset="1" stop-color="#9ccaff" stop-opacity="1" />
+            </linearGradient>
+            <linearGradient id="arcRight" x1="0" y1="156" x2="0" y2="266" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#3d78e8" stop-opacity="0.04" />
+              <stop offset="0.3" stop-color="#3f80ee" stop-opacity="0.35" />
+              <stop offset="0.68" stop-color="#4589f2" stop-opacity="0.75" />
+              <stop offset="1" stop-color="#3d78e8" stop-opacity="0.05" />
+            </linearGradient>
+            <filter id="arcGlow" x="-20%" y="-40%" width="140%" height="180%">
+              <feGaussianBlur stdDeviation="2.2" />
+            </filter>
+          </defs>
+          <path d="M239,250.3 A112,112 0 0 1 245.7,122" fill="none" stroke="url(#arcLeft)" stroke-width="2" stroke-linecap="round" />
+          <path d="M254.8,111.8 A112,112 0 0 1 398.2,99.3" fill="none" stroke="url(#arcHead)" stroke-width="6" stroke-linecap="round" opacity="0.45" filter="url(#arcGlow)" />
+          <path d="M254.8,111.8 A112,112 0 0 1 398.2,99.3" fill="none" stroke="url(#arcHead)" stroke-width="2.2" stroke-linecap="round" />
+          <path d="M440.5,156.4 A112,112 0 0 1 417.2,265.9" fill="none" stroke="url(#arcRight)" stroke-width="2" stroke-linecap="round" />
+        </svg>
+
+        <!-- 4. The lighthouse on its rocks, and the water. -->
+        <svg class="land" viewBox="30 38 606 290" preserveAspectRatio="xMidYMin meet">
+          <defs>
+            <clipPath id="towerShape">
+              <path d="M311,177 L358,177 L363.5,283 L303.5,283 Z" />
+            </clipPath>
+            <linearGradient id="towerBody" x1="303" y1="0" x2="364" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#4cc0ff" />
+              <stop offset="0.12" stop-color="#2a9cff" />
+              <stop offset="0.4" stop-color="#1a80fa" />
+              <stop offset="0.7" stop-color="#1565ee" />
+              <stop offset="1" stop-color="#0a43c8" />
+            </linearGradient>
+            <linearGradient id="towerFall" x1="0" y1="177" x2="0" y2="283" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#c2f8ff" stop-opacity="0.6" />
+              <stop offset="0.3" stop-color="#c2f8ff" stop-opacity="0" />
+              <stop offset="0.5" stop-color="#0a3cd8" stop-opacity="0.12" />
+              <stop offset="1" stop-color="#0a3cd8" stop-opacity="0.6" />
+            </linearGradient>
+            <linearGradient id="towerTurn" x1="303" y1="0" x2="364" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#ffffff" stop-opacity="0" />
+              <stop offset="0.14" stop-color="#ffffff" stop-opacity="0.12" />
+              <stop offset="0.32" stop-color="#ffffff" stop-opacity="0" />
+              <stop offset="0.6" stop-color="#1a5ae8" stop-opacity="0" />
+              <stop offset="1" stop-color="#1a5ae8" stop-opacity="0.5" />
+            </linearGradient>
+            <linearGradient id="band" x1="326" y1="0" x2="364" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#0b55f0" />
+              <stop offset="1" stop-color="#0841d0" />
+            </linearGradient>
+            <linearGradient id="stripe" x1="362" y1="212" x2="306" y2="284" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#f6f9ff" />
+              <stop offset="0.55" stop-color="#dce9fd" />
+              <stop offset="1" stop-color="#aac8f3" />
+            </linearGradient>
+            <linearGradient id="collar" x1="0" y1="177" x2="0" y2="187" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#041e78" stop-opacity="0.55" />
+              <stop offset="1" stop-color="#041e78" stop-opacity="0" />
+            </linearGradient>
+            <linearGradient id="gallery" x1="305" y1="0" x2="362" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#4fb4fd" />
+              <stop offset="0.22" stop-color="#1663ec" />
+              <stop offset="0.55" stop-color="#063cbc" />
+              <stop offset="1" stop-color="#05298c" />
+            </linearGradient>
+            <linearGradient id="dome" x1="311" y1="0" x2="356" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#62d0ff" />
+              <stop offset="0.26" stop-color="#1f78f2" />
+              <stop offset="0.55" stop-color="#0743cc" />
+              <stop offset="1" stop-color="#052d94" />
+            </linearGradient>
+            <linearGradient id="frame" x1="313" y1="0" x2="354" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#7fe0ff" />
+              <stop offset="0.5" stop-color="#4fb0ff" />
+              <stop offset="1" stop-color="#2a7cf0" />
+            </linearGradient>
+            <linearGradient id="glassSide" x1="0" y1="139" x2="0" y2="159" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#ffffff" />
+              <stop offset="1" stop-color="#d6eaff" />
+            </linearGradient>
+            <linearGradient id="rock" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#0b3388" />
+              <stop offset="0.3" stop-color="#061d52" />
+              <stop offset="0.65" stop-color="#041438" />
+              <stop offset="1" stop-color="#020b20" />
+            </linearGradient>
+            <linearGradient id="rockRim" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#a8d0ff" stop-opacity="1" />
+              <stop offset="0.1" stop-color="#4f92f6" stop-opacity="0.3" />
+              <stop offset="0.22" stop-color="#4f92f6" stop-opacity="0" />
+            </linearGradient>
+            <!-- The faces of the near rocks that the lamp lights. -->
+            <linearGradient id="faceLeft" x1="0" y1="0" x2="1" y2="0.6">
+              <stop offset="0" stop-color="#2f7cf2" stop-opacity="0" />
+              <stop offset="1" stop-color="#2f7cf2" stop-opacity="0.32" />
+            </linearGradient>
+            <linearGradient id="faceRight" x1="1" y1="0" x2="0" y2="0.6">
+              <stop offset="0" stop-color="#2f7cf2" stop-opacity="0" />
+              <stop offset="1" stop-color="#2f7cf2" stop-opacity="0.32" />
+            </linearGradient>
+            <linearGradient id="waterLine" x1="170" y1="0" x2="500" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#3f84f0" stop-opacity="0" />
+              <stop offset="0.14" stop-color="#4d92f6" stop-opacity="0.6" />
+              <stop offset="0.3" stop-color="#5b9cf6" stop-opacity="0.8" />
+              <stop offset="0.5" stop-color="#9fcbff" stop-opacity="0.95" />
+              <stop offset="0.7" stop-color="#5b9cf6" stop-opacity="0.8" />
+              <stop offset="0.86" stop-color="#4d92f6" stop-opacity="0.6" />
+              <stop offset="1" stop-color="#3f84f0" stop-opacity="0" />
+            </linearGradient>
+            <radialGradient id="waterGlow" cx="336" cy="290" r="180" gradientTransform="translate(0 290) scale(1 0.08) translate(0 -290)" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#3a86fa" stop-opacity="0.95" />
+              <stop offset="0.6" stop-color="#2a6fea" stop-opacity="0.38" />
+              <stop offset="1" stop-color="#3b82f6" stop-opacity="0" />
+            </radialGradient>
+            <radialGradient id="pool" cx="334" cy="290" r="86" gradientTransform="translate(0 290) scale(1 0.06) translate(0 -290)" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#7fb8ff" stop-opacity="0.55" />
+              <stop offset="1" stop-color="#3b82f6" stop-opacity="0" />
+            </radialGradient>
+            <radialGradient id="footGlow" cx="334" cy="274" r="118" gradientTransform="translate(0 274) scale(1 0.254) translate(0 -274)" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#2f7cf6" stop-opacity="0.5" />
+              <stop offset="0.55" stop-color="#2463e0" stop-opacity="0.18" />
+              <stop offset="1" stop-color="#1d4fc4" stop-opacity="0" />
+            </radialGradient>
+            <filter id="towerGlow" x="-60%" y="-20%" width="220%" height="140%">
+              <feGaussianBlur stdDeviation="7" />
+            </filter>
+            <filter id="towerAura" x="-140%" y="-40%" width="380%" height="180%">
+              <feGaussianBlur stdDeviation="15" />
+            </filter>
+          </defs>
+
+          <!-- Glow round the tower. -->
+          <path d="M309,120 L358,120 L366,283 L301,283 Z" fill="#2a74ff" opacity="0.55" filter="url(#towerAura)" />
+          <path d="M311,166 L358,166 L364,283 L303,283 Z" fill="#3a86ff" opacity="0.9" filter="url(#towerGlow)" />
+
+          <!-- Light spilling round the foot of the tower, behind the rocks. -->
+          <ellipse cx="334" cy="274" rx="118" ry="30" fill="url(#footGlow)" />
+
+          <!-- Rocks behind the tower. -->
+          <g fill="url(#rock)" stroke="url(#rockRim)" stroke-width="1">
+            <path d="M288,289 C289,272 297,256 309,250 C318,246 327,252 331,262 C333,270 334,280 334,289 Z" />
+            <path d="M348,289 C349,275 356,258 368,252 C379,247 392,253 398,264 C401,271 402,280 402,289 Z" />
+          </g>
+
+          <!-- The tower: blue, a darker band turning up the right, a white
+               stripe across the lower right. -->
+          <g clip-path="url(#towerShape)">
+            <rect x="300" y="170" width="70" height="120" fill="url(#towerBody)" />
+            <path d="M326,176 C340,176 347,185 347,199 L347,240 L372,240 L372,176 Z" fill="url(#band)" />
+            <path d="M370,203 C352,220 322,249 297,280 L297,290 L372,290 Z" fill="url(#stripe)" />
+            <rect x="300" y="170" width="70" height="120" fill="url(#towerFall)" />
+            <rect x="300" y="170" width="70" height="120" fill="url(#towerTurn)" />
+            <rect x="300" y="177" width="70" height="10" fill="url(#collar)" />
+            <path d="M311.4,177 L303.9,283" stroke="#a8f4ff" stroke-width="1.8" opacity="0.65" />
+          </g>
+
+          <!-- Gallery, lantern and dome. -->
+          <rect x="305.5" y="164" width="56" height="11.5" rx="5" fill="url(#gallery)" />
+          <rect x="308" y="164.4" width="50" height="1.3" rx="0.65" fill="#a8d6ff" opacity="0.65" />
+          <rect x="312" y="158.5" width="43" height="6.5" rx="1.5" fill="url(#gallery)" />
+          <rect x="313" y="136.5" width="41" height="23" fill="url(#frame)" />
+          <rect x="314.6" y="139" width="7.4" height="19.4" rx="1" fill="url(#glassSide)" />
+          <rect x="325.2" y="139" width="17.4" height="19.4" rx="1" fill="#ffffff" />
+          <rect x="345.8" y="139" width="6.8" height="19.4" rx="1" fill="url(#glassSide)" opacity="0.92" />
+          <rect x="308" y="133.4" width="51" height="5.6" rx="2.8" fill="url(#gallery)" />
+          <path d="M311.5,135 C311.5,124.5 321.5,118.5 333.5,118.5 C345.5,118.5 355.5,124.5 355.5,135 Z" fill="url(#dome)" />
+          <ellipse cx="321.5" cy="126" rx="4.2" ry="2.2" transform="rotate(-32 321.5 126)" fill="#ffffff" opacity="0.32" />
+          <rect x="331.4" y="107" width="4.2" height="13" rx="2.1" fill="#1f8af7" />
+
+          <!-- Rocks in front. -->
+          <g fill="url(#rock)" stroke="url(#rockRim)" stroke-width="1">
+            <path d="M222,289 C224,281 231,274 241,272 C250,271 259,276 263,283 C264,285 265,287 265,289 Z" />
+            <path d="M244,289 C245,277 252,263 263,256 C273,250 288,250 298,255 C308,261 314,273 316,289 Z" />
+            <path d="M366,289 C367,276 374,263 386,258 C397,254 410,257 417,266 C422,273 425,281 425,289 Z" />
+            <path d="M410,289 C411,282 417,275 427,273 C437,272 445,278 448,285 L449,289 Z" />
+            <path d="M322,290 C326,279 335,269 348,265 C361,262 377,266 386,275 C391,280 394,285 395,290 Z" />
+            <path d="M279,290 C281,285 289,280 299,279 C308,279 315,283 318,290 Z" />
+          </g>
+          <!-- Light on the faces turned to the lamp. -->
+          <path d="M274,251 C288,250 304,257 311,270 C313,276 315,282 315,289 L300,289 C301,275 292,261 274,251 Z" fill="url(#faceLeft)" />
+          <path d="M400,256 C390,256 378,262 372,271 C369,277 367,283 367,289 L382,289 C381,276 388,264 400,256 Z" fill="url(#faceRight)" />
+          <path d="M346,266 C337,269 329,276 325,284 L324,289 L338,289 C338,281 341,272 346,266 Z" fill="url(#faceRight)" />
+
+          <!-- The water line and its glow. -->
+          <ellipse cx="336" cy="290" rx="180" ry="14.4" fill="url(#waterGlow)" />
+          <ellipse cx="334" cy="290" rx="86" ry="5" fill="url(#pool)" />
+          <rect x="170" y="288" width="330" height="1.8" rx="0.9" fill="url(#waterLine)" />
+        </svg>
+
+        <!-- 5. Glints: the lamp's bloom and the ripples on the water. -->
+        <svg class="glint" viewBox="30 38 606 290" preserveAspectRatio="xMidYMin meet">
+          <defs>
+            <radialGradient id="bloom" cx="333.5" cy="149" r="34" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#ffffff" stop-opacity="0.75" />
+              <stop offset="0.3" stop-color="#9fd0ff" stop-opacity="0.34" />
+              <stop offset="1" stop-color="#5aa2ff" stop-opacity="0" />
+            </radialGradient>
+            <linearGradient id="ripple" x1="200" y1="0" x2="470" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#5a9bf6" stop-opacity="0" />
+              <stop offset="0.5" stop-color="#8fc2ff" stop-opacity="0.6" />
+              <stop offset="1" stop-color="#5a9bf6" stop-opacity="0" />
+            </linearGradient>
+          </defs>
+          <ellipse cx="333.5" cy="149" rx="34" ry="19" fill="url(#bloom)" />
+          <rect x="214" y="296" width="244" height="1.2" rx="0.6" fill="url(#ripple)" opacity="0.55" />
+          <rect x="250" y="302.5" width="172" height="1.1" rx="0.55" fill="url(#ripple)" opacity="0.38" />
+          <rect x="288" y="309" width="96" height="1" rx="0.5" fill="url(#ripple)" opacity="0.26" />
+          <rect x="312" y="293.4" width="44" height="1.4" rx="0.7" fill="#cfe6ff" opacity="0.45" />
+          <rect x="319" y="298.6" width="30" height="1.2" rx="0.6" fill="#cfe6ff" opacity="0.3" />
+          <rect x="325" y="303.8" width="18" height="1" rx="0.5" fill="#cfe6ff" opacity="0.2" />
+        </svg>
       </div>
       <h1>Starting Iron Jarvis<span class="dots"></span></h1>
       <p>Getting Iron Jarvis ready — this can take a few seconds.</p>

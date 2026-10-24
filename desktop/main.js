@@ -1926,7 +1926,9 @@ function createLoadingWindow() {
   loadingWin = new BrowserWindow({
     width: 520,
     height: 380,
-    backgroundColor: "#0a0a0f",
+    // The night blue loading.html paints (its --night), so the window shows
+    // no other colour for the moment before the page draws.
+    backgroundColor: "#041027",
     frame: false,
     resizable: false,
     center: true,

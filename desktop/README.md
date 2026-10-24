@@ -15,7 +15,7 @@ desktop/
 ├── package.json     # iron-jarvis-desktop — its own deps, separate from the dashboard
 ├── main.js          # Electron main process: spawns daemon + dashboard, manages windows
 ├── preload.js       # exposes window.ironjarvis = { isDesktop, version }
-├── loading.html     # dark "Starting Iron Jarvis…" splash
+├── loading.html     # the lighthouse "Starting Iron Jarvis…" splash (inline SVG)
 └── assets/
     ├── icon.png     # placeholder app icon (replace with your brand icon)
     └── README.md
@@ -25,7 +25,7 @@ desktop/
 
 On launch, `main.js`:
 
-1. Shows a dark **"Starting Iron Jarvis…"** splash window.
+1. Shows the **"Starting Iron Jarvis…"** splash window (a glowing lighthouse).
 2. Verifies `uv` and `pnpm` are on your `PATH` (friendly error dialog if not).
 3. Spawns the **daemon**:
    `uv run ironjarvis serve --host 127.0.0.1 --port 8787 --root <repoRoot>`
