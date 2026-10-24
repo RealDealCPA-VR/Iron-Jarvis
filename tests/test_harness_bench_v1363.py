@@ -82,6 +82,26 @@ TASKS = {t.id: t for t in load_tasks()}
 HARD = sorted(t.id for t in TASKS.values() if t.tier == "hard")
 
 
+def edge_installed() -> bool:
+    """Whether the browser task's own hidden check finds Microsoft Edge here
+    (its ``find_edge``, loaded from the check file)."""
+    import importlib.util
+
+    path = TASKS["frontier-inventory-filter"].check_dir / "test_hidden_inventory_page.py"
+    spec = importlib.util.spec_from_file_location("_ij_page_check", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return bool(module.find_edge())
+
+
+def skip_if_no_browser(g) -> None:
+    """The browser check exits 3 (unscored) when no browser can start. Only a
+    machine with NO Edge installed may skip on it: with Edge here, exit 3 is a
+    broken check or a browser that would not launch — red, never a quiet skip."""
+    if g.passed is None and "exit code 3" in g.reason and not edge_installed():
+        pytest.skip("no Microsoft Edge on this machine (the browser task is unscored here)")
+
+
 def apply_solution(task_id: str, work: Path, *, root: Path = SOLUTIONS) -> None:
     """Lay the reference solution (or, with ``root=DECOYS``, the decoy) over
     ``work``: every ``<path>.sol`` file is written to ``<path>``, every
@@ -144,10 +164,12 @@ def test_every_task_is_gradeable_both_ways(task_id, tmp_path):
     task = TASKS[task_id]
     untouched = prepare_workspace(task, tmp_path / "untouched")
     g = grade(task, untouched, tmp_path / "grade-untouched")
+    skip_if_no_browser(g)
     assert g.passed is False, (g.reason, g.output[-1500:])
     solved = prepare_workspace(task, tmp_path / "solved")
     apply_solution(task_id, solved)
     g = grade(task, solved, tmp_path / "grade-solved")
+    skip_if_no_browser(g)
     assert g.passed is True, (g.reason, g.output[-1500:])
 
 

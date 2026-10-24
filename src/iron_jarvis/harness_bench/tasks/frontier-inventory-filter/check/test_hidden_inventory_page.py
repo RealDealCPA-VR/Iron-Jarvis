@@ -81,6 +81,9 @@ def run_page_checks(edge, items):
                 browser = pw.chromium.launch(
                     executable_path=edge, headless=True,
                     args=["--no-first-run", "--no-default-browser-check", "--disable-extensions"],
+                    # A loaded machine can take a while to start a browser;
+                    # one that never starts is unscored, not failed.
+                    timeout=90000,
                 )
             except Exception as exc:  # noqa: BLE001
                 raise BrowserMissing(f"the browser would not start ({exc})") from exc

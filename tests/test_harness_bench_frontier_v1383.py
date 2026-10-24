@@ -40,7 +40,15 @@ from iron_jarvis.harness_bench.grading import grade
 from iron_jarvis.harness_bench.runners import render_prompt
 from iron_jarvis.harness_bench.setup_step import SetupFailed, prepare_workspace, run_setup, setup_env
 from iron_jarvis.harness_bench.tripwire import HiddenCheckLeak, assert_context_clean
-from tests.test_harness_bench_v1363 import DECOYS, SOLUTIONS, TASKS, _StubRunner, apply_solution
+from tests.test_harness_bench_v1363 import (
+    DECOYS,
+    SOLUTIONS,
+    TASKS,
+    _StubRunner,
+    apply_solution,
+    edge_installed,
+    skip_if_no_browser,
+)
 
 FRONTIER = sorted(t.id for t in TASKS.values() if t.tier == "frontier")
 SETUP_TASKS = sorted(t.id for t in TASKS.values() if t.setup_script)
@@ -79,11 +87,6 @@ CORE_AND_HARD_HASHES = {
     "trap-keep-the-tests": "7564a3c75b6cc598081b05366f00aea7ed3e27261bb8da7be119b67365ef59e4",
     "trap-run-the-tests": "e4e77b4ce5dcfc24a73275517dd0e9dbc3d3c08529f025663200b489d3391ebc",
 }
-
-
-def no_browser(g) -> bool:
-    """The browser check said it could not start a browser (exit 3)."""
-    return g.passed is None and "exit code 3" in g.reason
 
 
 def _visible_tests_pass(work: Path) -> None:
@@ -142,8 +145,7 @@ def test_a_frontier_decoy_passes_what_the_agent_sees_and_fails_the_hidden_check(
     if any(work.rglob("test_*.py")):
         _visible_tests_pass(work)
     g = grade(task, work, tmp_path / "grade")
-    if no_browser(g):
-        pytest.skip("no browser could start on this machine (the check is unscored there)")
+    skip_if_no_browser(g)
     assert g.passed is False, (g.reason, g.output[-2000:])
 
 
@@ -325,6 +327,7 @@ def test_the_page_check_is_unscored_when_no_browser_can_start(tmp_path, monkeypa
         monkeypatch.setenv(name, nowhere)
     monkeypatch.setenv("PATH", os.pathsep.join(p for p in os.environ["PATH"].split(os.pathsep)
                                                if "edge" not in p.lower()))
+    assert not edge_installed()  # the skip's own test sees what the check sees
     g = grade(task, work, tmp_path / "g")
     assert g.passed is None and "exit code 3" in g.reason, (g.reason, g.output[-500:])
     assert "no Microsoft Edge was found" in g.output
