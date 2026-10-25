@@ -12,7 +12,10 @@ lost runs themselves, and what the review found past them — or is a GUARD
     line that LOOKED like a test command was read as one. The body is now
     left out before the length check and the split
     (``finish.strip_heredocs``), a segment fed by one is never a test or a
-    setup step, and cmd's reading is unchanged.
+    setup step, and cmd's reading is unchanged. And a bash ``# comment``
+    after a kept segment no longer comments out the joined test run (``cd
+    <folder> # go there`` + failing tests was run again as the cd alone and
+    recorded as "passed").
 1b. THE FALSE ACCUSATION: both lost runs' replies ended with the chat's "no
     file was actually written this turn" after a bash heredoc WROTE calc.py,
     and every process-http-server reply ("saved … to status.json") got
