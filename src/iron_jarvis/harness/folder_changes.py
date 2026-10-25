@@ -17,11 +17,14 @@ reply when the journal says so OR this comparison says so.
 
 What a snapshot holds: every file's size and modification time (ns) under the
 folder, walked with ``list_files``' own pruning (``tools/builtins._SKIP_DIRS``
-and every folder whose name starts with ".") and its own caps (the same file
-count and the same deadline), plus folders the folder's ``.gitignore`` ignores
-(``finish.GitIgnore``). No file is read and nothing is hashed: a change that
-keeps a file's size AND its modification time to the nanosecond (an archive
-restoring an older copy with its old time) is not seen.
+and every folder whose name starts with "." — except the few that hold a
+project's own source, :data:`SOURCE_DOT_DIRS`: a CI workflow a command edits
+is a change) and its file cap, plus folders the folder's ``.gitignore``
+ignores (``finish.GitIgnore``, EVERY nested one read). Its deadline is the
+project map's (:data:`WALK_DEADLINE_S`): both walk at the start of every
+reply. No file is read and nothing is hashed: a change that keeps a file's
+size AND its modification time to the nanosecond (an archive restoring an
+older copy with its old time) is not seen.
 
 NOT CHANGES: caches and a tool's droppings — ``__pycache__`` / ``*.pyc``,
 ``.pytest_cache``, ``.mypy_cache``, ``.ruff_cache``, ``node_modules`` (its
@@ -78,6 +81,26 @@ JOURNALED_TOOLS = frozenset({
 
 #: Folders that are caches or build output beside list_files' own pruning.
 _CACHE_DIRS = frozenset({"htmlcov", "lcov-report", "__pypackages__"})
+#: Dot-folders that hold the PROJECT's own source — CI, a dev container, git
+#: hooks, release notes, a component catalog — walked, unlike every other
+#: folder whose name starts with "." (caches, virtualenvs, a tool's state: a
+#: test run writes there, the reply did not change the project). Review: a
+#: model that edited ``.github/workflows/ci.yml`` with a command changed
+#: files the check never saw.
+SOURCE_DOT_DIRS = frozenset({
+    ".github", ".gitlab", ".circleci", ".devcontainer", ".husky", ".changeset", ".storybook",
+})
+#: The walk's deadline: the project map's (``project_map.WALK_DEADLINE_S``),
+#: not list_files' 10 s for one call — this walk runs at the START of every
+#: Build reply, before its first model call, and again at its end (review: on
+#: slow storage the user waited up to 10 s before each reply's first word).
+WALK_DEADLINE_S = 3.0
+#: How long past its deadline a walk is waited for. The deadline is read
+#: between folders, so ONE listing that never returns (a network folder gone
+#: away) cannot be cut short inside the walk: the reply stops waiting, the
+#: walk is left to end on its own thread, and no second walk of that folder
+#: starts while it runs (:func:`walk_bounded`).
+WALK_GRACE_S = 2.0
 _CACHE_DIR_SUFFIXES = (".egg-info",)
 #: Files that are a cache, coverage output, a checker's dropping (eslint's
 #: and stylelint's caches, the mypy daemon's status file, tsc's
@@ -104,10 +127,11 @@ PROBLEM_NOT_KEPT = (
 
 
 def _caps() -> tuple[int, float]:
-    """``list_files``' own caps: the file count and the deadline."""
+    """The walk's caps: ``list_files``' file count, and the project map's
+    start-of-turn deadline (:data:`WALK_DEADLINE_S`)."""
     from ..tools import builtins as B
 
-    return int(B._MAX_WALK_ENTRIES), float(B._WALK_DEADLINE_S)
+    return int(B._MAX_WALK_ENTRIES), float(WALK_DEADLINE_S)
 
 
 def _skip_dirs() -> frozenset[str]:
@@ -119,6 +143,20 @@ def _skip_dirs() -> frozenset[str]:
 def cache_dir(name: str) -> bool:
     """Is a folder of this name a cache or build output (never walked)?"""
     return name in _CACHE_DIRS or name.endswith(_CACHE_DIR_SUFFIXES)
+
+
+def ignore_for(root: Any) -> Any:
+    """The folder's ``.gitignore`` rules for a walk or a comparison: EVERY
+    nested ``.gitignore`` read (review: ``finish.GitIgnore`` reads at most 64
+    folders' for the few files the new-files list asks about; a walk asks
+    about every folder, and past the 64th a nested ``.gitignore`` was never
+    read — on this PC's own Iron Jarvis checkout ``desktop/.gitignore``'s
+    ``release/`` (3,696 files) was walked and the snapshot always said "more
+    than 5000 files"). Bounded by the walk itself (its file cap and
+    deadline) and by the paths a comparison names."""
+    from .finish import GitIgnore
+
+    return GitIgnore(root, max_files=None)
 
 
 def cache_file(name: str) -> bool:
@@ -190,9 +228,7 @@ def take(
         if not fs_read_ok(str(root))[0] or not root.is_dir():
             return Snapshot(root=str(root), problem=PROBLEM_UNREADABLE)
         if ignore is None:
-            from .finish import GitIgnore
-
-            ignore = GitIgnore(root)
+            ignore = ignore_for(root)
         skip = _skip_dirs()
         files: dict[str, tuple[int, int]] = {}
         skipped: set[str] = set()
@@ -214,7 +250,8 @@ def take(
                     if entry.is_dir(follow_symlinks=False):
                         if _is_junction(entry):
                             continue  # never followed: it can lead outside the folder
-                        if name in skip or name.startswith(".") or cache_dir(name):
+                        if name in skip or cache_dir(name) or (
+                                name.startswith(".") and name not in SOURCE_DOT_DIRS):
                             continue
                         if ignore is not None and ignore.ignored(rel, is_dir=True):
                             continue
@@ -244,6 +281,49 @@ def take(
 def unavailable(root: Any, problem: str) -> Snapshot:
     """A snapshot that cannot be compared, and why."""
     return Snapshot(root=str(root), problem=str(problem or PROBLEM_UNREADABLE))
+
+
+def too_slow(root: Any) -> Snapshot:
+    """A walk given up on (:func:`walk_bounded`)."""
+    return unavailable(root, PROBLEM_TOO_SLOW.format(seconds=_caps()[1]))
+
+
+#: Folders a walk is still reading (normalised paths) — one thread per folder.
+_BUSY: set[str] = set()
+_BUSY_LOCK = threading.Lock()
+
+
+async def walk_bounded(folder: Any, fn: Callable[..., Any], *args: Any) -> Any:
+    """``fn(*args)`` — a BLOCKING walk of ``folder`` — off the loop, waited for
+    at most the walk's deadline and :data:`WALK_GRACE_S`; None when it took
+    longer (it is left to end on its thread), or when an earlier walk of this
+    folder that was given up on is still running (never a second one beside
+    it: a folder that stalls once stalls again). Never touches the disk on the
+    loop (the folder's name is normalised as text)."""
+    import asyncio
+
+    try:
+        key = os.path.normcase(os.path.abspath(str(folder)))
+    except (OSError, ValueError):
+        key = str(folder)
+    with _BUSY_LOCK:
+        if key in _BUSY:
+            log.info("finish check: %s is still being read by an earlier walk", folder)
+            return None
+        _BUSY.add(key)
+
+    def run() -> Any:
+        try:
+            return fn(*args)
+        finally:
+            with _BUSY_LOCK:
+                _BUSY.discard(key)
+
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(run), _caps()[1] + WALK_GRACE_S)
+    except asyncio.TimeoutError:
+        log.info("finish check: reading %s took longer than its deadline; left to finish on its own", folder)
+        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -385,15 +465,21 @@ __all__ = [
     "PROBLEM_TOO_MANY",
     "PROBLEM_TOO_SLOW",
     "PROBLEM_UNREADABLE",
+    "SOURCE_DOT_DIRS",
     "Snapshot",
     "UNJOURNALED_TOOLS",
+    "WALK_DEADLINE_S",
+    "WALK_GRACE_S",
     "cache_dir",
     "cache_file",
     "compare",
     "forget_kept",
+    "ignore_for",
     "keep",
     "kept",
     "take",
+    "too_slow",
     "unavailable",
     "unjournaled",
+    "walk_bounded",
 ]

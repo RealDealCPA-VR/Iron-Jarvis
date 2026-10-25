@@ -108,9 +108,13 @@ def test_a_folder_with_more_files_than_the_cap_cannot_be_compared(tmp_path):
 
 
 def test_the_caps_are_list_files_own(monkeypatch):
+    from iron_jarvis.harness import project_map
     from iron_jarvis.tools import builtins as B
 
-    assert FC._caps() == (B._MAX_WALK_ENTRIES, B._WALK_DEADLINE_S)
+    # (Review, moved on purpose: the DEADLINE is the project map's — this walk
+    # runs at the start of every reply, like the map — the file cap and the
+    # pruning stay list_files'.)
+    assert FC._caps() == (B._MAX_WALK_ENTRIES, project_map.WALK_DEADLINE_S)
     assert FC._skip_dirs() == B._SKIP_DIRS
 
 

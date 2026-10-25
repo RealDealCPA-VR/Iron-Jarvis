@@ -114,7 +114,7 @@ def test_cmds_reading_is_unchanged():
     # <<- : the closing word may be indented with tabs
     ("cat <<-EOF > a.py\n\tx = 1\n\tEOF\npytest -q", "pytest -q"),
     # two here-documents on one line: their bodies follow in order
-    ("cat <<A > a.py; cat <<B > b.py\n1\nA\n2\nB\npytest -q", "pytest -q"),
+    ("cat <<A > a.py; cat <<B > b.py\n1\nA\npytest -q\nB\npytest -x", "pytest -x"),
     # the operator line keeps what follows it on the same line
     ("cat <<EOF > a.py && pytest -q\nx = 1\nEOF", "pytest -q"),
     # a body that holds a test command is never a test command (OLD CODE read
@@ -127,6 +127,8 @@ def test_cmds_reading_is_unchanged():
     ("cat <<EOF > a.py\nEOF2\npytest -q\nEOF\npytest -x", "pytest -x"),
     # a test fed by a here-document cannot be run again as it ran: not a test
     ("pytest -q <<EOF\ny\nEOF", ""),
+    # ...nor a setup step one feeds
+    ("cd /w <<EOF\nx\nEOF\npytest -q", "pytest -q"),
 ])
 def test_heredoc_bodies_are_left_out_under_bash(command, part):
     assert F.test_part(command, posix=True) == part
@@ -138,6 +140,8 @@ def test_heredoc_bodies_are_left_out_under_bash(command, part):
     # inside quotes, `<<` is text
     ("echo 'a <<EOF'\npytest -q", "pytest -q"),
     ('echo "a <<EOF"\npytest -q', "pytest -q"),
+    # (the next lines are not a body: read as one, it would hide `pytest -q`)
+    ("echo 'a <<EOF b'\npytest -q\nEOF\npytest -x", "pytest -q && pytest -x"),
     # arithmetic shifts are not here-documents (read as one, the next line
     # would be taken for a body)
     ("echo $((1<<2))\npytest -q", "pytest -q"),
@@ -322,3 +326,171 @@ async def test_the_lost_runs_reply_is_never_told_no_file_was_written(tmp_path, n
     assert "evaluate" in (out["work"] / "calc.py").read_text(encoding="utf-8")
     assert out["done"]["tools_used"] == ["read_file", "read_file", "shell", "shell"]  # + the check's own run
     assert not _said_nothing_written(reply), reply
+
+
+# --------------------------------------------------------------------------- #
+# 2. what counts as a change
+# --------------------------------------------------------------------------- #
+
+
+def _put(root: Path, rel: str, data: bytes = b"x") -> Path:
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+    return p
+
+
+def test_a_nested_gitignore_is_read_however_many_folders_the_walk_saw(tmp_path):
+    """THE USER'S OWN REPO: ``GitIgnore`` read at most 64 folders'
+    ``.gitignore`` (enough for the few files the new-files list asks about),
+    and the snapshot asks about EVERY folder — so past the 64th, a nested
+    ``.gitignore`` was never read and the folder it ignores was walked.
+    Measured on this PC's Iron Jarvis checkout: ``desktop/.gitignore`` names
+    ``release/`` (3,696 files), the walk reached it after 64 folders and the
+    snapshot said "more than 5000 files" — the finish check fell back to the
+    journal alone on the user's main project, every reply (3,853 files, 63 ms
+    when read whole). Here: 70 folders, each ignoring its own ``out/``;
+    whatever the walk's order, at least 6 come past the 64th. OLD CODE: their
+    ``out/`` files were walked (over the cap)."""
+    for i in range(70):
+        _put(tmp_path, f"b{i:02d}/.gitignore", b"out/\n")
+        _put(tmp_path, f"b{i:02d}/keep.py")
+        _put(tmp_path, f"b{i:02d}/out/bundle.js")
+    snap = FC.take(tmp_path, limit=150)
+    assert snap.usable, snap.problem
+    assert not [r for r in snap.files if "/out/" in r]
+    assert len(snap.files) == 140
+
+
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_ignored_files_in_many_folders_are_never_changes(env, lane, monkeypatch):  # noqa: F811 — the fixture
+    """The same cap in the COMPARISON: a command (a test run) rewrote an
+    ignored log in 70 folders — the reply changed nothing. OLD CODE: past the
+    64th folder the logs read as changes, and the check ran on a reply that
+    changed nothing."""
+    platform, ws, wire = env
+    for i in range(70):
+        _put(ws, f"m{i:02d}/.gitignore", b"*.log\n")
+        _put(ws, f"m{i:02d}/run.log", b"a")
+    touch = _py("import glob; [open(p, 'w').write('more') for p in glob.glob('m*/run.log')]")
+    model = wire([_shell(touch), "Ran it."])
+    done, _ = await _lane(lane, platform, _body(ws, text="run it"), monkeypatch)
+    assert (ws / "m69" / "run.log").read_text() == "more"
+    assert model.notes() == [] and "finish" not in done
+
+
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_a_command_edit_of_the_projects_ci_workflow_is_a_change(env, lane, monkeypatch):  # noqa: F811 — the fixture
+    """DECIDED: ``.github/`` (and the other dot-folders that hold a project's
+    own source — CI, dev container, git hooks: ``SOURCE_DOT_DIRS``) is
+    walked; every other dot-folder (caches, virtualenvs, tool state) is not.
+    A reply that changed only ``.github/workflows/ci.yml`` with a command
+    changed files. OLD CODE: invisible (every dot-folder was skipped), so the
+    check never ran."""
+    platform, ws, wire = env
+    _put(ws, ".github/workflows/ci.yml", b"on: push\n")
+    edit = _py("open('.github/workflows/ci.yml', 'a').write('# lint too')")
+    model = wire([_shell(edit), "Added lint to CI.", "1. met."])
+    done, _ = await _lane(lane, platform, _body(ws, text="add lint to the CI workflow"), monkeypatch)
+    assert len(model.notes()) == 1 and "finish" in done
+
+
+async def test_other_dot_folders_stay_unwalked(env):  # noqa: F811 — the fixture
+    """THE GUARD for the decision above: a test run's tool state in other
+    dot-folders (``.tox``, ``.cache``, ``.venv`` …) is never a change."""
+    platform, ws, wire = env
+    plant = [".tox/py312/log.txt", ".cache/x/y", ".nox/s/z", ".hypothesis/examples/a", ".idea/ws.xml"]
+    code = "import os; [os.makedirs(os.path.dirname(p), exist_ok=True) or open(p, 'w').write('x') for p in " \
+           + repr(plant).replace('"', "'") + "]"
+    model = wire([_shell(_py(code)), "Done."])
+    out = await _stream(platform, _body(ws, text="run tox"))
+    assert all((ws / p).exists() for p in plant)
+    assert model.notes() == [] and "finish" not in out["done"]
+    snap = FC.take(ws)
+    assert not [r for r in snap.files if r.startswith(".")]  # (no dot-FILE planted here)
+
+
+async def test_a_gitignore_that_ignores_everything_hides_every_change(env):  # noqa: F811 — the fixture
+    """DECIDED (the brief's question): a folder whose ``.gitignore`` ignores
+    everything (``*``) — git itself would see no change, and neither does the
+    comparison: a command's write there does not open the check, exactly as
+    for the new-files list. (The honesty notes still never say "nothing was
+    written": a command ran.) A file tool's write still does (its journal)."""
+    platform, ws, wire = env
+    (ws / ".gitignore").write_text("*\n", encoding="utf-8")
+    model = wire([_shell(_py("open('app.py', 'w').write('X = 2\\n')")), "Set X to 2."])
+    out = await _stream(platform, _body(ws))
+    assert (ws / "app.py").read_text() == "X = 2\n"
+    assert model.notes() == [] and "finish" not in out["done"]
+    assert not _said_nothing_written(out["done"]["reply"])
+
+
+def test_the_gone_words_never_restore_what_someone_else_removed():
+    """A file gone since the reply began may be one the USER deleted while it
+    ran (or between a cut-off reply and its carry-on, hours later): the note
+    asks the model to put back only what ITS OWN command removed. OLD CODE:
+    "If the task did not ask for that, put them back." — for every file."""
+    assert "someone working in this folder" in F.GONE_ASK
+    assert "If a command you ran removed one the task did not ask to remove, put it back." in F.GONE_ASK
+    assert "put them back" not in F.GONE_ASK
+
+
+# --------------------------------------------------------------------------- #
+# 4. cost and the loop
+# --------------------------------------------------------------------------- #
+
+
+def test_the_walks_deadline_is_the_maps_and_its_cap_list_files():
+    """Both walks run at the start (and the end) of EVERY Build reply, before
+    the first model call: the project map's start-of-turn deadline (3 s), not
+    list_files' 10 s for one call. The file cap stays list_files'. OLD CODE:
+    10 s — on slow storage, up to 10 s before every reply's first word, and
+    again at its end."""
+    from iron_jarvis.harness import project_map
+    from iron_jarvis.tools import builtins as B
+
+    assert FC.WALK_DEADLINE_S == project_map.WALK_DEADLINE_S == 3.0
+    assert FC._caps() == (B._MAX_WALK_ENTRIES, FC.WALK_DEADLINE_S)
+
+
+async def test_a_stalled_walk_never_holds_the_reply_and_is_never_started_twice(env, monkeypatch):  # noqa: F811 — the fixture
+    """A folder whose listing never returns (a network share gone away): the
+    walk's own deadline is read between folders, so ONE stalled
+    ``os.scandir`` held the reply's first model call for as long as it
+    stalled. Now the reply waits the deadline and a grace, then goes on with
+    the journal alone (said); the stalled walk is left on its thread, and a
+    second reply in that folder does not start another while it runs. OLD
+    CODE: the first model call waited the whole stall."""
+    import threading
+    import time
+
+    platform, ws, wire = env
+    monkeypatch.setattr(FC, "_caps", lambda: (5000, 0.2))
+    monkeypatch.setattr(FC, "WALK_GRACE_S", 0.3)
+    release = threading.Event()
+    started: list[float] = []
+    real = FC.take
+
+    def stalled(folder, **kw):
+        started.append(time.monotonic())
+        release.wait(8.0)
+        return real(folder, **kw)
+
+    monkeypatch.setattr(FC, "take", stalled)
+    first_call: list[float] = []
+
+    def stamp(model: Model):
+        first_call.append(time.monotonic())
+        return _shell(_py("open('app.py', 'w').write('X = 2\\n')"))
+
+    try:
+        for _turn in range(2):
+            began = time.monotonic()
+            first_call.clear()
+            model = wire([stamp, "Done."])
+            out = await _stream(platform, _body(ws))
+            assert first_call and first_call[0] - began < 3.0, first_call[0] - began
+            assert model.notes() == [] and "finish" not in out["done"]
+        assert len(started) == 1, "a second walk of a folder still being read was started"
+    finally:
+        release.set()

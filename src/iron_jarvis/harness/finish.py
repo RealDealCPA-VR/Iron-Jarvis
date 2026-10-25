@@ -156,8 +156,9 @@ APPEARED_KEEP = (
 )
 GONE_HEAD = "## Files that were here when this reply began and are gone now"
 GONE_ASK = (
-    "No file tool removed them: a command run in this reply did, or a program running here. "
-    "If the task did not ask for that, put them back."
+    "No file tool removed them: a command run in this reply did, a program running here, or "
+    "someone working in this folder. If a command you ran removed one the task did not ask to "
+    "remove, put it back."
 )
 
 
@@ -369,10 +370,8 @@ def _scan_heredocs(command: str) -> tuple[str, int]:
             i += 2
             continue
         if not arith and text.startswith("<<", i):
-            if text.startswith("<<<", i):
-                out.append("<<<")
-                i += 3
-                continue
+            # (a here-string, `<<<`, reads as an operator with no word: its
+            # third `<` ends the word, so nothing is taken for a body)
             j = i + 2
             tabs = j < n and text[j] == "-"
             if tabs:
@@ -1531,8 +1530,12 @@ class GitIgnore:
     (``core.excludesFile``) and the exclude file of a linked worktree's main
     repository. BLOCKING (small reads, cached per folder); never raises."""
 
-    def __init__(self, folder: Any) -> None:
+    def __init__(self, folder: Any, *, max_files: "int | None" = MAX_GITIGNORE_FILES) -> None:
         self.folder = Path(str(folder))
+        #: how many folders' ``.gitignore`` are read (None: every one the
+        #: caller asks about — a walk, bounded by its own caps:
+        #: ``folder_changes.ignore_for``)
+        self._max_files = max_files
         self._files: dict[str, list[tuple[bool, bool, bool, Any]]] = {}
         try:
             git = self.folder / ".git"
@@ -1543,7 +1546,7 @@ class GitIgnore:
     def _at(self, rel_dir: str) -> list[tuple[bool, bool, bool, Any]]:
         if rel_dir in self._files:
             return self._files[rel_dir]
-        if len(self._files) >= MAX_GITIGNORE_FILES:
+        if self._max_files is not None and len(self._files) >= self._max_files:
             return []
         rules = gitignore_rules(self.folder / rel_dir if rel_dir else self.folder)
         self._files[rel_dir] = rules
@@ -1960,13 +1963,15 @@ class FinishCheck:
             self.folder_problem = self._before.problem
             log.info("finish check: %s, so only files made with file tools are known", self.folder_problem)
             return None
-        after = await asyncio.to_thread(FC.take, self.folder)
+        after = await FC.walk_bounded(self.folder, FC.take, self.folder)
+        if after is None:
+            after = FC.too_slow(self.folder)
         if not after.usable:
             self.folder_problem = after.problem
             log.info("finish check: %s, so only files made with file tools are known", self.folder_problem)
             return None
         before = self._before
-        seen = await asyncio.to_thread(lambda: FC.compare(before, after, GitIgnore(self.folder)))
+        seen = await asyncio.to_thread(lambda: FC.compare(before, after, FC.ignore_for(self.folder)))
         self.compared = True
         return seen
 
@@ -2716,7 +2721,10 @@ async def start(
             check._before, spec = got
             check._spec_before = dict(spec or {})
     else:
-        check._before, check._spec_before = await asyncio.to_thread(check.first_readings)
+        # Bounded (review): a listing that never returns (a network folder
+        # gone away) must not hold the reply's first model call.
+        got = await FC.walk_bounded(base, check.first_readings)
+        check._before, check._spec_before = got if got is not None else (FC.too_slow(base), {})
         FC.keep(sid, reply_id, check._before, dict(check._spec_before))
     return check
 
