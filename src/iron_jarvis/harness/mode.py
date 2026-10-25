@@ -483,6 +483,10 @@ class HarnessTurn:
         self._called_as: dict[str, str] = {}
         #: call id -> the dialect tool the model called (for its own words)
         self._called_tool: dict[str, _dialects.DialectTool] = {}
+        #: call id -> the shell language of a call the HARNESS makes itself
+        #: that re-runs a bash-written command (v1.386.0 review: the finish
+        #: check's re-run of a ``Bash`` command)
+        self._marked_syntax: dict[str, str] = {}
         #: v1.377.0: a Build session's shell facts (the user's own PATH and
         #: the tools found on it — ``harness/command_env``); "" elsewhere.
         self.shell_description = ""
@@ -581,13 +585,42 @@ class HarnessTurn:
         translated)."""
         return self._called_as.get(getattr(call, "id", ""), getattr(call, "name", ""))
 
-    def mark_called_as(self, call_id: str, name: str) -> None:
+    def mark_called_as(self, call_id: str, name: str, *, shell_syntax: str = "") -> None:
         """Part 3, Phase 2: a call the HARNESS makes itself (the finish
         check's test run, ``harness/finish``) is ledgered under ``name``
         (``ToolInvocation.called_as``) — through :meth:`ctx_for`, the same
-        path a translated call takes."""
+        path a translated call takes. ``shell_syntax`` (v1.386.0 review): the
+        language the command is in when it re-runs a command the MODEL wrote
+        in bash (Claude Code's ``Bash``) — so it runs in the shell the model's
+        own run did (Git for Windows' bash), never cmd.exe. "" = the
+        platform's own shell (a folder's own check: the user's words)."""
         if call_id and name:
             self._called_as[str(call_id)] = str(name)
+            if shell_syntax:
+                self._marked_syntax[str(call_id)] = str(shell_syntax)
+
+    def shell_syntax_of(self, call: Any) -> str:
+        """The shell language ``call``'s command was written in (v1.386.0):
+        "bash" for a call of a bash-written command tool (Claude Code's
+        ``Bash``) that became ``shell`` / ``process_start`` — what
+        :meth:`ctx_for` puts on its context — else ""."""
+        cid = getattr(call, "id", "")
+        if getattr(call, "name", "") not in _dialects.SHELL_TARGETS:
+            return ""
+        marked = self._marked_syntax.get(cid)
+        if marked:
+            return marked
+        tool = self._called_tool.get(cid)
+        return str(getattr(tool, "shell_syntax", "") or "") if tool is not None else ""
+
+    def shell_syntax_called(self, name: str) -> str:
+        """The shell language of the dialect tool the model calls ``name``
+        (v1.386.0 review: a ledger row's ``called_as`` — a carried-on reply's
+        earlier commands), else ""."""
+        for tool in getattr(self.plan, "dialect_tools", ()) or ():
+            if getattr(tool, "name", "") == name or name in (getattr(tool, "aliases", ()) or ()):
+                return str(getattr(tool, "shell_syntax", "") or "")
+        return ""
 
     def ctx_for(self, ctx: Any, call: Any) -> Any:
         """``ctx`` carrying the model's name for a translated call, so the
@@ -605,9 +638,8 @@ class HarnessTurn:
             out = dataclasses.replace(ctx, called_as=name)
         except Exception:  # noqa: BLE001 — a test double that is no dataclass
             return ctx
-        tool = self._called_tool.get(cid)
-        syntax = getattr(tool, "shell_syntax", "") if tool is not None else ""
-        if syntax and getattr(call, "name", "") in _dialects.SHELL_TARGETS:
+        syntax = self.shell_syntax_of(call)
+        if syntax:
             try:
                 out = dataclasses.replace(out, shell_syntax=syntax)
             except Exception:  # noqa: BLE001 — an older context: its own shell
