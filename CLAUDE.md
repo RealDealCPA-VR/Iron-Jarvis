@@ -3636,6 +3636,11 @@ does not need a bump, stop and bump it.
   volume makes no 8.3 names) and reproduced CI's exact failure on the old
   code. RULE: a path the agent is TOLD and a path a test RESOLVES must come
   from the same normalisation; on Windows TEMP may be an 8.3 name.
+  v1.384.2 (test-only; v1.384.1's gates failed, nothing published): the fix
+  broke `test_the_default_agent_folder_is_under_the_system_temp`, which still
+  compared with the temp folder AS NAMED. To reproduce the runners before a
+  push, run the touched files with TMP/TEMP set to the short name of a
+  long-named folder (`GetShortPathNameW`); all 382 benchmark tests pass so.
 - **The composer's model menu is PORTALED, FIXED at its chip and always
   inside the window** (v1.382.0, a USER BUG: in a new chat, the centred
   composer's menu opened upward and its top — the filter box, Recent — was
