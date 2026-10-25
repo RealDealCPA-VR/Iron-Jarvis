@@ -416,7 +416,8 @@ describe("ProjectTasks — Assign to", () => {
       assignee: "custom:analyst",
     });
     // No session strip: there is no session yet.
-    expect(screen.queryByText(/open session/)).toBeNull();
+    // Readiness 12A (0d.6, moved on purpose): "open run", never "open session".
+    expect(screen.queryByText(/open run/)).toBeNull();
     expect(hooks.reloads).toBeGreaterThan(0);
   });
 
@@ -438,7 +439,7 @@ describe("ProjectTasks — Assign to", () => {
       target: { value: "Summarize the PDFs" },
     });
     fireEvent.click(screen.getByRole("button", { name: /^Run$/ }));
-    await waitFor(() => expect(screen.getByText(/open session/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/open run/)).toBeInTheDocument());
     const call = hooks.posts.find((p) => p.path === "/projects/p1/task");
     expect(call?.body).toEqual({ text: "Summarize the PDFs", output: "chat", allow_tools: [] });
     expect(call?.body).not.toHaveProperty("assignee");

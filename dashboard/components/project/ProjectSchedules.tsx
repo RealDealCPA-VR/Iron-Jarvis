@@ -180,7 +180,7 @@ export function ProjectSchedules({
                   href={`/sessions/${encodeURIComponent(s.last_session_id)}`}
                   className="inline-flex items-center gap-1 text-[11px] text-accent-soft transition-colors hover:text-accent"
                 >
-                  open session <ArrowUpRight size={11} />
+                  open run <ArrowUpRight size={11} />
                 </Link>
               ) : null}
             </span>

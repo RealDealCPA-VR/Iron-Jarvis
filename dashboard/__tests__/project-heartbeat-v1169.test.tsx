@@ -233,7 +233,8 @@ describe("ProjectSchedules", () => {
     // Another project's automation must NOT leak in.
     expect(screen.queryByText("other-project")).toBeNull();
     // Deep link to the REAL session the last fire spawned.
-    const link = screen.getByText(/open session/).closest("a");
+    // Readiness 12A (0d.6, moved on purpose): "open run", never "open session".
+    const link = screen.getByText(/open run/).closest("a");
     expect(link?.getAttribute("href")).toBe("/sessions/session_abc");
     // Next run is the LOCAL time of next_run, not the raw ISO string, and its
     // tooltip carries the HUMANIZED trigger (never the bare cron line).
@@ -271,7 +272,7 @@ describe("ProjectSchedules", () => {
     render(<ProjectSchedules projectId="proj_1" />);
     // v1.352.0 (G17, updated on purpose): the Schedules page's "Not run yet".
     expect(await screen.findByText("Not run yet")).toBeInTheDocument();
-    expect(screen.queryByText(/open session/)).toBeNull();
+    expect(screen.queryByText(/open run/)).toBeNull();
   });
 
   it("renders NOTHING when the project has no schedules", async () => {

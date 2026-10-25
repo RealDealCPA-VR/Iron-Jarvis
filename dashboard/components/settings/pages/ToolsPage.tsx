@@ -1670,9 +1670,12 @@ export default function ToolsPage() {
           </div>
           {/* ONE JOB STORY, replacing the two similar blurbs (review §7). */}
           <p className="mb-3.5 text-[12.5px] leading-relaxed text-zinc-500">
-            Built-in tools work immediately. Extensions add bigger abilities —
-            files, repositories, memory — and may need Node or Python. You choose
-            the folder or account when you enable one.
+            {/* Readiness 12A (0d.6): files are BUILT IN (the Directory lists
+                Files & folders as built in), so extensions are not "files". */}
+            Built-in tools work immediately, files and folders included. Extensions
+            add abilities from other apps and services (repositories, memory, cloud
+            apps) and may need Node or Python. You choose the folder or account when
+            you enable one.
           </p>
           <FilterBar
             value={filters}
@@ -1911,9 +1914,10 @@ export default function ToolsPage() {
               blurb states the one thing that decides whether an extension
               will even start, in plain words, and that the page says so. */}
           <p className="mb-3 text-sm text-zinc-400">
-            <span className="text-zinc-300">Extensions</span> add bigger abilities —
-            files, repositories, memory, cloud apps — and you choose the folder or
-            account when you enable one. Some need a free helper program (Node.js).
+            <span className="text-zinc-300">Extensions</span> add abilities from other
+            apps and services (repositories, memory, cloud apps; files and folders are
+            built in), and you choose the folder or account when you enable one. Some
+            need a free helper program (Node.js).
             We&apos;ll tell you if one is missing.
           </p>
 

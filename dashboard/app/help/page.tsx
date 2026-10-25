@@ -37,6 +37,7 @@ import {
 import { ApiError, get } from "@/lib/api";
 import { couldntLoad, failureDetail } from "@/lib/loadFailed";
 import { OFFLINE_WORDS } from "@/lib/offlineWords";
+import { STATUS_HREF } from "@/lib/loopWords";
 import { useApi } from "@/lib/useApi";
 import { guideChatPath } from "@/lib/mission";
 import { Card, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
@@ -559,19 +560,20 @@ const TROUBLE: { symptom: string; fix: ReactNode }[] = [
   },
   {
     symptom: "Something else?",
-    // The System health panel lives on the OVERVIEW behind the nav's Advanced
-    // toggle ({advanced && ...} in app/page.tsx), and the doctor checks
-    // surface in the Overview's setup card — NOT on Settings (v1.198.0 fix:
-    // this entry once pointed at a Settings card that does not exist).
+    // Readiness 12A (0d.6): this pointed at "the System health card on the
+    // Overview (switch on Advanced at the bottom of the nav)" — the calm UI
+    // (v1.321.0) retired both the card and the Simple/Advanced switch. What
+    // is set up and what is not working now lives on Everything › Status
+    // (lib/loopWords STATUS_HREF, the sidebar's own status link), and Jarvis
+    // reads its own health when asked (tools/selfcare, v1.344.0).
     fix: (
       <>
-        The System health card on the{" "}
-        <Link href="/" className="text-accent-soft hover:text-accent">
-          Overview
+        <Link href={STATUS_HREF} className="text-accent-soft hover:text-accent">
+          Everything › Status
         </Link>{" "}
-        (switch on <span className="text-zinc-300">Advanced</span> at the bottom of the nav to
-        see it) and the doctor checks in the setup card show exactly what&apos;s unhappy —
-        errors are always shown honestly, never papered over.
+        shows what&apos;s set up and what isn&apos;t working right now, in plain words. You can
+        also ask Jarvis in chat &ldquo;what&apos;s wrong?&rdquo; and it checks its own health.
+        Errors are always shown honestly, never papered over.
       </>
     ),
   },

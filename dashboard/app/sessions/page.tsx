@@ -284,9 +284,11 @@ function SessionsList() {
       const res = await post<{ pruned: string[] }>("/worktrees/prune");
       const n = res?.pruned?.length ?? 0;
       setNotice(
+        // Readiness 12A (0d.6): the button's own words ("Clean up leftover
+        // folders"), never "orphaned worktrees to prune".
         n === 0
-          ? "No orphaned worktrees to prune."
-          : `Pruned ${n} orphaned worktree${n === 1 ? "" : "s"}.`,
+          ? "No leftover folders to clean up."
+          : `Cleaned up ${n} leftover folder${n === 1 ? "" : "s"}.`,
       );
       reload();
     } catch (err) {
@@ -346,7 +348,7 @@ function SessionsList() {
                   label="Clean up leftover folders"
                   confirmLabel="Clean up now?"
                   onConfirm={pruneWorktrees}
-                  title="Remove the git worktrees left behind by failed or deleted sessions"
+                  title="Remove the work folders left behind by runs that failed or were deleted"
                   idleClassName="!text-zinc-400 hover:!text-accent-soft"
                 />
               }

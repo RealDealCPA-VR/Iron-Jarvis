@@ -2328,6 +2328,13 @@ def build_platform(
                     str(ref),
                 )
                 return _run_outcome.workflow_waiting_detail(ref)
+            if status == "cancelled":
+                # Readiness 12A (0f.3): a workflow STOPPED mid-run (a Cancel on
+                # the Workflows page, Emergency stop) is not "ok — workflow
+                # ran": the row reads Stopped, like a stopped task fire, and —
+                # the stop being the user's — nothing is delivered.
+                fired["outcome"] = _run_outcome.STATUS_CANCELLED
+                return _run_outcome.workflow_cancelled_detail(ref)
             detail = f"workflow “{ref}” ran"
             if status == "completed" and skipped:
                 # v1.361.0 (lane 11A): it finished, but part of it failed —

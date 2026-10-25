@@ -737,10 +737,10 @@ function TimelineRow({
             <Link
               // v1.369.0: a Build session ("build:<id>") opens in Build.
               href={sessionLinkFor(e.session_id)}
-              title={`Open session ${e.session_id}`}
+              title={`Open run ${e.session_id}`}
               className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] text-zinc-500 transition-colors hover:border-accent/30 hover:text-accent-soft"
             >
-              Open session <ExternalLink size={9} />
+              Open run <ExternalLink size={9} />
             </Link>
           )}
         </div>

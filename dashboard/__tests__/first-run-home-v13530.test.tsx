@@ -473,7 +473,9 @@ describe("G57 — names, not provider ids", () => {
     expect(modelGroupName({ provider: "xai", model: "grok-4" })).toBe("xAI");
     expect(modelGroupName({ provider: "fleet-x", model: "m", name: "Box" })).toBe("Box");
     expect(modelGroupName({ provider: "ollama", model: "q", name: "q" })).toBe("Ollama");
-    expect(modelGroupName({ provider: "fleet-y", model: "m" })).toBe("fleet-y");
+    // Readiness 12A (0f.3, moved on purpose): an unlabelled fleet node is the
+    // user's model server, never its raw id.
+    expect(modelGroupName({ provider: "fleet-y", model: "m" })).toBe("Your model server");
   });
 
   it("Settings › Models: the default provider is chosen by name, the value stays the id", () => {

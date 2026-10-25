@@ -281,6 +281,9 @@ export function providerHeading(provider: string | null | undefined): string {
 export function modelGroupName(m: { provider: string; model?: string; name?: string }): string {
   const name = (m.name || "").trim();
   if (name && name !== m.model) return name;
+  // Readiness 12A (0f.3): a model server the user set up (a fleet node) that
+  // carries no label reads as theirs, never its raw id ("fleet-spark").
+  if ((m.provider ?? "").startsWith("fleet-")) return providerHeading("custom");
   return providerHeading(m.provider) || m.provider;
 }
 
@@ -462,7 +465,14 @@ export function modelPickWords(
   if (m.provider === "mock") return providerDisplay("mock");
   const words = modelRowName(m, catalog);
   if (isProviderDefaultModel(m.model)) return words;
-  const group = modelGroupName({ provider: m.provider, model: m.model, name: m.name });
+  // Readiness 12A (0f.3): a fleet node's group is the MACHINE — its name
+  // (from the row or the catalog's rows for it) else "Your model server" —
+  // never its raw id: a list said "fleet-spark · Spark B" when the caller
+  // handed the pick without its row's `name`.
+  const node = m.provider.startsWith("fleet-")
+    ? machineName(m.provider, { name: m.name, model: m.model, catalog }) || providerHeading("custom")
+    : "";
+  const group = node || modelGroupName({ provider: m.provider, model: m.model, name: m.name });
   if (!group || group === words) return words;
   return `${group} · ${words}`;
 }
