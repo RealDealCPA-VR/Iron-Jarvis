@@ -47,6 +47,7 @@ import {
   sessionLinkFor,
 } from "@/lib/buildLinks";
 import { lookingAt, noteWatched, wasWatched } from "@/lib/buildWatching";
+import { CHAT_ASKS_CHANGED_EVENT } from "@/lib/chatAway";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
 import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
@@ -1913,6 +1914,16 @@ export function NotificationBell() {
     prevApprovalEventId.current = latest.id;
     reloadAgentAsks();
   }, [events, reloadAgentAsks]);
+
+  // Readiness 12B (G05): a chat page in THIS window that left the screen with
+  // a turn parked on the user's OK told the daemon so (lib/chatAway); read
+  // the list now, so the row is here on the page the user went to — not on
+  // the next 15-second poll.
+  useEffect(() => {
+    const onChanged = () => reloadAgentAsks();
+    window.addEventListener(CHAT_ASKS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(CHAT_ASKS_CHANGED_EVENT, onChanged);
+  }, [reloadAgentAsks]);
 
   const handleAgentAskGone = (id: string) => {
     setAnsweredAgentAsks((prev) => new Set(prev).add(id));

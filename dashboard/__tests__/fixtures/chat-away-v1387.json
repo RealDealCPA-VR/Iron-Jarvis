@@ -1,0 +1,19 @@
+{
+  "stream_header": "X-IJ-Viewer",
+  "away_path": "/chat/turns/{turn_id}/away",
+  "away_body": {
+    "viewer": "view-A"
+  },
+  "away_answer": {
+    "away": true
+  },
+  "row": {
+    "id": "chat:th-12b",
+    "kind": "chat",
+    "thread_id": "th-12b",
+    "tool": "shell",
+    "requested_at": "2026-10-25T09:00:00Z",
+    "mission_id": null,
+    "project_id": null
+  }
+}
