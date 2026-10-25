@@ -400,7 +400,15 @@ async def test_replay_a_semicolon_chain(app, tmp_path):
     work = _copy_task("shell-count-failures", tmp_path)
     sid = await _bash_turn(app, work, RECORDED_CHAIN, "bash-chain")
     assert (work / "failures.txt").read_text(encoding="utf-8") == "8"
-    (row,) = [r for r in _rows(app, "shell") if r.session_id == f"build:{sid}"]
+    # MOVED ON PURPOSE (the finish check sees commands): `printf 8 >
+    # failures.txt` is a COMMAND's write, so the reply changed files and its
+    # finish check now runs — re-running the test part of the model's own
+    # command, in bash, as its own ledger row.
+    rows = [r for r in _rows(app, "shell") if r.session_id == f"build:{sid}"]
+    (row,) = [r for r in rows if r.called_as != "finish check"]
+    assert [json.loads(r.args_json)["command"] for r in rows if r.called_as == "finish check"] == [
+        "python -m unittest 2>&1"
+    ]
     assert (row.output or "").strip().splitlines()[-1] == "0", row.output  # grep -c: no ERROR lines
     graded = _hidden_check("shell-count-failures", work)
     assert graded.returncode == 0, graded.stderr.decode("utf-8", "replace")[-1500:]

@@ -5469,8 +5469,14 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws) 
         _carry_on = ""
     # Review: a daemon "carry on" (Resume when ready / Continue on another
     # account) continues a reply an account limit cut off — the check covers
-    # that WHOLE reply, from the question it continues (its `at`).
-    since = await asyncio.to_thread(_continued_question_at, d, body, _carry_on)
+    # that WHOLE reply, from the question it continues (its `at`), and
+    # compares the folder with the snapshot taken when THAT reply began (its
+    # turn id; harness/folder_changes).
+    since, continues = await asyncio.to_thread(_continued_question, d, body, _carry_on)
+    try:
+        custom = frozenset(d.platform.registry.custom_names())
+    except Exception:  # noqa: BLE001 — no registry here: nothing is known as custom
+        custom = frozenset()
     return await _finish.start(
         engine=getattr(d.platform, "engine", None),
         home=getattr(getattr(d.platform, "config", None), "home", None),
@@ -5481,36 +5487,40 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws) 
         harness=harness_turn,
         carry_on=[_carry_on] if _carry_on else [],
         since=since or None,
+        custom_tools=custom,
+        turn_id=str(getattr(body, "turn_id", "") or ""),
+        continues=continues,
     )
 
 
-def _continued_question_at(d, body, carry_on: str) -> str:
-    """BLOCKING. The ``at`` of the question a daemon "carry on" continues —
-    "" unless this turn's own message IS the carry-on text and the Build
-    session's transcript names the question (``command_shell.continued_turn``
-    — never a continuation, never a steer note)."""
+def _continued_question(d, body, carry_on: str) -> tuple[str, str]:
+    """BLOCKING. ``(at, turn id)`` of the question a daemon "carry on"
+    continues — ``("", "")`` unless this turn's own message IS the carry-on
+    text and the Build session's transcript names the question
+    (``command_shell.continued_turn`` — never a continuation, never a steer
+    note)."""
     try:
         users = [m for m in (getattr(body, "messages", None) or []) if getattr(m, "role", "") == "user"]
         if not carry_on or not users or str(getattr(users[-1], "content", "") or "").strip() != carry_on.strip():
-            return ""
+            return "", ""
         thread_id = str(getattr(body, "thread_id", "") or "")
         if not thread_id:
-            return ""
+            return "", ""
         from ..harness import sessions as _S
         from ..harness.command_shell import continued_turn
 
         row = _S.get_row(d.platform.engine, thread_id)
         if row is None:
-            return ""
+            return "", ""
         lines = _S._messages(row)
         turn = continued_turn(lines)
         for line in lines:
             if (isinstance(line, dict) and line.get("role") == "user" and turn
                     and str(line.get("turnId") or "") == turn and not line.get("continuation")):
-                return str(line.get("at") or "")
+                return str(line.get("at") or ""), turn
     except Exception:  # noqa: BLE001 — the reply's own part is still checked
         log.debug("finish check: reading the continued question failed", exc_info=True)
-    return ""
+    return "", ""
 
 
 #: A stand-in tool object that makes :func:`_fence_tool_output` fence and
