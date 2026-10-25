@@ -363,3 +363,36 @@ def test_an_older_database_gets_the_column_and_every_door_reads_a_null(tmp_path)
     after = client.get(f"/sessions/{sid}").json()["session"]
     assert after["summary"] == f"The run failed: {CODEX_REASON}"
     assert after["failure_detail"] == CODEX_400
+
+
+# --------------------------------------------------------------------------- #
+# 6. Survivors of the lane's own pins (mutation round)
+# --------------------------------------------------------------------------- #
+async def test_the_finalizer_names_the_runs_provider_when_the_failure_names_none(tmp_path):
+    """The orchestrator hands the RUN's provider to the rule (survived the
+    mutation round: the lane's pins only fed the hint to ``plain_reason``
+    directly). A typed provider failure with no provider in its words names
+    the run's provider, never "Iron Jarvis"."""
+    from iron_jarvis.agents.orchestrator import Orchestrator
+    from iron_jarvis.core.models import AgentType, Session
+    from iron_jarvis.platform import build_platform
+
+    p = build_platform(str(tmp_path / "home"))
+    orch = Orchestrator(p)
+    s = await orch.create_session("go", AgentType.BUILDER, provider="claude-cli")
+    await orch._finalize_failed(s, ProviderError("something new went wrong"))
+    with session_scope(p.engine) as db:
+        row = db.get(Session, s.id)
+        assert row.summary.startswith("The run failed: Claude Code couldn't finish this task."), row.summary
+        assert row.failure_detail == "something new went wrong"
+
+
+def test_a_safety_refusal_is_never_kept_as_an_already_worded_sentence():
+    """``worded_message`` leaves a safety refusal to ``classify`` (its way out
+    is worded for where it is read), even though it carries ``no_failover``."""
+    from iron_jarvis.providers.adapters.base import ProviderRefusal
+
+    r = ProviderRefusal("claude-cli: stop_reason refusal (cyber)", provider="claude-cli")
+    assert r.no_failover is True, "anti-vacuity: it carries the marker"
+    assert fw.worded_message(r) == ""
+    assert "stop_reason" not in fw.plain_reason(r)
