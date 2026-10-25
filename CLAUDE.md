@@ -3635,6 +3635,23 @@ does not need a bump, stop and bump it.
   - **Pins:** `tests/test_build_{long_replies,resume,faster_rounds,thinking_continuity,long_replies_review}_v1384.py`,
     `dashboard/__tests__/{build-resume,build-resume-kinds,ij-harness-long-replies,ij-harness-long-replies-review,ij-harness-turn-cache-drop-review}-v1384.test.ts(x)`
     (+ fixtures `build-resume*-v1384.json`).
+  - **v1.385.1, a defect the BENCHMARK found.** On v1.385.0, Jarvis on Codex
+    (gpt-6-astra, medium) failed 26 of 65 scored runs, and all 26 ended "The
+    working folder is read-only in this session, so I couldn't apply the
+    fix". Codex shows the model the thread's sandbox, and
+    `codex_native.protocol` starts every thread `sandbox: read-only` +
+    `approvalPolicy: untrusted` on purpose: that posture keeps Codex's OWN
+    built-ins from acting (and `start_problem` still refuses a thread that
+    does not confirm it). `thread_start_params` now appends
+    `protocol.SANDBOX_NOTE` to `baseInstructions` whenever the turn HAS
+    dynamic tools: the posture covers only Codex's switched-off built-ins,
+    Iron Jarvis carries out the function tools (they really change files),
+    and Iron Jarvis asks the user itself. A text-only turn gets no note, and
+    the posture is unchanged. Pin: `tests/test_codex_sandbox_note_v13851.py`
+    (`test_codex_native_v1365`'s exact-instructions assert moved on purpose).
+    Not yet seen live: the ChatGPT account on this PC hit its Codex usage
+    limit during that run (8 runs said so; 61 never started under the
+    breaker's cooldown).
 - **The benchmark can RANK: repeats with a range, the exact model, a
   `frontier` tier, and every run worked ALONE** (v1.384.0, IJ harness part 3
   Phase 1, `docs/IJ-HARNESS-PLAN-3.md`; a doer + a reviewer whose 4 hunters

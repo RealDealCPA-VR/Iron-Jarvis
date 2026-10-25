@@ -271,6 +271,25 @@ def thread_config(mcp_servers: list[str]) -> dict[str, Any]:
     return config
 
 
+#: v1.385.1: what the model must be told about the posture above. Codex shows
+#: the model its own sandbox ("read-only") and approval policy, and on the
+#: v1.385.0 benchmark gpt-6-astra read that as "I cannot change files": all
+#: 26 of Jarvis-on-Codex's failed runs ended "The working folder is read-only
+#: in this session, so I couldn't apply the fix" with a pasted patch. The
+#: posture stays exactly as it is (it is what keeps Codex's OWN tools from
+#: acting); the model is told who carries out its function tools.
+SANDBOX_NOTE = (
+    "About this session's sandbox: the read-only sandbox and approval policy "
+    "Codex reports apply only to Codex's own built-in tools, and those are all "
+    "switched off here. Your function tools are carried out by Iron Jarvis on "
+    "this computer: its file and command tools really do read, create, change "
+    "and delete files in the working folder, and Iron Jarvis asks the user "
+    "itself whenever a call needs approval. So never tell the user the folder "
+    "is read-only or ask them to apply a change by hand: make the change with "
+    "your tools."
+)
+
+
 def thread_start_params(
     *,
     base_instructions: str,
@@ -288,8 +307,13 @@ def thread_start_params(
         "dynamicTools": specs,
         "config": thread_config(mcp_servers),
     }
-    if base_instructions.strip():
-        params["baseInstructions"] = base_instructions
+    # The note only where the model HAS tools: a text-only turn has none, and
+    # telling it its tools change files would be untrue.
+    instructions = base_instructions
+    if specs:
+        instructions = f"{instructions.rstrip()}\n\n{SANDBOX_NOTE}" if instructions.strip() else SANDBOX_NOTE
+    if instructions.strip():
+        params["baseInstructions"] = instructions
     if model:
         params["model"] = model
     return params

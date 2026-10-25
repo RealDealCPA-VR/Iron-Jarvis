@@ -447,7 +447,9 @@ async def test_the_thread_starts_with_no_environment_and_every_builtin_off(tmp_p
     params = fake.received("thread/start")[0]["msg"]["params"]
     assert params["environments"] == [] and params["ephemeral"] is True
     assert params["sandbox"] == "read-only" and params["approvalPolicy"] == "untrusted"
-    assert params["baseInstructions"] == "You are Jarvis." and params["model"] == "gpt-5.5"
+    # v1.385.1: a turn WITH tools also tells the model who carries them out
+    # (tests/test_codex_sandbox_note_v13851.py).
+    assert params["baseInstructions"] == f"You are Jarvis.\n\n{P.SANDBOX_NOTE}" and params["model"] == "gpt-5.5"
     config = params["config"]
     for key, value in P.BUILTINS_OFF.items():
         assert config[key] == value, key

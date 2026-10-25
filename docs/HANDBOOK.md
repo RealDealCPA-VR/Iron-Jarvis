@@ -1897,6 +1897,18 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Codex no longer thinks your folder is read-only (v1.385.1)
+
+When Iron Jarvis worked through Codex (a chat or a Build session on
+codex-cli), the model could answer "The working folder is read-only in this
+session, so I couldn't apply the fix" and paste the change for you to make
+by hand. The coding benchmark found it: on gpt-6-astra it was every one of
+the 26 failed runs. Iron Jarvis starts Codex with a read-only setting on
+purpose, so that Codex's own tools cannot act; Iron Jarvis carries out the
+model's tools itself. The model is now told that plainly, so it makes the
+change itself (still asking you first wherever your approval setting says
+to). Nothing about what Codex itself may do has changed.
+
 ## Long Build replies finish (v1.385.0)
 
 A Build session's reply used to stop after 60 steps: a two-hour task once
