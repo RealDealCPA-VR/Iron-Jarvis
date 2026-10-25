@@ -33,6 +33,11 @@ export interface CachedPage {
   helpers: unknown[];
   questions: unknown[];
   steerNotes: string[];
+  /** v1.384.0 review: the question the user sent HERE for this reply (the
+   *  page's `pending` bubble). The session view a return paints was read
+   *  before the send; without it the question popped in above the live reply
+   *  once the open read landed. null/absent = none of its own. */
+  pending?: unknown;
 }
 
 export interface CachedTurn {

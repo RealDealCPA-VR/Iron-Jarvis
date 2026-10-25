@@ -391,7 +391,15 @@ export function HarnessSession({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<BuildMessage | null>(null);
+  // v1.384.0 review: the question the user SENT here rides the kept reply
+  // (lib/turnCache) — the session view a return paints was read before the
+  // send and nothing re-reads it mid-turn, so without this the question
+  // popped in above the live reply when the open read landed (a jump).
+  const [pending, setPending] = useState<BuildMessage | null>(
+    () => (kept?.page.pending as BuildMessage | null | undefined) ?? null,
+  );
+  const pendingRef = useRef<BuildMessage | null>(pending);
+  pendingRef.current = pending;
   const [questions, setQuestions] = useState<AskUserAsk[]>(() => (kept?.page.questions as AskUserAsk[] | undefined) ?? []);
   const [steerNotes, setSteerNotes] = useState<string[]>(() => kept?.page.steerNotes ?? []);
   // v1.372.0: the helper agents the running turn started, one row each
@@ -840,7 +848,12 @@ export function HarnessSession({
         turnId: id,
         lastId: pos,
         stream: seed,
-        page: { helpers: pageRef.current.helpers, questions: pageRef.current.questions, steerNotes: steerRef.current },
+        page: {
+          helpers: pageRef.current.helpers,
+          questions: pageRef.current.questions,
+          steerNotes: steerRef.current,
+          pending: pendingRef.current,
+        },
       });
     },
     [stream, threadId],
@@ -986,7 +999,9 @@ export function HarnessSession({
     leavingRef.current = false;
     setInput("");
     setError(null);
-    setPending(null);
+    // v1.384.0 review: a kept reply's question stays drawn (it is the kept
+    // turn's own; the read below confirms or drops it).
+    if (!kept) setPending(null);
     setLimit(null);
     setNextSteps([]);
     setRewindNote(null);
@@ -1001,6 +1016,7 @@ export function HarnessSession({
           turnRef.current = null;
           setTurnId(null);
           stream.abort();
+          setPending(null);
         }
         return;
       }
@@ -1043,6 +1059,7 @@ export function HarnessSession({
           stream.abort();
           setPageHelpers([]);
           setSteers([]);
+          setPending(null);
         }
         if (runningId && turnRef.current !== runningId) void runTurn(null, runningId);
       }
