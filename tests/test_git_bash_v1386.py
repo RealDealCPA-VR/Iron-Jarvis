@@ -217,16 +217,19 @@ def test_it_is_remembered_and_looked_for_again_when_it_should_be(monkeypatch, tm
         return real_search()
 
     monkeypatch.setattr(GB, "_search", search)
+    monkeypatch.setenv("PATH", str(tmp_path / "Git" / "cmd"))  # git is not installed YET
     assert GB.find() is None and GB.find() is None
     assert len(searches) == 1, "a miss was not remembered"
-    monkeypatch.setattr(GB, "MISS_RECHECK_S", 0.0)
-    git = _git_tree(tmp_path / "Git")
-    monkeypatch.setenv("PATH", str(git.parent))  # a changed PATH looks again at once
+    _git_tree(tmp_path / "Git")  # installed now, same PATH
+    assert GB.find() is None and len(searches) == 1, "a miss was looked for again too soon"
+    monkeypatch.setattr(GB, "MISS_RECHECK_S", 0.0)  # ... until the recheck time passes
     found = GB.find()
     assert found is not None and len(searches) == 2
     assert GB.find() == found and len(searches) == 2, "a found bash was not remembered"
+    monkeypatch.setenv(GB.ENV_OVERRIDE, str(tmp_path / "nowhere" / "bash.exe"))  # a changed setting
+    assert GB.find() == found and len(searches) == 3, "a changed setting did not look again"
     GB.forget()
-    assert GB.find() == found and len(searches) == 3, "Re-detect did not look again"
+    assert GB.find() == found and len(searches) == 4, "Re-detect did not look again"
     (tmp_path / "Git" / "bin" / "bash.exe").unlink()
     again = GB.find()
     assert again is not None and again.path.endswith(os.path.join("usr", "bin", "bash.exe"))
@@ -249,6 +252,15 @@ def test_the_real_bash_is_verified_once_with_a_bound(monkeypatch):
     v2 = GB._verify(path)
     assert v1 == v2 and v1.startswith("GNU bash, version ")
     assert runs == [([path, "--version"], GB.VERSION_TIMEOUT_S)]
+
+
+@needs_win
+def test_a_program_that_is_not_gnu_bash_is_never_verified():
+    """A real program that answers ``--version`` (here this Python) is not
+    bash: only "GNU bash" passes."""
+    import sys
+
+    assert GB._verify(sys.executable) == ""
 
 
 def test_off_windows_nothing_is_looked_for(monkeypatch):

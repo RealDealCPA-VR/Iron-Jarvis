@@ -528,11 +528,14 @@ async def test_run_in_background_starts_in_bash_in_the_table_and_ends_with_the_s
 
     work = tmp_path / "w"
     work.mkdir()
+    (work / "stale.pid").write_text("1", encoding="utf-8")
     sid = new_session(app, work, approval_mode="yolo")["id"]
     py = sys.executable.replace("\\", "/")
     bg = f'"{py}" -c "import os,time; open(\'pid.txt\',\'w\').write(str(os.getpid())); time.sleep(120)"; echo never'
     wire(app, Script([
-        [ToolCall(id="b1", name="Bash", arguments={"command": f"echo one; {bg}", "run_in_background": True})],
+        # `rm -f x; ...`: the shape cmd's guard refuses; in bash it is two commands.
+        [ToolCall(id="b1", name="Bash", arguments={"command": f"rm -f stale.pid; echo one; {bg}",
+                                                   "run_in_background": True})],
         "Done.",
     ]))
     status, raw = await open_turn(app, sid, {"text": "go", "turn_id": "bash-bg-table"}, timeout=60)
@@ -540,7 +543,8 @@ async def test_run_in_background_starts_in_bash_in_the_table_and_ends_with_the_s
     session = f"build:{sid}"
     try:
         (mp,) = P.TABLE.sessions(session)
-        assert mp.shell == "bash" and mp.command.startswith("echo one; ")
+        assert mp.shell == "bash" and mp.command.startswith("rm -f stale.pid; echo one; ")
+        assert not (work / "stale.pid").exists(), "the first command did not run"
         (row,) = [r for r in _rows(app, "process_start") if r.session_id == session]
         assert row.called_as == "Bash" and "Output:\none" in (row.output or ""), row.output  # ';' separated them
         pid = int(await until(lambda: (work / "pid.txt").exists() and (work / "pid.txt").read_text(encoding="utf-8"), 15))
@@ -650,6 +654,24 @@ async def test_the_git_guard_reads_bash_text_and_bash_runs_what_it_allows(app, t
     assert rows[-1].ok is True and "README.md" in (rows[-1].output or "")
     assert view["git"]["branch"] in (rows[-1].output or ""), "the ';' chain did not run in bash"
     B.forget_gh_state()
+
+
+@pytest.mark.parametrize("command,kinds", [
+    # bash runs EVERY line and every ';' / '&&' part — the guard reads them all
+    ("echo start; git push --force origin HEAD:main", ["force"]),
+    ("git add -A && git commit -m wip", ["commit"]),
+    ("x=$(git commit -qam wip) && echo $x", ["commit"]),
+    ("echo `git push`", ["push"]),
+    ("cat <<'EOF' > notes.txt\nhello\nEOF\ngit push -u origin HEAD", ["push"]),
+    ("bash -lc 'git commit -am x'", ["commit"]),
+    ("(cd sub && git reset --hard HEAD~2)", ["rewrite"]),
+    ("git status --short; git log --oneline -1", []),
+    ("echo 'git push is not run here' > note.txt", ["push"]),  # a mention reads as a run (documented)
+])
+def test_the_git_guard_reads_bash_text(command, kinds):
+    from iron_jarvis.harness import git_guard as G
+
+    assert [a.kind for a in G.classify(command)] == kinds, command
 
 
 @needs_bash

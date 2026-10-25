@@ -59,6 +59,10 @@ MUST_REFUSE: list[tuple[str, str]] = [
     ("@rm -f a; python b", "rm"),
     ("rm -f a 2>nul; python b", "rm"),
     ("rm -f a ; python b & echo c", "rm"),
+    # no space after the ';' still hands rm the LATER words (here `b`)
+    ("rm -f a;python b", "rm"),
+    ("rm -f a ;python b", "rm"),
+    ("rm a;b c", "rm"),
     ("mv a.txt b.txt; cat b.txt", "mv"),
     ("cp incoming/*.csv inbox/; ls inbox", "cp"),
     ("cp -r src dst; rm -rf src", "cp"),
@@ -115,6 +119,8 @@ MUST_RUN: list[str] = [
     'rm -f "a; b.txt"',
     "rm -f 'a; b.txt'",
     "rm -f a;b",
+    "rm -f a;",
+    "rm -f a ; ",
     "rm -f server.port & python server.py",
     "rm -f server.port && python server.py",
     "rm -f a.txt",
@@ -153,6 +159,7 @@ MUST_RUN: list[str] = [
     "printf 8 > failures.txt; python -m unittest 2>&1 | grep -c \"^ERROR:\"",
     # a heredoc's later lines never run in cmd (it stops at the first line break)
     "python - <<'E'\nrm -f x; python y\nE",
+    "python - <<'E'\nprint(1)\nE\nls *.tmp | xargs rm -f; echo done",
 ]
 
 
@@ -322,6 +329,14 @@ def test_control_cmd_really_feeds_rm_the_rest_of_the_line(tmp_path):
     (tmp_path / "victim.py").write_text("x", encoding="utf-8")
     NativeSandbox().run("rm -f nothing.port; victim.py", cwd=tmp_path, timeout=30, build=True)
     assert not (tmp_path / "victim.py").exists()
+    # ... and with no space after the ';' the LATER word is still a file name.
+    (tmp_path / "victim2.py").write_text("x", encoding="utf-8")
+    NativeSandbox().run("rm -f nothing.port;python victim2.py", cwd=tmp_path, timeout=30, build=True)
+    assert not (tmp_path / "victim2.py").exists()
+    # CONTROL of the control: a ';' inside the only word is one odd name.
+    (tmp_path / "keep.py").write_text("x", encoding="utf-8")
+    NativeSandbox().run("rm -f nothing;keep.py", cwd=tmp_path, timeout=30, build=True)
+    assert (tmp_path / "keep.py").exists()
 
 
 def test_a_long_line_is_judged_in_linear_time():

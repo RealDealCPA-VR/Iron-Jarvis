@@ -23,12 +23,13 @@ any other, before anything runs. It reads the text the way cmd.exe runs it:
   ``env``, ``call``, ``start``...) and inside ``cmd /c "..."``;
 * only a program of :data:`FILE_PROGRAMS` / :data:`CMD_FILE_COMMANDS` /
   :data:`GIT_FILE_SUBCOMMANDS` / :data:`INSTALLERS` (or an in-place ``sed -i``
-  / ``perl -i``) counts, and only an UNQUOTED ``;`` with more words after it:
+  / ``perl -i``) counts, and only an UNQUOTED ``;`` that hands it more words:
   for a program that parses its own arguments (``rm.exe``, ``git.exe``,
-  ``npm``...) a ``;`` inside ``"..."`` or ``'...'`` is part of a word, and a
-  ``;`` with no space after it stays inside one word (``a;b`` is one file
-  name); for cmd's own built-ins (``del``, ``copy``, ``mkdir``...) only double
-  quotes protect, and any ``;`` separates.
+  ``npm``...) a ``;`` inside ``"..."`` or ``'...'`` is part of a word, and
+  only a word holding a ``;`` that is NOT the last word counts (``rm -f
+  a;b`` deletes the one odd name ``a;b``; ``rm -f a;python b`` and ``rm -f a
+  ;python b`` delete ``b``); for cmd's own built-ins (``del``, ``copy``,
+  ``mkdir``...) only double quotes protect, and any ``;`` separates.
 
 So ``set PATH=%PATH%;C:\\x``, ``findstr "a;b" f``, ``echo a;b``, ``python -c
 "import x; print(1)"`` and ``sleep 2; cat x`` (harmless, if broken) all run.
@@ -170,30 +171,53 @@ def _leading(text: str) -> str:
 
 
 def _unquoted_semicolon(text: str, *, single_quotes: bool, needs_space: bool) -> bool:
-    """Does ``text`` hold a ``;`` outside quotes with a word after it — after
-    whitespace (a program that splits its own arguments: ``a;b`` stays one
-    word), or anywhere (cmd's own built-ins: ``;`` separates)?"""
-    # The last character that is a word (not space, and for a built-in not
-    # another ';'): a ';' before it has words after it. One pass each way.
-    last_word = -1
-    for j in range(len(text) - 1, -1, -1):
-        if not text[j].isspace() and (needs_space or text[j] != ";"):
-            last_word = j
-            break
+    """Does an unquoted ``;`` in ``text`` hand the program MORE WORDS?
+
+    ``needs_space`` (a program that splits its own arguments, ``rm.exe``):
+    a word holding an unquoted ``;`` that is not the LAST word — ``rm -f a;
+    b``, ``rm -f a ;b c`` and ``rm -f a;b c`` all hand ``rm`` a later word
+    (``b`` / ``c``) as a file name; ``rm -f a;b`` and ``rm -f a;`` hand it
+    only the one odd name. Otherwise (cmd's own built-ins, where ``;``
+    separates arguments): any unquoted ``;`` with something after it
+    (``del a;b`` deletes both). One pass."""
+    if not needs_space:
+        last_word = -1
+        for j in range(len(text) - 1, -1, -1):
+            if not text[j].isspace() and text[j] != ";":
+                last_word = j
+                break
+        quote = ""
+        for i, ch in enumerate(text):
+            if quote:
+                if ch == quote:
+                    quote = ""
+                continue
+            if ch == '"' or (single_quotes and ch == "'"):
+                quote = ch
+            elif ch == ";" and i < last_word:
+                return True
+        return False
+    words: list[bool] = []  # per word: holds an unquoted ';'
     quote = ""
-    for i, ch in enumerate(text):
+    in_word = has_semi = False
+    for ch in text:
         if quote:
             if ch == quote:
                 quote = ""
             continue
+        if ch.isspace():
+            if in_word:
+                words.append(has_semi)
+                in_word = has_semi = False
+            continue
+        in_word = True
         if ch == '"' or (single_quotes and ch == "'"):
             quote = ch
-            continue
-        if ch != ";" or i >= last_word:
-            continue
-        if not needs_space or text[i + 1].isspace():
-            return True
-    return False
+        elif ch == ";":
+            has_semi = True
+    if in_word:
+        words.append(has_semi)
+    return any(words[:-1])
 
 
 def _inner_of_cmd(text: str) -> str:
