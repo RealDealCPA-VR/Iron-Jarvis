@@ -75,6 +75,16 @@ async def test_repeat_twos_agent_finds_nothing_of_repeat_one_beside_it(tmp_path,
     monkeypatch.setenv("OLDPWD", str(home))
     monkeypatch.setenv("PATH", str(home / "bin") + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("IJ_TEST_POINTER", str(home / "harness-bench" / "notes.txt"))
+    # Another bench working at the same time (another setup, say): its agent
+    # folder is live, so it is neither swept nor within reach of this one.
+    import psutil
+
+    other = agent_parent / "ij-bench-runs" / "concurrent0001"
+    (other / "run" / "work").mkdir(parents=True)
+    (other / "run" / "work" / "peek-token.txt").write_text("another run's work", encoding="utf-8")
+    me = psutil.Process()
+    (other / bench_mod.OWNER_NAME).write_text(json.dumps({"pid": me.pid, "started": me.create_time()}),
+                                              encoding="utf-8")
     runner = ClaudeRunner(model="sonnet", effort="low",
                           binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
     res = await run_bench(runner=runner, home=home, tasks=list(TASKS.values()), names=[TASK], repeats=2)
@@ -93,7 +103,7 @@ async def test_repeat_twos_agent_finds_nothing_of_repeat_one_beside_it(tmp_path,
         assert not {"PWD", "OLDPWD"} & {k.upper() for k in peek["env"]}
         # The folder came home: graded, marked and reusable where it always was.
         assert (work / "peek-token.txt").is_file() and (res.config_dir / "runs" / key / "complete.json").is_file()
-    assert _agent_folders(agent_parent) == [], "a temporary agent folder was left behind"
+    assert _agent_folders(agent_parent) == [other], "a temporary agent folder was left behind"
     again = await run_bench(runner=runner, home=home, tasks=list(TASKS.values()), names=[TASK], repeats=2)
     assert [r["reused"] for r in again.records] == [True, True]
 
@@ -212,7 +222,7 @@ def test_a_killed_runs_agent_folder_is_gone_after_the_next_start(tmp_path):
         deadline = time.monotonic() + 120
         mine: list[Path] = []
         while time.monotonic() < deadline and not mine:
-            mine = [p for p in _owned_by(proc.pid) if (p / "work").is_dir()]
+            mine = [p for p in _owned_by(proc.pid) if any(p.rglob("work"))]
             time.sleep(0.1)
         assert mine, "the run never made its agent folder"
         time.sleep(1.0)

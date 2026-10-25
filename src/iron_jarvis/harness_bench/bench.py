@@ -51,8 +51,10 @@ EVERY RUN IS WORKED ALONE (v1.383.0 review). An agent used to work in
 ``runs/<key>/work`` itself — two folders from repeat 1's finished work of the
 same task (and every other finished run of the setup), with that path in its
 prompt. Now each run's agent works in a fresh, randomly named folder under the
-system temp, OUTSIDE the bench root (:func:`agent_runs_root`, one folder per
-run holding ``work/`` and the owner marker :data:`OWNER_NAME`). When the run
+system temp, OUTSIDE the bench root (:func:`agent_runs_root`; one folder per
+run holding the owner marker :data:`OWNER_NAME` and ``run/work/`` — a level
+deeper, so the agent's ``../..`` holds only its own run, not another bench's
+run going on at the same time). When the run
 has ended its ``work/`` is moved into ``runs/<key>/work`` and graded, marked
 and reused there exactly as before. The outside-folder snapshot covers the
 temporary folder too (a write beside ``work/`` is reported as ``../<file>``).
@@ -471,7 +473,8 @@ def _fresh_run_folder(task: Task, run_dir: Path, runs: Path, repeat: int = 1) ->
     })
     agent_root = make_agent_root()
     try:
-        work = materialize(task, agent_root / "work")
+        # Two levels down: the agent's ``..`` and ``../..`` are its own.
+        work = materialize(task, agent_root / "run" / "work")
         run_setup(task, work)
     except BaseException:
         discard_agent_root(agent_root)
@@ -600,7 +603,10 @@ async def _run_in_agent_folder(
     after = await asyncio.to_thread(_snapshot, cfg_dir)
     after_beside = await asyncio.to_thread(_snapshot, agent_root, work)
     outside = changed_outside(before, after) + [
-        f"../{p}" for p in changed_outside(before_beside, after_beside)
+        # Named from the agent's folder: ``../stray.txt`` is beside its work/.
+        Path(os.path.relpath(agent_root / p.removesuffix(" (removed)"), work)).as_posix()
+        + (" (removed)" if p.endswith(" (removed)") else "")
+        for p in changed_outside(before_beside, after_beside)
     ]
     # The run has ended: its work/ comes home, then everything below reads it
     # there (grading, the marker's workspace hash, a later reuse).
