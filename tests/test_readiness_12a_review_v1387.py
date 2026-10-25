@@ -396,3 +396,40 @@ def test_a_safety_refusal_is_never_kept_as_an_already_worded_sentence():
     assert r.no_failover is True, "anti-vacuity: it carries the marker"
     assert fw.worded_message(r) == ""
     assert "stop_reason" not in fw.plain_reason(r)
+
+
+# --------------------------------------------------------------------------- #
+# 7. A goal whose run raised: its breaker reason and the phone's line
+# --------------------------------------------------------------------------- #
+async def test_a_goal_whose_run_raised_records_the_runs_plain_words(tmp_path, monkeypatch):
+    """RED on the lane's commit: the goal's breaker reason — shown VERBATIM on
+    the Autonomy page and sent to the phone ("🛑 Goal breaker tripped: … —
+    session session_x raised ProviderError: codex-cli: CLI exited 1: …") — was
+    the class name and the raw text. Driven through the REAL goal engine and
+    the REAL orchestrator (its run finalizes, then re-raises), and the REAL
+    notifier's phone line."""
+    from iron_jarvis.agents.orchestrator import Orchestrator
+    from iron_jarvis.comm.notifier import format_event
+    from iron_jarvis.goals.engine import GOAL_ITERATION_COMPLETED, GOAL_TRIPPED, GoalEngine
+    from iron_jarvis.platform import build_platform
+
+    platform = build_platform(str(tmp_path / "home"))
+    orch = Orchestrator(platform)
+    monkeypatch.setattr(orch.runtime, "run", _failing_run(ProviderError(CODEX_400)))
+    engine = GoalEngine(platform, orch)
+    goal = engine.store.create(name="tidy", contract_text="do a thing", budget={"max_tokens": 1_000_000})
+
+    results = [await engine.run_iteration(goal.id) for _ in range(3)]
+    first = results[0]
+    assert first["ok"] is False and first["status"] == "failed", first
+    assert first["reason"] == CODEX_REASON, first
+    breaker = engine.store.get(goal.id).decoded_breaker()
+    assert breaker["last_reason"] == CODEX_REASON, breaker
+    done = [e for e in platform.event_bus.history if e.type == GOAL_ITERATION_COMPLETED]
+    assert done and done[-1].payload["error"] == CODEX_REASON
+    tripped = [e for e in platform.event_bus.history if e.type == GOAL_TRIPPED]
+    assert tripped, "anti-vacuity: three failures trip the breaker"
+    line = format_event({"type": GOAL_TRIPPED, "payload": tripped[-1].payload, "session_id": None})
+    assert CODEX_REASON in line, line
+    for text in (first["reason"], breaker["last_reason"], line):
+        assert _raw(text) == [] and "session_" not in text, text

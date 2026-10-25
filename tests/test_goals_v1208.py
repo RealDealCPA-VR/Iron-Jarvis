@@ -698,11 +698,21 @@ async def test_provider_crash_is_a_breaker_failure_with_the_real_reason(
     result = await engine.run_iteration(goal.id)
 
     assert result["ok"] is False and result["status"] == "failed"
-    assert "provider down" in result["reason"]  # the REAL reason, relayed
+    # Readiness 12A review (G28, moved on purpose): the reason is RELAYED in
+    # the run's plain words (failure_words.plain_reason) — it is shown
+    # verbatim on the Autonomy page and sent to the phone — never "session X
+    # raised RuntimeError: provider down"; the raw text is the run's own
+    # folded detail.
+    own = (
+        "Iron Jarvis couldn't finish this task. Run it again. "
+        "If it happens again, open the run to see the details."
+    )
+    assert result["reason"] == own
+    assert "RuntimeError" not in result["reason"] and "provider down" not in result["reason"]
     record = engine.store.get(goal.id)
     breaker = record.decoded_breaker()
     assert len(breaker["failures"]) == 1
-    assert "provider down" in breaker["last_reason"]
+    assert breaker["last_reason"] == own
     spent = record.decoded_spent()
     assert spent["iterations"] == 1  # the attempt is on the books
     checkpoint = record.decoded_checkpoint()
@@ -710,7 +720,7 @@ async def test_provider_crash_is_a_breaker_failure_with_the_real_reason(
     assert checkpoint["last_session_id"] == result["session_id"]
     assert engine.rehydrate() == 0  # …so no FALSE "interrupted" record later
     done = _events(platform, GOAL_ITERATION_COMPLETED, goal.id)
-    assert done and "provider down" in done[-1].payload["error"]
+    assert done and done[-1].payload["error"] == own
 
     # Three crashes in the window trip the breaker like any other failure.
     await engine.run_iteration(goal.id)
