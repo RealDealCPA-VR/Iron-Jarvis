@@ -104,6 +104,8 @@ export function costWords(u: TurnUsage | undefined, short = false): string | nul
 /** "120,400 in · 8,200 out" (+ " · 96,000 read from cache"). */
 export function tokenWords(u: TurnUsage | undefined): string | null {
   if (!u || (u.input_tokens === undefined && u.output_tokens === undefined)) return null;
+  // Nothing counted (the demo model, a model that reports none): nothing said.
+  if (!u.input_tokens && !u.output_tokens) return null;
   const parts = [
     `${(u.input_tokens ?? 0).toLocaleString("en-US")} in`,
     `${(u.output_tokens ?? 0).toLocaleString("en-US")} out`,
@@ -130,6 +132,9 @@ const STATE_WORDS: Record<BarState, string> = {
 
 function modelName(provider: string, model: string, models: readonly CatalogRow[]): string {
   if (!provider && !model) return "The model";
+  // The demo model is named as the composer names it ("Demo model
+  // (scripted)"), never by its scripted id.
+  if (provider === "mock") return providerDisplay(provider);
   return answeredModelName({ provider, model }, models) || providerDisplay(provider) || model;
 }
 

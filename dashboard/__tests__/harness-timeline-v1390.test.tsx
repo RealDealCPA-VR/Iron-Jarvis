@@ -32,7 +32,9 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { HarnessTimeline, NOT_KEPT, NO_TIMELINE, stepLabel, type LiveTimelineHandle } from "@/components/harness/HarnessTimeline";
 import {
   MAX_SEGMENTS,
+  axisTicks,
   callSegments,
+  tickLabel,
   createLiveTimeline,
   replyTimeline,
   timelineRows,
@@ -432,6 +434,33 @@ describe("the run log's words", () => {
       .map((el) => `${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("title") ?? ""}`)
       .join(" ");
     expect(`${text} ${labels}`).not.toMatch(BANNED);
+  });
+
+  it("the demo model is named as the composer names it; nothing counted says nothing", () => {
+    const demo = {
+      ...FIXTURE.line,
+      route: { provider: "mock", model: "mock-1", reason: "mock" },
+      usage: { input_tokens: 0, output_tokens: 0, cost_usd: 0 },
+      calls: (FIXTURE.line.calls as Record<string, unknown>[]).map((c) => ({
+        ...c,
+        provider: "mock",
+        model: "mock-1",
+        usage: { input_tokens: 0, output_tokens: 0, cost_usd: 0 },
+      })),
+    };
+    renderSaved([QUESTION, decodeMessage(demo) as BuildMessage]);
+    const first = screen.getAllByTestId("timeline-row")[0];
+    expect(first.querySelector("span[title]")?.getAttribute("title")).toBe("Demo model (scripted)");
+    // The reply's own line (the helper's, from the recording, is its own).
+    const own = screen.getByTestId("timeline-totals").querySelector("p")!;
+    expect(own.textContent).toBe(secondsText(DURATION));
+  });
+
+  it("the axis has round times, short replies too", () => {
+    expect(axisTicks(2_607)).toEqual([0, 1_000, 2_000]);
+    expect(axisTicks(400)).toEqual([0, 100, 200, 300, 400]);
+    expect(axisTicks(117 * 60_000)).toEqual([0, 30 * 60_000, 60 * 60_000, 90 * 60_000]);
+    expect([0, 500, 30_000, 120_000, 3_600_000].map(tickLabel)).toEqual(["0", "0.5 s", "30 s", "2 min", "1 h"]);
   });
 
   it("a working step says what it is doing", () => {

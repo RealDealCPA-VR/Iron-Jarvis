@@ -644,7 +644,7 @@ export function callSegments(calls: readonly TimelineCall[], duration: number, m
 /** Up to `want` round times on the axis (0 first), in ms. */
 export function axisTicks(duration: number, want = 4): number[] {
   const steps = [
-    1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
+    100, 200, 500, 1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
     3_600_000, 7_200_000, 14_400_000, 28_800_000,
   ];
   const d = Math.max(0, duration);
@@ -654,9 +654,10 @@ export function axisTicks(duration: number, want = 4): number[] {
   return out;
 }
 
-/** An axis label: "0", "30 s", "2 min", "1 h". */
+/** An axis label: "0", "0.5 s", "30 s", "2 min", "1 h". */
 export function tickLabel(t: number): string {
   if (t <= 0) return "0";
+  if (t < 1_000) return `${(t / 1000).toFixed(1)} s`;
   if (t < 60_000) return `${Math.round(t / 1000)} s`;
   if (t < 3_600_000) return `${Math.round(t / 60_000)} min`;
   const h = t / 3_600_000;

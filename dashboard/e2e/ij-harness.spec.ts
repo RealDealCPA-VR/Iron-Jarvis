@@ -562,7 +562,8 @@ test.describe("390 px — Build never pans sideways", () => {
     await page.getByTestId("harness-pane-tab-timeline").click();
     await expect(page.getByTestId("pane-timeline")).toBeVisible();
     await expect(page.getByTestId("timeline-totals")).toContainText("model call", { timeout: 20_000 });
-    await expect(page.getByTestId("timeline-row").first()).toBeVisible();
+    // The model you talk to, named as the composer names it.
+    await expect(page.getByTestId("timeline-row").first()).toContainText("Demo model (scripted)");
     await page.waitForTimeout(500);
     const pan = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(pan).toBeLessThanOrEqual(0);
@@ -592,6 +593,12 @@ test.describe("390 px — Build never pans sideways", () => {
     expect(after).toBeLessThanOrEqual(0);
     const shots = process.env.IJ_E2E_SHOTS;
     if (shots) await page.screenshot({ path: join(shots, "ij-harness-timeline-phone.png"), fullPage: true });
+    // And beside the conversation on a desktop window (the tab is in the
+    // narrow column there): nothing pans either.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+    if (shots) await page.screenshot({ path: join(shots, "ij-harness-timeline-desktop.png") });
   });
   // v1.373.0 (part 2, Phase 2): the "/" and "@" lists open ABOVE the box —
   // never over it, never past the window's top or sides — and Escape closes

@@ -487,6 +487,69 @@ def test_the_line_store_keeps_calls_and_the_clock_never_runs_backwards():
     assert "cost_usd" not in TL.call_usage("custom", "glm", {"input_tokens": 10, "output_tokens": 2})
 
 
+def _covered(bars: list[tuple[int, int]]) -> int:
+    """How much of the axis the bars cover (overlaps counted once)."""
+    total, cur = 0, None
+    for a, b in sorted(bars):
+        if cur is None:
+            cur = [a, b]
+        elif a <= cur[1]:
+            cur[1] = max(cur[1], b)
+        else:
+            total += cur[1] - cur[0]
+            cur = [a, b]
+    return total + (cur[1] - cur[0] if cur else 0)
+
+
+async def test_two_helpers_and_twenty_steps_add_up_to_the_reply(app, work, monkeypatch):
+    """The plan's done-when, on a scripted model: a reply with two helpers and
+    twenty tool calls — its bars (the model's calls, its steps, its helpers,
+    and the time it spent getting ready before its first call, which the
+    reply's card names) add up to the reply's measured time within one
+    second, and its calls' costs to its receipt."""
+    sid = new_session(app, work, approval_mode="yolo")
+    slow_reads(app, monkeypatch)
+    for i in range(16):
+        (work / f"m{i}.py").write_text(f"x = {i}\n", encoding="utf-8")
+
+    def helper(task, results):
+        if not results:
+            return [ToolCall(id=f"h-{abs(hash(task)) % 1000}", name="read_file", arguments={"path": "util.py"})]
+        return "done."
+
+    reads = [ToolCall(id=f"r{i}", name="Read", arguments={"file_path": f"m{i}.py"}) for i in range(16)]
+    wire(app, Timed(
+        [
+            reads[:8],
+            reads[8:],
+            [
+                ToolCall(id="a1", name="Agent", arguments={"description": "one", "prompt": "Part one."}),
+                ToolCall(id="a2", name="Agent", arguments={"description": "two", "prompt": "Part two."}),
+            ],
+            [ToolCall(id="w1", name="Write", arguments={"file_path": "out.py", "content": "y = 1\n"}),
+             ToolCall(id="w2", name="Write", arguments={"file_path": "out2.py", "content": "y = 2\n"})],
+            "All twenty done.",
+        ],
+        helper=helper,
+    ))
+    await _turn(app, sid, "twenty steps and two helpers", "tl-20")
+    line = _reply(app, sid)
+    duration = line["timing"]["endedAt"] - line["timing"]["startedAt"]
+    steps = [s for s in line["steps"] if not s.get("helper")]
+    assert len(line["steps"]) >= 20 and len(line["helpers"]) == 2
+    bars = (
+        [(c["start"], c["start"] + c["ms"]) for c in line["calls"]]
+        + [(s["start"], s["start"] + s["ms"]) for s in steps]
+        + [(h["start"], h["end"]) for h in line["helpers"]]
+    )
+    for a, b in bars:
+        assert 0 <= a <= b <= duration
+    getting_ready = line["calls"][0]["start"]
+    assert duration - _covered(bars + [(0, getting_ready)]) < 1000, (duration, _covered(bars))
+    total = sum(c["usage"]["cost_usd"] for c in line["calls"])
+    assert abs(total - line["usage"]["cost_usd"]) <= 1e-6
+
+
 # --------------------------------------------------------------------------- #
 # 6. the dashboard's fixture: a REAL recorded reply (line + its frames)
 # --------------------------------------------------------------------------- #
