@@ -191,6 +191,8 @@ _INPUT_RES = (
 #: The model's own output limit, when the server names it.
 _OUTPUT_CAP_RES = (
     re.compile(r"supports at most\s+" + _NUM + r"\s+completion tokens", re.IGNORECASE),
+    # review: DeepSeek-shaped "the valid range of max_tokens is [1, 8192]"
+    re.compile(r"range of max_(?:completion_)?tokens is\s*\[\s*\d+\s*,\s*" + _NUM, re.IGNORECASE),
     re.compile(r"max_(?:completion_)?tokens\W{0,4}(?:must be|should be)\s*(?:<=|less than or equal to|at most)\s*" + _NUM, re.IGNORECASE),
 )
 #: Words that say the refusal is about the OUTPUT budget (not a bad model,

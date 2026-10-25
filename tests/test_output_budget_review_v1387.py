@@ -600,3 +600,138 @@ async def test_a_name_the_proxy_routes_to_a_cloud_service_keeps_the_old_request(
 
     assert _answer_reserve(d, "custom", "frontier-x", 1_000_000) == output_reserve(1_000_000)
     assert _answer_reserve(d, "custom", MODEL, 1_000_000) == 32_768
+
+
+# --------------------------------------------------------------------------- #
+# 10. WHO IS BUDGETED — through the real manager and the real adapters.
+# --------------------------------------------------------------------------- #
+async def test_every_local_kind_is_budgeted_on_the_wire(tmp_path):
+    """The custom slot, the ollama slot and fleet nodes of BOTH protocols,
+    built by the REAL platform/manager/registry and streamed against a fake
+    server on this machine: every one asks more than the old 4,096."""
+    import httpx
+
+    from iron_jarvis.fleet.models import FleetNode
+    from tests.fixtures.fake_openai_endpoint_v1387 import FakeEndpoint, text_reply
+    from tests.test_reply_budget_v1387 import MODEL, _platform
+
+    with FakeEndpoint(lambda b: text_reply("ok")) as srv:
+        platform = _platform(tmp_path, srv.url)
+        platform.config.ollama_base_url = srv.url
+        platform.providers.configure_local(  # (one call: an omitted slot is reset)
+            custom_base_url=srv.url, custom_model=MODEL, ollama_base_url=srv.url, ollama_model=MODEL,
+        )
+        platform.fleet.add(FleetNode(id="box", label="Box", base_url=srv.url, source="user",
+                                     routable=True, default_model=MODEL))
+        platform.fleet.register_providers(platform.providers, secret_resolver=lambda n: None)
+        for name in ("custom", "ollama", "fleet-box"):
+            async for _ in platform.providers.get(name, MODEL).stream(system="s", messages=[], tools=[]):
+                pass
+        asked = [b["max_tokens"] for b in srv.chats()]
+    assert len(asked) == 3 and all(a > 4_096 for a in asked), asked
+
+    # the Anthropic-protocol node through the same registry
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"type": "message", "content": [{"type": "text", "text": "ok"}],
+                                         "stop_reason": "end_turn", "usage": {}})
+
+    node = FleetNode(id="abox", label="A", base_url="http://127.0.0.1:9", source="user",
+                     routable=True, default_model=MODEL, protocol="anthropic")
+    platform.fleet.add(node)
+    platform.fleet.register_providers(platform.providers, secret_resolver=lambda n: None)
+    adapter = platform.providers.get("fleet-abox", MODEL)
+    adapter._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter._key = lambda: ""
+    async for _ in adapter.stream(system="s", messages=[], tools=[]):
+        pass
+    assert seen and seen[0]["max_tokens"] > 4_096, seen
+
+
+@pytest.mark.parametrize("name", ["openai", "xai", "openrouter"])
+async def test_a_hosted_providers_streamed_request_is_byte_for_byte_the_old_one(name):
+    """The doer pinned the hosted providers' NOT-streamed body; the STREAMED
+    one (what the chat page sends) is the same as before v1.387.0 too."""
+    import httpx
+
+    from iron_jarvis.providers.manager import ProviderManager
+
+    seen: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.content)
+        sse = ("data: " + json.dumps({"choices": [{"index": 0, "delta": {"content": "hi"},
+                                                   "finish_reason": "stop"}]}) + "\n\ndata: [DONE]\n\n")
+        return httpx.Response(200, content=sse.encode(), headers={"content-type": "text/event-stream"})
+
+    mgr = ProviderManager(credential_resolver=lambda provider: "sk-test")
+    adapter = mgr.get(name)
+    adapter._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async for _ in adapter.stream(system="sys", messages=[], tools=[]):
+        pass
+    body = json.loads(seen[0])
+    assert body == {
+        "model": adapter.model, "max_tokens": 4096,
+        "messages": [{"role": "system", "content": "sys"}],
+        "stream": True, "stream_options": {"include_usage": True},
+    }
+    assert getattr(adapter, "reply_cap", lambda: None)() is None
+
+
+# --------------------------------------------------------------------------- #
+# 11. EVERY REFUSAL WORDING THE RETRY MEETS.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(("words", "asked", "raw", "expect"), [
+    # vLLM (older): the window and the prompt
+    ("This model's maximum context length is 32768 tokens. However, you requested 40000 tokens "
+     "(8000 in the messages, 32000 in the completion).", 32_000, 7_000, 32_768 - 8_000 - 16),
+    # vLLM (newer) — names BOTH fields; never the field-rename swap
+    ("'max_tokens' or 'max_completion_tokens' is too large: 32000. This model's maximum context "
+     "length is 32768 tokens and your request has 8000 input tokens (32000 > 32768 - 8000).",
+     32_000, 7_000, 32_768 - 8_000 - 16),
+    # SGLang
+    ("Requested token count exceeds the model's maximum context length of 32768 tokens. You "
+     "requested a total of 40000 tokens: 8000 tokens from the input messages and 32000 tokens "
+     "for the completion.", 32_000, 7_000, 32_768 - 8_000 - 16),
+    # TGI / Together (the window is "inputs + max_new_tokens <= N")
+    ("Input validation error: `inputs` tokens + `max_new_tokens` must be <= 4096. Given: 3000 "
+     "`inputs` tokens and 32000 `max_new_tokens`", 32_000, 2_500, 4_096 - 3_000 - 16),
+    # an OpenAI-shaped output limit (a hosted model behind a custom slot)
+    ("max_tokens is too large: 32768. This model supports at most 16384 completion tokens, "
+     "whereas you provided 32768.", 32_768, 500, 16_384),
+    # Groq-shaped output limit
+    ("max_tokens must be less than or equal to 8192, the maximum value for max_tokens is less "
+     "than the context_window for this model", 32_768, 500, 8_192),
+    # DeepSeek-shaped output range (review: read, not the 4,096 fallback)
+    ("Invalid max_tokens value, the valid range of max_tokens is [1, 8192]", 32_768, 500, 8_192),
+    # a budget refused with NO number: the old 4,096 (never worse than before)
+    ("Invalid value for 'max_tokens': the value is too big for this model.", 32_768, 500, 4_096),
+    # PROMPT-only refusals — the history is the problem: never a smaller answer
+    ("This model's maximum context length is 32768 tokens. However, your request has 40000 input "
+     "tokens. Please reduce the length of the input messages.", 4_096, 39_000, None),
+    ("the request exceeds the available context size, try increasing it", 4_096, 9_000, None),  # llama.cpp
+    ("Trying to keep the first 9000 tokens when context the overflows. However, the model is loaded "
+     "with context length of only 8192 tokens, which is not enough.", 4_096, 9_000, None),  # LM Studio
+    # the prompt nearly fills the window: no answer worth asking — raised for the refit
+    ("This model's maximum context length is 8192 tokens. However, you requested 12000 tokens "
+     "(7900 in the messages, 4100 in the completion).", 4_100, 7_800, None),
+])
+def test_the_retry_reads_every_wording(words, asked, raw, expect):
+    from iron_jarvis.providers.reply_budget import ReplyBudget
+
+    budget = ReplyBudget("custom", "http://box.test/v1/chat/completions")
+    assert budget.retry_ask("m", words, asked, raw) == expect
+
+
+def test_a_window_learned_on_one_endpoint_is_never_used_for_another():
+    from iron_jarvis.providers.reply_budget import ReplyBudget
+
+    a = ReplyBudget("fleet-a", "http://a.test/v1/chat/completions")
+    b = ReplyBudget("fleet-b", "http://b.test/v1/chat/completions")
+    a.retry_ask("m", "This model's maximum context length is 6000 tokens. However, you requested "
+                "33000 tokens (1000 in the messages, 32000 in the completion).", 32_000, 900)
+    assert a.window("m") == 6_000
+    assert b.window("m") is None and b.cap("m") == 32_768
+    assert a.window("other-model") is None
