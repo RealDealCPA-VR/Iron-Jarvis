@@ -550,10 +550,18 @@ async def test_other_native_errors_keep_their_words(tmp_path, monkeypatch):
         await fake.adapter().complete(system="", messages=[_user()], tools=[])
 
 
-async def test_a_tool_outside_the_inventory_fails_the_step(tmp_path, monkeypatch):
+async def test_a_tool_outside_the_inventory_is_handed_on_not_failed(tmp_path, monkeypatch):
+    """MOVED ON PURPOSE (IJ harness part 3, Phase 3): a ``tool_use`` naming a
+    tool outside the request's inventory used to FAIL THE STEP ("outside this
+    request's inventory") — the Phase 1 benchmark lost a whole turn to Claude
+    calling ``python``. It is now handed to the lane under the name the model
+    wrote (our ``mcp__ij__`` prefix off), where the registry refuses it as an
+    ordinary tool result (``tests/test_harness_unknown_tool_v1387.py`` drives
+    that through the lane). Nothing runs here either way."""
     fake = Fake(tmp_path, monkeypatch, "unknown_tool")
-    with pytest.raises(RuntimeError, match="outside this request's inventory"):
-        await fake.adapter().complete(system="", messages=[_user()], tools=TOOLS)
+    resp = await fake.adapter().complete(system="", messages=[_user()], tools=TOOLS)
+    assert [(c.id, c.name, c.arguments) for c in resp.tool_calls] == [("toolu_x", "not_offered", {})]
+    assert resp.finish_reason == "tool_use"
 
 
 async def test_final_text_that_differs_from_the_stream_is_an_error(tmp_path, monkeypatch):

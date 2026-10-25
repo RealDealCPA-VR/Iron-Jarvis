@@ -340,9 +340,24 @@ mutation-checked).
   conversation (it now continues the same thread).
 - **A reply that changed nothing makes exactly the calls it made before**
   (pinned), and plain chat never runs the check.
-- **Not yet measured:** the `--repeats 3` comparison with Phase 1 (no task
-  passing fewer times, mean time at most 20% longer) runs on the released
-  version and is recorded here when it finishes.
+- **The measurement (v1.386.2, which also carries the bash fix; `--repeats 3
+  --tier all`, effort medium):**
+
+  | Setup | Phase 1 | Phase 2 | Calls/task | Mean time | Tokens in |
+  |---|---|---|---|---|---|
+  | Jarvis on Claude (sonnet) | 115/126 (91%) | **124/126 (98%)** | 9.5 → 5.3 | 29.2 s → 23.2 s | 11.3 M → 7.8 M |
+  | Jarvis on glm-5.3-flash | 114/126 (90%) | 114/126 (90%) | 14.6 → 16.5 | 53.2 s → 65.3 s | 19.2 M → 26.2 M |
+  | Claude Code (sonnet), for reference | 123/126 (98%) | | 5.0 | 24.2 s | 13.3 M |
+
+  - **Claude meets "Done when"**: no task passed fewer times, and the mean
+    time fell. Its two remaining failures (`hard-expression-evaluator`, which
+    Claude Code itself passes 1 time in 3) wrote `calc.py` with a bash heredoc,
+    which the finish check did not see as a change; that is fixed next.
+  - **glm does not**: five tasks passed less often and five more often (the
+    total is unchanged), and the mean time grew 23%. Its own failures show two
+    harness causes being fixed: a 4,096-token reply cap that cut whole-file
+    writes (the run then ended on a no-tools final answer), and one file read
+    per round (Phase 3's multi-file read).
 
 ## Phase 3 — Fewer steps, and code awareness (target v1.385.0)
 
@@ -372,6 +387,30 @@ task takes fewer steps.
 - A type error introduced by an edit is reported back to the model in that
   edit's result (pinned with a project that has mypy, and one with tsc).
 - A project with no checkers installed behaves exactly as today (pinned).
+
+**Result (v1.387.0, 2026-10-25).** Built by a doer agent and checked by a
+separate reviewer, who found 6 more defects (each red first and fixed).
+- **The count first.** On the Phase 2 runs Jarvis on Claude already made
+  5.32 calls per task against Claude Code's 5.02 (+5.8%; core +22.6%, hard
+  +3.6%, frontier −6.2%), so the "within 20%" target was met on Claude before
+  this phase. What was left: listing the folder (0.57 calls per task) and
+  re-reading results cut at 12,000 characters.
+- **What shipped:** the project map, the project's own checkers after an edit
+  (as gated calls that ask first, even under "approve everything"), multi-file
+  reads for the generic and gpt dialects, longer honest cuts in a harness
+  turn, and unknown tool names answered as a refusal instead of ending the
+  run.
+- **Replays (scripted model, real lane):** `hard-explain-trace` 12 → 11 calls
+  (claude dialect + map) and 4 (generic + map + multi-read);
+  `hard-cross-module-bug` 10 → 9 and 5. A real type error introduced by an
+  edit came back from a real mypy and a real tsc.
+- **What the review fixed:** checkers ran with nobody asked under yolo;
+  checkers never ran after `apply_patch` (every Codex session); a checker
+  named by its bare name let cmd.exe run a program planted in the project
+  folder; the safety checks could not see a multi-file read; the map's name
+  reading had no deadline (88 s on a 4,800-file tree).
+- **Not yet measured:** whether real models use the map and multi-file reads;
+  that runs with the next measurement.
 
 ## Phase 4 — The harness from the command line (target v1.386.0)
 
