@@ -13,6 +13,8 @@
   (no editors) is never told to make changes one at a time, and no dialect
   is told its reads run at the same time unless they do (GPT reads through
   exec_command, which runs one call after another).
+* A long turn's RECORD is written within a byte budget: it was rewritten
+  whole every second (a 300-round reply ~2 MB a second, ~8 GB an hour).
 """
 
 from __future__ import annotations
@@ -153,3 +155,55 @@ def test_the_guidance_claims_nothing_a_dialect_cannot_keep():
         text = C.render(C.compose(dialect_section="Your tools: x.", dialect_id=dialect))
         if "run at the same time" in text.split("## Tools\n", 1)[1].split("\n## ", 1)[0]:
             assert _reads_run_together(dialect), f"{dialect}: told its reads run together; they do not"
+
+
+# --------------------------------------------------------------------------- #
+# a long turn's record is not rewritten whole every second
+# --------------------------------------------------------------------------- #
+
+
+def _big_log(rounds: int) -> dt.TurnLog:
+    """A turn shaped like the user's (0.44 MB of frames at 60 rounds)."""
+    lg = dt.TurnLog("big")
+    for r in range(rounds):
+        lg.add(dt.sse("thinking", {"text": "t" * 3000}))
+        lg.add(dt.sse("token", {"text": "w" * 800}))
+        lg.add(dt.sse("tool_call", {"id": f"c{r}", "name": "read_file", "status": "started", "args": {"path": "a.py"}}))
+        lg.add(dt.sse("tool_call", {"id": f"c{r}", "name": "read_file", "status": "finished", "ok": True,
+                                    "output": "o" * 1500, "detail": {"input": "{}", "output": "o" * 1500}}))
+        lg.add(dt.sse("round", {"round": r}))
+    return lg
+
+
+async def _written_over(lg: dt.TurnLog, seconds: int, monkeypatch) -> list[int]:
+    """Bytes of each record write while the turn streams for ``seconds``
+    (a frame every second; the clock is moved, never slept)."""
+    sizes: list[int] = []
+    monkeypatch.setattr(dt, "_write_record", lambda engine, tid, started, values: sizes.append(len(values["frames_json"])))
+    lg._last_persist = 0.0
+    for _ in range(seconds):
+        lg.add(dt.sse("token", {"text": "x"}))
+        lg._last_persist -= 1.0  # one second passed
+        lg.maybe_persist(object())
+        if lg._persisting is not None:
+            await lg._persisting
+    return sizes
+
+
+async def test_a_long_turns_record_is_written_within_a_byte_budget(monkeypatch):
+    """OLD: every second the turn was writing, its WHOLE record (frames_json)
+    was rewritten — a 300-round reply ~2 MB a second, ~8 GB an hour, and with
+    no step limit a reply can run for a day."""
+    lg = _big_log(300)
+    assert lg._chars > 1_500_000
+    sizes = await _written_over(lg, 120, monkeypatch)
+    assert sizes, "the record is still kept up to date"
+    budget = dt.PERSIST_BYTES_PER_S * 120 + max(sizes)
+    assert sum(sizes) <= budget, f"{len(sizes)} writes, {sum(sizes):,} bytes in 120 s"
+
+
+async def test_a_small_turn_is_still_written_every_second(monkeypatch):
+    lg = dt.TurnLog("small")
+    lg.add(dt.sse("token", {"text": "hello"}))
+    sizes = await _written_over(lg, 10, monkeypatch)
+    assert len(sizes) == 10, "a chat-sized turn keeps its once-a-second record"

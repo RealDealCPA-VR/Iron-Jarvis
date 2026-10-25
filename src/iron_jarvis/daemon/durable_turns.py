@@ -72,6 +72,15 @@ log = logging.getLogger("iron_jarvis.daemon.durable_turns")
 
 #: How often a running turn's log is written to disk (at most).
 PERSIST_EVERY_S = 1.0
+#: v1.384.0 review: the record is rewritten WHOLE (``frames_json``) each
+#: time, so its interval grows with its size — at most about this many bytes
+#: a second, averaged (``TurnLog.persist_interval``). A chat-sized turn (under
+#: 64 KB) is still written every second; the user's 60-round Build reply
+#: (0.44 MB) every ~7 s; a 300-round one (~2 MB) about every half minute —
+#: it was ~2 MB EVERY second, ~8 GB an hour, and a Build reply with no step
+#: limit can run for a day. A crash loses at most one interval of what the
+#: record shows (the files, the ledger and a clean end are untouched).
+PERSIST_BYTES_PER_S = 64_000
 #: How long a finished turn's log stays in memory for a late rejoin.
 FINISHED_KEEP_S = 600.0
 #: A turn nobody has followed for this long is stopped (see the module doc).
@@ -368,9 +377,14 @@ class TurnLog:
             "updated_at": utcnow(),
         }
 
+    def persist_interval(self) -> float:
+        """Seconds between two writes of the running record (v1.384.0 review:
+        it grows with the record — see :data:`PERSIST_BYTES_PER_S`)."""
+        return max(PERSIST_EVERY_S, self._chars / PERSIST_BYTES_PER_S)
+
     def maybe_persist(self, engine: Any) -> None:
         now = time.monotonic()
-        if not self._dirty or now - self._last_persist < PERSIST_EVERY_S:
+        if not self._dirty or now - self._last_persist < self.persist_interval():
             return
         if self._persisting is not None and not self._persisting.done():
             return
