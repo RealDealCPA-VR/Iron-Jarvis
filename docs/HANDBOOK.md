@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.387.2 (2026-10-25).*
+holds itself to. Current as of v1.388.0 (2026-10-25).*
 
 ---
 
@@ -1896,6 +1896,43 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Plain words at every door, and help where you are (v1.388.0)
+
+The last gaps from the product-readiness audit.
+
+- **A failed task says what went wrong in plain words, everywhere.** The run
+  page, the Schedules row, the bell, the phone, the desktop notice, a
+  workflow's step and a goal's stop all say the same sentence, for example
+  "Codex couldn't finish this task. Run it again. If it happens again, open
+  the run to see the details." The technical text is still on the run page,
+  folded under Details. A schedule that could not even start its task says
+  so, and never sends you to a run that does not exist.
+- **One Sign in button for Claude Code and Codex.** When either is signed
+  out, the button is beside it in Settings › Connections, under Rescan,
+  above the chat box before you type, and on the Agents page before you
+  start. A chat or run that fails for that reason says "Press Sign in beside
+  Claude Code in Settings › Connections."
+- **Every built-in tool reads in words** on approval cards, in the steps
+  under a reply and in the desktop notice. The tool's exact name stays on
+  hover.
+- **A chat waiting for your OK is found where you are.** If you are on
+  another page, the bell lists it and pings once; the chat you are looking
+  at never pings, and neither does a reload or a quick hop between pages.
+- **Connect an app somewhere else, then carry on.** When a reply offered to
+  connect an app and you connect it in the Directory, by signing in, or with
+  a key, the chat shows the app as connected with a Continue button.
+  Nothing is sent until you press it.
+- **The phone is honest about your apps.** A quick reply on the phone does
+  not use connected apps. When you ask about one, the note under the reply
+  says how to have it used: hand the task to an agent (it asks you on the
+  phone before each use), or ask in Chat on your PC.
+- **One phone message for a workflow waiting on you**, the one you can
+  answer. If that message cannot be sent, the old lines still arrive.
+- **Smaller fixes:** the browser sidebar's "not available" note names the
+  sidebar, not a menu it does not have; Help's catch-all sends you to
+  Everything › Status; Fleet groups are named by machine; a stopped scheduled
+  workflow says "stopped before it finished".
 
 ## Your own model servers can write long replies (v1.387.2)
 

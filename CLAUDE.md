@@ -3569,6 +3569,100 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A failed run reads in plain words at EVERY door; one Sign in press;
+  every built-in worded; a waiting chat is seen where the user is; Continue
+  after connecting elsewhere; the phone honest about apps** (v1.388.0,
+  product-readiness closing wave, lanes 12A + 12B; each a doer + a reviewer:
+  12A found 3 more doors + 2 unchecked pins, 12B 7 defects incl. a test that
+  reached a real service). 12A FAILURE WORDS (G28):
+  `failure_words.run_failure_words(exc, *, manager=None, provider="") ->
+  (reason, technical)` — the classifier first, then an already-worded
+  message (a `no_failover` refusal or a `plain_words` marker; provider-id
+  prefix stripped, masked, ≤ 400; a safety refusal never reworded), else a
+  generic "<Provider> couldn't finish this task." + `GENERIC_FIX_RUN_OWN`
+  (short enough for the 140-char bell clip; a model-server label ≤ 28 chars
+  fits whole); `plain_reason(..., started=)` — with NO run, "Iron Jarvis
+  couldn't start this task … ask Jarvis “what's wrong?” in chat", never
+  "open the run". Chat stays byte-identical. `_finalize_failed` writes "The
+  run failed: <reason>" and the raw text into `Session.failure_detail`
+  (additive, NULL on old rows; served on GET /sessions/{id} only; the
+  reconciler adds it — proven on an older DB AND in the update rehearsal);
+  the run page folds it under Details. The SAME rule at: the workflow agent
+  step (`engine._failed_run_words`, reads the run's stored summary), the
+  phone (`comm/inbound._run_problem`), a schedule fire with no run (the
+  schedule's own refusals keep their words via `_ScheduleRefused` /
+  `_ScheduledRunFailed`, both `plain_words`), the goal breaker
+  (`goals/engine._breaker_reason`). `EmergencyStopOn.plain_words = True`.
+  `runReachedAModel` trusts only `receipt.reached_a_model === true`.
+  FOOTNOTES: `refusal_footnotes(refused, *, surface=None)` +
+  `NOT_ARMED_ELSEWHERE` (build / pane / phone / SIDEBAR — a turn with
+  `arm_family` is the sidebar) — no Tools menu named off the chat page; the
+  chat page byte for byte. SIGN-IN (G33): `cli_auth.SIGN_IN_FIX` names the
+  press ("Press Sign in beside Claude Code in Settings › Connections."),
+  `is_sign_in_refusal` still matches it (the probe is still told);
+  `components/connections/CliSignInPress.tsx` is the ONE press (Connections
+  row, Rescan's amber line outside the green note, PreflightNote,
+  MissionComposer). Grok has no press yet. TOOL WORDS (G22/G24):
+  `agents/mission.card_words` / `step_line_words` are the ONE source;
+  `scripts/gen_tool_words.py` builds the REAL registry into
+  `dashboard/lib/builtinToolWords.ts` (169 card / 114 line phrases) and the
+  `// tool-words:start/end` block of `desktop/main.js`
+  (`TOOL_WORDS_BUILTIN`, read by `askToolWords`); `--check` fails on drift
+  and `test_tool_words_everywhere_v1387::test_the_generated_tables_are_current`
+  runs it in CI — A NEW BUILT-IN TOOL means re-running the generator.
+  The chat's TOOLS MENU (`chatControlWords.armedToolWords`) reads the
+  card table's own words (`toolWords.ownToolWords`), then the KIND's words
+  ("Read files"), then the generated words — the integrate step found the
+  generated one-call phrase ("Read a file") had replaced the menu's words
+  (`chat-words-v13560`, `composer-card-v1326`).
+  12B G05: `X-IJ-Viewer` (a per-mount viewer id, `lib/chatAway.ts`) rides
+  POST /chat/stream and the rejoin as a HEADER (a query parameter broke 9
+  exact-URL mocks); `durable_turns.follow(viewer=)` / `looked_at()` /
+  `mark_away()`, `POST /chat/turns/{id}/away` (400 no viewer, 404 unknown) —
+  the orphan guard (`watched()`) is unchanged. The page CLAIMS the chat it
+  opens synchronously (released at unmount, a failed open, a leave) and the
+  bell neither lists nor pings a chat a page in THIS window has open
+  (`shownHere`); other windows learn on their 15 s poll. `streamSSE` no
+  longer sends `cache: "no-store"` (it defeated Chromium's preflight cache —
+  the v1.230.0 lesson; the daemon's no-store is pinned on the stream and the
+  rejoin); the viewer preflight needs no token on BOTH CORS branches. G15:
+  `lib/connectedElsewhere.ts` + `components/chat/ConnectedElsewhere.tsx`
+  offer Continue on the NEWEST reply's connect door once the app is
+  connected elsewhere (Directory, OAuth, a key, an extension turned on); a
+  door is read WHOLE against the Directory's names, longest first, with a
+  separator at each boundary (Microsoft 365's real label has parentheses
+  and commas); nothing is sent before the press; an old chat ending on an
+  offer may offer Continue (decided: it really ended there). G39 (Option
+  B): the phone's quick reply never arms app tools (the POST lane grants
+  what it arms, low trust, it cannot answer its own card); under
+  `phone_surface` the apps section and `app_names.phone_apps_note` say the
+  app can be used by handing the task to an agent (which asks on the phone
+  before each use — proven end to end) or from Chat on the PC; no phone →
+  byte-identical. ONE PHONE LINE: `comm/prompts.note_question_sent` records
+  (run, destination, address) only after the prompt registered AND the send
+  succeeded; `engine._deliver(skip_asked=run_id)` and the schedule skip
+  their lines only then — a failed or unregistered question keeps the old
+  lines. NETWORK GUARD: `tests/_fakes/no_network.py` refuses every
+  non-loopback connect and non-local DNS lookup (getaddrinfo, gethostbyname,
+  socket connect, the loops' `sock_connect`), records each attempt, and the
+  `no_network` fixture fails the test NAMING the host; every 12B file uses
+  it; `IJ_TEST_NO_NETWORK=1` turns it on for a whole run (the session
+  default is NOT flipped yet). OPEN: Grok's press; "channel" in card words;
+  `config_undo`'s card; phone chat-turn crashes and a helper's failure to its
+  parent still raw; a pop-out's bell learns of a chat left elsewhere on its
+  poll; Build follows send no viewer; "…and N more apps" doors match only
+  the named apps; never driven in the packaged app or with the real phone.
+  Pins: `tests/test_{run_failure_words,run_where_dispatched,
+  build_footnote_words,sign_in_press,tool_words_everywhere,
+  cancelled_scheduled_workflow,readiness_12a_review,phone_one_line,
+  phone_one_line_review,phone_apps_honest,phone_apps_agent,
+  chat_waiting_where_you_are,chat_viewer_cors,connected_elsewhere,
+  connected_elsewhere_doors,network_guard}_v1387.py`,
+  `dashboard/__tests__/{run-failure-words,sign-in-press,
+  tool-words-everywhere,engine-room-words,chat-waiting-where-you-are,
+  chat-waiting-review,connected-elsewhere,connected-elsewhere-doors}-v1387.test.ts(x)`,
+  e2e `dashboard/e2e/chat-waiting-where-you-are.spec.ts`.
+
 - **A LOCAL endpoint's reply budget fits the work; a reply CUT at the limit
   never runs its half call and is picked up again** (v1.387.2; found by the
   Phase 2 glm benchmark: every local endpoint asked the OpenAI adapter's
