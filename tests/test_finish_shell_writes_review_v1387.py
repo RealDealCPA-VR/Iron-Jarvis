@@ -17,12 +17,16 @@ lost runs themselves, and what the review found past them — or is a GUARD
     file was actually written this turn" after a bash heredoc WROTE calc.py,
     and every process-http-server reply ("saved … to status.json") got
     "nothing was written to disk … that file does not exist". Neither note
-    now claims nothing was written after something that can write without a
-    file tool RAN — a command (in a Build turn, one that failed too:
-    ``FinishCheck.may_have_written``), code, a hand-off, an app's tool. The
-    folder comparison is not used to say the opposite: it never sees an
-    ignored or pruned folder or a file outside the session's folder, so it
-    can prove a write, never its absence. Both lanes, lock-step.
+    now claims nothing was written after something that may have written a
+    LOCAL file without a file tool RAN — a command (in a Build turn, one that
+    failed too: ``FinishCheck.may_have_written``), code, a program, a
+    hand-off, a pane's CLI, a user-made tool, an app tool its server did not
+    declare read-only (``chat_turn.ran_local_writer``). A browser click, a
+    vault note or a read-only app tool still leaves a fabricated file claim
+    flagged, as before. The folder comparison is not used to say the
+    opposite: it never sees an ignored or pruned folder or a file outside the
+    session's folder, so it can prove a write, never its absence. Both
+    lanes, lock-step.
 2.  WHAT COUNTS AS A CHANGE: every nested ``.gitignore`` is read (past the
     64th folder none was — on this PC's own Iron Jarvis checkout the snapshot
     always fell back as "more than 5000 files"); ``.github`` and the other
@@ -657,3 +661,49 @@ async def test_two_replies_reading_one_folder_at_once_both_compare(tmp_path):
     )
     assert first is not None and second is not None
     assert first.usable and second.usable
+
+
+def test_a_tool_that_writes_no_local_file_keeps_the_notes_as_they_were(tmp_path):
+    """The notes stay silent only after a tool that may have WRITTEN A LOCAL
+    FILE without a file tool. A browser click, a vault note, an agent's
+    notebook — and an app tool its server declared read-only (the live
+    registry knows) — make no file the user asked for: a fabricated "Saved
+    emails.csv" after a mail search is still flagged, exactly as before this
+    fix (the first cut of the review silenced it after ANY app tool)."""
+    from iron_jarvis.daemon import chat_turn as CT
+    from iron_jarvis.platform import build_platform
+    from iron_jarvis.tools.base import Reversibility, Tool
+
+    class _Search(Tool):
+        name = "mcp__mail__search_messages"
+        description = "search mail"
+        input_schema = {"type": "object", "properties": {}}
+        reversibility = Reversibility.READONLY
+
+        async def execute(self, args, ctx):  # pragma: no cover - never run here
+            return ToolResult(ok=True, output="")
+
+    class _Send(_Search):
+        name = "mcp__mail__export_to_disk"
+        reversibility = Reversibility.IRREVERSIBLE
+
+    platform = build_platform(str(tmp_path / "home"))
+    platform.registry.register(_Search())
+    platform.registry.register(_Send())
+    assert CT.ran_local_writer(platform, ["mcp__mail__search_messages"]) is False
+    assert CT.ran_local_writer(platform, ["mcp__mail__export_to_disk"]) is True
+    assert CT.ran_local_writer(platform, ["shell"]) is True
+    assert CT.ran_local_writer(platform, ["browser_click", "ltm_append", "notebook", "read_file"]) is False
+    assert CT.ran_local_writer(platform, ["pane_send"]) is True
+    assert CT.ran_local_writer(platform, ["bump"], {"bump"}) is True
+    claim = "Saved emails.csv with the ten newest."
+    judged = _claimed_write_note(claim, ["read_file"])
+    assert judged != ""
+    # the lanes' verdict for a read-only app tool: judged, as before
+    assert _claimed_write_note(claim, ["mcp__mail__search_messages"], ran_writer=False) == judged
+    for used in (["browser_click"], ["ltm_append"], ["notebook"]):
+        assert _claimed_write_note(claim, used) == judged, used
+    body = SimpleNamespace(messages=[SimpleNamespace(role="user", content="create a csv file of my last emails")])
+    true_note = _creation_honesty_note(body, ["write_file"], ["read_file"])
+    assert true_note and _creation_honesty_note(body, ["write_file"], ["browser_click"]) == true_note
+    assert _creation_honesty_note(body, ["write_file"], ["mcp__mail__search_messages"], ran_writer=False) == true_note

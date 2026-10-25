@@ -149,8 +149,11 @@ def test_both_chat_lanes_actually_append_the_note():
         assert "_creation_honesty_note(body, armed, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)" in src, (
             f"{rel} never appends the creation note with what the finish check saw run"
         )
-        assert "_ran_writer = _finish is not None and _finish.may_have_written()" in src, (
+        assert "_ran_writer = (_finish is not None and _finish.may_have_written()) or " in src, (
             f"{rel} does not read whether a command that may have written ran"
+        )
+        assert "ran_local_writer(" in src and "d.platform, tools_used, _custom_ran," in src, (
+            f"{rel} does not ask the live registry which app tools are read-only"
         )
         assert "custom_tools_used(d.platform, tools_used)" in src, (
             f"{rel} does not name the custom tools that ran"

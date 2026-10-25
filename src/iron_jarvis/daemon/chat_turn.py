@@ -5991,6 +5991,55 @@ def custom_tools_used(platform, tools_used) -> frozenset[str]:
     return frozenset(str(n) for n in tools_used if str(n) in names)
 
 
+def _writes_local_files_unnamed(name: str, custom_tools=(), readonly=frozenset()) -> bool:
+    """Can a call of this tool have WRITTEN A LOCAL FILE without a file tool
+    (so without the undo journal, and without naming it)? A command, code, a
+    program and what is typed into it, a hand-off to an agent or a workflow
+    (``harness/folder_changes.unjournaled`` — the folder comparison's own
+    list), a Build pane's CLI (``pane_send``), a user-made command tool
+    (*custom_tools*), an app's (``mcp__``) tool — unless its server declared
+    it read-only (*readonly*: those names, read off the live registry by
+    :func:`ran_local_writer`; with no registry every app tool counts).
+
+    Narrower than :func:`_may_have_changed_files` on purpose: a browser
+    click, a vault note, an agent's notebook or a read-only app tool change
+    no file the user asked to be MADE, so after one a creation claim is
+    still judged, exactly as before the finish-check review."""
+    from ..harness.folder_changes import unjournaled
+
+    n = str(name or "")
+    if n in readonly:
+        return False
+    return n == "pane_send" or unjournaled(n, frozenset(str(c) for c in custom_tools or ()))
+
+
+def ran_local_writer(platform, tools_used, custom_tools=()) -> bool:
+    """Did a tool that may have written a local file without a file tool
+    (:func:`_writes_local_files_unnamed`) succeed this turn? The app tools a
+    server declared read-only are read off the platform's live registry (a
+    platform without one counts every app tool). Never raises. MIRROR NOTE
+    (lock-step): both chat lanes hand it to the two honesty notes."""
+    readonly: set[str] = set()
+    for n in tools_used or ():
+        if str(n).startswith("mcp__"):
+            try:
+                tool = platform.registry.get(str(n))
+                if str(getattr(getattr(tool, "reversibility", ""), "value", "")) == "readonly":
+                    readonly.add(str(n))
+            except Exception:  # noqa: BLE001 — not known read-only: it may write
+                pass
+    return any(_writes_local_files_unnamed(n, custom_tools, frozenset(readonly)) for n in tools_used or ())
+
+
+def _ran_writer(ran_writer, tools_used, custom_tools) -> bool:
+    """The honesty notes' one reading of "a local writer ran": the caller's
+    verdict (``ran_writer``, the lanes' :func:`ran_local_writer` and a Build
+    turn's ``FinishCheck.may_have_written``), else the names alone."""
+    if ran_writer is not None:
+        return bool(ran_writer)
+    return any(_writes_local_files_unnamed(n, custom_tools) for n in tools_used or ())
+
+
 def _may_have_changed_files(tools_used: list[str], custom_tools=()) -> bool:
     """True when a tool that can change a file WITHOUT naming it succeeded
     this turn (v1.351.0 review): a shell line, code, a hand-off to an agent
@@ -6024,7 +6073,7 @@ def _may_have_changed_files(tools_used: list[str], custom_tools=()) -> bool:
     return False
 
 
-def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), ran_writer=False) -> str:
+def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), ran_writer=None) -> str:
     """'' unless the REPLY claims a file exists that no tool actually wrote.
 
     The sibling note above keys off the USER's phrasing, which is why it stayed
@@ -6054,22 +6103,22 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), r
     note, a browser action, a custom tool — *custom_tools* names the
     user-made ones that ran; a caller without a registry passes none).
 
-    Finish-check review (part 3): a CREATION claim after such a tool is not
-    judged either — "saved its /status body to status.json" after a shell
-    command wrote status.json was told "nothing was written to disk this turn
-    … that file does not exist" (every process-http-server reply). And
-    *ran_writer* (a Build turn's ``harness/finish.FinishCheck.
-    may_have_written``) says such a tool RAN even when it failed (a heredoc
-    writes before a failing test ends the line), which ``tools_used`` (the
-    calls that succeeded) cannot. MIRROR NOTE (lock-step): both chat lanes
-    pass it.
+    Finish-check review (part 3): NO claim is judged after a tool that may
+    have WRITTEN A LOCAL FILE without a file tool
+    (:func:`_writes_local_files_unnamed`) — "saved its /status body to
+    status.json" after a shell command wrote status.json was told "nothing
+    was written to disk this turn … that file does not exist" (every
+    process-http-server reply). *ran_writer* is the caller's verdict: the
+    lanes' :func:`ran_local_writer` (the live registry knows which app tools
+    are read-only) or a Build turn's ``harness/finish.FinishCheck.
+    may_have_written`` (a command that RAN and failed — a heredoc writes
+    before a failing test ends the line — which ``tools_used``, the calls
+    that succeeded, cannot show); None = judged from the names. MIRROR NOTE
+    (lock-step): both chat lanes pass it.
     """
     if not reply or set(tools_used) & _FILE_CHANGING_TOOLS:
         return ""
-    # A claim — a CHANGE claim since v1.351.0's review, a CREATION claim too
-    # since the finish-check review — is judged only when nothing that can
-    # change a file without naming it ran (:func:`_may_have_changed_files`).
-    if ran_writer or _may_have_changed_files(tools_used, custom_tools):
+    if _ran_writer(ran_writer, tools_used, custom_tools):
         return ""
     named: list[str] = []
     for m in _FILE_CLAIM_RX.finditer(reply):
@@ -6080,7 +6129,14 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), r
         if name not in named:
             named.append(name)
     changed: list[str] = []
-    claims = [*_FILE_CHANGE_CLAIM_RX.finditer(reply), *_FILE_MOVED_TO_RX.finditer(reply)]
+    # A CHANGE claim is judged only when nothing that can change a file
+    # without naming it succeeded (v1.351.0 review) — see
+    # :func:`_may_have_changed_files`.
+    judge_changes = not _may_have_changed_files(tools_used, custom_tools)
+    claims = (
+        [*_FILE_CHANGE_CLAIM_RX.finditer(reply), *_FILE_MOVED_TO_RX.finditer(reply)]
+        if judge_changes else []
+    )
     for m in sorted(claims, key=lambda c: c.start()):
         lead = reply[max(0, m.start() - 40) : m.start()]
         if _CLAIM_NEGATION_RX.search(lead) or not _CHANGE_SUBJECT_RX.search(lead):
@@ -6089,7 +6145,7 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), r
             continue  # the file is the SOURCE ("… using budget.xlsx"), or a denial
         if m.group(1) not in changed:
             changed.append(m.group(1))
-    for m in _FILE_CHANGED_AFTER_RX.finditer(reply):
+    for m in _FILE_CHANGED_AFTER_RX.finditer(reply) if judge_changes else ():
         lead = reply[max(0, m.start() - 40) : m.start()]
         if _CLAIM_NEGATION_RX.search(lead):
             continue  # "once budget.xlsx has been updated, …"
@@ -6189,7 +6245,7 @@ def _write_directive(body, armed: list[str]) -> str:
     )
 
 
-def _creation_honesty_note(body, armed: list[str], tools_used: list[str], *, custom_tools=(), ran_writer=False) -> str:
+def _creation_honesty_note(body, armed: list[str], tools_used: list[str], *, custom_tools=(), ran_writer=None) -> str:
     """'' unless the user asked for a FILE and none was written this turn — a
     model (local ones especially) narrating a save that never happened must
     never go unflagged, and the note tells the user exactly how to fix it.
@@ -6197,16 +6253,14 @@ def _creation_honesty_note(body, armed: list[str], tools_used: list[str], *, cus
     Shares :func:`_asked_for_a_file` with the DIRECTIVE that tries to prevent
     this outcome in the first place — see there for why that is one function.
 
-    Finish-check review (part 3): NEVER after a command, code, a hand-off or
-    an app's tool that may have written the file without a file tool (both
-    lost hard-expression-evaluator runs wrote calc.py with a bash heredoc and
-    still ended with "no file was actually written this turn"): one that
-    succeeded (:func:`_may_have_changed_files`; *custom_tools* the user-made
-    ones that ran), or — *ran_writer*, a Build turn's
-    ``harness/finish.FinishCheck.may_have_written`` — one that ran and
-    failed. Nothing can say it wrote nothing: a folder snapshot never sees an
-    ignored or pruned folder, or a file outside the session's folder. MIRROR
-    NOTE (lock-step): both chat lanes.
+    Finish-check review (part 3): NEVER after a tool that may have written
+    the file without a file tool (both lost hard-expression-evaluator runs
+    wrote calc.py with a bash heredoc and still ended with "no file was
+    actually written this turn"): :func:`_writes_local_files_unnamed`,
+    *ran_writer* the caller's verdict as in :func:`_claimed_write_note`.
+    Nothing can say it wrote nothing: a folder snapshot never sees an ignored
+    or pruned folder, or a file outside the session's folder. MIRROR NOTE
+    (lock-step): both chat lanes.
     """
     if not _asked_for_a_file(body):
         return ""
@@ -6214,7 +6268,7 @@ def _creation_honesty_note(body, armed: list[str], tools_used: list[str], *, cus
     # photo or a split PDF is the file the user asked for.
     if set(tools_used) & _FILE_CHANGING_TOOLS:
         return ""
-    if ran_writer or _may_have_changed_files(tools_used, custom_tools):
+    if _ran_writer(ran_writer, tools_used, custom_tools):
         return ""
     if set(armed) & _FILE_WRITING_TOOLS:
         return (
@@ -9268,7 +9322,9 @@ async def run_chat_turn(
             # was written" after a command that may have written a file.
             # MIRROR NOTE (lock-step): routes/chat.py.
             _custom_ran = custom_tools_used(d.platform, tools_used)
-            _ran_writer = _finish is not None and _finish.may_have_written()
+            _ran_writer = (_finish is not None and _finish.may_have_written()) or ran_local_writer(
+                d.platform, tools_used, _custom_ran,
+            )
             reply += _creation_honesty_note(body, armed, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)
             # v1.153.2: and check the reply's own CLAIMS against the
             # ledger — the note above keys off the user's phrasing and

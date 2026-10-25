@@ -6033,7 +6033,9 @@ async def chat_stream(
                 # "nothing was written" after a command that may have written a
                 # file. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
                 _custom_ran = _chat_turn.custom_tools_used(d.platform, tools_used)
-                _ran_writer = _finish is not None and _finish.may_have_written()
+                _ran_writer = (_finish is not None and _finish.may_have_written()) or _chat_turn.ran_local_writer(
+                    d.platform, tools_used, _custom_ran,
+                )
                 reply += _creation_honesty_note(body, armed, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)
                 # v1.153.2: and check the reply's own CLAIMS against the
                 # ledger — the note above keys off the user's phrasing and
