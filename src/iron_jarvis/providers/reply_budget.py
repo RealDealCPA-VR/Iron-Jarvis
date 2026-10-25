@@ -236,11 +236,23 @@ def about_output(detail: str) -> bool:
 _LOCK = threading.Lock()
 #: ``(endpoint, model) -> {"context": int, "output_cap": int, "ratio": float}``
 _LEARNED: dict[tuple[str, str], dict[str, Any]] = {}
+#: ``(provider, model) -> window`` — the same windows, by the names the history
+#: planner resolves (``chat_turn.learned_window`` reads it), so a window a
+#: server named in a refusal the adapter's retry answered reaches the PLANNER
+#: too, not only the next ask.
+_CONTEXT_BY_PROVIDER: dict[tuple[str, str], int] = {}
 
 
 def learned(endpoint: str, model: str) -> dict[str, Any]:
     with _LOCK:
         return dict(_LEARNED.get((str(endpoint or ""), str(model or "")), {}))
+
+
+def learned_context(provider: str, model: str) -> int | None:
+    """The smallest window a server named for ``(provider, model)`` this
+    process (a refusal the adapter retried), or ``None``. Never raises."""
+    with _LOCK:
+        return _CONTEXT_BY_PROVIDER.get((str(provider or ""), str(model or "")))
 
 
 def _learn(endpoint: str, model: str, **facts: Any) -> None:
@@ -257,10 +269,18 @@ def _learn(endpoint: str, model: str, **facts: Any) -> None:
                 cur[name] = max(float(cur.get(name) or 1.0), float(value))
 
 
+def _learn_context_for(provider: str, model: str, window: int) -> None:
+    key = (str(provider or ""), str(model or ""))
+    with _LOCK:
+        old = _CONTEXT_BY_PROVIDER.get(key)
+        _CONTEXT_BY_PROVIDER[key] = min(old, window) if old else window
+
+
 def forget_learned() -> None:
     """Test seam: forget every server-taught limit."""
     with _LOCK:
         _LEARNED.clear()
+        _CONTEXT_BY_PROVIDER.clear()
 
 
 # --------------------------------------------------------------------------- #
@@ -368,6 +388,7 @@ class ReplyBudget:
                 _learn(self.endpoint, model, ratio=min(3.0, inp / raw_prompt))
             if ctx:
                 _learn(self.endpoint, model, context=ctx)
+                _learn_context_for(self.provider, model, ctx)
             if cap:
                 _learn(self.endpoint, model, output_cap=cap)
             fits: int | None = None

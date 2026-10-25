@@ -189,6 +189,30 @@ async def test_a_length_refusal_is_retried_once_with_what_the_server_says_fits(t
     assert second.text == "ok"
     assert len(after) == 1
     assert srv.prompt_tokens(after[0]) + after[0]["max_tokens"] <= 4_800
+    # ...and the HISTORY PLANNER plans against the window the server named
+    # (the lanes never saw the refusal the adapter answered).
+    from types import SimpleNamespace
+
+    from iron_jarvis.daemon.chat_turn import _context_window_source
+
+    assert _context_window_source(SimpleNamespace(platform=platform), "custom", MODEL) == (4_800, "learned")
+
+
+async def test_an_adapter_without_the_platforms_facts_still_remembers_what_the_server_said():
+    """A bare manager (no window ladder wired — a CLI path, a fleet double)
+    keeps the server's window in the adapter's own memory: the second request
+    fits from the start."""
+    from iron_jarvis.providers.manager import ProviderManager
+
+    with FakeEndpoint(lambda b: text_reply("ok"), context_len=4_800) as srv:
+        mgr = ProviderManager(custom_base_url=srv.url, custom_model=MODEL)
+        assert mgr.reply_facts is None
+        adapter = mgr.get("custom", MODEL)
+        for _ in range(2):
+            await adapter.complete(system="s", messages=_msgs("word " * 1_000), tools=[])
+        bodies = srv.chats()
+    assert len(bodies) == 3, [b["max_tokens"] for b in bodies]  # refused, retried, then fitted
+    assert srv.prompt_tokens(bodies[2]) + bodies[2]["max_tokens"] <= 4_800
 
 
 async def test_a_prompt_that_itself_does_not_fit_is_raised_for_the_lanes_refit(tmp_path):
@@ -379,6 +403,35 @@ async def test_a_planned_long_chat_on_a_known_window_fits_the_first_time(tmp_pat
     assert out["reply"].startswith("We decided to ship.")
     assert len(bodies) == 1, [(srv.prompt_tokens(b), b["max_tokens"]) for b in bodies]
     assert srv.prompt_tokens(bodies[0]) + bodies[0]["max_tokens"] <= 16_000
+
+
+async def test_a_long_conversation_on_a_large_window_still_leaves_a_full_answer(tmp_path):
+    """The other half of the agreement, END TO END: on a 131,072-token model a
+    conversation far longer than the window is planned with the reply
+    budget's reserve (32,768 — the cap), so the request still asks for a full
+    answer and fits. With the classic 4,096 reserve the planner filled the
+    window and the fitted ask collapsed to a few thousand tokens. (RED before
+    v1.387.0 too: the ask was the fixed 4,096.)"""
+    from iron_jarvis.daemon.chat_turn import run_chat_turn
+    from iron_jarvis.daemon.schemas import ChatBody, ChatMessageBody
+    from iron_jarvis.personas.builtins import BUILTIN_PERSONAS
+
+    history = [
+        # 120 long turns (the planner keeps at most 60, ~3k tokens each):
+        # far more than the window holds.
+        ChatMessageBody(role=m["role"], content=m["content"]) for m in _conversation(120, 11_500)
+    ]
+    history.append(ChatMessageBody(role="user", content="sum it up"))
+    with FakeEndpoint(lambda b: text_reply("Summary."), context_len=131_072) as srv:
+        platform = _platform(tmp_path, srv.url, pins={f"custom::{MODEL}": 131_072})
+        await run_chat_turn(
+            platform, BUILTIN_PERSONAS, ChatBody(messages=history, provider="custom", model=MODEL),
+        )
+        (body,) = srv.chats()
+    p = srv.prompt_tokens(body)
+    assert p > 80_000, "the conversation was planned up to the window"
+    assert p + body["max_tokens"] <= 131_072
+    assert body["max_tokens"] >= 32_768 - max(256, p // 10)
 
 
 # --------------------------------------------------------------------------- #

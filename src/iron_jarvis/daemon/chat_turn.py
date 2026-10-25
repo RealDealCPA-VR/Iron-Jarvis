@@ -680,7 +680,17 @@ def _window_key(d, provider: str, model: str) -> str:
 
 def learned_window(d, provider: str, model: str) -> "int | None":
     try:
-        return _LEARNED_WINDOWS.get(_window_key(d, provider, model))
+        key = _window_key(d, provider, model)
+        n = _LEARNED_WINDOWS.get(key)
+        # v1.387.0: a window a server named in a "budget does not fit" refusal
+        # the ADAPTER retried (the lanes never saw that error) — the planner
+        # plans against it too (providers/reply_budget.learned_context).
+        from ..providers.reply_budget import learned_context
+
+        said = learned_context(*key.split("::", 1))
+        if said and (not n or said < n):
+            n = said
+        return n
     except Exception:  # noqa: BLE001
         return None
 
