@@ -119,6 +119,7 @@ import {
   threadShownHere,
 } from "@/lib/chatAway";
 import { streamSSE } from "@/lib/useChatStream";
+import { NEW_CHAT_EVENT } from "@/lib/sidebarSlot";
 
 const PENDING = "/chat/approvals/pending";
 
@@ -226,6 +227,18 @@ describe("the chat page claims the chat it opens — before any read answers", (
     render(<ChatPage />);
     await waitFor(() => expect(H.gets).toContain(`/chat/threads/${THREAD}`));
     await waitFor(() => expect(threadShownHere(THREAD)).toBe(false));
+  });
+
+  it("New chat while an open is still out lets the chat go (the page shows a new chat)", async () => {
+    H.hold.add(`/chat/threads/${THREAD}`);
+    window.history.replaceState({}, "", `/chat?thread=${THREAD}`);
+    render(<ChatPage />);
+    await waitFor(() => expect(H.gets).toContain(`/chat/threads/${THREAD}`));
+    expect(threadShownHere(THREAD)).toBe(true);
+    act(() => {
+      window.dispatchEvent(new Event(NEW_CHAT_EVENT));
+    });
+    expect(threadShownHere(THREAD)).toBe(false);
   });
 
   it("the bell beside it stays quiet for that chat (the reload the browser test drove)", async () => {

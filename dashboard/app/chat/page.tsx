@@ -10049,6 +10049,10 @@ export default function ChatPage() {
    * Both doors call this one function so neither can forget a step.
    */
   function leaveConversation() {
+    // Readiness 12B review: the chat being left is no longer shown here (an
+    // open that is still out would otherwise keep its claim after New chat);
+    // openThread claims the next one right after this.
+    noteShowing(viewerRef.current, "");
     // v1.327.0 (W2-1): the chat being left was seen up to now — its own
     // messages moved its `updated_at` while it was open, and that must not
     // read as "new since you last looked" once it is back in the list.
