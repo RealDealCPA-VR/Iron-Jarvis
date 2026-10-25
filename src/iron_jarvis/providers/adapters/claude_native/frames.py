@@ -28,7 +28,10 @@ THREE RULES this module exists to keep:
    (``mcp__<server>__<tool>``). Each name maps to a safe ``[A-Za-z0-9_-]``
    id of at most 55 characters (so ``mcp__ij__`` + id fits 64), the map is
    built from THIS request's tool list, collisions get a short hash suffix,
-   and a ``tool_use`` naming anything outside that inventory is an error.
+   and a ``tool_use`` naming anything outside that inventory is handed to the
+   lane under the name the model wrote (part 3, Phase 3:
+   :meth:`ToolNames.lane_name`), where the registry refuses it as an ordinary
+   tool result — it is never run, and it no longer fails the turn.
 """
 
 from __future__ import annotations
@@ -140,6 +143,29 @@ class ToolNames:
             f"claude-cli: the model called a tool outside this request's inventory "
             f"({native_name[:80]!r}); nothing was run."
         )
+
+    def lane_name(self, native_name: str) -> str:
+        """The name a native ``tool_use`` is handed to the lane under
+        (IJ harness part 3, Phase 3): the registry name for a tool of this
+        request's inventory (:meth:`ours`), else THE NAME THE MODEL WROTE —
+        our own ``mcp__ij__`` prefix taken off, nothing else changed.
+
+        A model that names a tool it was not given (the Phase 1 benchmark:
+        Claude called ``python`` after a shell command failed) used to FAIL
+        THE WHOLE TURN here ("outside this request's inventory"). Now the call
+        reaches the lane like any other, and the registry answers it as it
+        answers every model's invented name — "unknown tool" or "not armed",
+        ledgered, nothing run — so the model reads an ordinary refused tool
+        result and carries on. Nothing is widened: the lane's armed-set gate
+        (``allowed_names``) still decides, so a name outside what this turn
+        offered never runs."""
+        native_name = str(native_name or "")
+        try:
+            return self.ours(native_name)
+        except UnknownToolError:
+            if native_name.startswith(PREFIX) and len(native_name) > len(PREFIX):
+                return native_name[len(PREFIX):][:120]
+            return native_name[:120]
 
 
 # --------------------------------------------------------------------------- #

@@ -78,6 +78,9 @@ from ...harness.helpers import asking as _helper_asking
 # Part 3, Phase 2: what separates a Build reply's words from its answer to
 # the finish check (lock-step with chat_turn's `combine`).
 from ...harness.finish import SEPARATOR as _FINISH_SEPARATOR
+# Part 3, Phase 3: the ledger name of a project checker's run (lock-step with
+# chat_turn).
+from ...harness.checkers import CALLED_AS as _checkers_called_as
 from ...providers import turn_scope as _turn_scope
 from ..chat_turn import (
     preference_block,
@@ -4703,6 +4706,21 @@ async def chat_stream(
                             "this needs more steps than a quick answer allows"
                         )
                     break
+                if (
+                    _harness is not None and getattr(_harness, "checkers", None) is not None
+                    and not _finish_round
+                ):
+                    # THE PROJECT'S OWN CHECKERS (part 3, Phase 3 — harness/
+                    # checkers): a round that edited a file the folder's ruff /
+                    # mypy / eslint / tsc reads gets ONE command call per
+                    # checker, right after the edit, as this round's own call —
+                    # so the posture cards it exactly as a command the model
+                    # ran (Local only's "Allow once", Ask first's card), the
+                    # spend check, the gate and the ledger see it. Never in low
+                    # trust. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+                    calls = _harness.checkers.schedule(
+                        calls, low_trust=_chat_turn.finish_low_trust(_trust_state),
+                    )
                 if not _finish_round:
                     # (The finish check's own round put the model's reply in
                     # above, as words: the model called nothing.)
@@ -4868,7 +4886,15 @@ async def chat_stream(
                     # MIRROR NOTE: the POST lane never auto-grants a call, so
                     # it needs no twin; `_would_card` and the per-call branch
                     # below read it the same way.
-                    return _finish is not None and _finish.needs_a_person(_c)
+                    if _finish is not None and _finish.needs_a_person(_c):
+                        return True
+                    # Part 3, Phase 3 (review): a project CHECKER's run (ruff,
+                    # mypy, eslint, tsc after an edit — harness/checkers) is
+                    # the same kind of call: the APP's command, running a
+                    # program the PROJECT supplies. Never on auto-approve's
+                    # per-call grant either.
+                    _cks = getattr(_harness, "checkers", None) if _harness is not None else None
+                    return _cks is not None and _cks.needs_a_person(_c)
 
                 _round_asks: dict[str, list] = {}
                 for _c in calls:
@@ -5292,6 +5318,12 @@ async def chat_stream(
                     _p = _plans[i]
                     if _p["refused"]:
                         return None, _p["refused"]
+                    if _harness is not None and getattr(_harness, "checkers", None) is not None and _harness.checkers.owns(tc):
+                        # Part 3, Phase 3: a checker runs only on files its
+                        # edits REALLY changed (lock-step: chat_turn).
+                        _skip = await _harness.checkers.prepare_async(tc)
+                        if _skip:
+                            return None, _skip
                     # LOW TRUST (v1.298.0): a kept-away call (armed BEFORE a
                     # mid-turn taint, or an ask-tier name) is refused
                     # through the registry's deny path with the sentence
@@ -5467,6 +5499,33 @@ async def chat_stream(
                         result = _slots[_i]["result"]
                         content = _slots[_i]["content"]
                         ran = _slots[_i]["ran"]
+                        if _harness is not None and getattr(_harness, "checkers", None) is not None:
+                            _cks = _harness.checkers
+                            if _cks.owns(tc):
+                                # THE PROJECT'S OWN CHECKERS (part 3, Phase 3):
+                                # the run's findings go on the EDIT's result,
+                                # never a tool message of their own (the model
+                                # did not call it); its step shows like any
+                                # command. Lock-step: chat_turn.
+                                yield _sse("tool_call", {
+                                    "id": tc.id, "name": tc.name, "status": "finished",
+                                    "ok": ran, "output": str(content)[:2000],
+                                    "detail": _chat_turn.step_detail(
+                                        tc.name, _plans[_i]["safe_args"], content,
+                                    ),
+                                })
+                                _ck_text = await _cks.take(
+                                    tc, result, str(content or ""),
+                                    stop=_chat_turn.finish_invoke(
+                                        d, ctx, overrides, lambda: armed_grant, _turn_tools,
+                                        called_as=_checkers_called_as,
+                                    ),
+                                )
+                                _chat_turn.attach_check(
+                                    msgs, _cks.target(tc), _ck_text, getattr(_harness, "tool_message_chars", None),
+                                )
+                                continue
+                            _cks.note(tc, ran=ran)
                         if _plans[_i]["refused"]:
                             # Answered, not run (v1.274.0): no counters move.
                             # v1.349.0 (B1d): a refused step opens too — its
@@ -5492,7 +5551,11 @@ async def chat_stream(
                             msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                                    # v1.366.0: the name the model called.
                                                    name=(_harness.called_as(tc) if _harness is not None else tc.name),
-                                                   content=str(content)[:12000]))
+                                                   # Part 3, Phase 3 (lock-step: chat_turn).
+                                                   content=_chat_turn.tool_message_text(
+                                                       content,
+                                                       getattr(_harness, "tool_message_chars", None) if _harness is not None else None,
+                                                   )))
                             continue
                         _label = ""  # (read by the finish check below)
                         if ran:
@@ -5685,7 +5748,12 @@ async def chat_stream(
                         msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                                # v1.366.0: the name the model called.
                                                name=(_harness.called_as(tc) if _harness is not None else tc.name),
-                                               content=str(_tool_content)[:12000],
+                                               # Part 3, Phase 3: a harness turn's own cap,
+                                               # and a cut is said (lock-step: chat_turn).
+                                               content=_chat_turn.tool_message_text(
+                                                   _tool_content,
+                                                   getattr(_harness, "tool_message_chars", None) if _harness is not None else None,
+                                               ),
                                                # v1.371.0: a picture the tool handed
                                                # back (page_screenshot). MIRROR NOTE
                                                # (lock-step): chat_turn.run_chat_turn.
