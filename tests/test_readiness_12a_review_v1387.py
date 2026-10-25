@@ -290,3 +290,76 @@ async def test_the_browser_sidebars_footnote_names_no_tools_menu(tmp_path):
         assert place not in reply, (place, reply)
     # The chat page's words are untouched (no arm_family = the chat page).
     assert "Tools menu" in refusal_footnotes([("web_search", "not armed")])
+
+
+# --------------------------------------------------------------------------- #
+# 5. `Session.failure_detail` on a database an older app made
+# --------------------------------------------------------------------------- #
+def test_an_older_database_gets_the_column_and_every_door_reads_a_null(tmp_path):
+    """The lane added a column. An existing user's database has no such
+    column: the REAL boot reconciler (``core.db._reconcile_additive_columns``)
+    must add it, nullable, and every route that reads a session must read the
+    NULL an older row holds as "nothing to fold" — never a 500. Then a NEW
+    failure on that database keeps its words apart as on a fresh one."""
+    import sqlite3
+
+    from iron_jarvis.core.models import Session, SessionStatus
+
+    first = create_app(str(tmp_path))
+    engine = first.state.platform.engine
+    db_path = engine.url.database
+    with session_scope(engine) as db:
+        old = Session(task="the old way", status=SessionStatus.FAILED,
+                      summary="The run failed: codex-cli: CLI exited 1: an older daemon's words")
+        db.add(old)
+        db.commit()
+        old_id = old.id
+    engine.dispose()
+    # The older app's schema: no `failure_detail` column at all.
+    con = sqlite3.connect(db_path)
+    try:
+        con.execute('ALTER TABLE "session" DROP COLUMN "failure_detail"')
+        con.commit()
+        cols = [r[1] for r in con.execute('PRAGMA table_info("session")')]
+        assert "failure_detail" not in cols, "anti-vacuity: the older shape"
+    finally:
+        con.close()
+
+    app = create_app(str(tmp_path))  # boots through init_db -> the reconciler
+    client = TestClient(app)
+    con = sqlite3.connect(db_path)
+    try:
+        info = {r[1]: r for r in con.execute('PRAGMA table_info("session")')}
+        raw = con.execute('SELECT failure_detail FROM "session" WHERE id = ?', (old_id,)).fetchone()
+    finally:
+        con.close()
+    assert "failure_detail" in info and info["failure_detail"][3] == 0, "added, and nullable"
+    assert raw == (None,), "an older row holds NULL"
+    # Every door that reads a session.
+    detail = client.get(f"/sessions/{old_id}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["session"]["failure_detail"] == ""
+    assert client.get("/sessions").status_code == 200
+    assert client.get(f"/sessions/{old_id}/result").status_code == 200
+    assert client.get(f"/sessions/{old_id}?transcript=0").status_code == 200
+    assert client.get("/sessions/interrupted").status_code == 200
+    assert client.get("/ui/status-line").status_code == 200
+    # A continuation of the older row starts clean (no inherited detail).
+    cont = client.post(f"/sessions/{old_id}/continue", json={"message": "again", "wait": False})
+    assert cont.status_code in (200, 201), cont.text
+    # And a NEW failure on the upgraded database keeps its words apart.
+    import asyncio
+
+    from iron_jarvis.core.models import AgentType
+
+    orch = app.state.platform.orchestrator
+
+    async def fail_one() -> str:
+        s = await orch.create_session("go", AgentType.BUILDER)
+        await orch._finalize_failed(s, ProviderError(CODEX_400))
+        return s.id
+
+    sid = asyncio.run(fail_one())
+    after = client.get(f"/sessions/{sid}").json()["session"]
+    assert after["summary"] == f"The run failed: {CODEX_REASON}"
+    assert after["failure_detail"] == CODEX_400

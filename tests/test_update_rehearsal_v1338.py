@@ -22,6 +22,8 @@ user would notice:
   is recorded as cut off, a chat answer being written is kept and marked
   interrupted, an agent job is offered for Continue and Continue resumes its
   own conversation;
+* (readiness 12A review) a database an OLDER app made gains the columns this
+  one added (``session.failure_detail``), nullable, and its rows still read;
 * after a hard kill the data folder is not left locked and the terminal is
   still restored.
 
@@ -304,6 +306,27 @@ def _plant_cut_off_work(home: Path, workspace: Path) -> dict[str, str]:
         engine.dispose()
 
 
+def _as_older_schema(home: Path) -> None:
+    """The database an older app left: no ``session.failure_detail`` column
+    (readiness 12A added it). Written while the daemon is down."""
+    con = sqlite3.connect(home / "ironjarvis.db", timeout=10)
+    try:
+        con.execute('ALTER TABLE "session" DROP COLUMN "failure_detail"')
+        con.commit()
+    finally:
+        con.close()
+    assert "failure_detail" not in _session_columns(home), "anti-vacuity: the older shape"
+
+
+def _session_columns(home: Path) -> dict[str, int]:
+    """``{column: notnull}`` of the session table as it is on disk."""
+    con = sqlite3.connect(f"file:{home / 'ironjarvis.db'}?mode=ro", uri=True, timeout=10)
+    try:
+        return {r[1]: r[3] for r in con.execute('PRAGMA table_info("session")')}
+    finally:
+        con.close()
+
+
 def _ledger_row(home: Path, inv_id: str):
     con = sqlite3.connect(f"file:{home / 'ironjarvis.db'}?mode=ro", uri=True, timeout=10)
     try:
@@ -357,11 +380,23 @@ def test_an_update_restart_brings_everything_back(tmp_path):
         first.close()
 
     planted = _plant_cut_off_work(home, work)
+    # Readiness 12A review: the update comes FROM an older app, whose database
+    # has no `session.failure_detail` (the column 12A added): the restarted
+    # daemon's boot reconciler must add it, and every row an older app wrote
+    # must read as "nothing folded" (NULL), never a failed read.
+    _as_older_schema(home)
 
     second = Daemon(root, log)
     try:
         # Settings survived: the copy folder still gets the backup.
         _assert_backup(second, mirror)
+
+        # The older database gained the new column (nullable) and its rows read.
+        assert _session_columns(home)["failure_detail"] == 0, "added, and nullable"
+        row = second.get(f"/sessions/{planted['session']}")
+        assert row.status_code == 200, row.text
+        assert row.json()["session"]["failure_detail"] == ""
+        assert second.get("/sessions").status_code == 200
 
         # The terminal came back and types like a fresh one.
         rows = second.get("/terminals").json()
