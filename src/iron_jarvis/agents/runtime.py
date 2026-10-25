@@ -2922,11 +2922,21 @@ class AgentRuntime:
         # AFTER index 0: the task is never covered, because a run whose goal
         # survives only as a paraphrase can drift off what it was asked to do.
         _cpt_summary, _cpt_covers, _cpt_futile = "", 0, False
+        # v1.387.0: replies cut off at the output limit this invocation, and
+        # the note owed after a cut step's complete calls ran (the chat lanes'
+        # rule — providers/reply_budget.cut_off_round).
+        _cut_count = 0
+        _cut_pending = ""
         for _ in range(max_steps):
             # STOP ON ONE TEAMMATE (v1.309.0): a delegated run has no task of
             # its own to cancel, so the user's Stop is the row — read at every
             # step boundary, before any model call is made.
             await self._check_stop(run, session)
+            if _cut_pending:
+                # v1.387.0: after the cut step's tool results, before the
+                # next model call.
+                messages.append(LLMMessage(role="user", content=_cut_pending))
+                _cut_pending = ""
             # CONTEXT BUDGET (v1.152.0). The transcript grows by an assistant
             # turn plus every tool result on every step, and until now nothing
             # counted the tokens: the only guards were a 16k-char cap per tool
@@ -2940,7 +2950,7 @@ class AgentRuntime:
             step_messages, step_system = messages, system_prompt
             try:
                 from ..context.agent_window import plan_agent_transcript
-                from ..daemon.chat_turn import _context_window, _history_ratio
+                from ..daemon.chat_turn import _context_window, _history_ratio, _reserve_kw
 
                 _win = _context_window(
                     SimpleNamespace(platform=self.p),
@@ -2983,6 +2993,11 @@ class AgentRuntime:
                     window=_win,
                     system_text=_eff_system,
                     chars_per_token=_cpt,
+                    # v1.387.0: a local endpoint's reply-budget reserve (the
+                    # chat lanes' rule; omitted for every other provider).
+                    **_reserve_kw(
+                        SimpleNamespace(platform=self.p), session.provider, session.model, _win,
+                    ),
                 )
                 step_messages, step_system = _plan.messages, _eff_system
                 if _plan.recap:
@@ -3121,6 +3136,42 @@ class AgentRuntime:
             # landed DURING the model call must not run the tools it asked for.
             # The step's tokens are already on the run (spent is spent).
             await self._check_stop(run, session)
+
+            # A REPLY CUT OFF AT THE OUTPUT LIMIT (v1.387.0) — the chat lanes'
+            # rule (daemon/chat_turn.cut_off_round): a tool call the model
+            # never finished writing, or no text and no call at all, gets ONE
+            # note and another step (complete calls run first; the note
+            # follows their results); past CUT_OFF_NOTES_MAX the run ends
+            # NOT finished, saying what happened — never an empty result.
+            from ..providers.reply_budget import (
+                CUT_OFF_NOTES_MAX as _CUT_MAX,
+                cut_off_end_text as _cut_end_text,
+                cut_off_note as _cut_note_for,
+                cut_off_round as _cut_off_round,
+            )
+
+            _cut = _cut_off_round(resp, has_tools=bool(tool_specs))
+            if _cut is not None:
+                _cut_count += 1
+                if _cut_count > _CUT_MAX:
+                    await asyncio.to_thread(self._save, run)
+                    return False, _cut_end_text(_cut, _cut_count)
+                _cut_note = _cut_note_for(
+                    _cut,
+                    {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)},
+                    limit=(getattr(resp, "extra", None) or {}).get("max_tokens"),
+                    ran_others=bool(resp.tool_calls),
+                )
+                if not resp.wants_tools:
+                    if (resp.text or "").strip():
+                        messages.append(LLMMessage(
+                            role="assistant", content=resp.text,
+                            raw_blocks=list(getattr(resp, "raw_blocks", None) or []),
+                        ))
+                    messages.append(LLMMessage(role="user", content=_cut_note))
+                    await asyncio.to_thread(self._save, run)
+                    continue
+                _cut_pending = _cut_note
 
             if not resp.wants_tools:
                 await asyncio.to_thread(self._save, run)  # v1.226.0: off the loop

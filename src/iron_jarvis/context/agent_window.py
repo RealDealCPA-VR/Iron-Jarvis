@@ -136,6 +136,7 @@ def plan_agent_transcript(
     window: int | None,
     system_text: str = "",
     chars_per_token: float | None = None,
+    reserve: int | None = None,
 ) -> TranscriptPlan:
     """Fit the transcript to *window*, sacrificing the cheapest things first.
 
@@ -152,6 +153,10 @@ def plan_agent_transcript(
     as ``budget.plan_history``'s: both lanes must count tokens IDENTICALLY, so
     it feeds every estimate here (and the token→char back-conversion of the
     task clip).
+
+    ``reserve`` (v1.387.0): the room held back for the answer when the caller
+    knows it (a local endpoint's reply budget — the same contract as
+    ``budget.plan_history``'s); ``None`` = ``output_reserve(window)``.
     """
     win = int(window or DEFAULT_WINDOW)
     if win <= 0:
@@ -162,7 +167,7 @@ def plan_agent_transcript(
 
     cpt = chars_per_token
     system_tokens = estimate_tokens(system_text, cpt)
-    budget = win - system_tokens - output_reserve(win)
+    budget = win - system_tokens - (output_reserve(win) if reserve is None else int(reserve))
 
     blocks = blocks_of(list(messages))
     total = sum(_block_tokens(b, cpt) for b in blocks)

@@ -1673,6 +1673,29 @@ def build_platform(
     # Provider availability asks it (CACHED snapshot, never a call): a
     # signed-out default login must not hide a usable Iron-Proxy account.
     platform.providers.iron_proxy_usable = platform.iron_proxy.has_usable_account
+
+    # v1.387.0 — THE REPLY BUDGET's facts for a LOCAL endpoint's adapter
+    # (providers/reply_budget.py): the window the chat lanes plan against
+    # (the ONE ladder, `chat_turn._context_window` — the planner and the
+    # adapter must never measure two different windows), the output limit the
+    # model's server states (the proxy's /model/info, read in the background
+    # by the fleet route reader with the node's key — a cached read here) and
+    # the measured chars-per-token ratio. Cached reads only: this runs on
+    # every local model call, on the loop.
+    def _reply_facts(provider: str, model: str) -> dict:
+        from types import SimpleNamespace as _NS
+
+        from .daemon.chat_turn import _context_window, _history_ratio
+
+        d = _NS(platform=platform)
+        caps = fleet_registry.model_caps(provider, model) or {}
+        return {
+            "window": _context_window(d, provider, model),
+            "max_output": caps.get("max_output"),
+            "ratio": _history_ratio(d, provider, model),
+        }
+
+    platform.providers.reply_facts = _reply_facts
     # Share my profile with Build (v1.306.0): constructed always (no disk, no
     # thread); it writes nothing until a switch is on.
     from .profile.share import ProfileShare as _ProfileShare

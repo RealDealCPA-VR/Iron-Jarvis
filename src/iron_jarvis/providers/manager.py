@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from ..envelope import store as envelope_store
 from ..envelope.profile import CapabilityProfile, trusted_profile
@@ -324,6 +324,14 @@ class ProviderManager:
         # tests that build a bare ProviderManager() stay hermetic — a bare manager
         # reports grok-cli unavailable regardless of what's installed on the box.
         self._grok_cli_available_fn = grok_cli_available
+        #: v1.387.0 — THE REPLY BUDGET's facts: ``fn(provider, model) ->
+        #: {"window", "max_output", "ratio"}`` (the lanes' window ladder, the
+        #: output limit the model's server states, the measured ratio).
+        #: Assigned by the platform once it exists (the ladder needs it); a
+        #: bare manager has none, so a local endpoint asks the default cap
+        #: fitted to the default window. Read at CALL time through
+        #: :meth:`reply_facts_of`, so a late assignment reaches every adapter.
+        self.reply_facts: "Callable[[str, str], dict | None] | None" = None
         #: Iron-Proxy (v1.301.0): ``fn(provider) -> bool`` — does Iron-Proxy
         #: hold a usable CLI account for this provider? Assigned by the
         #: platform (``IronProxyService.has_usable_account``, a CACHED read);
@@ -390,6 +398,9 @@ class ProviderManager:
                 base_url=self._ollama_base_url,
                 api_key=None,
                 provider_name="ollama",
+                # v1.387.0: a LOCAL endpoint's reply budget (providers/
+                # reply_budget.py) — never the hosted providers above.
+                reply_budget=self._reply_budget("ollama", self._ollama_base_url),
             ),
         )
         # CUSTOM endpoint — user-pointed OpenAI-compatible server/aggregator
@@ -402,6 +413,8 @@ class ProviderManager:
                 base_url=self._custom_base_url,
                 credential=lambda: self._cred("custom"),
                 provider_name="custom",
+                # v1.387.0 — the user's local endpoint's reply budget.
+                reply_budget=self._reply_budget("custom", self._custom_base_url),
             ),
         )
         # LOCALLY-INSTALLED CLI provider: Grok (xAI's `grok` CLI). Detected on
@@ -701,6 +714,46 @@ class ProviderManager:
         invisible to every failover/replacement path unless it happened to be
         the configured default provider."""
         return sorted(n for n in self._factories if n.startswith("fleet-"))
+
+    # -- the reply budget (v1.387.0) ------------------------------------------
+    #: The providers whose adapters carry a reply budget: the two local
+    #: OpenAI-compatible slots and every fleet node (``fleet-*``). Hosted
+    #: APIs and the CLIs are never budgeted (see providers/reply_budget.py).
+    _BUDGETED = ("custom", "ollama")
+
+    @classmethod
+    def budgeted(cls, name: str) -> bool:
+        n = str(name or "")
+        return n in cls._BUDGETED or n.startswith("fleet-")
+
+    def _reply_budget(self, provider: str, endpoint: str | None) -> Any:
+        from .reply_budget import ReplyBudget
+
+        return ReplyBudget(provider, endpoint or "", facts=self.reply_facts_of)
+
+    def reply_facts_of(self, provider: str, model: str) -> dict | None:
+        """What the platform knows about ``(provider, model)``'s reply budget
+        (:attr:`reply_facts`, read at call time), or ``None``. Never raises."""
+        fn = self.reply_facts
+        if fn is None:
+            return None
+        try:
+            return fn(provider, model)
+        except Exception:  # noqa: BLE001 — nothing known, never a crash
+            return None
+
+    def reply_cap(self, name: str, model: str | None = None) -> int | None:
+        """The reply budget's cap for a BUDGETED provider (the most one reply
+        asks for), else ``None`` — the history planner then keeps its classic
+        answer reserve. Built through :meth:`get` (cached; a local endpoint's
+        adapter is a plain object, no network). Never raises."""
+        if not self.budgeted(name):
+            return None
+        try:
+            fn = getattr(self.get(name, model or None), "reply_cap", None)
+            return fn() if callable(fn) else None
+        except Exception:  # noqa: BLE001 — unknown provider: no budget
+            return None
 
     def configure_local(
         self,

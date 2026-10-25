@@ -186,11 +186,12 @@ def test_ollama_style_addresses_only_for_an_ollama_server(tmp_path):
 # --------------------------------------------------------------------------- #
 def test_model_info_capabilities_are_read_per_served_name():
     table = parse_model_info(model_info_body())
-    assert table.caps("vision") == {"vision": True, "tool_use": True, "context_window": 262_144}
-    assert table.caps("glm-5.3-flash") == {"vision": False, "tool_use": True, "context_window": 1_000_000}
+    # (v1.387.0: `max_output` joined the caps — the fixture states none.)
+    assert table.caps("vision") == {"vision": True, "tool_use": True, "context_window": 262_144, "max_output": None}
+    assert table.caps("glm-5.3-flash") == {"vision": False, "tool_use": True, "context_window": 1_000_000, "max_output": None}
     # a name the table does not list stays UNKNOWN (the hidden "fleet" alias)
-    assert table.caps("fleet") == {"vision": None, "tool_use": None, "context_window": None}
-    assert table.caps("") == {"vision": None, "tool_use": None, "context_window": None}
+    assert table.caps("fleet") == {"vision": None, "tool_use": None, "context_window": None, "max_output": None}
+    assert table.caps("") == {"vision": None, "tool_use": None, "context_window": None, "max_output": None}
 
 
 def test_capabilities_unknown_unless_stated_and_shared_deployments_must_agree():
@@ -202,10 +203,10 @@ def test_capabilities_unknown_unless_stated_and_shared_deployments_must_agree():
         {"model_name": "img-*", "litellm_params": {"model": "x"}, "model_info": {"supports_vision": True, "max_input_tokens": 4096}},
     ]}
     table = parse_model_info(body)
-    assert table.caps("a") == {"vision": None, "tool_use": None, "context_window": None}
-    assert table.caps("b") == {"vision": None, "tool_use": None, "context_window": 500}
-    assert table.caps("c") == {"vision": None, "tool_use": None, "context_window": None}
-    assert table.caps("img-big") == {"vision": True, "tool_use": None, "context_window": 4096}
+    assert table.caps("a") == {"vision": None, "tool_use": None, "context_window": None, "max_output": None}
+    assert table.caps("b") == {"vision": None, "tool_use": None, "context_window": 500, "max_output": None}
+    assert table.caps("c") == {"vision": None, "tool_use": None, "context_window": None, "max_output": None}
+    assert table.caps("img-big") == {"vision": True, "tool_use": None, "context_window": 4096, "max_output": None}
 
 
 def test_capabilities_survive_the_saved_table_and_an_old_saved_table_reads_unknown():
@@ -214,7 +215,7 @@ def test_capabilities_survive_the_saved_table_and_an_old_saved_table_reads_unkno
     assert again.caps("vision") == table.caps("vision")
     assert again.signature() == table.signature()
     old = RouteTable.from_json({"entries": [{"alias": "vision", "model": "m", "place": "local"}]})
-    assert old.caps("vision") == {"vision": None, "tool_use": None, "context_window": None}
+    assert old.caps("vision") == {"vision": None, "tool_use": None, "context_window": None, "max_output": None}
 
 
 def test_a_stated_capability_reaches_the_adapter_and_a_denial_changes_nothing():

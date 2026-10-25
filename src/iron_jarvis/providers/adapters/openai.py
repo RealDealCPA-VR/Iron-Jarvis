@@ -31,6 +31,7 @@ from .base import (
     ProviderError,
     ProviderRefusal,
     ToolCall,
+    complete_arguments,
     provider_error_from_response,
 )
 
@@ -77,8 +78,18 @@ _COMPLETION_TOKENS_MODELS: set[tuple[str, str]] = set()
 
 
 def _wants_completion_tokens(detail: str) -> bool:
-    """True when a 400 body is the 'use max_completion_tokens instead' error."""
-    return _COMPLETION_TOKENS_FIELD in (detail or "").lower()
+    """True when a 400 body is the 'use max_completion_tokens instead' error.
+
+    v1.387.0: NOT a length refusal that merely names both fields — newer vLLM
+    words "the budget does not fit" as "'max_tokens' or
+    'max_completion_tokens' is too large: … maximum context length is …". Read
+    as a field-name error, it renamed the field (remembered for the process)
+    and resent the SAME oversized budget; it is the reply budget's retry
+    (``providers.reply_budget``) that answers it."""
+    low = (detail or "").lower()
+    if _COMPLETION_TOKENS_FIELD not in low:
+        return False
+    return "maximum context length" not in low and "too large" not in low
 
 
 def _swap_token_limit(body: dict[str, Any]) -> dict[str, Any]:
@@ -211,12 +222,19 @@ class OpenAIAdapter(LLMAdapter):
         max_tokens: int = 4096,
         base_url: str | None = None,
         provider_name: str | None = None,
+        reply_budget: Any = None,
     ) -> None:
         self.model = model
         self._api_key = api_key
         self._credential = credential
         self._http = http
         self.max_tokens = max_tokens
+        #: v1.387.0: a LOCAL endpoint's reply budget
+        #: (``providers.reply_budget.ReplyBudget``) — the provider manager and
+        #: the fleet registry hand one to ``custom``, ``ollama`` and every
+        #: ``fleet-*`` node. ``None`` (every hosted provider: OpenAI, xAI,
+        #: OpenRouter) keeps the fixed ``max_tokens`` byte for byte.
+        self._reply_budget = reply_budget
         #: Chat-completions endpoint — defaults to OpenAI's hosted API, but can be
         #: pointed at any OpenAI-compatible server (e.g. a local Ollama instance).
         self._endpoint = base_url or _ENDPOINT
@@ -240,6 +258,45 @@ class OpenAIAdapter(LLMAdapter):
 
     def _remember_completion_tokens(self) -> None:
         _COMPLETION_TOKENS_MODELS.add((self._endpoint, self.model))
+
+    # -- the reply budget (v1.387.0) ------------------------------------------
+    def reply_cap(self) -> int | None:
+        """The most one reply from this endpoint may ask for, or ``None`` for
+        a hosted provider (its fixed ``max_tokens`` is not this budget). Read
+        by the history planner (``chat_turn._answer_reserve``) so the room it
+        holds back for the answer is THIS adapter's number."""
+        if self._reply_budget is None:
+            return None
+        return self._reply_budget.cap(self.model)
+
+    def _reply_limit(self, wire: list[dict[str, Any]], tools_wire: Any) -> tuple[int, int]:
+        """``(max_tokens, raw_prompt_estimate)`` for one request: the fixed
+        ``max_tokens`` (estimate 0) without a budget; else the budget fitted
+        to the window and THIS request's size."""
+        if self._reply_budget is None:
+            return self.max_tokens, 0
+        return self._reply_budget.plan(self.model, system="", wire=wire, tools=tools_wire)
+
+    def _budget_retry_body(
+        self, body: dict[str, Any], detail: str, raw_prompt: int
+    ) -> dict[str, Any] | None:
+        """A copy of ``body`` with the SMALLER budget the server says fits,
+        or ``None`` (no budget, not a budget refusal, or no room worth asking
+        for — the error is then raised as before and the lanes' too-long
+        refit takes over). The callers ask ONCE per request."""
+        if self._reply_budget is None:
+            return None
+        field = next(
+            (f for f in (_MAX_TOKENS_FIELD, _COMPLETION_TOKENS_FIELD) if f in body), None
+        )
+        if field is None:
+            return None
+        smaller = self._reply_budget.retry_ask(
+            self.model, detail, int(body[field]), raw_prompt
+        )
+        if smaller is None:
+            return None
+        return {**body, field: smaller}
 
     def _client(self) -> Any:
         if self._http is None:
@@ -341,9 +398,20 @@ class OpenAIAdapter(LLMAdapter):
         message = choice.get("message") or {}
         text = message.get("content") or ""
         tool_calls: list[ToolCall] = []
+        # v1.387.0: a reply the server stopped for running out of output
+        # tokens may end INSIDE a tool call's arguments. Such a call is never
+        # run (a half-parsed write_file writes half a file — the lenient
+        # recovery below can even pull an object out of the half-written
+        # content); it is reported by name in `cut_calls` instead, so the
+        # lanes continue the turn honestly.
+        length_cut = choice.get("finish_reason") == "length"
+        cut_calls: list[str] = []
         for raw in message.get("tool_calls") or []:
             fn = raw.get("function") or {}
             args_str = fn.get("arguments") or ""
+            if length_cut and complete_arguments(args_str) is None:
+                cut_calls.append(str(fn.get("name") or ""))
+                continue
             try:
                 args = json.loads(args_str) if args_str else {}
             except json.JSONDecodeError:
@@ -375,7 +443,8 @@ class OpenAIAdapter(LLMAdapter):
         # (which rebuilds its message through here).
         refused = _content_refusal(
             finish=raw_finish, refusal=message.get("refusal"),
-            text=text if isinstance(text, str) else "", calls=bool(tool_calls),
+            text=text if isinstance(text, str) else "",
+            calls=bool(tool_calls or cut_calls),
         )
         if refused is not None:
             raise refused
@@ -396,6 +465,7 @@ class OpenAIAdapter(LLMAdapter):
             finish_reason=finish,
             usage=usage_dict,
             thinking=_reasoning_of(message),
+            cut_calls=cut_calls,
         )
 
     # -- ChatGPT (Codex) backend shaping -------------------------------------
@@ -738,13 +808,19 @@ class OpenAIAdapter(LLMAdapter):
             raise RuntimeError(
                 "OpenAIAdapter: no API key (set api_key= or wire a credential())"
             )
+        wire = self._to_openai_messages(system, messages)
+        tools_wire = self._to_openai_tools(tools) if tools else None
+        # v1.387.0: a local endpoint's reply budget (the fixed max_tokens for
+        # a hosted provider — byte-identical); `raw_prompt` is what a
+        # refusal's one retry below is measured against.
+        limit, raw_prompt = self._reply_limit(wire, tools_wire)
         body: dict[str, Any] = {
             "model": self.model,
-            self._token_limit_field(): self.max_tokens,
-            "messages": self._to_openai_messages(system, messages),
+            self._token_limit_field(): limit,
+            "messages": wire,
         }
         if tools:
-            body["tools"] = self._to_openai_tools(tools)
+            body["tools"] = tools_wire
         # Guided-decoding knobs (v1.203.0): response_format is the portable
         # OpenAI form; extra_body carries server-specific keys (vLLM
         # guided_json/guided_grammar, llama.cpp grammar) and is applied last,
@@ -800,13 +876,37 @@ class OpenAIAdapter(LLMAdapter):
                 json=body,
             )
             status = getattr(resp, "status_code", 200)
+        if status == 400:
+            # v1.387.0: an OpenAI-compatible server (vLLM, SGLang, TGI…)
+            # REFUSES a request whose budget plus prompt overflows the model's
+            # window ("This model's maximum context length is …"). Retry ONCE
+            # with the budget it says fits, and remember what it said.
+            smaller = self._budget_retry_body(body, _error_detail(resp), raw_prompt)
+            if smaller is not None:
+                body = smaller
+                resp = await self._client().post(
+                    self._endpoint,
+                    headers=headers,
+                    json=body,
+                )
+                status = getattr(resp, "status_code", 200)
         if status >= 400:
             # Typed error (status + Retry-After) so the router fails over on a
             # transient 429/5xx and raises honestly on a permanent 4xx — never a
             # blank successful reply. Transport/timeout errors propagate as their
             # native httpx types, which the router also classifies as transient.
             raise provider_error_from_response(self.provider, resp, _error_detail(resp))
-        return self._parse(resp.json())
+        return self._stamp_budget(self._parse(resp.json()), body)
+
+    def _stamp_budget(self, response: LLMResponse, body: dict[str, Any]) -> LLMResponse:
+        """v1.387.0: a budgeted reply carries the output budget it was given
+        (``extra["max_tokens"]``) so a cut-off note can name the limit. Hosted
+        providers' responses are untouched."""
+        if self._reply_budget is not None:
+            limit = body.get(_MAX_TOKENS_FIELD, body.get(_COMPLETION_TOKENS_FIELD))
+            if isinstance(limit, int):
+                response.extra["max_tokens"] = limit
+        return response
 
     # -- token streaming (FX-01) --------------------------------------------
     async def stream(
@@ -857,15 +957,20 @@ class OpenAIAdapter(LLMAdapter):
             raise RuntimeError(
                 "OpenAIAdapter: no API key (set api_key= or wire a credential())"
             )
+        wire = self._to_openai_messages(system, messages)
+        tools_wire = self._to_openai_tools(tools) if tools else None
+        # v1.387.0 — the same budget complete() asks for (fixed for a hosted
+        # provider, byte-identical).
+        limit, raw_prompt = self._reply_limit(wire, tools_wire)
         body: dict[str, Any] = {
             "model": self.model,
-            self._token_limit_field(): self.max_tokens,
-            "messages": self._to_openai_messages(system, messages),
+            self._token_limit_field(): limit,
+            "messages": wire,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
         if tools:
-            body["tools"] = self._to_openai_tools(tools)
+            body["tools"] = tools_wire
         # Guided-decoding knobs (v1.203.0) — same contract as complete():
         # response_format is the portable OpenAI form; extra_body carries
         # server-specific keys (vLLM guided_json/guided_grammar, llama.cpp
@@ -899,6 +1004,7 @@ class OpenAIAdapter(LLMAdapter):
         # retry in ahead of any remaining attempt (which is swapped too — the
         # server has told us which name it speaks).
         i = 0
+        budget_retried = False  # v1.387.0: the budget retry happens ONCE
         while i < len(attempts):
             attempt_body = attempts[i]
             async with self._client().stream(
@@ -921,6 +1027,23 @@ class OpenAIAdapter(LLMAdapter):
                             _swap_token_limit(b)
                             for b in (attempt_body, *attempts[i + 1 :])
                         ]
+                    elif status == 400 and not budget_retried:
+                        # v1.387.0 — the stream half of complete()'s retry:
+                        # the budget the server says fits, spliced in ahead of
+                        # every remaining attempt (each of which takes it).
+                        smaller = self._budget_retry_body(
+                            attempt_body, _error_detail(resp), raw_prompt
+                        )
+                        if smaller is not None:
+                            budget_retried = True
+                            field = next(
+                                f for f in (_MAX_TOKENS_FIELD, _COMPLETION_TOKENS_FIELD)
+                                if f in smaller
+                            )
+                            attempts[i + 1 :] = [smaller] + [
+                                {**b, field: smaller[field]} if field in b else b
+                                for b in attempts[i + 1 :]
+                            ]
                     if status == 400 and i + 1 < len(attempts):
                         i += 1
                         continue  # retry (swapped field / without stream_options)
@@ -928,6 +1051,9 @@ class OpenAIAdapter(LLMAdapter):
                         self.provider, resp, _error_detail(resp)
                     )
                 async for frame in self._consume_chat_stream(resp):
+                    if frame.get("type") == "final":
+                        # v1.387.0 — the budget this answer was given.
+                        self._stamp_budget(frame["response"], attempt_body)
                     yield frame
                 return
 

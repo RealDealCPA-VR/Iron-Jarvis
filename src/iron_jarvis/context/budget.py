@@ -316,6 +316,7 @@ def plan_history(
     system_text: str = "",
     max_messages: int = MAX_MESSAGES,
     chars_per_token: float | None = None,
+    reserve: int | None = None,
 ) -> HistoryPlan:
     """Choose the messages for one turn against a real token budget.
 
@@ -327,6 +328,12 @@ def plan_history(
     token→char back-conversion of the clip path), because a ratio applied to
     some counters and not others makes the plan disagree with itself about
     what fits.
+
+    ``reserve`` (v1.387.0) is the room held back for the ANSWER when the
+    caller knows it — a local endpoint's reply budget
+    (``providers.reply_budget.reserve_for``), so the planner and the adapter
+    agree on what the answer gets. ``None`` = :func:`output_reserve`, the
+    long-standing answer (byte-identical for every other provider).
     """
     win = int(window or DEFAULT_WINDOW)
     if win <= 0:
@@ -350,7 +357,7 @@ def plan_history(
         return n
 
     system_tokens = _est(system_text)
-    reserve = output_reserve(win)
+    reserve = output_reserve(win) if reserve is None else int(reserve)
     budget = win - system_tokens - reserve
 
     plan = HistoryPlan(window=win, history_budget=max(0, budget))

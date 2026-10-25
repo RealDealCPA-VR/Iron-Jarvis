@@ -4401,6 +4401,12 @@ async def chat_stream(
         connect_offered: list[str] = []
         last_tool_output = ""               # last SUCCESSFUL output (synthesis)
         stopped_note = ""                   # round budget cut off tool calls
+        # v1.387.0 — a reply cut off at the output limit (lock-step with
+        # chat_turn: how many, the note owed after complete calls ran, the
+        # honest end once the notes run out).
+        _cut_times = 0
+        _cut_pending = ""
+        _cut_end = ""
         escalate = False        # the turn asked for the full agent
         escalate_reason = ""
         escalate_agent = None   # v1.139.0: validated roster target (None = default)
@@ -4482,6 +4488,11 @@ async def chat_stream(
                 # purpose — a turn that is stopping must not first be handed
                 # more work — and BEFORE the round frame, so the note is in
                 # `msgs` for the completion this round is about to make.
+                if _cut_pending:
+                    # v1.387.0: the cut-off note owed by the last round, after
+                    # its complete calls' results (lock-step: chat_turn).
+                    msgs.append(LLMMessage(role="user", content=_cut_pending))
+                    _cut_pending = ""
                 _note = await _steer()
                 if _note:
                     msgs.append(LLMMessage(role="user", content=_note))
@@ -4608,6 +4619,34 @@ async def chat_stream(
                 _model_calls = calls
                 if _harness is not None:
                     calls = _harness.translate_calls(calls)
+                # A REPLY CUT OFF AT THE OUTPUT LIMIT (v1.387.0) — the
+                # lock-step copy of chat_turn's: never the no-tools final
+                # answer; ONE note and the turn goes on (complete calls run
+                # first, the note follows their results); past the notes, or
+                # with no round left, the turn ends saying what happened. Only
+                # a turn that ARMED tools (not the exit tools alone).
+                _cut = _chat_turn.cut_off_round(final_resp, has_tools=bool(armed or ask_armed))
+                if _cut is not None:
+                    _cut_times += 1
+                    _truncated = False  # a cut CALL is not a long answer to Continue
+                    if _cut_times > _chat_turn.CUT_OFF_NOTES_MAX or _round >= _rounds - 1:
+                        _cut_end = _chat_turn.cut_off_end_text(_cut, _cut_times)
+                        break
+                    _cut_note = _chat_turn.cut_off_note(
+                        _cut,
+                        {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)},
+                        limit=(getattr(final_resp, "extra", None) or {}).get("max_tokens"),
+                        ran_others=bool(calls),
+                    )
+                    if not calls:
+                        if reply_text.strip():
+                            msgs.append(LLMMessage(
+                                role="assistant", content=reply_text,
+                                raw_blocks=list(getattr(final_resp, "raw_blocks", None) or []),
+                            ))
+                        msgs.append(LLMMessage(role="user", content=_cut_note))
+                        continue
+                    _cut_pending = _cut_note
                 # THE DRAFT, THREE WAYS (v1.225.0) — lock-step copy of
                 # chat_turn: the exit tool, an unarmed workflow_create,
                 # or JSON written in a text-only reply. (Never on a harness
@@ -5774,9 +5813,11 @@ async def chat_stream(
             _send, _send_system = _fit_turn_transcript(
                 d, msgs, system, provider_choice, model_choice, head=_head
             )
-            if _cut_office or _wants_final_answer(
+            # v1.387.0: never the no-tools nudge after a turn that ENDED on a
+            # cut-off reply (lock-step: chat_turn).
+            if not _cut_end and (_cut_office or _wants_final_answer(
                 reply_text or "", workflow_draft, escalate, completions,
-            ):
+            )):
                 _f_resp = None
                 _f_route = ("", "")
                 try:
@@ -5937,6 +5978,10 @@ async def chat_stream(
             # with chat_turn.
             reply += refusal_footnotes(refused_tools)
         else:
+            if _cut_end:
+                # v1.387.0: the honest end of a turn whose replies kept being
+                # cut off at the output limit (lock-step: chat_turn).
+                reply = f"{reply.rstrip()}\n\n{_cut_end}" if reply.strip() else _cut_end
             if not reply.strip():
                 # v1.246.0 — lock-step with chat_turn (v1.378.0: a declined
                 # nudge says so).
@@ -6051,6 +6096,10 @@ async def chat_stream(
                 # the dialect and the FINGERPRINT of the rendered component
                 # tree. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
                 **({"harness": _harness.route_info()} if _harness is not None else {}),
+                # v1.387.0 (additive, LAST, only when a reply was cut off at
+                # the output limit this turn). MIRROR NOTE (lock-step):
+                # chat_turn.run_chat_turn's route.
+                **_chat_turn.cut_off_receipt(_cut_times, bool(_cut_end)),
             },
             "tools_used": tools_used,
             # RESOURCES (v1.324.0): [{pack, uri, ok, note}] — ALWAYS present

@@ -92,8 +92,11 @@ def upstream_place(model: str, api_base: str) -> str:
 #: What a LiteLLM entry's ``model_info`` says a served name can do (the
 #: gateway-key fix): ``supports_vision``, ``supports_function_calling`` and
 #: ``max_input_tokens``, read only when the proxy states them. ``None`` =
-#: the proxy did not say, which stays unknown — never guessed.
-CAP_KEYS = ("vision", "tool_use", "context_window")
+#: the proxy did not say, which stays unknown — never guessed. v1.387.0:
+#: ``max_output`` — ``max_output_tokens`` (else LiteLLM's older
+#: ``max_tokens``), the output limit the reply budget prefers
+#: (providers/reply_budget.py).
+CAP_KEYS = ("vision", "tool_use", "context_window", "max_output")
 
 
 def _flag(value: Any) -> bool | None:
@@ -140,9 +143,14 @@ class Upstream:
     vision: bool | None = None
     tool_use: bool | None = None
     context_window: int | None = None
+    #: v1.387.0 (LAST, so positional constructions keep their meaning).
+    max_output: int | None = None
 
     def caps(self) -> dict[str, Any]:
-        return {"vision": self.vision, "tool_use": self.tool_use, "context_window": self.context_window}
+        return {
+            "vision": self.vision, "tool_use": self.tool_use,
+            "context_window": self.context_window, "max_output": self.max_output,
+        }
 
 
 def _merge_caps(entries: "list[Upstream]") -> dict[str, Any]:
@@ -150,11 +158,13 @@ def _merge_caps(entries: "list[Upstream]") -> dict[str, Any]:
     if not entries:
         return {k: None for k in CAP_KEYS}
     vision, tools, window = entries[0].vision, entries[0].tool_use, entries[0].context_window
+    out_cap = entries[0].max_output
     for e in entries[1:]:
         vision = _merge_flag(vision, e.vision)
         tools = _merge_flag(tools, e.tool_use)
         window = _merge_window(window, e.context_window)
-    return {"vision": vision, "tool_use": tools, "context_window": window}
+        out_cap = _merge_window(out_cap, e.max_output)
+    return {"vision": vision, "tool_use": tools, "context_window": window, "max_output": out_cap}
 
 
 @dataclass(frozen=True)
@@ -212,7 +222,8 @@ class RouteTable:
     def signature(self) -> tuple[tuple[Any, ...], ...]:
         """What the verdicts depend on (the read time is not part of it)."""
         return tuple(
-            (e.alias, e.model, e.place, e.vision, e.tool_use, e.context_window) for e in self.entries
+            (e.alias, e.model, e.place, e.vision, e.tool_use, e.context_window, e.max_output)
+            for e in self.entries
         )
 
     def cloud_names(self) -> list[str]:
@@ -248,6 +259,7 @@ class RouteTable:
                 vision=_flag(e.get("vision")),
                 tool_use=_flag(e.get("tool_use")),
                 context_window=_window(e.get("context_window")),
+                max_output=_window(e.get("max_output")),
             ))
         try:
             read_at = float(raw.get("read_at") or 0.0)
@@ -288,6 +300,15 @@ def parse_model_info(payload: Any) -> RouteTable | None:
         vision = _flag(info.get("supports_vision"))
         tools = _flag(info.get("supports_function_calling"))
         window = _window(info.get("max_input_tokens"))
+        # v1.387.0: the model's own OUTPUT limit, LiteLLM's current key first,
+        # then its LEGACY ``max_tokens`` — which LiteLLM documents as the
+        # output limit when the provider states one, else the INPUT limit; a
+        # legacy value equal to ``max_input_tokens`` is that second case and
+        # says nothing about the output.
+        out_cap = _window(info.get("max_output_tokens"))
+        if out_cap is None:
+            legacy = _window(info.get("max_tokens"))
+            out_cap = legacy if legacy and legacy != window else None
         # One name can be served by several deployments (LiteLLM load-balances
         # them): if ANY of them is cloud, a request may go there. A capability
         # holds only when every deployment states it the same way.
@@ -301,6 +322,7 @@ def parse_model_info(payload: Any) -> RouteTable | None:
                 vision=_merge_flag(prev.vision, vision),
                 tool_use=_merge_flag(prev.tool_use, tools),
                 context_window=_merge_window(prev.context_window, window),
+                max_output=_merge_window(prev.max_output, out_cap),
             )
             continue
         seen[alias] = len(out)
@@ -308,6 +330,7 @@ def parse_model_info(payload: Any) -> RouteTable | None:
             Upstream(
                 alias=alias, model=model, place=place,
                 vision=vision, tool_use=tools, context_window=window,
+                max_output=out_cap,
             )
         )
     return RouteTable(entries=tuple(out), read_at=time.time())

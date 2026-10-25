@@ -617,10 +617,13 @@ class FleetRegistry:
     def model_caps(self, provider: str, model: str) -> dict[str, Any]:
         """What the model PROXY behind *provider* states *model* can do, from
         its own ``/model/info`` (``RouteTable.caps``): ``{"vision",
-        "tool_use", "context_window"}``, each ``None`` when nothing says.
-        NEVER a network call (the table is read in the background by the
-        sampler, with the node's key). Never raises."""
-        unknown: dict[str, Any] = {"vision": None, "tool_use": None, "context_window": None}
+        "tool_use", "context_window", "max_output"}``, each ``None`` when
+        nothing says (``max_output`` since v1.387.0: the stated output limit
+        the reply budget prefers). NEVER a network call (the table is read in
+        the background by the sampler, with the node's key). Never raises."""
+        unknown: dict[str, Any] = {
+            "vision": None, "tool_use": None, "context_window": None, "max_output": None,
+        }
         try:
             node_id = self._node_id_for(provider)
             if not node_id:
@@ -693,10 +696,13 @@ class FleetRegistry:
 
                 # v1.329.0: the node's PROTOCOL picks the adapter (OpenAI
                 # chat-completions, or the Anthropic Messages API).
+                # v1.387.0: with the manager's reply-budget reader (a double
+                # without one passes None: the default budget).
                 manager.register(
                     provider_name(node.id),
-                    lambda model=None, n=node, c=_cred, k=_caps: adapter_for(
-                        n, model=model, credential=c, caps=k
+                    lambda model=None, n=node, c=_cred, k=_caps,
+                    f=getattr(manager, "reply_facts_of", None): adapter_for(
+                        n, model=model, credential=c, caps=k, reply_facts=f
                     ),
                 )
                 count += 1
