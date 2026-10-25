@@ -1848,7 +1848,7 @@ def build_platform(
 
     def _deliver_outcome(
         task, payload: dict, status: str, detail: str, *, bell_says: bool = False,
-        asked: bool = False,
+        asked: str = "",
     ) -> None:
         # A schedule is explicit intent, so the default audience is EVERY
         # destination ("This PC" included) — the pre-v1.119 default (default
@@ -1884,7 +1884,9 @@ def build_platform(
                 # about the same thing. Every other destination keeps it.
                 from .comm.prompts import question_destinations
 
-                skip = question_destinations(platform.notifier, engine)
+                # (review) Only where the question of THIS run really went:
+                # a prompt that failed leaves the phone this line.
+                skip = question_destinations(platform.notifier, asked)
                 targets = [t for t in targets if t not in skip]
             if targets:
                 platform.notifier.notify(message, targets)
@@ -2333,7 +2335,7 @@ def build_platform(
                 fired["outcome"] = _run_outcome.STATUS_NEEDS_YOU
                 # Readiness 12B (0e.4): the phone's answerable copy of the
                 # question is this fire's one line there (`_deliver_outcome`).
-                fired["asked"] = True
+                fired["asked"] = str(getattr(result, "id", "") or "")
                 # (integrate) remembered, so the answer settles the row.
                 await asyncio.to_thread(
                     _parked_runs.park,
@@ -2522,7 +2524,7 @@ def build_platform(
             if status != _run_outcome.STATUS_CANCELLED:
                 _deliver_outcome(
                     task, payload, status, detail, bell_says=_bell_says(fired, status),
-                    asked=bool(fired.get("asked")),
+                    asked=str(fired.get("asked") or ""),
                 )
 
         return _fire()

@@ -640,9 +640,10 @@ class WorkflowEngine:
                     # row), so "This PC" stays quiet — one notice per ask.
                     skip_desktop=True,
                     # Readiness 12B (0e.4): a destination the ANSWERABLE
-                    # question reaches (comm/prompts, the phone) gets that
-                    # one line only — this one said the same question again.
-                    skip_asked=True,
+                    # question of THIS run reached (comm/prompts, the phone)
+                    # gets that one line only — this one said the same
+                    # question again. Where it did not go out, this line does.
+                    skip_asked=run_id,
                 )
                 refreshed = self._get_record(run_id)
                 return refreshed if refreshed is not None else record
@@ -1343,7 +1344,7 @@ class WorkflowEngine:
         return None
 
     def _deliver(
-        self, message: str, *, skip_desktop: bool = False, skip_asked: bool = False
+        self, message: str, *, skip_desktop: bool = False, skip_asked: str = ""
     ) -> tuple[bool, str]:
         """Send to EVERY destination (schedule-delivery semantics — a workflow
         speaking to nobody is indistinguishable from a broken one). Returns
@@ -1355,11 +1356,11 @@ class WorkflowEngine:
         this PC. A notify STEP keeps every destination: it is the user's own
         message, and nothing else says it.
 
-        ``skip_asked`` (readiness 12B, 0e.4): leave out every destination the
-        ANSWERABLE copy of a parked run's question reaches
+        ``skip_asked`` (readiness 12B, 0e.4): a parked run's id — leave out
+        every destination the ANSWERABLE copy of that run's question REACHED
         (``comm.prompts.question_destinations`` — the phone's own chat), so
-        the phone hears the question ONCE, in the copy it can answer. BLOCKING
-        read (this method already runs off the loop)."""
+        the phone hears the question ONCE, in the copy it can answer; a
+        destination it did not reach keeps this line (review)."""
         try:
             notifier = self.platform.notifier
             msg = message if len(message) <= 3500 else message[:3500] + "…"
@@ -1371,7 +1372,7 @@ class WorkflowEngine:
             if skip_asked:
                 from ..comm.prompts import question_destinations
 
-                asked = question_destinations(notifier, getattr(self.platform, "engine", None))
+                asked = question_destinations(notifier, skip_asked)
                 targets = [t for t in targets if t not in asked]
             if (skip_desktop or skip_asked) and not targets:
                 # An EMPTY list would fall back to the default channel

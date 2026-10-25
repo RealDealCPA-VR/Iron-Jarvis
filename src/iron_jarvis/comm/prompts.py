@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections import OrderedDict
 from typing import Any
 
 from sqlalchemy import Engine, text
@@ -460,45 +461,76 @@ def _default_address(ch: Any) -> str:
     return ""
 
 
-def question_destinations(notifier: Any, engine: Engine) -> set[str]:
-    """The destinations a parked workflow's ANSWERABLE question reaches at the
-    very address their own lines go to (readiness 12B, 0e.4).
+#: Readiness 12B review: run id -> {destination: {address}} where the
+#: ANSWERABLE copy of that run's question was really DELIVERED (written by
+#: :func:`handle_workflow_waiting` after a send that succeeded). Process
+#: memory: the handler runs inside the engine's ``await publish`` (handlers
+#: have run by the time it returns), in the same process as the park line and
+#: the schedule's line that read it. Bounded (oldest runs forgotten first).
+_SENT: "OrderedDict[str, dict[str, set[str]]]" = OrderedDict()
+_SENT_LOCK = threading.Lock()
+_SENT_MAX = 256
+
+
+def note_question_sent(run_id: Any, channel: str, sender: Any) -> None:
+    """The answerable question of ``run_id`` reached ``sender`` on ``channel``."""
+    rid = str(run_id or "").strip()
+    if not rid or not channel:
+        return
+    with _SENT_LOCK:
+        per = _SENT.pop(rid, {})
+        per.setdefault(str(channel), set()).add(_address(sender))
+        _SENT[rid] = per
+        while len(_SENT) > _SENT_MAX:
+            _SENT.popitem(last=False)
+
+
+def sent_question_addresses(run_id: Any) -> dict[str, set[str]]:
+    """``{destination: {address}}`` the question of ``run_id`` was delivered to."""
+    with _SENT_LOCK:
+        return {k: set(v) for k, v in (_SENT.get(str(run_id or "").strip()) or {}).items()}
+
+
+def question_destinations(notifier: Any, run_id: Any) -> set[str]:
+    """The destinations the ANSWERABLE copy of ``run_id``'s question REACHED
+    at the very address their own lines go to (readiness 12B, 0e.4).
 
     THE DUPLICATE: a scheduled workflow parked on a question sent the same
     phone chat three lines — the answerable question (``Iron Jarvis:
     Workflow 'x' is waiting: … reply with /answer …``, from
     :func:`handle_workflow_waiting`), the engine's park line ("needs you …
     answer it in chat or on the Workflows page") and the schedule's own
-    "needs you" line. The engine's park line and the schedule's line now
-    leave out every destination named here, so the phone gets ONE line and
-    it is the one it can answer.
+    "needs you" line. The engine's park line and the schedule's line leave out
+    every destination named here, so the phone gets ONE line and it is the
+    one it can answer.
 
-    The SAME gates :func:`handle_workflow_waiting` applies (a chat-enabled,
-    credentialed destination; an identity on its allowlist — an established
-    conversation), plus one more: that identity's chat must be the address the
-    destination's own lines go to (:func:`_default_address`). A destination
-    whose lines go elsewhere (a group chat, a webhook) keeps them — nothing is
-    dropped that the question did not replace. BLOCKING (one small read per
-    destination): call it off the loop. Never raises (a fault names none, and
-    every line is sent as before)."""
+    WHAT WAS SENT, NEVER WHAT COULD BE (review): a destination counts only
+    when the question of THIS run was delivered there
+    (:func:`note_question_sent` — after the handler's gates, a prompt row
+    that registered and a send that succeeded) and to the address the
+    destination's own lines go to (:func:`_default_address`). A prompt that
+    could not be registered, a send that failed, or a run nobody registered
+    the question for (a workflow parked in a process without the daemon's
+    handler) names nothing — the phone keeps the park line, which says how to
+    answer. A destination whose lines go elsewhere (a group chat, a webhook)
+    keeps them too. Never raises (a fault names none, and every line is sent
+    as before)."""
     out: set[str] = set()
+    sent = sent_question_addresses(run_id)
+    if not sent:
+        return out
     try:
         names = list(notifier.channels())
     except Exception:  # noqa: BLE001
         return out
     for name in names:
         try:
+            if name not in sent:
+                continue
             ch = notifier.get(name)
-            if ch is None or not (ch.chat_enabled() and ch.has_credentials()):
-                continue
-            own = _default_address(ch)
-            if not own:
-                continue
-            for identity in _identities(engine, name):
-                sender = getattr(identity, "sender_id", None)
-                if ch.is_authorized(sender) and _address(sender) == own:
-                    out.add(name)
-                    break
+            own = _default_address(ch) if ch is not None else ""
+            if own and own in sent[name]:
+                out.add(name)
         except Exception:  # noqa: BLE001 — one destination's fault drops nothing
             continue
     return out
@@ -751,6 +783,11 @@ def handle_workflow_waiting(
                     sent = _send_chunked_sync(
                         ch, f"{reply_prefix}{line}", chat_id=identity.sender_id
                     )
+                    if sent:
+                        # Readiness 12B review: the park line and the
+                        # schedule's line leave this address out only now that
+                        # the answerable copy really went (question_destinations).
+                        note_question_sent(run_id, name, identity.sender_id)
                     out.append(
                         {
                             "channel": name,

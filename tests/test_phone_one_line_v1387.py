@@ -215,22 +215,15 @@ def _store(tmp_path) -> CommThreadStore:
     return CommThreadStore(engine)
 
 
-def test_question_destinations_is_the_questions_own_reach(tmp_path):
-    store = _store(tmp_path)
-    engine = store.engine
+def test_question_destinations_is_where_the_question_really_went(tmp_path):
+    """(Review) What was SENT for this run, at the destination's own address —
+    never what could have been."""
+    from iron_jarvis.comm.prompts import note_question_sent
+
     n = Notifier()
-    fake = FakeTelegram()
-    n.add_channel("phone", _tg(fake))  # two-way, its own chat is the identity's
-    n.add_channel("oneway", _tg(FakeTelegram(), chat=False))  # never asked
-    n.add_channel("group", _tg(FakeTelegram(), chat_id=-1))  # asked, elsewhere
-    n.add_channel(
-        "nokey",
-        TelegramChannel(
-            {"token_secret": "missing", "inbound_enabled": True, "chat_enabled": True,
-             "allowed_senders": [SENDER], "chat_id": SENDER},
-            secret_resolver=lambda _n: None,
-        ),
-    )
+    n.add_channel("phone", _tg(FakeTelegram()))  # its own chat is the identity's
+    n.add_channel("group", _tg(FakeTelegram(), chat_id=-1))  # asked, lines elsewhere
+    n.add_channel("quiet", _tg(FakeTelegram()))  # never sent to for this run
     n.add_channel(
         "mail",
         EmailChannel(
@@ -256,23 +249,57 @@ def test_question_destinations_is_the_questions_own_reach(tmp_path):
             secret_resolver=lambda _n: "xoxb",
         ),
     )
-    for name, sender in [
-        ("phone", SENDER), ("oneway", SENDER), ("group", SENDER), ("nokey", SENDER),
-        ("mail", "boss@acme.com"), ("hook", "U1"), ("dm", "U1"),
-    ]:
-        store.resolve(name, str(sender), "V")
-    assert question_destinations(n, engine) == {"phone", "mail", "dm"}
+    for name, sender in [("phone", SENDER), ("group", SENDER), ("mail", "boss@acme.com"),
+                         ("hook", "U1"), ("dm", "U1")]:
+        note_question_sent("run-1", name, sender)
+    assert question_destinations(n, "run-1") == {"phone", "mail", "dm"}
+    # Another run, or none: nothing was sent for it — every line goes.
+    assert question_destinations(n, "run-2") == set()
+    assert question_destinations(n, "") == set()
 
-    # The allowlist shrinking after the conversation existed: never asked.
-    n.get("phone").config["allowed_senders"] = [999]
-    assert "phone" not in question_destinations(n, engine)
-    # No conversation yet (no identity row): never asked either.
-    assert question_destinations(Notifier(), engine) == set()
+
+def test_the_handler_notes_only_a_question_that_went_out(tmp_path):
+    """The handler's own gates decide what is noted: a one-way destination, a
+    missing key, a shrunk allowlist and a refused send note nothing."""
+    from iron_jarvis.comm.prompts import PendingPromptStore, handle_workflow_waiting, sent_question_addresses
+    from iron_jarvis.core.events import Event
+
+    store = _store(tmp_path)
+    n = Notifier()
+    ok = FakeTelegram()
+    n.add_channel("phone", _tg(ok))
+    n.add_channel("oneway", _tg(FakeTelegram(), chat=False))
+    n.add_channel(
+        "nokey",
+        TelegramChannel(
+            {"token_secret": "missing", "inbound_enabled": True, "chat_enabled": True,
+             "allowed_senders": [SENDER], "chat_id": SENDER},
+            secret_resolver=lambda _n: None,
+        ),
+    )
+    shrunk = _tg(FakeTelegram())
+    shrunk.config["allowed_senders"] = [999]
+    n.add_channel("shrunk", shrunk)
+
+    class Refusing(FakeTelegram):
+        def post(self, url, payload):
+            return {"status_code": 500}
+
+    n.add_channel("down", _tg(Refusing()))
+    for name in ("phone", "oneway", "nokey", "shrunk", "down"):
+        store.resolve(name, str(SENDER), "V")
+    ev = Event(type="workflow.waiting", payload={"run_id": "run-h", "workflow": "gated", "question": "Send it?"})
+    handle_workflow_waiting(ev, store=PendingPromptStore(store.engine), notifier=n, thread_store=store)
+    assert sent_question_addresses("run-h") == {"phone": {str(SENDER)}}
+    assert question_destinations(n, "run-h") == {"phone"}
 
 
 def test_question_destinations_never_raises(tmp_path):
+    from iron_jarvis.comm.prompts import note_question_sent
+
     class Broken:
         def channels(self):
             raise RuntimeError("boom")
 
-    assert question_destinations(Broken(), make_engine(tmp_path / "db.sqlite")) == set()
+    note_question_sent("run-x", "tg", SENDER)
+    assert question_destinations(Broken(), "run-x") == set()
