@@ -59,4 +59,22 @@ describe("a door whose catalog name holds separators", () => {
     expect(nowConnected(offerFor(FIX.doors.three), rows("google_drive"))?.app).toBe("google_drive");
     expect(nowConnected(offerFor(FIX.doors.three), rows("onedrive"))).toBeNull();
   });
+
+  it("a name that only STARTS an item is not that item", () => {
+    // The Directory list as an older daemon (or a filtered read) may hand it:
+    // no Google Drive card, and the user's own extension called "Google".
+    const own = { id: "google-mine", name: "Google", connect_via: "mcp", status: "connected", tools_loaded: 2 };
+    expect(nowConnected(offerFor("Connect Google Drive in Settings"), [own])).toBeNull();
+    // Nor does a name reach ACROSS a separator into the next item.
+    const across = { id: "x", name: "Notion, Google", connect_via: "mcp", status: "connected", tools_loaded: 1 };
+    expect(nowConnected(offerFor(FIX.doors.three), [across])).toBeNull();
+  });
+
+  it("the LONGEST Directory name fills an item, whatever order the list comes in", () => {
+    // A catalog name that holds " and " (a future card) beside the user's own
+    // extension named after its first word, listed FIRST.
+    const own = { id: "files-mine", name: "Files", connect_via: "mcp", status: "connected", tools_loaded: 1 };
+    const card = { id: "files_folders", name: "Files and folders", connect_via: "mcp", status: "connected", tools_loaded: 14 };
+    expect(nowConnected(offerFor("Connect Files and folders in Settings"), [own, card])?.app).toBe("files_folders");
+  });
 });

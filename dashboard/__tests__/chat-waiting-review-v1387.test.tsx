@@ -37,6 +37,7 @@ const H = vi.hoisted(() => {
     gets: [] as string[],
     getResponses: {} as Record<string, unknown>,
     hold: new Set<string>(),
+    fail: new Set<string>(),
     notify: vi.fn(),
   };
 });
@@ -49,6 +50,7 @@ vi.mock("@/lib/api", () => ({
   get: async (path: string) => {
     H.gets.push(path);
     if (H.hold.has(path)) return new Promise(() => {}); // a read that never answers
+    if (H.fail.has(path)) throw new H.FakeApiError("Not Found", 404);
     const r = H.getResponses[path];
     if (r === undefined) return {};
     return typeof r === "function" ? (r as () => unknown)() : r;
@@ -125,6 +127,7 @@ beforeEach(() => {
   __resetChatAway();
   H.gets.length = 0;
   H.hold.clear();
+  H.fail.clear();
   H.notify.mockReset();
   H.getResponses = { [PENDING]: { approvals: [FIX.row] } };
   window.history.replaceState({}, "", "/everything");
@@ -201,6 +204,28 @@ describe("the chat page claims the chat it opens — before any read answers", (
     render(<ChatPage />);
     await waitFor(() => expect(H.gets).toContain(`/chat/threads/${THREAD}`));
     expect(threadShownHere(THREAD)).toBe(true);
+  });
+
+  it("a NEW chat is claimed by the id its first save mints", async () => {
+    window.history.replaceState({}, "", "/chat");
+    render(<ChatPage />);
+    const box = (await screen.findByPlaceholderText(/Message Iron Jarvis/)) as HTMLTextAreaElement;
+    expect(threadShownHere("t1")).toBe(false);
+    act(() => {
+      box.focus();
+    });
+    const { fireEvent } = await import("@testing-library/react");
+    fireEvent.change(box, { target: { value: "hello" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(threadShownHere("t1")).toBe(true)); // the mocked save answers id "t1"
+  });
+
+  it("a chat that fails to open is not claimed (the page shows none of it)", async () => {
+    H.fail.add(`/chat/threads/${THREAD}`);
+    window.history.replaceState({}, "", `/chat?thread=${THREAD}`);
+    render(<ChatPage />);
+    await waitFor(() => expect(H.gets).toContain(`/chat/threads/${THREAD}`));
+    await waitFor(() => expect(threadShownHere(THREAD)).toBe(false));
   });
 
   it("the bell beside it stays quiet for that chat (the reload the browser test drove)", async () => {
