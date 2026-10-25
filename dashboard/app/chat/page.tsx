@@ -220,7 +220,7 @@ import {
   type AppSecretCard,
 } from "@/lib/appConnect";
 // Readiness 12B (G05): a chat page that leaves the screen says so.
-import { leaveTurn, newViewerId } from "@/lib/chatAway";
+import { leaveTurn, newViewerId, noteNotShowing, noteShowing } from "@/lib/chatAway";
 // Readiness 12B (G15): an app connected SOMEWHERE ELSE lets the work go on.
 import { connectOffer, nowConnected, type ConnectedNow } from "@/lib/connectedElsewhere";
 import { ConnectedElsewhere } from "@/components/chat/ConnectedElsewhere";
@@ -3788,6 +3788,8 @@ export default function ChatPage() {
   if (!viewerRef.current) viewerRef.current = newViewerId();
   useEffect(
     () => () => {
+      // Readiness 12B review: this page no longer has a chat open here.
+      noteNotShowing(viewerRef.current);
       const live = turnIdRef.current;
       if (live) void leaveTurn(live, viewerRef.current, (p, b) => post(p, b));
     },
@@ -4075,6 +4077,11 @@ export default function ChatPage() {
   // Threads sidebar: the saved-conversation list + which one is loaded.
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
+  // Readiness 12B review: the chat this page has open, for this window's bell
+  // (lib/chatAway.shownHere) — a waiting chat whose card is here is not pinged.
+  useEffect(() => {
+    noteShowing(viewerRef.current, threadId ?? "");
+  }, [threadId]);
   // Open MESSAGING thread (owner === "daemon", v1.136.0): the daemon writes it
   // (phone conversation mirrored here live); the composer replies through
   // POST /comm/threads/{id}/send and the page NEVER autosaves it.
@@ -6000,6 +6007,10 @@ export default function ChatPage() {
       return;
     }
     leaveConversation();
+    // Readiness 12B review: claimed AT ONCE (before the read answers), so a
+    // page mounting again on a chat parked on its card (a reload, `/` ⇄
+    // `/chat`) holds this window's bell quiet before the bell's own read lands.
+    noteShowing(viewerRef.current, id);
     // v1.327.0 (W2-1): opening a chat is looking at it — its unread dot goes.
     noteViewed(id, listedThreads.find((t) => t.id === id)?.updated_at);
     // Orphan anything in flight from the previous conversation.
@@ -6238,6 +6249,9 @@ export default function ChatPage() {
         if (offlineNow) setOffline(true);
         return;
       }
+      // Readiness 12B review: the chat did not open (offline keeps the copy
+      // on screen), so this page shows none of it — the bell may list it.
+      if (!offlineNow) noteShowing(viewerRef.current, "");
       // The cached paint was a promise the GET could not keep (the thread is
       // gone or unreadable): take it back to a fresh conversation rather than
       // leave a dead thread on screen with the save box aimed at it. Offline,

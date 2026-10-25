@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -47,7 +47,7 @@ import {
   sessionLinkFor,
 } from "@/lib/buildLinks";
 import { lookingAt, noteWatched, wasWatched } from "@/lib/buildWatching";
-import { CHAT_ASKS_CHANGED_EVENT } from "@/lib/chatAway";
+import { CHAT_ASKS_CHANGED_EVENT, chatHereVersion, shownHere, subscribeChatHere } from "@/lib/chatAway";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
 import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
@@ -1888,14 +1888,21 @@ export function NotificationBell() {
   // v1.351.0 (G03): chat turns parked on their own card while nobody looks
   // (the same pending list, kind "chat"). They wait on the user like the
   // asks above, so they count; the row only opens the chat.
+  // Readiness 12B review: a chat whose card a chat page in THIS window shows
+  // (or is mounting again to show — a reload, `/` ⇄ `/chat`) is not listed or
+  // pinged here: the card is its one notice (lib/chatAway.shownHere).
+  const chatHere = useSyncExternalStore(subscribeChatHere, chatHereVersion, () => 0);
   const chatAsks = useMemo(() => {
     const out: ChatWaitingAsk[] = [];
     for (const raw of agentAsksApi.data?.approvals ?? []) {
       const ask = parseChatAsk(raw);
-      if (ask) out.push(ask);
+      if (ask && !(!ask.build && shownHere(ask))) out.push(ask);
     }
     return out;
-  }, [agentAsksApi.data]);
+    // `chatHere` is the registry's version: a page that opens or leaves a
+    // chat here re-reads the rule.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentAsksApi.data, chatHere]);
   // v1.353.0 (G52): one row per pane in state `blocked` — never on Build.
   const paneAsks = useMemo(
     () => (onBuildPage(pathname) ? [] : blockedPanes(panesApi.data)),

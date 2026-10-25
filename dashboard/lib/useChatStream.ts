@@ -1025,7 +1025,12 @@ export async function* streamSSE(
           ...(watch.viewer ? { [VIEWER_HEADER]: watch.viewer } : {}),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        cache: "no-store",
+        // Readiness 12B review: no `cache: "no-store"` here (the v1.230.0 rule
+        // lib/api.ts already follows) — it made Chromium skip its CORS
+        // preflight cache, so EVERY turn sent an OPTIONS before its stream
+        // (measured in Edge: two turns, two preflights; now one). Freshness is
+        // the daemon's: every response, a stream's too, says no-store
+        // (daemon/auth.NoStoreMiddleware), so nothing is kept on disk.
         signal: inner.signal,
       });
     } catch (e) {

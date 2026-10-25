@@ -46,11 +46,46 @@ export function awayPath(turnId: string): string {
 /** turn id -> the viewers in THIS window following it now. */
 const following = new Map<string, Set<string>>();
 
+/** Readiness 12B review: viewer -> the saved chat (thread id) that mounted
+ *  chat page has OPEN ("" = a new, unsaved chat). Set synchronously when the
+ *  page opens a chat — before any read answers — so a chat page mounting
+ *  again (a reload, `/` ⇄ `/chat`) has claimed its chat before the bell can
+ *  read a list in which the daemon, for a moment, sees nobody showing it. */
+const showing = new Map<string, string>();
+
+/** Who reads the two maps (the bell) re-reads on a change. */
+const listeners = new Set<() => void>();
+let version = 0;
+
+function changed(): void {
+  version += 1;
+  for (const l of [...listeners]) {
+    try {
+      l();
+    } catch {
+      /* a listener's fault is its own */
+    }
+  }
+}
+
+/** `useSyncExternalStore` pair for the bell. */
+export function subscribeChatHere(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+
+export function chatHereVersion(): number {
+  return version;
+}
+
 export function noteFollowing(turnId: string, viewer: string): void {
   if (!turnId || !viewer) return;
   const set = following.get(turnId) ?? new Set<string>();
   set.add(viewer);
   following.set(turnId, set);
+  changed();
 }
 
 export function noteNotFollowing(turnId: string, viewer: string): void {
@@ -58,6 +93,42 @@ export function noteNotFollowing(turnId: string, viewer: string): void {
   if (!set) return;
   set.delete(viewer);
   if (set.size === 0) following.delete(turnId);
+  changed();
+}
+
+/** The chat page `viewer` has chat `threadId` open ("" = a new chat). */
+export function noteShowing(viewer: string, threadId: string): void {
+  if (!viewer) return;
+  const t = (threadId || "").trim();
+  if (showing.get(viewer) === t) return;
+  showing.set(viewer, t);
+  changed();
+}
+
+/** The chat page `viewer` is gone (unmounted). */
+export function noteNotShowing(viewer: string): void {
+  if (showing.delete(viewer)) changed();
+}
+
+/** Does a chat page in THIS window have saved chat `threadId` open? */
+export function threadShownHere(threadId: string): boolean {
+  const t = (threadId || "").trim();
+  if (!t) return false;
+  for (const v of showing.values()) if (v === t) return true;
+  return false;
+}
+
+/** THE BELL'S RULE (readiness 12B review): is a waiting chat's card in front
+ *  of the user in THIS window? A chat page here has that chat open (its card
+ *  is on it, or comes back with its rejoin), or — a new chat's first turn,
+ *  listed as `chat:turn:<id>` — follows that turn. Then the card is the one
+ *  notice, and the bell neither lists nor pings it: the daemon cannot know
+ *  that a page mounting again is about to show it (its old page already said
+ *  it left; the new one has not rejoined yet). */
+export function shownHere(row: { id: string; threadId: string }): boolean {
+  if (threadShownHere(row.threadId)) return true;
+  const m = /^chat:turn:(.+)$/.exec(row.id || "");
+  return !!m && followedHere(m[1]);
 }
 
 /** Does a chat page in THIS window follow `turnId` now? */
@@ -96,4 +167,6 @@ export async function leaveTurn(
 /** Tests only. */
 export function __resetChatAway(): void {
   following.clear();
+  showing.clear();
+  changed();
 }

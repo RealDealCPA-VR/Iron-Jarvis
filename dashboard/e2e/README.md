@@ -22,6 +22,15 @@ IJ harness view the same way:
 | 390 px | the IJ harness and Terminals views never pan sideways; (v1.373.0) the `/` and `@` lists open above the box, inside the window, and Escape closes them without sending |
 | `/` and `@` (v1.373.0) | on the demo model, a folder skill picked with `/` and a file picked with `@` ride a real turn, and the question the daemon saves names both |
 
+`e2e/chat-waiting-where-you-are.spec.ts` (readiness 12B, G05) parks a chat
+on its approval card (Permissions "Ask first" + the demo model's `write_file`)
+with `window.Notification` recorded: the daemon's preflight allows the
+`X-IJ-Viewer` header and the browser sends the stream's preflight once, not
+per turn; on the chat page the card is the only notice, on another page of the
+same window the bell lists it and pings once, a `/` ⇄ `/chat` remount with a
+held (2.5 s) rejoin and a reload never ping, and a second window showing the
+same chat keeps every bell quiet until it closes.
+
 `e2e/model-menu-fit.spec.ts` (the model menu fits the window, 2026-10-24) opens
 the composer's model menu with a `/models` answer as tall as the user's (15
 providers, stubbed in the browser) from a new chat, a chat with messages and
