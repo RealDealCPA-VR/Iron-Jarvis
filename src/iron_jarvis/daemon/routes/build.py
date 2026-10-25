@@ -597,7 +597,14 @@ def failure_detail(raw: Any) -> str:
 class _ReplyWatch:
     """Reads a build turn's frames as they pass and keeps what its reply line
     needs (and the two things that change the SESSION mid-turn: an approved
-    plan and an "allow for this conversation" answer)."""
+    plan and an "allow for this conversation" answer).
+
+    v1.390.0 (the Timeline): it also keeps WHEN — each step's start, each
+    model call (``calls``), each helper step's start and length — through the
+    reply's own clock (``harness/timeline.ReplyClock``), and :meth:`see`
+    answers the frame's data with those offsets added for the frames it
+    stamps, so the page draws the running reply from the same numbers the
+    line keeps (``recorded_turn`` sends the stamped frame on)."""
 
     def __init__(self) -> None:
         self.text: list[str] = []
@@ -609,6 +616,10 @@ class _ReplyWatch:
         self.done: dict[str, Any] | None = None
         self.error: dict[str, Any] | None = None
         self.started_at = time.time()
+        #: v1.390.0: the reply's clock (offsets from ``started_at``).
+        from ...harness.timeline import ReplyClock
+
+        self.clock = ReplyClock(self.started_at)
         self.first_token_at: float | None = None
         #: (plan text) of an exit_plan_mode call that ran (the user allowed it).
         self.approved_plans: list[str] = []
@@ -635,13 +646,18 @@ class _ReplyWatch:
         #: ``step_limit`` it met is the SAFETY stop (the reply line says so).
         self.no_limit = False
 
-    def see(self, event: str, raw: str) -> None:
+    def see(self, event: str, raw: str) -> "dict[str, Any] | None":
+        """Fold one frame. Answers the frame's data with its Timeline offsets
+        added (v1.390.0) for a frame the clock stamps — ``tool_call``,
+        ``model_call``, ``helper`` — and None for every other frame (sent on
+        unchanged)."""
         try:
             data = json.loads(raw) if raw else {}
         except ValueError:
-            return
+            return None
         if not isinstance(data, dict):
-            return
+            return None
+        stamped: "dict[str, Any] | None" = None
         if event == "token":
             if self.first_token_at is None:
                 self.first_token_at = time.time()
@@ -655,22 +671,43 @@ class _ReplyWatch:
             if room > 0:
                 self.thinking.append(chunk[:room])
                 self.thinking_chars += len(chunk[:room])
-        elif event == "round" and data.get("steer"):
-            self.steers.append(str(data["steer"]))
+        elif event == "round":
+            if data.get("steer"):
+                self.steers.append(str(data["steer"]))
+            # v1.390.0: the tool loop is about to ask the model (a call in
+            # flight until its `model_call` frame).
+            self.clock.round_started()
+        elif event == "meta":
+            self.clock.meta(data.get("provider"), data.get("model"))
+        elif event == "model_call":
+            # v1.390.0: one billed model call (the lane's frame): kept on the
+            # line's `calls`, its start added to the frame.
+            stamped = self.clock.call_seen(data)
         elif event == "tool_call":
             cid = str(data.get("id") or "")
             name = str(data.get("name") or "")
             if data.get("status") == "started":
                 self._started[cid] = (name, time.time(), data.get("args"))
+                stamped = {**data, "start": self.clock.step_started(cid)}
             elif data.get("status") == "finished":
                 began = self._started.pop(cid, None)
                 ok = data.get("ok")
+                # v1.390.0: WHEN it ran — its start (the reply's clock) and
+                # its length (the lane's own measure of a call that ran
+                # beside others, else the time between its two frames).
+                start, ms = self.clock.step_finished(cid, data.get("ms"))
+                stamped = {**data, "start": start, "ms": ms}
                 if len(self.steps) < MAX_COUNTED_STEPS:
                     step: dict[str, Any] = {
                         "name": name,
                         "ok": bool(ok) if ok is not None else None,
-                        "ms": int((time.time() - began[1]) * 1000) if began else None,
+                        "ms": ms if began else None,
+                        "start": start,
                     }
+                    if cid and cid in self.helpers:
+                        # v1.390.0: this call STARTED a helper — the helper's
+                        # own row stands in for it on the Timeline.
+                        step["helper"] = True
                     # v1.378.0 review: what the step was done to ("cart.py",
                     # "python"), from the frame's own arguments — the words
                     # the live row shows (lib/workTarget's twin), saved
@@ -709,7 +746,9 @@ class _ReplyWatch:
                     self.approved_plans.append(approved)
                     self.approved_text = approved
         elif event == "helper":
-            self.see_helper(data)
+            # v1.390.0: the helper's row and its step on the reply's clock.
+            stamped = self.clock.helper(data)
+            self.see_helper(stamped)
         elif event == "approval_resolved" and data.get("decision") == "conversation":
             tool = str(data.get("tool") or "")
             if tool and tool not in self.granted:
@@ -718,6 +757,7 @@ class _ReplyWatch:
             self.done = data
         elif event == "error":
             self.error = data
+        return stamped
 
     def see_helper(self, data: dict[str, Any]) -> None:
         """Fold one ``helper`` frame (v1.372.0) into what the reply keeps of
@@ -749,6 +789,15 @@ class _ReplyWatch:
             h["startedAt"] = data["since"]
         if isinstance(data.get("ended"), int):
             h["endedAt"] = data["ended"]
+        # v1.390.0 (the Timeline): the model the helper ran on (its run's own
+        # `meta`) and, once it ended, what it used (its session's row) — the
+        # helper's cost is its OWN, never part of the reply's receipt.
+        for key in ("provider", "model"):
+            val = data.get(key)
+            if isinstance(val, str) and val:
+                h[key] = val[:200]
+        if isinstance(data.get("usage"), dict):
+            h["usage"] = data["usage"]
         # v1.374.0: the helper's plan as its row last showed it (the turn's
         # end reads it once more, settled — _with_helper_plans).
         if isinstance(data.get("plan"), dict) and isinstance(data["plan"].get("steps"), list):
@@ -759,8 +808,12 @@ class _ReplyWatch:
                 item: dict[str, Any] = {
                     "name": str(step.get("name") or ""),
                     "ok": bool(step.get("ok")) if step.get("ok") is not None else None,
-                    "ms": None,
+                    # v1.390.0: its length and start on the reply's clock
+                    # (stamped by `ReplyClock.helper`; None from an older frame).
+                    "ms": step.get("ms") if isinstance(step.get("ms"), int) else None,
                 }
+                if isinstance(step.get("start"), int):
+                    item["start"] = step["start"]
                 if isinstance(step.get("detail"), dict):
                     item["detail"] = step["detail"]
                 h["work"].append(item)
@@ -893,6 +946,15 @@ class _ReplyWatch:
             line["accountLimit"] = self.account_limit
         if self.steps:
             line["steps"] = self.steps
+        # v1.390.0 (the Timeline): every billed model call of the reply, and
+        # the one in flight when it ended (stopped, cut off, or failed).
+        calls = list(self.clock.calls)
+        if self.done is None:
+            open_call = self.clock.open_call("failed" if self.error is not None else "stopped")
+            if open_call is not None:
+                calls.append(open_call)
+        if calls:
+            line["calls"] = calls
         if self.helpers:
             # v1.372.0: the helper agents this turn started.
             line["helpers"] = self.helper_lines(status)
@@ -1263,8 +1325,19 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                         chunk = _with_limit_words(chunk, pin.limit)
                     chunk = _with_account(chunk, pin)
                     parsed = _durable.parse_chunk(chunk)
-                for event, data in parsed:
-                    watch.see(event, data)
+                # v1.390.0 (the Timeline): a frame the reply's clock stamps
+                # (a step, a model call, a helper) goes on WITH its offsets —
+                # the page draws the running reply from the numbers the line
+                # will keep. Every other frame passes byte for byte.
+                stamped_frames: "list[str] | None" = None
+                for k, (event, data) in enumerate(parsed):
+                    stamped = watch.see(event, data)
+                    if stamped is not None and stamped_frames is None:
+                        stamped_frames = [_durable.sse(e, d) for e, d in parsed[:k]]
+                    if stamped_frames is not None:
+                        stamped_frames.append(_durable.sse(event, stamped if stamped is not None else data))
+                if stamped_frames is not None:
+                    chunk = "".join(stamped_frames)
                 if watch.approved_plans or watch.granted:
                     await _apply_session_changes(engine, thread_id, watch)
                 if terminal and (watch.done is not None or watch.error is not None):

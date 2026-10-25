@@ -57,7 +57,9 @@ def test_a_build_reply_line_saves_each_steps_target_before_its_detail():
     assert [s.get("target") for s in steps] == ["cart.py", "cart.py", "python", None]
     # Saved like the chat page's: the target before the detail, and no key
     # at all when there is nothing safe to say.
-    assert list(steps[0]) == ["name", "ok", "ms", "target", "detail"]
+    # (v1.390.0, moved on purpose: the Timeline's `start` — ms from the
+    # reply's start — sits beside `ms`, before the target and the detail.)
+    assert list(steps[0]) == ["name", "ok", "ms", "start", "target", "detail"]
     assert "target" not in steps[3]
     reply = [ln for ln in w.lines("t1", "done") if ln.get("role") == "assistant"][-1]
     assert [s.get("target") for s in reply["steps"]] == ["cart.py", "cart.py", "python", None]
