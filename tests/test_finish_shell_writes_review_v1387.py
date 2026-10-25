@@ -707,3 +707,48 @@ def test_a_tool_that_writes_no_local_file_keeps_the_notes_as_they_were(tmp_path)
     true_note = _creation_honesty_note(body, ["write_file"], ["read_file"])
     assert true_note and _creation_honesty_note(body, ["write_file"], ["browser_click"]) == true_note
     assert _creation_honesty_note(body, ["write_file"], ["mcp__mail__search_messages"], ran_writer=False) == true_note
+
+
+@pytest.mark.parametrize("command, part", [
+    # a comment after a setup step swallowed the joined test run: the re-run
+    # was `cd /w # go there && pytest -q` — bash runs only `cd`, exit 0,
+    # and the check said the tests PASSED
+    ("cd /w # go there\npytest -q", "cd /w && pytest -q"),
+    ("pytest -q  # the unit tests\npytest -x", "pytest -q && pytest -x"),
+    # a `#` inside quotes or a word is not a comment
+    ('pytest -q -k "a # b"', 'pytest -q -k "a # b"'),
+    ("pytest -q -k a#b", "pytest -q -k a#b"),
+])
+def test_a_bash_comment_never_swallows_the_test_run(command, part):
+    """FOUND BY THE REVIEW (since bash commands are read with bash's rules):
+    a segment kept for the re-run carried its trailing ``# comment``, and the
+    joined part commented out every segment after it. OLD CODE: the comment
+    stayed in the part."""
+    assert F.test_part(command, posix=True) == part
+
+
+def test_a_comment_is_not_part_of_a_test_head():
+    assert F.test_heads("pytest -q  # the unit tests", posix=True) == ["pytest -q"]
+    # cmd has no `#` comments: its reading is unchanged
+    assert F.test_part("cd /w # go there\npytest -q", posix=False) == "cd /w # go there && pytest -q"
+
+
+async def test_a_commented_cd_never_turns_failing_tests_into_a_pass(env):  # noqa: F811 — the fixture
+    """End to end in real Git bash through the claude dialect: the model's
+    command is ``cd <folder> # go there`` then its (FAILING) test run. OLD
+    CODE: the check ran `cd … # go there && python -m unittest …` again —
+    bash ran only the cd — and the finish record said tests "passed"."""
+    from tests.test_finish_shell_replay_v1387 import BASH
+
+    if BASH is None:
+        pytest.skip("Git for Windows' bash is not installed here")
+    platform, ws, wire = env
+    folder = str(ws).replace("\\", "/")
+    command = f"cd {folder} # go there\necho 'Y = 1' > other.py\npython -m unittest -q test_mini"
+    model = wire([[ToolCall(id="b1", name="Bash", arguments={"command": command})],
+                  "Added other.py.", "1. not met: the test fails."])
+    out = await _stream(platform, _body(ws, text="add other.py and run the tests"), harness="claude")
+    assert len(model.notes()) == 1
+    finish = out["done"]["finish"]
+    assert finish["command"] == f"cd {folder} && python -m unittest -q test_mini"
+    assert finish["tests"] == "failed", finish

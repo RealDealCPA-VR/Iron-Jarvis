@@ -419,6 +419,37 @@ def _scan_heredocs(command: str) -> tuple[str, int]:
     return "".join(out), operators
 
 
+def _drop_comment(segment: str) -> str:
+    """A bash segment without its trailing ``# comment`` (a ``#`` that starts
+    a word, outside quotes). Review: the test part JOINS its segments with
+    ``&&``, so a kept segment's comment commented out every segment after it
+    — ``cd /w # go there`` + ``pytest -q`` was run again as ``cd /w # go there
+    && pytest -q``: bash ran only ``cd``, exit 0, and the check said the tests
+    PASSED. (cmd has no ``#`` comments.)"""
+    text = str(segment or "")
+    if "#" not in text:
+        return text
+    quote = ""
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+        elif ch == "\\":
+            i += 2
+            continue
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "#" and (i == 0 or text[i - 1] in " \t"):
+            return text[:i].rstrip()
+        i += 1
+    return text
+
+
 def _fed_by_heredoc(segment: str) -> bool:
     """Is this segment (of a bash-written command, bodies already left out)
     fed by a here-document? Run again it would read another input — never
@@ -765,9 +796,9 @@ def test_part(command: str, named: Iterable[str] = (), *, posix: bool | None = N
         if _test_segment(seg, named, posix):
             keep.extend(setup)
             setup = []
-            keep.append(_pipeline_head(seg))
+            keep.append(_pipeline_head(_drop_comment(seg) if _is_posix(posix) else seg))
         elif _setup_segment(seg, posix):
-            setup.append(_pipeline_head(seg))
+            setup.append(_pipeline_head(_drop_comment(seg) if _is_posix(posix) else seg))
     if not any(is_test_segment(k, named) for k in keep):
         return ""
     return " && ".join(keep)
@@ -811,7 +842,7 @@ def test_heads(command: str, named: Iterable[str] = (), *, posix: bool | None = 
     for seg in _segments(command, posix=posix):
         if not _test_segment(seg, named, posix):
             continue
-        words = _words(_pipeline_head(seg))
+        words = _words(_pipeline_head(_drop_comment(seg) if _is_posix(posix) else seg))
         kept: list[str] = []
         skip = False
         for w in words:
