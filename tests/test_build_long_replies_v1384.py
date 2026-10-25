@@ -37,7 +37,6 @@ from iron_jarvis.harness import mode as M
 from iron_jarvis.providers.adapters.base import ToolCall
 from tests.test_build_sessions_v1367 import (
     Script,
-    asgi,
     frames_of,
     messages_of,
     new_session,

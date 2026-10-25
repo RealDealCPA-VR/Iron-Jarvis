@@ -39,7 +39,7 @@ from iron_jarvis.daemon import durable_turns as dt
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from tests.test_build_sessions_v1367 import asgi_get, open_turn, turn_log, until
-from tests.test_harness_helpers_v1372 import CLAUDE, Model, _helper_reads, _is_main, new_session, wire
+from tests.test_harness_helpers_v1372 import Model, _helper_reads, _is_main, new_session, wire
 
 FIXTURE = Path(__file__).resolve().parents[1] / "dashboard" / "__tests__" / "fixtures" / "build-resume-v1384.json"
 MERGE = ("token", "thinking")
