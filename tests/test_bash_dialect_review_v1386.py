@@ -9,9 +9,26 @@ Windows' bash. The review found, each red on the doer's code first:
    so the note told the model its passing tests FAILED). A re-run of the
    model's command now runs in the shell that command ran in; a folder's own
    ``[[checks]]`` (the user's words) stay in cmd.exe for every dialect.
+2. THE GIT GUARD read ``git \\`` + a line break + ``push -f`` as nothing (bash
+   joins the lines: a force push ran with no card and reached the remote).
+3. A JOB LEFT RUNNING WITH ``&`` (output not redirected — Claude Code's own
+   habit) held the pipe: the call waited for its timeout and the kill ended
+   the server. Bash's output now goes to files (``procs.run_to_files``).
+4. HINTS: a tool that RAN was called missing (Git's ``cp`` in a Build
+   session); cmd habits in bash misled; ``start /b`` opened an error window
+   that stayed on the user's screen (now refused before it runs).
+5. LENGTH: a 40 KB heredoc was refused at 32,000 characters (an environment
+   handed to CreateProcessW carried 40,000,000).
+6. THE ';' GUARD read a redirection as a word, and let every formatter (a
+   program that REWRITES the files it is named) through (section 12).
+7. THE WORDS: "waits until the timeout" (false now), no word on cmd-style
+   switches or on where each call starts.
+10. THE FINDER missed a moved scoop.
 
-Driven through the REAL lanes (registry ``invoke``, permission engine, shell
-tool, real Git bash on this PC); only the model is scripted.
+Sections 8, 9 and 11 pin decisions and gates (a helper keeps cmd.exe; every
+gate through the real lane; bash's Job lets nothing leave, cmd's still
+does). Driven through the REAL lanes (registry ``invoke``, permission
+engine, shell tool, real Git bash on this PC); only the model is scripted.
 """
 
 from __future__ import annotations
