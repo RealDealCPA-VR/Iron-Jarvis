@@ -1,0 +1,2 @@
+Alternative (review), correct: the reference with one plain (non-reentrant) threading.Lock held for the WHOLE of zones.lookup, the postcode normalized inside the lock; clear_cache takes the same lock. Thread-safe, cache keyed on (region, postcode).
+Keeps REFACTOR.md 6 and every other rule; a check that calls lookup again from inside the postcode's own methods on the same thread would deadlock it, which is the check's fault, not the solution's.

@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from decimal import Decimal
 from pathlib import Path
@@ -116,6 +117,8 @@ EXPECTED = {'US': {'weight_unit': 'kg',
                         'ZONE:   4 (60311, US)\n'
                         'BOX:    L, 50.0 x 40.0 x 30.0 cm\n'
                         'WEIGHT: 15.30 kg',
+        'render_heavy_metric': 'FROM:   Iron Shipping Co.\nTO:     Hedy Lamarr\nZONE:   4 (60311, US)\nBOX:    L, 50.0 x 40.0 x 30.0 cm\nWEIGHT: 15.30 kg',
+        'render_heavy_imperial': 'FROM:   Iron Shipping Co.\nTO:     Hedy Lamarr\nZONE:   4 (60311, US)\nBOX:    L, 19.7 x 15.7 x 11.8 in\nWEIGHT: 33.73 lb',
         'message_b': 'Hello Grace Hopper, Iron Shipping Co. has sent your parcel (4.20 kg) with Express '
                      '(next-day). It cost USD 19.60 and should arrive in 1 day.',
         'message_heavy': 'Hello Hedy Lamarr, Iron Shipping Co. has sent your parcel (15.30 kg) with Express '
@@ -197,6 +200,8 @@ EXPECTED = {'US': {'weight_unit': 'kg',
         'render_heavy': ('raises',
                          'PackagingError',
                          'too heavy for one box: 33.73 lb (the limit is 33.07 lb)'),
+        'render_heavy_metric': ('raises', 'PackagingError', 'too heavy for one box: 15.30 kg (the limit is 15.00 kg)'),
+        'render_heavy_imperial': ('raises', 'PackagingError', 'too heavy for one box: 33.73 lb (the limit is 33.07 lb)'),
         'message_b': 'Hello Grace Hopper, Paket Nord GmbH has sent your parcel (9.26 lb) with Express '
                      '(next-day). It cost EUR 19.60 and should arrive in 1 day.',
         'message_heavy': ('raises',
@@ -278,6 +283,8 @@ EXPECTED = {'US': {'weight_unit': 'kg',
                         'ZONE:   3 (60311, EU)\n'
                         'BOX:    L, 50.0 x 40.0 x 30.0 cm\n'
                         'WEIGHT: 15.30 kg',
+        'render_heavy_metric': 'FROM:   Parcel & Co\nTO:     Hedy Lamarr\nZONE:   3 (60311, EU)\nBOX:    L, 50.0 x 40.0 x 30.0 cm\nWEIGHT: 15.30 kg',
+        'render_heavy_imperial': 'FROM:   Parcel & Co\nTO:     Hedy Lamarr\nZONE:   3 (60311, EU)\nBOX:    L, 19.7 x 15.7 x 11.8 in\nWEIGHT: 33.73 lb',
         'message_b': 'Hello Grace Hopper, Parcel & Co has sent your parcel (4.20 kg) with Express '
                      '(next-day). It cost GBP 19.60 and should arrive in 1 day.',
         'message_heavy': 'Hello Hedy Lamarr, Parcel & Co has sent your parcel (15.30 kg) with Express '
@@ -446,6 +453,8 @@ def cases():
         ("render_b_metric", labels.render, (b,), {"units": "metric"}),
         ("render_c", labels.render, (c,), {}),
         ("render_heavy", labels.render, (heavy,), {}),
+        ("render_heavy_metric", labels.render, (heavy,), {"units": "metric"}),
+        ("render_heavy_imperial", labels.render, (heavy,), {"units": "imperial"}),
         ("message_b", notify.message, (b, fixed), {}),
         ("message_heavy", notify.message, (heavy, fixed), {}),
     ]
@@ -585,6 +594,183 @@ class HiddenResults(unittest.TestCase):
         self.assertEqual(zones.lookup("94105", settings=eu), 4)
 
 
+class HiddenOverlappingCalls(unittest.TestCase):
+    """Two calls with different Settings must not affect each other even when
+    one starts while the other is half done (REFACTOR.md 6), and the Settings a
+    caller passes never changes, not even for the length of one call (task.md:
+    an immutable Settings). Each test makes the overlap happen on purpose, from
+    inside an object the code under test reads; correct code cannot fail them.
+
+    The nested call a probe makes runs on a HELPER THREAD and is waited for at
+    most HELPER_WAIT_S. Correct code may hold a plain lock for a whole call
+    (thread-safe, and allowed); the helper then waits for the outer call, the
+    wait runs out, and that is NOT a wrong answer -- the outer call goes on, its
+    lock is released, the helper finishes. A same-thread nested call would
+    deadlock such code for good."""
+
+    HELPER_WAIT_S = 5
+
+    def _on_helper(self, fn):
+        """``fn()`` on a helper thread, waited for at most HELPER_WAIT_S:
+        ``(True, value)`` when it came back, ``(False, None)`` when it is still
+        waiting (or raised)."""
+        out = []
+
+        def run():
+            out.append(fn())
+
+        helper = threading.Thread(target=run, daemon=True)
+        self._helpers.append(helper)
+        helper.start()
+        helper.join(self.HELPER_WAIT_S)
+        return (True, out[0]) if out else (False, None)
+
+    def setUp(self):
+        self._helpers = []
+
+    def tearDown(self):
+        for helper in self._helpers:
+            helper.join(30)
+
+    def test_a_lookup_made_while_another_one_is_half_done(self):
+        zones = _module("zones")
+        us, eu = _settings("US"), _settings("EU")
+        inner, waited = [], []
+        on_helper = self._on_helper
+
+        class Interleaved(str):
+            """A postcode: whenever the code tidies it (strip and friends), a
+            lookup of the same postcode with the OTHER settings runs (on a
+            helper thread, waited for) before the code goes on."""
+
+            def _other(self):
+                if waited:
+                    return  # the code serializes lookups: nothing more to probe
+                plain, other = str.strip(str(self)), self.other
+                came_back, zone = on_helper(lambda: zones.lookup(plain, settings=other))
+                if came_back:
+                    inner.append((other.region, zone))
+                else:
+                    waited.append(other.region)
+
+            def strip(self, *a):
+                self._other()
+                return str.strip(self, *a)
+
+            def lstrip(self, *a):
+                self._other()
+                return str.lstrip(self, *a)
+
+            def rstrip(self, *a):
+                self._other()
+                return str.rstrip(self, *a)
+
+            def replace(self, *a):
+                self._other()
+                return str.replace(self, *a)
+
+            def split(self, *a):
+                self._other()
+                return str.split(self, *a)
+
+        want = {"US": 8, "EU": 1}
+        for clear_first in (True, False):
+            for outer, other in ((us, eu), (eu, us), (us, eu)):
+                with self.subTest(outer=outer.region, clear_first=clear_first):
+                    if clear_first:
+                        zones.clear_cache()
+                    code = Interleaved(" 10115 ")
+                    code.other = other
+                    self.assertEqual(zones.lookup(code, settings=outer), want[outer.region],
+                                     "a lookup made in the middle of another changed its answer")
+        self.assertTrue(all(zone == want[region] for region, zone in inner), inner)
+        for helper in self._helpers:
+            helper.join(30)
+        self.assertFalse(any(helper.is_alive() for helper in self._helpers), "a lookup did not finish")
+
+    def test_two_threads_with_two_regions(self):
+        """Backstop for overlaps no object can trigger. Only a WRONG ANSWER
+        fails it (never a slow machine or an exception); bounded."""
+        zones = _module("zones")
+        us, eu = _settings("US"), _settings("EU")
+        wrong, raised = [], []
+
+        def hammer(settings, want):
+            try:
+                for _ in range(50_000):
+                    got = zones.lookup("10115", settings=settings)
+                    if got != want:
+                        wrong.append((settings.region, got))
+                        return
+            except Exception as exc:  # noqa: BLE001 - not this test's verdict
+                raised.append(repr(exc))
+
+        before = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        try:
+            threads = [threading.Thread(target=hammer, args=(us, 8), daemon=True),
+                       threading.Thread(target=hammer, args=(eu, 1), daemon=True)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(90)
+        finally:
+            sys.setswitchinterval(before)
+        self.assertFalse(any(thread.is_alive() for thread in threads), "a lookup did not finish")
+        self.assertEqual(wrong, [], "a US lookup and an EU lookup made at the same time got each other's zone")
+
+    def test_the_settings_given_never_change_during_a_label(self):
+        labels, model, units = _module("labels"), _module("model"), _module("units")
+        Settings = _module("settings").Settings
+        seen = []
+        on_helper = self._on_helper
+
+        class Watched(tuple):
+            """A shipment's items: whenever the code reads them, look at the
+            Settings the caller passed (and, on a helper thread, at what
+            format_weight makes of them)."""
+
+            def _look(self):
+                settings = self.settings
+                fields = dataclasses.astuple(settings)
+                came_back, shown = on_helper(lambda: units.format_weight(Decimal("2.5"), settings=settings))
+                seen.append((fields, shown if came_back else None))
+
+            def __iter__(self):
+                self._look()
+                return tuple.__iter__(self)
+
+            def __getitem__(self, index):
+                self._look()
+                return tuple.__getitem__(self, index)
+
+        runs = [
+            (Settings(), "imperial", "13.13"),
+            (Settings(), "metric", "13.14"),
+            (Settings(region="EU", units="imperial"), "metric", "13.15"),
+            (Settings(max_box_kg=15), "imperial", "13.16"),
+        ]
+        for settings, override, side in runs:
+            with self.subTest(units=settings.units, override=override):
+                before = dataclasses.astuple(settings)
+                shown = "2.50 kg" if settings.units == "metric" else "5.51 lb"
+                seen.clear()
+                weight = "16.5" if settings.max_box_kg == 15 else "1.2345"
+                items = Watched((model.make_item("hidden probe", ("11.11", "12.12", side), weight),))
+                items.settings = settings
+                shipment = model.Shipment("Ada Lovelace", "10115" if settings.region == "US" else "8001", items)
+                try:
+                    labels.render(shipment, units=override, settings=settings)
+                except ValueError:
+                    pass  # the too-heavy run fails; what matters is what the caller saw meanwhile
+                self.assertTrue(seen, "the label never read the shipment's items")
+                self.assertEqual({fields for fields, _ in seen}, {before},
+                                 "the caller's Settings changed while the label was being made")
+                self.assertLessEqual({said for _, said in seen} - {None}, {shown},
+                                     "the caller's Settings read differently while the label was being made")
+                self.assertEqual(dataclasses.astuple(settings), before)
+
+
 class HiddenLabels(unittest.TestCase):
     def test_a_failed_label_leaves_nothing_behind(self):
         labels, model, zones, packaging = _module("labels"), _module("model"), _module("zones"), _module("packaging")
@@ -592,18 +778,23 @@ class HiddenLabels(unittest.TestCase):
         us = _settings("US")
         items = (model.make_item("book", (24, 17, 3), "0.9"), model.make_item("mug", (12, 9, 7), "0.4"))
         ada = model.Shipment("Ada Lovelace", "10115", items)
+        # The messages are the ones the code printed before the refactor (the
+        # override applies to the whole label, the box's weight check included).
         failures = [
-            (model.Shipment("   ", "10115", items), us, labels.LabelError),
-            (model.Shipment("Ada Lovelace", "8001", items), us, zones.ZoneError),
+            (model.Shipment("   ", "10115", items), us, labels.LabelError, "a label needs a recipient"),
+            (model.Shipment("Ada Lovelace", "8001", items), us, zones.ZoneError,
+             "not a postcode of region US: '8001'"),
             (model.Shipment("Hedy Lamarr", "60311", (model.make_item("k", (20, 20, 20), "14.5"),)),
-             _module("settings").Settings(max_box_kg=15), packaging.PackagingError),
+             _module("settings").Settings(max_box_kg=15), packaging.PackagingError,
+             "too heavy for one box: 33.73 lb (the limit is 33.07 lb)"),
             (model.Shipment("Ada Lovelace", "10115", (model.make_item("ski", (180, 10, 10), "3"),)), us,
-             packaging.PackagingError),
+             packaging.PackagingError, "no box is big enough for these items"),
         ]
-        for shipment, settings, error in failures:
+        for shipment, settings, error, said in failures:
             with self.subTest(error=error.__name__, recipient=shipment.recipient):
-                with self.assertRaises(error):
+                with self.assertRaises(error) as caught:
                     labels.render(shipment, units="imperial", settings=settings)
+                self.assertEqual(str(caught.exception), said)
                 self.assertEqual(labels.render(ada, settings=us), EXPECTED["US"]["render_a"])
                 self.assertEqual(units.format_weight(Decimal("2.5"), settings=us), "2.50 kg")
                 self.assertEqual(units.format_weight(Decimal("2.5"), settings=settings), "2.50 kg")
@@ -655,6 +846,17 @@ class HiddenCli(unittest.TestCase):
             done = self._run("quote", order, "--settings", bad)
             self.assertEqual((done.returncode, done.stdout), (1, ""))
             self.assertTrue(done.stderr.startswith("error: "), done.stderr)
+            # Word for word what the command line printed before the refactor.
+            for values, said in (
+                ({"region": "Mars"}, "error: bad value for region: 'Mars'\n"),
+                ({"fuel_surcharge_pct": 51}, "error: bad value for fuel_surcharge_pct: 51\n"),
+                ({"colour": "blue"}, "error: unknown setting 'colour'\n"),
+            ):
+                with self.subTest(settings_file=values):
+                    with open(bad, "w", encoding="utf-8") as fh:
+                        json.dump(values, fh)
+                    done = self._run("quote", order, "--settings", bad)
+                    self.assertEqual((done.returncode, done.stdout, done.stderr), (1, "", said))
 
 
 class HiddenTestsKept(unittest.TestCase):

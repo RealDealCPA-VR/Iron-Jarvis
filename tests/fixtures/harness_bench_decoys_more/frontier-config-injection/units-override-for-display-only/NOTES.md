@@ -1,0 +1,2 @@
+Decoy (review): labels.render applies units= only to the BOX and WEIGHT lines and chooses the box with the settings as given, so "too heavy for one box" under an override is worded in the other unit system (15.30 kg instead of 33.73 lb).
+Breaks REFACTOR.md 5 ("raises the same errors (same classes, same messages)") and 7 (units overrides the unit system for that one label, as today); README.md: packaging reads units "(in an error message)".
