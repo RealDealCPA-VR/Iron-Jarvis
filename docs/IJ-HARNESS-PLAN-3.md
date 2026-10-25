@@ -113,6 +113,11 @@ Sources (read 2026-10-24): <https://www.tbench.ai/news/terminal-bench-4-0>,
 These change what gets built. Each has a recommendation; nothing starts until
 you answer.
 
+**Decided 2026-10-24: the user accepted all eleven recommendations** ("I
+accept all eleven recommended decisions. Start Phase 1 with doer and reviewer
+agents, and ship each phase when it's green"). The phases are built and
+shipped in order.
+
 1. **Headless runs: what may run without you there, and where it keeps its
    state (Phase 4).**
    - *Recommended (what may run):* by default a headless run asks nothing. It
@@ -226,6 +231,29 @@ to separate the harnesses.
 - On the `frontier` tier, the three setups do not all score the same. If they
   do, the tier is not hard enough and gets harder tasks before the phase
   ships.
+
+**Result (v1.384.0, 2026-10-24).** Built by a doer agent and checked by a
+separate reviewer.
+- **What shipped:** repeats with ranges; `--model` required; `--effort`
+  passed to every runner; the model each run reports, recorded beside the one
+  passed; twelve `frontier` tasks with setup steps.
+- **Each run works alone:** in its own folder outside the bench root.
+- **The checks got harder:** the reviewer's helpers wrote 54 more wrong
+  fixes, and 38 of them passed the checks as first shipped. Every one fails
+  now. 4 of 19 correct solutions had been wrongly failed; all pass now.
+- **Bench code defects found and fixed:** `--model default` was accepted; a
+  compiled copy of a hidden check (the whole answer key) was left where a
+  later run could read it; two snapshot dates counted as one model; a task id
+  could collide with a repeat's folder.
+- **Live smoke runs:**
+  - the doer's: 2 frontier tasks × 2 repeats on Claude Code (sonnet, low),
+    Codex (gpt-6-astra, low) and Jarvis on Claude (sonnet, low), 4 of 4 each;
+  - the reviewer's: frontier-debug-price-server × 2 on Claude Code, 2 of 2,
+    and every price server it started was gone at the end.
+
+The "Done when" items that need the full measurement (the three setups at
+`--repeats 3 --tier all`, and whether the frontier tier separates them) are
+run on the released version and recorded below when they finish.
 
 ## Phase 2 — The finish check (target v1.384.0)
 

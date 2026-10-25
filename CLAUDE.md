@@ -3569,6 +3569,62 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **The benchmark can RANK: repeats with a range, the exact model, a
+  `frontier` tier, and every run worked ALONE** (v1.384.0, IJ harness part 3
+  Phase 1, `docs/IJ-HARNESS-PLAN-3.md`; a doer + a reviewer whose 4 hunters
+  wrote 54 more decoys — 38 PASSED the checks as first shipped — and 19
+  correct alternatives, 4 of which the checks wrongly FAILED; all fixed and
+  pinned. The pin files say v1383: the target moved when the lighthouse splash
+  took v1.383.0). REPEATS: `--repeats N` (1–10, `bench.check_repeats`); every
+  task's repeat 1 before any repeat 2; repeat 1 keeps `runs/<id>`, the old
+  fingerprint and NO `repeat` key (a one-run results folder is reused), repeat
+  k≥2 is `runs/<id>.r<k>` with `fingerprint(task, k)`; `ledger.run_key`/
+  `record_key`, `verify_plan` per run; the report gives each repeat its own
+  denominator, the mean, the range and passed every time / some / never /
+  never scored, and counts only repeats with a scored run ("over 1 of 2
+  repeats (1 had no scored run)"); each invocation writes `plan.json`, and a
+  task's runs from repeats beyond the latest plan are `stale`, left out of
+  every number, and SAID. MODEL: `--model` is REQUIRED (Jarvis also
+  `--provider`), and `default`/`subscription`/`auto` are refused
+  (`MODEL_NOT_A_MODEL` — the Claude adapter reads them as the CLI's own
+  default); `--effort` (medium) is passed to every runner (Claude
+  `--model/--effort`, Codex `-m` + `-c model_reasoning_effort="<e>"` as TOML,
+  Jarvis only when `providers.reasoning.supports`, else "not offered"); records
+  carry `model_passed`, `effort_passed`, `model_reported` (Claude Code's
+  `system/init`; Jarvis's route ALIAS; Codex 0.157.0 reports none) and
+  `effort_reported`; `report.model_matches` treats an alias word, a `[1m]`
+  suffix, a provider prefix, `-latest` and 4.5/4-5 as one model and two
+  snapshot DATES as two; "default" is never written as a model. The identity
+  gains effort only when set, so a v1.382.1 folder run without an effort is
+  reused, and one run through the CLI (default effort medium) is not —
+  accepted: the old run used the user's own effort setting. FRONTIER: 12 tasks
+  (`tasks/frontier-*`, ≤ 200 files each, offline), each with a solution and
+  a decoy; `[setup]` in `task.toml` runs `python -I <script> <work> <task
+  seed>` through `procs.run` with a scrubbed env and isolated git config
+  (`setup_step.py`), a failure is "did not run" (`setup_failed` =
+  infrastructure); the browser task's check uses headless Edge via Playwright
+  and exits 3 (unscored) when no browser OR the driver cannot start; core and
+  hard content hashes are pinned. GRADING: `grading.remove_hidden_check` also
+  removes the COMPILED check (`python -I` ignores PYTHONDONTWRITEBYTECODE;
+  the reviewer decoded the whole legacy-callers answer key from a `.pyc` left
+  in `runs/<task>/grade/`). ISOLATION: the agent works in
+  `<system temp>/ij-bench-runs/<16 hex>/run/work` (`agent_runs_root`; the
+  extra `run/` level keeps a concurrent bench's run out of `../..` too); after
+  the run `work/` is MOVED into `runs/<key>/work` and grading, the marker
+  hash, reuse and the tripwire run there as before; the outside snapshot
+  covers the agent folder; `owner.json` (pid + start time, never a path) lets
+  `sweep_agent_roots` remove only folders whose owner is gone; `HIDDEN_PATHS`
+  + `hide_paths` + `hidden_environ()` keep the bench root out of a CLI child's
+  env (PWD/OLDPWD dropped) and a Jarvis turn's Build env and prompt. A task id
+  ending `.r<n>` is refused. Known: an absolute bench root under %TEMP% is
+  still reachable by a determined agent; a `uv run` venv path names the source
+  tree; the price task does not force debugging the running server; the Codex
+  effort flag has not yet been seen taking effect. Pins:
+  `tests/test_harness_bench_{repeats_model,frontier,review,isolation}_v1383.py`,
+  fixtures `harness_bench_decoys_more/`, `harness_bench_alternatives/`. SAME
+  RELEASE (test-only): `test_mcp_stderr_tail_v1342`'s chattering child gets a
+  5 s transport deadline, not 0.5 s — a Python child on a loaded PC took
+  1.2–2.1 s to print its first line, so the kept tail was empty every busy run.
 - **The composer's model menu is PORTALED, FIXED at its chip and always
   inside the window** (v1.382.0, a USER BUG: in a new chat, the centred
   composer's menu opened upward and its top — the filter box, Recent — was
