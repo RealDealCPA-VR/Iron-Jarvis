@@ -258,3 +258,35 @@ def test_the_schedules_own_worded_refusals_keep_their_sentence(tmp_path):
         "the workflow “weekly-digest” this schedule runs no longer exists. "
         "Edit the schedule to pick another, or remove it"
     ), body
+
+
+# --------------------------------------------------------------------------- #
+# 4. The browser sidebar's "not armed" footnote (the lane's open point 2)
+# --------------------------------------------------------------------------- #
+async def test_the_browser_sidebars_footnote_names_no_tools_menu(tmp_path):
+    """RED on the lane's commit: a sidebar turn (the browser add-on's panel —
+    the ONLY caller that passes ``arm_family``) ended "— turn on Web &
+    research in the chat's Tools menu." The sidebar has no Tools menu. Driven
+    through the REAL stream lane with the panel's own seam."""
+    from tests.test_chat_recovery_v1344 import _FakeTool, _app, _body, _done, _frames, _script
+
+    from iron_jarvis.daemon.chat_turn import NOT_ARMED_ELSEWHERE, refusal_footnotes
+    from iron_jarvis.daemon.routes.chat import stream_chat_turn
+    from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
+
+    armed, web = _FakeTool("lookup_fake"), _FakeTool("web_search")
+    platform = _app(tmp_path, armed, web)
+    _, stream = _script([
+        LLMResponse(text="", tool_calls=[ToolCall(id="c1", name="web_search", arguments={"q": "x"})]),
+        LLMResponse(text="That tool was not available."),
+    ])
+    platform.router.stream = stream
+    gen = await stream_chat_turn(platform, {}, _body("lookup_fake"), arm_family=frozenset({"lookup_fake"}))
+    reply = _done(_frames("".join([c async for c in gen])))["reply"]
+    assert web.calls == [], "anti-vacuity: the gate refused the unarmed tool"
+    words = NOT_ARMED_ELSEWHERE["sidebar"]
+    assert reply.endswith(f"\n\n_Note: Jarvis couldn't search the web ({words})._"), reply
+    for place in ("Tools menu", "Web & research", "for this chat"):
+        assert place not in reply, (place, reply)
+    # The chat page's words are untouched (no arm_family = the chat page).
+    assert "Tools menu" in refusal_footnotes([("web_search", "not armed")])

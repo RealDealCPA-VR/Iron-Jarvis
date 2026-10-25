@@ -95,12 +95,17 @@ def test_other_refusals_keep_their_words_everywhere():
 
 
 def test_both_lanes_pass_the_surface_lock_step():
-    """MIRROR NOTE: every footnote site in both lanes names the surface."""
+    """MIRROR NOTE: every footnote site in both lanes names the surface.
+    (12A review: the stream lane names it through `_footnote_place`, which
+    adds the browser sidebar's — tests/test_readiness_12a_review_v1387.)"""
     for module in (chat_turn, chat_routes):
         src = inspect.getsource(module)
         sites = src.count("refusal_footnotes(refused_tools")
         named = src.count("refusal_footnotes(refused_tools, surface=")
         assert sites == named == 2, (module.__name__, sites, named)
+    stream = inspect.getsource(chat_routes)
+    assert stream.count("refusal_footnotes(refused_tools, surface=_footnote_place)") == 2
+    assert "_surface_for(body)" in stream[stream.index("_footnote_place = ("):][:300]
 
 
 # --------------------------------------------------------------------------- #

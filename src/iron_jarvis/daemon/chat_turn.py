@@ -2543,7 +2543,13 @@ NOT_ARMED_ELSEWHERE: dict[str, str] = {
     "build": "not available in this reply",
     "pane": "not available in this terminal's chat",
     "phone": "not available from your phone",
+    # 12A review (the lane's open point 2): the browser add-on's sidebar —
+    # a footnote-only surface (never a failure_words surface): the stream lane
+    # passes it for a turn the panel made (`arm_family`, the panel's seam).
+    "sidebar": "not available in the browser sidebar",
 }
+#: The browser sidebar's footnote surface (``routes/chat.chat_stream``).
+SIDEBAR_FOOTNOTES = "sidebar"
 
 
 def _footnote_surface(surface: "str | None") -> str:

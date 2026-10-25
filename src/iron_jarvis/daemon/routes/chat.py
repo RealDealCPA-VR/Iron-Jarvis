@@ -5994,6 +5994,15 @@ async def chat_stream(
         if workflow_draft is not None and resolved_proj is not None and pid:
             workflow_draft["project_id"] = pid
         reply = reply_text or ""
+        # 12A review (the lane's open point 2): where the "not armed" footnote
+        # is read. A turn the browser add-on's sidebar made (the panel is the
+        # ONLY caller passing ``arm_family``) has no Tools menu to name; every
+        # other turn reads `_surface_for(body)` exactly as before. Stream lane
+        # only: the sidebar never uses the POST lane (MIRROR NOTE: chat_turn
+        # has no `arm_family`, so it has no sidebar turn to word).
+        _footnote_place = (
+            _chat_turn.SIDEBAR_FOOTNOTES if arm_family is not None else _surface_for(body)
+        )
         # v1.378.0 review: the reply IS a declined nudge's sentence (lock-step
         # with chat_turn).
         _declined_reply = False
@@ -6003,7 +6012,7 @@ async def chat_stream(
             reply = reply.strip()
             # v1.344.0 (M3): one line per refused (tool, reason) — lock-step
             # with chat_turn.
-            reply += refusal_footnotes(refused_tools, surface=_surface_for(body))  # 12A: lock-step
+            reply += refusal_footnotes(refused_tools, surface=_footnote_place)  # 12A: lock-step
         else:
             if not reply.strip():
                 # v1.246.0 — lock-step with chat_turn (v1.378.0: a declined
@@ -6012,7 +6021,7 @@ async def chat_stream(
                     tools_used, last_tool_output, _f_refusal, surface=_surface_for(body),
                 )
                 _declined_reply = _f_refusal is not None
-            reply += refusal_footnotes(refused_tools, surface=_surface_for(body))  # 12A: lock-step
+            reply += refusal_footnotes(refused_tools, surface=_footnote_place)  # 12A: lock-step
             if stopped_note:
                 reply += f"\n\n_Note: {stopped_note}._"
             if lang_note:
