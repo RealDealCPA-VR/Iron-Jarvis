@@ -35,6 +35,11 @@ from iron_jarvis.daemon.app import create_app
 from tests.test_chat_approvals_v1187 import _ASK_MSG, _asgi_post, _shell_call_stream
 from tests.test_durable_chat_turns_v1336 import _get, _until
 
+#: Readiness 12B review: no pin of this lane ever leaves this machine — the
+#: guard refuses and NAMES any host a missed stand-in would have dialled
+#: (tests/_fakes/no_network.py).
+pytestmark = pytest.mark.usefixtures("no_network")
+
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "dashboard" / "__tests__" / "fixtures" / "chat-away-v1387.json"
 REGEN = os.environ.get("IJ_REGEN_CHAT_AWAY") == "1"

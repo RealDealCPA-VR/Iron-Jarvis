@@ -37,6 +37,11 @@ from iron_jarvis.comm.threads import CommThreadStore
 from iron_jarvis.core.db import init_db, make_engine
 from iron_jarvis.daemon.app import create_app
 
+#: Readiness 12B review: no pin of this lane ever leaves this machine — the
+#: guard refuses and NAMES any host a missed stand-in would have dialled
+#: (tests/_fakes/no_network.py).
+pytestmark = pytest.mark.usefixtures("no_network")
+
 SENDER = 4242
 QUESTION_LINE = "Iron Jarvis: Workflow 'gated' is waiting: Send it? — reply with /answer <your answer>."
 PARK_LINE = "Workflow “gated” needs you: Send it? — answer it in chat or on the Workflows page."

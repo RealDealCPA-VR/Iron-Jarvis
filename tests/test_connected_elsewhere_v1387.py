@@ -42,6 +42,11 @@ from tests.test_chat_approvals_v1187 import _asgi_post, _drive_stream
 from tests.test_durable_chat_turns_v1336 import _get
 from tests.test_settings_chat_tools_v1321 import _body, _calls_stream, _done
 
+#: Readiness 12B review: no pin of this lane ever leaves this machine — the
+#: guard refuses and NAMES any host a missed stand-in would have dialled
+#: (tests/_fakes/no_network.py).
+pytestmark = pytest.mark.usefixtures("no_network")
+
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "dashboard" / "__tests__" / "fixtures" / "connected-elsewhere-v1387.json"
 REGEN = os.environ.get("IJ_REGEN_CONNECTED_ELSEWHERE") == "1"

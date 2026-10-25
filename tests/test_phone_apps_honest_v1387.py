@@ -60,6 +60,11 @@ from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.settings import records
 from tests.test_chat_approvals_v1187 import _asgi_post
 
+#: Readiness 12B review: no pin of this lane ever leaves this machine — the
+#: guard refuses and NAMES any host a missed stand-in would have dialled
+#: (tests/_fakes/no_network.py).
+pytestmark = pytest.mark.usefixtures("no_network")
+
 FIXTURE = str(Path(__file__).parent / "fixtures" / "argv_mcp_server_v13510.py")
 TOKEN = "ghp_PHONE12B0123456789abcdefNEVERSHOWN"
 SENDER = 4242
