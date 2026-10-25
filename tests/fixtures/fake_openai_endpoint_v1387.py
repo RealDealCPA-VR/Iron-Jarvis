@@ -125,6 +125,7 @@ class FakeEndpoint:
         model_info: dict[str, dict[str, Any]] | None = None,
         output_limit: int | None = None,
         output_limit_words: str = "Invalid value for 'max_tokens': the value is too big for this model.",
+        api_base: str | None = "http://100.64.0.7:8000/v1",
     ) -> None:
         self.handler = handler or (lambda body: text_reply("ok"))
         self.models = models
@@ -136,6 +137,11 @@ class FakeEndpoint:
         #: in them (the case the adapter can only answer with the old 4,096).
         self.output_limit = output_limit
         self.output_limit_words = output_limit_words
+        #: Review: where /model/info says each name is served — a box on the
+        #: user's own network (the real gateway's glm is a tailnet vLLM box),
+        #: so v1.362.0's route table reads it LOCAL. None = no api_base
+        #: (LiteLLM's hosted_vllm then reads as a cloud service).
+        self.api_base = api_base
         self.requests: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._server: ThreadingHTTPServer | None = None
@@ -188,8 +194,10 @@ class FakeEndpoint:
                 if self.path.rstrip("/").endswith("/model/info"):
                     if outer.model_info is None:
                         return self._send(404, {"detail": "Not Found"})
+                    params = {"api_base": outer.api_base} if outer.api_base else {}
                     data = [
-                        {"model_name": name, "litellm_params": {"model": f"hosted_vllm/{name}"},
+                        {"model_name": name,
+                         "litellm_params": {"model": f"hosted_vllm/{name}", **params},
                          "model_info": info}
                         for name, info in outer.model_info.items()
                     ]

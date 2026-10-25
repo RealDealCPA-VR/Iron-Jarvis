@@ -105,10 +105,12 @@ SERVER_FIT_MARGIN = 16
 NON_STREAM_CAP = REPLY_FLOOR
 
 #: ``(provider, model) -> {"window": int|None, "max_output": int|None,
-#: "ratio": float|None}`` — what the platform knows about a model: the window
-#: the lanes plan against, the output limit its server states, and the
-#: measured chars-per-token ratio. Injected by the platform
-#: (``ProviderManager.reply_facts``); absent = nothing known.
+#: "ratio": float|None, "cloud": bool}`` — what the platform knows about a
+#: model: the window the lanes plan against, the output limit its server
+#: states, the measured chars-per-token ratio, and (review) whether its
+#: requests leave the user's network (a hosted model keeps the old request).
+#: Injected by the platform (``ProviderManager.reply_facts``); absent =
+#: nothing known.
 FactsFn = Callable[[str, str], "dict[str, Any] | None"]
 
 
@@ -375,8 +377,11 @@ class ReplyBudget:
 
     def cap(self, model: str, facts: "dict[str, Any] | None" = None, *, stream: bool = True) -> int:
         """The most one reply asks for; a NOT-streamed request at most
-        :data:`NON_STREAM_CAP` (see there)."""
+        :data:`NON_STREAM_CAP` (see there); a name the platform says goes to
+        a CLOUD service (``facts["cloud"]``) the old :data:`REPLY_FLOOR`."""
         facts = self.facts(model) if facts is None else facts
+        if facts.get("cloud"):
+            return REPLY_FLOOR
         cap = cap_for(facts.get("max_output"), learned(self.endpoint, model).get("output_cap"))
         return cap if stream else min(cap, NON_STREAM_CAP)
 
@@ -417,6 +422,11 @@ class ReplyBudget:
         try:
             facts = self.facts(model)
             raw = self.raw_prompt_tokens(model, system, wire, tools, facts)
+            if facts.get("cloud"):
+                # Review: a HOSTED model behind a local slot or proxy — the
+                # request it had before v1.387.0, byte for byte (a refusal's
+                # one retry still applies).
+                return REPLY_FLOOR, raw
             return (
                 ask_for(
                     self.cap(model, facts, stream=stream), self.window(model, facts),

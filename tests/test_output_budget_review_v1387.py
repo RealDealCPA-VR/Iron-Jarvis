@@ -555,3 +555,48 @@ async def test_a_plain_chat_turn_and_a_tool_turn_get_the_same_budget(tmp_path, t
         sent = srv.chats()[-1]
     assert bool(sent.get("tools")) or not tools
     assert sent["max_tokens"] == 32_768
+
+
+# --------------------------------------------------------------------------- #
+# 9. A NAME THE USER'S PROXY SENDS TO THE CLOUD IS A HOSTED MODEL.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("stream", [False, True])
+async def test_a_name_the_proxy_routes_to_a_cloud_service_keeps_the_old_request(tmp_path, stream):
+    """RED on the doer's code: the budget keyed on the PROVIDER slot, so a
+    name the user's LiteLLM proxy sends on to a cloud service (the user's
+    proxy routes ``frontier`` to OpenRouter — v1.362.0's route table) asked
+    the 32,768 of a local model. That is a hosted model — the scope the
+    budget was never for — and OpenRouter checks a request's credit against
+    its WHOLE ``max_tokens`` (a 402 "fewer max_tokens", which no retry
+    answers). Such a name keeps the request it had: 4,096, and the planner's
+    classic reserve. A local name on the same proxy keeps the budget."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.daemon.chat_turn import _answer_reserve
+    from iron_jarvis.fleet.upstreams import RouteTable, Upstream
+    from tests.fixtures.fake_openai_endpoint_v1387 import FakeEndpoint, text_reply
+    from tests.test_reply_budget_v1387 import MODEL, _platform
+
+    with FakeEndpoint(lambda b: text_reply("ok"), models=(MODEL, "frontier-x")) as srv:
+        platform = _platform(tmp_path, srv.url)
+        platform.fleet.set_routes("custom", RouteTable(entries=(
+            Upstream(alias=MODEL, model=f"hosted_vllm/{MODEL}", place="local",
+                     context_window=1_000_000),
+            Upstream(alias="frontier-x", model="openrouter/some/model", place="cloud",
+                     context_window=1_000_000),
+        ), read_at=0.0))
+        for name in ("frontier-x", MODEL):
+            adapter = platform.providers.get("custom", name)
+            if stream:
+                async for _ in adapter.stream(system="s", messages=[], tools=[]):
+                    pass
+            else:
+                await adapter.complete(system="s", messages=[], tools=[])
+        cloud_body, local_body = srv.chats()
+    assert cloud_body["model"] == "frontier-x" and cloud_body["max_tokens"] == 4_096
+    assert local_body["max_tokens"] == (32_768 if stream else 4_096)
+    d = SimpleNamespace(platform=platform)
+    from iron_jarvis.context.budget import output_reserve
+
+    assert _answer_reserve(d, "custom", "frontier-x", 1_000_000) == output_reserve(1_000_000)
+    assert _answer_reserve(d, "custom", MODEL, 1_000_000) == 32_768

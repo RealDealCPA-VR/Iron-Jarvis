@@ -346,6 +346,13 @@ async def test_hosted_providers_send_the_same_request_as_before(name):
 
 def test_only_the_local_slots_and_fleet_nodes_are_budgeted(tmp_path):
     platform = build_platform(str(tmp_path / "home"))
+    # (review: a slot is budgeted while it points at the user's own network)
+    platform.config.custom_base_url = "http://127.0.0.1:9/v1"
+    platform.config.ollama_base_url = "http://127.0.0.1:11434"
+    platform.providers.configure_local(
+        custom_base_url=platform.config.custom_base_url, custom_model=MODEL,
+        ollama_base_url=platform.config.ollama_base_url,
+    )
     pm = platform.providers
     assert pm.reply_cap("custom") == 32_768
     assert pm.reply_cap("ollama") == 32_768
@@ -397,6 +404,8 @@ def test_the_hosted_planner_reserve_is_unchanged(tmp_path):
     from iron_jarvis.daemon.chat_turn import _answer_reserve, _reserve_kw
 
     platform = build_platform(str(tmp_path / "home"))
+    platform.config.custom_base_url = "http://127.0.0.1:9/v1"  # (review: a LOCAL slot)
+    platform.providers.configure_local(custom_base_url="http://127.0.0.1:9/v1", custom_model=MODEL)
     d = SimpleNamespace(platform=platform)
     for provider in ("anthropic", "openai", "claude-cli", "codex-cli", "mock", "auto"):
         assert _answer_reserve(d, provider, "m", 200_000) is None, provider

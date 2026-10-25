@@ -1689,10 +1689,22 @@ def build_platform(
 
         d = _NS(platform=platform)
         caps = fleet_registry.model_caps(provider, model) or {}
+        # v1.387.0 review: a name whose request leaves the user's network (a
+        # custom slot pointed at a cloud API, or a name the user's proxy sends
+        # on to one — v1.362.0's route table) is a HOSTED model: it keeps the
+        # request it had (reply_budget: "cloud"). The ONE predicate Local only
+        # and the receipts use — pure, no network, fails closed (= cloud, the
+        # old request).
+        from .providers import egress as _egress
+
+        cloud = not _egress.stays_on_this_network(
+            provider, platform.providers, platform.config, model,
+        )
         return {
             "window": _context_window(d, provider, model),
             "max_output": caps.get("max_output"),
             "ratio": _history_ratio(d, provider, model),
+            "cloud": cloud,
         }
 
     platform.providers.reply_facts = _reply_facts
