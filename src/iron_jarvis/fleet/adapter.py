@@ -66,12 +66,19 @@ class FleetAdapter(OpenAIAdapter):
         model: str | None = None,
         credential: Callable[[], str | None] | None = None,
         caps: CapsReader | None = None,
+        reply_facts: Any = None,
     ) -> None:
+        from ..providers.reply_budget import ReplyBudget
+
+        base_url = _normalize_ollama_url(node.base_url)
         super().__init__(
             model=model or node.default_model or "default",
-            base_url=_normalize_ollama_url(node.base_url),
+            base_url=base_url,
             credential=credential,
             provider_name=f"fleet-{node.id}",
+            # v1.387.0: a node the user owns gets the LOCAL reply budget
+            # (providers/reply_budget.py), never the hosted 4,096.
+            reply_budget=ReplyBudget(f"fleet-{node.id}", base_url or "", facts=reply_facts),
         )
         self.node = node
         self._caps = caps
@@ -89,6 +96,7 @@ def adapter_for(
     model: str | None = None,
     credential: Callable[[], str | None] | None = None,
     caps: CapsReader | None = None,
+    reply_facts: Any = None,
 ) -> Any:
     """The adapter that speaks *node*'s protocol (v1.329.0).
 
@@ -98,9 +106,15 @@ def adapter_for(
     existed). Both report the node's recorded capabilities and both are named
     ``fleet-<id>``, so a failing node refuses under its own name like any
     other local provider; nothing here ever substitutes another provider.
-    ``caps`` (the gateway-key fix) is the proxy's own per-model statement."""
+    ``caps`` (the gateway-key fix) is the proxy's own per-model statement.
+    ``reply_facts`` (v1.387.0) is the platform's reply-budget reader
+    (``ProviderManager.reply_facts_of``); both protocols are budgeted."""
     if getattr(node, "protocol", "openai") == "anthropic":
         from .anthropic_compat import AnthropicFleetAdapter
 
-        return AnthropicFleetAdapter(node=node, model=model, credential=credential, caps=caps)
-    return FleetAdapter(node=node, model=model, credential=credential, caps=caps)
+        return AnthropicFleetAdapter(
+            node=node, model=model, credential=credential, caps=caps, reply_facts=reply_facts,
+        )
+    return FleetAdapter(
+        node=node, model=model, credential=credential, caps=caps, reply_facts=reply_facts,
+    )

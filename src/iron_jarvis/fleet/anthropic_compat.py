@@ -43,6 +43,7 @@ them after a live probe), never assumed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -56,6 +57,7 @@ from ..providers.adapters.base import (
     ProviderError,
     ProviderRefusal,
     ToolCall,
+    complete_arguments,
     provider_error_from_response,
 )
 from .models import FleetNode
@@ -350,7 +352,10 @@ class AnthropicFleetAdapter(LLMAdapter):
         http: Any = None,
         max_tokens: int = 4096,
         caps: Callable[[str], dict] | None = None,
+        reply_facts: Any = None,
     ) -> None:
+        from ..providers.reply_budget import ReplyBudget
+
         self.node = node
         self.model = model or node.default_model or "default"
         self.provider = f"fleet-{node.id}"
@@ -359,6 +364,9 @@ class AnthropicFleetAdapter(LLMAdapter):
         self._http = http
         self._caps = caps
         self._base = messages_base(node.base_url)
+        #: v1.387.0: a node the user owns gets the LOCAL reply budget
+        #: (providers/reply_budget.py) — the same rule as FleetAdapter.
+        self._reply_budget = ReplyBudget(self.provider, self._base or "", facts=reply_facts)
         #: Read by the router's liveness pre-probe: ``{base}/models`` is what
         #: ``ModelRouter._models_url`` makes of it (any answer = alive).
         self._endpoint = self._base
@@ -431,19 +439,56 @@ class AnthropicFleetAdapter(LLMAdapter):
         *,
         stream: bool,
     ) -> dict[str, Any]:
+        return self._planned_body(system, messages, tools, stream=stream)[0]
+
+    def _planned_body(
+        self,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+        *,
+        stream: bool,
+    ) -> tuple[dict[str, Any], int]:
+        """``(body, raw_prompt_estimate)`` — the request, its ``max_tokens``
+        the reply budget fitted to it (v1.387.0), and the estimate a refusal's
+        one retry is measured against."""
+        wire = to_messages(messages)
+        tool_defs = to_tools(tools)
+        limit, raw_prompt = self._reply_budget.plan(
+            self.model, system=system or "", wire=wire, tools=tool_defs or None,
+            # review: a not-streamed request asks at most the old 4,096
+            # (`reply_budget.NON_STREAM_CAP`).
+            stream=stream,
+        )
         body: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": self.max_tokens,
-            "messages": to_messages(messages),
+            "max_tokens": limit,
+            "messages": wire,
         }
         if system:
             body["system"] = system
-        tool_defs = to_tools(tools)
         if tool_defs:
             body["tools"] = tool_defs
         if stream:
             body["stream"] = True
-        return body
+        return body, raw_prompt
+
+    def reply_cap(self, stream: bool = True) -> int | None:
+        """The reply budget's cap (v1.387.0; ``chat_turn._answer_reserve``)."""
+        return self._reply_budget.cap(self.model, stream=stream)
+
+    def _budget_retry_body(
+        self, body: dict[str, Any], resp: Any, key: str, raw_prompt: int
+    ) -> dict[str, Any] | None:
+        """``body`` with the smaller budget a 400 says fits, or ``None``
+        (v1.387.0; the OpenAI adapter's rule — ONE retry per request)."""
+        if int(getattr(resp, "status_code", 0) or 0) != 400:
+            return None
+        smaller = self._reply_budget.retry_ask(
+            self.model, self._error_detail(resp, key), int(body.get("max_tokens") or 0),
+            raw_prompt,
+        )
+        return None if smaller is None else {**body, "max_tokens": smaller}
 
     def _error_detail(self, resp: Any, key: str) -> str:
         """The server's own words for an error answer: the Messages shape
@@ -501,15 +546,30 @@ class AnthropicFleetAdapter(LLMAdapter):
         text: list[str] = []
         thinking: list[str] = []
         calls: list[ToolCall] = []
-        for block in content:
-            if not isinstance(block, dict):
-                continue
+        # v1.387.0 review: a reply stopped at the OUTPUT LIMIT ends inside the
+        # block it was writing. When that LAST block is a tool call, its input
+        # is whatever the server managed to parse of a call the model never
+        # finished — never run (a half write_file writes half a file), reported
+        # by name (`cut_calls`) like the stream's cut call. An input that came
+        # back as unclosed TEXT is cut wherever it sits. A call FOLLOWED by
+        # another block was finished: it runs.
+        length_cut = _finish(data.get("stop_reason")) == "max_tokens"
+        cut_calls: list[str] = []
+        blocks = [b for b in content if isinstance(b, dict)]
+        for pos, block in enumerate(blocks):
             kind = block.get("type")
             if kind == "text" and isinstance(block.get("text"), str):
                 text.append(block["text"])
             elif kind == "thinking" and isinstance(block.get("thinking"), str):
                 thinking.append(block["thinking"])
             elif kind == "tool_use" and block.get("name"):
+                raw_input = block.get("input")
+                if length_cut and (
+                    pos == len(blocks) - 1
+                    or (isinstance(raw_input, str) and complete_arguments(raw_input) is None)
+                ):
+                    cut_calls.append(str(block["name"]))
+                    continue
                 calls.append(
                     ToolCall(
                         id=str(block.get("id") or f"toolu_{len(calls)}"),
@@ -530,6 +590,7 @@ class AnthropicFleetAdapter(LLMAdapter):
             finish_reason=finish,
             usage=_public_usage(_usage(data.get("usage"))),
             thinking="\n\n".join(thinking),
+            cut_calls=cut_calls,
         )
 
     # -- the interface --------------------------------------------------------
@@ -549,18 +610,28 @@ class AnthropicFleetAdapter(LLMAdapter):
     ) -> LLMResponse:
         key = await asyncio.to_thread(self._key)
         self._preflight(key)
-        body = self._body(system, messages, tools, stream=False)
+        body, raw_prompt = self._planned_body(system, messages, tools, stream=False)
         resp = await self._client().post(
             f"{self._base}/messages", headers=self._headers(key), json=body
         )
         status = int(getattr(resp, "status_code", 200) or 200)
+        # v1.387.0: a budget the server says does not fit — retried ONCE.
+        smaller = self._budget_retry_body(body, resp, key, raw_prompt)
+        if smaller is not None:
+            body = smaller
+            resp = await self._client().post(
+                f"{self._base}/messages", headers=self._headers(key), json=body
+            )
+            status = int(getattr(resp, "status_code", 200) or 200)
         if status >= 300:
             raise self._http_error(resp, key)
         try:
             data = resp.json()
         except ValueError:
             raise self._shape_error("not with JSON", status) from None
-        return self._parse(data, status, key)
+        final = self._parse(data, status, key)
+        final.extra["max_tokens"] = int(body.get("max_tokens") or 0)  # v1.387.0
+        return final
 
     async def stream(
         self,
@@ -584,16 +655,31 @@ class AnthropicFleetAdapter(LLMAdapter):
 
         key = await asyncio.to_thread(self._key)
         self._preflight(key)
-        body = self._body(system, messages, tools, stream=True)
+        body, raw_prompt = self._planned_body(system, messages, tools, stream=True)
         headers = self._headers(key)
         headers["accept"] = "text/event-stream"
-        async with self._client().stream(
-            "POST", f"{self._base}/messages", headers=headers, json=body
-        ) as resp:
+        async with contextlib.AsyncExitStack() as _stack:
+            resp = await _stack.enter_async_context(self._client().stream(
+                "POST", f"{self._base}/messages", headers=headers, json=body
+            ))
             status = int(getattr(resp, "status_code", 200) or 200)
             if status >= 300:
                 await resp.aread()
-                raise self._http_error(resp, key)
+                # v1.387.0: a budget the server says does not fit — the first
+                # response is closed and the request sent ONCE more with the
+                # budget it says fits (complete()'s rule).
+                smaller = self._budget_retry_body(body, resp, key, raw_prompt)
+                if smaller is None:
+                    raise self._http_error(resp, key)
+                await _stack.aclose()
+                body = smaller
+                resp = await _stack.enter_async_context(self._client().stream(
+                    "POST", f"{self._base}/messages", headers=headers, json=body
+                ))
+                status = int(getattr(resp, "status_code", 200) or 200)
+                if status >= 300:
+                    await resp.aread()
+                    raise self._http_error(resp, key)
 
             text: list[str] = []
             # Per block, so the final joins blocks the way complete() does.
@@ -709,9 +795,23 @@ class AnthropicFleetAdapter(LLMAdapter):
             # MIRROR NOTE (lock-step): _parse above.
             raise _refusal(self.provider, stop_details, partial=bool("".join(text).strip()))
         calls: list[ToolCall] = []
+        # v1.387.0: a reply cut at the output limit may end inside a tool
+        # call's streamed input — never run, reported by name (the OpenAI
+        # adapter's rule; `LLMResponse.cut_calls`).
+        length_cut = _finish(stop_reason) == "max_tokens"
+        cut_calls: list[str] = []
         for idx in sorted(blocks):
             slot = blocks[idx]
             if slot.get("type") != "tool_use" or not slot.get("name"):
+                continue
+            if length_cut and (
+                complete_arguments(slot["json"]) is None
+                if slot["json"].strip()
+                # No input arrived at all: cut right after the call began —
+                # only the LAST block can be (another block followed the rest).
+                else idx == max(blocks)
+            ):
+                cut_calls.append(str(slot["name"]))
                 continue
             args = _tool_input(slot["json"]) if slot["json"].strip() else _tool_input(slot["input"])
             calls.append(
@@ -730,5 +830,8 @@ class AnthropicFleetAdapter(LLMAdapter):
                 thinking="\n\n".join(
                     "".join(thinking_by_block[i]) for i in sorted(thinking_by_block)
                 ),
+                cut_calls=cut_calls,
+                # v1.387.0: the output budget this answer was given.
+                extra={"max_tokens": int(body.get("max_tokens") or 0)},
             ),
         }

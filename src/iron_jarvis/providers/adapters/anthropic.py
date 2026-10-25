@@ -75,6 +75,22 @@ def _raw_blocks(content: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _cut_last_call(content: Any, stop_reason: Any) -> int | None:
+    """The index of the tool call a reply stopped at the OUTPUT LIMIT was
+    writing — its LAST block, when that is a ``tool_use`` — or None (v1.387.0
+    review). The SDK hands such a block back with a PARTIALLY PARSED input
+    (``{"path": "calc.py", "content": "class Calc: ..."}``, cut short): run, it
+    writes half a file. It is reported in ``cut_calls`` instead (never a
+    call, never replayed), and the chat lanes and the agent runtime recover
+    the turn (``providers/reply_budget.cut_off_round``). A call FOLLOWED by
+    another block was finished. MIRROR NOTE (lock-step): complete() and
+    stream()."""
+    blocks = list(content or [])
+    if _finish(stop_reason) != "max_tokens" or not blocks:
+        return None
+    return len(blocks) - 1 if getattr(blocks[-1], "type", None) == "tool_use" else None
+
+
 def _finish(stop_reason: Any) -> str:
     """The provider-neutral finish reason (v1.323.0): ``tool_use``, ``max_tokens``
     when Anthropic stopped the answer for running out of output tokens (or of
@@ -406,9 +422,15 @@ class AnthropicAdapter(LLMAdapter):
             raise refused
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
-        for block in resp.content:
+        # v1.387.0 review: the call the output limit stopped the model in is
+        # never run (`_cut_last_call`). MIRROR NOTE (lock-step): stream().
+        cut_at = _cut_last_call(resp.content, resp.stop_reason)
+        cut_calls: list[str] = []
+        for i, block in enumerate(resp.content):
             if block.type == "text":
                 text_parts.append(block.text)
+            elif block.type == "tool_use" and i == cut_at:
+                cut_calls.append(str(block.name or ""))
             elif block.type == "tool_use":
                 tool_calls.append(
                     ToolCall(id=block.id, name=block.name, arguments=dict(block.input))
@@ -424,8 +446,14 @@ class AnthropicAdapter(LLMAdapter):
             tool_calls=tool_calls,
             finish_reason=finish,
             usage=usage_dict,
-            raw_blocks=_raw_blocks(resp.content) if thinking_kw else [],
+            # (review: a cut call is never replayed — a tool_use with no
+            # tool_result makes the API refuse the whole conversation)
+            raw_blocks=(
+                _raw_blocks([b for i, b in enumerate(resp.content) if i != cut_at])
+                if thinking_kw else []
+            ),
             thinking=_thinking_text(resp.content),
+            cut_calls=cut_calls,
         )
 
     def _thinking(self, reasoning: str) -> tuple[dict[str, Any], int]:
@@ -573,9 +601,15 @@ class AnthropicAdapter(LLMAdapter):
             raise refused
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
-        for block in final.content:
+        # v1.387.0 review — lock-step with complete(): the call the output
+        # limit stopped the model in is never run.
+        cut_at = _cut_last_call(final.content, final.stop_reason)
+        cut_calls: list[str] = []
+        for i, block in enumerate(final.content):
             if block.type == "text":
                 text_parts.append(block.text)
+            elif block.type == "tool_use" and i == cut_at:
+                cut_calls.append(str(block.name or ""))
             elif block.type == "tool_use":
                 tool_calls.append(
                     ToolCall(id=block.id, name=block.name, arguments=dict(block.input))
@@ -593,8 +627,12 @@ class AnthropicAdapter(LLMAdapter):
                 tool_calls=tool_calls,
                 finish_reason=finish,
                 usage=usage_dict,
-                raw_blocks=_raw_blocks(final.content) if thinking_kw else [],
+                raw_blocks=(
+                    _raw_blocks([b for i, b in enumerate(final.content) if i != cut_at])
+                    if thinking_kw else []
+                ),
                 thinking=_thinking_text(final.content),
+                cut_calls=cut_calls,
             ),
         }
 

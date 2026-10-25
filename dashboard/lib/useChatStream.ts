@@ -169,6 +169,9 @@ export type SSEEvent =
         /** v1.228.0: on a failover, the provider that failed + why. */
         from?: string;
         why?: string;
+        /** v1.387.0: a reply cut off at the output limit this turn
+         *  (`lib/turnRecovery.decodeCutOff` reads it). */
+        cut_off?: { times?: number; recovered?: boolean } | null;
       };
       tools_used?: string[];
       denied_tools?: string[];

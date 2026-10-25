@@ -292,10 +292,75 @@ class LLMResponse:
     #: ``primary``/``secondary`` ``{usedPercent, windowDurationMins,
     #: resetsAt}``). Empty for every other adapter. Readers use ``.get``.
     extra: dict[str, Any] = field(default_factory=dict)
+    #: v1.387.0: the NAMES of tool calls the provider stopped writing when it
+    #: ran out of output tokens (``finish_reason == "max_tokens"``) — their
+    #: arguments never closed, so they are NOT in ``tool_calls`` and are never
+    #: run: a half-parsed ``write_file`` would write half a file. ``""`` for a
+    #: call whose name never arrived. Empty on every other answer. The chat
+    #: lanes and the agent runtime read it to continue the turn instead of
+    #: ending it (``chat_turn.cut_off_round``).
+    cut_calls: list[str] = field(default_factory=list)
 
     @property
     def wants_tools(self) -> bool:
         return bool(self.tool_calls)
+
+
+def complete_arguments(raw: Any) -> "dict[str, Any] | None":
+    """A tool call's arguments when they ARRIVED WHOLE, else ``None``
+    (v1.387.0). Used only for a call the provider stopped mid-answer at its
+    output limit: there, a lenient recovery (``core/jsonish`` — fences, the
+    first balanced object) could pull an object out of the half-written
+    content and run the call with it. Strict JSON or nothing; the
+    ``{"arguments": "<json>"}`` envelope is peeled as the parse sites do."""
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    import json
+
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    from ...core.jsonish import unwrap_arguments
+
+    obj = unwrap_arguments(obj)
+    return obj if isinstance(obj, dict) else None
+
+
+def unterminated_arguments(raw: Any) -> bool:
+    """True when a tool call's argument text STOPS before its JSON closes —
+    it ends inside a string, or an object/array it opened is still open
+    (v1.387.0 review). Structure only: ``{"a": 1,}`` (whole, if malformed)
+    is NOT unterminated — the lenient ladder (``core/jsonish``) may recover
+    it; ``{"path": "a.py", "content": "cla`` is. A dict, or empty text, is
+    never unterminated. Never raises."""
+    if not isinstance(raw, str) or not raw.strip():
+        return False
+    depth = 0
+    in_str = False
+    escaped = False
+    opened = False
+    for ch in raw:
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            depth += 1
+            opened = True
+        elif ch in "}]":
+            depth = max(0, depth - 1)
+    return in_str or (opened and depth > 0)
 
 
 class LLMAdapter(ABC):

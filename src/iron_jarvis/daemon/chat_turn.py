@@ -51,6 +51,18 @@ from typing import Any
 from ..providers import egress as _egress
 from ..providers.adapters.base import refusal_of
 from ..providers.reasoning import normalize_level
+# v1.387.0: a reply cut off at the output limit — recovered, not ended (see
+# the note beside `_truncated_by`). MIRROR NOTE (lock-step): both lanes.
+from ..providers.reply_budget import (
+    CUT_OFF_NOTES_MAX,
+    cut_off_end,
+    cut_off_end_text,
+    cut_off_exhausted,
+    cut_off_note,
+    cut_off_receipt,
+    cut_off_round,
+    cut_off_text,
+)
 from ..media.registry import ACCOUNTS_AND_KEYS as _MEDIA_KEYS_PLACE
 from ..core.db import session_scope
 from ..mcp.tools import packs_starting_note
@@ -431,6 +443,45 @@ def _history_ratio(d, provider: str, model: str) -> "float | None":
     return None
 
 
+def _answer_reserve(d, provider: str, model: str, window: "int | None") -> "int | None":
+    """The room the history planner holds back for the ANSWER (v1.387.0).
+
+    For a LOCAL endpoint (``custom``, ``ollama``, ``fleet-*``) it is the reply
+    budget's own reserve — ``providers.reply_budget.reserve_for(window, cap)``
+    with the cap the answering adapter will ask up to — so the planner and the
+    adapter agree: a planned transcript always leaves room for at least this
+    much answer, and the planner never holds back more than the adapter can
+    use. ``None`` for every other provider (and on any fault): the planner
+    keeps its long-standing ``output_reserve`` — hosted turns are planned
+    byte-identically. Resolution mirrors ``_context_window`` (empty provider/
+    model = the configured defaults). Used by every planner caller: both chat
+    lanes (``_plan_context``, ``_fit_turn_transcript``, ``_shrink_to_window``)
+    and the agent runtime. Never raises."""
+    try:
+        providers = getattr(getattr(d, "platform", None), "providers", None)
+        cap_of = getattr(providers, "reply_cap", None)
+        if not callable(cap_of):
+            return None
+        cfg = getattr(d.platform, "config", None)
+        provider = (provider or "").strip() or str(getattr(cfg, "default_provider", "") or "")
+        model = (model or "").strip() or str(getattr(cfg, "default_model", "") or "")
+        cap = cap_of(provider, model)
+        if not cap:
+            return None
+        from ..providers.reply_budget import reserve_for
+
+        return reserve_for(window, cap)
+    except Exception:  # noqa: BLE001 — the classic reserve, never a crash
+        return None
+
+
+def _reserve_kw(d, provider: str, model: str, window: "int | None") -> dict:
+    """``{"reserve": n}`` for a planner call when :func:`_answer_reserve`
+    has one, else ``{}`` (v1.387.0)."""
+    n = _answer_reserve(d, provider, model, window)
+    return {"reserve": n} if n is not None else {}
+
+
 def _plan_context(d, body, system: str, provider: str, model: str, messages=None):
     """Budget this turn's history against the answering model's window.
 
@@ -451,11 +502,16 @@ def _plan_context(d, body, system: str, provider: str, model: str, messages=None
 
     items = list(body.messages or []) if messages is None else list(messages)
     try:
+        _win = _context_window(d, provider, model)
         return plan_history(
             items,
-            window=_context_window(d, provider, model),
+            window=_win,
             system_text=system,
             chars_per_token=_history_ratio(d, provider, model),
+            # v1.387.0: the answer's room = the local reply budget's reserve;
+            # passed ONLY then (every other provider: the classic reserve,
+            # and a planner double that predates the knob sees its old call).
+            **_reserve_kw(d, provider, model, _win),
         )
     except Exception:  # noqa: BLE001 — degrade to the pre-v1.146.0 behaviour
         log.warning("context planning failed; using the fixed slice", exc_info=True)
@@ -516,6 +572,9 @@ def _fit_turn_transcript(d, msgs, system: str, provider: str, model: str, *, hea
             window=window,
             system_text=system + "\n" + fixed,
             chars_per_token=_history_ratio(d, provider, model),
+            # v1.387.0: the local reply budget's reserve (lock-step with
+            # `_plan_context`; omitted for every other provider).
+            **_reserve_kw(d, provider, model, window),
         )
         if not plan.changed:
             return msgs, system
@@ -624,7 +683,17 @@ def _window_key(d, provider: str, model: str) -> str:
 
 def learned_window(d, provider: str, model: str) -> "int | None":
     try:
-        return _LEARNED_WINDOWS.get(_window_key(d, provider, model))
+        key = _window_key(d, provider, model)
+        n = _LEARNED_WINDOWS.get(key)
+        # v1.387.0: a window a server named in a "budget does not fit" refusal
+        # the ADAPTER retried (the lanes never saw that error) — the planner
+        # plans against it too (providers/reply_budget.learned_context).
+        from ..providers.reply_budget import learned_context
+
+        said = learned_context(*key.split("::", 1))
+        if said and (not n or said < n):
+            n = said
+        return n
     except Exception:  # noqa: BLE001
         return None
 
@@ -659,7 +728,10 @@ def _shrink_to_window(d, msgs, system: str, provider: str, model: str, *, head: 
         q -= 1
     if q < 0:
         return None
-    budget = int(window * 0.9) - output_reserve(window)
+    # v1.387.0: the answer's room is the local reply budget's reserve when the
+    # answering endpoint has one (the planners' rule), else the classic one.
+    _reserve = _answer_reserve(d, provider, model, window)
+    budget = int(window * 0.9) - (output_reserve(window) if _reserve is None else _reserve)
     system2 = system + "\n\n" + OVERFLOW_NOTE
     keep_from = 0
     while keep_from < q and _tokens_of(msgs[keep_from:], system2, d, provider, model) > budget:
@@ -3170,14 +3242,25 @@ def _truncated_by(response) -> bool:
     stopped because the provider ran out of OUTPUT TOKENS (v1.323.0).
 
     A round that asked for tools is never a truncation, whatever its finish
-    word. ``getattr`` defaults: a test double's response without the
-    attributes reads as "not truncated". Shared by both chat lanes (lock-step).
+    word — nor (v1.387.0) a round whose tool call was CUT at the limit: that
+    is a cut-off the lanes recover (:func:`cut_off_round`), not a long answer
+    the page's Continue extends. ``getattr`` defaults: a test double's
+    response without the attributes reads as "not truncated". Shared by both
+    chat lanes (lock-step).
     """
     if response is None:
         return False
-    if getattr(response, "tool_calls", None):
+    if getattr(response, "tool_calls", None) or getattr(response, "cut_calls", None):
         return False
     return getattr(response, "finish_reason", "") == "max_tokens"
+
+
+# A REPLY CUT OFF AT THE OUTPUT LIMIT IS RECOVERED, NOT ENDED (v1.387.0): the
+# helpers (`cut_off_round`, `cut_off_note`, `cut_off_end_text`,
+# `cut_off_receipt`, `CUT_OFF_NOTES_MAX`) live beside the reply budget in
+# providers/reply_budget.py — the agent runtime reads them too, and agents do
+# not import the daemon — imported at the top of this module; both chat lanes
+# reach them through these names. MIRROR NOTE (lock-step).
 
 
 def _thinking_of(response) -> str:
@@ -8566,6 +8649,14 @@ async def run_chat_turn(
     _thinking_parts: list[str] = []
     _truncated = False
     stopped_note = ""  # honest note when the round budget cuts off tool calls
+    # v1.387.0 — A REPLY CUT OFF AT THE OUTPUT LIMIT (`cut_off_round`): how
+    # many this turn, the note owed after a round's complete calls ran, and
+    # the honest end once the notes run out. MIRROR NOTE (lock-step): the
+    # stream lane keeps the same three.
+    _cut_times = 0
+    _cut_streak = 0  # review: cut rounds IN A ROW (the notes' bound)
+    _cut_pending = ""
+    _cut_end = ""
     escalate = False        # the turn asked for the full agent
     escalate_reason = ""
     escalate_agent = None   # v1.139.0: validated roster target (None = default)
@@ -8593,6 +8684,11 @@ async def run_chat_turn(
     _refit_note: dict[str, int] = {}
     try:
         for _round in range(_rounds):
+            if _cut_pending:
+                # v1.387.0: the cut-off note owed by the last round, AFTER its
+                # complete calls' results (lock-step: the stream lane).
+                msgs.append(LLMMessage(role="user", content=_cut_pending))
+                _cut_pending = ""
             _send, _send_system = _fit_turn_transcript(
                 d, msgs, system, provider_choice, model_choice, head=_head
             )
@@ -8622,7 +8718,13 @@ async def run_chat_turn(
             completions += 1
             _thinking_parts.append(_thinking_of(route.response))
             _truncated = _truncated_by(route.response)
-            if _finish is not None:
+            # v1.387.0 review: a reply CUT OFF at the output limit (see the
+            # branch below) is read FIRST — it is never the finish check's
+            # answer (an empty "answer" heard there hid the real one that
+            # follows the cut-off note). Lock-step: the stream lane.
+            _offered = {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)}
+            _cut = cut_off_round(route.response, has_tools=bool(armed), tool_names=_offered)
+            if _finish is not None and _cut is None:
                 # The first answer after the finish note is the model's
                 # point-by-point answer (lock-step: the stream lane).
                 _finish.heard(route.response.text or "")
@@ -8636,6 +8738,43 @@ async def run_chat_turn(
             _model_calls = calls
             if _harness is not None:
                 calls = _harness.translate_calls(calls)
+            # A REPLY CUT OFF AT THE OUTPUT LIMIT (v1.387.0): never the
+            # no-tools final answer. ONE note and the turn goes on (a reply
+            # with complete calls too: they run, the note follows their
+            # results); past CUT_OFF_NOTES_MAX, or with no round left, the
+            # turn ends saying what happened. Only a turn that ARMED tools
+            # (the exit tools every chat offers do not count — a plain
+            # question cut off while thinking keeps the v1.246.0 nudge).
+            # MIRROR NOTE (lock-step): the stream loop in routes/chat.py.
+            # (`_cut` was read above, before the finish check's `heard`.)
+            # Review: the notes are bounded by cuts IN A ROW (a round that was
+            # not cut starts the count again) and by a total.
+            if _cut is None:
+                _cut_streak = 0
+            else:
+                _cut_times += 1
+                _cut_streak += 1
+                _truncated = False  # a cut CALL is not a long answer to Continue
+                if cut_off_exhausted(_cut_times, _cut_streak) or _round >= _rounds - 1:
+                    _cut_end = cut_off_end(_cut, _cut_times, _cut_streak)
+                    break
+                _cut_note = cut_off_note(
+                    _cut, _offered,
+                    limit=(getattr(route.response, "extra", None) or {}).get("max_tokens"),
+                    ran_others=bool(calls),
+                )
+                if not calls:
+                    # Review: the words before a call leaked as text — never
+                    # the half call's markup (`cut_off_text`).
+                    _kept = cut_off_text(route.response, _offered)
+                    if _kept.strip():
+                        msgs.append(LLMMessage(
+                            role="assistant", content=_kept,
+                            raw_blocks=list(getattr(route.response, "raw_blocks", None) or []),
+                        ))
+                    msgs.append(LLMMessage(role="user", content=_cut_note))
+                    continue
+                _cut_pending = _cut_note
             # THE DRAFT, THREE WAYS (v1.225.0): the workflow_draft exit; an
             # unarmed workflow_create call (same shape, same intent); or the
             # workflow WRITTEN as JSON in a text-only reply — local models do
@@ -9193,6 +9332,12 @@ async def run_chat_turn(
     # construction and must never trigger (or be eaten by) a rewrite.
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
     model_text = route.response.text or ""
+    if _cut_end:
+        # v1.387.0 review: a turn that ENDED on a cut round keeps that round's
+        # words only — never a half call's markup (`cut_off_text`).
+        model_text = cut_off_text(
+            route.response, {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)},
+        )
     # THE FINISH CHECK (part 3, Phase 2): the reply is what the model wrote
     # before the check, then its answer to it. MIRROR NOTE (lock-step): the
     # stream lane combines at the same point.
@@ -9209,9 +9354,11 @@ async def run_chat_turn(
     )
     # v1.378.0: the nudge's safety refusal, when it had one (see below).
     _f_refusal = None
-    if _cut_office or _wants_final_answer(
+    # v1.387.0: a turn that ENDED on a cut-off reply is never asked for a
+    # no-tools answer — that is what made the model paste its code into chat.
+    if not _cut_end and (_cut_office or _wants_final_answer(
         model_text, workflow_draft, escalate, completions,
-    ):
+    )):
         _f_outcome: dict = {}
         _f_text, _f_in, _f_out, _f_n = await _final_answer_after_tools(
             d.platform,
@@ -9290,6 +9437,11 @@ async def run_chat_turn(
         # denied, not armed, low trust. MIRROR NOTE (lock-step): routes/chat.py.
         reply += refusal_footnotes(refused_tools)
     else:
+        if _cut_end:
+            # v1.387.0: the honest end of a turn whose replies kept being cut
+            # off at the output limit (after any words the model did write).
+            # MIRROR NOTE (lock-step): routes/chat.py.
+            reply = f"{reply.rstrip()}\n\n{_cut_end}" if reply.strip() else _cut_end
         if not reply.strip():
             # v1.246.0: said in plain words — never the bare "(no reply)".
             # v1.378.0: a nudge the safety check declined says so (lock-step).
@@ -9414,6 +9566,10 @@ async def run_chat_turn(
             # dialect and the FINGERPRINT of the rendered component tree.
             # MIRROR NOTE (lock-step): routes/chat.py's done frame.
             **({"harness": _harness.route_info()} if _harness is not None else {}),
+            # v1.387.0 (additive, LAST, only when a reply was cut off at the
+            # output limit this turn): how often, and whether the turn went
+            # on past it. MIRROR NOTE (lock-step): routes/chat.py.
+            **cut_off_receipt(_cut_times, bool(_cut_end)),
         },
         "attached": len(body.attachments or []),
         # RESOURCES (v1.324.0): [{pack, uri, ok, note}] for what the user
