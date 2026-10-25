@@ -927,3 +927,35 @@ async def test_the_hosted_anthropic_api_never_runs_a_call_cut_at_the_limit(monke
     assert final.finish_reason == "max_tokens"
     assert final.tool_calls == [] and final.cut_calls == ["write_file"]
     assert final.text == "Writing it."
+
+
+async def test_a_cut_call_is_never_replayed_in_the_thinking_blocks(monkeypatch):
+    """With thinking on, the hosted adapter hands the turn's blocks back for
+    VERBATIM replay (`raw_blocks`, v1.263.0). A cut call left in them is a
+    tool_use with no tool_result on the next request — the API refuses the
+    whole conversation. It is left out; the signed thinking stays."""
+    import httpx
+    from anthropic import AsyncAnthropic
+
+    from iron_jarvis.providers.adapters.anthropic import AnthropicAdapter
+    from iron_jarvis.providers.adapters.base import LLMMessage
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5",
+            "content": [{"type": "thinking", "thinking": "plan", "signature": "sig"},
+                        {"type": "tool_use", "id": "toolu_1", "name": "write_file",
+                         "input": {"path": "calc.py", "content": "class"}}],
+            "stop_reason": "max_tokens", "stop_sequence": None,
+            "usage": {"input_tokens": 9, "output_tokens": 8192}})
+
+    a = AnthropicAdapter(model="claude-sonnet-4-5", api_key="sk-ant-test")
+    client = AsyncAnthropic(api_key="sk-ant-test",
+                            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(a, "_client", lambda: client)
+    final = await a.complete(system="", messages=[LLMMessage(role="user", content="go")],
+                             tools=[{"name": "write_file", "description": "w", "input_schema": {"type": "object"}}],
+                             reasoning="low")
+    assert final.cut_calls == ["write_file"] and final.tool_calls == []
+    kinds = [b.get("type") for b in final.raw_blocks]
+    assert kinds == ["thinking"], kinds
