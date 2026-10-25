@@ -3569,6 +3569,44 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **The finish check sees files a reply changed THROUGH COMMANDS: a folder
+  snapshot beside the journal** (v1.387.1; found by the Phase 2 benchmark —
+  both of Jarvis-on-Claude's remaining failures wrote `calc.py` with a bash
+  heredoc, so the journal saw no change and the check never ran; a doer + a
+  reviewer that found 6 more defects). `harness/folder_changes.py`: `take`
+  records (size, mtime_ns) under the session folder (list_files' pruning +
+  caps, 5,000 files; the project map's 3 s deadline; `walk_bounded` waits ≤
+  deadline + 2 s then falls back, the reason said; never follows links /
+  junctions; `SOURCE_DOT_DIRS` like `.github` ARE walked; EVERY nested
+  `.gitignore` read via `ignore_for` — GitIgnore's 64-folder cap had made the
+  user's own checkout fall back every time); taken in `finish.start` off the
+  loop after the ledger mark, before any tool; a second walk only after an
+  unjournaled writer ran (`UNJOURNALED_TOOLS`; `_MUTATING_TOOLS` is split
+  between it and `JOURNALED_TOOLS`, pinned); created/changed/deleted, moves
+  paired; caches, coverage, `*.tsbuildinfo`, `.eslintcache`, gitignored never
+  count; `HARNESS_CALLED_AS` ("finish check", "project check") never the
+  reply's work. Command-made files are listed APART with keep words ("…leave
+  these as they are; remove one only if you wrote it yourself as a scratch
+  file…"), files the request names never listed, a "gone" section; the
+  description file is read when the reply BEGINS; a carry-on compares with the
+  kept first snapshot (≤ 4 sessions, in memory) or says why not; `removed`/
+  `kept` still count file-tool files only. TEST PART: `finish.strip_heredocs`
+  removes heredoc BODIES under bash before the length check and the split (a
+  body line `pytest -q` was read as a test); `_drop_comment` (`cd x # note &&
+  pytest` ran only the cd and reported "passed"). HONESTY: a folder snapshot
+  can prove a write, NEVER its absence (ignored / pruned / outside-folder
+  writes are unseen), so both lanes' creation-honesty and claimed-write notes
+  stay SILENT after any tool that may have written a local file without a file
+  tool (`chat_turn._writes_local_files_unnamed`, `ran_local_writer` reads the
+  live registry's read-only flags; a Build turn also `may_have_written()`);
+  change claims keep the v1.351.0 rule byte for byte. OPEN: whether real
+  models follow the keep / remove words; a server left writing un-ignored logs
+  makes later command replies "changed"; the project map's own walk has no
+  stall bound. Pins: `tests/test_{folder_changes,finish_shell_writes,
+  finish_shell_replay,finish_shell_writes_review}_v1387.py` (+
+  `fixtures/finish_shell_replays_v1387.json`); moved on purpose:
+  `test_chat_lanes_v13510`, `test_file_claim_honesty_v11532`,
+  `test_finish_check_review_v1386`, `test_bash_dialect_v1386`.
 - **A Build turn starts with a PROJECT MAP; the project's OWN checkers run
   after an edit as GATED calls that need a person; a made-up tool name is a
   refusal, not a dead turn** (v1.387.0, IJ harness part 3 Phase 3; a doer +

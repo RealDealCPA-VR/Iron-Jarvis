@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.387.0 (2026-10-25).*
+holds itself to. Current as of v1.387.1 (2026-10-25).*
 
 ---
 
@@ -1896,6 +1896,25 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The finish check sees files a command wrote (v1.387.1)
+
+The finish check (v1.386.1) only saw changes the agent made with its file
+tools. Claude now often writes a file with a shell command instead, and then
+the check never ran: both of its remaining benchmark failures were that.
+
+- **The folder is compared before and after.** When a reply ran a command,
+  Iron Jarvis compares the session folder as the reply began with the folder
+  at the end, so a file a command wrote or changed counts. It takes a few
+  hundredths of a second on a few thousand files. Caches, build output and
+  anything `.gitignore` ignores never count.
+- **Files a program made are listed apart,** with words telling the agent to
+  keep a program's log or output that the task may need, and to remove only a
+  scratch file it wrote itself.
+- **Tests inside a long bash command are found** (a heredoc no longer hides
+  them), and a test command is never re-run in a way that could report
+  "passed" for failing tests.
+- **No false "no file was written" note** after a command wrote one.
 
 ## A Build session knows your project and checks your code (v1.387.0)
 
