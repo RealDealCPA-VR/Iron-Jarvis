@@ -1392,9 +1392,12 @@ class ToolRegistry:
         alternatives = getattr(tool, "required_alternatives", None) or {}
         if not isinstance(alternatives, dict):
             alternatives = {}
+        # (An alternative counts only with a value: a model's `"paths": null`
+        # is no argument at all — it must get the missing-`path` sentence,
+        # not the tool's `KeyError: 'path'`. Phase 3 review.)
         missing = [
             k for k in required
-            if k not in args and not any(a in args for a in (alternatives.get(k) or ()))
+            if k not in args and not any(args.get(a) is not None for a in (alternatives.get(k) or ()))
         ]
         wrong: list[str] = []
         if isinstance(props, dict):

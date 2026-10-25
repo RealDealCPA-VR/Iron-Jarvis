@@ -94,6 +94,24 @@ def _edit_then_done(path: str = "app.py", content: str = "import os\nX = 2\n") -
     return [[call("write_file", "w1", path=path, content=content)], "Done."]
 
 
+def _program_of(command: str) -> str:
+    """The checker program's own name ("ruff") from a checker's command line:
+    its first word is the program the detection found — the project's own
+    copy (a relative path) or, found on the PATH, its FULL path (Phase 3
+    review), double-quoted when it holds a space."""
+    first = command[1:command.index('"', 1)] if command.startswith('"') else command.split()[0]
+    return Path(first.replace("\\", "/")).stem.lower()
+
+
+def _ALLOW_ONCE(frame: dict) -> str:
+    """The card a checker run puts up in EVERY posture, yolo included (Phase 3
+    review: a project checker needs a person — ``ProjectCheckers.
+    needs_a_person``), answered "Allow once"; only a checker's card is
+    expected here."""
+    assert str(frame.get("call_id", "")).startswith(C.CALL_ID_PREFIX), frame
+    return "once"
+
+
 def _check_rows(platform) -> list:
     return [r for r in ledger(platform) if r.called_as == C.CALLED_AS]
 
@@ -112,7 +130,7 @@ async def test_a_checker_the_folder_has_runs_after_the_edit_and_its_findings_rid
         # the user's permissions allow it.
         monkeypatch.setitem(platform.permissions._base, "shell", "allow")
     model = wire(platform, monkeypatch, _edit_then_done())
-    out = await (stream(platform, body(ws)) if lane == "stream" else post(platform, body(ws)))
+    out = await (stream(platform, body(ws), answer=_ALLOW_ONCE) if lane == "stream" else post(platform, body(ws)))
     done = out["done"] if lane == "stream" else out
     assert done is not None
     # The model's next call reads the findings ON THE EDIT's result, under its
@@ -127,7 +145,9 @@ async def test_a_checker_the_folder_has_runs_after_the_edit_and_its_findings_rid
     rows = _check_rows(platform)
     assert [(r.tool, r.session_id) for r in rows] == [("shell", SESSION)]
     command = json.loads(rows[0].args_json)["command"]
-    assert command == "ruff check --no-fix --no-cache --force-exclude --output-format concise app.py"
+    # (Phase 3 review: a PATH checker is named by its full path)
+    assert _program_of(command) == "ruff" and os.path.isabs(command.split()[0].strip('"'))
+    assert command.endswith(" check --no-fix --no-cache --force-exclude --output-format concise app.py")
     assert log.read_text(encoding="utf-8").split() == [
         "check", "--no-fix", "--no-cache", "--force-exclude", "--output-format", "concise", "app.py"]
     if lane == "stream":
@@ -139,7 +159,7 @@ async def test_a_clean_file_says_no_problems(env, monkeypatch):
     platform, ws, _log = env
     _ruff_on(ws)
     model = wire(platform, monkeypatch, _edit_then_done(content="X = 2  # CLEAN\n"))
-    await stream(platform, body(ws))
+    await stream(platform, body(ws), answer=_ALLOW_ONCE)
     assert model.tool_messages(1)["w1"].endswith("Check: the file parses.\nCheck (ruff): no problems in app.py.")
 
 
@@ -148,7 +168,7 @@ async def test_findings_are_bounded_and_the_cut_is_said(env, monkeypatch):
     _ruff_on(ws)
     monkeypatch.setenv("FAKE_RUFF_LINES", "60")
     model = wire(platform, monkeypatch, _edit_then_done())
-    await stream(platform, body(ws))
+    await stream(platform, body(ws), answer=_ALLOW_ONCE)
     text = model.tool_messages(1)["w1"]
     assert "Check (ruff): 60 problems in app.py" in text
     shown = [ln for ln in text.splitlines() if "fake finding" in ln]
@@ -201,7 +221,7 @@ async def test_ask_first_cards_the_checker_and_a_declined_card_runs_nothing(env,
     model = wire(platform, monkeypatch, _edit_then_done())
     await stream(platform, body(ws, approval_mode="approve_for_me"), answer=answer)
     # ONE card: the checker's command (the write is allow-tier there).
-    assert [(f["tool"], f["args"]["command"].split()[:2]) for f in asked] == [("shell", ["ruff", "check"])]
+    assert [(f["tool"], _program_of(f["args"]["command"])) for f in asked] == [("shell", "ruff")]
     assert not log.exists(), "a declined checker ran"
     text = model.tool_messages(1)["w1"]
     assert "Check: the file parses.\nCheck (ruff) was not run: " in text
@@ -229,8 +249,8 @@ async def test_local_only_cards_it_allow_once_only(env, monkeypatch):
     model = wire(platform, monkeypatch, _edit_then_done())
     with egress.local_only_scope(True):
         await stream(platform, body(ws), answer=lambda f: (asked.append(f) or "once"))
-    assert [f["tool"] for f in asked if f["args"].get("command", "").startswith("ruff")] == ["shell"]
-    card = next(f for f in asked if f["args"].get("command", "").startswith("ruff"))
+    assert [f["tool"] for f in asked if _program_of(f["args"].get("command", "") or "-") == "ruff"] == ["shell"]
+    card = next(f for f in asked if _program_of(f["args"].get("command", "") or "-") == "ruff")
     assert card.get("once_only") is True
     assert "Check (ruff): 1 problem" in model.tool_messages(1)["w1"]
 
@@ -277,7 +297,7 @@ async def test_an_edit_that_did_not_apply_runs_no_checker(env, monkeypatch):
     model = wire(platform, monkeypatch, [
         [call("edit_file", "e1", path="app.py", old="NOT THERE", new="Y = 1")], "Done.",
     ])
-    out = await stream(platform, body(ws))
+    out = await stream(platform, body(ws), answer=_ALLOW_ONCE)
     assert not log.exists() and _check_rows(platform) == []
     assert "Check (ruff)" not in model.tool_messages(1)["e1"]
     # (Its step still settles — answered without running.)
@@ -293,7 +313,7 @@ async def test_one_run_per_checker_covers_the_rounds_edits_and_only_files_it_rea
         call("write_file", "w2", path="notes.md", content="hi\n"),
         call("edit_file", "w3", path="b.py", old="Y = 1", new="import sys\nY = 2"),
     ], "Done."])
-    await stream(platform, body(ws))
+    await stream(platform, body(ws), answer=_ALLOW_ONCE)
     assert log.read_text(encoding="utf-8").split()[-2:] == ["app.py", "b.py"]
     sent = model.tool_messages(1)
     # The findings ride the LAST edit of the round that changed a checked file.
@@ -309,7 +329,7 @@ async def test_one_run_takes_a_bounded_number_of_files_and_says_so(env, monkeypa
     model = wire(platform, monkeypatch, [[
         call("write_file", f"w{i}", path=f"m{i}.py", content="import os\n") for i in range(3)
     ], "Done."])
-    await stream(platform, body(ws))
+    await stream(platform, body(ws), answer=_ALLOW_ONCE)
     assert log.read_text(encoding="utf-8").split()[-2:] == ["m0.py", "m1.py"]
     assert ("Check (ruff): 2 problems in m0.py, m1.py (1 more changed file not checked: one run "
             "takes at most 2)") in model.tool_messages(1)["w2"]
@@ -349,7 +369,7 @@ def test_detection_needs_the_config_and_the_program_and_never_installs(tmp_path,
     assert set(found) == {"ruff", "mypy", "tsc"}
     assert found["ruff"].where == "project" and found["ruff"].program.replace("\\", "/").endswith(".venv/Scripts/ruff.exe"
                                                                                                     if os.name == "nt" else ".venv/bin/ruff")
-    assert found["mypy"].where == "path" and found["mypy"].program == "mypy"
+    assert found["mypy"].where == "path" and found["mypy"].program == "/usr/bin/mypy"  # the full path found
     assert found["tsc"].where == "project"
     for c in found.values():
         line = C.command_line(c.argv(["a.py"]))
@@ -404,7 +424,7 @@ async def test_the_run_is_prepared_and_read_off_the_event_loop(env, monkeypatch)
     monkeypatch.setattr(C.ProjectCheckers, "prepare", prepare)
     monkeypatch.setattr(C, "findings", findings)
     model = wire(platform, monkeypatch, _edit_then_done())
-    await stream(platform, body(ws))
+    await stream(platform, body(ws), answer=_ALLOW_ONCE)
     assert "Check (ruff): 1 problem" in model.tool_messages(1)["w1"]
     loop_thread = threading.get_ident()
     assert seen["prepare"] and loop_thread not in seen["prepare"]
@@ -449,14 +469,20 @@ async def test_a_checker_run_is_never_the_finish_checks_test_command(env, monkey
         "Set X to 2; the tests pass.",
         "1. met: X is 2 and the tests pass.",
     ])
-    out = await stream(platform, body(ws, text="set X to 2 in app.py and run the tests"))
+    out = await stream(platform, body(ws, text="set X to 2 in app.py and run the tests"), answer=_ALLOW_ONCE)
     finish = out["done"]["finish"]
     assert finish["command"] == test_cmd and finish["tests"] == "passed"
     assert len(_check_rows(platform)) == 1  # the checker ran — and was not mistaken for the tests
     for checker in (C.Checker("ruff", "ruff", "path", "ruff.toml", C.PY_SUFFIXES),
                     C.Checker("mypy", "mypy", "path", "mypy.ini", C.PY_SUFFIXES),
                     C.Checker("eslint", "eslint", "path", "eslint.config.js", C.JS_SUFFIXES),
-                    C.Checker("tsc", r"node_modules\.bin\tsc.cmd", "project", "tsconfig.json", C.TS_SUFFIXES)):
+                    C.Checker("tsc", r"node_modules\.bin\tsc.cmd", "project", "tsconfig.json", C.TS_SUFFIXES),
+                    # Phase 3 review: a PATH checker is named by its full path.
+                    C.Checker("ruff", r"C:\Program Files\Python\Scripts\ruff.exe", "path", "ruff.toml",
+                              C.PY_SUFFIXES),
+                    C.Checker("mypy", "/usr/local/bin/mypy", "path", "mypy.ini", C.PY_SUFFIXES),
+                    C.Checker("tsc", r"C:\Users\me\AppData\Roaming\npm\tsc.cmd", "path", "tsconfig.json",
+                              C.TS_SUFFIXES)):
         line = C.command_line(checker.argv(["src/a.py"]))
         assert F.test_part(line) == "" and not F.status_is_tests(line), line
 
@@ -508,7 +534,7 @@ async def test_the_real_ruff_takes_the_flags_and_its_finding_comes_back(tmp_path
     (ws / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\nfix = true\n", encoding="utf-8")
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="app.py", content="import os\nX = 1\n")],
                                          "Done."])
-    await stream(platform, body(ws))
+    await stream(platform, body(ws), answer=_ALLOW_ONCE)
     text = model.tool_messages(1)["w1"]
     assert "Check (ruff): 1 problem in app.py\n" in text and "F401" in text, text
     # `fix = true` in the config, and the file is untouched (--no-fix).
@@ -526,7 +552,7 @@ async def test_a_file_the_projects_ruff_settings_exclude_is_said_not_passed(tmp_
     model = wire(platform, monkeypatch, [
         [call("write_file", "w1", path="generated.py", content="import os\n")], "Done.",
     ])
-    await stream(platform, body(ws))
+    await stream(platform, body(ws), answer=_ALLOW_ONCE)
     text = model.tool_messages(1)["w1"]
     assert text.endswith("Check (ruff): generated.py is excluded by the project's own ruff settings, so it was "
                          "not checked."), text
@@ -566,14 +592,15 @@ async def test_a_type_error_an_edit_introduced_comes_back_from_the_real_mypy(tmp
     monkeypatch.setenv("PATH", _mypy_dir() + os.pathsep + os.environ.get("PATH", ""))
     bad = "from util import double\n\n\ndef label(n: int) -> str:\n    return double(n)\n"
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="app.py", content=bad)], "Done."])
-    await stream(platform, body(ws))
+    await stream(platform, body(ws), answer=_ALLOW_ONCE)
     text = model.tool_messages(1)["w1"]
     assert "Check: the file parses.\nCheck (mypy): 1 problem in app.py\n" in text, text
     assert "app.py:5: error: Incompatible return value type" in text
     # Only the changed file's lines; nothing written into the project.
     assert not (ws / ".mypy_cache").exists()
     rows = _check_rows(platform)
-    assert len(rows) == 1 and json.loads(rows[0].args_json)["command"].startswith("mypy --cache-dir")
+    command = json.loads(rows[0].args_json)["command"]
+    assert len(rows) == 1 and _program_of(command) == "mypy" and " --cache-dir " in command
 
 
 @pytest.mark.skipif(_typescript() is None, reason="typescript + node are not on this machine (IJ_TEST_TYPESCRIPT)")
@@ -599,7 +626,7 @@ async def test_a_type_error_an_edit_introduced_comes_back_from_the_projects_own_
         sh.chmod(0o755)
     bad = "export function total(xs: number[]): number {\n  return xs.join(',');\n}\n"
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="src/total.ts", content=bad)], "Done."])
-    await stream(platform, body(ws))
+    await stream(platform, body(ws), answer=_ALLOW_ONCE)
     text = model.tool_messages(1)["w1"]
     assert "Check (tsc): 1 problem in src/total.ts\n" in text, text
     assert "src/total.ts(2,3): error TS2322" in text

@@ -33,6 +33,14 @@ the model had run it —
   only's "Allow once" card, the git guard and the project-command rule (the
   spend check), the permission engine in the REAL ``registry.invoke``, the
   ledger (``called_as`` :data:`CALLED_AS`) and the tool deadline;
+* it NEEDS A PERSON (Phase 3 review, :meth:`ProjectCheckers.needs_a_person`):
+  the model never chose to run it, so auto-approve's per-call grant never
+  covers it — under yolo it cards exactly as under approve-for-me unless a
+  grant wider than one call covers the command tool (the permission table,
+  "Allow for this chat", a standing grant). The v1.386.1 rule for the finish
+  check's folder command and the v1.366.0 rule for plugin checks. A round's
+  checkers share ONE card (v1.247.0) — under Local only each still cards
+  alone ("Allow once"), as every command there does;
 * low trust never schedules one (and a call tainted low mid-round is refused
   by the lane like any command);
 * the POST lane arms no ask-tier command tool, so there a checker runs only
@@ -121,7 +129,10 @@ class Checker:
 
     name: str
     #: What the command line names: a path relative to the folder (the
-    #: project's own program) or the bare name found on the session's PATH.
+    #: project's own program) or the FULL path of the one found on the
+    #: session's PATH (Phase 3 review: never the bare name — cmd.exe looks in
+    #: the current folder first, so a project's own ``ruff.bat`` stood in for
+    #: the PATH's ruff behind a card that read "ruff check …").
     program: str
     #: "project" (``.venv`` / ``venv`` / ``node_modules``) | "path"
     where: str
@@ -256,9 +267,14 @@ def detect(folder: Any, *, path_env: "str | None" = None) -> list[Checker]:
             program = _project_program(name, base, kind)
             where = "project"
             if not program:
-                if shutil.which(name, path=path_env) is None:
+                found = shutil.which(name, path=path_env)
+                if found is None:
                     continue  # not installed: never installed for it
-                program, where = name, "path"
+                program, where = str(found), "path"
+                if _UNSAFE.search(program):
+                    # A program path a command line cannot carry as plain
+                    # data (cmd.exe expands `%`, runs on at `&`): not used.
+                    continue
             out.append(Checker(name=name, program=program, where=where, config=config, suffixes=suffixes))
         except Exception:  # noqa: BLE001 — one checker's oddity never hides the others
             log.debug("checker %s: detection failed", name, exc_info=True)
@@ -455,7 +471,13 @@ class ProjectCheckers:
         args = getattr(call, "arguments", None) or {}
         if name not in EDIT_TOOLS or not isinstance(args, dict):
             return []
-        raws = _patch_files(args.get("input") or "") if name == "apply_patch" else [args.get("path")]
+        # The REAL apply_patch takes `patch` (Codex's own `input` is
+        # translated to it at the boundary — harness/dialects._apply_patch);
+        # `input` is still read for a call that reached here untranslated.
+        raws = (
+            _patch_files(args.get("patch") or args.get("input") or "")
+            if name == "apply_patch" else [args.get("path")]
+        )
         out = []
         for raw in raws:
             rel = self._rel(raw) if raw else ""
@@ -524,6 +546,20 @@ class ProjectCheckers:
 
     def owns(self, call: Any) -> bool:
         return str(getattr(call, "id", "") or "") in self._pending
+
+    def needs_a_person(self, call: Any) -> bool:
+        """Must this call be allowed by a PERSON (a card, or a grant wider
+        than one call — the permission table, "Allow for this chat", a
+        standing grant) — never by auto-approve's per-call grant? True for
+        every checker run (Phase 3 review): it is a command the APP wrote,
+        running a program the PROJECT supplies or configures (its ``.venv``
+        / ``node_modules`` copy, an ESLint JS config, a mypy plugin), which
+        the model never chose to run. The same rule as the finish check's folder
+        command (``finish.FinishCheck.needs_a_person``, v1.386.1) and a
+        folder's plugin checks (``chat_turn.harness_check_runner``, v1.366.0).
+        The stream lane reads it beside the finish check's (MIRROR NOTE: the
+        POST lane never auto-grants a call, so it needs no twin)."""
+        return self.owns(call)
 
     def note(self, call: Any, *, ran: bool) -> None:
         """A call of the round settled (only an edit a checker covers is

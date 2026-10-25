@@ -16,7 +16,7 @@ Same measurement: ``frontier-multicurrency-ledger``'s 14,063-character
 SPEC.md came back cut at the lanes' fixed 12,000 characters WITH NO WORD
 SAID, and the model spent three calls on each of the three repeats probing
 the file's tail. A harness turn's tool result is now cut at a quarter of the
-model's window (never under the old 12,000, never over 50,000) and the cut is
+model's window (never under the old 12,000, never over 32,000) and the cut is
 said. Plain chat keeps its old cut byte for byte.
 """
 

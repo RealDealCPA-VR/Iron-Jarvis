@@ -82,6 +82,15 @@ MAX_SOURCE_BYTES = 256 * 1024
 #: The walk's own deadline (``list_files`` allows 10 s for ONE call; the map
 #: is built at the start of every turn).
 WALK_DEADLINE_S = 3.0
+#: Reading and parsing files for their top-level names stops here in ONE
+#: build (Phase 3 review: with no deadline, a 4,800-file tree of 43 KB
+#: Python files took 88 s before the turn's first model call — to show a
+#: 3,084-character map). Names already read are kept per file, so the next
+#: turn reads on from where this one stopped; a map built with names unread
+#: says so and is never served from the cache as if it were whole.
+NAMES_DEADLINE_S = 1.5
+#: The clock the deadlines read (one name, so a test can drive it).
+_now = time.monotonic
 #: Files whose names are read.
 PY_SUFFIXES = frozenset({".py", ".pyi"})
 SCRIPT_SUFFIXES = frozenset({".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"})
@@ -238,7 +247,7 @@ def _walk(base: Path) -> tuple[list[_Entry], int, str]:
     and saying so. BLOCKING."""
     from ..tools.builtins import _MAX_WALK_ENTRIES, _SKIP_DIRS
 
-    started = time.monotonic()
+    started = _now()
     entries: list[_Entry] = []
     files = 0
     note = ""
@@ -279,7 +288,7 @@ def _walk(base: Path) -> tuple[list[_Entry], int, str]:
             files += 1
             if files >= _MAX_WALK_ENTRIES:
                 return entries, files, f"the walk stopped at {_MAX_WALK_ENTRIES:,} files"
-        if time.monotonic() - started >= WALK_DEADLINE_S:
+        if _now() - started >= WALK_DEADLINE_S:
             note = f"the walk stopped after {WALK_DEADLINE_S:g} s"
             break
         # depth-first in name order: push in reverse so the first is next
@@ -409,7 +418,7 @@ def _compose(head: str, lines: list[str], foot: str) -> str:
 
 def render(
     folder_name: str, entries: list[_Entry], names: dict[tuple[str, ...], list[str]],
-    *, files: int, walk_note: str, limit: int, depth: int = MAP_DEPTH,
+    *, files: int, walk_note: str, limit: int, depth: int = MAP_DEPTH, names_unread: int = 0,
 ) -> MapResult:
     """The richest map that fits ``limit`` characters, and what it left out.
     Pure. The steps, each tried only when the one before does not fit:
@@ -421,7 +430,9 @@ def render(
     4. one sentence saying the folder is too big for the share.
 
     Whatever a step leaves out is named on the map's last line — and in
-    :attr:`MapResult.left_out` — never cut silently."""
+    :attr:`MapResult.left_out` — never cut silently. ``names_unread`` (Phase 3
+    review): source files whose names were not read before
+    :data:`NAMES_DEADLINE_S` — said too."""
     if limit < MAP_MIN_CHARS:
         text = (
             f"{HEADING}\nNo map of the session folder ({files:,} files): this model's window "
@@ -450,6 +461,11 @@ def render(
             lines, is_file, has_names = lines[:keep], is_file[:keep], has_names[:keep]
         named = sum(has_names)
         parts: list[str] = []
+        if names_unread:
+            parts.append(
+                f"the top-level names of {names_unread} more source file"
+                f"{'' if names_unread == 1 else 's'} (not read in time; a later turn reads them)"
+            )
         if named < namable_at(d):
             left = namable_at(d) - named
             parts.append(f"the top-level names of {left} source file{'' if left == 1 else 's'}")
@@ -520,12 +536,19 @@ def _signature(entries: list[_Entry], note: str) -> str:
     return h.hexdigest()
 
 
-def _names_for(base: Path, entries: list[_Entry], depth: int = MAP_DEPTH) -> dict[tuple[str, ...], list[str]]:
-    """The top-level names of every source file the map can SHOW (at most
-    ``depth`` levels down — a deeper file is only counted, so it is never
-    parsed), from the per-file cache when the file did not change."""
+def _names_for(
+    base: Path, entries: list[_Entry], depth: int = MAP_DEPTH,
+) -> tuple[dict[tuple[str, ...], list[str]], int]:
+    """``(names, unread)``: the top-level names of every source file the map
+    can SHOW (at most ``depth`` levels down — a deeper file is only counted,
+    so it is never parsed), from the per-file cache when the file did not
+    change; ``unread`` counts the files not read because reading passed
+    :data:`NAMES_DEADLINE_S` (a cached file's names are still used — they
+    cost no read)."""
     out: dict[tuple[str, ...], list[str]] = {}
     per_folder: dict[tuple[str, ...], int] = {}
+    started = _now()
+    unread = 0
     for e in entries:
         if e.is_dir or len(e.parts) > depth:
             continue
@@ -548,6 +571,9 @@ def _names_for(base: Path, entries: list[_Entry], depth: int = MAP_DEPTH) -> dic
             else:
                 names = None
         if names is None:
+            if _now() - started >= NAMES_DEADLINE_S:
+                unread += 1
+                continue
             names = _names_of(path, suffix)
             with _LOCK:
                 BUILDS["parsed"] += 1
@@ -557,11 +583,25 @@ def _names_for(base: Path, entries: list[_Entry], depth: int = MAP_DEPTH) -> dic
                     _NAMES.popitem(last=False)
         if names:
             out[e.parts] = names
-    return out
+    return out, unread
 
 
 #: How many times a map was built rather than reused (the cache pin reads it).
 BUILDS = {"maps": 0, "parsed": 0}
+
+
+def _names_depth(entries: list[_Entry], limit: int, depth: int = MAP_DEPTH) -> int:
+    """The deepest level (``depth`` down to 1; 0 = none) whose tree, with no
+    names at all, fits ``limit`` characters — the levels whose files the map
+    can show by name. Pure. (A share too small for any map reads none.)"""
+    if limit < MAP_MIN_CHARS:
+        return 0
+    root = _tree(entries)
+    for d in range(depth, 0, -1):
+        lines = _render_lines(root, {}, depth=d, name_budget=0)[0]
+        if sum(len(line) + 1 for line in lines) <= limit:
+            return d
+    return 0
 
 
 def build(folder: Any, *, limit: int, depth: int = MAP_DEPTH) -> "MapResult | None":
@@ -583,15 +623,25 @@ def build(folder: Any, *, limit: int, depth: int = MAP_DEPTH) -> "MapResult | No
             _MAPS.move_to_end(key)
             cached = hit[1]
             return MapResult(**{**cached.__dict__, "left_out": list(cached.left_out)})
-    names = _names_for(base, entries, depth)
+    # Only the levels a tree WITHOUT names could even fit are read for names
+    # (Phase 3 review): a deeper file can only ever be inside a "(N files)"
+    # count at this share, so reading it is wasted time. The test is the
+    # tree's own lines alone (no header, no footer) — a NECESSARY condition
+    # for a level to fit, so this never reads less than render can show.
+    names, unread = _names_for(base, entries, _names_depth(entries, limit, depth))
     result = render(base.name or str(base), entries, names, files=files, walk_note=note,
-                    limit=limit, depth=depth)
+                    limit=limit, depth=depth, names_unread=unread)
     with _LOCK:
         BUILDS["maps"] += 1
-        _MAPS[key] = (sig, result)
-        _MAPS.move_to_end(key)
-        while len(_MAPS) > _MAX_MAPS:
-            _MAPS.popitem(last=False)
+        if unread:
+            # Names were left unread at the deadline: never served as the map
+            # of this folder — the next turn reads on and renders again.
+            _MAPS.pop(key, None)
+        else:
+            _MAPS[key] = (sig, result)
+            _MAPS.move_to_end(key)
+            while len(_MAPS) > _MAX_MAPS:
+                _MAPS.popitem(last=False)
     return MapResult(**{**result.__dict__, "left_out": list(result.left_out)})
 
 

@@ -4886,7 +4886,15 @@ async def chat_stream(
                     # MIRROR NOTE: the POST lane never auto-grants a call, so
                     # it needs no twin; `_would_card` and the per-call branch
                     # below read it the same way.
-                    return _finish is not None and _finish.needs_a_person(_c)
+                    if _finish is not None and _finish.needs_a_person(_c):
+                        return True
+                    # Part 3, Phase 3 (review): a project CHECKER's run (ruff,
+                    # mypy, eslint, tsc after an edit — harness/checkers) is
+                    # the same kind of call: the APP's command, running a
+                    # program the PROJECT supplies. Never on auto-approve's
+                    # per-call grant either.
+                    _cks = getattr(_harness, "checkers", None) if _harness is not None else None
+                    return _cks is not None and _cks.needs_a_person(_c)
 
                 _round_asks: dict[str, list] = {}
                 for _c in calls:

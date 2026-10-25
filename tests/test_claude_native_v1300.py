@@ -556,7 +556,7 @@ async def test_a_tool_outside_the_inventory_is_handed_on_not_failed(tmp_path, mo
     request's inventory") — the Phase 1 benchmark lost a whole turn to Claude
     calling ``python``. It is now handed to the lane under the name the model
     wrote (our ``mcp__ij__`` prefix off), where the registry refuses it as an
-    ordinary tool result (``tests/test_harness_fewer_steps_v1387.py`` drives
+    ordinary tool result (``tests/test_harness_unknown_tool_v1387.py`` drives
     that through the lane). Nothing runs here either way."""
     fake = Fake(tmp_path, monkeypatch, "unknown_tool")
     resp = await fake.adapter().complete(system="", messages=[_user()], tools=TOOLS)
