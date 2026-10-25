@@ -20,6 +20,7 @@ import type { PaneMessage } from "@/components/terminal/paneWork";
 import { decodeQueuedItem, type QueuedItem } from "@/lib/buildComposer";
 import { decodeSessionGit, type SessionGit } from "@/lib/buildGit";
 import { decodeBranchedFrom, type BranchedFrom } from "@/lib/buildNext";
+import type { FinishRecord } from "@/lib/stepWords";
 
 // Where a Build session opens lives in the import-free lib/buildLinks (the
 // bell and the Activity rows read it); re-exported here for the screen.
@@ -233,7 +234,36 @@ export type BuildMessage = PaneMessage & {
   /** v1.384.0: the reply met its STEP LIMIT (raw; `decodeStepLimit`) — the
    *  screen says so and offers "Keep going". */
   stepLimit?: unknown;
+  /** Part 3, Phase 2: what the reply's FINISH CHECK did (raw;
+   *  `decodeFinish`) — the work line's "Checked: …". Absent on a reply that
+   *  changed no file, and on every line an older daemon wrote. */
+  finish?: unknown;
 };
+
+/** Part 3, Phase 2: a reply line's `finish`, whitelisted — the known keys
+ *  with the right types, else null (the work line then reads exactly as
+ *  before). The daemon's twin is harness/finish.saved_record. */
+export function decodeFinish(raw: unknown): FinishRecord | null {
+  const r = rec(raw);
+  if (!r) return null;
+  const tests = r.tests;
+  if (tests !== "passed" && tests !== "failed" && tests !== "none" && tests !== "not_run") return null;
+  const count = (v: unknown): number =>
+    typeof v === "number" && Number.isInteger(v) && v >= 0 ? Math.min(v, 1_000_000) : 0;
+  const after = r.after === "passed" || r.after === "failed" ? r.after : "";
+  const out: FinishRecord = {
+    tests,
+    command: str(r.command, 500),
+    removed: count(r.removed),
+    kept: count(r.kept),
+    points: count(r.points),
+    unmet: count(r.unmet),
+    after,
+  };
+  const why = str(r.why, 200).trim();
+  if (tests === "not_run" && why) out.why = why;
+  return out;
+}
 
 /** v1.384.0: a reply's step limit, as the daemon kept it: how many steps,
  *  and whether that was the SAFETY stop of a reply with no limit. */
@@ -309,6 +339,8 @@ const LINE_KEYS = [
   "command",
   // v1.384.0: a reply that met its step limit ({limit, safety}).
   "stepLimit",
+  // Part 3, Phase 2: what the reply's finish check did (raw; decodeFinish).
+  "finish",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {

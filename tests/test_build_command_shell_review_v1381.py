@@ -58,6 +58,7 @@ from tests.test_build_command_shell_ask_v1381 import (
     nth_card,
     project_command,
     ran,
+    shell_rows,
     start,
     write,
 )
@@ -332,13 +333,24 @@ async def test_a_folders_plugin_check_never_runs_on_its_own_in_a_commands_turn(a
     edit2 = [ToolCall(id="pc-e2", name="Edit", arguments={"file_path": "app.py", "old_string": "x = 1",
                                                          "new_string": "x = 3"})]
     script = wire(app, Script([edit2, "Done."]))
-    status, raw = await open_turn(app, sid, {"text": "", "command": "deploy", "turn_id": "pc-1"}, timeout=60)
-    assert status == 200 and frames_of(raw)[-1][0] == "done", raw[-400:]
+    drop, task = await start(app, sid, "pc-1", command="deploy")
+    # Part 3, Phase 2: the reply changed a file, so its FINISH CHECK runs the
+    # folder's check once more at the end — through the turn's own round, so
+    # in the command's turn it ASKS, once, like every command (never on its
+    # own). Declined here; the after-edit check above it never asked.
+    card = await nth_card(app, "pc-1", 0)
+    assert card["call_id"].startswith("ij-finish-") and card["args"]["command"] == "echo IJ-CHECKED"
+    assert card.get("once_only") is True and card.get("once_reason") == "command"
+    await answer(app, card, "deny")
+    await finish(app, "pc-1", drop, task)
     assert (work / "app.py").read_bytes() == b"x = 3\n"
     assert len(_check_rows(app)) == 1, "the folder's check did not run in the command's turn"
     told = [m for m in script.calls[1]["messages"] if m.role == "tool"][0].content
     assert "Check not run (running it needs the user's approval)" in told and "echo IJ-CHECKED" in told
-    assert cards_of(app, "pc-1") == []
+    assert len(cards_of(app, "pc-1")) == 1, "only the finish check's own run asked"
+    # The declined run did not run: the only successful IJ-CHECKED runs are the
+    # control turn's two (its after-edit check, and its finish check's).
+    assert len([r for r in shell_rows(app) if r.ok and "IJ-CHECKED" in (r.output or "")]) == 2
 
 
 async def test_a_plugin_check_the_git_guard_would_card_is_not_run_on_its_own(app, work):

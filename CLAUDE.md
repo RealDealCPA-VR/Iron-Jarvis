@@ -3569,6 +3569,64 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A Build reply that changed files CHECKS ITS OWN WORK once before it ends,
+  through the same gates as any call** (v1.386.0, IJ harness part 3 Phase 2,
+  `docs/IJ-HARNESS-PLAN-3.md`, the user's decision 6; a doer + a reviewer that
+  found 17 more defects, each red first and mutation-checked).
+  `harness/finish.py` (`FinishCheck`): a harness component in the DEFAULT
+  layer, `.ironjarvis/harness/finish.toml` (`enabled`, `tests`, `new_files`,
+  `request`; all on when absent; a voided layer = default on). WHEN: a harness
+  turn about to end on its final text whose CHANGES come from the ledger (a
+  rowid mark at turn start; helper sessions' writes via
+  `options.build_session`; a carry-on turn counts the whole reply from the
+  question it continues), not cut for length, with ≥ 2 rounds left; never on
+  error / refusal / Stop / step limit / plain chat / a pane chat; at most once.
+  ONE note, ONE extra round: (a) TESTS = the folder's `[[checks]]` for the
+  changed files, else the TEST PART of the last command the model ran that
+  STARTED (`_never_ran` skips a refused one; segments split at unquoted
+  `&&`/`||`/`;`/lone `&`/newlines, only before an unquoted `|`; `$(…)`,
+  backticks, `<(…)` never re-run; `python -c` ends the read; `--version`,
+  `--collect-only`, `--no-run`, `-DskipTests`, watch modes are NOT test
+  runs; a docs-named command must say test/check/spec/e2e/verify and not
+  remove/fetch/ship), run as a synthetic `ij-finish-N` call of the turn's
+  command tool (`shell`, `process_start` under GPT) through the lane's own
+  round and the REAL `registry.invoke` (`called_as "finish check"`); a folder
+  check (or a test only the folder names) is judged as approve-for-me even
+  under yolo (`needs_a_person`: a card unless a grant wider than one call
+  covers the tool); low trust = "not run: low trust"; verdict ONLY from the
+  exit status, a timeout = failed; `after` ("then fixed") only from a later
+  `&&`-chained, pipe-free run that covers the check's own tests
+  (`status_is_tests`, `_covers`). (b) NEW FILES = the journal's created
+  entries still present, not named in the request, not ignored (`GitIgnore`:
+  nested `.gitignore` + `.git/info/exclude`; global excludes not read); a
+  reply that ran a command is told commands may have made other files. (c)
+  THE REQUEST as points + the points of a written description it names (read
+  as it was BEFORE the reply, promptguard-scanned). The note rides after the
+  round; the stream lane sends a "\n\n" token; the answer's "N. met:" lines
+  are dropped from the SAVED reply (unmet lines and the closing sentence
+  stay). The check's failures never count toward the repeated-call limit.
+  RECORD `finish {tests, command, removed, kept, points, unmet, after[, why]}`
+  LAST on the done frame / POST answer and the Build reply line
+  (`harness/sessions.LINE_KEYS`; `chat_append.LINE_KEYS` is unchanged — it
+  refuses Build threads), dashboard `lib/stepWords.finishWords` →
+  `work-line-finish`. CODEX: `providers/turn_scope.py` — both lanes open a
+  scope while a note can still be sent; inside it `CodexNativeAdapter` keeps a
+  session whose turn ENDED, keyed by the exact conversation + tools (never a
+  helper's run), and the note continues the same thread with `turn/start`
+  (measured with the fake app-server: 2 process starts + 10,354 chars
+  replayed → 1 process, the note alone); outside a scope nothing changes.
+  The bench records `extra.finish` and hashes `finish.py` into its identity.
+  OPEN: the Codex continuation not yet seen live (a refusal falls back to the
+  replay); Stop waits for a running check command; the card does not say
+  "finish check"; shell-only writes are not changes (a git-status snapshot is
+  the later fix); after-edit plugin checks never fire for `write_file`;
+  denying `shell` alone leaves `process_start`. Pins:
+  `tests/test_finish_{check,lanes,replay,check_review,claude_shape,codex_continue}_v1386.py`
+  (+ `fixtures/finish_replays_v1386.json`, built from the two lost runs'
+  trajectories), `dashboard/__tests__/finish-check-v1386.test.tsx`; moved on
+  purpose: `test_build_turns_v1367`, `test_harness_rewind_v1370`,
+  `test_harness_bench_v1363`, `test_build_command_shell_review_v1381`,
+  `test_build_checks_v1367`, `test_chat_mcp_error_fence_v1342`.
 - **A Build reply works until it is DONE: no fixed step limit, never stopped
   for being unwatched, resumed from where the page was, the plan on the
   right** (v1.385.0; a USER BUG: a reply ran 117 minutes — Opus 5.5 high,

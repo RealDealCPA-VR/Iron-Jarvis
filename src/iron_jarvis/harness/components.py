@@ -23,6 +23,11 @@ skills             playbooks, each with a TRIGGER line rendered in always-on
 scripts            files in the harness folder a skill or prompt may run
 plugins            DECLARATIVE tool rules (``plugins.toml``): ask / deny for
                    named tools, and "check" commands after an edit
+finish             the FINISH CHECK at the end of a Build reply that changed
+                   files (``harness/finish``): on by default; a folder's
+                   ``finish.toml`` turns it, or one part of it, off. It
+                   renders NOTHING into the prompt (a reply that changed
+                   nothing makes exactly the calls it made before).
 =================  ==========================================================
 
 LAYERS, OMITTED-IS-INHERITED: the built-in default → the model family's layer
@@ -87,8 +92,11 @@ TEXT_FILES: dict[str, str] = {
     "tool_guidance.md": "tool_guidance",
 }
 PLUGINS_FILE = "plugins.toml"
+#: The finish check's switch (``harness/finish``): ``enabled``, ``tests``,
+#: ``new_files``, ``request`` — each true or false, all on when absent.
+FINISH_FILE = "finish.toml"
 FOLDERS = ("skills", "sub_agents", "scripts")
-KNOWN_ENTRIES = frozenset({*TEXT_FILES, PLUGINS_FILE, *FOLDERS})
+KNOWN_ENTRIES = frozenset({*TEXT_FILES, PLUGINS_FILE, FINISH_FILE, *FOLDERS})
 
 #: Size caps (characters of UTF-8 text) — a layer over any is invalid.
 MAX_TEXT_CHARS = 16_000
@@ -236,6 +244,9 @@ class ProjectLayer:
     sub_agents: list[SubAgent] = field(default_factory=list)
     scripts: list[str] = field(default_factory=list)
     plugins: Plugins = field(default_factory=Plugins)
+    #: The finish check's switch (:data:`FINISH_FILE`; the default when the
+    #: folder has no such file).
+    finish: Any = None
     blocked: int = 0
 
     @property
@@ -497,6 +508,19 @@ def _validate(folder: Path, known_tools: "set[str] | None") -> ProjectLayer:
         plugins_text = _read_text(plugins_path, MAX_PLUGINS_CHARS, PLUGINS_FILE)
         total += len(plugins_text)
         layer.plugins = _parse_plugins(plugins_text, known_tools)
+    # finish.toml — the finish check's switch (harness/finish)
+    finish_path = hdir / FINISH_FILE
+    if finish_path.exists():
+        from .finish import MAX_FINISH_CHARS, parse_config
+
+        if not finish_path.is_file():
+            raise LayerInvalid(f"{FINISH_FILE} is not a file")
+        finish_text = _read_text(finish_path, MAX_FINISH_CHARS, FINISH_FILE)
+        total += len(finish_text)
+        try:
+            layer.finish = parse_config(finish_text)
+        except ValueError as exc:
+            raise LayerInvalid(f"{FINISH_FILE}: {exc}") from None
     if total > MAX_TOTAL_CHARS:
         raise LayerInvalid(f"its files hold {total:,} characters (at most {MAX_TOTAL_CHARS:,})")
     # every script a text refers to must exist
@@ -626,6 +650,11 @@ class ComponentTree:
     #: user ACCEPTED for this folder (``harness/library.library_lines``,
     #: promptguard-scanned, bounded). Empty renders nothing (byte-identical).
     library: tuple[str, ...] = ()
+    #: Part 3, Phase 2: the FINISH CHECK's switch (``harness/finish``). It
+    #: renders nothing; a folder that changed it from the default changes the
+    #: fingerprint (``finish.mark()``), a folder that did not leaves it as it
+    #: was.
+    finish: Any = None
 
 
 def plan_mode_text(*, exit_name: str, plan_name: str) -> str:
@@ -697,6 +726,9 @@ def compose(
     lessons = tuple(str(x).strip() for x in library if str(x or "").strip())
     if lessons:
         layers.append("library")
+    from .finish import DEFAULT_CONFIG as _FINISH_DEFAULT
+
+    finish = (project.finish if project.used and project.finish is not None else None) or _FINISH_DEFAULT
     return ComponentTree(
         system_prompt=system_prompt,
         guardrails=tuple(guardrails),
@@ -709,6 +741,7 @@ def compose(
         layers=tuple(layers),
         mode=str(mode or "").strip(),
         library=lessons,
+        finish=finish,
     )
 
 
@@ -772,6 +805,10 @@ def render(tree: ComponentTree) -> str:
     return "\n\n".join(parts)
 
 
-def fingerprint(rendered: str, dialect_id: str) -> str:
-    """sha256 of the rendered components + the dialect id."""
-    return hashlib.sha256((rendered + "\0" + dialect_id).encode("utf-8")).hexdigest()
+def fingerprint(rendered: str, dialect_id: str, extra: str = "") -> str:
+    """sha256 of the rendered components + the dialect id (+ ``extra``: what
+    shapes the harness without rendering — a folder's finish-check switch,
+    ``finish.FinishConfig.mark()``; "" adds nothing, so the fingerprint of
+    every folder that did not change it is byte-identical)."""
+    tail = ("\0" + extra) if extra else ""
+    return hashlib.sha256((rendered + "\0" + dialect_id + tail).encode("utf-8")).hexdigest()

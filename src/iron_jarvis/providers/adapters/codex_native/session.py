@@ -177,9 +177,13 @@ class CodexSession:
         self._kill_lock = threading.Lock()
         self._next_id = 0
         self.killed = False
-        #: new | streaming | paused | closed — guarded by the pool lock.
+        #: new | streaming | paused | done | closed — guarded by the pool lock.
+        #: ``done``: its turn ENDED and it is kept for the same lane turn's
+        #: next call to continue (``providers.turn_scope``, the finish check).
         self.state = "new"
         self.paused_at = 0.0
+        #: The key a ``done`` session is kept under (:meth:`Pool.park_done`).
+        self.done_key: Any = None
         self.thread_id = ""
         self.turn_id = ""
         self.names: Any = None
@@ -410,6 +414,8 @@ class Pool:
         self.cond = threading.Condition(self.lock)
         self.sessions: dict[str, CodexSession] = {}
         self.by_call: dict[str, str] = {}
+        #: ``done`` sessions by the key the lane's next call must present.
+        self.by_done: dict[Any, str] = {}
         self._reaper: threading.Thread | None = None
 
     # all under the lock -----------------------------------------------------
@@ -417,6 +423,9 @@ class Pool:
         for cid in list(s.pending):
             if self.by_call.get(cid) == s.id:
                 del self.by_call[cid]
+        if s.done_key is not None and self.by_done.get(s.done_key) == s.id:
+            del self.by_done[s.done_key]
+        s.done_key = None
 
     def _forget(self, s: CodexSession) -> None:
         self.sessions.pop(s.id, None)
@@ -433,7 +442,7 @@ class Pool:
         with self.lock:
             while len(self.sessions) >= cap:
                 parked = sorted(
-                    (x for x in self.sessions.values() if x.state == "paused"),
+                    (x for x in self.sessions.values() if x.state in ("paused", "done")),
                     key=lambda x: x.paused_at,
                 )
                 if not parked:
@@ -461,6 +470,44 @@ class Pool:
             self._ensure_reaper()
             self.cond.notify_all()
         return True
+
+    def park_done(self, s: CodexSession, key: Any) -> bool:
+        """Keep a session whose turn ENDED under ``key`` (the lane's next call
+        of the same turn scope continues it). A session already kept under
+        that key is replaced (returned through :meth:`release_done` by its
+        own scope). False when it was stopped meanwhile."""
+        with self.lock:
+            if s.id not in self.sessions or s.killed:
+                return False
+            self._unindex(s)
+            s.state = "done"
+            s.paused_at = time.monotonic()
+            s.done_key = key
+            self.by_done[key] = s.id
+            self._ensure_reaper()
+            self.cond.notify_all()
+        return True
+
+    def claim_done(self, key: Any) -> CodexSession | None:
+        """The ``done`` session kept under ``key`` (now ``streaming``), or
+        None."""
+        with self.lock:
+            sid = self.by_done.get(key)
+            s = self.sessions.get(sid) if sid is not None else None
+            if s is None or s.state != "done" or s.killed:
+                return None
+            self._unindex(s)
+            s.state = "streaming"
+            return s
+
+    def release_done(self, s: CodexSession) -> bool:
+        """Forget ``s`` when it is still a kept ``done`` session (its scope
+        closed): True when the caller must stop it now."""
+        with self.lock:
+            if s.id in self.sessions and s.state == "done":
+                self._forget(s)
+                return True
+            return False
 
     def claim(self, call_ids: list[str]) -> tuple[CodexSession | None, list[CodexSession]]:
         """``(session, stale)``: the PARKED session waiting on exactly
@@ -538,7 +585,7 @@ class Pool:
         limit = float(PAUSED_IDLE_TIMEOUT_S)
         with self.lock:
             expired = [s for s in self.sessions.values()
-                       if s.state == "paused" and now - s.paused_at >= limit]
+                       if s.state in ("paused", "done") and now - s.paused_at >= limit]
             for s in expired:
                 self._forget(s)
         return expired
@@ -550,7 +597,7 @@ class Pool:
                 log.info("codex-cli: stopping a Codex session nobody resumed (idle)")
                 s.kill()
             with self.lock:
-                parked = [s for s in self.sessions.values() if s.state == "paused"]
+                parked = [s for s in self.sessions.values() if s.state in ("paused", "done")]
                 if not parked:
                     self._reaper = None
                     return

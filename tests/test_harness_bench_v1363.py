@@ -890,12 +890,16 @@ async def test_smoke_two_tasks_through_the_jarvis_lane_are_scored_end_to_end(tmp
         assert rec["answered_provider"] == "scripted" and rec["answered_model"] == "script-1"
         assert rec["files_outside"] == []
         assert (res.config_dir / "runs" / task_id / MARKER_NAME).exists()
-    # Three model calls each (two tool rounds + the answer); tool calls as scripted.
-    assert by["bugfix-pagination"]["model_rounds"] == 3 and by["bugfix-pagination"]["tool_calls"] == 2
-    assert by["explain-export-command"]["model_rounds"] == 3 and by["explain-export-command"]["tool_calls"] == 3
-    assert by["bugfix-pagination"]["model_calls"] == 3
+    # FOUR model calls each (two tool rounds + the answer + the FINISH
+    # CHECK's one round — part 3, Phase 2: the bench runs as a Build session,
+    # and both tasks change files); tool calls as scripted (no test command
+    # ran, so the check ran none: "none").
+    assert by["bugfix-pagination"]["model_rounds"] == 4 and by["bugfix-pagination"]["tool_calls"] == 2
+    assert by["explain-export-command"]["model_rounds"] == 4 and by["explain-export-command"]["tool_calls"] == 3
+    assert by["bugfix-pagination"]["model_calls"] == 4
+    assert by["bugfix-pagination"]["extra"]["finish"]["tests"] == "none"
     # Tokens: the lane's receipt, the ledger and the script's own count agree.
-    assert sum(r["tokens_in"] for r in res.records) == scripted.usage_in == 3 * 2 * 100 + 2 * (0 + 1 + 2)
+    assert sum(r["tokens_in"] for r in res.records) == scripted.usage_in == 4 * 2 * 100 + 2 * (0 + 1 + 2 + 3)
     assert sum(r["tokens_out"] for r in res.records) == scripted.usage_out
     # An unpriced provider off this network: cost unknown, never a made-up 0.
     assert by["bugfix-pagination"]["cost_metered_usd"] is None

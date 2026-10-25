@@ -146,12 +146,16 @@ async def test_a_build_turn_is_a_harness_turn_on_the_sessions_folder_under_its_o
     assert [(r.session_id, r.agent_run_id, r.called_as) for r in rows] == [
         (f"build:{sid}", f"build:{sid}", "Write")
     ]
-    # The daemon wrote the question and the reply.
+    # The daemon wrote the question and the reply. Part 3, Phase 2: the reply
+    # changed a file, so its FINISH CHECK ran — one more model round, whose
+    # answer ("Done.", the script's own) follows the reply's words — and the
+    # line keeps what it did (no test command ran: "none").
     msgs = messages_of(app, sid)
     assert [(m["role"], m["content"], m["turnId"]) for m in msgs] == [
-        ("user", "make hello.py", "bt-1"), ("assistant", "Wrote hello.py.", "bt-1"),
+        ("user", "make hello.py", "bt-1"), ("assistant", "Wrote hello.py.\n\nDone.", "bt-1"),
     ]
     reply = msgs[1]
+    assert reply["finish"]["tests"] == "none" and reply["finish"]["kept"] == 0, reply["finish"]
     assert reply["toolsUsed"] == ["write_file"] and reply["route"]["harness"]["dialect"] == "claude"
     assert any(p.endswith("hello.py") for p in reply["documents"])
     assert reply["steps"][0]["name"] == "write_file" and reply["steps"][0]["ok"] is True

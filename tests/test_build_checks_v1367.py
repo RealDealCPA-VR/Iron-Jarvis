@@ -106,7 +106,16 @@ async def test_a_check_past_its_timeout_is_stopped(app, work):
 
 async def test_without_the_users_grant_the_check_still_asks_nobody(app, work):
     """The carrier changes, the rule does not: a check runs on its own only
-    where the user already allowed the command tool beyond one call."""
+    where the user already allowed the command tool beyond one call.
+
+    (Part 3, Phase 2: the reply's FINISH CHECK would run the folder's check
+    again at the end, through the turn's own round — and in this posture, with
+    no grant, it CARDS like any command (pinned in test_finish_lanes_v1386).
+    This pin is about the after-edit check, so the folder turns the finish
+    check's test run off.)"""
+    hd = work / ".ironjarvis" / "harness"
+    hd.mkdir(parents=True, exist_ok=True)
+    (hd / "finish.toml").write_text("tests = false\n", encoding="utf-8")
     _sid, script, content = await _gpt_turn(app, work, "echo checked", "bc-ask", granted=[])
     assert "Check not run (running it needs the user's approval)" in content
     assert ("process_start", False) in _checks(app)
