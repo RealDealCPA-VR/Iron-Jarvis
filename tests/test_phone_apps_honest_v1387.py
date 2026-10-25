@@ -6,8 +6,11 @@ connected (1 tool)." and given none of GitHub's tools, so "list my open PRs on
 GitHub" from the phone got a model that believed it could look — and could
 not.
 
-THE DECISION (Option B, with the evidence in the report): the phone keeps no
-app tools, and says so plainly — in the model's prompt and in the answer.
+THE DECISION (Option B, with the evidence in the report): the phone's quick
+reply keeps no app tools, and says so plainly — in the model's prompt and in
+the answer. (Review: and it says the way that DOES work from the phone — an
+agent it hands the request to asks the phone before each use;
+tests/test_phone_apps_agent_v1387.py.)
 
 * The POST lane cannot show a card, so every armed tool there is GRANTED
   (``chat_turn.run_chat_turn``: armed → ``overrides[name] = "allow"`` +
@@ -71,13 +74,19 @@ SENDER = 4242
 SECTION = "# Apps named in this message"
 #: Every line the phone gets wears the sender's name (``InboundPoller.send_chunked``).
 PREFIX = "Iron Jarvis: "
+#: (Review, moved on purpose) BOTH real ways: an agent the phone hands the
+#: request to (it asks the phone before each use — tests/
+#: test_phone_apps_agent_v1387.py drives it end to end), or Chat on the PC.
 PHONE_LINE = (
-    "- GitHub: connected (1 tool), but its tools can't be used in this conversation with the"
-    " phone — only from Chat in Iron Jarvis on the PC."
+    "- GitHub: connected (1 tool), but this quick reply on the phone cannot use its tools. An"
+    " agent can: hand the request over with escalate_to_agent — the agent asks the user here,"
+    " on the phone, before each use of GitHub — or the user can ask in Chat in Iron Jarvis on"
+    " the PC."
 )
 NOTE = (
-    "\n\n_Note: I can't use GitHub from this conversation with your phone. To have me use it,"
-    " ask in Chat in Iron Jarvis on your PC._"
+    "\n\n_Note: I can't use GitHub in a quick reply on your phone. To have it used, ask me to"
+    " hand this to an agent (it asks you here before each use), or ask in Chat in Iron Jarvis"
+    " on your PC._"
 )
 
 
@@ -328,8 +337,9 @@ def test_only_an_app_whose_tools_this_conversation_lacks_gets_the_phone_line():
     gm = next(ln for ln in lines if ln.startswith("- Gmail:"))
     dr = next(ln for ln in lines if ln.startswith("- Google Drive:"))
     no = next(ln for ln in lines if ln.startswith("- Notion:"))
-    assert "can't be used in this conversation with the phone" in gh and "a line under your reply" in gh
-    assert "can't be used in this conversation with the phone" in gm and "a line under your reply" not in gm
+    assert "this quick reply on the phone cannot use its tools" in gh and "a line under your reply" in gh
+    assert "this quick reply on the phone cannot use its tools" in gm and "a line under your reply" not in gm
+    assert "escalate_to_agent" in gh and "before each use of GitHub" in gh
     # A drive signed in through the browser reaches chat through a memory
     # base — it is read on the phone too, so its line is not changed.
     assert dr == "- Google Drive: connected."
@@ -352,6 +362,7 @@ def test_the_note_names_each_app_once():
     assert phone_apps_note([]) == ""
     assert phone_apps_note(["GitHub"]) == NOTE
     assert phone_apps_note(["GitHub", "Gmail", "GitHub"]) == (
-        "\n\n_Note: I can't use GitHub and Gmail from this conversation with your phone. To have"
-        " me use them, ask in Chat in Iron Jarvis on your PC._"
+        "\n\n_Note: I can't use GitHub and Gmail in a quick reply on your phone. To have them"
+        " used, ask me to hand this to an agent (it asks you here before each use), or ask in"
+        " Chat in Iron Jarvis on your PC._"
     )

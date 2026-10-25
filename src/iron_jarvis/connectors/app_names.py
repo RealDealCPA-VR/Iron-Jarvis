@@ -1436,9 +1436,11 @@ def phone_unreachable(text: str, rows: list[dict[str, Any]]) -> list[dict[str, s
 
 def phone_apps_note(names: "list[str] | tuple[str, ...]") -> str:
     """The note under a reply in the PHONE's conversation (readiness 12B,
-    G39) for the connected apps it named and could not use — "" when none.
+    G39) for the connected apps it named and did not use — "" when none.
     Fixed words (never the model's), in the chat's note shape; each app
-    named once."""
+    named once. BOTH real ways (review): an agent the phone hands it to (its
+    session starts from the phone and asks the phone before each use), or
+    Chat on the PC."""
     seen: list[str] = []
     for n in names or []:
         n = " ".join(str(n or "").split())
@@ -1449,8 +1451,9 @@ def phone_apps_note(names: "list[str] | tuple[str, ...]") -> str:
     apps = seen[0] if len(seen) == 1 else ", ".join(seen[:-1]) + " and " + seen[-1]
     it = "it" if len(seen) == 1 else "them"
     return (
-        f"\n\n_Note: I can't use {apps} from this conversation with your phone. To have me"
-        f" use {it}, ask in Chat in Iron Jarvis on your PC._"
+        f"\n\n_Note: I can't use {apps} in a quick reply on your phone. To have {it} used,"
+        " ask me to hand this to an agent (it asks you here before each use), or ask in"
+        " Chat in Iron Jarvis on your PC._"
     )
 
 
@@ -1525,24 +1528,30 @@ def apps_section(
                 if r.get("note"):
                     line = line.rstrip(".") + f"; {r['note']}."
                 if phone_own is not None and n:
-                    # Readiness 12B (G39): this conversation (the phone's)
+                    # Readiness 12B (G39): this quick reply (the phone's)
                     # arms no app tool — it cannot show a card, so a tool
-                    # armed here would run with nobody's OK.
+                    # armed here would run with nobody's OK. (Review) But an
+                    # AGENT the phone hands the request to can: its session
+                    # starts from the phone (origin comm:), holds every
+                    # connected app's tools (mcp:*) and asks the phone before
+                    # each use — said, never hidden.
                     line = line.rstrip(".") + (
-                        ", but its tools can't be used in this conversation with the phone"
-                        f" — only from {PHONE_APPS_PLACE}."
+                        ", but this quick reply on the phone cannot use its tools. An agent"
+                        " can: hand the request over with escalate_to_agent — the agent asks"
+                        f" the user here, on the phone, before each use of {name} — or the"
+                        f" user can ask in {PHONE_APPS_PLACE}."
                     )
                     if r.get("id") in phone_own:
                         line += (
-                            " Never guess what is in it or say you looked; say in a few"
-                            " words that you can't reach it from here — a line under your"
-                            " reply already tells the user how to have it done from the PC,"
-                            " so do not repeat that."
+                            " Never guess what is in it or say you looked. If you do not"
+                            " hand it over, say in a few words that this reply can't reach"
+                            " it — a line under your reply tells the user both ways, so do"
+                            " not repeat them."
                         )
                     else:
                         line += (
-                            f" If answering needs what is in the user's own {name}, say"
-                            " plainly that it can't be reached from here."
+                            f" If answering needs what is in the user's own {name}, hand"
+                            " the request over the same way."
                         )
             elif state == "not_working":
                 why = f" ({r['note']})" if r.get("note") else ""
