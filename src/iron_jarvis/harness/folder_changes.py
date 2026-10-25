@@ -120,9 +120,12 @@ _CACHE_FILE_PREFIXES = (".coverage.",)
 PROBLEM_TOO_MANY = "this folder has more than {limit} files to compare"
 PROBLEM_TOO_SLOW = "reading this folder took longer than {seconds:g} s"
 PROBLEM_UNREADABLE = "this folder could not be read"
+#: (Review: it said "(Iron Jarvis restarted after the reply was cut off)" as
+#: fact; a snapshot is also let go when newer replies of other sessions push
+#: it out — a carry-on can come hours later.)
 PROBLEM_NOT_KEPT = (
-    "the folder as it was when this reply began was not kept (Iron Jarvis restarted "
-    "after the reply was cut off)"
+    "the folder as it was when this reply began is no longer kept (it is kept only for the "
+    "newest replies of a few sessions, and not across a restart)"
 )
 
 

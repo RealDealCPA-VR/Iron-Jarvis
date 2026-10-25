@@ -494,3 +494,98 @@ async def test_a_stalled_walk_never_holds_the_reply_and_is_never_started_twice(e
         assert len(started) == 1, "a second walk of a folder still being read was started"
     finally:
         release.set()
+
+
+# --------------------------------------------------------------------------- #
+# 3. the note's words for what a command made
+# --------------------------------------------------------------------------- #
+
+FILES_HEAD = "## Files this reply made that the request does not name\n"
+
+
+def _files(note: str) -> str:
+    return note.split(FILES_HEAD, 1)[1].split("\n\n", 1)[0]
+
+
+def test_the_appeared_words_warn_that_a_left_scratch_file_breaks_the_test_run():
+    """A scratch file a COMMAND wrote (``cat > _probe.py <<EOF``) is listed
+    beside a program's log: the words keep the log and let the model remove
+    its own scratch file — and, like the file tools' list, say why it should
+    (a stray test file is picked up by the project's own test run, and by a
+    grader's). OLD WORDS: keep-only, no reason to remove one."""
+    assert "may be just what the task needs, so leave these as they are" in F.APPEARED_KEEP
+    assert "remove one only if you wrote it yourself as a scratch file and nothing needs it" in F.APPEARED_KEEP
+    assert "can break the project's own test run" in F.APPEARED_KEEP
+
+
+async def test_a_scratch_file_a_command_wrote_can_go_and_a_programs_log_stays(env):  # noqa: F811 — the fixture
+    """Replayed through the claude dialect in real Git bash: the model wrote
+    ``_probe.py`` with a heredoc and ran it, and a program wrote
+    ``server.log``. The note lists both in the keep-what-a-program-wrote
+    words; a model that follows them removes its own probe with a command
+    and keeps the log. The record counts the FILE TOOLS' files only, so
+    neither is counted ("1 scratch file removed" never means a command's)."""
+    from tests.test_finish_shell_replay_v1387 import BASH
+
+    if BASH is None:
+        pytest.skip("Git for Windows' bash is not installed here")
+    platform, ws, wire = env
+    probe = "cat > _probe.py <<'EOF'\nimport app\nprint(app.X)\nEOF\npython _probe.py"
+    program = 'python -c "open(\'server.log\', \'w\').write(\'listening\')"'
+    seen: list[str] = []
+
+    def follow_the_words(model: Model):
+        files = _files(model.calls[-1]["messages"][-1].content)
+        seen.append(files)
+        assert "- `_probe.py`" in files and "- `server.log`" in files
+        assert F.APPEARED_KEEP in files
+        return ("1. met: checked.", [ToolCall(id="rm", name="Bash", arguments={"command": "rm _probe.py"})])
+
+    wire([[ToolCall(id="b1", name="Bash", arguments={"command": probe})],
+          [ToolCall(id="b2", name="Bash", arguments={"command": program})],
+          "Probed X; the server is up.", follow_the_words, "Removed my probe; kept the server's log."])
+    out = await _stream(platform, _body(ws, text="check what X is in app.py and start the server"), harness="claude")
+    assert seen, "no finish note"
+    assert not (ws / "_probe.py").exists() and (ws / "server.log").read_text() == "listening"
+    assert out["done"]["finish"]["removed"] == 0 and out["done"]["finish"]["kept"] == 0
+
+
+async def test_files_put_in_a_folder_the_request_names_are_listed_with_the_keep_words(env):  # noqa: F811 — the fixture
+    """DECIDED: a folder the request names (``inbox/``) does not exempt the
+    files under it — a named ``tests/`` folder would then hide a stray
+    scratch test file from the file tools' list — but what a command put
+    there is listed only in the keep-what-the-task-needs words, never in the
+    "remove the rest" list."""
+    platform, ws, wire = env
+    (ws / "incoming").mkdir()
+    (ws / "inbox").mkdir()
+    (ws / "incoming" / "a.csv").write_text("amount\n1\n", encoding="utf-8")
+    copy = _py("import shutil; shutil.copy('incoming/a.csv', 'inbox/a.csv')")
+    model = wire([_shell(copy), "Copied it.", "1. met."])
+    await _stream(platform, _body(ws, text="copy the file from incoming/ into inbox/"))
+    files = _files(model.notes()[0])
+    assert files == "None made with your file tools. " + F.APPEARED_HEAD + "\n- `inbox/a.csv`\n" + F.APPEARED_KEEP
+    assert "remove the rest" not in files
+
+
+async def test_a_carry_on_whose_first_snapshot_was_let_go_never_blames_a_restart(env, monkeypatch):  # noqa: F811 — the fixture
+    """The first snapshot of a cut-off reply is kept for the newest replies of
+    a few sessions only: a carry-on hours later, after work in four other
+    Build sessions, finds it gone with NO restart. OLD WORDS: "(Iron Jarvis
+    restarted after the reply was cut off)" — said as fact either way."""
+    from tests.test_finish_shell_writes_v1387 import _cut_then_carry_on
+
+    def other_sessions_since():
+        for i in range(FC.MAX_KEPT_REPLIES):
+            FC.keep(f"build:other-{i}", f"turn-{i}", FC.unavailable("x", "y"))
+
+    monkeypatch.setattr(FC, "forget_kept", other_sessions_since)
+    model, _out = await _cut_then_carry_on(platform=env[0], ws=env[1], wire=env[2], forget=True,
+                                           carry_moves=[_write_call("notes.md"), "Done.", "1. met."])
+    files = _files(model.notes()[0])
+    assert F.FinishCheck.CANNOT_COMPARE.format(why=FC.PROBLEM_NOT_KEPT) in files
+    assert "Iron Jarvis restarted" not in files
+
+
+def _write_call(path: str) -> list[ToolCall]:
+    return [ToolCall(id="k1", name="write_file", arguments={"path": path, "content": "- x\n"})]

@@ -152,7 +152,8 @@ APPEARED_ALSO_HEAD = (
 )
 APPEARED_KEEP = (
     "A program's log, port or output file may be just what the task needs, so leave these as "
-    "they are; remove one only if you wrote it yourself as a scratch file and nothing needs it."
+    "they are; remove one only if you wrote it yourself as a scratch file and nothing needs it "
+    "(a scratch script or test file left in the folder can break the project's own test run)."
 )
 GONE_HEAD = "## Files that were here when this reply began and are gone now"
 GONE_ASK = (
