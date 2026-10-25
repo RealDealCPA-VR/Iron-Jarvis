@@ -23,6 +23,7 @@ PR that ships it.
 | The built-in stand-in that answers when no AI model is chosen (provider id `mock`) | **demo model**; what it says is "a scripted demo, not real answers"; under one reply: "Demo answer. No AI model ran." | mock, offline mock, offline demo, offline model, simulated mode |
 | One shell or CLI window on the Build page | **terminal** | pane |
 | Build's other view, where Jarvis writes, runs and checks code in a folder, one conversation per session | **Coding sessions**; one of them is a **coding session** | IJ harness, harness |
+| A coding session's reply drawn on one time axis, the tab beside Plan (v1.390.0): the model you talk to, each step it took, each helper with its model | **Timeline**; its pieces are **steps**, **model calls** and **helpers** (the run log's words) | trace, span, waterfall, orchestrator, LLM call, round (never shown) |
 | Anything Iron Jarvis knows how to do | **skill** | — |
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |
 | A destination you can talk back to | **two-way destination** | gateway, messaging platform |

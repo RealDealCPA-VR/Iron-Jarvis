@@ -551,6 +551,55 @@ test.describe("390 px — Build never pans sideways", () => {
     const shots = process.env.IJ_E2E_SHOTS;
     if (shots) await page.screenshot({ path: join(shots, "ij-harness-agent-browser-phone.png"), fullPage: true });
   });
+  // v1.390.0 (the long-jobs plan's Phase 1): the Timeline tab draws the demo
+  // model's real reply (its model call, its step) on one time axis — at
+  // 390 px nothing pans sideways, every bar is inside the window, and the
+  // rows scroll inside the tab.
+  test("the Timeline tab draws the reply and fits the width", async ({ page }) => {
+    test.skip(!sessionId, "needs the session from the first test");
+    await page.goto(`/terminals?session=${sessionId}`);
+    await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+    await page.getByTestId("harness-pane-tab-timeline").click();
+    await expect(page.getByTestId("pane-timeline")).toBeVisible();
+    await expect(page.getByTestId("timeline-totals")).toContainText("model call", { timeout: 20_000 });
+    // The model you talk to, named as the composer names it.
+    await expect(page.getByTestId("timeline-row").first()).toContainText("Demo model (scripted)");
+    await page.waitForTimeout(500);
+    const pan = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(pan).toBeLessThanOrEqual(0);
+    const fits = await page.evaluate(() => {
+      const vw = window.innerWidth;
+      const all = [...document.querySelectorAll('[data-testid="timeline-bar"], [data-testid="timeline-segment"], [data-testid="timeline-row"]')];
+      const rows = document.querySelector('[data-testid="timeline-rows"]');
+      return {
+        vw,
+        right: Math.max(...all.map((el) => el.getBoundingClientRect().right)),
+        left: Math.min(...all.map((el) => el.getBoundingClientRect().left)),
+        scrollsInside: rows ? getComputedStyle(rows).overflowY : "",
+        noSideways: rows ? getComputedStyle(rows).overflowX : "",
+      };
+    });
+    expect(fits.right).toBeLessThanOrEqual(fits.vw);
+    expect(fits.left).toBeGreaterThanOrEqual(0);
+    expect(fits.scrollsInside).toBe("auto");
+    expect(fits.noSideways).toBe("hidden");
+    // A press opens the card, inside the window too.
+    await page.getByTestId("timeline-bar").first().click();
+    const card = page.getByTestId("timeline-card");
+    await expect(card).toBeVisible();
+    const cardBox = await card.boundingBox();
+    expect(cardBox!.x + cardBox!.width).toBeLessThanOrEqual(390);
+    const after = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(after).toBeLessThanOrEqual(0);
+    const shots = process.env.IJ_E2E_SHOTS;
+    if (shots) await page.screenshot({ path: join(shots, "ij-harness-timeline-phone.png"), fullPage: true });
+    // And beside the conversation on a desktop window (the tab is in the
+    // narrow column there): nothing pans either.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+    if (shots) await page.screenshot({ path: join(shots, "ij-harness-timeline-desktop.png") });
+  });
   // v1.373.0 (part 2, Phase 2): the "/" and "@" lists open ABOVE the box —
   // never over it, never past the window's top or sides — and Escape closes
   // each one without sending or touching the words.
