@@ -233,6 +233,17 @@ class Session(SQLModel, table=True):
     #: exactly the pre-v1.299.0 behaviour. Decoded by
     #: ``scheduling/knobs.session_options``. Additive column (auto-reconciled).
     options_json: str = "{}"
+    #: THE FAILURE'S OWN WORDS, kept apart (readiness 12A, G28): a failed run's
+    #: ``summary`` is one plain sentence ("The run failed: Codex couldn't
+    #: finish this task. …") and the adapter's or server's raw text — masked,
+    #: bounded (``failure_words.technical_text``) — is kept here for the run
+    #: page's folded Details, the chat's title/fix/technical split for a run.
+    #: Written only by ``Orchestrator._finalize_failed``; "" when the summary
+    #: already IS the failure's words or nothing failed. Served by ``GET
+    #: /sessions/{id}`` only (never the lists). A continue/rerun builds a new
+    #: row, so it never inherits one. Additive column (auto-reconciled; NULL
+    #: on older rows).
+    failure_detail: str = ""
     created_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 

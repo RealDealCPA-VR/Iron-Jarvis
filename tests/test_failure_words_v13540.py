@@ -275,8 +275,18 @@ async def test_a_failed_run_summary_is_the_plain_headline_not_the_exception_clas
 
 
 async def test_an_unrecognised_failure_keeps_its_own_words_without_the_class(tmp_path):
+    """Readiness 12A (G28), moved on purpose: an unrecognised failure no
+    longer reads its RAW text on the summary (the run page, the Schedules
+    row, the bell and the phone all print it). It says what failed and what
+    to do next; the failure's own words are kept apart, for the run page's
+    folded Details (``Session.failure_detail``)."""
     p = build_platform(str(tmp_path / "home"))
     orch = Orchestrator(p)
     s = await orch.create_session("go", AgentType.BUILDER)
     await orch._finalize_failed(s, RuntimeError("the build script exited 2"))
-    assert _summary(p.engine, s.id) == "The run failed: the build script exited 2"
+    assert _summary(p.engine, s.id) == (
+        "The run failed: Iron Jarvis couldn't finish this task. Run it again. If it happens "
+        "again, the run's Details in Iron Jarvis say what went wrong."
+    )
+    with session_scope(p.engine) as db:
+        assert db.get(Session, s.id).failure_detail == "the build script exited 2"

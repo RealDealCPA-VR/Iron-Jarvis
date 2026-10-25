@@ -170,7 +170,16 @@ const positive = (v: unknown): boolean => typeof v === "number" && Number.isFini
 export function runReachedAModel(
   runs: readonly ReachedRun[] | null | undefined,
   tools?: readonly unknown[] | null,
+  receipt?: { reached_a_model?: unknown } | null,
 ): boolean {
+  // Readiness 12A (0f.3): the daemon's OWN verdict for THIS run, when its
+  // receipt carries one (agents/outcome.reached_a_model also counts the
+  // router's dispatch events). A cloud call that went out and then failed
+  // before any step, token or tool call left no trace in the transcript, so
+  // the page said nothing while the receipt said "cloud". Only an explicit
+  // `true` counts: an older daemon sends no key (and judged every stored
+  // provider), so its receipt alone never says a model was reached.
+  if (receipt && receipt.reached_a_model === true) return true;
   if (Array.isArray(tools) && tools.length > 0) return true;
   return (Array.isArray(runs) ? runs : []).some(
     (r) => !!r && (positive(r.steps) || positive(r.input_tokens) || positive(r.output_tokens)),
@@ -318,6 +327,34 @@ export const OLD_STOPPED_SUMMARIES: Readonly<Record<string, string>> = {
   "session cancelled by the user.": STOPPED_SUMMARY,
   "cancelled while queued (never started).": STOPPED_BEFORE_START,
 };
+
+/* ---- A failed run's own words, folded (readiness 12A, G28) --------------- */
+
+/** The longest technical text the fold shows (the daemon already caps it at
+ *  2,000 — `failure_words.technical_text`). */
+export const FAILURE_DETAIL_MAX = 2000;
+
+/**
+ * The technical text behind a FAILED run's plain summary, for the folded
+ * "Details" under it — or null. Since readiness 12A the daemon writes a
+ * failed run's summary as one plain sentence ("The run failed: Codex
+ * couldn't finish this task. …") and keeps the adapter's or server's own
+ * words apart (`Session.failure_detail`, served by GET /sessions/{id} only),
+ * the chat's title / fix / technical split for a run. Shown only on a failed
+ * run, as text (never markdown — it is the server's words), one per page;
+ * null when absent (an older daemon, a run that did not fail) or when the
+ * summary already says it.
+ */
+export function failureDetailShown(
+  session: { status?: string | null; summary?: string | null; failure_detail?: unknown } | null | undefined,
+): string | null {
+  if (!session) return null;
+  if ((session.status ?? "").trim().toLowerCase() !== "failed") return null;
+  const raw = typeof session.failure_detail === "string" ? session.failure_detail.trim() : "";
+  if (!raw) return null;
+  if ((session.summary ?? "").includes(raw)) return null;
+  return raw.length > FAILURE_DETAIL_MAX ? `${raw.slice(0, FAILURE_DETAIL_MAX - 1)}…` : raw;
+}
 
 /** The summary the receipt shows. The reconcile's stock words are hidden
  *  while the "Stopped when Iron Jarvis restarted" line stands (it says the

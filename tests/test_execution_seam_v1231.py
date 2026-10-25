@@ -244,6 +244,10 @@ async def test_a_vanished_project_row_is_recorded_too(platform):
     assert "no longer exists" in s.summary
 
 
+#: Readiness 12A (G28): the run's words for a failure no model caused.
+OWN_REASON = "Iron Jarvis couldn't finish this task. Run it again. If it happens again, the run's Details in Iron Jarvis say what went wrong."
+
+
 async def test_a_failed_run_keeps_the_folder_note_under_the_failure(platform, tmp_path, monkeypatch):
     root = tmp_path / "gone"
     root.mkdir()
@@ -261,8 +265,10 @@ async def test_a_failed_run_keeps_the_folder_note_under_the_failure(platform, tm
     row = _row(platform.engine, s.id)
     assert row.status is SessionStatus.FAILED
     # v1.354.0 (G28): the summary says what happened in plain words; the
-    # exception class goes to the log, never to the person.
-    assert row.summary.startswith("The run failed: provider exploded")
+    # exception class goes to the log, never to the person. Readiness 12A
+    # (moved on purpose): nor the raw text — it rides ``failure_detail``.
+    assert row.summary.startswith(f"The run failed: {OWN_REASON}")
+    assert row.failure_detail == "provider exploded"
     assert "RuntimeError" not in row.summary
     assert row.summary.rstrip().endswith(s.summary)
 

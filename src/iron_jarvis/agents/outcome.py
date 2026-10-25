@@ -267,7 +267,15 @@ def _fill_receipt(out: dict[str, Any], db, session: Session, manager: Any, confi
         provider = out.get("provider") or ""
         # v1.361.0: judged only when the work reached a model — a run the
         # router refused before sending anything says nowhere (None).
-        if provider and reached_a_model(db, session.id, provider):
+        reached = bool(provider) and reached_a_model(db, session.id, provider)
+        # Readiness 12A (0f.3): the verdict itself rides the receipt, so the
+        # run page can say where a run went that a model's dispatch reached
+        # and that then failed before any step, token or tool call (its
+        # transcript alone shows nothing, and the page said nothing while
+        # this receipt said "cloud"). An older daemon sends no key, and the
+        # page then keeps reading its transcript only.
+        out["reached_a_model"] = reached
+        if reached:
             from ..providers.egress import stays_on_this_network
 
             out["on_this_network"] = bool(
@@ -346,6 +354,7 @@ def session_result(
     if receipt:
         out["route_note"] = ""
         out["on_this_network"] = None
+        out["reached_a_model"] = False
         out["activity"] = []
     try:
         with session_scope(engine) as db:

@@ -614,20 +614,40 @@ GENERIC_FIX_RUN = f"Run it again. If it happens again, choose another model in {
 #: provider it knows ("Claude Code couldn't finish this answer"), never an
 #: anonymous "Iron Jarvis" over a model's failure.
 GENERIC_TITLE_TAIL = " couldn't finish this answer"
+#: Readiness 12A (G28): the generic headline READ OUTSIDE THE CHAT. A run is
+#: a task, not an answer: "Codex couldn't finish this task" on its run page,
+#: its Schedules row, the bell and the phone — where the raw text ("codex-cli:
+#: CLI exited 1: error: unexpected status 400 …") used to stand.
+GENERIC_TITLE_RUN_TAIL = " couldn't finish this task"
+GENERIC_TITLE_RUN = f"Iron Jarvis{GENERIC_TITLE_RUN_TAIL}"
+#: Readiness 12A (G28): the run's generic fix when NO model caused the
+#: failure (Iron Jarvis's own fault): there is no other model to choose, so it
+#: says where the folded technical text is — the run page's "Details" fold
+#: (``Session.failure_detail``), which every surface's row links to.
+GENERIC_FIX_RUN_OWN = "Run it again. If it happens again, the run's Details in Iron Jarvis say what went wrong."
 
 
-def generic_title(name: str = "") -> str:
+def generic_title(name: str = "", *, run: bool = False) -> str:
     """The generic headline: "<Name> couldn't finish this answer" for a
-    provider it knows, else :data:`GENERIC_TITLE`. Pure."""
+    provider it knows, else :data:`GENERIC_TITLE`. ``run`` (readiness 12A,
+    G28): read outside the chat, "… couldn't finish this task". Pure."""
     n = " ".join(str(name or "").split())
-    return f"{heading(n)}{GENERIC_TITLE_TAIL}" if n else GENERIC_TITLE
+    tail = GENERIC_TITLE_RUN_TAIL if run else GENERIC_TITLE_TAIL
+    if n:
+        return f"{heading(n)}{tail}"
+    return GENERIC_TITLE_RUN if run else GENERIC_TITLE
 
 
 def is_generic_title(title: Any) -> bool:
-    """Is *title* the generic headline (named or not)? The stream lane asks,
-    to say a failure before the answer began as what it is. Pure."""
+    """Is *title* the generic headline (named or not, a chat's or a run's)?
+    The stream lane asks, to say a failure before the answer began as what
+    it is. Pure."""
     t = str(title or "")
-    return t == GENERIC_TITLE or t.endswith(GENERIC_TITLE_TAIL)
+    return (
+        t in (GENERIC_TITLE, GENERIC_TITLE_RUN)
+        or t.endswith(GENERIC_TITLE_TAIL)
+        or t.endswith(GENERIC_TITLE_RUN_TAIL)
+    )
 
 
 def _generic_name(exc: BaseException | None, provider: str, manager: Any) -> str:
@@ -698,45 +718,130 @@ def friendly_error(
         words = None
     if words is not None:
         title, fix = words
+    elif run:
+        # Readiness 12A (G28): the run's own generic words (see
+        # :func:`_run_generic_words`), so the router's background-task banner
+        # and the run's summary say one thing.
+        title, fix = _run_generic_words(exc, provider, manager)
     else:
         title = generic_title(_generic_name(exc, provider, manager))
-        fix = GENERIC_FIX_RUN if run else GENERIC_FIX
+        fix = GENERIC_FIX
     return {"title": title, "fix": fix, "technical": technical_text(exc, technical)}
 
 
-def plain_reason(exc: BaseException | None, *, manager: Any = None) -> str:
-    """One plain sentence for a run summary ("The run failed: <this>"): the
-    headline and its fix when the failure is recognised, else the failure's
-    own message (masked) — never the exception's CLASS, which goes to the
-    log. Never raises; never empty.
+def _run_generic_words(exc: BaseException | None, provider: str, manager: Any) -> "tuple[str, str]":
+    """``(title, fix)`` for a RUN's failure nothing recognised (readiness 12A,
+    G28): WHAT failed — the provider by its plain name when a provider's
+    error is in the chain ("Codex couldn't finish this task"), else Iron
+    Jarvis itself — and what to do next: choose another model when a model
+    failed, else where the details are. Never the failure's own text (that is
+    the technical detail, kept apart). Never raises."""
+    try:
+        name = _generic_name(exc, provider, manager)
+    except Exception:  # noqa: BLE001 — wording only
+        name = ""
+    return generic_title(name, run=True), (GENERIC_FIX_RUN if name else GENERIC_FIX_RUN_OWN)
+
+
+def worded_message(exc: BaseException | None) -> str:
+    """The failure's OWN sentence when it was already written for a person,
+    else "" (readiness 12A, G28). Those failures carry a marker, never a
+    guess from their words:
+
+    * ``no_failover`` — the refusals worded BY KIND for the user (Iron-Proxy's
+      account sentences, a local-only chat's refusal, a held Build session,
+      Codex's own session cap);
+    * ``plain_words`` — Iron Jarvis's own refusals written as one sentence
+      (``agents.orchestrator.EmergencyStopOn``).
+
+    A safety refusal (:class:`~.adapters.base.ProviderRefusal`) is not one
+    here: :func:`classify` words it for where it is read. The adapter's
+    "<provider id>: " prefix is left out (an engine id, never the user's
+    word), secret-shaped values masked, cut to 400. Never raises."""
+    seen = 0
+    cur = exc
+    while cur is not None and seen < _CHAIN:
+        try:
+            marked = getattr(cur, "no_failover", False) is True or getattr(
+                cur, "plain_words", False
+            ) is True
+            if marked and str(getattr(cur, "kind", "") or "") != "refusal":
+                text = " ".join(str(cur or "").split())
+                m = _PROVIDER_PREFIX_RX.match(text)
+                if m is not None and m.group("p") in PLAIN_NAMES:
+                    text = text[m.end():].strip()
+                if text:
+                    try:
+                        from ..detections.redact import mask
+
+                        text = mask(text)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return undoubled(text)[:400]
+        except Exception:  # noqa: BLE001 — a hostile __str__ is no reason to fail
+            pass
+        cur = cur.__cause__ or cur.__context__
+        seen += 1
+    return ""
+
+
+def _hint(provider: str) -> str:
+    """A caller's provider hint that may NAME a failure: never Auto (a choice,
+    not a provider) or the demo model (it never fails a call)."""
+    p = " ".join(str(provider or "").split())
+    return "" if p.lower() in ("auto", "mock") else p
+
+
+def run_failure_words(
+    exc: BaseException | None, *, manager: Any = None, provider: str = ""
+) -> "tuple[str, str]":
+    """``(reason, technical)`` for a failed RUN (readiness 12A, G28) — the ONE
+    rule every surface outside the chat reads (the run's summary, so its run
+    page, its Schedules row, the bell, the phone, the computer a task came
+    from):
+
+    * ``reason`` — one plain sentence, never the server's or the adapter's
+      raw text: a recognised failure's headline and fix (:func:`classify`,
+      worded for a run); a failure already written for a person, as it is
+      (:func:`worded_message`); else WHAT failed and what to do next
+      (:func:`_run_generic_words`: "Codex couldn't finish this task. Run it
+      again. If it happens again, choose another model in Settings.");
+    * ``technical`` — the failure's own text (masked, bounded) for the run
+      page's folded Details, or "" when the reason already IS that text.
+
+    ``provider`` is the run's provider, a hint used only when the failure
+    names none itself. Never raises; the reason is never empty."""
+    hint = _hint(provider)
+    try:
+        words = classify(exc, provider=hint, manager=manager, surface=SURFACE_RUN)
+    except Exception:  # noqa: BLE001
+        words = None
+    try:
+        technical = technical_text(exc)
+    except Exception:  # noqa: BLE001
+        technical = ""
+    if words is not None:
+        return f"{words[0]}. {words[1]}", technical
+    worded = worded_message(exc)
+    if worded:
+        return worded, ""
+    title, fix = _run_generic_words(exc, hint, manager)
+    return f"{title}. {fix}", technical
+
+
+def plain_reason(exc: BaseException | None, *, manager: Any = None, provider: str = "") -> str:
+    """One plain sentence for a run summary ("The run failed: <this>"):
+    :func:`run_failure_words`' reason — the headline and its fix when the
+    failure is recognised, a failure already worded for a person as it is,
+    else what failed and what to do next. Never the exception's CLASS and,
+    since readiness 12A (G28), never the failure's raw text (that rides the
+    run's folded Details). Never raises; never empty.
 
     v1.359.0 (wave 9): a run's summary is read OUTSIDE the chat (its
     Schedules row, its run page, the bell, the phone), so its fix is always
     the run's ("Run it again, or choose another model in Settings."), never
     "Press Retry, or pick another model for this chat."."""
     try:
-        words = classify(exc, manager=manager, surface=SURFACE_RUN)
+        return run_failure_words(exc, manager=manager, provider=provider)[0]
     except Exception:  # noqa: BLE001
-        words = None
-    if words is not None:
-        return f"{words[0]}. {words[1]}"
-    raw = ""
-    try:
-        raw = " ".join(str(exc or "").split())
-    except Exception:  # noqa: BLE001
-        raw = ""
-    if raw:
-        try:
-            from ..detections.redact import mask
-
-            raw = mask(raw)
-        except Exception:  # noqa: BLE001
-            pass
-        # v1.358.0: never "claude-cli: claude-cli: …" on a run summary.
-        return undoubled(raw)[:400]
-    try:
-        from .router import failure_reason
-
-        return f"it stopped with an error ({failure_reason(exc)})"  # type: ignore[arg-type]
-    except Exception:  # noqa: BLE001
-        return "it stopped with an error"
+        return f"{GENERIC_TITLE_RUN}. {GENERIC_FIX_RUN_OWN}"

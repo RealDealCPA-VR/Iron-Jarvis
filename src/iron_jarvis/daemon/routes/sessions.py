@@ -1024,8 +1024,13 @@ def register(app: FastAPI, d) -> None:
         session = d.orchestrator.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
+        row = _session_row(d, session)
+        # Readiness 12A (G28): a failed run's own (masked) technical words,
+        # for the run page's folded Details under its plain summary. Only
+        # here — a list row never carries up to 2,000 characters per run.
+        row["failure_detail"] = str(getattr(session, "failure_detail", "") or "")
         return {
-            "session": _session_row(d, session),
+            "session": row,
             "transcript": d.orchestrator.transcript(session_id) if transcript else None,
         }
 

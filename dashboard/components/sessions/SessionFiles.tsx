@@ -50,6 +50,10 @@ export interface SessionResult {
    *  no provider to judge. The run page's Model line reads both (v1.360.1). */
   provider?: string;
   on_this_network?: boolean | null;
+  /** Readiness 12A (0f.3): the daemon's own verdict that this run's work
+   *  reached a model (agents/outcome.reached_a_model, dispatch events
+   *  included); absent from an older daemon. */
+  reached_a_model?: boolean;
   [k: string]: unknown;
 }
 

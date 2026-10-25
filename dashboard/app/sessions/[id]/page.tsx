@@ -73,7 +73,9 @@ import { isMissionRow } from "@/lib/missionLinks";
 import { tookMs } from "@/lib/ranOnWords";
 import { phaseLabel } from "@/lib/stepWords";
 import { LOW_TRUST_CANNOT } from "@/lib/trustWords";
+import { DETAILS_WORDS } from "@/lib/failureActions";
 import {
+  failureDetailShown,
   findContinuation,
   liveEventWords,
   offersRestartContinue,
@@ -162,6 +164,12 @@ export default function SessionDetailPage({
   // child, whose job continues from the run that started it.
   const restartOffer = session ? offersRestartContinue(session, runs) : false;
   const summaryShown = session ? shownSummary(session.summary, interrupted) : null;
+  // Readiness 12A (G28): a failed run's summary is one plain sentence; the
+  // failure's own (masked) words are folded under it, never in it. Read off
+  // GET /sessions/{id} only (the lists do not carry them).
+  const failureDetail = interrupted
+    ? null
+    : failureDetailShown(session as (SessionView & { failure_detail?: unknown }) | undefined);
 
   /* ---- The receipt's words (v1.354.0, G20) -------------------------------
    * The task's first line is the title (the id sits behind a copy button);
@@ -194,7 +202,7 @@ export default function SessionDetailPage({
   // agent run is saved before the first model call, so "a run exists" is not
   // the sign): only a step a model answered, its tokens, or a tool call it
   // asked for is (runPageWords.runReachedAModel).
-  const reachedAModel = runReachedAModel(runs, tools);
+  const reachedAModel = runReachedAModel(runs, tools, receipt?.session_id === id ? receipt : null);
   const where =
     session && !isActive && reachedAModel
       ? runWhere(session.provider, session.model, catalog, receipt?.session_id === id ? receipt : null)
@@ -633,6 +641,17 @@ export default function SessionDetailPage({
                 >
                   <Markdown content={summaryShown} />
                 </div>
+              )}
+              {failureDetail && (
+                <details data-testid="session-failure-details" className="-mt-2 mb-4 px-1 text-xs text-zinc-500">
+                  <summary className="cursor-pointer select-none hover:text-zinc-300">{DETAILS_WORDS}</summary>
+                  <p
+                    data-testid="session-failure-technical"
+                    className="mt-1.5 whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-zinc-400"
+                  >
+                    {failureDetail}
+                  </p>
+                </details>
               )}
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 {/* v1.315.0 (one AI identity): a mission's coordinator is
