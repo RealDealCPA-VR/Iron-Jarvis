@@ -58,6 +58,20 @@ def test_both_cors_branches_allow_the_viewer_header(tmp_path, monkeypatch, branc
     assert r.headers.get("cache-control") != "no-store"  # … and not undone
 
 
+def test_the_preflight_needs_no_token_with_the_install_token_on(tmp_path, monkeypatch):
+    """The packaged app sends its install token on every request, so the
+    stream was preflighted before the viewer header too; the preflight itself
+    carries no token and must still be answered (CORS sits OUTSIDE the token
+    guard)."""
+    monkeypatch.setenv("IRONJARVIS_TOKEN", "sekrit-12b")
+    client = TestClient(create_app(str(tmp_path)), base_url="http://127.0.0.1:8787")
+    r = _preflight(client, "/chat/stream", "POST")
+    assert r.status_code == 200, r.text
+    assert "x-ij-viewer" in r.headers.get("access-control-allow-headers", "").lower()
+    # … while the request itself still needs the token.
+    assert client.post("/chat/turns/t/away", json={"viewer": "v"}, headers={"Origin": WEB}).status_code == 401
+
+
 def test_a_streams_own_responses_say_no_store(tmp_path):
     """The stream reader sends no ``cache`` key any more (it defeated the
     preflight cache); the daemon's own no-store must cover the stream and the
