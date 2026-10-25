@@ -16,10 +16,13 @@ lost runs themselves, and what the review found past them — or is a GUARD
 1b. THE FALSE ACCUSATION: both lost runs' replies ended with the chat's "no
     file was actually written this turn" after a bash heredoc WROTE calc.py,
     and every process-http-server reply ("saved … to status.json") got
-    "nothing was written to disk … that file does not exist". The Build
-    turn's folder comparison now decides (``FinishCheck.folder_wrote``);
-    without one, neither note claims nothing was written after a command
-    (or code, a hand-off, an app's tool) ran. Both lanes, lock-step.
+    "nothing was written to disk … that file does not exist". Neither note
+    now claims nothing was written after something that can write without a
+    file tool RAN — a command (in a Build turn, one that failed too:
+    ``FinishCheck.may_have_written``), code, a hand-off, an app's tool. The
+    folder comparison is not used to say the opposite: it never sees an
+    ignored or pruned folder or a file outside the session's folder, so it
+    can prove a write, never its absence. Both lanes, lock-step.
 """
 
 from __future__ import annotations
@@ -204,41 +207,54 @@ async def test_a_file_a_command_wrote_is_never_called_unwritten(env, lane, monke
 
 
 @pytest.mark.parametrize("lane", ["stream", "post"])
-async def test_a_command_that_wrote_nothing_still_gets_the_true_note(env, lane, monkeypatch):  # noqa: F811 — the fixture
-    """THE GUARD: a command ran, the folder was compared, nothing was
-    written — so "no file was written" is TRUE and both notes say it, as
-    they always did (mutation: a folder verdict that is never False)."""
+async def test_a_command_that_ran_and_failed_after_writing_is_never_accused(env, lane, monkeypatch):  # noqa: F811 — the fixture
+    """A command wrote the file and then FAILED (a heredoc, then a test that
+    exits 1): ``tools_used`` holds only the calls that succeeded, so the
+    notes' own rule could not see it — the Build turn's finish check can
+    (``FinishCheck.may_have_written``). OLD CODE: both notes."""
     platform, ws, wire = env
-    model = wire([_shell(_py("print(1)")), "Created report.csv with the totals."])
+    write_then_fail = _py("open('report.csv', 'w').write('a,b'); import sys; sys.exit(1)")
+    wire([_shell(write_then_fail), "Created report.csv with the totals.", _met])
+    done, _ = await _lane(lane, platform, _body(ws, text=ASKS_FOR_A_FILE), monkeypatch)
+    assert (ws / "report.csv").exists() and "shell" not in done["tools_used"]
+    assert not _said_nothing_written(done["reply"]), done["reply"]
+
+
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_a_file_written_where_the_folder_is_not_compared_is_never_accused(env, lane, monkeypatch):  # noqa: F811 — the fixture
+    """WHY THE FOLDER'S SILENCE IS NOT EVIDENCE: the command wrote the file
+    the user asked for into a folder the .gitignore names (`out/`, never
+    walked) — the comparison saw nothing, and "nothing was written" would be
+    false. A snapshot can prove a write, never that none happened. OLD CODE:
+    both notes."""
+    platform, ws, wire = env
+    (ws / ".gitignore").write_text("out/\n", encoding="utf-8")
+    write = _py("import os; os.makedirs('out', exist_ok=True); open('out/report.csv', 'w').write('a,b')")
+    model = wire([_shell(write), "Created out/report.csv with the totals."])
+    done, _ = await _lane(lane, platform, _body(ws, text=ASKS_FOR_A_FILE), monkeypatch)
+    assert (ws / "out" / "report.csv").exists()
+    assert model.notes() == [] and "finish" not in done  # the comparison saw nothing to check
+    assert not _said_nothing_written(done["reply"]), done["reply"]
+
+
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_a_build_reply_that_ran_nothing_still_gets_the_true_notes(env, lane, monkeypatch):  # noqa: F811 — the fixture
+    """THE GUARD: no tool ran at all, and the reply claims a file — "nothing
+    was written" is TRUE and both notes say it, as they always did
+    (mutation: a writer counted that never ran)."""
+    platform, ws, wire = env
+    model = wire(["Created report.csv with the totals."])
     done, _ = await _lane(lane, platform, _body(ws, text=ASKS_FOR_A_FILE), monkeypatch)
     assert not (ws / "report.csv").exists() and model.notes() == [] and "finish" not in done
     assert "no file was actually written" in done["reply"], done["reply"]
     assert "The reply mentions `report.csv`, but no document-writing tool ran" in done["reply"]
 
 
-async def test_a_command_in_the_finish_round_counts_too(env):  # noqa: F811 — the fixture
-    """The folder was compared when the reply first ended (only a removed
-    file then); the model's answer to the note then WROTE the file with a
-    command. The comparison is stale: the notes must not say nothing was
-    written. OLD CODE: both notes."""
-    platform, ws, wire = env
-    (ws / "old.txt").write_text("x", encoding="utf-8")
-
-    def answer(model: Model):
-        assert model.calls[-1]["messages"][-1].content.startswith(NOTE_HEAD)
-        return ("1. met.", _shell(_py("open('report.csv', 'w').write('a,b')"), "s2"))
-
-    wire([_shell(_py("import os; os.remove('old.txt')")), "Done.", answer, "Created report.csv."])
-    out = await _stream(platform, _body(ws, text=ASKS_FOR_A_FILE))
-    assert (ws / "report.csv").exists() and "finish" in out["done"]
-    assert not _said_nothing_written(out["done"]["reply"]), out["done"]["reply"]
-
-
 @pytest.mark.parametrize("lane", ["stream", "post"])
 async def test_plain_chat_claims_nothing_after_a_command(env, lane, monkeypatch):  # noqa: F811 — the fixture
-    """Plain chat has no folder comparison: after a command ran (it may have
-    written the file), neither note says nothing was written. OLD CODE: both
-    notes, though the command wrote report.csv."""
+    """Plain chat (no finish check): after a command SUCCEEDED (it may have
+    written the file), neither note says nothing was written. OLD CODE: the
+    claim note ("report.csv does not exist"), though the command wrote it."""
     platform, ws, wire = env
     wire([_shell(_py("open('report.csv', 'w').write('a,b')")), "Created report.csv with the totals."])
     body = _body(ws, text=ASKS_FOR_A_FILE, tools=["shell", "write_file"])
@@ -252,41 +268,37 @@ async def test_plain_chat_claims_nothing_after_a_command(env, lane, monkeypatch)
     assert not _said_nothing_written(done["reply"]), done["reply"]
 
 
-def test_the_folders_verdict_on_what_a_reply_wrote(tmp_path):
-    """``FinishCheck.folder_wrote``: True when the comparison found a file
-    written (or moved in), or something that writes ran and the folder was
-    not compared — or ran again after it; False when it was compared and
-    nothing was written; None when nothing that writes ran."""
+def test_may_have_written_is_any_writer_that_ran(tmp_path):
+    """``FinishCheck.may_have_written``: a command that RAN (passing or
+    failing), never one the tool refused before any program started, never a
+    reader, never the harness's own call."""
     check = F.FinishCheck(engine=None, home=tmp_path, event_bus=None, session_id=SESSION,
                           folder=tmp_path, mark=0, request="x")
-    assert check.folder_wrote() is None
-    ran = ToolResult(ok=False, output="", data={"returncode": 1})  # it ran, and failed
-    check.observe(ToolCall(id="m1", name="shell", arguments={"command": "make"}), ran, refused=False)
-    assert check.folder_wrote() is True  # not compared: nothing can be claimed
-    check.compared, check._seen = True, FC.Changes()
-    assert check.folder_wrote() is False
-    check._seen = FC.Changes(deleted=["a.txt"])
-    assert check.folder_wrote() is False  # a removal writes nothing
-    for found in (FC.Changes(created=["a"]), FC.Changes(changed=["a"]), FC.Changes(moved=[("a", "b/a")])):
-        check._seen = found
-        assert check.folder_wrote() is True
-    check._seen = FC.Changes()
-    check.observe(ToolCall(id="m2", name="shell", arguments={"command": "make"}), ran, refused=False)
-    assert check.folder_wrote() is True  # it ran again after the comparison
+    assert check.may_have_written() is False
+    read = ToolResult(ok=True, output="x", data={})
+    check.observe(ToolCall(id="r1", name="read_file", arguments={"path": "a"}), read, refused=False)
+    refused = ToolResult(ok=False, output="", error="the git guard refused it", data={})
+    check.observe(ToolCall(id="m0", name="shell", arguments={"command": "git push -f"}), refused, refused=False)
+    assert check.may_have_written() is False
+    failed = ToolResult(ok=False, output="", data={"returncode": 1})  # it ran, and failed
+    check.observe(ToolCall(id="m1", name="shell", arguments={"command": "make"}), failed, refused=False)
+    assert check.may_have_written() is True
 
 
-def test_the_notes_read_the_folders_verdict():
+def test_the_notes_never_claim_nothing_after_a_writer_ran():
     body = SimpleNamespace(messages=[SimpleNamespace(role="user", content=ASKS_FOR_A_FILE)])
     armed = ["write_file", "shell"]
     true_note = _creation_honesty_note(body, armed, ["read_file"])
     assert "no file was actually written" in true_note
-    assert _creation_honesty_note(body, armed, ["shell"]) == ""  # no verdict: nothing claimed
-    assert _creation_honesty_note(body, armed, ["shell"], wrote=False) == true_note
-    assert _creation_honesty_note(body, armed, ["shell"], wrote=True) == ""
-    assert _creation_honesty_note(body, armed, ["read_file"], wrote=True) == ""
+    assert _creation_honesty_note(body, armed, ["read_file"], ran_writer=False) == true_note
+    assert _creation_honesty_note(body, armed, ["shell"]) == ""
+    assert _creation_honesty_note(body, armed, ["read_file"], ran_writer=True) == ""
     assert _creation_honesty_note(body, armed, ["bump"], custom_tools={"bump"}) == ""
     claim = "Saved to report.csv."
-    assert _claimed_write_note(claim, ["shell"], wrote=False) == _claimed_write_note(claim, ["read_file"]) != ""
+    judged = _claimed_write_note(claim, ["read_file"])
+    assert judged != "" and _claimed_write_note(claim, ["read_file"], ran_writer=False) == judged
+    assert _claimed_write_note(claim, ["shell"]) == ""
+    assert _claimed_write_note(claim, ["read_file"], ran_writer=True) == ""
 
 
 @pytest.mark.parametrize("name", ["claude-r1", "claude-r2"])

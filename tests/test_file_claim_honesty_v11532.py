@@ -142,15 +142,15 @@ def test_both_chat_lanes_actually_append_the_note():
         src = (root / rel).read_text(encoding="utf-8")
         # v1.351.0 fix round: the call also names the custom tools that ran
         # (read off the live registry), so the needle grew its keyword — and
-        # (finish-check review, part 3) the Build turn's folder verdict.
-        assert "_claimed_write_note(reply, tools_used, custom_tools=_custom_ran, wrote=_wrote)" in src, (
+        # (finish-check review, part 3) whether the Build turn ran a writer.
+        assert "_claimed_write_note(reply, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)" in src, (
             f"{rel} never appends the claim-check note"
         )
-        assert "_creation_honesty_note(body, armed, tools_used, custom_tools=_custom_ran, wrote=_wrote)" in src, (
-            f"{rel} never appends the creation note with the folder's verdict"
+        assert "_creation_honesty_note(body, armed, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)" in src, (
+            f"{rel} never appends the creation note with what the finish check saw run"
         )
-        assert "_wrote = _finish.folder_wrote() if _finish is not None else None" in src, (
-            f"{rel} does not read what the folder says the reply wrote"
+        assert "_ran_writer = _finish is not None and _finish.may_have_written()" in src, (
+            f"{rel} does not read whether a command that may have written ran"
         )
         assert "custom_tools_used(d.platform, tools_used)" in src, (
             f"{rel} does not name the custom tools that ran"

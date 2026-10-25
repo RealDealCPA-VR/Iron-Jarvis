@@ -664,8 +664,7 @@ def test_a_custom_tool_that_ran_can_have_changed_the_file():
     # Finish-check review (part 3, moved on purpose): a CREATION claim after
     # one is not judged either — the tool may have written the very file the
     # reply names ("saved … to status.json" after a command wrote it was
-    # told "that file does not exist"). A Build turn's folder decides when it
-    # was compared (`wrote=`; tests/test_finish_shell_writes_review_v1387).
+    # told "that file does not exist"; tests/test_finish_shell_writes_review_v1387).
     assert _claimed_write_note("Saved to report.docx.", ["bump_notes"], custom_tools={"bump_notes"}) == ""
     assert _claimed_write_note("Saved to report.docx.", ["read_document"]) != ""
 
@@ -726,21 +725,19 @@ def test_a_file_a_custom_tool_really_changed_is_not_accused(tmp_path, lane):
             assert "The reply says it changed `notes.md`" in out["reply"], out["reply"]
 
 
-def test_a_creation_claim_after_shell_is_left_alone_unless_the_folder_says_nothing_was_written():
+def test_a_creation_claim_after_shell_is_left_alone():
     """Finish-check review (part 3, moved on purpose): v1.351.0 kept judging
     a CREATION claim after a shell line byte for byte — and so every
     process-http-server reply ("saved its /status body to status.json", the
     command wrote it) ended with "nothing was written to disk this turn …
     that file does not exist". A shell line can write the file it names, so
-    without a folder comparison nothing is claimed; with one (a Build turn,
-    ``wrote=``) the folder decides, and a claim the folder contradicts reads
-    exactly as before."""
+    nothing is claimed after one (``ran_writer``: a Build turn's command that
+    ran and failed counts too); with none, a claim reads exactly as before."""
     assert _claimed_write_note("Saved to report.docx.", ["shell"]) == ""
     judged = _claimed_write_note("Saved to report.docx.", ["read_document"])
     assert judged != ""
-    assert _claimed_write_note("Saved to report.docx.", ["shell"], wrote=False) == judged
-    assert _claimed_write_note("Saved to report.docx.", ["shell"], wrote=True) == ""
-    assert _claimed_write_note("Saved to report.docx.", ["read_document"], wrote=True) == ""
+    assert _claimed_write_note("Saved to report.docx.", ["read_document"], ran_writer=True) == ""
+    assert _claimed_write_note("Saved to report.docx.", ["read_document"], ran_writer=False) == judged
 
 
 def test_a_file_shell_really_changed_is_not_accused(tmp_path):

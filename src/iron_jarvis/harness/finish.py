@@ -1763,11 +1763,6 @@ class FinishCheck:
         self._spec_before: dict[str, "bytes | None"] = {}
         #: True once the folder was really compared (both snapshots whole)
         self.compared = False
-        #: what the comparison found (``folder_changes.Changes``), and
-        #: whether something that can write without the journal ran AFTER it
-        #: (the finish round) — :meth:`folder_wrote`
-        self._seen: Any = None
-        self._wrote_after_compare = False
         #: why it could not be (said in the note, and logged)
         self.folder_problem = ""
         #: files that APPEARED while commands ran (no file tool made them)
@@ -1816,13 +1811,10 @@ class FinishCheck:
             # neither a command the model ran nor the reply's own work.
             return
         data = dict(getattr(result, "data", None) or {})
-        if _wrote_unjournaled(name, result, self._custom):
+        if not self._may_write and _wrote_unjournaled(name, result, self._custom):
             # A command, a program, a hand-off or an app's tool RAN: what it
-            # did to the folder counts (``harness/folder_changes``) — and once
-            # the folder was compared, it may have written since.
+            # did to the folder counts (``harness/folder_changes``).
             self._may_write = True
-            if self.compared:
-                self._wrote_after_compare = True
         if name in COMMAND_TOOLS and _never_ran(name, result):
             # Review: a command the TOOL refused before any program started
             # (the git guard's force push, low trust's sandbox, a folder
@@ -1976,29 +1968,24 @@ class FinishCheck:
         before = self._before
         seen = await asyncio.to_thread(lambda: FC.compare(before, after, GitIgnore(self.folder)))
         self.compared = True
-        self._seen = seen
         return seen
 
-    def folder_wrote(self) -> "bool | None":
-        """What the folder says about files this reply WROTE — for the chat's
-        honesty notes (``daemon/chat_turn._creation_honesty_note`` and
-        ``_claimed_write_note``), which must never say "no file was written"
-        after a command wrote one (review: both lost hard-expression-evaluator
-        runs wrote calc.py with a bash heredoc and their replies still ended
-        with "no file was actually written this turn").
-
-        True: the comparison found a file created, changed or moved in — or
-        something that can write without the journal ran and the folder was
-        not compared (or it ran again after the comparison), so nothing can
-        be claimed. False: the folder was compared, nothing was written in
-        it, and nothing that writes ran afterwards. None: nothing that can
-        write without the journal ran (the notes' own rule decides)."""
-        seen = self._seen
-        if seen is not None and (seen.created or seen.changed or seen.moved):
-            return True
-        if self._may_write and (not self.compared or self._wrote_after_compare):
-            return True
-        return False if self.compared else None
+    def may_have_written(self) -> bool:
+        """Did this reply RUN something that can write a file without the
+        undo journal — a command (whatever its exit status: a heredoc writes
+        before a failing test ends the line), code, a program, a hand-off, an
+        app's or a user-made tool — in the reply or in the cut part a carry-on
+        continues? For the chat's honesty notes
+        (``daemon/chat_turn._creation_honesty_note`` and
+        ``_claimed_write_note``): after one, neither may say "no file was
+        written" (review: both lost hard-expression-evaluator runs wrote
+        calc.py with a bash heredoc and still ended with "no file was
+        actually written this turn"). The folder comparison cannot settle it
+        the other way: it never sees an ignored or pruned folder (``dist/``,
+        an ``out/`` the .gitignore names, a dot-folder) or a file outside the
+        session's folder — a snapshot can prove a write, never that none
+        happened."""
+        return bool(self._may_write)
 
     def _gather(self, files: TurnFiles, seen: Any = None) -> None:
         """BLOCKING: the docs' test commands, the new files, the points."""

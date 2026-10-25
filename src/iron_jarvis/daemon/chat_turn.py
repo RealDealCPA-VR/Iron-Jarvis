@@ -6024,7 +6024,7 @@ def _may_have_changed_files(tools_used: list[str], custom_tools=()) -> bool:
     return False
 
 
-def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), wrote=None) -> str:
+def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), ran_writer=False) -> str:
     """'' unless the REPLY claims a file exists that no tool actually wrote.
 
     The sibling note above keys off the USER's phrasing, which is why it stayed
@@ -6056,20 +6056,23 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), w
 
     Finish-check review (part 3): a CREATION claim after such a tool is not
     judged either — "saved its /status body to status.json" after a shell
-    command wrote status.json was told "that file does not exist" (every
-    process-http-server reply), and the same note was "nothing was written to
-    disk this turn". *wrote* is a Build turn's folder comparison when it has
-    one (``harness/finish.FinishCheck.folder_wrote``): True — a file was
-    written (or may have been): no note; False — the folder was compared and
-    nothing was written in it: a creation claim is judged as before; None —
-    no comparison: nothing can be claimed after such a tool. MIRROR NOTE
-    (lock-step): both chat lanes pass it.
+    command wrote status.json was told "nothing was written to disk this turn
+    … that file does not exist" (every process-http-server reply). And
+    *ran_writer* (a Build turn's ``harness/finish.FinishCheck.
+    may_have_written``) says such a tool RAN even when it failed (a heredoc
+    writes before a failing test ends the line), which ``tools_used`` (the
+    calls that succeeded) cannot. MIRROR NOTE (lock-step): both chat lanes
+    pass it.
     """
-    if not reply or set(tools_used) & _FILE_CHANGING_TOOLS or wrote is True:
+    if not reply or set(tools_used) & _FILE_CHANGING_TOOLS:
         return ""
-    may_have = _may_have_changed_files(tools_used, custom_tools)
+    # A claim — a CHANGE claim since v1.351.0's review, a CREATION claim too
+    # since the finish-check review — is judged only when nothing that can
+    # change a file without naming it ran (:func:`_may_have_changed_files`).
+    if ran_writer or _may_have_changed_files(tools_used, custom_tools):
+        return ""
     named: list[str] = []
-    for m in _FILE_CLAIM_RX.finditer(reply) if not (wrote is None and may_have) else ():
+    for m in _FILE_CLAIM_RX.finditer(reply):
         lead = reply[max(0, m.start() - 40) : m.start()]
         if _CLAIM_NEGATION_RX.search(lead):
             continue  # an offer or a denial, not a claim
@@ -6077,14 +6080,7 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), w
         if name not in named:
             named.append(name)
     changed: list[str] = []
-    # A CHANGE claim is judged only when nothing that can change a file
-    # without naming it succeeded (v1.351.0 review) — see
-    # :func:`_may_have_changed_files`.
-    judge_changes = not may_have
-    claims = (
-        [*_FILE_CHANGE_CLAIM_RX.finditer(reply), *_FILE_MOVED_TO_RX.finditer(reply)]
-        if judge_changes else []
-    )
+    claims = [*_FILE_CHANGE_CLAIM_RX.finditer(reply), *_FILE_MOVED_TO_RX.finditer(reply)]
     for m in sorted(claims, key=lambda c: c.start()):
         lead = reply[max(0, m.start() - 40) : m.start()]
         if _CLAIM_NEGATION_RX.search(lead) or not _CHANGE_SUBJECT_RX.search(lead):
@@ -6093,7 +6089,7 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), w
             continue  # the file is the SOURCE ("… using budget.xlsx"), or a denial
         if m.group(1) not in changed:
             changed.append(m.group(1))
-    for m in _FILE_CHANGED_AFTER_RX.finditer(reply) if judge_changes else ():
+    for m in _FILE_CHANGED_AFTER_RX.finditer(reply):
         lead = reply[max(0, m.start() - 40) : m.start()]
         if _CLAIM_NEGATION_RX.search(lead):
             continue  # "once budget.xlsx has been updated, …"
@@ -6193,7 +6189,7 @@ def _write_directive(body, armed: list[str]) -> str:
     )
 
 
-def _creation_honesty_note(body, armed: list[str], tools_used: list[str], *, custom_tools=(), wrote=None) -> str:
+def _creation_honesty_note(body, armed: list[str], tools_used: list[str], *, custom_tools=(), ran_writer=False) -> str:
     """'' unless the user asked for a FILE and none was written this turn — a
     model (local ones especially) narrating a save that never happened must
     never go unflagged, and the note tells the user exactly how to fix it.
@@ -6202,15 +6198,15 @@ def _creation_honesty_note(body, armed: list[str], tools_used: list[str], *, cus
     this outcome in the first place — see there for why that is one function.
 
     Finish-check review (part 3): NEVER after a command, code, a hand-off or
-    an app's tool wrote the file without a file tool — both lost
-    hard-expression-evaluator runs wrote calc.py with a bash heredoc and
-    still ended with "no file was actually written this turn". *wrote* is a
-    Build turn's folder comparison when it has one
-    (``harness/finish.FinishCheck.folder_wrote``): True — a file was written
-    (or may have been); False — the folder was compared and nothing was
-    written, so the note is true; None — no comparison, so after such a tool
-    (:func:`_may_have_changed_files`; *custom_tools* the user-made ones that
-    ran) nothing can be claimed. MIRROR NOTE (lock-step): both chat lanes.
+    an app's tool that may have written the file without a file tool (both
+    lost hard-expression-evaluator runs wrote calc.py with a bash heredoc and
+    still ended with "no file was actually written this turn"): one that
+    succeeded (:func:`_may_have_changed_files`; *custom_tools* the user-made
+    ones that ran), or — *ran_writer*, a Build turn's
+    ``harness/finish.FinishCheck.may_have_written`` — one that ran and
+    failed. Nothing can say it wrote nothing: a folder snapshot never sees an
+    ignored or pruned folder, or a file outside the session's folder. MIRROR
+    NOTE (lock-step): both chat lanes.
     """
     if not _asked_for_a_file(body):
         return ""
@@ -6218,7 +6214,7 @@ def _creation_honesty_note(body, armed: list[str], tools_used: list[str], *, cus
     # photo or a split PDF is the file the user asked for.
     if set(tools_used) & _FILE_CHANGING_TOOLS:
         return ""
-    if wrote is True or (wrote is None and _may_have_changed_files(tools_used, custom_tools)):
+    if ran_writer or _may_have_changed_files(tools_used, custom_tools):
         return ""
     if set(armed) & _FILE_WRITING_TOOLS:
         return (
@@ -9266,18 +9262,19 @@ async def run_chat_turn(
         else:
             # v1.351.0 fix round: the custom tools that ran are named from
             # the live registry — a user-made tool can change a file it never
-            # names. Finish-check review: and a Build turn's folder says what
-            # its commands wrote (`FinishCheck.folder_wrote`), so neither note
-            # says "nothing was written" after a command wrote a file.
+            # names. Finish-check review: and a Build turn's finish check
+            # knows a command RAN even when it exited non-zero
+            # (`FinishCheck.may_have_written`), so neither note says "nothing
+            # was written" after a command that may have written a file.
             # MIRROR NOTE (lock-step): routes/chat.py.
             _custom_ran = custom_tools_used(d.platform, tools_used)
-            _wrote = _finish.folder_wrote() if _finish is not None else None
-            reply += _creation_honesty_note(body, armed, tools_used, custom_tools=_custom_ran, wrote=_wrote)
+            _ran_writer = _finish is not None and _finish.may_have_written()
+            reply += _creation_honesty_note(body, armed, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)
             # v1.153.2: and check the reply's own CLAIMS against the
             # ledger — the note above keys off the user's phrasing and
             # so missed a reply announcing a saved file after only a
             # scan had run. MIRROR NOTE (lock-step): both lanes.
-            reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran, wrote=_wrote)
+            reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did ("I'm passing this to builder") gets the plain note.
         # MIRROR NOTE (lock-step): routes/chat.py appends the same helper.

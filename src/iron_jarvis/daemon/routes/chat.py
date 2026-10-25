@@ -6027,18 +6027,19 @@ async def chat_stream(
                 reply += _chat_turn.demo_note(tools_used, reply)
             else:
                 # v1.351.0 fix round: the custom tools that ran, from the live
-                # registry. Finish-check review: and a Build turn's folder says
-                # what its commands wrote (`FinishCheck.folder_wrote`), so
-                # neither note says "nothing was written" after a command wrote
-                # a file. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+                # registry. Finish-check review: and a Build turn's finish check
+                # knows a command RAN even when it exited non-zero
+                # (`FinishCheck.may_have_written`), so neither note says
+                # "nothing was written" after a command that may have written a
+                # file. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
                 _custom_ran = _chat_turn.custom_tools_used(d.platform, tools_used)
-                _wrote = _finish.folder_wrote() if _finish is not None else None
-                reply += _creation_honesty_note(body, armed, tools_used, custom_tools=_custom_ran, wrote=_wrote)
+                _ran_writer = _finish is not None and _finish.may_have_written()
+                reply += _creation_honesty_note(body, armed, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)
                 # v1.153.2: and check the reply's own CLAIMS against the
                 # ledger — the note above keys off the user's phrasing and
                 # so missed a reply announcing a saved file after only a
                 # scan had run. MIRROR NOTE (lock-step): both lanes.
-                reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran, wrote=_wrote)
+                reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did gets the plain note. MIRROR NOTE (lock-step): chat_turn.
         # Only an AGENT-shaped receiver counts (the roster's names, read off
