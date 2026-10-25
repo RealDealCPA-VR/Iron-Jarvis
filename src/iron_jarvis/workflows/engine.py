@@ -1090,7 +1090,11 @@ class WorkflowEngine:
             return {
                 "session_id": session.id,
                 "status": "failed",
-                "summary": f"{type(exc).__name__}: {exc}",
+                # Readiness 12A review (G28): the run's OWN plain sentence
+                # (what its run page says), never "ProviderError: codex-cli:
+                # CLI exited 1: …" on the Workflows page, the scheduled
+                # workflow's Schedules row and the phone.
+                "summary": await self._failed_run_words(orch, session, exc),
                 "tool": step.tool,
                 "kind": "agent",
             }
@@ -1104,6 +1108,36 @@ class WorkflowEngine:
             "tool": step.tool,
             "kind": "agent",
         }
+
+    async def _failed_run_words(self, orch, session, exc: BaseException) -> str:
+        """A failed agent step's summary when its run RAISED (readiness 12A
+        review, G28): the run's own summary as ``Orchestrator._finalize_failed``
+        wrote it ("The run failed: Codex couldn't finish this task. …" — the
+        raw text folded on its run page), else the same rule applied here
+        (``failure_words.plain_reason``). Never the exception's class or its
+        raw text. The row is read off the loop. Never raises."""
+        try:
+            get = getattr(orch, "get_session", None)
+            if callable(get):
+                row = await asyncio.to_thread(get, session.id)
+                status = getattr(row, "status", None)
+                status = getattr(status, "value", status)
+                summary = str(getattr(row, "summary", "") or "").strip()
+                if status == "failed" and summary:
+                    return summary
+        except Exception:  # noqa: BLE001 — the rule below still words it
+            pass
+        try:
+            from ..providers.failure_words import plain_reason
+
+            reason = plain_reason(
+                exc,
+                manager=getattr(self.platform, "providers", None),
+                provider=str(getattr(session, "provider", "") or ""),
+            )
+        except Exception:  # noqa: BLE001 — wording only
+            reason = ""
+        return f"The run failed: {reason}" if reason else "The run failed."
 
     async def _run_tool_step(
         self,

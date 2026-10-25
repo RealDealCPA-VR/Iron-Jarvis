@@ -627,6 +627,13 @@ GENERIC_TITLE_RUN = f"Iron Jarvis{GENERIC_TITLE_RUN_TAIL}"
 #: purpose: the bell clips a row at 140 characters, and "The run failed: " +
 #: the title + this must fit (dashboard/__tests__/wave7-seams-v13570).
 GENERIC_FIX_RUN_OWN = "Run it again. If it happens again, open the run to see the details."
+#: Readiness 12A review (the doer's open point 4): Iron Jarvis's own fault
+#: BEFORE any run existed (a schedule's fire that could not create its run).
+#: There is no run to open — the Schedules row has no "open run" link — so
+#: the words never point at one; Jarvis reads its own recent errors when
+#: asked (``tools/selfcare.app_health``, the Help page's same advice).
+GENERIC_TITLE_UNSTARTED = "Iron Jarvis couldn't start this task"
+GENERIC_FIX_UNSTARTED = "Run it again. If it happens again, ask Jarvis “what's wrong?” in chat."
 
 
 def generic_title(name: str = "", *, run: bool = False) -> str:
@@ -731,18 +738,26 @@ def friendly_error(
     return {"title": title, "fix": fix, "technical": technical_text(exc, technical)}
 
 
-def _run_generic_words(exc: BaseException | None, provider: str, manager: Any) -> "tuple[str, str]":
+def _run_generic_words(
+    exc: BaseException | None, provider: str, manager: Any, *, started: bool = True
+) -> "tuple[str, str]":
     """``(title, fix)`` for a RUN's failure nothing recognised (readiness 12A,
     G28): WHAT failed — the provider by its plain name when a provider's
     error is in the chain ("Codex couldn't finish this task"), else Iron
     Jarvis itself — and what to do next: choose another model when a model
     failed, else where the details are. Never the failure's own text (that is
-    the technical detail, kept apart). Never raises."""
+    the technical detail, kept apart). ``started`` False (12A review): no run
+    existed, so Iron Jarvis's own fault never says "open the run" (there is
+    none) — :data:`GENERIC_TITLE_UNSTARTED`. Never raises."""
     try:
         name = _generic_name(exc, provider, manager)
     except Exception:  # noqa: BLE001 — wording only
         name = ""
-    return generic_title(name, run=True), (GENERIC_FIX_RUN if name else GENERIC_FIX_RUN_OWN)
+    if name:
+        return generic_title(name, run=True), GENERIC_FIX_RUN
+    if not started:
+        return GENERIC_TITLE_UNSTARTED, GENERIC_FIX_UNSTARTED
+    return generic_title("", run=True), GENERIC_FIX_RUN_OWN
 
 
 def worded_message(exc: BaseException | None) -> str:
@@ -795,7 +810,7 @@ def _hint(provider: str) -> str:
 
 
 def run_failure_words(
-    exc: BaseException | None, *, manager: Any = None, provider: str = ""
+    exc: BaseException | None, *, manager: Any = None, provider: str = "", started: bool = True
 ) -> "tuple[str, str]":
     """``(reason, technical)`` for a failed RUN (readiness 12A, G28) — the ONE
     rule every surface outside the chat reads (the run's summary, so its run
@@ -812,7 +827,9 @@ def run_failure_words(
       page's folded Details, or "" when the reason already IS that text.
 
     ``provider`` is the run's provider, a hint used only when the failure
-    names none itself. Never raises; the reason is never empty."""
+    names none itself. ``started`` (12A review): False when the failure came
+    BEFORE any run existed (a schedule's fire) — Iron Jarvis's own fault then
+    never says "open the run". Never raises; the reason is never empty."""
     hint = _hint(provider)
     try:
         words = classify(exc, provider=hint, manager=manager, surface=SURFACE_RUN)
@@ -827,11 +844,13 @@ def run_failure_words(
     worded = worded_message(exc)
     if worded:
         return worded, ""
-    title, fix = _run_generic_words(exc, hint, manager)
+    title, fix = _run_generic_words(exc, hint, manager, started=started)
     return f"{title}. {fix}", technical
 
 
-def plain_reason(exc: BaseException | None, *, manager: Any = None, provider: str = "") -> str:
+def plain_reason(
+    exc: BaseException | None, *, manager: Any = None, provider: str = "", started: bool = True
+) -> str:
     """One plain sentence for a run summary ("The run failed: <this>"):
     :func:`run_failure_words`' reason — the headline and its fix when the
     failure is recognised, a failure already worded for a person as it is,
@@ -844,6 +863,8 @@ def plain_reason(exc: BaseException | None, *, manager: Any = None, provider: st
     the run's ("Run it again, or choose another model in Settings."), never
     "Press Retry, or pick another model for this chat."."""
     try:
-        return run_failure_words(exc, manager=manager, provider=provider)[0]
+        return run_failure_words(exc, manager=manager, provider=provider, started=started)[0]
     except Exception:  # noqa: BLE001
+        if not started:
+            return f"{GENERIC_TITLE_UNSTARTED}. {GENERIC_FIX_UNSTARTED}"
         return f"{GENERIC_TITLE_RUN}. {GENERIC_FIX_RUN_OWN}"

@@ -420,7 +420,10 @@ async def test_a_crashed_background_run_tells_the_phone(platform):
 
     assert fake.texts() == [
         f"Iron Jarvis: {ONESHOT_ACK}",
-        "Iron Jarvis: I hit a problem: RuntimeError: provider down",
+        # Readiness 12A review (G28): the run's ONE rule, never the class
+        # name and raw text ("RuntimeError: provider down").
+        "Iron Jarvis: I hit a problem: Iron Jarvis couldn't finish this task. Run it again. "
+        "If it happens again, open the run to see the details.",
     ]
 
 
