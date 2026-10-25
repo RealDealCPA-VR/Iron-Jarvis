@@ -331,6 +331,38 @@ def complete_arguments(raw: Any) -> "dict[str, Any] | None":
     return obj if isinstance(obj, dict) else None
 
 
+def unterminated_arguments(raw: Any) -> bool:
+    """True when a tool call's argument text STOPS before its JSON closes —
+    it ends inside a string, or an object/array it opened is still open
+    (v1.387.0 review). Structure only: ``{"a": 1,}`` (whole, if malformed)
+    is NOT unterminated — the lenient ladder (``core/jsonish``) may recover
+    it; ``{"path": "a.py", "content": "cla`` is. A dict, or empty text, is
+    never unterminated. Never raises."""
+    if not isinstance(raw, str) or not raw.strip():
+        return False
+    depth = 0
+    in_str = False
+    escaped = False
+    opened = False
+    for ch in raw:
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            depth += 1
+            opened = True
+        elif ch in "}]":
+            depth = max(0, depth - 1)
+    return in_str or (opened and depth > 0)
+
+
 class LLMAdapter(ABC):
     provider: str = ""
     model: str = ""

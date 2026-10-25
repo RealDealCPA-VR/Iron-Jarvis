@@ -33,6 +33,8 @@ from .base import (
     ToolCall,
     complete_arguments,
     provider_error_from_response,
+    scrub_sent_credentials,
+    unterminated_arguments,
 )
 
 _ENDPOINT = "https://api.openai.com/v1/chat/completions"
@@ -122,6 +124,28 @@ def _chatgpt_account_id(token: str) -> str:
     if isinstance(claim, dict):
         return str(claim.get("chatgpt_account_id") or "")
     return ""
+
+
+def _stream_error(provider: str, err: Any, resp: Any) -> ProviderError:
+    """A ProviderError for an ``{"error": ...}`` object a server sent INSIDE a
+    stream (v1.387.0 review): its message (credentials the request carried
+    taken out), its status when it names one (LiteLLM's ``code``: "408",
+    500…), else 502. Never raises anything else."""
+    status = 502
+    message = err
+    if isinstance(err, dict):
+        message = err.get("message") or err.get("type") or err
+        try:
+            code = int(str(err.get("code") or err.get("status") or "").strip())
+        except (TypeError, ValueError):
+            code = 0
+        if 400 <= code <= 599:
+            status = code
+    detail = scrub_sent_credentials(str(message)[:500], resp)
+    return ProviderError(
+        f"{provider} API error {status}: the server failed mid-answer: {detail}",
+        status_code=status,
+    )
 
 
 def _error_detail(resp: Any) -> str:
@@ -1099,6 +1123,17 @@ class OpenAIAdapter(LLMAdapter):
                 usage = u  # the include_usage chunk (choices == [])
             choices = chunk.get("choices") or []
             if not choices:
+                # v1.387.0 review: a server (a LiteLLM proxy whose upstream
+                # timed out or reset) that fails MID-STREAM sends
+                # `data: {"error": {...}}` and ends. Skipped, it left a
+                # half-written call to run through the lenient JSON ladder and
+                # a half-written answer to read as a finished one; it is a
+                # ProviderError in the server's own words instead (its status
+                # when it names one, else 502 — both transient-classified like
+                # any server failure).
+                err = chunk.get("error")
+                if err:
+                    raise _stream_error(self.provider, err, resp)
                 continue
             delta = choices[0].get("delta") or {}
             # v1.323.0: reasoning text streams as `thinking` frames —
@@ -1159,6 +1194,22 @@ class OpenAIAdapter(LLMAdapter):
                 for _, slot in sorted(tool_accum.items())
             ]
         if finish_reason is None:
+            # v1.387.0 review: the stream ENDED without the server saying why
+            # (a dropped connection). A call whose arguments stop before their
+            # JSON closes was being WRITTEN when it ended: never run (the
+            # lenient ladder could otherwise run part of it), and not an
+            # output-limit cut either — an interrupted answer, said plainly.
+            open_calls = [
+                slot["name"] or "tool" for _, slot in sorted(tool_accum.items())
+                if unterminated_arguments(slot["args"])
+            ]
+            if open_calls:
+                raise ProviderError(
+                    f"{self.provider}: the answer stopped in the middle of its "
+                    f"{', '.join(dict.fromkeys(open_calls))} call before the server said it "
+                    "was done, so nothing from that call was run",
+                    status_code=502,
+                )
             finish_reason = "tool_calls" if tool_accum else "stop"
         data = {
             "choices": [{"message": message, "finish_reason": finish_reason}],

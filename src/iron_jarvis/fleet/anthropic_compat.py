@@ -543,15 +543,30 @@ class AnthropicFleetAdapter(LLMAdapter):
         text: list[str] = []
         thinking: list[str] = []
         calls: list[ToolCall] = []
-        for block in content:
-            if not isinstance(block, dict):
-                continue
+        # v1.387.0 review: a reply stopped at the OUTPUT LIMIT ends inside the
+        # block it was writing. When that LAST block is a tool call, its input
+        # is whatever the server managed to parse of a call the model never
+        # finished — never run (a half write_file writes half a file), reported
+        # by name (`cut_calls`) like the stream's cut call. An input that came
+        # back as unclosed TEXT is cut wherever it sits. A call FOLLOWED by
+        # another block was finished: it runs.
+        length_cut = _finish(data.get("stop_reason")) == "max_tokens"
+        cut_calls: list[str] = []
+        blocks = [b for b in content if isinstance(b, dict)]
+        for pos, block in enumerate(blocks):
             kind = block.get("type")
             if kind == "text" and isinstance(block.get("text"), str):
                 text.append(block["text"])
             elif kind == "thinking" and isinstance(block.get("thinking"), str):
                 thinking.append(block["thinking"])
             elif kind == "tool_use" and block.get("name"):
+                raw_input = block.get("input")
+                if length_cut and (
+                    pos == len(blocks) - 1
+                    or (isinstance(raw_input, str) and complete_arguments(raw_input) is None)
+                ):
+                    cut_calls.append(str(block["name"]))
+                    continue
                 calls.append(
                     ToolCall(
                         id=str(block.get("id") or f"toolu_{len(calls)}"),
@@ -572,6 +587,7 @@ class AnthropicFleetAdapter(LLMAdapter):
             finish_reason=finish,
             usage=_public_usage(_usage(data.get("usage"))),
             thinking="\n\n".join(thinking),
+            cut_calls=cut_calls,
         )
 
     # -- the interface --------------------------------------------------------

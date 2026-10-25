@@ -4408,6 +4408,7 @@ async def chat_stream(
         # chat_turn: how many, the note owed after complete calls ran, the
         # honest end once the notes run out).
         _cut_times = 0
+        _cut_streak = 0  # review: cut rounds IN A ROW (the notes' bound)
         _cut_pending = ""
         _cut_end = ""
         escalate = False        # the turn asked for the full agent
@@ -4605,7 +4606,11 @@ async def chat_stream(
                     return
                 reply_text = final_resp.text or ""
                 _truncated = _chat_turn._truncated_by(final_resp)
-                if _finish is not None:
+                # v1.387.0 review: a reply CUT OFF at the output limit is read
+                # FIRST — it is never the finish check's answer (lock-step:
+                # chat_turn).
+                _cut = _chat_turn.cut_off_round(final_resp, has_tools=bool(armed or ask_armed))
+                if _finish is not None and _cut is None:
                     # The first answer after the finish note is the model's
                     # point-by-point answer (lock-step: chat_turn).
                     _finish.heard(reply_text)
@@ -4627,13 +4632,30 @@ async def chat_stream(
                 # answer; ONE note and the turn goes on (complete calls run
                 # first, the note follows their results); past the notes, or
                 # with no round left, the turn ends saying what happened. Only
-                # a turn that ARMED tools (not the exit tools alone).
-                _cut = _chat_turn.cut_off_round(final_resp, has_tools=bool(armed or ask_armed))
-                if _cut is not None:
+                # a turn that ARMED tools (not the exit tools alone). (`_cut`
+                # was read above, before the finish check's `heard`.)
+                # Review: bounded by cuts IN A ROW (a round that was not cut
+                # starts the count again) and by a total (lock-step:
+                # chat_turn).
+                if _cut is None:
+                    _cut_streak = 0
+                else:
                     _cut_times += 1
+                    _cut_streak += 1
                     _truncated = False  # a cut CALL is not a long answer to Continue
-                    if _cut_times > _chat_turn.CUT_OFF_NOTES_MAX or _round >= _rounds - 1:
-                        _cut_end = _chat_turn.cut_off_end_text(_cut, _cut_times)
+                    _kept = _chat_turn.cut_off_text(final_resp)
+                    if _kept != reply_text:
+                        # Review: a call the server handed back as TEXT (the
+                        # GLM parser's unclosed <tool_call>) was streamed to
+                        # the page — the words before it replace it (the
+                        # frame the text-call nudge and the language rewrite
+                        # use), and the markup is never kept.
+                        reply_text = _kept
+                        yield _sse("reset", {"reason": "cut_off"})
+                        if _kept:
+                            yield _sse("token", {"text": _kept})
+                    if _chat_turn.cut_off_exhausted(_cut_times, _cut_streak) or _round >= _rounds - 1:
+                        _cut_end = _chat_turn.cut_off_end(_cut, _cut_times, _cut_streak)
                         break
                     _cut_note = _chat_turn.cut_off_note(
                         _cut,

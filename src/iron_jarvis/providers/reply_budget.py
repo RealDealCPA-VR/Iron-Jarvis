@@ -426,8 +426,16 @@ class ReplyBudget:
 # Read by BOTH chat lanes (daemon/chat_turn.py, daemon/routes/chat.py —
 # lock-step) and the agent runtime (agents/runtime.py).
 # --------------------------------------------------------------------------- #
-#: The most cut-off notes one turn (or one agent run) is given.
+#: The most cut-off notes one turn (or one agent run) is given IN A ROW — cut
+#: after cut with nothing else between them (v1.387.0 review: counted per
+#: turn, a long Build reply that recovered three times on three different
+#: files was ended at the third). A round that is not cut starts the count
+#: again.
 CUT_OFF_NOTES_MAX = 2
+#: ...and in all, however they are spread: each cut can cost a whole reply
+#: budget (up to ~10 minutes of generation on a slow local model), so a model
+#: that keeps being cut still reaches an end.
+CUT_OFF_TOTAL_MAX = 8
 #: The tools a note offers for writing the rest of a file, in the order named
 #: (the real names and the Claude dialect's; only the ARMED ones are named).
 _PART_TOOLS = ("edit_file", "apply_patch", "multi_edit", "Edit", "MultiEdit")
@@ -436,12 +444,60 @@ _PART_TOOLS = ("edit_file", "apply_patch", "multi_edit", "Edit", "MultiEdit")
 _WRITE_TOOLS = ("write_file", "Write", *_PART_TOOLS)
 
 
+#: A tool call a server's tool parser handed back as TEXT because it never
+#: saw the call close (v1.387.0 review): vLLM's GLM / Qwen / Hermes parsers
+#: return an unclosed ``<tool_call>`` as content when not streaming. Each
+#: opener, and the closer that would have ended it.
+_LEAK_OPENERS = (
+    (re.compile(r"<\s*tool_call\s*>", re.IGNORECASE), re.compile(r"<\s*/\s*tool_call\s*>", re.IGNORECASE)),
+    (re.compile(r"<\s*function_calls\s*>", re.IGNORECASE), re.compile(r"<\s*/\s*function_calls\s*>", re.IGNORECASE)),
+    (re.compile(r"<\s*function\s*=", re.IGNORECASE), re.compile(r"<\s*/\s*function\s*>", re.IGNORECASE)),
+    (re.compile(r"<\s*invoke\s+name\s*=", re.IGNORECASE), re.compile(r"<\s*/\s*invoke\s*>", re.IGNORECASE)),
+)
+_LEAK_NAME_RES = (
+    re.compile(r"\"(?:name|tool|tool_name|function)\"\s*:\s*\"([A-Za-z0-9_.\-]{1,64})\""),
+    re.compile(r"<\s*invoke\s+name\s*=\s*[\"']?([A-Za-z0-9_.\-]{1,64})", re.IGNORECASE),
+    re.compile(r"<\s*function\s*=\s*[\"']?([A-Za-z0-9_.\-]{1,64})", re.IGNORECASE),
+    re.compile(r"<\s*tool_call\s*>\s*([A-Za-z_][A-Za-z0-9_.\-]{0,63})", re.IGNORECASE),
+)
+
+
+def leaked_call(text: Any) -> "tuple[str, int] | None":
+    """``(name, start)`` of a tool call a reply was WRITING AS TEXT when it
+    stopped — the LAST call opener with no closer after it (``name`` "" when
+    none can be read) — or ``None``. Never raises."""
+    try:
+        body = str(text or "")
+        best: "tuple[int, re.Pattern[str]] | None" = None
+        for opener, closer in _LEAK_OPENERS:
+            last = None
+            for m in opener.finditer(body):
+                last = m
+            if last is None or closer.search(body, last.end()):
+                continue
+            if best is None or last.start() < best[0]:
+                best = (last.start(), opener)
+        if best is None:
+            return None
+        start = best[0]
+        tail = body[start:start + 2000]
+        for rx in _LEAK_NAME_RES:
+            m = rx.search(tail)
+            if m:
+                return m.group(1), start
+        return "", start
+    except Exception:  # noqa: BLE001 — not a leak
+        return None
+
+
 def cut_off_round(response: Any, *, has_tools: bool) -> "list[str] | None":
     """The names of the calls a round's reply was CUT OFF in (``""`` for a
     call whose name never arrived; ``[]`` when it wrote no text and no
     complete call at all), or ``None`` when the round was not such a cut:
     it did not stop at the output limit, the turn has no tools, or it is a
-    long TEXT answer (the ``truncated`` + Continue case). Never raises."""
+    long TEXT answer (the ``truncated`` + Continue case). A call the server
+    handed back as unclosed TEXT (:func:`leaked_call`) is a cut call too.
+    Never raises."""
     try:
         if response is None or not has_tools:
             return None
@@ -452,11 +508,26 @@ def cut_off_round(response: Any, *, has_tools: bool) -> "list[str] | None":
             return cut
         if getattr(response, "tool_calls", None):
             return None
-        if (getattr(response, "text", "") or "").strip():
-            return None
+        text = getattr(response, "text", "") or ""
+        if text.strip():
+            leak = leaked_call(text)
+            return [leak[0]] if leak is not None else None
         return []
     except Exception:  # noqa: BLE001 — not a cut, the old path
         return None
+
+
+def cut_off_text(response: Any) -> str:
+    """The words a cut-off round keeps — what the model wrote BEFORE a call
+    it leaked as text (:func:`leaked_call`), else its whole text. The markup
+    of a half call is never given back to the model (it would copy the
+    format) nor kept in the reply. Never raises."""
+    try:
+        text = str(getattr(response, "text", "") or "")
+        leak = leaked_call(text)
+        return text[: leak[1]].rstrip() if leak is not None else text
+    except Exception:  # noqa: BLE001
+        return str(getattr(response, "text", "") or "")
 
 
 def _cut_what(cut: "list[str]") -> str:
@@ -496,19 +567,40 @@ def cut_off_note(cut: "list[str]", tool_names: Any, *, limit: "int | None" = Non
     )
 
 
-def cut_off_end_text(cut: "list[str]", times: int) -> str:
-    """The reply when a turn's replies were cut off more times than it is
-    given notes (or with no round left): what happened, in plain words, and
-    what the user can do. Never the no-tools final answer (which made the
-    model paste its code into chat)."""
+def cut_off_end_text(cut: "list[str]", times: int, *, in_a_row: bool = True) -> str:
+    """The reply when a turn's replies were cut off more times IN A ROW than
+    it is given notes, more times in all than :data:`CUT_OFF_TOTAL_MAX`
+    (``in_a_row=False``), or with no round left: what happened, in plain
+    words, and what the user can do. Never the no-tools final answer (which
+    made the model paste its code into chat)."""
     n = max(1, int(times))
     when = "once" if n == 1 else ("twice" if n == 2 else f"{n} times")
-    in_a_row = "" if n == 1 else " in a row"
+    if n == 1:
+        where = ""
+    else:
+        where = " in a row" if in_a_row else " in this reply"
     return (
-        f"The model's reply was cut off at its output limit {when}{in_a_row} "
+        f"The model's reply was cut off at its output limit {when}{where} "
         f"{_cut_what(cut)}, so nothing from that reply was run. Ask for the work "
         "in smaller pieces, or choose a model with a larger output limit."
     )
+
+
+def cut_off_exhausted(times: int, streak: int) -> bool:
+    """True when a turn (or run) has been given every note it gets: more cuts
+    IN A ROW than :data:`CUT_OFF_NOTES_MAX`, or more in all than
+    :data:`CUT_OFF_TOTAL_MAX` (v1.387.0 review). The lanes and the agent
+    runtime ask this one rule."""
+    return int(streak) > CUT_OFF_NOTES_MAX or int(times) > CUT_OFF_TOTAL_MAX
+
+
+def cut_off_end(cut: "list[str]", times: int, streak: int) -> str:
+    """The honest end (:func:`cut_off_end_text`) worded by what ended it:
+    the cuts IN A ROW when those ran out, else every cut of the reply — "in
+    a row" only when they all were."""
+    if int(streak) > CUT_OFF_NOTES_MAX:
+        return cut_off_end_text(cut, streak, in_a_row=True)
+    return cut_off_end_text(cut, times, in_a_row=int(streak) >= int(times))
 
 
 def cut_off_receipt(times: int, ended: bool) -> dict:

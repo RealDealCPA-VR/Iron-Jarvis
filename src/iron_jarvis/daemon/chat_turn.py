@@ -55,10 +55,13 @@ from ..providers.reasoning import normalize_level
 # the note beside `_truncated_by`). MIRROR NOTE (lock-step): both lanes.
 from ..providers.reply_budget import (
     CUT_OFF_NOTES_MAX,
+    cut_off_end,
     cut_off_end_text,
+    cut_off_exhausted,
     cut_off_note,
     cut_off_receipt,
     cut_off_round,
+    cut_off_text,
 )
 from ..media.registry import ACCOUNTS_AND_KEYS as _MEDIA_KEYS_PLACE
 from ..core.db import session_scope
@@ -8566,6 +8569,7 @@ async def run_chat_turn(
     # the honest end once the notes run out. MIRROR NOTE (lock-step): the
     # stream lane keeps the same three.
     _cut_times = 0
+    _cut_streak = 0  # review: cut rounds IN A ROW (the notes' bound)
     _cut_pending = ""
     _cut_end = ""
     escalate = False        # the turn asked for the full agent
@@ -8629,7 +8633,12 @@ async def run_chat_turn(
             completions += 1
             _thinking_parts.append(_thinking_of(route.response))
             _truncated = _truncated_by(route.response)
-            if _finish is not None:
+            # v1.387.0 review: a reply CUT OFF at the output limit (see the
+            # branch below) is read FIRST — it is never the finish check's
+            # answer (an empty "answer" heard there hid the real one that
+            # follows the cut-off note). Lock-step: the stream lane.
+            _cut = cut_off_round(route.response, has_tools=bool(armed))
+            if _finish is not None and _cut is None:
                 # The first answer after the finish note is the model's
                 # point-by-point answer (lock-step: the stream lane).
                 _finish.heard(route.response.text or "")
@@ -8651,12 +8660,17 @@ async def run_chat_turn(
             # (the exit tools every chat offers do not count — a plain
             # question cut off while thinking keeps the v1.246.0 nudge).
             # MIRROR NOTE (lock-step): the stream loop in routes/chat.py.
-            _cut = cut_off_round(route.response, has_tools=bool(armed))
-            if _cut is not None:
+            # (`_cut` was read above, before the finish check's `heard`.)
+            # Review: the notes are bounded by cuts IN A ROW (a round that was
+            # not cut starts the count again) and by a total.
+            if _cut is None:
+                _cut_streak = 0
+            else:
                 _cut_times += 1
+                _cut_streak += 1
                 _truncated = False  # a cut CALL is not a long answer to Continue
-                if _cut_times > CUT_OFF_NOTES_MAX or _round >= _rounds - 1:
-                    _cut_end = cut_off_end_text(_cut, _cut_times)
+                if cut_off_exhausted(_cut_times, _cut_streak) or _round >= _rounds - 1:
+                    _cut_end = cut_off_end(_cut, _cut_times, _cut_streak)
                     break
                 _cut_note = cut_off_note(
                     _cut, {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)},
@@ -8664,9 +8678,12 @@ async def run_chat_turn(
                     ran_others=bool(calls),
                 )
                 if not calls:
-                    if (route.response.text or "").strip():
+                    # Review: the words before a call leaked as text — never
+                    # the half call's markup (`cut_off_text`).
+                    _kept = cut_off_text(route.response)
+                    if _kept.strip():
                         msgs.append(LLMMessage(
-                            role="assistant", content=route.response.text,
+                            role="assistant", content=_kept,
                             raw_blocks=list(getattr(route.response, "raw_blocks", None) or []),
                         ))
                     msgs.append(LLMMessage(role="user", content=_cut_note))
@@ -9229,6 +9246,10 @@ async def run_chat_turn(
     # construction and must never trigger (or be eaten by) a rewrite.
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
     model_text = route.response.text or ""
+    if _cut_end:
+        # v1.387.0 review: a turn that ENDED on a cut round keeps that round's
+        # words only — never a half call's markup (`cut_off_text`).
+        model_text = cut_off_text(route.response)
     # THE FINISH CHECK (part 3, Phase 2): the reply is what the model wrote
     # before the check, then its answer to it. MIRROR NOTE (lock-step): the
     # stream lane combines at the same point.

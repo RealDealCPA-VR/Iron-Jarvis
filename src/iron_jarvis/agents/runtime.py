@@ -2926,6 +2926,7 @@ class AgentRuntime:
         # the note owed after a cut step's complete calls ran (the chat lanes'
         # rule — providers/reply_budget.cut_off_round).
         _cut_count = 0
+        _cut_streak = 0  # review: cut steps IN A ROW (the notes' bound)
         _cut_pending = ""
         for _ in range(max_steps):
             # STOP ON ONE TEAMMATE (v1.309.0): a delegated run has no task of
@@ -3144,18 +3145,22 @@ class AgentRuntime:
             # follows their results); past CUT_OFF_NOTES_MAX the run ends
             # NOT finished, saying what happened — never an empty result.
             from ..providers.reply_budget import (
-                CUT_OFF_NOTES_MAX as _CUT_MAX,
-                cut_off_end_text as _cut_end_text,
+                cut_off_end as _cut_end_for,
+                cut_off_exhausted as _cut_exhausted,
                 cut_off_note as _cut_note_for,
                 cut_off_round as _cut_off_round,
+                cut_off_text as _cut_text,
             )
 
             _cut = _cut_off_round(resp, has_tools=bool(tool_specs))
-            if _cut is not None:
+            if _cut is None:
+                _cut_streak = 0  # review: a step that was not cut
+            else:
                 _cut_count += 1
-                if _cut_count > _CUT_MAX:
+                _cut_streak += 1
+                if _cut_exhausted(_cut_count, _cut_streak):
                     await asyncio.to_thread(self._save, run)
-                    return False, _cut_end_text(_cut, _cut_count)
+                    return False, _cut_end_for(_cut, _cut_count, _cut_streak)
                 _cut_note = _cut_note_for(
                     _cut,
                     {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)},
@@ -3163,9 +3168,11 @@ class AgentRuntime:
                     ran_others=bool(resp.tool_calls),
                 )
                 if not resp.wants_tools:
-                    if (resp.text or "").strip():
+                    # Review: never a half call's markup (`cut_off_text`).
+                    _kept = _cut_text(resp)
+                    if _kept.strip():
                         messages.append(LLMMessage(
-                            role="assistant", content=resp.text,
+                            role="assistant", content=_kept,
                             raw_blocks=list(getattr(resp, "raw_blocks", None) or []),
                         ))
                     messages.append(LLMMessage(role="user", content=_cut_note))
