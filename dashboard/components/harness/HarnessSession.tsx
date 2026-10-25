@@ -92,6 +92,8 @@ import { companyMenu } from "@/lib/harnessModelMenu";
 import { paneTurnWindow, paneWorkInput } from "@/components/terminal/paneWork";
 import { PANE_COMPOSER_CARD, paneSendClass } from "@/components/terminal/paneChatLook";
 import { HarnessPanes, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
+import type { LiveTimelineHandle } from "@/components/harness/HarnessTimeline";
+import { createLiveTimeline } from "@/lib/buildTimeline";
 import { AccountChip, AccountLimitCard, AccountList } from "@/components/harness/HarnessAccounts";
 import { RewindControl } from "@/components/harness/RewindControl";
 // v1.373.0: the conversation's own reading look (a centred column, 15 px).
@@ -387,6 +389,10 @@ export function HarnessSession({
   // FIRST render, then the reply carries on from its last frame.
   const [kept] = useState(() => turnFor(threadId));
   const stream = useChatStream({ textInState: false, seed: kept?.stream ?? null });
+  // v1.390.0 (the Timeline): the running reply folded from its frames — a
+  // store, never React state (the Timeline tab reads it once a second while
+  // it is shown); carried on from where this window left it (lib/turnCache).
+  const [timeline] = useState(() => createLiveTimeline(kept?.page.timeline));
   const [view, setView] = useState<BuildSessionView | null>(() => viewFor<BuildSessionView>(threadId));
   const viewRef = useRef<BuildSessionView | null>(null);
   viewRef.current = view;
@@ -721,9 +727,14 @@ export function HarnessSession({
       // A tagged follow (v1.384.0): what comes up to `caught_up` is folded,
       // not drawn; `resumed: false` is the whole turn — fold it from nothing.
       replayingRef.current = true;
-      if (data.resumed !== true) pageRef.current = { helpers: [], questions: [] };
+      if (data.resumed !== true) {
+        pageRef.current = { helpers: [], questions: [] };
+        timeline.reset(turnRef.current ?? "");
+      }
       return;
     }
+    // v1.390.0: the Timeline folds what it reads (a no-op for the rest).
+    timeline.fold(event, data);
     if (event === "caught_up") {
       replayingRef.current = false;
       drawPage();
@@ -756,7 +767,7 @@ export function HarnessSession({
       return;
     }
     if (!replayingRef.current) drawPage();
-  }, [drawPage]);
+  }, [drawPage, timeline]);
 
   /** After a turn: adopt what the daemon wrote, put unread steer notes back
    *  in the box, and send what was waiting. */
@@ -859,10 +870,12 @@ export function HarnessSession({
           questions: pageRef.current.questions,
           steerNotes: steerRef.current,
           pending: pendingRef.current,
+          // v1.390.0: the store itself (no copy — this runs per frame).
+          timeline: timeline.state(),
         },
       });
     },
-    [stream, threadId],
+    [stream, threadId, timeline],
   );
   const posRef = useRef<string>(kept?.lastId ?? "");
 
@@ -888,6 +901,8 @@ export function HarnessSession({
       // A new (or rejoined: its frames replay) turn draws its own helpers —
       // v1.384.0: one carried on from where the user was keeps its own.
       if (!resume) setPageHelpers([]);
+      // v1.390.0: and its own Timeline (a rejoin's replay folds it again).
+      if (!resume) timeline.reset(id);
       replayingRef.current = false;
       posRef.current = resume?.after ?? "";
       limitSeenRef.current = false;
@@ -1000,7 +1015,7 @@ export function HarnessSession({
       }
       if (started && !leavingRef.current) await settle(id, unread, clean);
     },
-    [stream, threadId, onFrame, load, settle, restoreToBox, keepRunning, setPageHelpers],
+    [stream, threadId, onFrame, load, settle, restoreToBox, keepRunning, setPageHelpers, timeline],
   );
 
   // Open: read the session, its accounts, and follow a turn already running.
@@ -1890,6 +1905,14 @@ export function HarnessSession({
     return dup ? base : [...base, pending];
   }, [view?.messages, pending, turnId]);
   const livePlan = planFromCards(stream.tools);
+  // v1.390.0: what the Timeline tab reads — a STABLE handle (the tab is
+  // memoized; a token never makes a new one), changed only when the reply
+  // starts, ends or is rejoined.
+  const timelineTurn = turnId ?? timeline.turn();
+  const timelineLive: LiveTimelineHandle = useMemo(
+    () => ({ store: timeline, running: busy, startedAt: stream.startedAt ?? null, turnId: timelineTurn || null }),
+    [timeline, busy, stream.startedAt, timelineTurn],
+  );
   // v1.374.0: how full the conversation is — the newest reply's reading, the
   // daemon's own numbers — and the summary standing in for the older turns.
   const reading = latestContext(view?.messages ?? []);
@@ -2779,6 +2802,8 @@ export function HarnessSession({
           terminal={terminal}
           refreshKey={turnsEnded + rewinds}
           pageSteps={finishedPageSteps(stream.tools)}
+          timeline={timelineLive}
+          models={catalog.models}
           undoFor={undoFor}
           onUndo={onUndo}
           onSessionChanged={() => void load()}

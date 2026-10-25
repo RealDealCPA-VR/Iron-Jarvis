@@ -17,7 +17,10 @@
  *    session's own `build:<id>` journal, with Undo;
  *  - browser: a preview of a page on this PC or the user's network, and the
  *    paired browser named (BrowserPreview);
- *  - files: `FilesPanel` (calm) on the session's folder.
+ *  - files: `FilesPanel` (calm) on the session's folder;
+ *  - timeline (v1.390.0): the reply on one time axis — the model you talk
+ *    to, each step, each helper with its model (HarnessTimeline). Mounted
+ *    only on its tab, so the running reply is read only while it is shown.
  *
  * The terminal tab, once opened, stays MOUNTED and is hidden with
  * `visibility` (never `display:none`, never an unmount — the Build terminal
@@ -31,6 +34,8 @@ import { ChangedFiles, fetchTurnChangeSet, type ChangeUndoState, type FileChange
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { BrowserPreview } from "@/components/harness/BrowserPreview";
 import { BranchView } from "@/components/harness/HarnessBranch";
+import { HarnessTimeline, type LiveTimelineHandle } from "@/components/harness/HarnessTimeline";
+import type { CatalogRow } from "@/lib/answeredModel";
 import { ConfirmButton } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
 import type { PlanView } from "@/lib/planChecklist";
@@ -58,10 +63,12 @@ export interface SessionTerminalApi {
   close: (id: string) => void;
 }
 
-export type PaneTab = "plan" | "terminal" | "changes" | "browser" | "files";
+export type PaneTab = "plan" | "timeline" | "terminal" | "changes" | "browser" | "files";
 
 export const PANE_TABS: readonly { value: PaneTab; label: string }[] = [
   { value: "plan", label: "Plan" },
+  // v1.390.0 (the long-jobs plan's Phase 1, decision 9): beside Plan.
+  { value: "timeline", label: "Timeline" },
   { value: "terminal", label: "Terminal" },
   { value: "changes", label: "Changes" },
   { value: "browser", label: "Browser" },
@@ -447,9 +454,15 @@ export function HarnessPanes({
   onSessionChanged,
   onSessionGone,
   pageSteps = 0,
+  timeline = null,
+  models,
 }: {
   view: BuildSessionView;
   livePlan: PlanView | null;
+  /** v1.390.0: the running reply's Timeline (HarnessSession folds it). */
+  timeline?: LiveTimelineHandle | null;
+  /** v1.390.0: the model list, for the Timeline's model names. */
+  models?: readonly CatalogRow[];
   terminal: SessionTerminalApi;
   /** Bumped when a turn ends, so the changes are read again. */
   refreshKey: number;
@@ -547,6 +560,7 @@ export function HarnessPanes({
         className="relative min-h-0 flex-1 overflow-y-auto px-1"
       >
         {tab === "plan" ? <PlanPane view={view} livePlan={livePlan} /> : null}
+        {tab === "timeline" ? <HarnessTimeline view={view} live={timeline} models={models} /> : null}
         {tab === "changes" ? (
           <ChangesPane
             view={view}
