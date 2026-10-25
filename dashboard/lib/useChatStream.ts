@@ -80,6 +80,14 @@ export type SSEEvent =
    *  that follow replace it" — the daemon's streamed language rewrite. The
    *  daemon may send a `reason`; nothing here needs it. */
   | { type: "reset" }
+  /** v1.384.0: a TAGGED follow's first frame (Build's page asks for one,
+   *  daemon/durable_turns): `resumed` false = the frames after it are the
+   *  WHOLE turn from its start (drop what you hold); true = only what came
+   *  after the resume position the page sent. */
+  | { type: "resume"; resumed: boolean; running: boolean }
+  /** v1.384.0: the STORED part of a tagged follow ended — what follows is
+   *  live. A page draws everything up to here in ONE pass. */
+  | { type: "caught_up"; id: string }
   | {
       type: "tool_call";
       id: string;
@@ -595,6 +603,10 @@ export function sseEventFrom(
       return { type: "thinking", text: typeof data.text === "string" ? data.text : "" };
     case "reset":
       return { type: "reset" };
+    case "resume":
+      return { type: "resume", resumed: data.resumed === true, running: data.running === true };
+    case "caught_up":
+      return { type: "caught_up", id: str(data.id) };
     case "tool_call": {
       const ev: Extract<SSEEvent, { type: "tool_call" }> = {
         type: "tool_call",
@@ -864,18 +876,21 @@ export function decodeSSE(event: string, rawData: string): SSEEvent | null {
 }
 
 /** ONE raw SSE frame (the text between blank-line separators): its `event:`
- *  name + joined `data:` lines; null for a `:`-comment (keepalive). */
-function rawFrame(raw: string): { event: string; data: string } | null {
+ *  name + joined `data:` lines; null for a `:`-comment (keepalive).
+ *  v1.384.0: its `id:` too — a tagged follow's RESUME POSITION. */
+function rawFrame(raw: string): { event: string; data: string; id?: string } | null {
   let event = "message";
+  let id: string | undefined;
   const dataLines: string[] = [];
   for (const lineRaw of raw.split("\n")) {
     const line = lineRaw.endsWith("\r") ? lineRaw.slice(0, -1) : lineRaw;
     if (!line || line.startsWith(":")) continue; // blank or keepalive comment
     if (line.startsWith("event:")) event = line.slice(6).trim();
     else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+    else if (line.startsWith("id:")) id = line.slice(3).trim();
   }
   if (dataLines.length === 0) return null;
-  return { event, data: dataLines.join("\n") };
+  return id === undefined ? { event, data: dataLines.join("\n") } : { event, data: dataLines.join("\n"), id };
 }
 
 /** v1.369.0: hand every frame, decoded or not, to the caller's tap (Build's
@@ -945,6 +960,9 @@ export interface StreamWatch {
   /** v1.369.0: every frame's name and parsed data, before it is decoded —
    *  the frames this file does not decode reach a caller only here. */
   onFrame?: (event: string, data: Record<string, unknown>) => void;
+  /** v1.384.0: a tagged frame's RESUME POSITION, called once the frame has
+   *  been handed on and processed (its tap AND its decoded event). */
+  onPosition?: (id: string) => void;
 }
 
 /**
@@ -1119,6 +1137,9 @@ export async function* streamSSE(
           tapFrame(frame, watch.onFrame);
           const ev = decodeSSE(frame.event, frame.data);
           if (ev) yield ev;
+          // v1.384.0: AFTER the consumer processed it (the generator resumes
+          // only once the loop body that read `ev` is done).
+          if (frame.id !== undefined) watch.onPosition?.(frame.id);
         }
       }
     } catch (e) {
@@ -1293,6 +1314,33 @@ export interface UseChatStreamOptions {
    *  text is rendered by a child through `textStore`, so the caller does not
    *  re-render per frame. */
   textInState?: boolean;
+  /** v1.384.0: a running reply's state kept while the user was elsewhere
+   *  (lib/turnCache) — drawn on the FIRST render (streaming, its text, steps,
+   *  card), so a return shows where the user was before anything is read.
+   *  Read once, at mount. */
+  seed?: StreamSeed | null;
+}
+
+/** v1.384.0: a running reply's folded state — what `run` has drawn so far —
+ *  so the page can keep it while the user is elsewhere and carry on from it
+ *  (`RunOptions.resume`). Plain data: nothing in it is live. */
+export interface StreamSeed {
+  text: string;
+  thinking: string;
+  tools: ToolCard[];
+  approval: PendingApproval | null;
+  mcpAsks: McpAsk[];
+  phase: TurnPhase | null;
+  prepStep: PrepStep | null;
+  startedAt: number | null;
+  committed: boolean;
+  steered: string[];
+  askIds: string[];
+  thinkingMs: number | null;
+  firstTokenAt: number | null;
+  truncated: boolean;
+  provider?: string;
+  model?: string;
 }
 
 /** The live text of `stream`, subscribed at the component that SHOWS it.
@@ -1377,6 +1425,10 @@ export interface UseChatStream {
   ) => Promise<ChatStreamResult>;
   /** Abort the in-flight turn (resolves `run` with whatever streamed so far). */
   abort: () => void;
+  /** v1.384.0: the running reply's folded state as `run` holds it now (null
+   *  when no turn has run). Optional so a hand-built test double need not
+   *  carry it. */
+  seedOf?: () => StreamSeed | null;
 }
 
 /** How `run` reaches its turn. */
@@ -1388,6 +1440,17 @@ export interface RunOptions {
   path?: string;
   /** v1.369.0: every frame's name and data, before decoding (StreamWatch). */
   onFrame?: (event: string, data: Record<string, unknown>) => void;
+  /** v1.384.0: ask for a TAGGED rejoin (`?ids=1`): every frame carries its
+   *  resume position (`onPosition`), the stored part between `resume` and
+   *  `caught_up`. (A Build turn's POST asks with `ids: true` in its body.) */
+  ids?: boolean;
+  /** v1.384.0: CARRY ON from a kept state: the rejoin asks only for what came
+   *  after `after` (`?after=<i>:<c>`), and `run` starts from `seed` instead
+   *  of empty. A daemon that answers with the whole turn (`resume` with
+   *  `resumed: false`, or no `resume` at all) is folded from scratch. */
+  resume?: { after: string; seed: StreamSeed };
+  /** v1.384.0: a frame's resume position, once it was processed. */
+  onPosition?: (id: string) => void;
 }
 
 /**
@@ -1408,11 +1471,15 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
   // `textStore` and the caller itself never re-renders per token. Everyone
   // else keeps `text` as state, exactly as before.
   const textInState = opts.textInState ?? true;
-  const [streaming, setStreaming] = useState(false);
-  const [text, setText] = useState("");
+  // v1.384.0: a kept reply is drawn on the FIRST render (read once, at mount).
+  const seedRef = useRef<StreamSeed | null | undefined>(undefined);
+  if (seedRef.current === undefined) seedRef.current = opts.seed ?? null;
+  const seed0 = seedRef.current;
+  const [streaming, setStreaming] = useState(!!seed0);
+  const [text, setText] = useState(textInState && seed0 ? seed0.text : "");
   // The live text and its subscribers. The ref is the truth (a handler reads
   // it synchronously); state/notifications are flushed at most once a frame.
-  const textRef = useRef("");
+  const textRef = useRef(seed0?.text ?? "");
   const listenersRef = useRef<Set<() => void>>(new Set());
   const frameRef = useRef<number | null>(null);
   const storeRef = useRef<TextStore | null>(null);
@@ -1427,8 +1494,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
   }
   // v1.323.0: the reasoning text rides the SAME mechanism — its own ref and
   // listeners, published by the same once-a-frame flush.
-  const [thinking, setThinking] = useState("");
-  const thinkingRef = useRef("");
+  const [thinking, setThinking] = useState(textInState && seed0 ? seed0.thinking : "");
+  const thinkingRef = useRef(seed0?.thinking ?? "");
   const thinkingListenersRef = useRef<Set<() => void>>(new Set());
   const thinkingStoreRef = useRef<TextStore | null>(null);
   if (thinkingStoreRef.current === null) {
@@ -1470,15 +1537,17 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
             notifyThinking();
           }, 16) as unknown as number);
   }, [textInState, notifyThinking]);
-  const [tools, setTools] = useState<ToolCard[]>([]);
-  const [approval, setApproval] = useState<PendingApproval | null>(null);
-  const [mcpAsks, setMcpAsks] = useState<McpAsk[]>([]);
-  const [phase, setPhase] = useState<TurnPhase | null>(null);
+  const [tools, setTools] = useState<ToolCard[]>(seed0?.tools ?? []);
+  const [approval, setApproval] = useState<PendingApproval | null>(seed0?.approval ?? null);
+  const [mcpAsks, setMcpAsks] = useState<McpAsk[]>(seed0?.mcpAsks ?? []);
+  const [phase, setPhase] = useState<TurnPhase | null>(seed0 ? (seed0.phase ?? "working") : null);
   const [withFiles, setWithFiles] = useState(false);
-  const [prepStep, setPrepStep] = useState<PrepStep | null>(null);
-  const [startedAt, setStartedAt] = useState<number | null>(null);
-  const [lastEventAt, setLastEventAt] = useState<number | null>(null);
+  const [prepStep, setPrepStep] = useState<PrepStep | null>(seed0?.prepStep ?? null);
+  const [startedAt, setStartedAt] = useState<number | null>(seed0?.startedAt ?? null);
+  const [lastEventAt, setLastEventAt] = useState<number | null>(seed0 ? Date.now() : null);
   const abortRef = useRef<AbortController | null>(null);
+  // v1.384.0: the running reply's folded state, as `run` holds it (seedOf).
+  const liveRef = useRef<StreamSeed | null>(seed0);
 
   const abort = useCallback(() => {
     abortRef.current?.abort();
@@ -1488,6 +1557,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
     // can only 404 — the pending entry is popped when the wait ends.
     setApproval(null);
   }, []);
+
+  const seedOf = useCallback(() => liveRef.current, []);
 
   const run = useCallback(
     async (
@@ -1499,27 +1570,34 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
       abortRef.current?.abort(); // tear down any prior turn
       const controller = new AbortController();
       abortRef.current = controller;
+      // v1.384.0: CARRY ON from a kept state — nothing is cleared, the
+      // folds below start from it, and the rejoin asks only for the rest.
+      const from = runOpts.resume?.seed ?? null;
       setStreaming(true);
-      setText("");
-      textRef.current = "";
-      // v1.323.0: the reasoning resets per turn. A store reader that showed
-      // the LAST turn's thinking hears the reset now, not at the first flush.
-      if (thinkingRef.current) {
-        thinkingRef.current = "";
-        notifyThinking();
+      const t0 = from?.startedAt ?? Date.now();
+      if (!from) {
+        setText("");
+        textRef.current = "";
+        // v1.323.0: the reasoning resets per turn. A store reader that showed
+        // the LAST turn's thinking hears the reset now, not at the first flush.
+        if (thinkingRef.current) {
+          thinkingRef.current = "";
+          notifyThinking();
+        }
+        setTools([]);
+        setApproval(null);
+        setMcpAsks([]);
+        setPhase("preparing");
+        setWithFiles(carriesFiles(body));
+        setPrepStep(null);
+        setStartedAt(t0);
+        setLastEventAt(t0);
       }
-      setTools([]);
-      setApproval(null);
-      setMcpAsks([]);
-      const t0 = Date.now();
-      setPhase("preparing");
-      setWithFiles(carriesFiles(body));
-      setPrepStep(null);
-      setStartedAt(t0);
-      setLastEventAt(t0);
       const watch: StreamWatch = {
         onOpen: () => {
           if (abortRef.current !== controller) return;
+          // A kept state already says where the turn is; a frame moves it.
+          if (from) return;
           setPhase("working");
           setLastEventAt(Date.now());
         },
@@ -1530,43 +1608,137 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               },
             }
           : {}),
+        ...(runOpts.onPosition
+          ? {
+              onPosition: (id: string) => {
+                if (abortRef.current === controller) runOpts.onPosition?.(id);
+              },
+            }
+          : {}),
       };
 
-      let acc = "";
+      let acc = from?.text ?? "";
       let done: Omit<ChatStreamResult, TurnExtras> | null = null;
-      let provider: string | undefined;
-      let model: string | undefined;
+      let provider: string | undefined = from?.provider;
+      let model: string | undefined = from?.model;
       // Did the server do real work for this turn (streamed a token or ran a
       // tool)? If so, a non-streaming re-POST on failure would re-execute it.
-      let committed = false;
-      const steered: string[] = [];
+      let committed = from?.committed ?? false;
+      const steered: string[] = [...(from?.steered ?? [])];
       // v1.323.0: this turn's reasoning, timing and tool cards (a local copy
       // of the cards — the state list belongs to the screen; the result needs
       // them in order the moment the loop ends).
-      let thought = "";
+      let thought = from?.thinking ?? "";
       // Thinking time = the sum of each run of thinking frames, from its
       // first delta to the next frame of any other kind (or the end) — so a
       // second round's thinking after the first round's words still counts.
       let thinkingSince: number | null = null;
-      let thinkingMs: number | null = null;
-      let firstTokenAt: number | null = null;
-      let truncated = false;
-      let cards: ToolCard[] = [];
+      let thinkingMs: number | null = from?.thinkingMs ?? null;
+      let firstTokenAt: number | null = from?.firstTokenAt ?? null;
+      let truncated = from?.truncated ?? false;
+      let cards: ToolCard[] = from?.tools ?? [];
+      // v1.384.0: the card and the app asks as this run folds them (the
+      // screen's state is set FROM these, so a replay can draw them once).
+      let pending: PendingApproval | null = from?.approval ?? null;
+      let asks: McpAsk[] = from?.mcpAsks ?? [];
+      let prep: PrepStep | null = from?.prepStep ?? null;
       // v1.324.0: the ids of the app asks THIS turn raised — the settle at the
       // end stops only these, so a newer turn's open question is never eaten.
-      const askIds = new Set<string>();
+      const askIds = new Set<string>(from?.askIds ?? []);
+      // v1.384.0: inside a tagged follow's STORED part (`resume` ..
+      // `caught_up`) nothing is drawn frame by frame: the folds below run,
+      // and `caught_up` (or the end) draws the result in ONE pass. A stream
+      // with no `resume` frame (an untagged follow, an older daemon) draws
+      // every frame as it comes, exactly as before.
+      let replaying = false;
+      let first = true;
+      const keep = () => {
+        liveRef.current = {
+          text: acc,
+          thinking: thought,
+          tools: cards,
+          approval: pending,
+          mcpAsks: asks,
+          phase: "working",
+          prepStep: prep,
+          startedAt: t0,
+          committed,
+          steered: [...steered],
+          askIds: [...askIds],
+          thinkingMs,
+          firstTokenAt,
+          truncated,
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {}),
+        };
+      };
+      const drawAll = () => {
+        textRef.current = acc;
+        thinkingRef.current = thought;
+        setTools(cards);
+        setApproval(pending);
+        setMcpAsks(asks);
+        setPrepStep(prep);
+        setPhase("working");
+        setLastEventAt(Date.now());
+        flushText();
+      };
+      const restart = () => {
+        // The daemon answered with the WHOLE turn: fold it from nothing.
+        acc = "";
+        thought = "";
+        cards = [];
+        pending = null;
+        asks = [];
+        prep = null;
+        committed = false;
+        steered.length = 0;
+        askIds.clear();
+        thinkingMs = null;
+        firstTokenAt = null;
+        truncated = false;
+      };
+      if (from) keep();
 
+      const query = runOpts.rejoin
+        ? runOpts.resume?.after
+          ? `?after=${encodeURIComponent(runOpts.resume.after)}`
+          : runOpts.ids
+            ? "?ids=1"
+            : ""
+        : "";
       try {
         for await (const ev of streamSSE(
           runOpts.rejoin
-            ? `/chat/turns/${encodeURIComponent(runOpts.rejoin)}/stream`
+            ? `/chat/turns/${encodeURIComponent(runOpts.rejoin)}/stream${query}`
             : (runOpts.path ?? "/chat/stream"),
           runOpts.rejoin ? undefined : body,
           controller.signal,
           watch,
         )) {
+          if (first) {
+            first = false;
+            // A kept state carried on ONLY when the daemon says it resumed;
+            // an answer with no `resume` frame (an older daemon) is the whole
+            // turn, drawn as it comes, from nothing.
+            if (from && ev.type !== "resume") {
+              restart();
+              drawAll();
+            }
+          }
+          if (ev.type === "resume") {
+            replaying = true;
+            if (!ev.resumed) restart();
+            keep();
+            continue;
+          }
+          if (ev.type === "caught_up") {
+            replaying = false;
+            drawAll();
+            continue;
+          }
           // A real frame moved the turn (keepalives never reach here).
-          if (ev.type !== "done" && ev.type !== "error") setLastEventAt(Date.now());
+          if (!replaying && ev.type !== "done" && ev.type !== "error") setLastEventAt(Date.now());
           if (ev.type !== "thinking" && thinkingSince !== null) {
             thinkingMs = (thinkingMs ?? 0) + Math.max(0, Date.now() - thinkingSince);
             thinkingSince = null;
@@ -1574,8 +1746,10 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
           // v1.312.0: anything but a stage name means preparation is over —
           // the bubble's stage words must not outlive it. (A `meta` frame is
           // routing, not progress; it leaves the words alone.)
-          if (ev.type !== "phase" && ev.type !== "meta" && ev.type !== "approval_resolved")
-            setPrepStep(null);
+          if (ev.type !== "phase" && ev.type !== "meta" && ev.type !== "approval_resolved") {
+            prep = null;
+            if (!replaying) setPrepStep(null);
+          }
           switch (ev.type) {
             case "token":
               committed = true;
@@ -1584,8 +1758,10 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               // v1.250.0 (S-03): the ref is the truth; the screen catches up
               // once a frame. `onToken` still sees EVERY token (the TTS feed
               // splits on whole words and must not miss one).
-              textRef.current = acc;
-              scheduleText();
+              if (!replaying) {
+                textRef.current = acc;
+                scheduleText();
+              }
               onToken?.(ev.text, acc);
               break;
             case "reset":
@@ -1597,8 +1773,10 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               // empty bubble rides the same once-a-frame publish as a token.
               // NOT `committed`: a reset is not work; the tokens around it are.
               acc = "";
-              textRef.current = "";
-              scheduleText();
+              if (!replaying) {
+                textRef.current = "";
+                scheduleText();
+              }
               onReset?.();
               break;
             case "thinking":
@@ -1608,8 +1786,10 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               if (!ev.text) break;
               if (thinkingSince === null) thinkingSince = Date.now();
               thought += ev.text;
-              thinkingRef.current = thought;
-              scheduleText();
+              if (!replaying) {
+                thinkingRef.current = thought;
+                scheduleText();
+              }
               break;
             case "tool_call": {
               committed = true;
@@ -1617,7 +1797,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               // the result's step agree to the millisecond.
               const now = Date.now();
               cards = upsertTool(cards, ev, now);
-              setTools((prev) => upsertTool(prev, ev, now));
+              if (!replaying) setTools(cards);
               break;
             }
             case "approval":
@@ -1625,7 +1805,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               // committed work — the model has already chosen this call, so a
               // silent re-POST would replay the turn.
               committed = true;
-              setApproval({
+              pending = {
                 id: ev.id,
                 callId: ev.call_id,
                 tool: ev.tool,
@@ -1639,12 +1819,14 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 ...(onceReasonOf(ev.once_reason) ? { onceReason: onceReasonOf(ev.once_reason) } : {}),
                 ...(ev.cost_note ? { costNote: ev.cost_note } : {}),
                 ...(typeof ev.reversible === "boolean" ? { reversible: ev.reversible } : {}),
-              });
+              };
+              if (!replaying) setApproval(pending);
               break;
             case "approval_resolved":
               // Clear only the card this frame answers — a stale resolution
               // must not eat a NEWER question.
-              setApproval((prev) => (prev && prev.id === ev.id ? null : prev));
+              if (pending && pending.id === ev.id) pending = null;
+              if (!replaying) setApproval((prev) => (prev && prev.id === ev.id ? null : prev));
               break;
             case "mcp_elicitation":
             case "mcp_sampling": {
@@ -1654,13 +1836,15 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               committed = true;
               const ask = ev.ask;
               askIds.add(ask.id);
-              setMcpAsks((prev) => upsertAsk(prev, ask));
+              asks = upsertAsk(asks, ask);
+              if (!replaying) setMcpAsks(asks);
               break;
             }
             case "mcp_resolved": {
               // Only the ask this frame names; a stale id changes nothing.
               const fr: McpResolvedFrame = { id: ev.id, kind: ev.kind, outcome: ev.outcome };
-              setMcpAsks((prev) => resolveAsk(prev, fr));
+              asks = resolveAsk(asks, fr);
+              if (!replaying) setMcpAsks(asks);
               break;
             }
             case "mcp_progress": {
@@ -1674,7 +1858,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 message: ev.message,
               };
               cards = foldToolProgress(cards, fr);
-              setTools((prev) => foldToolProgress(prev, fr));
+              if (!replaying) setTools(cards);
               break;
             }
             case "meta":
@@ -1688,7 +1872,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               // v1.312.0: the preparation stage the bubble names. Not work
               // (nothing is billed before the model starts), so not
               // `committed`: a turn that failed here may still fall back.
-              setPrepStep(ev.phase);
+              prep = ev.phase;
+              if (!replaying) setPrepStep(ev.phase);
               break;
             case "done":
               truncated = ev.truncated === true;
@@ -1754,8 +1939,17 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
             default:
               break; // round / unknown — nothing to accumulate
           }
+          keep();
         }
       } finally {
+        // A replay that ended before its `caught_up` (a finished turn's
+        // whole record) is drawn now, in one pass.
+        if (replaying) {
+          textRef.current = acc;
+          thinkingRef.current = thought;
+          setTools(cards);
+          setMcpAsks(asks);
+        }
         // The last words land EXACTLY, not one frame late: flush synchronously
         // and drop any queued frame (v1.250.0, S-03).
         flushText();
@@ -1810,5 +2004,6 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
     lastEventAt,
     run,
     abort,
+    seedOf,
   };
 }

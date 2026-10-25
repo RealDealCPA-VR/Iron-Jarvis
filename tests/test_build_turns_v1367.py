@@ -127,7 +127,8 @@ async def test_a_build_turn_is_a_harness_turn_on_the_sessions_folder_under_its_o
     frames = await _run(app, sid, "make hello.py", "bt-1")
     # The lane was asked for exactly this.
     kw = seen[0]
-    assert kw["harness"] == "auto" and kw["round_budget"] == 60 and kw["stay_in_chat"] is True
+    # v1.384.0: no step limit by default — the 1,000-step safety stop (was 60).
+    assert kw["harness"] == "auto" and kw["round_budget"] == 1000 and kw["stay_in_chat"] is True
     assert kw["session_id"] == f"build:{sid}" and kw["plan_mode"] is False
     assert kw["suggest_preferences"] is False
     body = kw["body"]
@@ -197,10 +198,11 @@ def test_the_setting_is_in_the_schema_with_its_range(tmp_path):
     d = schema.get("build_round_budget")
     assert d is not None and d.tier == "allow" and d.store == "config"
     client = TestClient(create_app(str(tmp_path / "home")))
-    assert client.get("/settings").json()["settings"]["build_round_budget"] == 60
+    # v1.384.0: 0 = no limit, the default (was 60); the range is 0..1000.
+    assert client.get("/settings").json()["settings"]["build_round_budget"] == 0
     assert client.put("/settings/values", json={"values": {"build_round_budget": 120}}).status_code == 200
     assert client.app.state.platform.config.build_round_budget == 120
-    assert client.put("/settings/values", json={"values": {"build_round_budget": 201}}).status_code >= 400
+    assert client.put("/settings/values", json={"values": {"build_round_budget": 1001}}).status_code >= 400
 
 
 async def test_a_turn_is_refused_in_words_when_it_cannot_run(app, work, tmp_path):

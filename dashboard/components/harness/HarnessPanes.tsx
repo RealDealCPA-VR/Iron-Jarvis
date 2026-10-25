@@ -7,7 +7,9 @@
  *
  *  - plan: `PlanChecklist`, fed by the running turn's `plan_update` calls,
  *    else the newest one a reply kept, else the plan the session keeps (one
- *    the user approved in plan mode);
+ *    the user approved in plan mode). v1.384.0: the RUNNING turn's plan is
+ *    here only from `xl` (beside the conversation; below it, under the
+ *    reply), and a plan that appears behind another tab marks this one;
  *  - terminal: a NORMAL Build terminal in the session's folder, made through
  *    the terminals API and drawn by the page's own TerminalPane (the pane
  *    host, v1.243.0) — it is in the Terminals view's rail too;
@@ -22,7 +24,7 @@
  * rules); behind another tab its terminal parks in the host's lot.
  */
 
-import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Loader2, Plus, RefreshCw } from "lucide-react";
 import { PlanChecklist } from "@/components/chat/PlanChecklist";
 import { ChangedFiles, fetchTurnChangeSet, type ChangeUndoState, type FileChange } from "@/components/chat/ChangedFiles";
@@ -82,11 +84,27 @@ export function panePlan(view: BuildSessionView, livePlan: PlanView | null): Pla
   return livePlan ?? planFromMessages(view.messages) ?? planFromSession(view.plan);
 }
 
+/** Below `xl` (the panes stacked under the conversation) a RUNNING reply's
+ *  plan is drawn under the reply; this pane says where it is (v1.384.0). */
+export const LIVE_PLAN_ELSEWHERE = "While it works, the plan is under the reply.";
+
 function PlanPane({ view, livePlan }: { view: BuildSessionView; livePlan: PlanView | null }) {
   const plan = panePlan(view, livePlan);
   return (
     <div data-testid="pane-plan" className="space-y-3">
-      {plan ? (
+      {livePlan ? (
+        // v1.384.0 — ONE PLACE for a running reply's plan: here from `xl`
+        // (this pane sits beside the conversation), under the reply below it
+        // (`HarnessPlan.LivePlan`). CSS only.
+        <>
+          <div data-testid="pane-plan-live" className="hidden xl:block">
+            <PlanChecklist plan={livePlan} />
+          </div>
+          <p data-testid="pane-plan-elsewhere" className="text-[13px] text-zinc-400 xl:hidden">
+            {LIVE_PLAN_ELSEWHERE}
+          </p>
+        </>
+      ) : plan ? (
         <PlanChecklist plan={plan} />
       ) : (
         <p className="text-[13px] text-zinc-400">
@@ -391,9 +409,20 @@ export function HarnessPanes({
     setTab(saved);
     if (saved === "terminal") setTerminalOpened(true);
   }, []);
+  // v1.384.0: a running reply's plan APPEARS while the user is on another
+  // tab — the tab stays (never switched for them); the Plan tab is MARKED
+  // (a dot, with words for a screen reader) until they open it.
+  const [planNew, setPlanNew] = useState(false);
+  const hadPlan = useRef(!!livePlan);
+  const hasPlan = !!livePlan;
+  useEffect(() => {
+    if (hasPlan && !hadPlan.current && tab !== "plan") setPlanNew(true);
+    hadPlan.current = hasPlan;
+  }, [hasPlan, tab]);
   const choose = useCallback((t: PaneTab) => {
     setTab(t);
     if (t === "terminal") setTerminalOpened(true);
+    if (t === "plan") setPlanNew(false);
     try {
       window.localStorage.setItem(TAB_KEY, t);
     } catch {
@@ -436,6 +465,14 @@ export function HarnessPanes({
               }`}
             >
               {t.label}
+              {t.value === "plan" && planNew && !selected ? (
+                // v1.384.0: from xl only — below it the plan is under the
+                // reply, where the user already is.
+                <span data-testid="harness-plan-new" className="hidden xl:inline">
+                  <span aria-hidden className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle" />
+                  <span className="sr-only"> (a new plan)</span>
+                </span>
+              ) : null}
             </button>
           );
         })}

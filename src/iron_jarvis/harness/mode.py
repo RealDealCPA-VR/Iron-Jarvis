@@ -116,8 +116,41 @@ ASK_USER_TOOL = "ask_user"
 ONCE_ONLY_TOOLS: frozenset[str] = frozenset({EXIT_PLAN_TOOL})
 
 #: A harness turn's tool rounds when the caller set none — the plan's Phase 4
-#: decision (60), measured by the Phase 0 benchmark.
+#: decision (60), measured by the Phase 0 benchmark. (The benchmark and any
+#: harness caller with no budget of its own; a BUILD reply has its own rule,
+#: :data:`BUILD_SAFETY_ROUNDS`.)
 HARNESS_DEFAULT_ROUNDS = 60
+
+#: THE SAFETY STOP of a Build reply with NO step limit (v1.384.0, the
+#: default since the user's 117-minute reply hit 60 rounds and ended on
+#: "nothing is built yet"). Like Claude Code, a Build reply works until the
+#: model ends its turn or the user presses Stop; this is only the last guard
+#: against a model stuck in a loop the repeated-call breaker cannot see (one
+#: that reads a different file every round). 1,000 is the agent run's own
+#: step ceiling (`max_steps`, 1..1000), ~16x the reply that started this
+#: (60 rounds, 117 minutes): at the 2-6 minutes a round took there it is
+#: 1.5 to 4 DAYS of work, so no real task meets it, while it still bounds
+#: what a runaway loop can spend of the user's plan (the in-turn transcript is
+#: fitted to the model's window every round, so memory and context stay
+#: bounded meanwhile). ``chat_turn.MAX_TURN_ROUNDS`` equals it (pinned).
+BUILD_SAFETY_ROUNDS = 1000
+
+#: What a Build reply cut at its step limit is told to write instead of
+#: another tool call (v1.384.0). The old office wording ("write your final
+#: answer") made a reply that had only read and searched say "Nothing is
+#: built yet" — true, and no way to carry on. The reply line gets a one-press
+#: "Keep going" (the screen's), so the model writes a progress report, never
+#: a verdict. ``{limit}`` is the number of steps.
+OUT_OF_STEPS_BUILD_INSTRUCTION = (
+    "You have reached this reply's step limit ({limit} steps), so no more tools can run "
+    "in this reply. The user can press Keep going to let you carry on from exactly here. "
+    "Write a short progress report now, from the results above: start with one sentence "
+    "saying you reached the step limit; then what you have done so far (the files you "
+    "changed and where, the commands you ran and what they showed, what you found out); "
+    "then the next steps you will take when the user says keep going. Never say that "
+    "nothing was done: if you only read and searched, say what you read and what you "
+    "learned from it."
+)
 
 #: The exit lines a harness turn is told in place of the chat's escalate /
 #: workflow lines (``chat_turn._ENV_EXIT_LINES``).

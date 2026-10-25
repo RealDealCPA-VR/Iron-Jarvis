@@ -125,6 +125,11 @@ DEFAULT_SYSTEM_PROMPT = (
     "the tests or the command that proves it works, and fix what fails. Keep going "
     "until the task is done. When you finish, reply with a short summary of what "
     "you changed and how you checked it."
+    # v1.384.0 (the user's 117-minute reply read for 60 rounds and changed
+    # nothing): work INCREMENTALLY. True for every dialect.
+    " Given a list of changes, do them one at a time: make a change and check it "
+    "before you read for the next one. Do not read the whole codebase before your "
+    "first change."
 )
 
 #: THE FLOOR. Learned the hard way (2026-10-21): in a Phase 0 review run the
@@ -157,6 +162,12 @@ DEFAULT_TOOL_GUIDANCE = (
     "Use the tools to look before you change anything. After an edit, run the "
     "project's tests or the relevant command and read the result. If a call fails, "
     "read the error, fix the call and try again instead of repeating it unchanged."
+    # v1.384.0: BATCH independent reads — each step is a whole model round
+    # (minutes on a large model), and the lane runs a round's readers at the
+    # same time (`chat_turn.CONCURRENT_READ_TOOLS`).
+    " When you need several files or searches that do not depend on each other, "
+    "call those tools together in ONE reply (they run at the same time), not one "
+    "per step."
 )
 
 

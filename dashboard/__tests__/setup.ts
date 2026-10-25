@@ -7,7 +7,11 @@ import { afterEach } from "vitest";
 // module state. Clear it between tests so no suite inherits another's payload
 // (a test asserting a first-visit placeholder must see one).
 import { __resetApiCache } from "@/lib/apiCache";
+// v1.384.0: Build's IJ harness keeps where the user was (the session, its
+// running reply, the scroll) as module state too — the same rule.
+import { resetTurnCache } from "@/lib/turnCache";
 
 afterEach(() => {
   __resetApiCache();
+  resetTurnCache();
 });

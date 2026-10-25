@@ -2756,6 +2756,10 @@ CONCURRENT_READ_TOOLS: frozenset[str] = frozenset({
     "web_search", "web_fetch", "read_document", "read_file", "list_files",
     "file_search", "memory_search", "memory_read", "ltm_search", "recall",
     "guide_search", "guide_read", "app_search", "app_status",
+    # v1.384.0: the coding readers a harness turn uses most (the user's
+    # 117-minute reply made 46 grep calls) — files on disk, no live surface.
+    # The harness guidance now asks for independent reads in ONE reply.
+    "grep", "glob",
 }) - LOW_TRUST_DENY
 
 
@@ -4868,14 +4872,36 @@ def _stays_in_chat(armed_names, *, force: bool = False) -> bool:
     return _is_office_turn(armed_names) or _is_browser_agent_turn(armed_names)
 
 
-def _out_of_rounds_instruction(armed_names) -> str:
+def _out_of_rounds_instruction(armed_names, *, harness: bool = False, limit: int = 0) -> str:
     """The final-answer instruction for a turn cut at its last round: the
     browser wording when it acted in a browser, the office wording otherwise.
     MIRROR NOTE (lock-step): both chat lanes pass this to
-    ``_final_answer_after_tools`` — never one of the constants directly."""
+    ``_final_answer_after_tools`` — never one of the constants directly.
+
+    ``harness`` (v1.384.0): an IJ harness turn (a Build reply, the benchmark)
+    cut at its STEP LIMIT writes a progress report the user can carry on from
+    with one press ("Keep going") — never the office verdict, which made a
+    reply that had only read say "Nothing is built yet". ``limit`` is the
+    turn's step count. False — every other caller — is the old answer."""
+    if harness:
+        from ..harness.mode import OUT_OF_STEPS_BUILD_INSTRUCTION
+
+        return OUT_OF_STEPS_BUILD_INSTRUCTION.format(limit=f"{int(limit):,}")
     if _is_browser_agent_turn(armed_names):
         return OUT_OF_STEPS_BROWSER_INSTRUCTION
     return OUT_OF_ROUNDS_INSTRUCTION
+
+
+def step_limit_receipt(round_budget: "int | None", cut: bool, rounds: int) -> "dict[str, int] | None":
+    """``{"limit": rounds}`` when a turn whose CALLER set its round budget
+    (``round_budget`` — a Build reply, the benchmark) was cut at its last
+    round, else None (v1.384.0). It rides the stream lane's ``done`` frame
+    and the POST lane's answer as ``step_limit`` ONLY then, so every other
+    turn's frame is byte-identical; a Build reply line keeps it (the screen's
+    "Keep going"). MIRROR NOTE (lock-step): both lanes."""
+    if round_budget is None or not cut:
+        return None
+    return {"limit": int(rounds)}
 
 
 def _round_budget(armed_names, *, override: "int | None" = None) -> int:
@@ -4899,7 +4925,12 @@ def _round_budget(armed_names, *, override: "int | None" = None) -> int:
 #: setting: the knob is a keyword argument of the two lanes, reachable from
 #: Python callers only (no HTTP field carries it), and the bound only keeps a
 #: mistaken caller from sizing a loop it never meant to run.
-MAX_TURN_ROUNDS = 200
+#: v1.384.0: 200 -> 1,000, so a Build reply with NO step limit (the default)
+#: can run to its safety stop, ``harness.mode.BUILD_SAFETY_ROUNDS`` (equal,
+#: pinned). Only the validator's bound moved: plain chat turns, the agent
+#: runtime, the POST lane and the benchmark's explicit ``round_budget`` keep
+#: exactly the budgets they had (none of them passes more than it did).
+MAX_TURN_ROUNDS = 1000
 
 
 def turn_round_budget(value: Any) -> "int | None":
@@ -8333,7 +8364,12 @@ async def run_chat_turn(
                 # LAST allowed round: no round is left to show the model
                 # these results, so executing them would burn tool side
                 # effects invisibly. Skip them and say so.
-                stopped_note = (
+                # v1.384.0: a HARNESS turn says it on its reply line instead
+                # (`step_limit`, the screen's "Keep going") — the model's
+                # progress report names the limit (OUT_OF_STEPS_BUILD_
+                # INSTRUCTION), so no engine note is glued under it. MIRROR
+                # NOTE (lock-step): the stream lane.
+                stopped_note = "" if _harness is not None else (
                     f"stopped after {_round} tool rounds; "
                     f"{len(calls)} tool call(s) not executed"
                 )
@@ -8750,7 +8786,11 @@ async def run_chat_turn(
             model=model_choice,
             # v1.247.0 / v1.262.0: a turn cut at its last round is told so, in
             # the browser wording when it acted in a browser.
-            **({"instruction": _out_of_rounds_instruction(armed)} if _cut_office else {}),
+            # v1.384.0: a harness turn's own wording (a progress report the
+            # user carries on from with "Keep going"). Lock-step: stream lane.
+            **({"instruction": _out_of_rounds_instruction(
+                armed, harness=_harness is not None, limit=_rounds,
+            )} if _cut_office else {}),
             tally=_tally,
             outcome=_f_outcome,
         )
@@ -9052,6 +9092,13 @@ async def run_chat_turn(
     # key — edit both or neither.
     if workflow_run_info is not None:
         out["workflow_run"] = workflow_run_info
+    # STEP LIMIT (v1.384.0): {"limit": n} when a caller-budgeted turn (a Build
+    # reply, the benchmark) was cut at its last round — present ONLY then.
+    # MIRROR NOTE (lock-step): the stream done-frame carries the same
+    # conditional key — edit both or neither.
+    _step_limit = step_limit_receipt(round_budget, _cut_office, _rounds)
+    if _step_limit is not None:
+        out["step_limit"] = _step_limit
     # ESCALATION CARRIES THE TURN (v1.344.0, P1): present on EVERY escalation
     # (possibly []), absent otherwise — the page hands it to POST /sessions.
     # MIRROR NOTE (lock-step): the stream done-frame in routes/chat.py carries

@@ -20,7 +20,7 @@
  * back in the composer, even when the turn ended while nobody watched it.
  */
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
   CircleAlert,
@@ -40,7 +40,18 @@ import { REWIND_PICK_WORDS } from "@/lib/failureActions";
 import { ApiError, get, post, put } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
 import { useModels } from "@/lib/useModels";
-import { useChatStream, useLiveText, StreamError } from "@/lib/useChatStream";
+import { useChatStream, useLiveText, StreamError, type StreamSeed } from "@/lib/useChatStream";
+// v1.384.0: where the user was — the session, its running reply, the scroll.
+import {
+  atBottomOf,
+  dropTurn,
+  keepScroll,
+  keepTurn,
+  keepView,
+  scrollFor,
+  turnFor,
+  viewFor,
+} from "@/lib/turnCache";
 import { useLiveThinking } from "@/lib/liveThinking";
 import { mintTurnId } from "@/lib/turnRejoin";
 import { turnErrorText } from "@/lib/failureLine";
@@ -198,7 +209,10 @@ import {
   decodeAskResolved,
   decodeAskUser,
   decodeSessionView,
+  decodeStepLimit,
   deleteSession,
+  KEEP_GOING_TEXT,
+  stepLimitWords,
   getSession,
   isMissing,
   NO_FOLDER_NAME,
@@ -364,8 +378,13 @@ export function HarnessSession({
 }) {
   const daemon = useDaemon();
   const catalog = useModels();
-  const stream = useChatStream({ textInState: false });
-  const [view, setView] = useState<BuildSessionView | null>(null);
+  // v1.384.0: WHERE THE USER WAS (lib/turnCache) — the session last read
+  // and its running reply as this window last drew it (this component is
+  // keyed by the session: these are read once, at mount). Drawn on the
+  // FIRST render, then the reply carries on from its last frame.
+  const [kept] = useState(() => turnFor(threadId));
+  const stream = useChatStream({ textInState: false, seed: kept?.stream ?? null });
+  const [view, setView] = useState<BuildSessionView | null>(() => viewFor<BuildSessionView>(threadId));
   const viewRef = useRef<BuildSessionView | null>(null);
   viewRef.current = view;
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -373,15 +392,42 @@ export function HarnessSession({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<BuildMessage | null>(null);
-  const [questions, setQuestions] = useState<AskUserAsk[]>([]);
-  const [steerNotes, setSteerNotes] = useState<string[]>([]);
+  const [questions, setQuestions] = useState<AskUserAsk[]>(() => (kept?.page.questions as AskUserAsk[] | undefined) ?? []);
+  const [steerNotes, setSteerNotes] = useState<string[]>(() => kept?.page.steerNotes ?? []);
   // v1.372.0: the helper agents the running turn started, one row each
   // (its `helper` frames; lib/buildHelpers). The reply keeps them after.
-  const [helpers, setHelpers] = useState<HelperView[]>([]);
+  const [helpers, setHelpers] = useState<HelperView[]>(() => (kept?.page.helpers as HelperView[] | undefined) ?? []);
+  // v1.384.0: the frames' folds of THIS session (helpers, questions) as the
+  // running reply builds them — the truth the state above is drawn from, so a
+  // replay folds silently and is drawn ONCE (at `caught_up`), and the kept
+  // reply carries them. Every write goes through the setters below.
+  const pageRef = useRef<{ helpers: HelperView[]; questions: AskUserAsk[] }>({ helpers, questions });
+  const replayingRef = useRef(false);
+  const steerRef = useRef<string[]>(steerNotes);
+  const setPageHelpers = useCallback((next: HelperView[]) => {
+    pageRef.current = { ...pageRef.current, helpers: next };
+    setHelpers(next);
+  }, []);
+  const setPageQuestions = useCallback((f: (prev: AskUserAsk[]) => AskUserAsk[]) => {
+    const next = f(pageRef.current.questions);
+    pageRef.current = { ...pageRef.current, questions: next };
+    setQuestions(next);
+  }, []);
+  const setSteers = useCallback((next: string[]) => {
+    steerRef.current = next;
+    setSteerNotes(next);
+  }, []);
   // v1.373.0: a waiting message keeps its own skill and files.
   const [queued, setQueued] = useState<QueuedItem[]>([]);
-  const turnRef = useRef<string | null>(null);
-  const [turnId, setTurnId] = useState<string | null>(null);
+  const turnRef = useRef<string | null>(kept?.turnId ?? null);
+  const [turnId, setTurnId] = useState<string | null>(kept?.turnId ?? null);
+  // v1.384.0: the session is being LEFT (this component unmounts): its
+  // running reply is not over, so it is kept, never settled or dropped.
+  const leavingRef = useRef(false);
+  // v1.384.0: a `stream.run` is in flight (the cleanup closes only that),
+  // and which run is the newest.
+  const inFlightRef = useRef(false);
+  const runGenRef = useRef(0);
   const [turnsEnded, setTurnsEnded] = useState(0);
   // v1.370.0 (Phase 7): rewinds done here — the panes and the library read
   // again after one, like after a reply.
@@ -538,6 +584,10 @@ export function HarnessSession({
       setWaiting(!!decodeAccountWait(v.accountWait));
     }
   }, []);
+  // v1.384.0: the view last drawn is what a return paints at once.
+  useEffect(() => {
+    if (view) keepView(threadId, view);
+  }, [threadId, view]);
 
   const load = useCallback(async (): Promise<BuildSessionView | null> => {
     try {
@@ -646,13 +696,37 @@ export function HarnessSession({
   );
 
   // ----------------------------------------------------------- the turn
+  /** v1.384.0: draw the session's own folds (pageRef) — at once while live,
+   *  ONCE at `caught_up` while a replay is folded. */
+  const drawPage = useCallback(() => {
+    setHelpers(pageRef.current.helpers);
+    setQuestions(pageRef.current.questions);
+  }, []);
   const onFrame = useCallback((event: string, data: Record<string, unknown>) => {
+    if (event === "resume") {
+      // A tagged follow (v1.384.0): what comes up to `caught_up` is folded,
+      // not drawn; `resumed: false` is the whole turn — fold it from nothing.
+      replayingRef.current = true;
+      if (data.resumed !== true) pageRef.current = { helpers: [], questions: [] };
+      return;
+    }
+    if (event === "caught_up") {
+      replayingRef.current = false;
+      drawPage();
+      return;
+    }
+    const page = pageRef.current;
     if (event === "ask_user") {
       const ask = decodeAskUser(data);
-      if (ask) setQuestions((prev) => [...prev.filter((q) => q.id !== ask.id), ask]);
+      if (ask) pageRef.current = { ...page, questions: [...page.questions.filter((q) => q.id !== ask.id), ask] };
     } else if (event === "mcp_resolved") {
       const done = decodeAskResolved(data);
-      if (done) setQuestions((prev) => prev.map((q) => (q.id === done.id ? { ...q, outcome: done.outcome } : q)));
+      if (done) {
+        pageRef.current = {
+          ...page,
+          questions: page.questions.map((q) => (q.id === done.id ? { ...q, outcome: done.outcome } : q)),
+        };
+      }
     } else if (event === "account_limit") {
       const lim = decodeAccountLimit(data);
       if (lim) {
@@ -661,10 +735,14 @@ export function HarnessSession({
         setWaiting(false);
         setChoosing(false);
       }
+      return;
     } else if (event === "helper") {
-      setHelpers((prev) => applyHelperFrame(prev, data));
+      pageRef.current = { ...page, helpers: applyHelperFrame(page.helpers, data) };
+    } else {
+      return;
     }
-  }, []);
+    if (!replayingRef.current) drawPage();
+  }, [drawPage]);
 
   /** After a turn: adopt what the daemon wrote, put unread steer notes back
    *  in the box, and send what was waiting. */
@@ -691,10 +769,10 @@ export function HarnessSession({
       // notes and questions belong to that turn and stay (v1.369.0 review).
       if (turnRef.current === null) {
         setPending(null);
-        setSteerNotes([]);
+        setSteers([]);
         // The reply line now keeps the helpers (its `helpers`).
-        setHelpers([]);
-        setQuestions((prev) => prev.map((q) => (q.outcome ? q : { ...q, outcome: "stopped" })));
+        setPageHelpers([]);
+        setPageQuestions((prev) => prev.map((q) => (q.outcome ? q : { ...q, outcome: "stopped" })));
       }
       const sent = readSentSteers(threadId);
       const back = unreadSteersFor(sent, finished, v?.messages ?? [], unread);
@@ -717,7 +795,7 @@ export function HarnessSession({
       }
       return clean;
     },
-    [load, onChanged, threadId, refreshAccounts],
+    [load, onChanged, threadId, refreshAccounts, setSteers, setPageHelpers, setPageQuestions],
   );
 
   /** A message that never started goes back in the box: its words and what
@@ -751,9 +829,33 @@ export function HarnessSession({
     [restoreUploads],
   );
 
+  /** v1.384.0: keep the running reply as it stands (lib/turnCache), so a
+   *  return paints it at once and asks only for the frames after `pos`. */
+  const keepRunning = useCallback(
+    (id: string, pos: string) => {
+      const seed = stream.seedOf?.();
+      if (!seed || !pos) return;
+      keepTurn({
+        threadId,
+        turnId: id,
+        lastId: pos,
+        stream: seed,
+        page: { helpers: pageRef.current.helpers, questions: pageRef.current.questions, steerNotes: steerRef.current },
+      });
+    },
+    [stream, threadId],
+  );
+  const posRef = useRef<string>(kept?.lastId ?? "");
+
   const runTurn = useCallback(
-    async (text: string | null, rejoinId?: string, extras?: TurnExtras) => {
+    async (
+      text: string | null,
+      rejoinId?: string,
+      extras?: TurnExtras,
+      resume?: { after: string; seed: StreamSeed },
+    ) => {
       const id = rejoinId ?? mintTurnId();
+      const gen = ++runGenRef.current;
       turnRef.current = id;
       setTurnId(id);
       setSending(true);
@@ -764,8 +866,11 @@ export function HarnessSession({
       nextGenRef.current += 1;
       setNextSteps([]);
       setRewindNote(null);
-      // A new (or rejoined: its frames replay) turn draws its own helpers.
-      setHelpers([]);
+      // A new (or rejoined: its frames replay) turn draws its own helpers —
+      // v1.384.0: one carried on from where the user was keeps its own.
+      if (!resume) setPageHelpers([]);
+      replayingRef.current = false;
+      posRef.current = resume?.after ?? "";
       limitSeenRef.current = false;
       let started = !!rejoinId;
       // A NEW turn retires the limit card at its first real frame (once —
@@ -773,6 +878,10 @@ export function HarnessSession({
       let retired = !!rejoinId;
       let unread: string[] = [];
       let clean = false;
+      const onPosition = (pos: string) => {
+        posRef.current = pos;
+        keepRunning(id, pos);
+      };
       try {
         // v1.371.0: the message's files, and the page the Browser pane
         // shows (the agent may screenshot that dev server without asking).
@@ -781,6 +890,7 @@ export function HarnessSession({
         const preview = previewAddressFor(threadId);
         const ups = extras?.attachments ?? [];
         const picks = extras?.files ?? [];
+        inFlightRef.current = true;
         const res = await stream.run(
           rejoinId
             ? undefined
@@ -794,12 +904,18 @@ export function HarnessSession({
                 // expands it; `text` is its words).
                 ...(extras?.command ? { command: extras.command } : {}),
                 ...(preview ? { preview_url: preview } : {}),
+                // v1.384.0: every frame tagged with its resume position.
+                ids: true,
               },
           undefined,
           undefined,
           rejoinId
             ? {
                 rejoin: rejoinId,
+                // v1.384.0: tagged; with `resume`, only what came after.
+                ids: true,
+                ...(resume ? { resume } : {}),
+                onPosition,
                 onFrame: (e, d) => {
                   started = true;
                   onFrame(e, d);
@@ -807,9 +923,10 @@ export function HarnessSession({
               }
             : {
                 path: `/build/sessions/${encodeURIComponent(threadId)}/turn`,
+                onPosition,
                 onFrame: (e, d) => {
                   started = true;
-                  if (!retired && e !== "phase") {
+                  if (!retired && e !== "phase" && e !== "resume" && e !== "caught_up") {
                     retired = true;
                     setLimit(null);
                   }
@@ -840,30 +957,53 @@ export function HarnessSession({
           restoreToBox(text, extras);
         }
       } finally {
-        turnRef.current = null;
-        setTurnId(null);
-        setSending(false);
+        // v1.384.0: only the NEWEST run owns these (a 409 above hands over to
+        // a follow it started itself, which must keep them).
+        const newest = runGenRef.current === gen;
+        if (newest) inFlightRef.current = false;
+        // v1.384.0: LEAVING the session (it unmounts) is not the reply's
+        // end — it is kept (lib/turnCache) and carried on from on return;
+        // nothing is settled here.
+        if (!leavingRef.current && newest) {
+          turnRef.current = null;
+          setTurnId(null);
+          setSending(false);
+          dropTurn(threadId, id);
+        }
       }
-      if (started) await settle(id, unread, clean);
+      if (started && !leavingRef.current) await settle(id, unread, clean);
     },
-    [stream, threadId, onFrame, load, settle, restoreToBox],
+    [stream, threadId, onFrame, load, settle, restoreToBox, keepRunning, setPageHelpers],
   );
 
   // Open: read the session, its accounts, and follow a turn already running.
+  // v1.384.0: the session and its running reply were DRAWN already, from
+  // where this window last left them (lib/turnCache); the read below checks
+  // the reply still runs and carries it on from its last frame (only the
+  // frames after it are sent), or settles it when it ended meanwhile.
   useEffect(() => {
     let live = true;
-    setView(null);
+    leavingRef.current = false;
     setInput("");
     setError(null);
     setPending(null);
-    setQuestions([]);
     setLimit(null);
     setNextSteps([]);
     setRewindNote(null);
     setBranchError(null);
     void refreshAccounts();
     void load().then(async (v) => {
-      if (!live || !v) return;
+      if (!live) return;
+      if (!v) {
+        // Unreadable (offline, gone): a kept reply is not left "working".
+        if (kept) {
+          dropTurn(threadId, kept.turnId);
+          turnRef.current = null;
+          setTurnId(null);
+          stream.abort();
+        }
+        return;
+      }
       // v1.377.0: a session just branched from a QUESTION opens with that
       // question's words and files in its box (nothing is sent).
       if (initialDraft) {
@@ -889,20 +1029,47 @@ export function HarnessSession({
         if (back.length) setInput((cur) => withSteersRestored(cur, back));
       }
       if (v.queued.length) setQueued(v.queued.slice(0, MAX_QUEUED));
-      if (v.running && v.turnId && v.turnId !== "running") void runTurn(null, v.turnId);
+      const runningId = v.running && v.turnId && v.turnId !== "running" ? v.turnId : null;
+      if (kept && runningId === kept.turnId && kept.lastId) {
+        // Where the user was: carry on with only the frames after it.
+        void runTurn(null, kept.turnId, undefined, { after: kept.lastId, seed: kept.stream });
+      } else {
+        if (kept) {
+          // The kept reply ENDED while the user was away (or another one
+          // runs now): the transcript has its line — the live state goes.
+          dropTurn(threadId, kept.turnId);
+          turnRef.current = null;
+          setTurnId(null);
+          stream.abort();
+          setPageHelpers([]);
+          setSteers([]);
+        }
+        if (runningId && turnRef.current !== runningId) void runTurn(null, runningId);
+      }
     });
     return () => {
       live = false;
-      stream.abort();
+      // v1.384.0: the reply is not over because its session left the
+      // screen — it is kept (lib/turnCache) and carried on from on return.
+      // Only a stream in flight is closed: a kept state drawn at mount and
+      // not yet carried on stays drawn (React's development double mount
+      // would otherwise blank it for a frame).
+      leavingRef.current = true;
+      if (inFlightRef.current) stream.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 
   // The list saw a turn start here (a resumed wait, another window).
+  // v1.384.0: never a SECOND follow of the turn this screen already follows
+  // (the open read and the list can both see it run — each follow used to
+  // abort the other and replay the whole turn again).
   useEffect(() => {
     if (!listRunning || busy) return;
     void load().then((v) => {
-      if (v?.running && v.turnId && v.turnId !== "running") void runTurn(null, v.turnId);
+      if (v?.running && v.turnId && v.turnId !== "running" && turnRef.current !== v.turnId) {
+        void runTurn(null, v.turnId);
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listRunning]);
@@ -1020,6 +1187,8 @@ export function HarnessSession({
       setSkill(null);
     }
     setUsageNote(null);
+    // v1.384.0: a message the user sends brings them to the bottom.
+    atBottomRef.current = true;
     setPending({
       role: "user",
       // A command shows as it was typed ("/review app.py"), like Claude Code.
@@ -1092,7 +1261,9 @@ export function HarnessSession({
     try {
       await post(`/chat/turns/${encodeURIComponent(id)}/steer`, { text });
       writeSentSteers(threadId, [...readSentSteers(threadId), { turnId: id, text }]);
-      setSteerNotes((prev) => [...prev, text]);
+      setSteers([...steerRef.current, text]);
+      // v1.384.0: a return shows the note too.
+      if (posRef.current) keepRunning(id, posRef.current);
       setInput("");
     } catch (e) {
       setError(
@@ -1623,9 +1794,29 @@ export function HarnessSession({
   // ------------------------------------------------------------- render
   // Keep the newest line in view — the TRANSCRIPT scrolls, never the page (a
   // scrollIntoView would drag the whole window down on a phone).
+  // v1.384.0: only while the user is AT the bottom (a reader scrolled up to
+  // an earlier reply is not dragged down by every new step), and the place is
+  // kept per session (lib/turnCache): a return is at the bottom when the user
+  // left it there, else exactly where they were — before the first paint.
+  const atBottomRef = useRef(scrollFor(threadId)?.atBottom ?? true);
+  const restoredRef = useRef(false);
+  const onTranscriptScroll = useCallback(() => {
+    const el = transcriptRef.current;
+    if (!el) return;
+    const at = atBottomOf(el);
+    atBottomRef.current = at;
+    keepScroll(threadId, { top: el.scrollTop, atBottom: at });
+  }, [threadId]);
+  useLayoutEffect(() => {
+    const el = transcriptRef.current;
+    if (!el || restoredRef.current) return;
+    restoredRef.current = true;
+    const saved = scrollFor(threadId);
+    el.scrollTop = !saved || saved.atBottom ? el.scrollHeight : saved.top;
+  });
   useEffect(() => {
     const el = transcriptRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [view?.messages.length, pending, stream.tools.length, limit]);
 
   const asks = collectDockAsks({
@@ -1964,6 +2155,7 @@ export function HarnessSession({
           ref={transcriptRef}
           data-testid="harness-transcript"
           className={`min-h-0 flex-1 space-y-6 overflow-y-auto px-1 py-3 ${HARNESS_TRANSCRIPT_ROWS}`}
+          onScroll={onTranscriptScroll}
         >
           {offline ? <OfflineHint /> : null}
           {shown.length === 0 && !busy ? (
@@ -2033,6 +2225,33 @@ export function HarnessSession({
                 ) : null}
                 {/* v1.374.0: the turn's task list, folded into its reply. */}
                 <SettledPlan plan={replyPlan(m.plan, !!m.error)} />
+                {/* v1.384.0: the reply met its STEP LIMIT — said plainly, and
+                    the newest one offers ONE press to carry on (a new turn,
+                    the same as typing "continue"; never automatic). */}
+                {(() => {
+                  const sl = decodeStepLimit(m.stepLimit);
+                  if (!sl) return null;
+                  const offer = m === lastReply && !busy && !view.archived;
+                  return (
+                    <div data-testid="harness-step-limit" className="mt-2 flex flex-wrap items-center gap-2">
+                      <p className="flex items-center gap-1.5 text-[12px] text-zinc-400">
+                        <CircleAlert size={12} aria-hidden className="shrink-0" />
+                        {stepLimitWords(sl)}
+                      </p>
+                      {offer ? (
+                        <button
+                          type="button"
+                          data-testid="harness-keep-going"
+                          onClick={() => void send({ text: KEEP_GOING_TEXT })}
+                          title={`Carry on from where it stopped (sends "${KEEP_GOING_TEXT}")`}
+                          className="rounded-full bg-white/[0.06] px-3 py-1 text-[12px] text-zinc-200 transition-colors hover:bg-white/[0.1] hover:text-zinc-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+                        >
+                          Keep going
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })()}
                 {(() => {
                   // Phase 5: the limit card this reply ended on, as one quiet
                   // line in the transcript (the live card is below).
