@@ -77,9 +77,41 @@ INSTALLERS: dict[str, frozenset[str]] = {
 #: Programs that run ``python -m pip install x; y``.
 _PYTHONS = frozenset({"python", "python3", "py"})
 #: Wrappers that hand the rest of the command to another program.
-_WRAPPERS = frozenset({"sudo", "env", "nohup", "time", "nice", "command", "exec", "xargs", "call", "start"})
+_WRAPPERS = frozenset({"sudo", "env", "nohup", "time", "nice", "command", "exec", "xargs", "call", "start",
+                       # v1.386.0 review: a package runner hands the rest to the
+                       # program it fetches (`npx prettier --write src; ...`).
+                       "npx", "pnpx", "bunx", "uvx"})
 #: Options of those wrappers that take the next word as their value.
-_WRAPPER_VALUE_OPTS = frozenset({"-n", "-I", "-d", "-L", "-P", "-a", "-E", "-s", "-u"})
+_WRAPPER_VALUE_OPTS = frozenset({"-n", "-I", "-d", "-L", "-P", "-a", "-E", "-s", "-u", "-p", "--package"})
+#: Project runners whose `run` hands the rest to a program (`uv run black ...`).
+_RUNNERS = frozenset({"uv", "poetry", "pipenv", "pdm", "hatch", "rye"})
+_RUNNER_VALUE_OPTS = frozenset({"--with", "--python", "-p", "--project", "--directory", "--env-file",
+                                "--extra", "--group", "--package", "--from", "-e", "--env"})
+#: v1.386.0 review: FORMATTERS and fixers REWRITE the files they are named —
+#: measured: in cmd.exe `ruff format src; pytest tests` reformatted tests\
+#: (a folder the model never meant) and failed on `src;`. Some always write
+#: unless a read-only switch is given ...
+_WRITES_UNLESS: dict[str, frozenset[str]] = {
+    "black": frozenset({"--check", "--diff"}),
+    "isort": frozenset({"--check", "--check-only", "-c", "--diff"}),
+    "rustfmt": frozenset({"--check"}),
+    "pyupgrade": frozenset(),
+    "ruff format": frozenset({"--check", "--diff"}),
+}
+#: ... others only with their write switch.
+_WRITES_WITH: dict[str, frozenset[str]] = {
+    "autopep8": frozenset({"-i", "--in-place"}),
+    "yapf": frozenset({"-i", "--in-place"}),
+    "autoflake": frozenset({"-i", "--in-place"}),
+    "docformatter": frozenset({"-i", "--in-place"}),
+    "gofmt": frozenset({"-w"}),
+    "goimports": frozenset({"-w"}),
+    "clang-format": frozenset({"-i"}),
+    "prettier": frozenset({"--write", "-w"}),
+    "eslint": frozenset({"--fix"}),
+    "stylelint": frozenset({"--fix"}),
+    "ruff check": frozenset({"--fix", "--unsafe-fixes"}),
+}
 _GIT_VALUE_OPTS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env",
                              "--exec-path", "--super-prefix"})
 _EXT_RX = re.compile(r"\.(?:exe|com|cmd|bat)$", re.IGNORECASE)
@@ -270,9 +302,25 @@ def _git_subcommand(args: list[str]) -> str:
     return ""
 
 
+def _formatter(prog: str, args: list[str]) -> bool:
+    """Is ``prog args`` a formatter or fixer that rewrites the files it is
+    named (v1.386.0 review)?"""
+    low = [a.rstrip(";") for a in args]
+    if prog == "ruff":
+        sub = next((a for a in low if not a.startswith("-")), "")
+        prog = "ruff format" if sub == "format" else "ruff check" if sub in ("check", "") else ""
+    if prog in _WRITES_UNLESS:
+        return not (set(low) & _WRITES_UNLESS[prog])
+    if prog in _WRITES_WITH:
+        return bool(set(low) & _WRITES_WITH[prog])
+    return False
+
+
 def _guarded(prog: str, args: list[str]) -> bool:
     """Is ``prog args`` a command whose arguments it acts on (files, packages)?"""
     if prog in FILE_PROGRAMS:
+        return True
+    if _formatter(prog, args):
         return True
     if prog in IN_PLACE_EDITORS:
         return any(re.match(r"^-[A-Za-z]*i", a) or a.startswith("--in-place") for a in args)
@@ -288,6 +336,8 @@ def _guarded(prog: str, args: list[str]) -> bool:
             if k + 1 < len(low) and low[k + 1] in ("pip", "pip3"):
                 sub = next((a for a in low[k + 2:] if not a.startswith("-")), "")
                 return sub.rstrip(";") in INSTALLERS["pip"]
+            if k + 1 < len(low):
+                return _formatter(low[k + 1].rstrip(";"), args[k + 2:])
     return False
 
 
@@ -313,6 +363,13 @@ def _judge(segment: str, depth: int) -> str:
                 if not opt.startswith("/"):
                     break
             return ""
+        if prog in _RUNNERS and i + 1 < len(words) and words[i + 1][0].lower() == "run":
+            # `uv run black src; ...`: the program after `run` (its options
+            # with a value skipped) is the one that gets the words.
+            i += 2
+            while i < len(words) and words[i][0].startswith("-"):
+                i += 2 if words[i][0] in _RUNNER_VALUE_OPTS and "=" not in words[i][0] else 1
+            continue
         if prog in _WRAPPERS:
             i += 1
             titled = False

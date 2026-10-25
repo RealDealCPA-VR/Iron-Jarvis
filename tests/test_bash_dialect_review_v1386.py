@@ -928,3 +928,57 @@ def test_a_bash_name_that_really_is_wsl_is_refused_wherever_wsl_lives(monkeypatc
 
     monkeypatch.setattr(GB.os.path, "realpath", lambda p: "C:/Program Files/WSL/wsl.exe")
     assert GB.is_wsl_launcher("C:/tools/bash.exe")
+
+
+# --------------------------------------------------------------------------- #
+# 12. the ';' guard, more rows a real model writes (both ways)
+# --------------------------------------------------------------------------- #
+#
+# A FORMATTER rewrites the files it is named. Measured in cmd.exe: `ruff
+# format src; pytest tests` reformatted tests\ (never meant) and failed on
+# `src;`. The doer's guard let every formatter through.
+
+
+@pytest.mark.parametrize("command,program", [
+    ("black src; pytest tests", "black"),
+    ("python -m black src; pytest", "python"),
+    ("uv run black src; pytest tests", "black"),
+    ("isort src; pytest", "isort"),
+    ("ruff format src; pytest tests", "ruff"),
+    ("ruff check --fix src; pytest", "ruff"),
+    ("npx prettier --write src; npm test", "prettier"),
+    ("eslint --fix src; npm test", "eslint"),
+    ("gofmt -w .; go test ./...", "gofmt"),
+    ("autopep8 -i a.py; python a.py", "autopep8"),
+    ("clang-format -i a.c; make", "clang-format"),
+])
+def test_a_formatter_before_a_semicolon_is_refused(command, program):
+    from iron_jarvis.sandbox import cmd_guard as G
+
+    assert G.semicolon_refusal(command) == G.refusal_sentence(program), command
+
+
+@pytest.mark.parametrize("command", [
+    # the brief's own must-run rows
+    'echo "a; b"',
+    'rm -f "a; b"',
+    r"set PATH=%PATH%;C:\x",
+    'python -c "import x; print(1)"',
+    'findstr "a;b" notes.txt',
+    'git log --format="%h;%s" -3',
+    'curl -s "http://127.0.0.1:8000/a;b"',
+    "pip install https://example.com/pkg-1.0.tar.gz#egg=pkg;python_version",
+    'powershell -Command "Remove-Item a.txt; python b.py"',
+    # read-only formatter runs and runners of read-only tools
+    "black --check src; pytest",
+    "isort --check-only src; pytest",
+    "ruff check src; pytest",
+    "ruff format --check src; pytest",
+    "prettier --check src; npm test",
+    "uv run pytest -q; echo done",
+    "npx tsc --noEmit; npm test",
+])
+def test_ordinary_lines_with_a_semicolon_still_run(command):
+    from iron_jarvis.sandbox import cmd_guard as G
+
+    assert G.semicolon_refusal(command) == "", command
