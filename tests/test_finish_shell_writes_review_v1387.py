@@ -41,6 +41,7 @@ lost runs themselves, and what the review found past them — or is a GUARD
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -509,6 +510,17 @@ async def test_a_stalled_walk_never_holds_the_reply_and_is_never_started_twice(e
         assert len(started) == 1, "a second walk of a folder still being read was started"
     finally:
         release.set()
+    # ...and once the stalled walk has ended, the folder is read again: a
+    # command's write is seen (a stall is never remembered past its walk).
+    for _ in range(100):
+        if not FC._STALLED:
+            break
+        await asyncio.sleep(0.05)
+    monkeypatch.setattr(FC, "take", real)
+    (ws / "app.py").write_bytes(b"X = 1\n")
+    model = wire([_shell(_py("open('app.py', 'w').write('X = 2\\n')")), "Done.", "1. met."])
+    out = await _stream(platform, _body(ws))
+    assert len(model.notes()) == 1 and "finish" in out["done"]
 
 
 # --------------------------------------------------------------------------- #
@@ -623,3 +635,25 @@ def test_a_linked_folder_is_recorded_as_a_link_and_never_followed(tmp_path):
     (outside / "secret.txt").write_bytes(b"changed outside")
     _put(outside, "new.txt")
     assert not FC.compare(before, FC.take(work)).any
+
+
+async def test_two_replies_reading_one_folder_at_once_both_compare(tmp_path):
+    """Only a walk that was GIVEN UP ON keeps a second one out. Two Build
+    sessions on one folder (Branch from here shares it) whose walks overlap
+    must both get their snapshot — the first cut of the bounded walk refused
+    the second as "took longer than 3 s" although nothing was slow."""
+    import asyncio
+    import time
+
+    _put(tmp_path, "a.txt")
+
+    def slow_take(folder):
+        time.sleep(0.3)
+        return FC.take(folder)
+
+    first, second = await asyncio.gather(
+        FC.walk_bounded(tmp_path, slow_take, tmp_path),
+        FC.walk_bounded(tmp_path, slow_take, tmp_path),
+    )
+    assert first is not None and second is not None
+    assert first.usable and second.usable

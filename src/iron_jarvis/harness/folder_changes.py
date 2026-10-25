@@ -295,9 +295,12 @@ def too_slow(root: Any) -> Snapshot:
     return unavailable(root, PROBLEM_TOO_SLOW.format(seconds=_caps()[1]))
 
 
-#: Folders a walk is still reading (normalised paths) — one thread per folder.
-_BUSY: set[str] = set()
-_BUSY_LOCK = threading.Lock()
+#: Folders whose walk was GIVEN UP ON and still runs (normalised path ->
+#: that walk's token): one stalled thread per folder, never a pile. A walk
+#: that is merely running keeps nobody out (two Build sessions can share a
+#: folder: Branch from here).
+_STALLED: dict[str, object] = {}
+_STALLED_LOCK = threading.Lock()
 
 
 async def walk_bounded(folder: Any, fn: Callable[..., Any], *args: Any) -> Any:
@@ -313,22 +316,28 @@ async def walk_bounded(folder: Any, fn: Callable[..., Any], *args: Any) -> Any:
         key = os.path.normcase(os.path.abspath(str(folder)))
     except (OSError, ValueError):
         key = str(folder)
-    with _BUSY_LOCK:
-        if key in _BUSY:
-            log.info("finish check: %s is still being read by an earlier walk", folder)
+    with _STALLED_LOCK:
+        if key in _STALLED:
+            log.info("finish check: an earlier walk of %s that was given up on still runs", folder)
             return None
-        _BUSY.add(key)
+    token = object()
+    done = threading.Event()
 
     def run() -> Any:
         try:
             return fn(*args)
         finally:
-            with _BUSY_LOCK:
-                _BUSY.discard(key)
+            done.set()
+            with _STALLED_LOCK:
+                if _STALLED.get(key) is token:
+                    del _STALLED[key]
 
     try:
         return await asyncio.wait_for(asyncio.to_thread(run), _caps()[1] + WALK_GRACE_S)
     except asyncio.TimeoutError:
+        with _STALLED_LOCK:
+            if not done.is_set():
+                _STALLED[key] = token
         log.info("finish check: reading %s took longer than its deadline; left to finish on its own", folder)
         return None
 
