@@ -7,7 +7,7 @@
       "origin": "remote:laptop",
       "outcome": null,
       "status": "failed",
-      "summary": "The run failed: the supervisor fell over"
+      "summary": "The run failed: Iron Jarvis couldn't finish this task. Run it again. If it happens again, open the run to see the details."
     },
     "session_id": "session_remote_task",
     "type": "session.completed"

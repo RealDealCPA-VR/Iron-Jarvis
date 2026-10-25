@@ -389,7 +389,7 @@ async def test_the_failure_path_appends_the_failure_sentence(tmp_path):
     # (moved on purpose): nor the raw text, which rides ``failure_detail``.
     assert line["content"] == row.summary == (
         "The run failed: Iron Jarvis couldn't finish this task. Run it again. If it happens "
-        "again, the run's Details in Iron Jarvis say what went wrong."
+        "again, open the run to see the details."
     )
     assert row.failure_detail == "the provider blew up"
     assert line["content"] == content_for_session(row)

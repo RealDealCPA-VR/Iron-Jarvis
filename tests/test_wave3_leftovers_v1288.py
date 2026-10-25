@@ -70,7 +70,12 @@ def test_the_phones_dynamic_agent_lane_settles_a_crash(tmp_path):
     sid = asyncio.run(go())
     refreshed = orch.get_session(sid)
     assert refreshed.status is SessionStatus.FAILED, refreshed.status
-    assert _ERR in (refreshed.summary or ""), refreshed.summary
+    # Readiness 12A (G28, moved on purpose): the summary is plain words (the
+    # run page, the bell, the phone print it); the failure's own text rides
+    # failure_detail, the run page's folded Details.
+    assert _ERR not in (refreshed.summary or ""), refreshed.summary
+    assert (refreshed.summary or "").startswith("The run failed: "), refreshed.summary
+    assert refreshed.failure_detail == _ERR, refreshed.failure_detail
     rows = _runs(p, sid)
     assert rows and all(st is AgentState.FAILED and fin is not None for st, fin in rows), rows
 

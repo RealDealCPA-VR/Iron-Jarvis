@@ -623,8 +623,10 @@ GENERIC_TITLE_RUN = f"Iron Jarvis{GENERIC_TITLE_RUN_TAIL}"
 #: Readiness 12A (G28): the run's generic fix when NO model caused the
 #: failure (Iron Jarvis's own fault): there is no other model to choose, so it
 #: says where the folded technical text is — the run page's "Details" fold
-#: (``Session.failure_detail``), which every surface's row links to.
-GENERIC_FIX_RUN_OWN = "Run it again. If it happens again, the run's Details in Iron Jarvis say what went wrong."
+#: (``Session.failure_detail``), which every surface's row links to. Short on
+#: purpose: the bell clips a row at 140 characters, and "The run failed: " +
+#: the title + this must fit (dashboard/__tests__/wave7-seams-v13570).
+GENERIC_FIX_RUN_OWN = "Run it again. If it happens again, open the run to see the details."
 
 
 def generic_title(name: str = "", *, run: bool = False) -> str:

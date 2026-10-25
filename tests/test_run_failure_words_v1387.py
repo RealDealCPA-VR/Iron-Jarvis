@@ -70,7 +70,7 @@ CODEX_REASON = (
 )
 OWN_REASON = (
     "Iron Jarvis couldn't finish this task. Run it again. If it happens again, "
-    "the run's Details in Iron Jarvis say what went wrong."
+    "open the run to see the details."
 )
 
 
@@ -94,6 +94,18 @@ def test_a_failure_no_model_caused_names_iron_jarvis_and_where_the_details_are()
     assert reason == OWN_REASON
     assert technical == "sqlite3.OperationalError: database disk image is malformed"
     assert "sqlite" not in reason and "OperationalError" not in reason
+
+
+def test_the_generic_run_sentence_fits_a_bell_row_whole():
+    """The bell clips a row's body at 140 characters (NotificationBell
+    ``clip``); a generic run sentence must be read whole there, never "…say
+    what went wr…" (the first cut of this wave did not fit)."""
+    ids = [k for k in fw.PLAIN_NAMES if k not in ("auto", "mock")]
+    longest = max(ids, key=lambda k: len(fw.PLAIN_NAMES[k]))
+    named = fw.plain_reason(ProviderError(f"{longest}: something new went wrong"))
+    assert named.startswith(fw.heading(fw.PLAIN_NAMES[longest])), named
+    for reason in (OWN_REASON, CODEX_REASON, named):
+        assert len(f"The run failed: {reason}") <= 140, reason
 
 
 def test_the_runs_provider_names_a_provider_failure_that_names_none():

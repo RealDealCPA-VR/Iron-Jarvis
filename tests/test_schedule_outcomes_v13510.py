@@ -221,7 +221,7 @@ def test_a_failed_run_reads_the_run_failed_with_no_class_name(tmp_path, monkeypa
     # what failed and what to do next (the raw text is the run's Details).
     assert body["last_detail"] == ro.failure_detail(
         "The run failed: Iron Jarvis couldn't finish this task. Run it again. If it happens "
-        "again, the run's Details in Iron Jarvis say what went wrong."
+        "again, open the run to see the details."
     ), body
     assert "office is not answering" not in body["last_detail"]
     assert "RuntimeError" not in body["last_detail"]

@@ -245,7 +245,7 @@ async def test_a_vanished_project_row_is_recorded_too(platform):
 
 
 #: Readiness 12A (G28): the run's words for a failure no model caused.
-OWN_REASON = "Iron Jarvis couldn't finish this task. Run it again. If it happens again, the run's Details in Iron Jarvis say what went wrong."
+OWN_REASON = "Iron Jarvis couldn't finish this task. Run it again. If it happens again, open the run to see the details."
 
 
 async def test_a_failed_run_keeps_the_folder_note_under_the_failure(platform, tmp_path, monkeypatch):

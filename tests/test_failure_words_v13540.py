@@ -286,7 +286,7 @@ async def test_an_unrecognised_failure_keeps_its_own_words_without_the_class(tmp
     await orch._finalize_failed(s, RuntimeError("the build script exited 2"))
     assert _summary(p.engine, s.id) == (
         "The run failed: Iron Jarvis couldn't finish this task. Run it again. If it happens "
-        "again, the run's Details in Iron Jarvis say what went wrong."
+        "again, open the run to see the details."
     )
     with session_scope(p.engine) as db:
         assert db.get(Session, s.id).failure_detail == "the build script exited 2"
