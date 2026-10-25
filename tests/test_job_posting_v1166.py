@@ -245,7 +245,10 @@ def test_a_crashing_spawned_run_is_finalized_failed_not_stranded_active(
         assert rows[0].status is SessionStatus.FAILED, (
             f"a crashed spawn must be FAILED, got {rows[0].status!r}"
         )
-        assert "boom" in (rows[0].summary or "")
+        # v1.388.0 (12A, on purpose): the summary is the plain run sentence;
+        # the raw text is kept on the run (failure_detail, under Details).
+        assert (rows[0].summary or "").startswith("The run failed: ")
+        assert "boom" in (rows[0].failure_detail or "")
         # And the API says the same thing (nested shape on GET one).
         got = client.get(f"/sessions/{rows[0].id}").json()
         assert got["session"]["status"] == "failed"

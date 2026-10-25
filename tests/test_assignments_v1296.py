@@ -459,11 +459,17 @@ async def test_a_failed_run_increments_failure_count_through_the_hook(platform, 
     await _settle(platform)
     row = store.get(rec.id)
     assert row.status == "failed" and row.failure_count == 1
-    assert "provider down at 3am" in row.last_error
+    # v1.388.0 (12A, on purpose): a failed run reads in plain words at every
+    # door, so the row carries the run's sentence; the raw text is kept on the
+    # run (Session.failure_detail), under Details on the run page.
+    assert row.last_error.startswith("The run failed: ")
+    assert "provider down at 3am" not in row.last_error
     s = _sessions(platform.engine)[0]
     assert s.status is SessionStatus.FAILED
+    assert "provider down at 3am" in (s.failure_detail or "")
     finished = _events(platform.engine, EventType.ASSIGNMENT_FINISHED)
-    assert len(finished) == 1 and finished[0]["ok"] is False and "provider down" in finished[0]["error"]
+    assert len(finished) == 1 and finished[0]["ok"] is False
+    assert finished[0]["error"] == row.last_error
 
 
 async def test_a_cancelled_run_settles_the_assignment_through_the_hook(platform, store, dispatcher):

@@ -373,7 +373,10 @@ def test_denied_armed_tool_gets_a_note_and_stays_out_of_tools_used(
     body = r.json()
     assert body["tools_used"] == []      # a denied call is not honestly "used"
     # v1.358.0 (G41, on purpose): the built-in reads in tool words, not its id.
-    assert "Jarvis couldn't use image info (permission denied)" in body["reply"]
+    # v1.388.0 (12A, on purpose): every built-in's words come from ONE table
+    # (agents/mission.card_words, generated into builtinToolWords.ts), where
+    # image_info is "read a file".
+    assert "Jarvis couldn't read a file (permission denied)" in body["reply"]
 
 
 # --- response contract --------------------------------------------------------
