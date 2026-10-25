@@ -243,7 +243,9 @@ function boxClasses(el: Element | null | undefined): string[] {
 
 describe("the folded line says what the turn did, in plain words", () => {
   it("duration from the stored timing, then the counts in a fixed order", () => {
-    expect(workSummary({ steps: STEPS, timing: TIMING })).toBe("Worked for 14 s · read 2 files, ran 1 tool");
+    // Readiness 12A (G22, moved on purpose): excel_query is a registered built-in — it reads
+    // in the run log's words ("Queried a workbook"), never "Ran excel_query".
+    expect(workSummary({ steps: STEPS, timing: TIMING })).toBe("Worked for 14 s · read 2 files, queried a workbook");
   });
 
   it("no timing: the counts alone, capitalised", () => {
@@ -253,7 +255,7 @@ describe("the folded line says what the turn did, in plain words", () => {
   });
 
   it("stored steps win over the tool names (one per call, not per name)", () => {
-    expect(workSummary({ steps: STEPS, toolsUsed: ["read_file"] })).toBe("Read 2 files, ran 1 tool");
+    expect(workSummary({ steps: STEPS, toolsUsed: ["read_file"] })).toBe("Read 2 files, queried a workbook");
   });
 
   it("a failed step is counted and said", () => {
@@ -302,7 +304,7 @@ describe("one quiet line above a settled reply", () => {
       <WorkLine steps={STEPS} timing={TIMING} thinking="First I compare the two sheets." thinkingSeconds={4} />,
     );
     const btn = screen.getByRole("button", { expanded: false });
-    expect(screen.getByTestId("work-summary").textContent).toBe("Worked for 14 s · read 2 files, ran 1 tool");
+    expect(screen.getByTestId("work-summary").textContent).toBe("Worked for 14 s · read 2 files, queried a workbook");
     expect(screen.queryByTestId("work-rows")).toBeNull();
     // A hairline under the line, never a box.
     expect(classes(btn)).toEqual(expect.arrayContaining(["border-b", "border-white/[0.08]"]));
@@ -315,10 +317,10 @@ describe("one quiet line above a settled reply", () => {
     expect(steps.map((r) => r.textContent)).toEqual([
       "Readread_file0.3 s",
       "Readread_file0.2 s",
-      // v1.329.0: a tool the app does not know names itself in one phrase
-      // with a real space ("Ran excel_query"); the two read_file steps were
-      // saved before targets existed and keep the older words · id row.
-      "Ran excel_query1.2 s",
+      // v1.329.0: the two read_file steps were saved before targets existed
+      // and keep the older words · id row. Readiness 12A (moved on purpose):
+      // excel_query, a registered built-in, reads in the run log's words.
+      "Queried a workbook1.2 s",
     ]);
     for (const r of steps) expect(boxClasses(r)).toEqual([]);
   });
@@ -438,7 +440,7 @@ describe("on the chat page (calm chat W1-5)", () => {
     const work = within(reply as HTMLElement).getByTestId("work-line");
     const prose = text.closest('[data-testid="reply-prose"]')!;
     expect(work.compareDocumentPosition(prose) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(work).getByTestId("work-summary").textContent).toBe("Worked for 14 s · read 2 files, ran 1 tool");
+    expect(within(work).getByTestId("work-summary").textContent).toBe("Worked for 14 s · read 2 files, queried a workbook");
     expect(within(prose as HTMLElement).queryByTestId("thinking-disclosure")).toBeNull();
     fireEvent.click(within(work).getByRole("button", { expanded: false }));
     expect(within(work).getByTestId("thinking-summary").textContent).toBe("Thought for 4 s");

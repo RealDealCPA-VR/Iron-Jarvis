@@ -227,7 +227,9 @@ describe("the live line says the work in the folded line's own words", () => {
     const steps = liveSteps(finished);
     expect(workCounts(steps)).toEqual(stepCounts(steps));
     const live = liveWorkSummary(steps, 14_000);
-    expect(live).toBe("Working for 14 s · read 3 files, searched the web 2 times, ran 1 tool");
+    // Readiness 12A (G22, moved on purpose): excel_query is a registered built-in — it reads
+    // in the run log's words ("Queried a workbook"), never "Ran excel_query".
+    expect(live).toBe("Working for 14 s · read 3 files, searched the web 2 times, queried a workbook");
     // When the same turn folds, the words are the same, only the tense moves.
     const folded = workSummary({ steps, timing: { startedAt: 0, firstTokenAt: null, endedAt: 14_000 } });
     expect(folded).toBe(live.replace(/^Working/, "Worked"));
@@ -235,7 +237,7 @@ describe("the live line says the work in the folded line's own words", () => {
 
   it("a call still running is not counted yet; a failed one is, and says so", () => {
     expect(liveWorkSummary(liveSteps(SIX), 12_000)).toBe(
-      "Working for 12 s · read 3 files, searched the web, ran 1 tool",
+      "Working for 12 s · read 3 files, searched the web, queried a workbook",
     );
     expect(liveWorkSummary(liveSteps([running("r", "read_file", {})]), 4_000)).toBe("Working for 4 s");
     // v1.351.0 (G07): a failed write counts only as failed, never as made.
@@ -326,7 +328,9 @@ describe("only the newest steps show; older ones fold into 'N earlier steps'", (
     const rowsText = () => screen.getAllByTestId("work-row").map((r) => r.textContent ?? "");
     expect(rowsText()).toHaveLength(3);
     expect(rowsText()[0]).toMatch(/^Searched the web/);
-    expect(rowsText()[1]).toMatch(/^Ran excel_query/);
+    // Readiness 12A (G22, moved on purpose): excel_query is a registered built-in — it reads
+    // in the run log's words ("Queried a workbook"), never "Ran excel_query".
+    expect(rowsText()[1]).toMatch(/^Queried a workbook/);
     expect(rowsText()[2]).toBe("Searching the web for harbor st hours");
     const toggle = screen.getByRole("button", { name: "3 earlier steps" });
     expect(toggle.tagName).toBe("BUTTON");
@@ -346,7 +350,7 @@ describe("only the newest steps show; older ones fold into 'N earlier steps'", (
       "Read b.xlsx0.1 s",
       "Read c.xlsx0.1 s",
       expect.stringMatching(/^Searched the web/),
-      expect.stringMatching(/^Ran excel_query/),
+      expect.stringMatching(/^Queried a workbook/),
       "Searching the web for harbor st hours",
     ]);
     expect(toggle.compareDocumentPosition(screen.getAllByTestId("work-row")[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -529,7 +533,7 @@ describe("on the chat page", () => {
     // Wait for the THING asserted: the toggle the live rows draw.
     await waitFor(() => expect(within(live).getByTestId("live-earlier").textContent).toBe("3 earlier steps"));
     expect(within(live).getByTestId("live-work-words").textContent).toMatch(
-      /^Working for \d+ s · read 3 files, searched the web, ran 1 tool$/,
+      /^Working for \d+ s · read 3 files, searched the web, queried a workbook$/,
     );
     // The three newest calls, then the page's own "Thinking…" row.
     const rows = within(live).getAllByTestId("work-row");

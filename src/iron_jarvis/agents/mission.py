@@ -284,22 +284,46 @@ ASK_WORDS: dict[str, str] = {
     # (harness/helpers) — both doors are ask-tier, so they card.
     "delegate": "hand part of the work to a helper agent",
     "spawn_agent": "start a helper agent",
+    # Readiness 12A (G22/G24): the rest of the card's own table (lib/toolWords
+    # WORDS), so this table and the card hold the SAME phrases entry for entry
+    # and the activity log, the refusal line and the desktop toast say what
+    # the card says (they read "change a workflow" / "switch a watcher on or
+    # off" beside a card that said "change a saved workflow" / "pause or
+    # resume a watcher").
+    "config_change": "change a setting",
+    "config_change_protected": "change a protected setting",
+    "schedule_update": "change a schedule",
+    "schedule_delete": "remove a schedule",
+    "workflow_update": "change a saved workflow",
+    "workflow_delete": "remove a saved workflow",
+    "workflow_schedule": "put a saved workflow on a schedule",
+    "channel_toggle": "turn a channel's two-way messages on or off",
+    "channel_connect": "add a notification channel",
+    "webhook_update": "change a webhook",
+    "webhook_delete": "remove a webhook",
+    "sentinel_update": "pause or resume a watcher",
+    "sentinel_delete": "remove a watcher",
+    "goal_update": "change a goal",
+    "goal_delete": "drop a goal",
+    "reflex_create": "add a rule that acts on its own",
+    "reflex_update": "change a rule that acts on its own",
+    "reflex_delete": "remove a rule that acts on its own",
+    "config_undo": "undo your last change",
+    "approve_plan": "follow this plan",
 }
 
 
 def ask_words(tool: str) -> str:
-    """What an ask for ``tool`` wants to do ("save a file"), else "use <its
-    name>". Pure.
+    """What an ask for ``tool`` wants to do ("save a file") — readiness 12A
+    (G24): :func:`card_words`, the ONE rule the approval card, the desktop
+    toast and the log share, so every registered built-in reads in words
+    (it read "use read file" / "use assign work" for the ~140 built-ins
+    :data:`ASK_WORDS` did not list). Pure.
 
     v1.359.0 (wave 9): a connected app's tool is named as the chat footnote
     names it ("use Gmail › search messages"), never "use mcp  gmail  search
     messages" (its id with the underscores spaced)."""
-    name = str(tool or "").strip()
-    if name in ASK_WORDS:
-        return ASK_WORDS[name]
-    if name.startswith("mcp__"):
-        return f"use {tool_own_name(name)}"
-    return f"use {name.replace('_', ' ') or 'a tool'}"
+    return card_words(tool)
 
 
 #: Tools whose lines are bookkeeping, not work — kept out of the log.
@@ -698,12 +722,48 @@ def do_words(tool: str) -> str:
       chats", "read a file", "use your browser");
     * a custom tool by the only name it has ("use rename real file").
 
-    Never a built-in's spaced id. Pure."""
+    Never a built-in's spaced id. Pure.
+
+    Readiness 12A (G22/G24): :func:`card_words` — the approval card's own
+    rule, so a built-in browser tool reads "act in a browser tab" here as on
+    its card."""
+    return card_words(tool)
+
+
+#: Readiness 12A (G24): what the approval card says for a built-in browser
+#: tool (lib/toolWords ``toolWords`` — the card's tab answer says the rest).
+BROWSER_CARD_WORDS = "act in a browser tab"
+
+
+def card_words(tool: str) -> str:
+    """What a call of ``tool`` sets out to do, completing "The assistant wants
+    to …" — THE ONE RULE (readiness 12A, G22/G24) the approval card
+    (``dashboard/lib/toolWords.toolWords``), the desktop's ask toast
+    (``desktop/main.js askToolWords``), the activity log's "needed your OK
+    to …" / "is waiting for your OK to …" lines and the chat's refusal
+    footnote all read, so every registered built-in has the same words on
+    each (``scripts/gen_tool_words.py`` writes the dashboard's and the
+    desktop's tables FROM this function; ``tests/test_tool_words_everywhere_
+    v1387.py`` builds the real registry and fails on a built-in it cannot
+    word):
+
+    * the card's own phrase (:data:`ASK_WORDS`, == lib/toolWords WORDS);
+    * a built-in browser tool, :data:`BROWSER_CARD_WORDS`;
+    * a connected app's tool by its catalog name ("use Gmail › search
+      messages", :func:`app_tool_display`);
+    * else the log's own line for the tool, in the present ("search your
+      chats", "read a file");
+    * a custom tool by the only name it has ("use rename real file") — never
+      described in words the app cannot vouch for.
+
+    Pure."""
     name = str(tool or "").strip()
     if not name:
         return "use a tool"
     if name in ASK_WORDS:
         return ASK_WORDS[name]
+    if name in _BROWSER_TOOLS:
+        return BROWSER_CARD_WORDS
     if name.startswith("mcp__"):
         return f"use {tool_own_name(name)}"
     words = _RUN_TOOL_WORDS.get(name)
@@ -715,6 +775,57 @@ def do_words(tool: str) -> str:
         if present:
             return present
     return f"use {tool_own_name(name)}"
+
+
+#: The first word of a "did" phrase (:data:`_PRESENT`'s keys) as the chat's
+#: work line says it WHILE the step runs (readiness 12A, G22: "Searching your
+#: chats", where it read "Running history_search"). Every first word
+#: :data:`_RUN_TOOL_WORDS` uses is here (pinned).
+_ING: dict[str, str] = {
+    "added": "adding", "asked": "asking", "called": "calling", "changed": "changing",
+    "checked": "checking", "compared": "comparing", "finished": "finishing",
+    "handed": "handing", "listed": "listing", "loaded": "loading", "looked": "looking",
+    "made": "making", "messaged": "messaging", "noted": "noting", "opened": "opening",
+    "picked": "picking", "posted": "posting", "queried": "querying", "ran": "running",
+    "read": "reading", "saved": "saving", "searched": "searching", "started": "starting",
+    "suggested": "suggesting", "updated": "updating", "used": "using",
+    "acted": "acting", "captured": "capturing", "connected": "connecting",
+    "created": "creating", "dropped": "dropping", "published": "publishing",
+    "queued": "queuing", "removed": "removing", "restarted": "restarting",
+    "scanned": "scanning", "scheduled": "scheduling", "sent": "sending", "set": "setting",
+    "switched": "switching", "tested": "testing", "took": "taking", "typed": "typing",
+    "undid": "undoing", "waited": "waiting", "worked": "working", "applied": "applying",
+    "stopped": "stopping", "presented": "presenting", "clicked": "clicking",
+}
+
+
+def doing_phrase(did: str) -> str | None:
+    """"searched your chats" → "searching your chats"; None when the verb is
+    not in :data:`_ING`. Pure."""
+    head, _, rest = str(did or "").partition(" ")
+    verb = _ING.get(head)
+    if verb is None:
+        return None
+    return f"{verb} {rest}".strip() if rest else verb
+
+
+def step_line_words(tool: str) -> tuple[str, str] | None:
+    """The chat's work line for a built-in the line does not word by KIND
+    (readiness 12A, G22): ``(done, doing)`` — "Searched your chats" /
+    "Searching your chats" — from the run log's own line
+    (:data:`_RUN_TOOL_WORDS`), or None for a tool that has none (a kind's
+    tool, a browser tool, an app's, a custom one). Pure."""
+    name = str(tool or "").strip()
+    if name in _STEP_KIND or name in _BROWSER_TOOLS:
+        return None  # the line words these by kind (lib/workTarget KIND_OF)
+    words = _RUN_TOOL_WORDS.get(name)
+    if words is None:
+        return None
+    doing = doing_phrase(words[0])
+    if doing is None:
+        return None
+    cap = lambda t: t[:1].upper() + t[1:]  # noqa: E731 — one line, pure
+    return cap(words[0]), cap(doing)
 
 
 def _service_name(raw: Any) -> str:

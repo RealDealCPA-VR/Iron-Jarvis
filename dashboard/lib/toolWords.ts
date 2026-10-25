@@ -10,7 +10,13 @@
  * what will run, and what a "this conversation" grant is keyed on.
  *
  * Phrases complete "The assistant wants to … — your call."
+ *
+ * Readiness 12A (G24): a built-in this table does not list reads in the
+ * generated words of every registered built-in (lib/builtinToolWords, from
+ * agents/mission.card_words — no imports, so this file stays dependency-free).
  */
+
+import { BUILTIN_CARD_WORDS } from "@/lib/builtinToolWords";
 
 const WORDS: Record<string, string> = {
   write_file: "save a file",
@@ -253,6 +259,12 @@ export function toolWords(tool: string): string | null {
   // The built-in browser tools act in a tab of the browser the user
   // connected; the card's tab answer and note say the rest.
   if (isBuiltinBrowserTool(id)) return "act in a browser tab";
+  // Readiness 12A (G24): every OTHER registered built-in, in the words of
+  // the one source (agents/mission.card_words, generated into
+  // lib/builtinToolWords by scripts/gen_tool_words.py) — the card read "run
+  // assign_work" for the ~110 built-ins this file's table did not list.
+  // Built-ins only, by exact name: a custom tool still falls through to null.
+  if (Object.prototype.hasOwnProperty.call(BUILTIN_CARD_WORDS, id)) return BUILTIN_CARD_WORDS[id];
   // v1.352.0 (G22): a connected app's tool is named by its app and its own
   // words — "use gmail (search messages)" — read straight off its id, so
   // nothing is invented; the exact id stays on the card beside it.

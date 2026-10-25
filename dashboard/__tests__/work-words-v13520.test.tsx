@@ -113,7 +113,9 @@ describe("one counter: apps by name, the browser as one surface", () => {
         { name: "browser_click", ok: true },
         { name: "excel_query", ok: true },
       ]),
-    ).toEqual(["read 1 file", "used your browser 2 times", "used gmail 2 times", "used github", "ran 1 tool"]);
+      // Readiness 12A (G22, moved on purpose): a registered built-in counts
+      // as itself; only a custom tool is "ran 1 tool".
+    ).toEqual(["read 1 file", "used your browser 2 times", "used gmail 2 times", "used github", "queried a workbook"]);
   });
 
   it("a failed app step counts only as failed (the v1.351.0 rule holds)", () => {
@@ -263,7 +265,10 @@ describe("the kinds stay EXACT: never a prefix, never a guess", () => {
     expect(stepPhraseText(stepPhrase("browser_click"))).toBe("Used your browser · click");
     // Unchanged: a known tool, an unknown tool, an older step.
     expect(stepPhraseText(stepPhrase("read_file", "harbor.xlsx"))).toBe("Read harbor.xlsx");
-    expect(stepPhraseText(stepPhrase("excel_query"))).toBe("Ran excel_query");
+    // Readiness 12A (G22, moved on purpose): a registered built-in reads in
+    // the run log's words; a custom tool still names itself.
+    expect(stepPhraseText(stepPhrase("excel_query"))).toBe("Queried a workbook");
+    expect(stepPhraseText(stepPhrase("rename_real_file"))).toBe("Ran rename_real_file");
     expect(stepPhraseText(stepPhrase("read_file"))).toBe("Read · read_file");
   });
 });
@@ -274,7 +279,10 @@ describe("the approval card's words for an app tool", () => {
     expect(toolWords("mcp__github__listOpenIssues")).toBe("use github (list open issues)");
     expect(toolWords("write_file")).toBe("save a file");
     expect(toolWords("browser_click")).toBe("act in a browser tab");
-    expect(toolWords("excel_query")).toBeNull();
+    // Readiness 12A (G24, moved on purpose): every registered built-in has
+    // the card's words; a custom tool still has none of its own.
+    expect(toolWords("excel_query")).toBe("query a workbook");
+    expect(toolWords("rename_real_file")).toBeNull();
     expect(toolWords("mcp__gmail__")).toBeNull();
   });
 });

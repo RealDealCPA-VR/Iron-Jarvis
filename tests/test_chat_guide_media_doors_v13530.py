@@ -669,7 +669,8 @@ def test_an_app_tools_refusal_reads_in_the_users_words():
     # v1.358.0 (G41, on purpose): built-ins read in tool words, never the raw
     # id (tests/test_chat_picks_tools_v13580.py); malformed ids stay raw.
     assert refusal_footnotes([("image_info", "permission denied")]) == (
-        "\n\n_Note: Jarvis couldn't use image info (permission denied)._"
+        # Readiness 12A (G24, moved on purpose): the card's words, never the spaced id.
+        "\n\n_Note: Jarvis couldn't read a file (permission denied)._"
     )
     for raw in ("mcp__", "mcp____x", "mcp__ok__", "mcp__bad pack__x"):
         assert app_tool_words(raw) is None, raw

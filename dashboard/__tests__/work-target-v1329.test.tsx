@@ -306,7 +306,7 @@ describe("unfolded rows say what was done to what", () => {
       "Read sales-harbor-st.xlsx0.3 s",
       "Searched the web for pier 9 hours0.9 s",
       "Read a page on example.com0.4 s",
-      "Ran excel_query1.2 s",
+      "Queried a workbook1.2 s",
       "Made summary.xlsx0.1 sfailed",
     ]);
     const file = within(rows[0]).getByTestId("work-target");
@@ -353,7 +353,9 @@ describe("live rows use the same words", () => {
     // The live file keeps its full path on hover (this screen only; never saved).
     expect(within(read).getByTestId("work-target").getAttribute("title")).toBe("C:\\work\\harbor.xlsx (read_file)");
     expect(search.textContent).toBe("Searching the web for pier 9 hours");
-    expect(query.textContent).toBe("Running excel_query");
+    // Readiness 12A (G22, moved on purpose): excel_query is a registered built-in — it reads
+    // in the run log's words ("Queried a workbook"), never "Ran excel_query".
+    expect(query.textContent).toBe("Querying a workbook");
   });
 
   it("a secret-looking argument is never on screen or in a hover", () => {
@@ -379,14 +381,16 @@ describe("live rows use the same words", () => {
     ];
     render(<LiveToolRows cards={cards} />);
     const [shell, tool, secret] = screen.getAllByTestId("work-row");
-    // The visible words are unchanged: the program, the tool id.
+    // The visible words: the program; (readiness 12A, moved on purpose) a
+    // registered built-in in the run log's words, never its id.
     expect(shell.textContent).toBe("Running git");
-    expect(tool.textContent).toBe("Running excel_query");
-    // The hover is the whole one-line command, then the tool id.
+    expect(tool.textContent).toBe("Querying a workbook");
+    // The hover is the whole one-line command, then the tool id — on the
+    // built-in's words now (it has no subject of its own).
     expect(within(shell).getByTestId("work-target").getAttribute("title")).toBe("git push origin main (shell)");
-    expect(within(tool).getByTestId("work-target").getAttribute("title")).toBe("C:\\work\\harbor.xlsx (excel_query)");
+    expect(within(tool).getByText("Querying a workbook").getAttribute("title")).toBe("C:\\work\\harbor.xlsx (excel_query)");
     // A credential-shaped argument keeps the older hover: the id alone.
-    expect(within(secret).getByTestId("work-target").getAttribute("title")).toBe("excel_query");
+    expect(within(secret).getByText("Querying a workbook").getAttribute("title")).toBe("excel_query");
     expect(visibleAndHover(secret)).not.toContain(KEY);
   });
 
@@ -485,7 +489,7 @@ describe("on the chat page, the target is saved with the step and read back", ()
     expect(rows.map((r) => r.textContent)).toEqual([
       "Read sales-harbor-st.xlsx0.4 s",
       "Searched the webweb_search0.2 s",
-      "Ran excel_query0.1 s",
+      "Queried a workbook0.1 s",
     ]);
     // v1.349.0: the step with a detail opens to it; the others stay plain rows.
     expect(rows.map((r) => r.tagName)).toEqual(["BUTTON", "DIV", "DIV"]);

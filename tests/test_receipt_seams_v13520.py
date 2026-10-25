@@ -283,7 +283,8 @@ def test_the_activity_logs_ask_words_are_the_approval_cards():
         assert words == _tool_words_ts(tool), tool
     assert mission.ask_words("write_file") == "save a file"
     # A tool nobody described keeps its own name, never invented words.
-    assert mission.ask_words("read_file") == "use read file"
+    # Readiness 12A (G22/G24, moved on purpose): the card's own words (mission.card_words).
+    assert mission.ask_words("read_file") == "read a file"
 
 
 def test_the_retired_level_names_still_mean_the_same_level():

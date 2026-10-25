@@ -243,7 +243,8 @@ def test_refusal_footnotes_are_one_line_per_tool_deduped_and_keep_the_old_words(
     # image info"), never the raw id; one line per tool, deduped, as before.
     assert refusal_footnotes([]) == ""
     assert refusal_footnotes([("image_info", "permission denied")]) == (
-        "\n\n_Note: Jarvis couldn't use image info (permission denied)._"
+        # Readiness 12A (G24, moved on purpose): the card's words, never the spaced id.
+        "\n\n_Note: Jarvis couldn't read a file (permission denied)._"
     )
     out = refusal_footnotes([
         ("a", "not armed"), ("b", "low trust"), ("a", "not armed"), ("c", "mystery"),

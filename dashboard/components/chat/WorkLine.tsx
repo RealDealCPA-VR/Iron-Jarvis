@@ -315,6 +315,10 @@ export interface WorkRowProps {
   subjectFile?: boolean;
   /** The subject's hover text (its tool id, a live file's full path). */
   subjectTitle?: string;
+  /** Readiness 12A (G22): the WORDS' hover when the row has no subject — a
+   *  worded built-in ("Searched your chats") keeps its tool id, and while it
+   *  runs what it was called with, on hover, as the "Ran <id>" row did. */
+  titleTitle?: string;
   /** v1.349.0: the row OPENS (its step carries a detail): it is drawn as a
    *  real disclosure button, the same quiet line plus a small chevron.
    *  `controls` is the id of the panel drawn beneath it while open. Absent:
@@ -336,6 +340,7 @@ export function WorkRow({
   subject,
   subjectFile,
   subjectTitle,
+  titleTitle,
   expand,
 }: WorkRowProps) {
   // v1.348.0: a running title SHIMMERS (a soft light sweep, `.ij-shimmer` in
@@ -371,7 +376,9 @@ export function WorkRow({
           </span>
         </span>
       ) : (
-        <span className={`shrink-0 ${titleTone}`}>{title}</span>
+        <span className={`shrink-0 ${titleTone}`} title={titleTitle}>
+          {title}
+        </span>
       )}
       {!subject && detail ? (
         <>
@@ -678,6 +685,7 @@ function ToolRow({ card }: { card: ToolCard }) {
       subject={subject?.text ?? null}
       subjectFile={!!subject?.file}
       subjectTitle={subjectTitle}
+      titleTitle={!subject && kind === "tool" ? argHover ?? card.name : undefined}
       detail={subject ? null : stepHint(kind, card.name)}
       detailTitle={subject ? card.name : argHover ?? card.name}
       running={running}
@@ -886,6 +894,7 @@ function StepRow({ step }: { step: ReceiptStep }) {
       subject={p.subject}
       subjectFile={p.file}
       subjectTitle={p.subject ? (p.kind === "tool" ? step.name : `${p.subject} (${step.name})`) : undefined}
+      titleTitle={!p.subject && p.kind === "tool" ? step.name : undefined}
       detail={p.hint}
       // v1.352.0 (G22): a browser step's quiet word is its action ("click");
       // its tool id is the hover.
