@@ -88,6 +88,8 @@ import {
 } from "@/lib/turnReads";
 import {
   approvedLine,
+  cutOffLine,
+  cutOffTitle,
   decodeApproved,
   refitLine,
   refitTitle,
@@ -217,6 +219,11 @@ export interface TurnRoute {
    *  note when the call was sent again without earlier thinking. Absent on
    *  every chat reply. */
   account?: { id?: string; name?: string; note?: string } | null;
+  /** v1.387.0 (the reply budget): a reply this turn was cut off at the
+   *  model's OUTPUT limit before a tool call was complete — how many, and
+   *  whether the turn went on past it (daemon truth, LAST on the route, only
+   *  when it happened; decoded by `lib/turnRecovery.decodeCutOff`). */
+  cut_off?: { times?: number; recovered?: boolean } | null;
 }
 
 /** v1.369.0: a Build session reply's account, as the receipt says it ("on
@@ -784,6 +791,11 @@ export function TurnReceipt({
   // Review fix: the "why" follows what happened — a retry that left no
   // message out must not say the oldest messages were left out.
   const refitWhy = refitTitle(refit) ?? undefined;
+  // v1.387.0 (review): a reply cut off at the output limit — said where the
+  // user reads the reply, like a refit (decoded: a reopened chat hands back
+  // whatever the disk held).
+  const cutText = cutOffLine(rt?.cut_off);
+  const cutWhy = cutOffTitle(rt?.cut_off) ?? undefined;
   const approvedRows = decodeApproved(approved);
   if (
     !used.cache &&
@@ -940,6 +952,16 @@ export function TurnReceipt({
     parts.push(
       <span key="adapted" className="text-zinc-500">
         {adaptedText}
+      </span>,
+    );
+  }
+  if (cutText) {
+    // v1.387.0 (review): the same quiet class as a refit — Iron Jarvis ran
+    // nothing from a reply the model could not finish and asked it to carry
+    // on. Why is on hover and in the expanded receipt (a phone has no hover).
+    parts.push(
+      <span key="cut-off" data-testid="turn-cut-off" title={cutWhy} className="text-zinc-500">
+        {cutText}
       </span>,
     );
   }
@@ -1206,6 +1228,17 @@ export function TurnReceipt({
               <Scissors size={12} className="mt-0.5 shrink-0 text-zinc-500" />
               <div data-testid="turn-refit-detail" className="min-w-0 text-[12px] leading-relaxed text-zinc-400">
                 {refitWhy}
+              </div>
+            </div>
+          )}
+          {/* v1.387.0 (review): why a reply was cut off at the output limit,
+              in words a phone can read (the collapsed part's title needs a
+              pointer). */}
+          {cutText && (
+            <div className="flex items-start gap-2">
+              <Scissors size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+              <div data-testid="turn-cut-off-detail" className="min-w-0 text-[12px] leading-relaxed text-zinc-400">
+                {cutWhy}
               </div>
             </div>
           )}

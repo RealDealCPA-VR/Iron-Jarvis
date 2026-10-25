@@ -132,3 +132,55 @@ export function approvedLine(a: ApprovedCall): string {
   const many = a.count && a.count > 1 ? `, ${a.count} calls` : "";
   return `You approved: ${askPhrase(a.tool)} (${reach}${many})`;
 }
+
+/**
+ * v1.387.0 (the reply budget, review): a reply the model was writing when it
+ * ran out of room — its OUTPUT limit — before a tool call was complete. The
+ * daemon ran nothing from it and either asked the model to carry on (writing
+ * a large file in parts: `recovered`) or, after too many in a row, ended the
+ * turn saying so. The route object carries `cut_off: {times, recovered}`
+ * (both lanes, LAST, only when it happened); this is its whitelist.
+ */
+export interface TurnCutOff {
+  times: number;
+  recovered: boolean;
+}
+
+/** The route's `cut_off` field's normal form, or null (absent, an older
+ *  daemon, a hand-edited thread). */
+export function decodeCutOff(raw: unknown): TurnCutOff | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as { times?: unknown; recovered?: unknown };
+  const n = r.times;
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 1) return null;
+  return { times: Math.floor(n), recovered: r.recovered === true };
+}
+
+/** The receipt's words, or null when no reply was cut off: "Cut off at the
+ *  output limit, picked up again" (more than once: "… 2 times, picked up
+ *  again"); a turn that ENDED on a cut says only that it was cut off — its
+ *  reply already says what happened. */
+export function cutOffLine(raw: unknown): string | null {
+  const c = decodeCutOff(raw);
+  if (!c) return null;
+  const times = c.times > 1 ? ` ${c.times} times` : "";
+  return c.recovered
+    ? `Cut off at the output limit${times}, picked up again`
+    : `Cut off at the output limit${times}`;
+}
+
+/** Hover words (and the expanded receipt's) for a reply that was cut off and
+ *  went on. */
+export const CUT_OFF_TITLE =
+  "The model ran out of room for one reply (its output limit) before a tool call was complete. Iron Jarvis ran nothing from that reply and asked it to carry on, writing large files in parts.";
+
+/** The same for a turn that ENDED on a cut: nothing from it was run. */
+export const CUT_OFF_END_TITLE =
+  "The model kept running out of room for one reply (its output limit) before a tool call was complete, so the reply ended there. Nothing from the cut replies was run.";
+
+/** The "why" for a cut-off reply, or null when there was none. */
+export function cutOffTitle(raw: unknown): string | null {
+  const c = decodeCutOff(raw);
+  if (!c) return null;
+  return c.recovered ? CUT_OFF_TITLE : CUT_OFF_END_TITLE;
+}
