@@ -263,14 +263,17 @@ medium; read from the bench's own reports).**
 | Claude Code | sonnet | 123 / 126 | 98% | 95%–100% | 60/60 | 27/30 | 36/36 |
 | Jarvis on Claude | sonnet | 115 / 126 | 91% | 90%–93% | 57/60 | 25/30 | 33/36 |
 | Jarvis on glm | glm-5.3-flash | 114 / 126 | 90% | 90%–90% | 58/60 | 24/30 | 32/36 |
-| Jarvis on Codex | gpt-6-astra | pending | | | | | |
+| Jarvis on Codex (v1.385.1) | gpt-6-astra | 89 / 89 | 100% | 100%–100% | 44/44 | 20/20 | 25/25 |
 
 - The frontier tier does separate them: Claude Code 36/36, Jarvis on Claude
   33/36.
-- **The Codex row is pending.** The first Codex run (v1.385.0) is not
-  counted: all 26 of its failed runs ended with "the folder is read-only",
-  which was fixed in v1.385.1, and the ChatGPT account hit its Codex usage
-  limit part-way through. It is being run again on v1.385.1.
+- **Codex passed every run it scored, but only 89 of 126 ran.** The first
+  Codex run (v1.385.0) is not counted: all 26 of its failed runs ended with
+  "the folder is read-only", fixed in v1.385.1. The second run (v1.385.1)
+  passed 89 of 89 scored runs; the other 37 did not run because the ChatGPT
+  account reached its Codex usage limit (unscored, not failures). No task
+  failed, so Codex shows no harness defect to fix; its row is not comparable
+  task for task with the others until those 37 run.
 - **Most of Jarvis on Claude's gap is one defect, found by this run.** The
   claude dialect shows Claude its trained `Bash` tool, but on Windows the
   command ran in cmd.exe. In `process-http-server` the line
@@ -358,6 +361,16 @@ mutation-checked).
     harness causes being fixed: a 4,096-token reply cap that cut whole-file
     writes (the run then ended on a no-tools final answer), and one file read
     per round (Phase 3's multi-file read).
+  - **The reply cap is fixed in v1.387.2:** local endpoints now ask for the
+    model's stated output limit or 32,768 tokens (fitted to the window), and a
+    reply cut at the limit runs nothing from its half call and is asked to
+    carry on, writing large files in parts. A first live check on the user's
+    glm endpoint (4 tasks glm had lost, one run each): 3 passed, including
+    `hard-expression-evaluator`, written in one reply of 5,462 tokens (the
+    old limit cut it at 4,096); no reply reached the new limit, so the
+    picked-up-again path did not run. `hard-markdown-exporter` failed on a
+    spec detail (a missing blank line), not the limit. glm is measured again
+    with repeats after Phase 3 ships.
 
 ## Phase 3 — Fewer steps, and code awareness (target v1.385.0)
 

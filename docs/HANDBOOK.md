@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.387.1 (2026-10-25).*
+holds itself to. Current as of v1.387.2 (2026-10-25).*
 
 ---
 
@@ -1896,6 +1896,37 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Your own model servers can write long replies (v1.387.2)
+
+Your own model servers (a custom endpoint, Ollama, a Fleet machine) were held
+to 4,096 tokens per reply. That is too little for one tool call that writes a
+whole source file. When the model reached the limit partway through such a
+call, the half call was dropped, and the reply ended with the code pasted into
+chat instead of saved.
+
+- **A reply budget that fits the work.** A local model now asks for up to
+  32,768 tokens per reply (or the limit its server states, up to 65,536), and
+  never more than fits after your conversation in what it can read at once.
+  When that size is unknown it never asks for less than before. Hosted
+  services (OpenAI, xAI, OpenRouter, Anthropic, Google), the sign-in programs
+  (Claude Code, Codex, Grok, OpenCode) and a model name your proxy sends on
+  to a cloud service keep exactly their old request. A reply that is not
+  streamed (the phone, summaries and other one-off calls) keeps the old 4,096.
+- **A long reply takes longer only when it runs long.** A model stops when
+  its answer is done. One that runs to the full budget at about 55 tokens a
+  second takes about ten minutes; Stop still ends it at once.
+- **A server that refuses the budget is asked once more** with the size it
+  says fits, and that size is remembered until Iron Jarvis restarts.
+- **A reply cut off in the middle of a tool call is picked up again.** Iron
+  Jarvis runs nothing from the half call (complete calls in the same reply
+  still run), tells the model what happened, and asks it to carry on, writing
+  a large file in parts. This happens at most twice in a row and eight times
+  in one reply; after that the reply says plainly it was cut off and suggests
+  asking for smaller pieces or a model with a larger output limit. The
+  receipt under the reply says "Cut off at the output limit, picked up
+  again". A long text answer cut off at the limit keeps its Continue button,
+  as before.
 
 ## The finish check sees files a command wrote (v1.387.1)
 

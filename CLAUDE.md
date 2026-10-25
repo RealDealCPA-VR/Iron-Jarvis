@@ -3569,6 +3569,72 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A LOCAL endpoint's reply budget fits the work; a reply CUT at the limit
+  never runs its half call and is picked up again** (v1.387.2; found by the
+  Phase 2 glm benchmark: every local endpoint asked the OpenAI adapter's
+  default `max_tokens=4096`, glm spent it on thinking + a `write_file` of a
+  whole module, the server's tool parser never emitted the half call, the
+  round came back empty and the lane asked a NO-TOOLS final answer, so the
+  code was pasted into chat; a doer + a reviewer that found 14 more
+  defects). `providers/reply_budget.py` is the ONE rule: the custom slot,
+  ollama and every `fleet-*` node (both protocols) ask cap = the model's
+  STATED output limit (LiteLLM `/model/info` `max_output_tokens`, else its
+  legacy `max_tokens` only when it differs from `max_input_tokens`; two
+  deployments keep the smaller; saved by the route reader as `max_output`,
+  never a key or `api_base`) up to `REPLY_CEILING` 65,536, else
+  `DEFAULT_REPLY_TOKENS` 32,768, fitted to `min(cap, window − request
+  estimate − slack)` on the lanes' own window ladder; an UNKNOWN window never
+  asks below `REPLY_FLOOR` 4,096, a known one is honoured down to `MIN_ASK`
+  1,024; a picture counts `IMAGE_TOKENS` (2,048), never its base64. NOT
+  BUDGETED, byte for byte the old request (pinned on the STREAMED wire too):
+  openai/xai/openrouter, anthropic, google, the CLIs, and a name
+  `egress.stays_on_this_network` calls cloud (`facts["cloud"]` — a proxy's
+  `frontier`; OpenRouter checks credit against the whole max_tokens). A
+  request that is NOT STREAMED (the POST lane — phone, API — and the
+  one-shots) asks at most `NON_STREAM_CAP` 4,096: it arrives whole inside the
+  client's 60 s read timeout (~3,300 tokens at glm speed) or not at all, and
+  a bigger ask only lengthens a generation the router retries 3 times. A
+  streamed reply has no wall bound but the budget (~10 min at 55 tok/s): the
+  60 s IDLE read and Stop (pinned: Stop closes the connection to the model
+  server); chat and tool turns get the same budget (decided — a reasoning
+  model's thinking spends it). RETRY: ONE retry on a length refusal with
+  what the server says fits (vLLM old/new — the new wording no longer trips
+  the field-rename swap —, SGLang, TGI, DeepSeek's "valid range … [1,
+  8192]", Groq/OpenAI output limits), read from up to 4,000 chars of the
+  refusal (the display cut is 300); a window or output cap a server names is
+  learned per (endpoint, model) for the process and the window also feeds
+  `chat_turn.learned_window`; a refusal naming max_tokens with no number →
+  4,096 once, remembered; a PROMPT that does not fit (fit < 1,024) is raised
+  for the v1.335.0 refit. The planners (`plan_history`,
+  `plan_agent_transcript`, `_shrink_to_window`, the runtime) reserve
+  `reserve_for(window, cap)` = max(512, min(cap, 25% window)) only for a
+  budgeted endpoint (the classic reserve otherwise). CUT-OFF (both chat lanes
+  lock-step + the agent runtime): `finish_reason == "max_tokens"` in a tool
+  turn with a cut call (`LLMResponse.cut_calls`: OpenAI stream/non-stream
+  strict, never the lenient ladder; a stream ENDING inside arguments with no
+  finish_reason is an interrupted answer, raised; an in-stream `{"error"}`
+  chunk is a `ProviderError`; anthropic-compat and the HOSTED Anthropic API
+  treat a max_tokens reply's LAST `tool_use` as cut — never run, never
+  replayed in thinking `raw_blocks`), or a call LEAKED as text naming an
+  offered tool (`leaked_call`: vLLM's unclosed `<tool_call>`), or no text and
+  no call at all → complete calls run, ONE `cut_off_note` ("…cut off at the
+  output limit (N tokens) … so nothing was run … Write a large file in
+  parts…", naming only ARMED part tools), the turn goes on; at most
+  `CUT_OFF_NOTES_MAX` 2 IN A ROW and `CUT_OFF_TOTAL_MAX` 8 per reply
+  (`cut_off_exhausted`), then `cut_off_end` — an honest end, no extra model
+  call, never the no-tools final answer. A cut TEXT reply keeps v1.323.0's
+  `truncated` + Continue. The finish check reads the cut FIRST (`heard()`
+  skips a cut round). Route object ends with `cut_off {times, recovered}`
+  only when cut; the receipt (`lib/turnRecovery.decodeCutOff` / `cutOffLine`,
+  `CUT_OFF_TITLE`) says "Cut off at the output limit, picked up again" on
+  the collapsed line. claude-cli's relay never hands on a cut call (pinned).
+  OPEN, live only: whether glm spent the budget on thinking or a held-back
+  call; whether 32,768 is enough; whether glm writes in parts when told;
+  Ollama context-shifts instead of refusing; hosted API-key adapters stay at
+  4,096. Pins: `tests/test_{reply_budget,cut_off_recovery,
+  output_budget_review}_v1387.py` (+ `fixtures/fake_openai_endpoint_v1387.py`,
+  a REAL fake SSE server), `dashboard/__tests__/turn-receipt-cut-off-v1387.test.tsx`.
+
 - **The finish check sees files a reply changed THROUGH COMMANDS: a folder
   snapshot beside the journal** (v1.387.1; found by the Phase 2 benchmark —
   both of Jarvis-on-Claude's remaining failures wrote `calc.py` with a bash
