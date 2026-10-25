@@ -1,0 +1,1400 @@
+{
+"_doc": "v1.384.0 review: a turn log holding every kind of frame (tests/test_build_long_replies_review_v1384.py) \u2014 an approval card and its answer, a steer note, a reset, a limit card, an error end. stored = the log's frames; live = what a tagged follower received; resumes[N] = frames_after(id of live[N-1]) (N=0: the whole turn). Regenerate with IJ_REGEN_BUILD_RESUME=1.",
+"stored": [
+[
+"phase",
+"{\"phase\": \"choosing_tools\"}"
+],
+[
+"thinking",
+"{\"text\": \"Let me look.\"}"
+],
+[
+"token",
+"{\"text\": \"Reading cart.py\"}"
+],
+[
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"finished\", \"ok\": true, \"detail\": {\"input\": \"{}\", \"output\": \"x = 1\"}}"
+],
+[
+"round",
+"{\"round\": 1}"
+],
+[
+"token",
+"{\"text\": \"Now I will edit it.\"}"
+],
+[
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"live": [
+[
+"0:0",
+"phase",
+"{\"phase\": \"choosing_tools\"}"
+],
+[
+"1:7",
+"thinking",
+"{\"text\": \"Let me \"}"
+],
+[
+"1:12",
+"thinking",
+"{\"text\": \"look.\"}"
+],
+[
+"2:8",
+"token",
+"{\"text\": \"Reading \"}"
+],
+[
+"2:15",
+"token",
+"{\"text\": \"cart.py\"}"
+],
+[
+"3:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"4:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"finished\", \"ok\": true, \"detail\": {\"input\": \"{}\", \"output\": \"x = 1\"}}"
+],
+[
+"5:0",
+"round",
+"{\"round\": 1}"
+],
+[
+"6:11",
+"token",
+"{\"text\": \"Now I will \"}"
+],
+[
+"6:19",
+"token",
+"{\"text\": \"edit it.\"}"
+],
+[
+"7:0",
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:12",
+"thinking",
+"{\"text\": \"The receipt \"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"too.\"}"
+],
+[
+"13:17",
+"token",
+"{\"text\": \"Draft words that \"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:17",
+"token",
+"{\"text\": \"Changed cart.py; \"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"resumes": {
+"0": [
+[
+"0:0",
+"phase",
+"{\"phase\": \"choosing_tools\"}"
+],
+[
+"1:12",
+"thinking",
+"{\"text\": \"Let me look.\"}"
+],
+[
+"2:15",
+"token",
+"{\"text\": \"Reading cart.py\"}"
+],
+[
+"3:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"4:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"finished\", \"ok\": true, \"detail\": {\"input\": \"{}\", \"output\": \"x = 1\"}}"
+],
+[
+"5:0",
+"round",
+"{\"round\": 1}"
+],
+[
+"6:19",
+"token",
+"{\"text\": \"Now I will edit it.\"}"
+],
+[
+"7:0",
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"1": [
+[
+"1:12",
+"thinking",
+"{\"text\": \"Let me look.\"}"
+],
+[
+"2:15",
+"token",
+"{\"text\": \"Reading cart.py\"}"
+],
+[
+"3:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"4:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"finished\", \"ok\": true, \"detail\": {\"input\": \"{}\", \"output\": \"x = 1\"}}"
+],
+[
+"5:0",
+"round",
+"{\"round\": 1}"
+],
+[
+"6:19",
+"token",
+"{\"text\": \"Now I will edit it.\"}"
+],
+[
+"7:0",
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"2": [
+[
+"1:12",
+"thinking",
+"{\"text\": \"look.\"}"
+],
+[
+"2:15",
+"token",
+"{\"text\": \"Reading cart.py\"}"
+],
+[
+"3:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"4:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"finished\", \"ok\": true, \"detail\": {\"input\": \"{}\", \"output\": \"x = 1\"}}"
+],
+[
+"5:0",
+"round",
+"{\"round\": 1}"
+],
+[
+"6:19",
+"token",
+"{\"text\": \"Now I will edit it.\"}"
+],
+[
+"7:0",
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"3": [
+[
+"2:15",
+"token",
+"{\"text\": \"Reading cart.py\"}"
+],
+[
+"3:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"4:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"finished\", \"ok\": true, \"detail\": {\"input\": \"{}\", \"output\": \"x = 1\"}}"
+],
+[
+"5:0",
+"round",
+"{\"round\": 1}"
+],
+[
+"6:19",
+"token",
+"{\"text\": \"Now I will edit it.\"}"
+],
+[
+"7:0",
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"4": [
+[
+"2:15",
+"token",
+"{\"text\": \"cart.py\"}"
+],
+[
+"3:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"4:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"finished\", \"ok\": true, \"detail\": {\"input\": \"{}\", \"output\": \"x = 1\"}}"
+],
+[
+"5:0",
+"round",
+"{\"round\": 1}"
+],
+[
+"6:19",
+"token",
+"{\"text\": \"Now I will edit it.\"}"
+],
+[
+"7:0",
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"5": [
+[
+"3:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"4:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"finished\", \"ok\": true, \"detail\": {\"input\": \"{}\", \"output\": \"x = 1\"}}"
+],
+[
+"5:0",
+"round",
+"{\"round\": 1}"
+],
+[
+"6:19",
+"token",
+"{\"text\": \"Now I will edit it.\"}"
+],
+[
+"7:0",
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"6": [
+[
+"4:0",
+"tool_call",
+"{\"id\": \"c1\", \"name\": \"read_file\", \"status\": \"finished\", \"ok\": true, \"detail\": {\"input\": \"{}\", \"output\": \"x = 1\"}}"
+],
+[
+"5:0",
+"round",
+"{\"round\": 1}"
+],
+[
+"6:19",
+"token",
+"{\"text\": \"Now I will edit it.\"}"
+],
+[
+"7:0",
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"7": [
+[
+"5:0",
+"round",
+"{\"round\": 1}"
+],
+[
+"6:19",
+"token",
+"{\"text\": \"Now I will edit it.\"}"
+],
+[
+"7:0",
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"8": [
+[
+"6:19",
+"token",
+"{\"text\": \"Now I will edit it.\"}"
+],
+[
+"7:0",
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"9": [
+[
+"6:19",
+"token",
+"{\"text\": \"edit it.\"}"
+],
+[
+"7:0",
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"10": [
+[
+"7:0",
+"approval",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"args\": {\"path\": \"cart.py\"}, \"args_hash\": \"h\", \"can_always\": false, \"timeout_s\": 0}"
+],
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"11": [
+[
+"8:0",
+"approval_resolved",
+"{\"id\": \"ap1\", \"call_id\": \"c2\", \"tool\": \"edit_file\", \"decision\": \"once\"}"
+],
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"12": [
+[
+"9:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"started\", \"args\": {\"path\": \"cart.py\"}}"
+],
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"13": [
+[
+"10:0",
+"tool_call",
+"{\"id\": \"c2\", \"name\": \"edit_file\", \"status\": \"finished\", \"ok\": true}"
+],
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"14": [
+[
+"11:0",
+"round",
+"{\"round\": 2, \"steer\": \"also fix the receipt\"}"
+],
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"15": [
+[
+"12:16",
+"thinking",
+"{\"text\": \"The receipt too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"16": [
+[
+"12:16",
+"thinking",
+"{\"text\": \"too.\"}"
+],
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"17": [
+[
+"13:30",
+"token",
+"{\"text\": \"Draft words that get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"18": [
+[
+"13:30",
+"token",
+"{\"text\": \"get replaced.\"}"
+],
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"19": [
+[
+"14:0",
+"reset",
+"{\"reason\": \"rewrite\"}"
+],
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"20": [
+[
+"15:37",
+"token",
+"{\"text\": \"Changed cart.py; the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"21": [
+[
+"15:37",
+"token",
+"{\"text\": \"the receipt is next.\"}"
+],
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"22": [
+[
+"16:0",
+"account_limit",
+"{\"account\": \"a1\", \"account_name\": \"Work\", \"provider\": \"claude-cli\", \"kind\": \"rate_limit\", \"resets_at\": null, \"resumable\": true}"
+],
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"23": [
+[
+"17:0",
+"error",
+"{\"detail\": \"Your Claude account Work hit its limit.\", \"status\": 429}"
+]
+],
+"24": []
+}
+}

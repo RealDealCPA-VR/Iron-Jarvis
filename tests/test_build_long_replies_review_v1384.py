@@ -15,6 +15,12 @@
   exec_command, which runs one call after another).
 * A long turn's RECORD is written within a byte budget: it was rewritten
   whole every second (a 300-round reply ~2 MB a second, ~8 GB an hour).
+* Resume holds at EVERY cut of a log holding every kind of frame (an
+  approval card and its answer, a steer note, a reset, a limit card, an
+  error end) — the page's own check reads the same log as a fixture.
+* A Build turn parked on a card nobody answers WAITS for its answer (the
+  decision behind ``_never_orphaned``), holds no program, and still stops
+  on Stop.
 """
 
 from __future__ import annotations
@@ -207,3 +213,156 @@ async def test_a_small_turn_is_still_written_every_second(monkeypatch):
     lg.add(dt.sse("token", {"text": "hello"}))
     sizes = await _written_over(lg, 10, monkeypatch)
     assert len(sizes) == 10, "a chat-sized turn keeps its once-a-second record"
+
+
+# --------------------------------------------------------------------------- #
+# resume at EVERY cut of a log holding every kind of frame
+# --------------------------------------------------------------------------- #
+
+import os  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from tests.test_build_resume_v1384 import blocks, body_of, merged, stored  # noqa: E402
+
+KINDS_FIXTURE = (
+    Path(__file__).resolve().parents[1] / "dashboard" / "__tests__" / "fixtures" / "build-resume-kinds-v1384.json"
+)
+
+
+def _kinds_chunks() -> list[str]:
+    """The lane's chunks (shapes as routes/chat sends them): thinking and
+    words in pieces, a tool step, an approval CARD and its answer, a steer
+    note read at a round boundary, a RESET (a rewrite clears the bubble), an
+    account-limit card, a keepalive comment, two frames in one chunk, and
+    the end — an ERROR frame (the limit card's turn ends on one)."""
+    s = dt.sse
+    return [
+        s("phase", {"phase": "choosing_tools"}),
+        s("thinking", {"text": "Let me "}), s("thinking", {"text": "look."}),
+        s("token", {"text": "Reading "}), s("token", {"text": "cart.py"}),
+        s("tool_call", {"id": "c1", "name": "read_file", "status": "started", "args": {"path": "cart.py"}}),
+        s("tool_call", {"id": "c1", "name": "read_file", "status": "finished", "ok": True,
+                        "detail": {"input": "{}", "output": "x = 1"}}),
+        s("round", {"round": 1}),
+        s("token", {"text": "Now I will "}) + s("token", {"text": "edit it."}),
+        s("approval", {"id": "ap1", "call_id": "c2", "tool": "edit_file", "args": {"path": "cart.py"},
+                       "args_hash": "h", "can_always": False, "timeout_s": 0}),
+        ": keepalive\n\n",
+        s("approval_resolved", {"id": "ap1", "call_id": "c2", "tool": "edit_file", "decision": "once"}),
+        s("tool_call", {"id": "c2", "name": "edit_file", "status": "started", "args": {"path": "cart.py"}}),
+        s("tool_call", {"id": "c2", "name": "edit_file", "status": "finished", "ok": True}),
+        s("round", {"round": 2, "steer": "also fix the receipt"}),
+        s("thinking", {"text": "The receipt "}), s("thinking", {"text": "too."}),
+        s("token", {"text": "Draft words that "}), s("token", {"text": "get replaced."}),
+        s("reset", {"reason": "rewrite"}),
+        s("token", {"text": "Changed cart.py; "}), s("token", {"text": "the receipt is next."}),
+        s("account_limit", {"account": "a1", "account_name": "Work", "provider": "claude-cli",
+                            "kind": "rate_limit", "resets_at": None, "resumable": True}),
+        s("error", {"detail": "Your Claude account Work hit its limit.", "status": 429}),
+    ]
+
+
+async def test_resume_at_every_cut_of_every_kind_of_frame_loses_and_repeats_nothing():
+    lg = dt.TurnLog("kinds")
+    import asyncio
+
+    q: asyncio.Queue = asyncio.Queue()
+    lg._followers.add(q)
+    live_text = ""
+    for chunk in _kinds_chunks():
+        lg.add(chunk)
+        while not q.empty():
+            raw, ids = q.get_nowait()
+            live_text += ids
+    lg.status = "error"
+    live = body_of(blocks(live_text))
+    want = stored(lg)
+    kinds = {e for e, _d in lg.frames}
+    assert {"approval", "approval_resolved", "reset", "account_limit", "error", "round", "thinking",
+            "token", "tool_call", "phase"} <= kinds
+    assert merged(live) == want
+    resumes: dict[str, list] = {"0": [[dt.position_of(lg.frames, j), e, d] for j, (e, d) in enumerate(lg.frames)]}
+    for n in range(1, len(live) + 1):
+        rest = lg.frames_after(live[n - 1][0])
+        assert rest is not None, (n, live[n - 1][0])
+        resumes[str(n)] = [list(t) for t in rest]
+        assert merged(live[:n] + [tuple(t) for t in rest]) == want, f"cut at {n}"
+    if os.environ.get("IJ_REGEN_BUILD_RESUME") == "1":
+        KINDS_FIXTURE.write_text(json.dumps({
+            "_doc": "v1.384.0 review: a turn log holding every kind of frame (tests/"
+                    "test_build_long_replies_review_v1384.py) — an approval card and its answer, "
+                    "a steer note, a reset, a limit card, an error end. stored = the log's frames; "
+                    "live = what a tagged follower received; resumes[N] = frames_after(id of "
+                    "live[N-1]) (N=0: the whole turn). Regenerate with IJ_REGEN_BUILD_RESUME=1.",
+            "stored": [list(f) for f in lg.frames],
+            "live": [list(f) for f in live],
+            "resumes": resumes,
+        }, indent=0) + "\n", encoding="utf-8", newline="\n")
+    # The fixture the page checks is what this daemon answers.
+    fx = json.loads(KINDS_FIXTURE.read_text(encoding="utf-8"))
+    assert fx["stored"] == [list(f) for f in lg.frames]
+    assert fx["live"] == [list(f) for f in live]
+    assert fx["resumes"] == resumes
+
+
+# --------------------------------------------------------------------------- #
+# a Build turn parked on a card nobody answers WAITS — and holds nothing else
+# --------------------------------------------------------------------------- #
+
+import asyncio  # noqa: E402
+
+from tests.test_build_sessions_v1367 import asgi_get, turn_frames, until  # noqa: E402
+from tests.test_chat_turn_stop_v1241 import _asgi_post  # noqa: E402
+
+
+@pytest.fixture()
+def one_file(tmp_path):
+    folder = tmp_path / "one"
+    folder.mkdir()
+    (folder / "app.py").write_text("x = 1\n", encoding="utf-8")
+    return folder
+
+
+async def _parked(app, folder, turn_id: str):
+    sid = new_session(app, folder)["id"]
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ran it"]))
+    drop = asyncio.Event()
+    task = asyncio.create_task(open_turn(app, sid, {"text": "run it", "turn_id": turn_id}, drop=drop))
+    card = await until(lambda: [d for e, d in turn_frames(app, turn_id) if e == "approval"])
+    drop.set()  # the user leaves: nobody watches
+    lg = app.state.platform.turn_logs.get(turn_id)
+    await until(lambda: not lg.watched())
+    lg._last_seen -= dt.ORPHAN_STOP_S + 60  # an hour and a minute unwatched
+    await asyncio.sleep(1.6)  # past the card wait's poll (chat._ASK_POLL_S, 1 s)
+    return sid, card[0], lg, task
+
+
+async def test_a_parked_build_turn_nobody_watches_waits_for_its_answer(app, one_file):
+    """The decision behind `_never_orphaned`: a card is the user's to answer.
+    OLD (the orphan guard): the parked card's poll stopped the turn."""
+    sid, card, lg, task = await _parked(app, one_file, "rv-parked")
+    assert lg.status == "running", "still waiting for the user"
+    # The bell's listing names it as a Build session that waits.
+    status, pending = await asgi_get(app, "/chat/approvals/pending")
+    assert status == 200
+    rows = [r for r in pending.get("approvals", []) if isinstance(r, dict) and r.get("thread_id") == sid]
+    assert rows and rows[0].get("surface") == "build", pending
+    # Nothing else is held for it: no program started, no other turn blocked.
+    from iron_jarvis.core import procs
+
+    assert procs.kept_jobs(f"build:{sid}") == 0
+    # The answer, given late, lets it finish.
+    assert (await _asgi_post(app, f"/chat/approvals/{card['id']}", {"decision": "once"}))[0] == 200
+    await until(lambda: lg.status != "running", 30)
+    assert lg.status == "done"
+    assert messages_of(app, sid)[-1]["content"] == "ran it"
+    await task
+
+
+async def test_a_parked_build_turn_still_stops_on_stop(app, one_file):
+    _sid, _card, lg, task = await _parked(app, one_file, "rv-parked-stop")
+    assert lg.status == "running"
+    assert (await _asgi_post(app, "/chat/turns/rv-parked-stop/stop"))[0] == 200
+    await until(lambda: lg.status != "running", 30)
+    assert lg.status == "stopped"
+    await task
