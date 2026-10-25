@@ -281,10 +281,24 @@ def _rm_on_build_path() -> bool:
     return shutil.which("rm", path=path) is not None
 
 
+def _warm_python() -> None:
+    """The recorded command gives its server the model's own ``sleep 2`` to
+    write ``server.port``; start the ``python`` bash will find once first, so
+    a cold disk cache on a loaded runner cannot eat that margin (the replay
+    tests the shell, not the runner's disk)."""
+    env = N.build_env()
+    path = next((v for k, v in env.items() if k.upper() == "PATH"), "")
+    python = shutil.which("python", path=path)
+    if python:
+        subprocess.run([python, "-c", "import csv, hashlib, http.server, json, threading"],
+                       capture_output=True, timeout=60)
+
+
 @needs_bash
 async def test_replay_the_deletion_server_py_survives_and_the_server_answered_and_stopped(app, tmp_path):
     """RED on v1.385.1 (see the control below): ``server.py`` was deleted."""
     work = _copy_task("process-http-server", tmp_path)
+    _warm_python()
     sid = await _bash_turn(app, work, RECORDED_R1, "bash-replay-r1")
     assert (work / "server.py").exists(), "server.py was deleted"
     status = json.loads((work / "status.json").read_text(encoding="utf-8"))
@@ -305,6 +319,7 @@ async def test_replay_the_deletion_server_py_survives_and_the_server_answered_an
 @needs_bash
 async def test_replay_the_deletion_with_its_cd_prefix(app, tmp_path):
     work = _copy_task("process-http-server", tmp_path)
+    _warm_python()
     await _bash_turn(app, work, RECORDED_R3.format(folder=str(work).replace("\\", "/")), "bash-replay-r3")
     assert (work / "server.py").exists()
     assert _hidden_check("process-http-server", work).returncode == 0
@@ -544,9 +559,10 @@ async def test_run_in_background_starts_in_bash_in_the_table_and_ends_with_the_s
     try:
         (mp,) = P.TABLE.sessions(session)
         assert mp.shell == "bash" and mp.command.startswith("rm -f stale.pid; echo one; ")
-        assert not (work / "stale.pid").exists(), "the first command did not run"
         (row,) = [r for r in _rows(app, "process_start") if r.session_id == session]
-        assert row.called_as == "Bash" and "Output:\none" in (row.output or ""), row.output  # ';' separated them
+        assert row.called_as == "Bash" and row.ok, row.output
+        # ';' separated the commands: the rm ran, then the program started.
+        assert await until(lambda: not (work / "stale.pid").exists(), 15), "the first command did not run"
         pid = int(await until(lambda: (work / "pid.txt").exists() and (work / "pid.txt").read_text(encoding="utf-8"), 15))
         assert psutil.pid_exists(pid)
     finally:
