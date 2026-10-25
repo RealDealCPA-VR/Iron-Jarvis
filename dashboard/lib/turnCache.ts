@@ -93,6 +93,16 @@ export function dropTurn(threadId: string, turnId?: string): void {
   turns.delete(threadId);
 }
 
+/** v1.384.0 review: the session list answered — every kept reply of a
+ *  session it does NOT list as running has ended (or the session is gone):
+ *  forget it, whether or not the user ever goes back to that session. The
+ *  session on screen is unaffected (it read its kept reply at mount). */
+export function dropEndedTurns(running: ReadonlySet<string>): void {
+  for (const threadId of [...turns.keys()]) {
+    if (!running.has(threadId)) turns.delete(threadId);
+  }
+}
+
 export function keepView<V>(threadId: string, view: V): void {
   views.delete(threadId);
   views.set(threadId, view);

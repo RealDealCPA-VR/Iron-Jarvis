@@ -22,7 +22,7 @@ import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
 import type { BranchDraft } from "@/lib/buildNext";
 import { useHarnessKeys } from "@/lib/harnessKeys";
-import { cachedFolders, keepFolders, viewFor } from "@/lib/turnCache";
+import { cachedFolders, dropEndedTurns, keepFolders, viewFor } from "@/lib/turnCache";
 import {
   LAST_SESSION_KEY,
   createSession,
@@ -110,6 +110,9 @@ export function IjHarnessView({
       setWorkRoot(root);
       setListError(null);
       keepFolders({ folders: list, workRoot: root });
+      // v1.384.0 review: a kept reply of a session that no longer answers is
+      // dropped now, not only when that session is opened again.
+      dropEndedTurns(new Set(list.flatMap((f) => f.sessions.filter((s) => s.running).map((s) => s.id))));
       return list;
     } catch (e) {
       setListError(
