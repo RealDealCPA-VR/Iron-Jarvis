@@ -385,6 +385,10 @@ async def test_a_tool_that_ran_is_never_called_missing(tmp_path, monkeypatch):
     assert (ws / "b.txt").exists(), "cp ran"
     assert "is a POSIX command" not in res.output, res.output
     assert ST.SEMICOLON_HINT in res.output, res.output
+    # and with no ';' at all: cp ran and failed for its own reason — no claim
+    res = await ST.SandboxedShellTool().execute({"command": "cp no-such-file.txt c.txt"}, ctx)
+    assert res.ok is False and "No such file" in res.output, res.output
+    assert "is a POSIX command" not in res.output, res.output
 
 
 def test_the_posix_hint_checks_the_path_the_line_ran_with(tmp_path):
@@ -914,3 +918,13 @@ def test_bashs_job_lets_nothing_leave_and_every_other_job_still_does(tmp_path):
                 psutil.Process(left).kill()
             except psutil.Error:
                 pass
+
+
+def test_a_bash_name_that_really_is_wsl_is_refused_wherever_wsl_lives(monkeypatch):
+    """A ``bash.exe`` that links to WSL's ``wsl.exe`` OUTSIDE System32 (the
+    Store's WSL lives in ``C:/Program Files/WSL``) is refused by what it
+    links to (the mutation round found no pin held this clause)."""
+    from iron_jarvis.sandbox import git_bash as GB
+
+    monkeypatch.setattr(GB.os.path, "realpath", lambda p: "C:/Program Files/WSL/wsl.exe")
+    assert GB.is_wsl_launcher("C:/tools/bash.exe")
