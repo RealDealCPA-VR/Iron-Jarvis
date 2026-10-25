@@ -98,6 +98,15 @@ LINE_KEYS: tuple[str, ...] = (
     # v1.378.0: what the error WAS ("refusal": the provider's safety check
     # declined the conversation — the screen offers Rewind, never Retry).
     "errorKind",
+    # Harness gaps (fix 2): a failed reply keeps what the chat's failure line
+    # shows — the headline alone (beside a press), the server's own words for
+    # the Details fold (masked), and the provider a Sign in / key press is
+    # about ("sign_in" / "key" in ``errorKind``).
+    "errorTitle", "errorDetail", "errorProvider",
+    # Harness gaps (fix 3): the receipt facts the chat page keeps on a reply
+    # that a Build reply line dropped — the envelope's adaptation, a kept
+    # preference and the earlier chats read.
+    "adapted", "remembered", "threadRefs",
     "folderRules",
     "approved", "refit", "doors", "trust", "trustReason", "trustNote",
     "timing",

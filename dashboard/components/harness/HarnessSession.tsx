@@ -29,15 +29,17 @@ import {
   FolderX,
   GitBranch,
   GitFork,
-  History,
   Loader2,
   MoreHorizontal,
   Pencil,
   Square,
 } from "lucide-react";
 import { branchLine } from "@/lib/buildGit";
-import { REWIND_PICK_WORDS } from "@/lib/failureActions";
 import { ApiError, get, post, put } from "@/lib/api";
+// Harness gaps (fix 2, fix 3): the chat's failure line and receipt facts.
+import { FailureDetails, HarnessFailureLine } from "@/components/harness/HarnessFailure";
+import { retryItemFor, retryOffered } from "@/lib/buildRetry";
+import { receiptFacts } from "@/lib/receiptFacts";
 import { useDaemon } from "@/lib/daemon";
 import { useModels } from "@/lib/useModels";
 import { useChatStream, useLiveText, StreamError, type StreamSeed } from "@/lib/useChatStream";
@@ -54,7 +56,7 @@ import {
 } from "@/lib/turnCache";
 import { useLiveThinking } from "@/lib/liveThinking";
 import { mintTurnId } from "@/lib/turnRejoin";
-import { turnErrorText } from "@/lib/failureLine";
+import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
 import { answeredModelName } from "@/lib/answeredModel";
 import { composerChipClass } from "@/lib/composerChips";
 import { asPermissionMode } from "@/lib/permissionLevels";
@@ -392,6 +394,9 @@ export function HarnessSession({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Harness gaps (fix 2): the live failure's technical text (for its Details
+  // fold) and the turn it belongs to — kept for THIS `error` only.
+  const [errorTech, setErrorTech] = useState<{ text: string; technical: string; turn: string | null } | null>(null);
   // v1.384.0 review: the question the user SENT here rides the kept reply
   // (lib/turnCache) — the session view a return paints was read before the
   // send and nothing re-reads it mid-turn, so without this the question
@@ -963,7 +968,15 @@ export function HarnessSession({
           }
         }
         // An account limit is said by its card; the error frame repeats it.
-        if (!limitSeenRef.current) setError(turnErrorText(e));
+        if (!limitSeenRef.current) {
+          const line = turnErrorText(e);
+          setError(line);
+          // Harness gaps (fix 2): the server's own words, folded under
+          // Details, and WHICH turn failed — a turn that started has its
+          // failure on its reply line (the daemon writes it before the last
+          // frame), so the note below steps aside once that line is read.
+          setErrorTech({ text: line, technical: turnErrorTechnical(e), turn: started ? id : null });
+        }
         if (!started && text !== null) {
           // Never started: the words and what rode them go back in the box,
           // nothing was lost (v1.373.0: a file-only message too).
@@ -1141,10 +1154,14 @@ export function HarnessSession({
     const files: HarnessFile[] = fromBox ? att.filesRef.current : (item.attachments ?? []);
     const picks: AtFile[] = fromBox ? atFilesRef.current : (item.files ?? []);
     const chip: PickedSkill | null = fromBox ? skillRef.current : (item.skill ?? null);
+    // Harness gaps review: a message SENT once before (Retry) carries what it
+    // ran — its words go as they are and its command by name; it is never
+    // read for a "/" command again (lib/buildRetry).
+    const resend = fromBox ? undefined : item.resend;
     // v1.379.0: a message that STARTS with "/name" runs that command or skill
     // (Claude Code's rule): the words after the name are its arguments. An
     // unknown "/word" is ordinary text (a path such as /etc/hosts too).
-    const lists = leadingSlash(raw) ? await ensureSlashLists() : null;
+    const lists = !resend && leadingSlash(raw) ? await ensureSlashLists() : null;
     const typed = lists ? resolveTyped(raw, commands, lists.folder, lists.yours, lists.custom) : null;
     if (busy && typed) {
       // Claude Code queues a command sent while it answers; the session's own
@@ -1166,7 +1183,10 @@ export function HarnessSession({
     }
     let text = raw;
     let picked: PickedSkill | null = chip;
-    let command = "";
+    let command = resend?.command ?? "";
+    // What the line shows and what goes back in the box if it never starts:
+    // a command as it was typed ("/review app.py").
+    let typedLine = command ? `/${command}${text ? ` ${text}` : ""}` : raw;
     if (typed?.kind === "skill") {
       const want = pickedOf(typed.skill);
       if (chip && (chip.name !== want.name || chip.source !== want.source)) {
@@ -1182,6 +1202,7 @@ export function HarnessSession({
       }
       command = typed.command.name;
       text = typed.args;
+      typedLine = raw;
     }
     // v1.379.0: a skill or a command alone is a message too.
     if (!text && files.length === 0 && picks.length === 0 && !picked && !command) return;
@@ -1210,7 +1231,7 @@ export function HarnessSession({
     setPending({
       role: "user",
       // A command shows as it was typed ("/review app.py"), like Claude Code.
-      content: command ? raw : text,
+      content: command ? typedLine : text,
       at: new Date().toISOString(),
       ...(paths.length ? { attachmentPaths: paths } : {}),
       ...(filePaths.length ? { filePaths } : {}),
@@ -1221,7 +1242,7 @@ export function HarnessSession({
       attachments: files,
       files: picks,
       skill: picked,
-      ...(command ? { command, typed: raw } : {}),
+      ...(command ? { command, typed: typedLine } : {}),
     });
   }
 
@@ -1569,7 +1590,8 @@ export function HarnessSession({
   async function compact(focus = "") {
     if (compactingRef.current || !view) return;
     if (busy) {
-      setError("Wait for the reply to finish, then compact.");
+      // Harness gaps (fix 4): the chat's word ("Summarize").
+      setError("Wait for the reply to finish, then summarize the earlier turns.");
       // v1.379.0 review: a typed "/compact <words>" goes back in the box
       // (the box was emptied for it).
       if (focus) setInput((cur) => cur || `/compact ${focus}`);
@@ -1876,6 +1898,18 @@ export function HarnessSession({
   const summarized = !!compaction && beforeSummary;
   const offerCompact = offersCompact(reading?.context ?? null, beforeSummary);
   const lastReply = [...shown].reverse().find((m) => m.role === "assistant");
+  // Harness gaps (fix 2): the reply that ENDS the conversation (a question
+  // after it — one stopped before a word — means it is no longer the one to
+  // retry or to fix).
+  const newestReply = lastReply && shown[shown.length - 1] === lastReply ? lastReply : undefined;
+  /** Retry: send the failed reply's question again, as a new turn (its
+   *  words, uploads, "@" files and "/" skill — lib/buildRetry). The box keeps
+   *  whatever the user has typed. */
+  const retryReply = (index: number) => {
+    if (busy || !view) return;
+    const item = retryItemFor(shown, index, view.messages ?? [], view.folder);
+    if (item) void send(item);
+  };
   // v1.378.0: a message the daemon wrote can be rewound to (the refusal's
   // press opens the "/rewind" list only when there is one).
   const canRewindHere = !view?.archived && shown.some((m) => m.role === "user" && !m.steer && !!m.turnId);
@@ -2283,34 +2317,25 @@ export function HarnessSession({
                     </p>
                   ) : null;
                 })()}
-                {m.error && !m.accountLimit ? (
-                  <>
-                    <p data-testid="harness-reply-error" className="mt-1 flex items-start gap-1.5 text-[12px] text-tone-danger">
-                      <CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden /> {m.error}
-                    </p>
-                    {/* v1.378.0: A SAFETY REFUSAL on the newest reply. The
-                        provider judges the whole conversation, so the way out
-                        is back to before the message that set it off: the
-                        press opens the "/rewind" list (the session's own
-                        messages, each with its two-press Rewind). Never a
-                        Retry — the same conversation is declined again. */}
-                    {m === lastReply && m.errorKind === "refusal" && !busy && canRewindHere ? (
-                      <button
-                        type="button"
-                        data-testid="harness-refusal-rewind"
-                        onClick={() => setRewindOpen(true)}
-                        className="mt-1 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
-                      >
-                        <History size={12} aria-hidden />
-                        {REWIND_PICK_WORDS}
-                      </button>
-                    ) : null}
-                  </>
-                ) : m.interrupted ? (
-                  <p className="mt-1 flex items-center gap-1.5 text-[12px] text-tone-warn">
-                    <CircleAlert size={12} aria-hidden /> This answer is incomplete.
-                  </p>
-                ) : null}
+                {/* Harness gaps (fix 2): the chat's failure line at a
+                    session's scale (HarnessFailure) — the sentence (or its
+                    headline beside a press), Sign in / the key link, Retry on
+                    the NEWEST failed or cut-off reply, the server's own words
+                    folded under Details. A safety refusal keeps its rewind
+                    list (v1.378.0), never a Retry. A reply that ended on an
+                    account's limit card says only that it is incomplete (the
+                    card is its way out). */}
+                <HarnessFailureLine
+                  m={m.accountLimit ? { ...m, error: undefined } : m}
+                  newest={m === newestReply}
+                  busy={busy}
+                  health={daemon.health}
+                  turnProvider={m.route?.provider || provider}
+                  retry={retryOffered(m, { newest: m === newestReply, busy, archived: !!view.archived })}
+                  onRetry={() => retryReply(i)}
+                  canRewind={canRewindHere}
+                  onRewind={() => setRewindOpen(true)}
+                />
                 <ReplyChanges
                   turn={(() => {
                     const w = paneTurnWindow(shown, i);
@@ -2333,12 +2358,18 @@ export function HarnessSession({
                     steps={m.steps}
                     timing={m.timing}
                     documents={m.documents}
-                    folderRules={m.folderRules}
                     onOpenDocument={(path) => {
                       post("/documents/open", { path }).catch(() => {});
                     }}
                     undoFor={undoFor}
                     onUndo={onUndo}
+                    // Harness gaps (fix 3): every receipt fact the chat page
+                    // passes (app/chat/page.tsx), read off the daemon's reply
+                    // line and decoded the chat's way — the approvals the
+                    // user gave, the older messages left out to fit, the
+                    // envelope's adaptation, a kept preference, the folder's
+                    // rules and the earlier chats read.
+                    {...receiptFacts(m)}
                   />
                   {/* v1.377.0: a new session with the conversation up to
                       and including this reply. */}
@@ -2457,7 +2488,27 @@ export function HarnessSession({
             </p>
           ) : null}
           {branchError ? <ErrorNote>{branchError}</ErrorNote> : null}
-          {error ? <ErrorNote>{error}</ErrorNote> : null}
+          {/* Harness gaps (fix 2): a failed turn that STARTED has its failure
+              on its reply line (with Retry and Details) once the session is
+              read again; this note stays only for a failure with no line (a
+              message that never started — its words are back in the box —
+              or a read that failed), with the live failure's Details. */}
+          {error &&
+          !(
+            errorTech?.text === error &&
+            errorTech.turn &&
+            newestReply?.turnId === errorTech.turn &&
+            (newestReply.error || newestReply.accountLimit)
+          ) ? (
+            <>
+              <ErrorNote>{error}</ErrorNote>
+              {errorTech?.text === error ? (
+                <div className="flex flex-wrap items-center">
+                  <FailureDetails technical={errorTech.technical} testId="harness-error-details" />
+                </div>
+              ) : null}
+            </>
+          ) : null}
         </div>
         {summaryOpen && compaction ? (
           <CompactionCard info={compactionCardInfo(compaction)} onClose={() => setSummaryOpen(false)} />

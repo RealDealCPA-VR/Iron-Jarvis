@@ -21,7 +21,7 @@ import React from "react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 /* ---- api ------------------------------------------------------------------- */
 
@@ -104,6 +104,7 @@ vi.mock("@/components/terminal/FilesPanel", () => ({
 }));
 
 import TerminalsPage from "@/app/terminals/page";
+import { announceBuildTerminalLink, terminalOfHref } from "@/lib/buildLinks";
 
 /* ---- fixtures -------------------------------------------------------------- */
 
@@ -319,5 +320,41 @@ describe("the canvas is gone", () => {
     expect(pkg.devDependencies?.["react-rnd"]).toBeUndefined();
     const page = read("app", "terminals", "page.tsx");
     expect(page).not.toMatch(/from "react-rnd"|<Rnd\b/);
+  });
+});
+
+// Harness gaps (fix 2): the Sign in press now stands under a coding session's
+// failed reply — ON Build — and its "Finish signing in there" link
+// (/terminals?focus=<id>) changed only the address: Next keeps the page on a
+// query-only change, Build's terminal list is read once, and the coding
+// sessions view stayed. The link is announced (lib/buildLinks
+// BUILD_TERMINAL_EVENT): Build reads its list again, adds the new terminal
+// and shows it in the Terminals view — not remembered as the saved view.
+describe("a terminal link pressed while Build is open (harness gaps, fix 2)", () => {
+  it("adds the terminal started elsewhere and shows it in the Terminals view", async () => {
+    localStorage.setItem("ij.build.shape", "harness");
+    render(<TerminalsPage />);
+    await screen.findByTestId("ij-harness-view");
+    // The Sign in press opened t9 meanwhile (the list was read before it).
+    api.responses["/terminals"] = {
+      terminals: [term("t1", "C:\\proj\\alpha"), term("t2", "C:\\proj\\beta"), term("t9", "C:\\Users\\me")],
+    };
+    act(() => {
+      expect(announceBuildTerminalLink("/terminals?focus=t9")).toBe(true);
+    });
+    expect(await screen.findByTestId("terminal-pane-t9")).toBeInTheDocument();
+    expect(await screen.findByTestId("pane-rail")).toBeInTheDocument();
+    expect(screen.queryByTestId("ij-harness-view")).toBeNull();
+    expect(screen.getByTestId("build-view-terminals")).toHaveAttribute("aria-selected", "true");
+    // A detour, not a choice: the saved view is untouched.
+    expect(saved()).toBe("harness");
+  });
+
+  it("CONTROL: off Build the link is not announced (the navigation opens it)", () => {
+    at("/chat");
+    expect(announceBuildTerminalLink("/terminals?focus=t9")).toBe(false);
+    expect(terminalOfHref("/terminals?focus=t9")).toBe("t9");
+    expect(terminalOfHref("/terminals?session=s1")).toBeNull();
+    expect(terminalOfHref("/sessions?focus=t9")).toBeNull();
   });
 });

@@ -58,7 +58,8 @@ import {
 } from "@/components/terminal/PaneState";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { viewFromSaved, type BuildView } from "@/lib/buildSessions";
-import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
+import { BUILD_SESSION_EVENT, BUILD_TERMINAL_EVENT, sessionOfEvent } from "@/lib/buildLinks";
+import { CODING_VIEW_NAME } from "@/lib/buildWords";
 import { cachedShape, keepShape } from "@/lib/turnCache";
 
 // xterm only runs in the browser — never during SSR / `next build`.
@@ -691,6 +692,36 @@ export default function TerminalsPage() {
     setFocusedId(id);
   }, []);
 
+  // Harness gaps (fix 2): a link to a terminal pressed while Build is open
+  // (the Sign in press under a coding session's failed reply opened one):
+  // the same-page navigation keeps this page's state, so the terminal is
+  // announced (lib/buildLinks BUILD_TERMINAL_EVENT). The list was read once,
+  // so a terminal started elsewhere is read again and added; then the
+  // Terminals view shows it, like a `?focus=` link at load (not remembered).
+  useEffect(() => {
+    let alive = true;
+    const onLink = (e: Event) => {
+      const id = sessionOfEvent(e);
+      if (!id) return;
+      setShape("rail");
+      get<{ terminals: TerminalInfo[] }>("/terminals")
+        .then((res) => {
+          if (!alive) return;
+          const found = (res?.terminals ?? []).find((t) => t.id === id && t.alive);
+          if (found) setTerminals((prev) => (prev.some((t) => t.id === id) ? prev : [...prev, found]));
+          setFocusedId(id);
+        })
+        .catch(() => {
+          if (alive) setFocusedId(id);
+        });
+    };
+    window.addEventListener(BUILD_TERMINAL_EVENT, onLink);
+    return () => {
+      alive = false;
+      window.removeEventListener(BUILD_TERMINAL_EVENT, onLink);
+    };
+  }, []);
+
   /** From the IJ harness view's Terminals group: open that terminal in the
    *  Terminals view, through the same focus the rail uses. */
   const openInTerminals = useCallback(
@@ -916,15 +947,17 @@ export default function TerminalsPage() {
           // v1.369.0: the two views the switch beside it names.
           subtitle={
             shape === "harness"
-              ? "Coding sessions that work in a folder and keep going when you leave. Start one, or open a terminal from the list."
+              ? `${CODING_VIEW_NAME} work in a folder and keep going when you leave. Start one, or open a terminal from the list.`
               : "Live terminals on this PC. Press New terminal to open one, or pick a project folder and open a terminal in it."
           }
           // v1.370.2: the switch sits in the header's exact MIDDLE and does not
           // move between the two views ("centered and fixed in both modes");
           // the Terminals view's own controls take the right column.
           center={
-            // THE SWITCH (v1.369.0): Terminals | IJ harness. Plain text tabs
-            // like the side panel's, the open one in ink.
+            // THE SWITCH (v1.369.0): Terminals | Coding sessions (harness
+            // gaps, fix 4: the view's everyday name, lib/buildWords — the
+            // value "harness" and the test id stay). Plain text tabs like the
+            // side panel's, the open one in ink.
             <div
               role="tablist"
               aria-label="Build view"
@@ -934,7 +967,7 @@ export default function TerminalsPage() {
               {(
                 [
                   { value: "rail", label: "Terminals", icon: <SquareTerminal size={13} aria-hidden /> },
-                  { value: "harness", label: "IJ harness", icon: <Bot size={13} aria-hidden /> },
+                  { value: "harness", label: CODING_VIEW_NAME, icon: <Bot size={13} aria-hidden /> },
                 ] as const
               ).map((v) => {
                 const selected = shape === v.value;

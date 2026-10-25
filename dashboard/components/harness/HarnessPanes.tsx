@@ -34,6 +34,7 @@ import { BranchView } from "@/components/harness/HarnessBranch";
 import { ConfirmButton } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
 import type { PlanView } from "@/lib/planChecklist";
+import { replyPlan } from "@/lib/buildContext";
 import {
   addressesIn,
   planFromMessages,
@@ -78,10 +79,72 @@ function readTab(): PaneTab {
   }
 }
 
-/** The plan to show: the running turn's, else a kept reply's, else the
- *  session's approved one. */
+/**
+ * The newest plan a reply KEPT (harness gaps, fix 5), newest reply first:
+ * its saved `plan` (the line's own checklist since v1.374.0) read through
+ * `replyPlan` — the SAME reading the reply's own "Plan · N of M done" uses,
+ * so the two can never disagree — else, for a line an older daemon wrote,
+ * the plan rebuilt from its `plan_update` step's detail.
+ *
+ * THE BUG THIS ENDS (the user's screenshot, v1.388.1): the pane read ONLY
+ * the step detail, whose input is cut at 300 characters (chat_turn.
+ * step_detail) — any plan longer than that failed to parse — and a long
+ * reply's steps after its first 60 keep no detail at all. So the Plan tab
+ * said "No plan yet" beside a reply that said "Plan · 0 of 11 done".
+ */
+export function keptPlan(messages: readonly BuildSessionView["messages"][number][]): PlanView | null {
+  return newestKept(messages)?.plan ?? null;
+}
+
+/** `keptPlan`, with WHEN the reply that kept it was written (its `at`). */
+function newestKept(
+  messages: readonly BuildSessionView["messages"][number][],
+): { plan: PlanView; at: string } | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m.role !== "assistant") continue;
+    const at = typeof m.at === "string" ? m.at : "";
+    const saved = replyPlan(m.plan, !!m.error);
+    if (saved) return { plan: saved, at };
+    const fromStep = planFromMessages([m]);
+    if (fromStep) return { plan: fromStep, at };
+  }
+  return null;
+}
+
+/** Milliseconds of a daemon stamp (ISO; one with no zone is UTC, the
+ *  daemon's clock — lib/format `normalizeIso`'s rule), else null. */
+function stampMs(iso: string | null | undefined): number | null {
+  let s = typeof iso === "string" ? iso.trim() : "";
+  if (!s) return null;
+  if (/[T ]\d{2}:\d{2}/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s = `${s.replace(" ", "T")}Z`;
+  const t = Date.parse(s);
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * The plan to show: the running turn's, else the NEWEST of the plan a reply
+ * kept (`keptPlan`) and the session's approved one.
+ *
+ * Harness gaps review: the first cut took ANY reply's plan before the approved
+ * one, so a plan approved after an older reply kept its own (plan mode, the
+ * model writes a new plan, Allow) never showed — the tab kept the old reply's
+ * steps. A reply's plan wins only when that reply was written at or after the
+ * approval: the approving turn's own reply (it is written when the turn ends,
+ * after the approval landed mid-turn) or a later one — so the pane still says
+ * what the reply beside it says. A stamp that cannot be read keeps the reply's
+ * plan, as before.
+ */
 export function panePlan(view: BuildSessionView, livePlan: PlanView | null): PlanView | null {
-  return livePlan ?? planFromMessages(view.messages) ?? planFromSession(view.plan);
+  if (livePlan) return livePlan;
+  const kept = newestKept(view.messages);
+  const approved = planFromSession(view.plan);
+  if (kept && approved) {
+    const approvedAt = stampMs(view.plan?.approvedAt);
+    const keptAt = stampMs(kept.at);
+    if (approvedAt !== null && keptAt !== null && approvedAt > keptAt) return approved;
+  }
+  return kept?.plan ?? approved;
 }
 
 /** Below `xl` (the panes stacked under the conversation) a RUNNING reply's

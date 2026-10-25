@@ -52,6 +52,17 @@ def normalize_route(raw: str) -> str | None:
     return f"/{first}" if _SEGMENT.match(first) else None
 
 
+def build_replies_running(d) -> int:
+    """How many Build coding-session replies are being written now (the
+    durable turn registry, ``durable_turns.reply_counts``). Never raises."""
+    try:
+        from ..durable_turns import reply_counts
+
+        return int(reply_counts(getattr(d.platform, "turn_logs", None)).get("build", 0))
+    except Exception:  # noqa: BLE001 — a count we cannot read is zero
+        return 0
+
+
 def status_line(d) -> dict[str, int]:
     """Counts for the home's ONE conditional line (calm UI redesign S8,
     AUDIT §4.5 R2): jobs a restart cut off, background loops and tool packs
@@ -95,6 +106,13 @@ def status_line(d) -> dict[str, int]:
         out["running"] = len(getattr(d.orchestrator, "_running", {}) or {})
     except Exception:  # noqa: BLE001
         pass
+    # Harness gaps (fix 1): a Build coding session's reply is work running
+    # too — it has no Session row, so the orchestrator never counted it and
+    # the home said nothing while a reply ran for an hour. Read from the ONE
+    # truth for running replies (the durable turn registry, in memory). A
+    # CHAT reply is not counted here on purpose: this line is drawn above the
+    # chat's own composer, where the reply being written is already on screen.
+    out["running"] += build_replies_running(d)
     try:
         from sqlalchemy import func
 

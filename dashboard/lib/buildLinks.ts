@@ -55,6 +55,39 @@ export function announceBuildSessionLink(href: string | null | undefined): boole
   return true;
 }
 
+/** Harness gaps (fix 2): the same trap for a link to a TERMINAL
+ *  (`/terminals?focus=<id>`). The one Sign in press now stands under a
+ *  failed coding-session reply — ON Build — and its "Finish signing in
+ *  there" link changed only the address: Build neither showed the new
+ *  terminal (its list is read once) nor left the coding sessions view. The
+ *  link's click announces the terminal with this event; Build adds it to
+ *  its list and shows it in the Terminals view. */
+export const BUILD_TERMINAL_EVENT = "ij:open-build-terminal";
+
+/** The terminal a Build link names (`/terminals?focus=<id>`), else null. */
+export function terminalOfHref(href: string | null | undefined): string | null {
+  const h = typeof href === "string" ? href.trim() : "";
+  const q = h.indexOf("?");
+  if (q < 0 || h.slice(0, q).replace(/\/+$/, "") !== "/terminals") return null;
+  try {
+    const id = new URLSearchParams(h.slice(q + 1)).get("focus");
+    return id && id.trim() ? id.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Tell an open Build page that a link to one of its terminals was pressed.
+ *  Only on Build (anywhere else the navigation itself opens it). */
+export function announceBuildTerminalLink(href: string | null | undefined): boolean {
+  if (typeof window === "undefined") return false;
+  const id = terminalOfHref(href);
+  if (!id) return false;
+  if (window.location.pathname.replace(/\/+$/, "") !== "/terminals") return false;
+  window.dispatchEvent(new CustomEvent(BUILD_TERMINAL_EVENT, { detail: { id } }));
+  return true;
+}
+
 /** The session id a BUILD_SESSION_EVENT carries, else null. */
 export function sessionOfEvent(e: Event): string | null {
   const d = (e as CustomEvent<{ id?: unknown }>).detail;

@@ -588,7 +588,8 @@ async def test_an_invalid_layer_is_ignored_with_one_note_on_the_turn(env):
     out = (await _stream(platform, _body(ws), harness=True))["done"]
     harness = out["route"]["harness"]
     assert harness["layers"] == ["default", "family:claude"]
-    assert harness["note"].startswith("This folder's harness files (.ironjarvis/harness) were not used:")
+    # Moved on purpose (harness gaps review): "coding-session instructions".
+    assert harness["note"].startswith("This folder's coding-session instructions (.ironjarvis/harness) were not used:")
     assert "PROJECT PROMPT" not in model.calls[0]["system"]
 
 

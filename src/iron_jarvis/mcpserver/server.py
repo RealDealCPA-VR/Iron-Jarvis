@@ -174,7 +174,7 @@ SUPPORTED_METHODS: tuple[str, ...] = (
 NO_CAPABILITY_MESSAGE = (
     "this Build terminal grants no capability Iron Jarvis serves over MCP — only "
     "Browser and Memory are served in this version; tick one of them in the "
-    "terminal's Capabilities in Build, then relaunch the harness"
+    "terminal's Capabilities in Build, then start the coding tool again"
 )
 
 #: 400 wording when a call arrives with no live ``Mcp-Session-Id``. The
@@ -302,8 +302,8 @@ def capability_refused_message(tool_name: str) -> str:
         if family.admits(tool_name):
             label = _CAPABILITY_LABELS.get(capability, capability)
             return (
-                f"{tool_name} is not available to this pane: its Capabilities do not "
-                f"include {label}. Tick it in Build and relaunch the harness."
+                f"{tool_name} is not available to this terminal: its Capabilities do not "
+                f"include {label}. Tick it in Build and start the coding tool again."
             )
     return (
         f"{tool_name} is not served over MCP by Iron Jarvis: only Browser tools "

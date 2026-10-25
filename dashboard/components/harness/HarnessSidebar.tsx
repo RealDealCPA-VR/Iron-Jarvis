@@ -23,6 +23,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Check, FolderOpen, FolderX, Loader2, Pencil, Plus, Search, SquareTerminal, X } from "lucide-react";
 import { filterFolders } from "@/lib/buildNext";
+import { CODING_VIEW_NAME } from "@/lib/buildWords";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import { PaneDot, stateWord } from "@/components/terminal/PaneState";
 import type { RailPane } from "@/components/terminal/PaneRail";
@@ -427,7 +428,8 @@ export function HarnessSidebar({
   }
 
   return (
-    <nav aria-label="IJ harness sessions" data-testid="harness-sidebar" className="flex h-full min-h-0 flex-col gap-2">
+    // Harness gaps (fix 4): the view's everyday name (lib/buildWords).
+    <nav aria-label={CODING_VIEW_NAME} data-testid="harness-sidebar" className="flex h-full min-h-0 flex-col gap-2">
       {creating ? (
         <NewSessionForm
           defaultFolder={startWithNoFolder ? "" : defaultFolder}

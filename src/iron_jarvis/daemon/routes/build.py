@@ -118,7 +118,9 @@ _COMPACTING: set[str] = set()
 COMPACTING_SENTENCE = (
     "This session is summarizing its earlier turns. Send your message when that finishes."
 )
-COMPACT_RUNNING = "This session is still answering. Wait for the reply, or stop it, before you compact it."
+#: Harness gaps review: the press is "Summarize" (fix 4); this refusal was
+#: still worded for the old "Compact".
+COMPACT_RUNNING = "This session is still answering. Wait for the reply, or stop it, before you summarize it."
 
 #: v1.374.0: a turn that ran longer than this, and ended, is said by the bell
 #: (and by the desktop app from the tray) — ``build.turn_finished``.
@@ -569,6 +571,29 @@ def check_account(platform: Any, setup: dict[str, Any]) -> "dict[str, Any] | Non
 # --------------------------------------------------------------------------- #
 
 
+#: Harness gaps (fix 2): how much of a failure's own words (the error frame's
+#: ``technical``) a reply line keeps for the Details fold — the frame's are
+#: already masked and cut at this length (``failure_words.technical_text``).
+FAILURE_DETAIL_CHARS = 2000
+
+
+def failure_detail(raw: Any) -> str:
+    """A failure's technical text as a reply line keeps it: masked again
+    (``failure_words.mask_failure_text`` — the shared mask plus the secret
+    shapes it does not know, harness gaps review; idempotent) and bounded. ""
+    for nothing. Never raises."""
+    text = raw.strip() if isinstance(raw, str) else ""
+    if not text:
+        return ""
+    try:
+        from ...providers.failure_words import mask_failure_text
+
+        text = mask_failure_text(text)
+    except Exception:  # noqa: BLE001 — wording never fails a turn
+        pass
+    return text[:FAILURE_DETAIL_CHARS]
+
+
 class _ReplyWatch:
     """Reads a build turn's frames as they pass and keeps what its reply line
     needs (and the two things that change the SESSION mid-turn: an approved
@@ -783,6 +808,18 @@ class _ReplyWatch:
                 "refit": done.get("refit"),
                 "doors": done.get("doors") or [],
             })
+            # Harness gaps (fix 3): every receipt fact the chat page keeps on
+            # a reply, so the Build receipt says what the chat's says — the
+            # envelope's adaptation, a kept preference and the earlier chats
+            # read, each only when the turn had one (absent = nothing to say).
+            if isinstance(done.get("adapted"), dict) and done["adapted"]:
+                line["adapted"] = done["adapted"]
+            remembered = [str(x) for x in (done.get("remembered") or []) if isinstance(x, str) and x.strip()]
+            if remembered:
+                line["remembered"] = remembered
+            refs = [r for r in (done.get("thread_refs") or []) if isinstance(r, dict)]
+            if refs:
+                line["threadRefs"] = refs
             # v1.374.0: how full the conversation was for the model this turn
             # — the planner's own numbers, never a guess on the screen.
             ctx = context_receipt(done.get("context"))
@@ -811,7 +848,7 @@ class _ReplyWatch:
             # `title. fix` — the join the chat's failure line makes
             # (lib/failureLine.failureSentence; v1.378.0: it was joined with a
             # bare space, "…declined to answer this conversation Its safety…").
-            title = str(err.get("title") or "").strip()
+            headline = title = str(err.get("title") or "").strip()
             fix = str(err.get("fix") or "").strip()
             if title and fix and title[-1] not in ".!?":
                 title += "."
@@ -820,8 +857,28 @@ class _ReplyWatch:
             # v1.378.0: a SAFETY REFUSAL is marked on the line, so the
             # session offers Rewind (never Retry: the same conversation is
             # declined again) — also after it is opened again.
-            if str(err.get("fix_kind") or "") == "refusal":
+            kind = str(err.get("fix_kind") or "")
+            if kind == "refusal":
                 line["errorKind"] = "refusal"
+            elif kind in ("sign_in", "key"):
+                # Harness gaps (fix 2): the ONE press that fixes it (the chat's
+                # `fix_action`) is kept too — a signed-out Claude Code / Codex
+                # offers Sign in, a refused key the link to its place — and
+                # the provider it is about (an id, never a secret).
+                line["errorKind"] = kind
+                provider = str(err.get("fix_provider") or "").strip()[:80]
+                if provider:
+                    line["errorProvider"] = provider
+            # Harness gaps (fix 2): the headline alone (the line reads just it
+            # when a press stands beside it, the chat's rule) and the
+            # server's own words, folded under Details on the screen — kept
+            # on the line so they are there after a reload too. Masked again
+            # (the frame's are already) and bounded.
+            if headline:
+                line["errorTitle"] = headline
+            technical = failure_detail(err.get("technical"))
+            if technical and technical != words:
+                line["errorDetail"] = technical
         else:
             if not partial.strip() and not self.helpers:
                 return out  # stopped before a word: nothing to keep

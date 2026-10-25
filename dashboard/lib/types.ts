@@ -31,6 +31,10 @@ export interface Health {
   /** The ACTIVE context-spine project new sessions default into (or null). */
   active_project?: { id: string; name: string; root?: string } | null;
   providers: ProviderHealth[];
+  /** Harness gaps (fix 1): how many replies the daemon is writing right now
+   *  — a chat's and a Build coding session's (the durable turn registry, in
+   *  memory). Absent on an older Iron Jarvis. */
+  replies?: { chat?: number; build?: number } | null;
 }
 
 export interface Metrics {

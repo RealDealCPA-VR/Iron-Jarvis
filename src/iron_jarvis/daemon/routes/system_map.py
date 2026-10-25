@@ -157,6 +157,14 @@ def _count(db, stmt) -> int:
     return int(db.scalar(stmt) or 0)
 
 
+def _build_replies(d) -> int:
+    """Running Build coding-session replies (the durable turn registry, in
+    memory; ``routes/ui.build_replies_running``). Never raises."""
+    from .ui import build_replies_running
+
+    return build_replies_running(d)
+
+
 def _active_session_count(db, *where) -> int:
     from ...core.models import Session, SessionStatus
 
@@ -231,8 +239,12 @@ def _work(d, db, since) -> list[dict[str, Any]]:
             .where(ChatThreadRecord.archived_at.is_(None))  # type: ignore[union-attr]
             .where(chats_only),
         )
+        # Harness gaps (fix 1): CHAT_INFLIGHT counts every daemon-owned reply,
+        # a Build coding session's too — and Build sessions are not chats
+        # (v1.367.0), so theirs are taken back out and lit on the Build star.
+        live = max(0, CHAT_INFLIGHT.count() - _build_replies(d))
         return _node(
-            "chats", "Chats", "/chat", setup=total, used=used, live=CHAT_INFLIGHT.count(), unit="chat",
+            "chats", "Chats", "/chat", setup=total, used=used, live=live, unit="chat",
             detail="Your conversations with Jarvis.",
         )
 
@@ -258,9 +270,16 @@ def _work(d, db, since) -> list[dict[str, Any]]:
         rows = list(d.platform.terminals.list())
         alive = [r for r in rows if r.get("alive") is not False]
         busy = sum(1 for r in alive if r.get("state") in ("working", "blocked"))
+        # Harness gaps (fix 1): a coding session whose reply runs is Build in
+        # use too (it is not a terminal, so it adds to "in use", never to the
+        # open terminals).
+        replies = _build_replies(d)
+        detail = f"{len(alive)} open terminal{'s' if len(alive) != 1 else ''}; a terminal counts as in use while its program works."
+        if replies:
+            detail += f" {replies} coding session{'s are' if replies != 1 else ' is'} answering now."
         return _node(
-            "build", "Build", "/terminals", setup=len(alive), used=busy, live=busy, unit="terminal",
-            detail=f"{len(alive)} open terminal{'s' if len(alive) != 1 else ''}; a terminal counts as in use while its program works.",
+            "build", "Build", "/terminals", setup=len(alive), used=busy + replies, live=busy + replies, unit="terminal",
+            detail=detail,
         )
 
     def documents() -> dict[str, Any]:
@@ -767,6 +786,10 @@ def _status(d, db) -> dict[str, Any]:
         out["running"] = _active_session_count(db)
     except Exception:  # noqa: BLE001
         pass
+    # Harness gaps (fix 1): "Working on N tasks" counts a Build coding
+    # session's running reply, like the home line (routes/ui.status_line) —
+    # the Running number opens Running now, which lists it.
+    out["running"] += _build_replies(d)
     try:
         out["failing_loops"] = [
             {"name": str(name), "error": str(v.get("last_error") or v.get("error") or "failed")}

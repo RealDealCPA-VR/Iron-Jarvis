@@ -262,7 +262,11 @@ class LayerInvalid(Exception):
 
 
 def _ignored_note(reason: str) -> str:
-    return f"This folder's harness files ({HARNESS_REL}) were not used: {reason}."
+    # Harness gaps review: the "/" menu shows this (GET /build/sessions/{id}/
+    # skills). "harness files" was the engine room's word the bell and
+    # Settings dropped for "coding-session instructions" (fix 4); the folder
+    # keeps its real name, the path the user edits.
+    return f"This folder's coding-session instructions ({HARNESS_REL}) were not used: {reason}."
 
 
 def _inside(path: Path, root: Path) -> bool:

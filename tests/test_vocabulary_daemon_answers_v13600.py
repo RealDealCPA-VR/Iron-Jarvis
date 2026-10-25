@@ -133,6 +133,23 @@ _VAULT = (
     "'<App>: <field label>' on the Secrets page, so the words are never shown as written"
 )
 _FILE = "a real file name (VOCABULARY.md: a real file name is a file name)"
+#: Harness gaps (fix 4): the reasons the retired "harness" stays in a line.
+_HARNESS_DIR = (
+    "names the folder's real `.ironjarvis/harness` folder and its files, which the user edits "
+    "by that name (a folder name is a name, like daemon.log)"
+)
+_CALLER = (
+    "a programming error a caller's code meets (a keyword-only argument no request sets), "
+    "never a person"
+)
+_HISTORY = "the /history API's `harness` parameter (the wire: claude-code | codex), not prose"
+#: Harness gaps review: was ONE entry whose piece was the bare word
+#: "harness" (it allowed every line of refine.py holding it, today's and
+#: tomorrow's — tests/test_harness_gaps_review_v1389.py). Each line is named.
+_BENCH = (
+    "output of the developer-only `ironjarvis bench-harness` command (run --refine / adopt), printed "
+    "in a terminal: the benchmark measures the harness, so it names its subject; never an app screen"
+)
 
 #: Deliberate uses: (file, a piece of the text, why).
 ALLOW: list[tuple[str, str, str]] = [
@@ -151,6 +168,21 @@ ALLOW: list[tuple[str, str, str]] = [
     ("src/iron_jarvis/tools/selfcare.py", "The pack's name as listed under Settings > Tools.", _MODEL + " (the pack argument's help)"),
     ("src/iron_jarvis/tools/selfcare.py", "Restart ONE tool pack (an MCP server)", _MODEL + " (pack_restart's description)"),
     ("src/iron_jarvis/tools/selfcare.py", "Run the app's runtime checks (a model is connected", _MODEL + " (run_doctor's description)"),
+    # Harness gaps (fix 4): "harness" joined the retired words (Build's view
+    # is "Coding sessions"). These keep it on purpose:
+    ("src/iron_jarvis/harness/components.py", "the harness folder points outside the project folder", _HARNESS_DIR),
+    ("src/iron_jarvis/harness/components.py", " is not a harness file (expected ", _HARNESS_DIR),
+    ("src/iron_jarvis/harness/components.py", " points outside the harness folder", _HARNESS_DIR),
+    ("src/iron_jarvis/daemon/chat_turn.py", "plan_mode needs harness mode", _CALLER),
+    ("src/iron_jarvis/harness/mode.py", "harness must be True, 'auto' or one of ", _CALLER),
+    ("src/iron_jarvis/history/index.py", "unknown harness ", _HISTORY),
+    ("src/iron_jarvis/history/index.py", "harness must be one of ", _HISTORY),
+    ("src/iron_jarvis/harness_bench/refine.py", "No candidate scored at least as well as the current harness.", _BENCH),
+    ("src/iron_jarvis/harness_bench/refine.py", " holds no valid harness files (", _BENCH),
+    ("src/iron_jarvis/harness_bench/refine.py", "'s .ironjarvis/harness points outside the folder", _BENCH + "; " + _HARNESS_DIR),
+    ("src/iron_jarvis/harness_bench/refine.py", "'s .ironjarvis/harness/", _BENCH + "; " + _HARNESS_DIR),
+    ("src/iron_jarvis/harness_bench/refine.py", " in .ironjarvis/harness, and it differs", _BENCH + "; " + _HARNESS_DIR),
+    ("src/iron_jarvis/harness_bench/refine.py", "With these files the folder's harness would not be valid (", _BENCH),
 ]
 
 _P = "not lane 10C's file this wave: the integrator rewords it from lane 10C's notes and deletes this entry"

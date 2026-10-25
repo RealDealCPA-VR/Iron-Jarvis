@@ -52,9 +52,12 @@ MEMORY_WRITE_TOOLS = ("memory_write", "memory_propose", "ltm_append")
 
 #: The pre-v1.290.0 refusal for a browser tool, spelled out as a literal: the
 #: generalised message must keep Browser's sentence byte for byte.
+#: Moved on purpose (harness gaps, fix 4): "pane" and "harness" were the
+#: engine room's words — a Build window is a terminal (VOCABULARY.md) and what
+#: runs in it is the coding tool. The rest of the sentence is unchanged.
 BROWSER_REFUSAL_V1238 = (
-    "browser_click is not available to this pane: its Capabilities do not "
-    "include Browser. Tick it in Build and relaunch the harness."
+    "browser_click is not available to this terminal: its Capabilities do not "
+    "include Browser. Tick it in Build and start the coding tool again."
 )
 
 

@@ -60,6 +60,10 @@ export const RETIRED: readonly Retired[] = [
   { word: "pane", re: /\bpanes?\b/i, use: "terminal" },
   { word: "job", re: /\bjobs?\b/i, use: "task (one attempt at it is a run)" },
   { word: "assignment", re: /\bassignments?\b/i, use: "task (a queued task)" },
+  // Harness gaps (fix 4): Build's coding-agent view is "Coding sessions"
+  // (dashboard/lib/buildWords); "IJ harness" / "harness" were the engine
+  // room's words for it and for the coding tool in a terminal.
+  { word: "harness", re: /\bharness(?:es)?\b/i, use: "Coding sessions (Build's view), a coding session, or the coding tool" },
 ];
 
 /** The folders whose files a user reads. */

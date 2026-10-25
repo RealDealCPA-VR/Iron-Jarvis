@@ -627,7 +627,9 @@ export function SystemMap({ data, loading }: { data: SystemMapData | null; loadi
 export function describe(n: MapNode): string {
   const parts: string[] = [];
   if (n.setup > 0) parts.push(n.unit ? `${n.setup} ${plural(n.unit, n.setup)}` : `${n.setup} set up`);
-  else parts.push("not set up yet");
+  // Harness gaps review: a star in use (a coding session answering with no
+  // terminal open lights Build) is never "not set up yet" beside it.
+  else if (n.used === 0 && n.live === 0) parts.push("not set up yet");
   if (n.used > 0) parts.push(`${compact(n.used)} use${n.used === 1 ? "" : "s"} this week`);
   if (n.live > 0) parts.push(`${n.live} in use now`);
   return parts.join(" · ");

@@ -399,6 +399,44 @@ def failure_facts(exc: BaseException | None) -> _Facts:
     return f
 
 
+#: Harness gaps review: secret shapes a failure's words can carry that the
+#: shared mask (``detections.redact.mask``) leaves as they are — a bare
+#: ``Bearer <value>`` (not after an ``Authorization`` key: a proxy's own 401
+#: text), and the key shapes of Google (``AIza…``), xAI (``xai-…``), Groq
+#: (``gsk_…``) and Hugging Face (``hf_…``). A coding session KEEPS these words
+#: on its reply line (``errorDetail``: on disk, in backups), so they are taken
+#: out here, for the live frame and the line alike. Each rule needs a digit or
+#: a long run, so a sentence ("Bearer authentication failed") is never touched;
+#: every rule is linear (no nested repetition).
+_FAILURE_MASKS: tuple[tuple["re.Pattern[str]", str], ...] = (
+    (
+        re.compile(r"(\bbearer:?\s+)(?![*]{3})(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{12,}", re.IGNORECASE),
+        r"\1***",
+    ),
+    (re.compile(r"\b(AIza)[0-9A-Za-z_-]{30,}"), r"\1***"),
+    (re.compile(r"\b(xai-|gsk_|hf_)[A-Za-z0-9]{20,}"), r"\1***"),
+)
+
+
+def mask_failure_text(text: str) -> str:
+    """*text* with every secret-looking value masked: the shared mask, then
+    the shapes it does not know (``_FAILURE_MASKS``). Never raises."""
+    if not isinstance(text, str) or not text:
+        return text if isinstance(text, str) else ""
+    try:
+        from ..detections.redact import mask
+
+        text = mask(text)
+    except Exception:  # noqa: BLE001 — never fail on wording
+        pass
+    for rx, repl in _FAILURE_MASKS:
+        try:
+            text = rx.sub(repl, text)
+        except Exception:  # noqa: BLE001
+            pass
+    return text
+
+
 def technical_text(exc: BaseException | None, detail: str | None = None) -> str:
     """The original detail (*detail* when the caller already built it — the
     chat lanes' ``_error_detail``), secret-shaped values masked, bounded."""
@@ -415,12 +453,8 @@ def technical_text(exc: BaseException | None, detail: str | None = None) -> str:
                 text = f"{type(exc).__name__}: {failure_reason(exc)}"  # type: ignore[arg-type]
             except Exception:  # noqa: BLE001
                 text = type(exc).__name__
-    try:
-        from ..detections.redact import mask
-
-        text = mask(text)
-    except Exception:  # noqa: BLE001 — never fail on wording
-        pass
+    # Harness gaps review: the shared mask AND the shapes it does not know.
+    text = mask_failure_text(text)
     # v1.358.0: a wrapper's "claude-cli: claude-cli: …" is said once.
     return undoubled(str(text or ""))[:2000]
 
@@ -526,7 +560,9 @@ def classify(
     kind = f.kind
     run = (surface or current_surface()) == SURFACE_RUN
     other = (
-        f"choose another model in {RUN_MODEL_PLACE}" if run else "pick another model for this chat"
+        f"choose another model in {RUN_MODEL_PLACE}"
+        if run
+        else f"pick another model for {this_place(surface)}"
     )
     again = "run it again" if run else "retry"
 
@@ -563,7 +599,7 @@ def classify(
         elif run:
             fix = f"Run it again, or {other}."
         else:
-            fix = "Press Retry, or pick another model for this chat."
+            fix = f"Press Retry, or {other}."
         return (f"{Name} didn't answer in time", fix)
     if transport == "interrupted":
         if f.partial:
@@ -607,6 +643,15 @@ def classify(
 #: The generic words when nothing typed says more.
 GENERIC_TITLE = "Iron Jarvis couldn't finish this answer"
 GENERIC_FIX = "Press Retry. If it happens again, pick another model for this chat."
+#: v1.389.0: the same words in a CODING SESSION (Build), which is not a chat —
+#: its model is picked in the session's own box.
+GENERIC_FIX_BUILD = "Press Retry. If it happens again, pick another model for this session."
+
+
+def this_place(surface: str | None = None) -> str:
+    """What the reader's conversation is called in a fix (v1.389.0): "this
+    session" in a coding session (Build), else "this chat"."""
+    return "this session" if (surface or current_surface()) == SURFACE_BUILD else "this chat"
 #: v1.359.0: the generic fix read OUTSIDE the chat (a run, see ``_SURFACE``).
 GENERIC_FIX_RUN = f"Run it again. If it happens again, choose another model in {RUN_MODEL_PLACE}."
 #: v1.358.0 (the re-audit's confirmed regression): the generic headline's
@@ -734,7 +779,7 @@ def friendly_error(
         title, fix = _run_generic_words(exc, provider, manager)
     else:
         title = generic_title(_generic_name(exc, provider, manager))
-        fix = GENERIC_FIX
+        fix = GENERIC_FIX_BUILD if this_place(surface) == "this session" else GENERIC_FIX
     return {"title": title, "fix": fix, "technical": technical_text(exc, technical)}
 
 

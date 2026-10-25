@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { get } from "@/lib/api";
+import { useDaemon } from "@/lib/daemon";
 import { useEvents } from "@/lib/useEvents";
-import type { IJEvent } from "@/lib/types";
+import type { Health, IJEvent } from "@/lib/types";
 
 /**
  * MoodOrb — a small, dependency-free arc-reactor orb that reflects how the
@@ -56,9 +57,28 @@ const COLOR: Record<Mood, string> = {
 
 const LABEL: Record<Mood, string> = {
   idle: "Idle — nothing running",
-  thinking: "Thinking — a session is in flight",
+  // Harness gaps (fix 1): "a session is in flight" was the engine room's
+  // words (the v1.388.0 re-audit, 0g.6), and the orb now also turns for a
+  // chat or a Build coding session answering — not only a session.
+  thinking: "Working — something is running",
   alert: "Attention needed — something is waiting for you",
 };
+
+/**
+ * How many replies the daemon is writing right now (harness gaps, fix 1):
+ * a chat's and a Build coding session's, from /health's `replies` (the
+ * durable turn registry's counts). The orb used to key ONLY on session /
+ * agent events, so it sat "Idle — nothing running" through a chat turn and
+ * through a Build reply that ran for an hour. Read from the ONE shared
+ * /health poll (lib/daemon) — no request of its own. 0 for an older Iron
+ * Jarvis (no field) or before the first poll.
+ */
+export function repliesRunning(health: Health | null | undefined): number {
+  const r = health?.replies;
+  if (!r || typeof r !== "object") return 0;
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+  return n(r.chat) + n(r.build);
+}
 
 /** The /events types the orb reads (v1.311.0, wave 3): reviews and
  *  proposals for ALERT, session/agent lifecycle for THINKING. The orb is in
@@ -123,6 +143,11 @@ export function MoodOrb({
   controls?: string;
 } = {}) {
   const { events, connected } = useEvents(100, { types: MOOD_EVENT_TYPES });
+  // Harness gaps (fix 1): a chat or a Build coding session answering. Review:
+  // only while Iron Jarvis answers — lib/daemon keeps the LAST /health while
+  // it is offline, and a reply counted before a crash is not being written.
+  const daemon = useDaemon();
+  const replies = daemon.online ? repliesRunning(daemon.health) : 0;
   // The START frames of runs the daemon said had ended when asked after a
   // reconnect (see above). Keyed by the frame, not the session: a continue
   // re-publishes session.created under the SAME session id, and that new
@@ -191,11 +216,13 @@ export function MoodOrb({
       if (e.type === "autonomy.proposed" && !resolved.has(sid(e))) return "alert";
     }
 
-    // THINKING: a session/agent that started but hasn't completed yet.
-    if (inFlight.length > 0) return "thinking";
+    // THINKING: a session/agent that started but hasn't completed yet — or
+    // (harness gaps, fix 1) a reply being written: a chat's, a Build coding
+    // session's.
+    if (inFlight.length > 0 || replies > 0) return "thinking";
 
     return "idle";
-  }, [events, inFlight]);
+  }, [events, inFlight, replies]);
 
   const color = COLOR[mood];
   const thinking = mood === "thinking";

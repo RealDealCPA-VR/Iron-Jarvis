@@ -26,6 +26,7 @@
 import Link from "next/link";
 import { Loader2, LogIn } from "lucide-react";
 import { codeParts, paneHref, subscriptionCliFor, useCliSignIn } from "@/lib/cliSignIn";
+import { announceBuildTerminalLink } from "@/lib/buildLinks";
 import { CALM_ACTION } from "@/components/connections/endpointChip";
 
 const ROW_LINK =
@@ -68,7 +69,14 @@ export function CliSignInPress({
         {si.paneId !== undefined ? (
           <span data-testid={`${testIdPrefix}-pane-hint-${provider}`}>
             A Build terminal opened.{" "}
-            <Link href={paneHref(si.paneId)} className={ROW_LINK}>
+            <Link
+              href={paneHref(si.paneId)}
+              // Harness gaps (fix 2): pressed ON Build (a coding session's
+              // failed reply), the link is announced — Build shows the
+              // terminal (lib/buildLinks BUILD_TERMINAL_EVENT).
+              onClick={() => announceBuildTerminalLink(paneHref(si.paneId))}
+              className={ROW_LINK}
+            >
               Finish signing in there
             </Link>
           </span>
@@ -101,7 +109,11 @@ export function CliSignInPress({
         <span data-testid={`${testIdPrefix}-pane-hint-${provider}`}>
           A Build terminal opened with {cli.name} running. {withCode(cli.paneHint)} This turns green by
           itself once you&apos;re signed in.{" "}
-          <Link href={paneHref(si.paneId)} className={ROW_LINK}>
+          <Link
+            href={paneHref(si.paneId)}
+            onClick={() => announceBuildTerminalLink(paneHref(si.paneId))}
+            className={ROW_LINK}
+          >
             Open the Build terminal
           </Link>
         </span>

@@ -19,6 +19,7 @@
 
 import { Layers, Loader2 } from "lucide-react";
 import { meterTitle, type TurnContext } from "@/lib/buildContext";
+import { COMPACTION_OFFER_BUTTON } from "@/lib/chatControlWords";
 
 const RING = 14;
 const STROKE = 2;
@@ -118,7 +119,10 @@ export function ContextMeter({
           title="Summarize the earlier turns so the conversation stays light. The model reads the summary in their place; the full conversation is kept."
           className="rounded-md px-1.5 py-0.5 text-[12px] font-medium text-tone-warn transition-colors hover:bg-tone-warn/10"
         >
-          Compact
+          {/* Harness gaps (fix 4): the chat's word for the same press
+              (v1.356.0 G75 retired "Compact now"); the "/compact" command
+              keeps its name — it is Claude Code's. */}
+          {COMPACTION_OFFER_BUTTON}
         </button>
       ) : null}
     </span>

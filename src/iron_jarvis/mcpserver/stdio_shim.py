@@ -68,7 +68,7 @@ UNREACHABLE_MESSAGE = "cannot reach Iron Jarvis at {url}: {error}"
 
 #: What it says when it was started with no token in the environment.
 NO_TOKEN_MESSAGE = (
-    f"{MCP_TOKEN_ENV} is not set: start this harness from a Build terminal in Iron "
+    f"{MCP_TOKEN_ENV} is not set: start this coding tool from a Build terminal in Iron "
     "Jarvis so the terminal token reaches it"
 )
 

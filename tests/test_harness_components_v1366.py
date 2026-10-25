@@ -189,7 +189,9 @@ def test_plugins_parse_and_render(tmp_path):
 def _invalid(folder: Path, **kw) -> str:
     layer = _read(folder, **kw)
     assert layer.present and not layer.valid and not layer.used, layer
-    assert layer.note.startswith("This folder's harness files (.ironjarvis/harness) were not used: "), layer.note
+    # Moved on purpose (harness gaps review): the lead names the folder's
+    # coding-session instructions, as the bell and Settings do.
+    assert layer.note.startswith("This folder's coding-session instructions (.ironjarvis/harness) were not used: "), layer.note
     # Nothing of it reaches the tree — never half-applied.
     assert _tree(layer) == _tree()
     return layer.note

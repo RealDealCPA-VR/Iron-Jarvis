@@ -35,6 +35,7 @@ import {
   SquareKanban,
   type LucideIcon,
 } from "lucide-react";
+import { BUILD_BLURB } from "@/lib/buildWords";
 
 /**
  * The navigation catalogue — the SINGLE source of truth for "what pages exist".
@@ -101,8 +102,23 @@ export const NAV: NavSectionDef[] = [
         // Nobody types "Build" when they want a shell — they type "terminal".
         // v1.357.0 (G76): "pane" is retired from the screen (VOCABULARY.md),
         // so it stays here: a word the app taught keeps finding the page.
-        aliases: ["terminal", "shell", "command line", "console", "code", "cli", "pane"],
-        blurb: "Command-line windows for coding tools like Claude Code, opened in any project folder.",
+        // Harness gaps (fix 4): Build's second view is named in
+        // lib/buildWords; "IJ harness" and "harness" were its old words and
+        // stay searchable forever (VOCABULARY.md's rename rule).
+        aliases: [
+          "terminal",
+          "shell",
+          "command line",
+          "console",
+          "code",
+          "cli",
+          "pane",
+          "coding session",
+          "coding sessions",
+          "IJ harness",
+          "harness",
+        ],
+        blurb: BUILD_BLURB,
       },
       {
         // v1.151.1: Projects was MISSING from this catalogue entirely — no rail

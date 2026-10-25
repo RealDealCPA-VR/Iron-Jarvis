@@ -98,13 +98,15 @@ SCAN_SOURCE = "the summary of earlier turns"
 
 # The press's refusals, in plain words (the route answers them as they are).
 NO_SESSION = "no such Build session"
-ARCHIVED = "This session is archived. Bring it back before you compact it."
+#: Harness gaps (fix 4): the press is "Summarize", the chat's word (v1.356.0
+#: G75 retired "Compact now"); the "/compact" command keeps Claude Code's name.
+ARCHIVED = "This session is archived. Bring it back before you summarize it."
 NOT_ENOUGH = (
     "There is not enough conversation to summarize yet: the newest turns are always kept as they are."
 )
 NOTHING_NEW = "Nothing new to summarize: every older turn is already in the summary."
 NO_REAL_MODEL = (
-    "Compact needs a real model: this session runs on the demo model, which would make a summary up. "
+    "Summarizing needs a real model: this session runs on the demo model, which would make a summary up. "
     "Choose a model for the session first."
 )
 TOO_LONG = (

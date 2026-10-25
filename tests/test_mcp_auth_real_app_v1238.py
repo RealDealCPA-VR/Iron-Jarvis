@@ -221,7 +221,9 @@ def test_a_bogus_pane_token_is_refused_by_the_pane_store(real_app):
     response = real_app.initialize(token="not-a-pane-token-at-all")
     assert response.status_code == 401
     assert response.json()["reason"] == REASON_UNKNOWN_TOKEN
-    assert "relaunch the harness" in response.json()["detail"]
+    # Moved on purpose (harness gaps, fix 4): "harness" was the engine
+    # room's word for the coding tool in the terminal.
+    assert "start the coding tool again" in response.json()["detail"]
 
 
 # --------------------------------------------------------------------------- #

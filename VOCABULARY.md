@@ -22,6 +22,7 @@ PR that ships it.
 | An MCP server (a connection that adds tools) | **extension** | plug-in, pack, tool pack, MCP pack |
 | The built-in stand-in that answers when no AI model is chosen (provider id `mock`) | **demo model**; what it says is "a scripted demo, not real answers"; under one reply: "Demo answer. No AI model ran." | mock, offline mock, offline demo, offline model, simulated mode |
 | One shell or CLI window on the Build page | **terminal** | pane |
+| Build's other view, where Jarvis writes, runs and checks code in a folder, one conversation per session | **Coding sessions**; one of them is a **coding session** | IJ harness, harness |
 | Anything Iron Jarvis knows how to do | **skill** | — |
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |
 | A destination you can talk back to | **two-way destination** | gateway, messaging platform |
@@ -161,6 +162,33 @@ keys, routes and API fields (`assignment_id`, `/assignments`, the
 `pack_restart` tool) are the wire and keep their names. "plug-in" is retired
 here but not on the scanner's word list, so the run-without-asking note
 ("extension tools") is pinned by hand.
+
+### IJ harness → Coding sessions (harness gaps, after v1.388.2)
+
+Build has two views. The second — where Jarvis works on code in a folder,
+one conversation per session, and keeps going when you leave — shipped as
+the **IJ harness** (v1.369.0), the engine room's name for the thing that
+drives a coding model. The v1.388.0 re-audit (0g.6) found it on Build's view
+switch, the view's sidebar, the bell ("A change to a harness file is
+suggested") and two terminal refusals ("relaunch the harness"), and no Help
+entry at all. The user's word is **Coding sessions** (confirmed 2026-10-25):
+the switch reads "Terminals | Coding sessions", one session is "a coding
+session", and "New session" stays inside the view. What runs in a Build
+terminal (Claude Code, Codex) is **the coding tool** ("start the coding tool
+again in the Build terminal"). Build's one-line blurb (Ctrl K, Everything,
+Help) names both views.
+
+The dashboard reads the name from ONE place, `dashboard/lib/buildWords.ts`,
+so a different choice is a two-line change. "IJ harness" and "harness" stay
+search aliases on Build (`lib/nav.ts`). "harness" is on the scanners' retired
+list; the deliberate uses are allowlisted with a reason: the real
+`.ironjarvis/harness` folder and its files (a folder name is a name), the
+`/history` API's `harness` parameter, the `ironjarvis bench-harness`
+developer command, and two programming-error messages no request can reach.
+The wire is unchanged: the `harness/` package, `ij.build.shape` value
+`"harness"`, test ids and routes. "Build session" (a session in Build) is not
+retired yet; it is still written in the bell, the desktop notices and the
+daemon's sentences, and a later wave folds it into "coding session".
 
 ## Reserved
 

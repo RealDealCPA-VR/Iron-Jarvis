@@ -398,6 +398,8 @@ describe("the bell", () => {
       id: "e2", ts: "2026-10-22T10:00:00Z", type: "library.proposal", session_id: "build:s1",
       payload: { id: "lib_2", kind: "layer_edit", folder_name: "shop", thread_id: "s1", summary: "memory.md" },
     } as never);
-    expect(edit!.title).toBe("A change to a harness file is suggested for shop");
+    // Moved on purpose (harness gaps, fix 4): "harness" is the engine room's
+    // word; the folder's harness files are its coding-session instructions.
+    expect(edit!.title).toBe("A change to the coding session instructions is suggested for shop");
   });
 });

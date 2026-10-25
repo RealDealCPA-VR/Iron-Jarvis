@@ -717,7 +717,9 @@ describe("MoodOrb no longer reads as a settings gear", () => {
     a.unmount();
     S.events = [{ id: "e2", type: "session.created", session_id: "s2", payload: {}, ts: "" }];
     render(<MoodOrb />);
-    expect(screen.getByRole("img").getAttribute("aria-label")).toMatch(/Thinking/);
+    // Moved on purpose (harness gaps, fix 1): the busy words read "Working —
+    // something is running" ("a session is in flight" was engine-room).
+    expect(screen.getByRole("img").getAttribute("aria-label")).toMatch(/Working/);
   });
 });
 

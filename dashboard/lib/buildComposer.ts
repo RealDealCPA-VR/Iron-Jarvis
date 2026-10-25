@@ -455,6 +455,13 @@ export interface QueuedItem {
   skill?: PickedSkill | null;
   files?: AtFile[];
   attachments?: QueuedUpload[];
+  /** Harness gaps review: a message SENT once before and sent again by Retry
+   *  (lib/buildRetry). Its words go as they are — never read for a "/"
+   *  command again (a skill's words may start with "/model") — and
+   *  `command` names the Claude Code command it ran ("" = none), even when
+   *  the session's command list cannot be read. Never saved in the queue
+   *  (`decodeQueuedItem` reads it back as words). */
+  resend?: { command: string };
 }
 
 function str(v: unknown, cap: number): string {

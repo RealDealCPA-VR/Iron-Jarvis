@@ -118,6 +118,17 @@ def _paired_flag(runtime, browser_flag) -> bool:
         return False
 
 
+def _replies_running(d) -> dict[str, int]:
+    """``{"chat": n, "build": n}`` — the replies the durable turn registry is
+    writing now (``durable_turns.reply_counts``). Never raises."""
+    try:
+        from ..durable_turns import reply_counts
+
+        return reply_counts(getattr(d.platform, "turn_logs", None))
+    except Exception:  # noqa: BLE001 — /health must never fail
+        return {"chat": 0, "build": 0}
+
+
 def activity_snapshot(d) -> dict[str, Any]:
     """What the daemon is busy with RIGHT NOW (v1.226.0, contract C6).
 
@@ -223,6 +234,13 @@ def register(app: FastAPI, d) -> None:
             # so a browser probe that threw would take the whole app down in
             # the UI (the v1.153.1 outage shape, one layer up).
             "browser": _browser_health(d),
+            # HARNESS GAPS (fix 1): how many replies are being written right
+            # now — {"chat": n, "build": n}, from the durable turn registry
+            # (in memory, never a database read). The status orb reads it, so
+            # a chat or a Build coding session answering is "working", not
+            # "Idle — nothing running". Counts only: /health is polled every
+            # 5 s by every window, and an equal answer keeps the held object.
+            "replies": _replies_running(d),
         }
 
     @app.get("/system/activity")

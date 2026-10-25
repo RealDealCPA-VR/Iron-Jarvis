@@ -419,7 +419,7 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("build_reflect", "Learn from Build sessions", "memory", "bool",
       "When a Build session has been idle for 10 minutes after replies that changed files or ran "
       "commands, Iron Jarvis may suggest one lesson for that folder, and sometimes a small edit to "
-      "the folder's harness files. It sends one request, cut to a fixed size, to the session's own "
+      "the folder's coding-session instructions. It sends one request, cut to a fixed size, to the session's own "
       "model on the session's own account, so on a Claude Code or Codex plan it counts toward that "
       "plan's limits. It waits while that account is at or near its limit. Nothing is kept until "
       "you accept it.",

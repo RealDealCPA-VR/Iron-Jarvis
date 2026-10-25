@@ -373,7 +373,7 @@ describe("the canon is a scan, not a list of strings (v1.357.0)", () => {
 
   it("covers every retired word the canon names", () => {
     const words = RETIRED.map((r) => r.word);
-    for (const w of ["pack", "connector", "memory source", "brain", "mission", "daemon", "mock", "pane", "job"]) {
+    for (const w of ["pack", "connector", "memory source", "brain", "mission", "daemon", "mock", "pane", "job", "harness"]) {
       expect(words).toContain(w);
     }
     const canon = readFileSync(join(DASH, "..", "VOCABULARY.md"), "utf-8").replace(/\r\n/g, "\n");
@@ -381,5 +381,7 @@ describe("the canon is a scan, not a list of strings (v1.357.0)", () => {
     expect(canon).toMatch(/\*\*task\*\*; one attempt at it is a \*\*run\*\*/);
     expect(canon).toContain("| **terminal** | pane |");
     expect(canon).toContain("| **Iron Jarvis** | daemon |");
+    // Harness gaps (fix 4): Build's coding-agent view.
+    expect(canon).toContain("| **Coding sessions**; one of them is a **coding session** | IJ harness, harness |");
   });
 });

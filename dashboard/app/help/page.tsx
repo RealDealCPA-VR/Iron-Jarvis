@@ -40,6 +40,7 @@ import { OFFLINE_WORDS } from "@/lib/offlineWords";
 import { STATUS_HREF } from "@/lib/loopWords";
 import { useApi } from "@/lib/useApi";
 import { guideChatPath } from "@/lib/mission";
+import { BUILD_BLURB, CODING_SESSION, CODING_VIEW_NAME } from "@/lib/buildWords";
 import { Card, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -75,7 +76,9 @@ const SUBSYSTEMS: Subsystem[] = [
     href: "/terminals",
     title: "Build",
     icon: SquareTerminal,
-    desc: "Command windows for coding, side by side — open each one in any project folder.",
+    // Harness gaps (fix 4): both of Build's views in one plain line — the
+    // same words as Ctrl K and Everything (lib/buildWords).
+    desc: BUILD_BLURB,
   },
   {
     href: "/creative",
@@ -239,6 +242,11 @@ const GLOSSARY: GlossaryTerm[] = [
   {
     term: "Terminals",
     def: "Real shells on your machine that agents can run commands in.",
+  },
+  {
+    // Harness gaps (fix 4): Build's second view had no Help entry at all.
+    term: CODING_VIEW_NAME,
+    def: `Build's other view: tell Jarvis what to build or change in a folder, and it writes, runs and checks the code there — one conversation per ${CODING_SESSION}, which keeps working when you leave and can be rewound.`,
   },
 ];
 

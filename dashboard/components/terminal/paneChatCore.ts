@@ -19,6 +19,8 @@
 import type { TurnAdapted, TurnRoute } from "@/components/chat/TurnReceipt";
 import type { Door } from "@/components/chat/DoorsStrip";
 import type { ProviderHealth, TurnUsage } from "@/lib/types";
+import type { ApprovedCall, TurnRefit } from "@/lib/turnRecovery";
+import type { ThreadRefReceipt } from "@/lib/turnReads";
 
 // ------------------------------------------------------------------ messages
 
@@ -53,6 +55,15 @@ export interface PaneMsg {
   /** Reply cut off mid-stream (error with a streamed partial) — marked so a
    *  partial answer never looks complete. */
   interrupted?: boolean;
+  /** Harness gaps (fix 3): the rest of what the chat page's receipt says,
+   *  under the chat page's own names — the folder's instruction files the
+   *  turn read, the earlier chats it read, the older messages left out to
+   *  fit, the cards the user allowed, and a preference kept. */
+  folderRules?: string[];
+  threadRefs?: ThreadRefReceipt[];
+  refit?: TurnRefit;
+  approved?: ApprovedCall[];
+  remembered?: string[];
 }
 
 // ------------------------------------------------------------ thread + title

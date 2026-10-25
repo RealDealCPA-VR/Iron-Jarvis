@@ -287,8 +287,17 @@ class TurnLog:
     def open_asks(self, pending: "set[str] | frozenset[str]") -> list[tuple[str, str, str]]:
         """``[(approval id, tool, asked at)]`` for this turn's cards that are
         still waiting — the shared registry (``pending``) is the truth: a card
-        it no longer holds was answered, timed out or abandoned."""
-        return [(aid, tool, at) for aid, (tool, at) in self._asks.items() if aid in pending]
+        it no longer holds was answered, timed out or abandoned.
+
+        SNAPSHOT first (harness gaps review): ``GET /chat/turns/running`` is a
+        SYNC route and reads this from a worker thread while the loop adds a
+        card (``_note_ask``). The membership check between two items is
+        Python code, where a thread switch lands — walking the live dict there
+        raised "dictionary changed size during iteration" and the listing came
+        back empty. ``list()`` copies the items in C, with no Python code
+        between them."""
+        asks = list(self._asks.items())
+        return [(aid, tool, at) for aid, (tool, at) in asks if aid in pending]
 
     def _store(self, event: str, data: str) -> None:
         if event in _MERGEABLE and self.frames and self.frames[-1][0] == event:
@@ -633,6 +642,99 @@ def waiting_unwatched(
     except Exception:  # noqa: BLE001 — a listing never fails because of this
         log.warning("could not list waiting chat turns", exc_info=True)
     return rows
+
+
+#: The two kinds of reply a daemon-owned turn writes (``TurnLog.surface``):
+#: a chat's, and a Build coding session's.
+REPLY_SURFACES: tuple[str, ...] = ("chat", "build")
+
+
+def _surface_of(lg: Any) -> str:
+    return "build" if getattr(lg, "surface", "") == "build" else "chat"
+
+
+def running_replies(
+    logs: "TurnLogs | None",
+    thread_states: "dict[str, dict[str, bool]] | None" = None,
+    pending_ids: "Any" = (),
+) -> list[dict[str, Any]]:
+    """Every reply a daemon-owned turn is writing RIGHT NOW (harness gaps,
+    fix 1): ``{turn_id, thread_id, surface: "chat" | "build", started_at,
+    waiting}``, oldest first.
+
+    THE GAP THIS CLOSES: a Build coding session's reply runs for an hour
+    with no Session row (a Build turn is a chat-shaped turn the daemon owns),
+    so Running now said "Nothing is running right now.", the status orb sat
+    idle and the home line counted nothing — while "Install when idle"
+    (which reads ``CHAT_INFLIGHT``) already knew it ran. The durable turn
+    registry is the ONE truth for "which reply runs": this reads it, and
+    every surface that says what runs reads this (``GET /chat/turns/running``,
+    ``/health``'s ``replies``, the home line, Everything › Status).
+
+    ``waiting`` — parked on the user: its chat reads ``waiting`` in
+    ``TURNS.thread_states()`` (an approval card, the model's own question,
+    an app's question), or one of its approval cards is still in the shared
+    registry (``pending_ids``). In memory only — no database read, nothing
+    that blocks; safe from a worker thread (``TurnLogs.running`` snapshots).
+    Never raises."""
+    rows: list[dict[str, Any]] = []
+    if logs is None:
+        return rows
+    try:
+        states = thread_states or {}
+        pending = frozenset(str(i) for i in (pending_ids or ()))
+        for lg in logs.running():
+            thread = str(lg.thread_id or "").strip()[:80]
+            parked = bool(thread) and bool((states.get(thread) or {}).get("waiting"))
+            asks = bool(pending) and bool(lg.open_asks(pending))
+            rows.append({
+                "turn_id": lg.turn_id,
+                "thread_id": thread,
+                "surface": _surface_of(lg),
+                "started_at": _iso_utc(lg.started_at),
+                "waiting": parked or asks,
+            })
+    except Exception:  # noqa: BLE001 — a listing never fails because of this
+        log.warning("could not list running replies", exc_info=True)
+    return rows
+
+
+def reply_counts(logs: "TurnLogs | None") -> dict[str, int]:
+    """How many replies are being written right now, per surface:
+    ``{"chat": n, "build": n}`` — the cheap count ``/health`` and the status
+    lines carry (in memory, no database). Never raises."""
+    out = {s: 0 for s in REPLY_SURFACES}
+    if logs is None:
+        return out
+    try:
+        for lg in logs.running():
+            out[_surface_of(lg)] += 1
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def reply_titles(engine: Any, thread_ids: "list[str]") -> dict[str, str]:
+    """``{thread id: title}`` for the chats / coding sessions whose replies
+    run — ONE primary-key read of the title column (never a message body).
+    BLOCKING: call it from a sync route (FastAPI's threadpool) or a worker
+    thread. Never raises; an unreadable title is left out."""
+    ids = sorted({str(t) for t in thread_ids if str(t or "").strip()})
+    if not ids:
+        return {}
+    try:
+        from sqlmodel import select
+
+        from ..core.models import ChatThreadRecord as T
+
+        with session_scope(engine) as db:
+            return {
+                str(tid): str(title or "")
+                for tid, title in db.exec(select(T.id, T.title).where(T.id.in_(ids)))  # type: ignore[attr-defined]
+            }
+    except Exception:  # noqa: BLE001
+        log.warning("could not read the running replies' titles", exc_info=True)
+        return {}
 
 
 def stop_predicate(get_log: Any) -> Any:

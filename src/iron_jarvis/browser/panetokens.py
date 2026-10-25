@@ -103,12 +103,12 @@ MCP_TOKEN_ENV = "IRONJARVIS_MCP_TOKEN"
 #: Plan section 12.2: what an unknown pane token means after a restart (worded
 #: "terminal token" / "Build terminal" since v1.360.0, the canon's words).
 PANE_TOKEN_EXPIRED_MESSAGE = (
-    "the terminal token expired when Iron Jarvis restarted; relaunch the harness "
-    "from the Build terminal"
+    "the terminal token expired when Iron Jarvis restarted; start the coding tool "
+    "again in the Build terminal"
 )
 MISSING_TOKEN_MESSAGE = (
     "no terminal token: /mcp needs the token Iron Jarvis put in IRONJARVIS_MCP_TOKEN "
-    "when the Build terminal launched this harness"
+    "when the Build terminal started this coding tool"
 )
 INSTALL_BEARER_MESSAGE = (
     "the Iron Jarvis install token is not accepted at /mcp; use the terminal token "

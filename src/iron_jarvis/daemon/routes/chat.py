@@ -2859,6 +2859,27 @@ def register(app: FastAPI, d) -> None:
                 log.warning("media: homing turn %s failed", turn_id, exc_info=True)
         return {"ok": True, "linked": linked, "media_homed": media_homed}
 
+    @app.get("/chat/turns/running")
+    def running_chat_turns() -> dict[str, Any]:
+        """Every reply being written RIGHT NOW (harness gaps, fix 1): one row
+        per running daemon-owned turn — a chat's or a Build coding session's —
+        ``{turn_id, thread_id, surface, started_at, waiting, title}``.
+
+        The ONE truth Running now reads for a coding session's reply (a Build
+        turn has no Session row, so ``GET /sessions`` never lists it, and
+        ``GET /chat/threads`` leaves Build sessions out by design). In memory
+        (``durable_turns.running_replies``) plus ONE primary-key read of the
+        title column — never a message body. A sync route: FastAPI runs it in
+        its threadpool, off the event loop."""
+        rows = _durable.running_replies(
+            getattr(d.platform, "turn_logs", None), TURNS.thread_states(),
+            _approvals(d).pending_ids(),
+        )
+        titles = _durable.reply_titles(d.platform.engine, [r["thread_id"] for r in rows])
+        for r in rows:
+            r["title"] = titles.get(r["thread_id"], "")
+        return {"replies": rows}
+
     @app.get("/chat/turns")
     def list_chat_turns(thread_id: str, limit: int = 3) -> dict[str, Any]:
         """The newest daemon-owned turns of one saved chat (v1.336.0), newest

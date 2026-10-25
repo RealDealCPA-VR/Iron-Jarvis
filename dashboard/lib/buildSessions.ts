@@ -229,8 +229,18 @@ export type BuildMessage = PaneMessage & {
   plan?: unknown;
   /** v1.378.0: on a failed reply, what the error WAS — "refusal" when the
    *  provider's safety check declined the conversation (the screen offers
-   *  Rewind, never Retry). */
+   *  Rewind, never Retry). Harness gaps (fix 2): "sign_in" / "key" — the
+   *  press that fixes it (the chat's `fix_kind`). */
   errorKind?: string;
+  /** Harness gaps (fix 2): the failure's headline alone ("Claude Code isn't
+   *  signed in") — the line reads just it beside a press. */
+  errorTitle?: string;
+  /** Harness gaps (fix 2): the server's own words (masked by the daemon),
+   *  folded under Details. */
+  errorDetail?: string;
+  /** Harness gaps (fix 2): the provider a Sign in / key press is about
+   *  ("claude-cli"). */
+  errorProvider?: string;
   /** v1.384.0: the reply met its STEP LIMIT (raw; `decodeStepLimit`) — the
    *  screen says so and offers "Keep going". */
   stepLimit?: unknown;
@@ -312,6 +322,15 @@ const LINE_KEYS = [
   "error",
   // v1.378.0: what the error WAS ("refusal": a provider's safety check).
   "errorKind",
+  // Harness gaps (fix 2): the headline, the masked technical text (Details)
+  // and the provider a Sign in / key press is about.
+  "errorTitle",
+  "errorDetail",
+  "errorProvider",
+  // Harness gaps (fix 3): the receipt facts the chat keeps on a reply.
+  "adapted",
+  "remembered",
+  "threadRefs",
   "folderRules",
   "approved",
   "refit",

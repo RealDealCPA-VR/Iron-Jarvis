@@ -8,8 +8,9 @@
  * menu), and Everything › Status's "Running" number opens it in place
  * (StatusOverview). The rows are `lib/runningNow.runningItems` over what the
  * daemon already serves — GET /sessions (active/queued runs) and the chat
- * list's running/waiting flags — so there is no new route and no second
- * vocabulary.
+ * list's running/waiting flags — and (harness gaps, fix 1) GET
+ * /chat/turns/running for a Build coding session's reply, which neither of
+ * the other two lists. No second vocabulary.
  *
  * Reads only while it is on screen: mounted = open. The run list is re-read
  * every RUNNING_POLL_MS (visible windows only) and at once whenever a run
@@ -30,11 +31,14 @@ import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import {
   MAX_RUNNING_ROWS,
   RUNNING_POLL_MS,
+  RUNNING_REPLIES_PATH,
   RUNNING_SESSIONS_PATH,
   RUNNING_TICK_MS,
   runningItems,
+  type RunningReplyRow,
   type RunningSessionRow,
 } from "@/lib/runningNow";
+import { announceBuildSessionLink } from "@/lib/buildLinks";
 
 /** The frames that start or end a run (the run half of the orb's
  *  MOOD_EVENT_TYPES). Any NEW one re-reads the list. */
@@ -59,6 +63,11 @@ export function RunningNow({
   headingId?: string;
 }) {
   const sessions = usePolledApi<{ sessions?: RunningSessionRow[] }>(RUNNING_SESSIONS_PATH, RUNNING_POLL_MS);
+  // Harness gaps (fix 1): a Build coding session's reply has no Session row
+  // and is not in the chat list, so it is read from the daemon's running
+  // replies (in memory there). An older Iron Jarvis without the route (404)
+  // lists none, as before.
+  const replies = usePolledApi<{ replies?: RunningReplyRow[] }>(RUNNING_REPLIES_PATH, RUNNING_POLL_MS);
   const chats = useChatList();
   const [now, setNow] = useState(() => Date.now());
   useVisibleInterval(() => setNow(Date.now()), RUNNING_TICK_MS);
@@ -74,17 +83,19 @@ export function RunningNow({
     return e ? `${e.id}|${e.type}|${e.ts}` : "";
   }, [events]);
   const reload = sessions.reload;
+  const reloadReplies = replies.reload;
   const seenRef = useRef(edgeKey);
   useEffect(() => {
     if (edgeKey === seenRef.current) return;
     seenRef.current = edgeKey;
     setNow(Date.now());
     reload();
-  }, [edgeKey, reload]);
+    reloadReplies();
+  }, [edgeKey, reload, reloadReplies]);
 
   const items = useMemo(
-    () => runningItems(sessions.data?.sessions ?? null, chats.threads, now),
-    [sessions.data, chats.threads, now],
+    () => runningItems(sessions.data?.sessions ?? null, chats.threads, now, replies.data?.replies ?? null),
+    [sessions.data, chats.threads, now, replies.data],
   );
   const shown = items.slice(0, MAX_RUNNING_ROWS);
   const more = items.length - shown.length;
@@ -113,7 +124,13 @@ export function RunningNow({
                 <li key={it.key}>
                   <Link
                     href={it.href}
-                    onClick={() => onNavigate?.()}
+                    onClick={() => {
+                      // A coding session pressed while Build is already open:
+                      // Next keeps the page on a query-only change, so the
+                      // session is announced (lib/buildLinks).
+                      if (it.kind === "build") announceBuildSessionLink(it.href);
+                      onNavigate?.();
+                    }}
                     data-testid="running-row"
                     data-kind={it.kind}
                     data-waiting={it.waiting ? "true" : undefined}

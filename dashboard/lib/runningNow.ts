@@ -12,7 +12,14 @@
 //     every other list opens a run (`missionLinks.sessionHref`: a mission on
 //     its mission screen, anything else on its session page);
 //   * GET /chat/threads rows the daemon marks `running` or `waiting`, worded
-//     by `threadStatus.statusWords`, opened at `/chat?thread=<id>`.
+//     by `threadStatus.statusWords`, opened at `/chat?thread=<id>`;
+//   * (harness gaps, fix 1) GET /chat/turns/running rows whose surface is
+//     "build": a Build coding session answering, which has no Session row
+//     and is left out of the chat list on purpose — named by its session's
+//     title, opened on that session in Build (`buildLinks.buildSessionHref`).
+//     The route is the durable turn registry's ONE truth for "which reply is
+//     running"; chats keep coming from the chat list (the same registry's
+//     per-chat flags), so a chat is never listed twice.
 //
 // An origin the vocabulary has no words for (a chat's escalation stamps
 // "chat") is not guessed at: the row names the agent that runs it instead
@@ -22,6 +29,8 @@
 
 import { originLabel } from "@/components/sessions/OriginChip";
 import { agentLabel } from "./agentWorlds";
+import { buildSessionHref } from "./buildLinks";
+import { CODING_SESSION_LABEL } from "./buildWords";
 import { normalizeIso } from "./format";
 import { sessionHref } from "./missionLinks";
 import { statusWords, type ThreadSummary } from "./threadStatus";
@@ -29,6 +38,9 @@ import { statusWords, type ThreadSummary } from "./threadStatus";
 /** The /sessions read the list makes (newest first; an active run older than
  *  this window is rare — a mission's teammates are rows too). */
 export const RUNNING_SESSIONS_PATH = "/sessions?limit=100";
+/** The running replies the list reads (harness gaps, fix 1): a Build coding
+ *  session answering is listed from here. In memory on the daemon. */
+export const RUNNING_REPLIES_PATH = "/chat/turns/running";
 /** How often the open list re-reads the sessions (ms). Only while open. */
 export const RUNNING_POLL_MS = 10_000;
 /** How often the open list re-words its elapsed times (ms). */
@@ -52,9 +64,23 @@ export interface RunningSessionRow {
   waiting_on?: unknown;
 }
 
+/** One row of GET /chat/turns/running (durable_turns.running_replies). */
+export interface RunningReplyRow {
+  turn_id: string;
+  thread_id?: string | null;
+  /** "chat" | "build". */
+  surface?: string | null;
+  /** When the reply started (ISO, UTC). */
+  started_at?: string | null;
+  /** Parked on the user (an approval card, a question). */
+  waiting?: boolean | null;
+  /** The chat's or the coding session's title. */
+  title?: string | null;
+}
+
 export interface RunningItem {
   key: string;
-  kind: "session" | "chat";
+  kind: "session" | "chat" | "build";
   href: string;
   /** Who or what: "Schedule · nightly-brief", "Mission", "Builder", "Chat". */
   who: string;
@@ -158,15 +184,57 @@ function chatItem(t: ThreadSummary): RunningItem {
   };
 }
 
+/** A Build coding session answering (harness gaps, fix 1): "Coding session ·
+ *  12 min", its title under it, opened on that session in Build. */
+function buildItem(r: RunningReplyRow, now: number): RunningItem {
+  const thread = String(r.thread_id ?? "").trim();
+  const waiting = r.waiting === true;
+  const started = startedMs(r.started_at);
+  const parts: string[] = [];
+  if (started != null) parts.push(elapsedWords(now - started));
+  if (waiting) parts.push(statusWords("waiting"));
+  const when = parts.filter(Boolean).join(" · ");
+  const title = (r.title || "").trim();
+  return {
+    key: `b:${r.turn_id}`,
+    kind: "build",
+    href: buildSessionHref(thread),
+    who: CODING_SESSION_LABEL,
+    when,
+    detail: oneLine(title) || `Untitled ${CODING_SESSION_LABEL.toLowerCase()}`,
+    line: when ? `${CODING_SESSION_LABEL} · ${when}` : CODING_SESSION_LABEL,
+    title: title || CODING_SESSION_LABEL,
+    waiting,
+    queued: false,
+  };
+}
+
+/** The Build rows of GET /chat/turns/running, newest start first: only a
+ *  coding session's reply that names its session (a chat's comes from the
+ *  chat list, so it is never listed twice). */
+export function buildReplyItems(
+  replies: RunningReplyRow[] | null | undefined,
+  now: number = Date.now(),
+): RunningItem[] {
+  return (replies ?? [])
+    .filter(
+      (r) => r && typeof r.turn_id === "string" && r.surface === "build" && String(r.thread_id ?? "").trim() !== "",
+    )
+    .sort((a, b) => (startedMs(b.started_at) ?? 0) - (startedMs(a.started_at) ?? 0))
+    .map((r) => buildItem(r, now));
+}
+
 /**
  * Everything running right now, most urgent first: what waits on the user,
- * then what runs (newest start first, chats after runs), then what is queued.
- * `sessions` / `threads` may be null (not read yet) and read as empty.
+ * then what runs (newest start first, chats after runs, coding sessions
+ * after chats), then what is queued. `sessions` / `threads` / `replies` may
+ * be null (not read yet) and read as empty.
  */
 export function runningItems(
   sessions: RunningSessionRow[] | null | undefined,
   threads: ThreadSummary[] | null | undefined,
   now: number = Date.now(),
+  replies: RunningReplyRow[] | null | undefined = null,
 ): RunningItem[] {
   const live = (sessions ?? []).filter(
     (r) => r && typeof r.id === "string" && RUNNING_STATUSES.has(String(r.status ?? "")),
@@ -177,8 +245,17 @@ export function runningItems(
   const chats = (threads ?? [])
     .filter((t) => t && typeof t.id === "string" && (t.running === true || t.waiting === true))
     .map(chatItem);
-  const waiting = [...runs.filter((i) => i.waiting), ...chats.filter((i) => i.waiting)];
-  const running = [...runs.filter((i) => !i.waiting && !i.queued), ...chats.filter((i) => !i.waiting)];
+  const builds = buildReplyItems(replies, now);
+  const waiting = [
+    ...runs.filter((i) => i.waiting),
+    ...chats.filter((i) => i.waiting),
+    ...builds.filter((i) => i.waiting),
+  ];
+  const running = [
+    ...runs.filter((i) => !i.waiting && !i.queued),
+    ...chats.filter((i) => !i.waiting),
+    ...builds.filter((i) => !i.waiting),
+  ];
   const queued = runs.filter((i) => i.queued);
   return [...waiting, ...running, ...queued];
 }

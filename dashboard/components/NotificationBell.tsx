@@ -46,6 +46,7 @@ import {
   buildThreadOf,
   sessionLinkFor,
 } from "@/lib/buildLinks";
+import { CODING_SESSION } from "@/lib/buildWords";
 import { lookingAt, noteWatched, wasWatched } from "@/lib/buildWatching";
 import { CHAT_ASKS_CHANGED_EVENT, chatHereVersion, shownHere, subscribeChatHere } from "@/lib/chatAway";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
@@ -937,7 +938,10 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: Lightbulb,
       title: lesson
         ? `A lesson is suggested${folder ? ` for ${folder}` : ""}`
-        : `A change to a harness file is suggested${folder ? ` for ${folder}` : ""}`,
+        : // Harness gaps (fix 4): the folder's `.ironjarvis/harness/` files
+          // are its coding-session instructions — "harness" is the engine
+          // room's word (lib/buildWords).
+          `A change to the ${CODING_SESSION} instructions is suggested${folder ? ` for ${folder}` : ""}`,
       body: summary.length > 140 ? `${summary.slice(0, 139)}…` : summary,
     };
   }

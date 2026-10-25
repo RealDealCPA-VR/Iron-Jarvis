@@ -276,6 +276,9 @@ describe("usePolledApi: poll ticks never pile up hung requests", () => {
 /* F6 — the MoodOrb stops spinning for runs a daemon restart ended            */
 /* ========================================================================== */
 
+// Moved on purpose (harness gaps, fix 1): the orb's busy words read
+// "Working — something is running" (it also turns for a chat's or a Build
+// coding session's reply now; "a session is in flight" was engine-room).
 describe("MoodOrb: a run a restart cut off stops reading as in flight", () => {
   const mood = () => screen.getByRole("img").getAttribute("aria-label") ?? "";
   function mountOrb() {
@@ -290,7 +293,7 @@ describe("MoodOrb: a run a restart cut off stops reading as in flight", () => {
   it("a sessions.interrupted frame naming the run turns the orb back to idle", () => {
     mountOrb();
     act(() => socket().frame("e1", "session.created", {}, "s1"));
-    expect(mood()).toMatch(/^Thinking/);
+    expect(mood()).toMatch(/^Working/);
     act(() => socket().frame("e2", "sessions.interrupted", { count: 1, session_ids: ["s1"] }));
     expect(mood()).toMatch(/^Idle/);
   });
@@ -300,7 +303,7 @@ describe("MoodOrb: a run a restart cut off stops reading as in flight", () => {
     H.replies["/sessions/s2?transcript=0"] = { session: { id: "s2", status: "failed" }, transcript: null };
     mountOrb();
     act(() => socket().frame("e1", "session.created", {}, "s2"));
-    expect(mood()).toMatch(/^Thinking/);
+    expect(mood()).toMatch(/^Working/);
     expect(H.gets).toEqual([]); // nothing is read while connected
     act(() => socket().drop()); // the daemon restarts…
     await act(async () => {
@@ -328,7 +331,7 @@ describe("MoodOrb: a run a restart cut off stops reading as in flight", () => {
     // SAME session id. The answer the orb got for the OLD start must not
     // silence the new one.
     act(() => socket().frame("e7", "session.created", {}, "s4"));
-    expect(mood()).toMatch(/^Thinking/);
+    expect(mood()).toMatch(/^Working/);
     expect(H.gets).toEqual(["/sessions/s4?transcript=0"]); // and still read nothing while connected
   });
 
@@ -344,6 +347,6 @@ describe("MoodOrb: a run a restart cut off stops reading as in flight", () => {
     act(() => socket().open());
     await act(async () => {});
     expect(H.gets).toEqual(["/sessions/s3?transcript=0"]);
-    expect(mood()).toMatch(/^Thinking/);
+    expect(mood()).toMatch(/^Working/);
   });
 });

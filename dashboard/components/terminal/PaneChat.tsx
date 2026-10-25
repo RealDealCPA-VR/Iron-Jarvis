@@ -77,6 +77,7 @@ import {
   paneSendClass,
 } from "@/components/terminal/paneChatLook";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
+import { receiptFacts } from "@/lib/receiptFacts";
 import { DoorsStrip } from "@/components/chat/DoorsStrip";
 // v1.329.0 (calm chat wave 5): the chat page's own work line, changes line
 // and permission chip, fed from the pane's messages by a small adapter
@@ -945,6 +946,18 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         ...(res.usage ? { usage: res.usage } : {}),
         ...(res.documents?.length ? { documents: res.documents } : {}),
         ...(res.doors?.length ? { doors: res.doors } : {}),
+        // Harness gaps (fix 3): the rest of the chat page's receipt — the
+        // approvals given, the older messages left out to fit, a kept
+        // preference, the folder's rules and the earlier chats read —
+        // decoded the chat page's way and saved under its names, so they
+        // show live AND after the pane is reopened.
+        ...receiptFacts({
+          approved: res.approved,
+          refit: res.refit,
+          remembered: res.remembered,
+          folderRules: res.folderRules,
+          threadRefs: res.threadRefs,
+        }),
         // v1.329.0 (kept LAST, the receipt rule): the settle time and the
         // turn's steps, timing and thinking, for the work line and the
         // changes line.
@@ -1246,6 +1259,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                   onOpenDocument={(path) => void openDoc(path)}
                   undoFor={undoStateFor}
                   onUndo={(actionId, path) => undoNewestWrite(actionId, path, i)}
+                  // Harness gaps (fix 3): every receipt fact the chat page
+                  // passes, read off the saved reply (decoded again: the
+                  // thread crossed a JSON boundary).
+                  {...receiptFacts(m)}
                 />
               </div>
               <DoorsStrip doors={m.doors} />
