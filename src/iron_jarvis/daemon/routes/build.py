@@ -795,6 +795,13 @@ class _ReplyWatch:
             sl = done.get("step_limit")
             if isinstance(sl, dict) and isinstance(sl.get("limit"), int) and not isinstance(sl.get("limit"), bool):
                 line["stepLimit"] = {"limit": int(sl["limit"]), "safety": bool(self.no_limit)}
+            # Part 3, Phase 2: what the reply's FINISH CHECK did (present only
+            # when it ran) — the work line's "Checked: tests passed, …".
+            from ...harness.finish import saved_record
+
+            fin = saved_record(done.get("finish"))
+            if fin is not None:
+                line["finish"] = fin
             if done.get("trust") and done.get("trust") != "full":
                 line["trust"] = done.get("trust")
                 line["trustReason"] = done.get("trust_reason") or ""

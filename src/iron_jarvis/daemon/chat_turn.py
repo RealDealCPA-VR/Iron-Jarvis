@@ -5438,6 +5438,88 @@ def harness_check_runner(d, ctx, overrides: dict[str, str], grants, gate, trust_
     return run
 
 
+# --------------------------------------------------------------------------- #
+# THE FINISH CHECK (IJ harness part 3, Phase 2 — harness/finish). MIRROR NOTE
+# (lock-step): routes/chat.py's stream lane calls every helper below at the
+# same seams as run_chat_turn.
+# --------------------------------------------------------------------------- #
+
+
+async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws) -> Any:
+    """The reply's finish check (``harness/finish.FinishCheck``), or None:
+    only a harness turn of a Build session's own (``build:<id>``) in act mode,
+    in a folder that did not turn it off. The ledger mark it measures "this
+    reply" from is read off the loop, before any tool of the reply runs."""
+    if harness_turn is None:
+        return None
+    from ..harness import finish as _finish
+
+    try:
+        from .routes.build import CONTINUE_TEXT as _carry_on
+    except Exception:  # noqa: BLE001 — the route module is optional here
+        _carry_on = ""
+    return await _finish.start(
+        engine=getattr(d.platform, "engine", None),
+        home=getattr(getattr(d.platform, "config", None), "home", None),
+        event_bus=getattr(d.platform, "event_bus", None),
+        session_id=str(tool_session or ""),
+        folder=tool_ws,
+        messages=list(getattr(body, "messages", None) or []),
+        harness=harness_turn,
+        carry_on=[_carry_on] if _carry_on else [],
+    )
+
+
+#: A stand-in tool object that makes :func:`_fence_tool_output` fence and
+#: scan a test run's output for the finish note (its text is the program's,
+#: and the note is a USER message — higher standing than a tool result).
+_FINISH_UNTRUSTED = SimpleNamespace(returns_untrusted_content=True)
+
+
+def finish_fence(d, trust_state: dict[str, Any], overrides: dict[str, str], tool_name: str):
+    """``async fence(text)`` for the finish note: the lane's own fence + scan
+    (a flagged output TAINTS the reply, exactly as a flagged tool result)."""
+
+    async def fence(text: str) -> str:
+        return str(await _fence_tool_output(
+            d, trust_state, overrides, tool_name, _FINISH_UNTRUSTED, str(text or ""),
+        ))
+
+    return fence
+
+
+def finish_invoke(d, ctx, overrides: dict[str, str], grants, gate):
+    """``async invoke(name, args)`` for the finish check's own follow-up
+    calls (``process_read`` / ``process_stop`` of a test run it started
+    under the GPT dialect): an ordinary call THROUGH THE REGISTRY — the
+    armed-set gate, the permission engine with the reply's current grants,
+    the ledger (``called_as`` "finish check") and the tool deadline."""
+    import dataclasses as _dc
+
+    from ..harness.finish import CALLED_AS
+
+    try:
+        own_ctx = _dc.replace(ctx, called_as=CALLED_AS)
+    except Exception:  # noqa: BLE001
+        own_ctx = ctx
+
+    async def invoke(name: str, args: dict[str, Any]):
+        return await d.platform.registry.invoke(
+            name, args, own_ctx, d.platform.permissions, overrides,
+            session_allow=set(grants()), allowed_names=set(gate),
+            deadline_s=chat_tool_deadline(d.platform),
+        )
+
+    return invoke
+
+
+def finish_low_trust(trust_state: dict[str, Any]) -> bool:
+    """The finish check runs no command in low trust (a test command is the
+    folder's own code, and the folder is untrusted content then) — the same
+    rule as a folder's plugin checks (:func:`harness_check_gate`)."""
+    return bool(trust_state.get("low") or trust_state.get("tainted"))
+
+
 def harness_check_gate(trust_state: dict[str, Any]) -> dict[str, Any]:
     """``{may_run, why_not}`` for a folder's plugin checks this turn: never
     in low trust (a check is the folder's own command, and the folder is
@@ -8233,6 +8315,14 @@ async def run_chat_turn(
         )
         if armed else None
     )
+    # THE FINISH CHECK (part 3, Phase 2 — harness/finish): a Build reply that
+    # changed files is checked once before it ends. None on every other turn,
+    # which then runs exactly as before. MIRROR NOTE (lock-step):
+    # routes/chat.py's stream lane builds it at the same seam.
+    _finish = (
+        await finish_for_turn(d, body, _harness, tool_session=_tool_session, tool_ws=tool_ws)
+        if armed and _harness is not None else None
+    )
     # (provider_choice/model_choice were resolved above the attachments —
     # budgets needed them early; the values are identical.)
     # Accumulate token usage + completion count ACROSS the (up to 4) tool
@@ -8306,6 +8396,10 @@ async def run_chat_turn(
             completions += 1
             _thinking_parts.append(_thinking_of(route.response))
             _truncated = _truncated_by(route.response)
+            if _finish is not None:
+                # The first answer after the finish note is the model's
+                # point-by-point answer (lock-step: the stream lane).
+                _finish.heard(route.response.text or "")
             calls = route.response.tool_calls or []
             # IJ HARNESS (v1.366.0) — TRANSLATION AT THE BOUNDARY: the model's
             # calls (in its dialect) become the REAL tools before anything
@@ -8358,6 +8452,32 @@ async def run_chat_turn(
                 msgs.append(LLMMessage(role="assistant", content=route.response.text or ""))
                 msgs.append(LLMMessage(role="user", content=TEXT_TOOL_CALL_NUDGE))
                 continue
+            # THE FINISH CHECK (part 3, Phase 2): the model ends a Build reply
+            # that changed files — ONCE, its tests run as this round's own
+            # calls (the same gate and ledger as any call below; this lane
+            # cards nothing) and ONE note goes to the model, answered in the
+            # next round. None = it does not run: the reply ends exactly as
+            # before. MIRROR NOTE (lock-step): routes/chat.py's stream loop.
+            _finish_round = False
+            if not calls and _finish is not None:
+                _fin_text = route.response.text or ""
+                _fin_calls = await _finish.prepare(
+                    reply=_fin_text, round_index=_round, rounds=_rounds,
+                    truncated=_truncated, low_trust=finish_low_trust(_trust_state),
+                )
+                if _fin_calls is not None:
+                    if _fin_text.strip():
+                        msgs.append(LLMMessage(
+                            role="assistant", content=_fin_text,
+                            raw_blocks=list(getattr(route.response, "raw_blocks", None) or []),
+                        ))
+                    if not _fin_calls:
+                        msgs.append(LLMMessage(role="user", content=await _finish.note(
+                            finish_fence(d, _trust_state, overrides, _finish.carrier),
+                        )))
+                        continue
+                    calls = _fin_calls
+                    _finish_round = True
             if not calls or not armed:
                 break
             if _round == _rounds - 1:
@@ -8385,13 +8505,16 @@ async def run_chat_turn(
                         "this needs more steps than a quick answer allows"
                     )
                 break
-            msgs.append(LLMMessage(role="assistant",
-                                   content=route.response.text,
-                                   # v1.366.0: what the MODEL called (its dialect's
-                                   # names) — `calls` itself on every other turn.
-                                   tool_calls=_model_calls,
-                                   # v1.263.0 — lock-step with the stream lane.
-                                   raw_blocks=list(getattr(route.response, "raw_blocks", None) or [])))
+            if not _finish_round:
+                # (The finish check's own round put the model's reply in
+                # above, as words: the model called nothing.)
+                msgs.append(LLMMessage(role="assistant",
+                                       content=route.response.text,
+                                       # v1.366.0: what the MODEL called (its dialect's
+                                       # names) — `calls` itself on every other turn.
+                                       tool_calls=_model_calls,
+                                       # v1.263.0 — lock-step with the stream lane.
+                                       raw_blocks=list(getattr(route.response, "raw_blocks", None) or [])))
             # v1.311.0 (chat-tools-run-serially): the round's allow-listed
             # readers run TOGETHER, then every other call serially in model
             # order, through the ONE runner both lanes use
@@ -8607,7 +8730,10 @@ async def run_chat_turn(
                             # (lock-step): routes/chat.py's stream loop
                             # carries the same append — edit both or neither.
                             door_entries.append(failure_door_for(tc.name, tc.arguments, result))
-                    if not ran:
+                    # (Part 3, Phase 2: the finish check's own test run is not
+                    # the MODEL's call — its failure never counts toward the
+                    # model's repeated-call limit. Lock-step: the stream lane.)
+                    if not ran and not (_finish is not None and _finish.owns(tc)):
                         _call_key = _keys[_i]
                         _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
                         # SECOND FAILURE (v1.344.0, M2): the model-facing tool
@@ -8716,6 +8842,27 @@ async def run_chat_turn(
                                 **harness_check_gate(_trust_state),
                             )
                         content = _harness.model_text(tc, content)
+                    if _finish is not None:
+                        # THE FINISH CHECK (part 3, Phase 2) — lock-step with
+                        # the stream lane: its own test run is read into the
+                        # finish note (never a tool message: the model did not
+                        # call it); a command the MODEL ran is noted.
+                        _fin_refused = bool(
+                            _refused[_i]
+                            or (result is not None and not ran and refusal_label(result.error or ""))
+                        )
+                        if _finish.owns(tc):
+                            if _refused[_i]:
+                                _finish.refused_call(tc, _refused[_i])
+                            else:
+                                await _finish.take(
+                                    tc, result, str(content), refused=_fin_refused,
+                                    invoke=finish_invoke(
+                                        d, ctx, overrides, lambda: armed_grant, set(armed),
+                                    ),
+                                )
+                            continue
+                        _finish.observe(tc, result, refused=_fin_refused)
                     msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                            name=(_harness.called_as(tc) if _harness is not None else tc.name),
                                            content=str(content)[:12000],
@@ -8725,6 +8872,13 @@ async def run_chat_turn(
                                            images=tool_result_images(result, ran)))
                     if msgs[-1].images:
                         trim_tool_images(msgs)
+            if _finish_round:
+                # The finish check's tests ran (or were refused): its ONE note
+                # goes to the model now; the next round is its answer.
+                # Lock-step: the stream lane.
+                msgs.append(LLMMessage(role="user", content=await _finish.note(
+                    finish_fence(d, _trust_state, overrides, _finish.carrier),
+                )))
     except Exception as exc:  # noqa: BLE001 — honest, human error
         # The rounds that DID complete were still billed — persist their
         # usage before surfacing the failure, or a round-2 error silently
@@ -8763,6 +8917,11 @@ async def run_chat_turn(
     # construction and must never trigger (or be eaten by) a rewrite.
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
     model_text = route.response.text or ""
+    # THE FINISH CHECK (part 3, Phase 2): the reply is what the model wrote
+    # before the check, then its answer to it. MIRROR NOTE (lock-step): the
+    # stream lane combines at the same point.
+    if _finish is not None:
+        model_text = _finish.combine(model_text)
     # FINAL ANSWER (v1.246.0): the model was reached but wrote nothing — ask
     # it once, without tools, for the answer. Before the language guard, so
     # the answer is checked like any other; billed below like any other.
@@ -9111,4 +9270,9 @@ async def run_chat_turn(
     # queued for it and none can be left unread. MIRROR NOTE (lock-step): a
     # change that makes POST /chat steerable must close the queue and add
     # the key exactly as routes/chat.py's stream lane does.
+    # THE FINISH CHECK (part 3, Phase 2): LAST, and present ONLY when the
+    # check ran this reply. MIRROR NOTE (lock-step): the stream done-frame
+    # carries the same conditional key.
+    if _finish is not None and _finish.ran:
+        out["finish"] = await _finish.record()
     return out

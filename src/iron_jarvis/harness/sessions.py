@@ -128,6 +128,10 @@ LINE_KEYS: tuple[str, ...] = (
     # to (``harness/claude_commands.expand``) — what the model was sent and
     # what a later turn's history reads in place of the typed line.
     "command", "commandText",
+    # Part 3, Phase 2: on a reply, what its FINISH CHECK did
+    # (``harness/finish.saved_record``: tests, command, removed, kept,
+    # points, unmet, after[, why]) — the work line's "Checked: …".
+    "finish",
 )
 
 

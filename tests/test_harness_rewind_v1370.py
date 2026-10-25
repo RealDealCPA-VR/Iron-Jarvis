@@ -69,12 +69,17 @@ async def _turn(app, sid: str, text: str, turn_id: str) -> list:
 
 def _two_turns(app, work):
     """Turn 1 creates hello.py and edits app.py (x = 1 -> 2); turn 2 edits
-    app.py again (2 -> 3), creates notes.md and runs a command."""
+    app.py again (2 -> 3), creates notes.md and runs a command.
+
+    Part 3, Phase 2: a reply that changed files gets ONE more model round —
+    its finish check — so turn one's script answers it ("Checked: …") before
+    turn two's moves begin (turn two's is the script's own "Done.")."""
     return wire(app, Script([
         [ToolCall(id="a1", name="Write", arguments={"file_path": "hello.py", "content": "print(1)\n"}),
          ToolCall(id="a2", name="Edit", arguments={
              "file_path": "app.py", "old_string": "x = 1", "new_string": "x = 2"})],
         "Turn one done.",
+        "Checked: nothing needed changing.",
         [ToolCall(id="b1", name="Edit", arguments={
             "file_path": "app.py", "old_string": "x = 2", "new_string": "x = 3"}),
          ToolCall(id="b2", name="Write", arguments={"file_path": "notes.md", "content": "# notes\n"}),
@@ -169,8 +174,12 @@ async def test_rewinding_to_a_later_turn_keeps_the_earlier_one(app, work):
         await _turn(app, sid, "carry on", "t3")
     finally:
         build_routes.stream_chat_turn = saved
+    # (Turn one's reply line keeps its finish check's answer after its words —
+    # part 3, Phase 2.)
     assert [(m.role, m.content) for m in seen[0].messages] == [
-        ("user", "make hello and bump x"), ("assistant", "Turn one done."), ("user", "carry on"),
+        ("user", "make hello and bump x"),
+        ("assistant", "Turn one done.\n\nChecked: nothing needed changing."),
+        ("user", "carry on"),
     ]
 
 

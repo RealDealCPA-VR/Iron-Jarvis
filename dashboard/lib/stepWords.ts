@@ -289,6 +289,66 @@ export function stepPhraseText(p: StepPhrase): string {
   return p.hint ? `${p.words} · ${p.hint}` : p.words;
 }
 
+/**
+ * IJ harness part 3, Phase 2: what a Build reply's FINISH CHECK did, as the
+ * daemon kept it on the reply line (`harness/finish.saved_record`; decoded by
+ * lib/buildSessions `decodeFinish`). `tests` is the check's own run, decided
+ * by the command's own exit status; `after` the last test run the model made
+ * after the check's note ("" when it made none).
+ */
+export interface FinishRecord {
+  tests: "passed" | "failed" | "none" | "not_run";
+  command: string;
+  removed: number;
+  kept: number;
+  points: number;
+  unmet: number;
+  after: "" | "passed" | "failed";
+  why?: string;
+}
+
+/** The finish check's ONE sentence on the work line: "Checked: tests passed,
+ *  1 scratch file removed", "Checked: tests failed, then fixed". Built only
+ *  from the record (never a claim the record does not make). */
+export function finishWords(f: FinishRecord): string {
+  const parts: string[] = [];
+  if (f.tests === "passed") {
+    parts.push(f.after === "failed" ? "tests passed, then failed" : "tests passed");
+  } else if (f.tests === "failed") {
+    parts.push(f.after === "passed" ? "tests failed, then fixed" : "tests failed");
+  } else if (f.tests === "not_run") {
+    parts.push(
+      f.after === "passed"
+        ? "tests passed after the check"
+        : f.after === "failed"
+          ? "tests failed after the check"
+          : "tests not run",
+    );
+  } else {
+    parts.push("no tests found");
+  }
+  if (f.removed > 0) parts.push(`${plural(f.removed, "scratch file")} removed`);
+  if (f.kept > 0) parts.push(`${plural(f.kept, "new file")} kept`);
+  if (f.unmet > 0) parts.push(`${plural(f.unmet, "point")} needed more work`);
+  return `Checked: ${parts.join(", ")}`;
+}
+
+/** Does the finish line carry the warn mark? Only when the tests were last
+ *  seen FAILING (never fixed after), the same theme token as a failed step. */
+export function finishWarn(f: FinishRecord): boolean {
+  if (f.after === "failed") return true;
+  return f.tests === "failed" && f.after !== "passed";
+}
+
+/** The finish line's hover: the command it ran, and why the tests did not
+ *  run when they did not. */
+export function finishTitle(f: FinishRecord): string | undefined {
+  const bits: string[] = [];
+  if (f.command) bits.push(`Ran: ${f.command}`);
+  if (f.tests === "not_run" && f.why) bits.push(`Not run: ${f.why}`);
+  return bits.length ? bits.join("\n") : undefined;
+}
+
 /** Human wording for an agent run's phase (v1.149.0). An unknown phase falls
  *  through to its raw name rather than a generic label — a new phase the
  *  daemon adds should read oddly, not silently look like every other one.

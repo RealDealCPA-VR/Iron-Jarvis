@@ -208,6 +208,7 @@ import {
   archiveSession,
   decodeAskResolved,
   decodeAskUser,
+  decodeFinish,
   decodeSessionView,
   decodeStepLimit,
   deleteSession,
@@ -2232,6 +2233,8 @@ export function HarnessSession({
                 <WorkLine
                   {...paneWorkInput(m)}
                   cutOff={m.truncated ? "truncated" : m.interrupted ? "interrupted" : null}
+                  // Part 3, Phase 2: the reply's finish check, in one sentence.
+                  finish={decodeFinish(m.finish)}
                 />
                 {/* v1.372.0: the helper agents this reply's turn started. */}
                 <SavedHelperRows raw={m.helpers} />
