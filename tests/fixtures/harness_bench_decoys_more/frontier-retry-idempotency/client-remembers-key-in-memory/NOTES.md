@@ -1,0 +1,2 @@
+Retries correctly (one key, 3 attempts, timeout/503 only), and remembers the key of a charge that gave up INSIDE the client object; invoices.py is untouched.
+Breaks billing/server_api.md "Idempotency" (a batch job that is run again must "keep the key with your own record ... make it from the invoice number") and the invoices.py docstring (the invoices are the saved record; a run that stopped is run again by a new run of the job, with a new client): the restarted run charges the stopped invoice a second time.

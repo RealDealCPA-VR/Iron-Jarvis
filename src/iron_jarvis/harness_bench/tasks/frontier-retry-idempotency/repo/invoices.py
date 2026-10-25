@@ -12,11 +12,13 @@ record — the caller saves it):
   client's retries) STOPS the run: the exception is raised, this invoice stays
   ``"open"``, and the invoices after it are not touched.
 
-Runs are RESUMABLE. After a run stopped, fix the cause and call
-``run_invoices`` again with the same invoices: paid and declined invoices are
-skipped, and no invoice is ever charged twice — not even the one that stopped
-the run, whose charge may have reached the server before the connection
-failed (``billing/server_api.md``, "Idempotency").
+Runs are RESUMABLE. After a run stopped, fix the cause and run the job again:
+the new run (a new process, with a new ``PaymentsClient``) calls
+``run_invoices`` with the same, saved invoices — nothing else carries over
+from the run that stopped. Paid and declined invoices are skipped, and no
+invoice is ever charged twice — not even the one that stopped the run, whose
+charge may have reached the server before the connection failed
+(``billing/server_api.md``, "Idempotency").
 """
 
 from __future__ import annotations

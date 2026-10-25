@@ -1,8 +1,9 @@
 # IJ-BENCH-HIDDEN-CHECK frontier-debug-price-server
-"""Hidden check: the final replay ran clean against the final code and the
-server was stopped with /shutdown; the fixed server answers OTHER traffic
-(currencies, quantities, spellings) right, computes each distinct price exactly
-once, also under simultaneous requests; the recorded files are unchanged."""
+"""Hidden check: the final replay ran clean against the final code and every
+server that ran was stopped with /shutdown; the fixed server answers OTHER
+traffic (currencies, quantities, spellings) right, computes each distinct price
+exactly once — also after many hundreds of distinct prices (no cache that
+forgets) and under simultaneous requests; the recorded files are unchanged."""
 import hashlib
 import json
 import os
@@ -140,6 +141,17 @@ BURST_TWO = [
     ["/price?sku=D405&tier=regular&currency=EUR&qty=300", {"currency": "EUR", "qty": 300, "sku": "D405", "tier": "regular", "total": "2475.00", "unit": "8.25"}],
 ]
 BURST_TWO_DISTINCT = 3
+
+#: Many distinct prices (PERFORMANCE.md: no expiry; computed exactly once while
+#: the server runs) — far more than a small bounded cache (functools.lru_cache's
+#: default keeps 128) holds. All of them are asked for, then all of them AGAIN in
+#: the same order and spelled differently: nothing may be computed a second time.
+MANY_SKUS = ("A100", "B220", "C310", "D405", "E512")
+MANY_TIERS = ("regular", "silver", "gold", "platinum")
+MANY_CURRENCIES = ("USD", "EUR", "GBP", "CHF", "JPY")
+MANY_QTYS = (1, 4, 10, 37, 120, 250)
+MANY = [(sku, tier, currency, qty) for sku in MANY_SKUS for tier in MANY_TIERS
+        for currency in MANY_CURRENCIES for qty in MANY_QTYS]
 
 
 def _sha_of(*names, folder=HERE):
@@ -291,8 +303,17 @@ class HiddenPriceServer(unittest.TestCase):
         with open(path, encoding="utf-8") as fh:
             lines = [line.strip() for line in fh if line.strip()]
         starts = [i for i, line in enumerate(lines) if line.startswith("listening ")]
+        stops = [i for i, line in enumerate(lines) if line == "stopped"]
         self.assertTrue(starts, "server.log has no 'listening' line")
         self.assertEqual(lines[-1], "stopped", "the last server run did not end with /shutdown (server.log)")
+        # Every server run appends one 'listening' line when it starts and one
+        # 'stopped' line when /shutdown stops it (README.md): a start with no
+        # stop is a server that was left running, or ended another way.
+        self.assertEqual(
+            len(stops), len(starts),
+            f"server.log shows {len(starts)} servers started but {len(stops)} stopped with /shutdown: "
+            "every server must end with /shutdown (task.md); one was left running or ended another way",
+        )
 
     def test_c_other_traffic_gets_the_right_answers(self):
         wrong = []
@@ -331,6 +352,32 @@ class HiddenPriceServer(unittest.TestCase):
         self.assertEqual(
             second, 1 + BURST_TWO_DISTINCT,
             f"simultaneous requests for {BURST_TWO_DISTINCT} prices computed {second - first} prices",
+        )
+
+    def test_g_hundreds_of_distinct_prices_are_each_computed_once(self):
+        with _Server() as server:
+            first = {}
+            for sku, tier, currency, qty in MANY:
+                status, body = _get(server.port, f"/price?sku={sku}&tier={tier}&currency={currency}&qty={qty}")
+                self.assertEqual(status, 200, (sku, tier, currency, qty, body))
+                self.assertEqual(
+                    {k: body.get(k) for k in ("sku", "tier", "currency", "qty")},
+                    {"sku": sku, "tier": tier, "currency": currency, "qty": qty},
+                    "the answer is not for the price that was asked",
+                )
+                first[(sku, tier, currency, qty)] = body
+            after_first = server.compute_calls()
+            for sku, tier, currency, qty in MANY:
+                path = f"/price?sku={sku.lower()}&tier={tier.title()}&currency={currency.lower()}&qty=0{qty}"
+                status, body = _get(server.port, path)
+                self.assertEqual((status, body), (200, first[(sku, tier, currency, qty)]), path)
+            calls = server.compute_calls()
+        self.assertEqual(after_first, len(MANY),
+                         f"{len(MANY)} distinct prices were asked for, but _compute_price ran {after_first} times")
+        self.assertEqual(
+            calls, len(MANY),
+            f"{len(MANY)} distinct prices were asked for, then each again: PERFORMANCE.md says each is computed "
+            f"exactly once while the server runs (no expiry), but _compute_price ran {calls} times",
         )
 
     def test_f_the_recorded_files_are_unchanged(self):

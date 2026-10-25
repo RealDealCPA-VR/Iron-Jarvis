@@ -145,6 +145,29 @@ assert again.notes == ("read 'pcs' as 'each'",), again.notes
 print("ok")
 """
 
+#: units.resolve itself (units.py: it returns the unit "and the notes of this
+#: reading"), called the way any caller of the public function may call it,
+#: after other readings: its notes are its own reading's, and a list it
+#: returned is not changed by a later reading.
+PROBE_RESOLVE = r"""
+import os, sys
+sys.path.insert(0, os.getcwd())
+from inventory import units
+units.parse_quantity("4 pcs")
+units.parse_quantity("1 dz")
+units.convert(24, "pcs", "dozen")
+units.dimension("ea")
+key, notes = units.resolve("kg")
+assert (key, list(notes)) == ("kg", []), (key, notes)
+key, dz_notes = units.resolve("dz")
+assert (key, list(dz_notes)) == ("dozen", ["read 'dz' as 'dozen'"]), (key, dz_notes)
+units.resolve("ea")
+units.resolve("kg")
+units.parse_quantity("2 metre")
+assert list(dz_notes) == ["read 'dz' as 'dozen'"], ("a later reading changed the notes resolve('dz') returned", dz_notes)
+print("ok")
+"""
+
 PROBE_BASE_PRICE = r"""
 import os, sys
 sys.path.insert(0, os.getcwd())
@@ -191,6 +214,9 @@ class EachCauseOnItsOwn(unittest.TestCase):
 
     def test_notes_belong_to_one_reading(self):
         self._probe(PROBE_NOTES, "the notes of one reading included notes of earlier readings")
+
+    def test_resolve_returns_the_notes_of_its_own_reading(self):
+        self._probe(PROBE_RESOLVE, "units.resolve returned notes that were not those of its own reading")
 
     def test_a_new_base_price_is_used_at_once(self):
         self._probe(PROBE_BASE_PRICE, "a price read before set_price stayed in use after it")

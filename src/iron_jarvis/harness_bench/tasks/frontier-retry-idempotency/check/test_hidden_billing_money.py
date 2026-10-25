@@ -244,14 +244,17 @@ class InvoiceRuns(unittest.TestCase):
         with self.assertRaises(TransportTimeout):
             run_invoices(self.client, invoices)
         self.assertEqual(invoices[0].status, "paid")
-        self.assertNotIn(invoices[1].status, ("paid", "declined"))
+        self.assertEqual(invoices[1].status, "open",
+                         "the invoice whose charge stopped the run must stay \"open\" (invoices.py)")
         self.assertEqual(invoices[2].status, "open", "the run must stop at the invoice that failed")
         self.assertEqual(_keys(self.server, "cus_c"), [], "the run must stop at the invoice that failed")
         self.assertEqual(len(_keys(self.server, "cus_b")), 3)
         self.assertEqual(len(self.server.charges_for("cus_b")), 1)
 
-        # The network is back: run the same invoices again.
-        summary = run_invoices(self.client, invoices)
+        # The network is back: the job is run again. A new run is a new
+        # process with a NEW client (invoices.py): only the saved invoices
+        # carry over, so a key kept anywhere else is gone.
+        summary = run_invoices(PaymentsClient(self.server), invoices)
         self.assertEqual(sorted(summary.paid), ["INV-5002", "INV-5003"])
         self.assert_one_charge_each(invoices)
         self.assertEqual(len(self.server.ledger), 3)
