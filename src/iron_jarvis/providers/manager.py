@@ -742,7 +742,7 @@ class ProviderManager:
         except Exception:  # noqa: BLE001 — nothing known, never a crash
             return None
 
-    def reply_cap(self, name: str, model: str | None = None) -> int | None:
+    def reply_cap(self, name: str, model: str | None = None, *, stream: bool = True) -> int | None:
         """The reply budget's cap for a BUDGETED provider (the most one reply
         asks for), else ``None`` — the history planner then keeps its classic
         answer reserve. Built through :meth:`get` (cached; a local endpoint's
@@ -751,7 +751,9 @@ class ProviderManager:
             return None
         try:
             fn = getattr(self.get(name, model or None), "reply_cap", None)
-            return fn() if callable(fn) else None
+            # review: a not-streamed request's cap (`stream=False`) is
+            # `reply_budget.NON_STREAM_CAP` at most.
+            return fn(stream=stream) if callable(fn) else None
         except Exception:  # noqa: BLE001 — unknown provider: no budget
             return None
 

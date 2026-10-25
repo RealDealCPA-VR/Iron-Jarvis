@@ -456,6 +456,9 @@ class AnthropicFleetAdapter(LLMAdapter):
         tool_defs = to_tools(tools)
         limit, raw_prompt = self._reply_budget.plan(
             self.model, system=system or "", wire=wire, tools=tool_defs or None,
+            # review: a not-streamed request asks at most the old 4,096
+            # (`reply_budget.NON_STREAM_CAP`).
+            stream=stream,
         )
         body: dict[str, Any] = {
             "model": self.model,
@@ -470,9 +473,9 @@ class AnthropicFleetAdapter(LLMAdapter):
             body["stream"] = True
         return body, raw_prompt
 
-    def reply_cap(self) -> int | None:
+    def reply_cap(self, stream: bool = True) -> int | None:
         """The reply budget's cap (v1.387.0; ``chat_turn._answer_reserve``)."""
-        return self._reply_budget.cap(self.model)
+        return self._reply_budget.cap(self.model, stream=stream)
 
     def _budget_retry_body(
         self, body: dict[str, Any], resp: Any, key: str, raw_prompt: int

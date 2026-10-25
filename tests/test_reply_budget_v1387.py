@@ -110,7 +110,10 @@ async def test_the_users_glm_endpoint_asks_for_a_budget_that_fits_the_work(tmp_p
         await _ask(platform, stream=stream)
         body = srv.chats()[-1]
     assert body["model"] == MODEL
-    assert body["max_tokens"] == 32_768
+    # Review (moved on purpose): a request that is NOT streamed keeps the old
+    # 4,096 (`reply_budget.NON_STREAM_CAP` — it has 60 seconds to arrive
+    # whole); the streamed lanes ask the full budget.
+    assert body["max_tokens"] == (32_768 if stream else 4_096)
     assert "max_completion_tokens" not in body
 
 
@@ -124,7 +127,8 @@ async def test_a_stated_output_limit_is_preferred(tmp_path, stream):
         platform = _platform(tmp_path, srv.url)
         _read_table(platform)
         await _ask(platform, stream=stream)
-        assert srv.chats()[-1]["max_tokens"] == 16_384
+        # (review: not streamed — at most the old 4,096)
+        assert srv.chats()[-1]["max_tokens"] == (16_384 if stream else 4_096)
     # Saved beside the other capabilities — never an upstream address (the
     # entry carries the verdicts only), never a key.
     path = platform.fleet._routes_path
@@ -142,11 +146,14 @@ async def test_an_unknown_window_is_planned_as_the_default_and_never_below_the_o
     the old 4,096."""
     with FakeEndpoint(lambda b: text_reply("ok")) as srv:
         platform = _platform(tmp_path, srv.url)
-        await _ask(platform)
+        await _ask(platform, stream=True)  # review: the streamed lanes' budget
         body = srv.chats()[-1]
+        await _ask(platform)  # ...and a request that is not streamed
+        not_streamed = srv.chats()[-1]
     prompt = srv.prompt_tokens(body)
     assert 4096 < body["max_tokens"] <= 32_000 - prompt
     assert body["max_tokens"] >= 32_000 - prompt - max(256, prompt // 10) - 64
+    assert not_streamed["max_tokens"] == 4_096
 
 
 async def test_a_small_known_window_asks_only_what_fits(tmp_path):
@@ -228,7 +235,11 @@ async def test_a_budget_refused_in_words_without_a_number_falls_back_to_the_old_
         second = await _ask(platform, stream=stream)
         asked = [b["max_tokens"] for b in srv.chats()]
     assert first.text == "ok" and second.text == "ok"
-    assert asked[0] > 8_192 and asked[1:] == [4_096, 4_096], asked
+    if stream:
+        assert asked[0] > 8_192 and asked[1:] == [4_096, 4_096], asked
+    else:
+        # review: a not-streamed request never asked more than 4,096
+        assert asked == [4_096, 4_096], asked
 
 
 async def test_a_prompt_that_itself_does_not_fit_is_raised_for_the_lanes_refit(tmp_path):
@@ -438,16 +449,31 @@ async def test_a_long_conversation_on_a_large_window_still_leaves_a_full_answer(
         ChatMessageBody(role=m["role"], content=m["content"]) for m in _conversation(120, 11_500)
     ]
     history.append(ChatMessageBody(role="user", content="sum it up"))
+    from iron_jarvis.daemon.chat_stream import stream_chat_turn
+
     with FakeEndpoint(lambda b: text_reply("Summary."), context_len=131_072) as srv:
         platform = _platform(tmp_path, srv.url, pins={f"custom::{MODEL}": 131_072})
+        # review: the STREAMED lane — the one that asks the full budget
+        gen = await stream_chat_turn(
+            platform, BUILTIN_PERSONAS, ChatBody(messages=history, provider="custom", model=MODEL),
+        )
+        async for _ in gen:
+            pass
+        (body,) = srv.chats()
+        # ...and the POST lane: not streamed, so it asks 4,096 — out of the
+        # SAME planned room (one rule for both lanes; the extra room covers
+        # the adapter's estimate slack, which on a long prompt is larger than
+        # 4,096 — with the classic reserve the ask collapsed to 1,024)
         await run_chat_turn(
             platform, BUILTIN_PERSONAS, ChatBody(messages=history, provider="custom", model=MODEL),
         )
-        (body,) = srv.chats()
+        post = srv.chats()[-1]
     p = srv.prompt_tokens(body)
     assert p > 80_000, "the conversation was planned up to the window"
     assert p + body["max_tokens"] <= 131_072
     assert body["max_tokens"] >= 32_768 - max(256, p // 10)
+    assert post["max_tokens"] == 4_096
+    assert srv.prompt_tokens(post) + 4_096 <= 131_072
 
 
 # --------------------------------------------------------------------------- #
@@ -477,10 +503,13 @@ async def test_an_openai_fleet_node_is_budgeted():
     with FakeEndpoint(lambda b: text_reply("ok")) as srv:
         mgr = _fleet({"base_url": srv.url})
         adapter = mgr.get("fleet-box", MODEL)
-        await adapter.complete(system="s", messages=_msgs("hi"), tools=[WRITE_SPEC])
+        async for _ in adapter.stream(system="s", messages=_msgs("hi"), tools=[WRITE_SPEC]):
+            pass
         body = srv.chats()[-1]
     assert body["max_tokens"] > 4_096
     assert mgr.reply_cap("fleet-box", MODEL) == 32_768
+    # review: what a not-streamed request plans for (`NON_STREAM_CAP`)
+    assert mgr.reply_cap("fleet-box", MODEL, stream=False) == 4_096
 
 
 def _anthropic_adapter(respond):
@@ -532,8 +561,12 @@ async def test_an_anthropic_fleet_node_is_budgeted_and_reports_a_cut_call():
 
 @pytest.mark.parametrize("stream", [False, True])
 async def test_an_anthropic_fleet_node_retries_a_length_refusal_once(stream):
+    # (review: a not-streamed request asks at most 4,096 — its refusal names
+    # a prompt that leaves less than that)
+    inp = 1_000 if stream else 3_000
     words = ("This model's maximum context length is 6000 tokens. However, you requested "
-             "33000 tokens (1000 in the messages, 32000 in the completion).")
+             f"{inp + (32000 if stream else 4096)} tokens ({inp} in the messages, "
+             f"{32000 if stream else 4096} in the completion).")
 
     def respond(req, n):
         if n == 1:
@@ -561,4 +594,4 @@ async def test_an_anthropic_fleet_node_retries_a_length_refusal_once(stream):
         final = await adapter.complete(system="s", messages=_msgs("hi"), tools=[])
     assert final.text == "ok"
     assert len(seen) == 2
-    assert json.loads(seen[1].content)["max_tokens"] == 6_000 - 1_000 - 16
+    assert json.loads(seen[1].content)["max_tokens"] == 6_000 - inp - 16

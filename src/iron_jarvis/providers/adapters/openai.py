@@ -295,22 +295,28 @@ class OpenAIAdapter(LLMAdapter):
         _COMPLETION_TOKENS_MODELS.add((self._endpoint, self.model))
 
     # -- the reply budget (v1.387.0) ------------------------------------------
-    def reply_cap(self) -> int | None:
+    def reply_cap(self, stream: bool = True) -> int | None:
         """The most one reply from this endpoint may ask for, or ``None`` for
         a hosted provider (its fixed ``max_tokens`` is not this budget). Read
         by the history planner (``chat_turn._answer_reserve``) so the room it
-        holds back for the answer is THIS adapter's number."""
+        holds back for the answer is THIS adapter's number — for a streamed
+        request, or (``stream=False``, review) a not-streamed one."""
         if self._reply_budget is None:
             return None
-        return self._reply_budget.cap(self.model)
+        return self._reply_budget.cap(self.model, stream=stream)
 
-    def _reply_limit(self, wire: list[dict[str, Any]], tools_wire: Any) -> tuple[int, int]:
+    def _reply_limit(
+        self, wire: list[dict[str, Any]], tools_wire: Any, *, stream: bool = True
+    ) -> tuple[int, int]:
         """``(max_tokens, raw_prompt_estimate)`` for one request: the fixed
         ``max_tokens`` (estimate 0) without a budget; else the budget fitted
-        to the window and THIS request's size."""
+        to the window and THIS request's size (a not-streamed request: at
+        most ``reply_budget.NON_STREAM_CAP``)."""
         if self._reply_budget is None:
             return self.max_tokens, 0
-        return self._reply_budget.plan(self.model, system="", wire=wire, tools=tools_wire)
+        return self._reply_budget.plan(
+            self.model, system="", wire=wire, tools=tools_wire, stream=stream,
+        )
 
     def _budget_retry_body(
         self, body: dict[str, Any], detail: str, raw_prompt: int
@@ -847,8 +853,9 @@ class OpenAIAdapter(LLMAdapter):
         tools_wire = self._to_openai_tools(tools) if tools else None
         # v1.387.0: a local endpoint's reply budget (the fixed max_tokens for
         # a hosted provider — byte-identical); `raw_prompt` is what a
-        # refusal's one retry below is measured against.
-        limit, raw_prompt = self._reply_limit(wire, tools_wire)
+        # refusal's one retry below is measured against. Review: NOT streamed
+        # — at most the old 4,096 (`reply_budget.NON_STREAM_CAP`).
+        limit, raw_prompt = self._reply_limit(wire, tools_wire, stream=False)
         body: dict[str, Any] = {
             "model": self.model,
             self._token_limit_field(): limit,

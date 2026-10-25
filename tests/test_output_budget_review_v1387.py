@@ -376,12 +376,182 @@ async def test_a_refusal_whose_numbers_sit_past_the_display_cut_is_still_read(tm
     monkeypatch.setitem(fake.REFUSALS, "litellm_long", long_words)
     from iron_jarvis.providers import reply_budget
 
-    with fake.FakeEndpoint(lambda b: fake.text_reply("ok"), context_len=24_000,
+    ctx = 24_000 if stream else 3_000  # (not streamed: it asks at most 4,096)
+    with fake.FakeEndpoint(lambda b: fake.text_reply("ok"), context_len=ctx,
                            refusal="litellm_long") as srv:
         platform = _platform(tmp_path, srv.url, pins={f"custom::{MODEL}": 200_000})
         await _ask(platform, stream=stream)
         bodies = srv.chats()
-    assert bodies[0]["max_tokens"] == 32_768
+    assert bodies[0]["max_tokens"] == (32_768 if stream else 4_096)
     second = bodies[1]["max_tokens"]
-    assert second > 4_096 and srv.prompt_tokens(bodies[1]) + second <= 24_000
-    assert reply_budget.learned(srv.url, MODEL).get("output_cap") != 4_096
+    assert srv.prompt_tokens(bodies[1]) + second <= ctx
+    assert second == ctx - srv.prompt_tokens(bodies[1]) - 16
+    assert reply_budget.learned(srv.url, MODEL).get("output_cap") is None
+
+
+# --------------------------------------------------------------------------- #
+# 8. THE COST OF A BIGGER BUDGET — what bounds one model call.
+# --------------------------------------------------------------------------- #
+class _SlowServer:
+    """An OpenAI-compatible server whose answer RUNS AWAY: one token every
+    0.1 s for a minute (a looping generation under a 32,768-token budget).
+    It records when the client went away (its write fails)."""
+
+    def __init__(self) -> None:
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        outer = self
+        self.started = threading.Event()
+        self.gone = threading.Event()
+        self.asked: list[int] = []
+
+        class _H(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *a):
+                return
+
+            def do_GET(self):  # the router's liveness probe
+                data = json.dumps({"object": "list", "data": [{"id": "glm-5.3-flash"}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_POST(self):
+                import time
+
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+                outer.asked.append(int(body.get("max_tokens") or 0))
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                outer.started.set()
+                try:
+                    for _ in range(600):
+                        chunk = "data: " + json.dumps({"choices": [{"index": 0, "delta": {"content": "la "},
+                                                                   "finish_reason": None}]}) + "\n\n"
+                        raw = chunk.encode()
+                        self.wfile.write(f"{len(raw):x}\r\n".encode() + raw + b"\r\n")
+                        self.wfile.flush()
+                        time.sleep(0.1)
+                except OSError:
+                    outer.gone.set()
+
+        self._srv = ThreadingHTTPServer(("127.0.0.1", 0), _H)
+        self._srv.daemon_threads = True
+        import threading as _t
+
+        self._thread = _t.Thread(target=self._srv.serve_forever, daemon=True)
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._srv.shutdown()
+        self._srv.server_close()
+
+    @property
+    def url(self) -> str:
+        host, port = self._srv.server_address[:2]
+        return f"http://{host}:{port}"
+
+
+async def test_stop_ends_a_runaway_streamed_reply_at_once_and_closes_the_connection(tmp_path):
+    """THE BOUND THAT MATTERS for the streamed lanes: a reply that runs away
+    under the 32,768-token budget (~10 minutes at ~55 tokens a second) is
+    ended by Stop AT ONCE — the turn ends and the HTTP stream to the model
+    server is closed, which is what makes vLLM (and a proxy relaying a
+    stream) stop generating. Pinned so a later change cannot turn Stop into
+    "the turn ends but the model keeps writing"."""
+    import asyncio
+    import time
+
+    from iron_jarvis.daemon.chat_stream import TURNS, stream_chat_turn
+    from iron_jarvis.daemon.schemas import ChatBody, ChatMessageBody
+    from iron_jarvis.personas.builtins import BUILTIN_PERSONAS
+    from tests.test_reply_budget_v1387 import MODEL, _platform
+
+    with _SlowServer() as srv:
+        platform = _platform(tmp_path, srv.url)
+        body = ChatBody(messages=[ChatMessageBody(role="user", content="sing")],
+                        provider="custom", model=MODEL, turn_id="runaway-1")
+        gen = await stream_chat_turn(platform, BUILTIN_PERSONAS, body)
+        stopped_at = None
+        t0 = time.monotonic()
+
+        async def consume():
+            nonlocal stopped_at
+            async for chunk in gen:
+                if "event: token" in chunk and stopped_at is None:
+                    stopped_at = time.monotonic()
+                    TURNS.stop("runaway-1")
+
+        await asyncio.wait_for(consume(), timeout=20)
+        ended = time.monotonic()
+        assert stopped_at is not None, "no token arrived"
+        assert ended - stopped_at < 3.0, ended - stopped_at
+        assert len(srv.asked) == 1 and srv.asked[0] > 4_096, srv.asked  # the full (fitted) budget
+        assert await asyncio.to_thread(srv.gone.wait, 10), "the server never saw the client go"
+        assert time.monotonic() - t0 < 25
+
+
+async def test_a_not_streamed_request_keeps_the_old_budget_and_the_reason_is_pinned(tmp_path):
+    """THE REVIEW'S DECISION, pinned: a request that is NOT streamed (the
+    POST chat lane — the phone, API callers — and the one-shot utilities)
+    asks at most the old 4,096 (``NON_STREAM_CAP``). Its answer arrives whole
+    or not at all inside the client's 60-second read timeout (pinned below,
+    so a change to it makes this decision visible): ~3,300 tokens at the
+    daily driver's ~55 a second. With the doer's 32,768 a timed-out request
+    only ran longer on the server (a proxy keeps generating for a client that
+    left) — and the router tries such a timeout three times. RED on the
+    doer's code: 32,768."""
+    from iron_jarvis.daemon.chat_turn import run_chat_turn
+    from iron_jarvis.daemon.schemas import ChatBody, ChatMessageBody
+    from iron_jarvis.personas.builtins import BUILTIN_PERSONAS
+    from iron_jarvis.providers.reply_budget import NON_STREAM_CAP
+    from tests.fixtures.fake_openai_endpoint_v1387 import FakeEndpoint, text_reply
+    from tests.test_reply_budget_v1387 import MODEL, USER_GLM_INFO, _platform, _read_table
+
+    assert NON_STREAM_CAP == 4_096
+    with FakeEndpoint(lambda b: text_reply("ok"), model_info=USER_GLM_INFO) as srv:
+        platform = _platform(tmp_path, srv.url)
+        _read_table(platform)
+        await run_chat_turn(platform, BUILTIN_PERSONAS, ChatBody(
+            messages=[ChatMessageBody(role="user", content="hi")], provider="custom", model=MODEL))
+        assert srv.chats()[-1]["max_tokens"] == 4_096
+        adapter = platform.providers.get("custom", MODEL)
+        assert adapter._client().timeout.read == 60.0
+
+
+@pytest.mark.parametrize("tools", [False, True])
+async def test_a_plain_chat_turn_and_a_tool_turn_get_the_same_budget(tmp_path, tools):
+    """THE REVIEW'S OTHER DECISION, pinned: the streamed budget is the SAME
+    for a plain chat turn as for a turn with tools (no separate, lower chat
+    default). Evidence: a streamed reply is bounded by Stop (pinned above)
+    and the 60-second idle read timeout; a reasoning model (glm) spends its
+    thinking from the same budget, so a lower chat budget cuts the ANSWER of
+    a hard question, not just a runaway; and a chat turn with tools (a
+    project chat writing a file, office documents) needs the room Build
+    does."""
+    from iron_jarvis.daemon.chat_stream import stream_chat_turn
+    from iron_jarvis.daemon.schemas import ChatBody, ChatMessageBody
+    from iron_jarvis.personas.builtins import BUILTIN_PERSONAS
+    from tests.fixtures.fake_openai_endpoint_v1387 import FakeEndpoint, text_reply
+    from tests.test_reply_budget_v1387 import MODEL, USER_GLM_INFO, _platform, _read_table
+
+    with FakeEndpoint(lambda b: text_reply("ok"), model_info=USER_GLM_INFO) as srv:
+        platform = _platform(tmp_path, srv.url)
+        _read_table(platform)
+        body = ChatBody(messages=[ChatMessageBody(role="user", content="hi")], provider="custom",
+                        model=MODEL, **({"tools": ["read_file", "write_file"]} if tools else {}))
+        gen = await stream_chat_turn(platform, BUILTIN_PERSONAS, body)
+        async for _ in gen:
+            pass
+        sent = srv.chats()[-1]
+    assert bool(sent.get("tools")) or not tools
+    assert sent["max_tokens"] == 32_768

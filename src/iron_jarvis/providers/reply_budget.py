@@ -91,6 +91,18 @@ PROMPT_SLACK_MIN = 256
 RETRY_MIN = MIN_ASK
 #: Kept off the server's own exact fit (chat-template rounding).
 SERVER_FIT_MARGIN = 16
+#: The most a NOT-STREAMED request asks for (v1.387.0 review): the old 4,096.
+#: Such a reply arrives whole or not at all, and the adapters' HTTP client
+#: gives it 60 seconds to arrive (the ``httpx`` read timeout) — about 3,300
+#: tokens at the daily driver's ~55 tokens a second — so a bigger ask buys
+#: nothing there. It only makes a timed-out generation run longer on the
+#: server: a proxy keeps generating for a client that has gone, and the
+#: router tries such a timeout up to three times. The streamed lanes (the
+#: chat page, Build, agent runs, the benchmark) keep the full budget — a
+#: stream is bounded by its idle timeout and by Stop. Not streamed: the POST
+#: chat lane (the phone, API callers) and the one-shot utilities
+#: (compaction, follow-ups, commit messages, reflections).
+NON_STREAM_CAP = REPLY_FLOOR
 
 #: ``(provider, model) -> {"window": int|None, "max_output": int|None,
 #: "ratio": float|None}`` — what the platform knows about a model: the window
@@ -361,9 +373,12 @@ class ReplyBudget:
             return {}
         return got if isinstance(got, dict) else {}
 
-    def cap(self, model: str, facts: "dict[str, Any] | None" = None) -> int:
+    def cap(self, model: str, facts: "dict[str, Any] | None" = None, *, stream: bool = True) -> int:
+        """The most one reply asks for; a NOT-streamed request at most
+        :data:`NON_STREAM_CAP` (see there)."""
         facts = self.facts(model) if facts is None else facts
-        return cap_for(facts.get("max_output"), learned(self.endpoint, model).get("output_cap"))
+        cap = cap_for(facts.get("max_output"), learned(self.endpoint, model).get("output_cap"))
+        return cap if stream else min(cap, NON_STREAM_CAP)
 
     def window(self, model: str, facts: "dict[str, Any] | None" = None) -> int | None:
         """The window to fit against: the lanes' ladder, narrowed by what the
@@ -393,22 +408,28 @@ class ReplyBudget:
             return int(raw * float(scale)) + 1
         return raw
 
-    def plan(self, model: str, *, system: str, wire: Any, tools: Any) -> tuple[int, int]:
+    def plan(self, model: str, *, system: str, wire: Any, tools: Any,
+             stream: bool = True) -> tuple[int, int]:
         """``(max_tokens, raw_prompt_estimate)`` for one request — the ask,
-        and the estimate a refusal's retry is measured against. Never raises."""
+        and the estimate a refusal's retry is measured against. ``stream``
+        False: the request is not streamed (:data:`NON_STREAM_CAP`). Never
+        raises."""
         try:
             facts = self.facts(model)
             raw = self.raw_prompt_tokens(model, system, wire, tools, facts)
             return (
-                ask_for(self.cap(model, facts), self.window(model, facts), self.scaled(model, raw)),
+                ask_for(
+                    self.cap(model, facts, stream=stream), self.window(model, facts),
+                    self.scaled(model, raw),
+                ),
                 raw,
             )
         except Exception:  # noqa: BLE001 — the old budget, never a crash
             return REPLY_FLOOR, 0
 
-    def ask(self, model: str, *, system: str, wire: Any, tools: Any) -> int:
+    def ask(self, model: str, *, system: str, wire: Any, tools: Any, stream: bool = True) -> int:
         """The ``max_tokens`` this request asks for. Never raises."""
-        return self.plan(model, system=system, wire=wire, tools=tools)[0]
+        return self.plan(model, system=system, wire=wire, tools=tools, stream=stream)[0]
 
     def retry_ask(self, model: str, detail: str, asked: int, raw_prompt: int) -> int | None:
         """The SMALLER budget to retry once with after the server refused
