@@ -4441,7 +4441,7 @@ async def chat_stream(
         # (chat_turn.run_chat_turn) sends no frames and has no Build caller —
         # there is nothing of this to mirror there.
         _timeline = _harness is not None
-        _call_t0 = time.monotonic()
+        _call_t0 = time.perf_counter()
         tools_used: list[str] = []          # ONLY tools that actually executed
         remembered: list[str] = []          # v1.282.0: preferences kept this turn (lock-step)
         config_cards: list[dict[str, Any]] = []  # redesign S3/S4 (lock-step)
@@ -4584,7 +4584,7 @@ async def chat_stream(
                 _send, _send_system = _fit_turn_transcript(
                     d, msgs, system, provider_choice, model_choice, head=_head
                 )
-                _call_t0 = time.monotonic()  # v1.390.0: this call's start (Timeline)
+                _call_t0 = time.perf_counter()  # v1.390.0: this call's start (Timeline)
                 # v1.287.0: raced against Stop (see `_frames_until_stop`), so a
                 # Stop pressed before the model's first frame ends the turn now
                 # instead of when that frame finally arrives — and CLOSED when
@@ -4699,7 +4699,7 @@ async def chat_stream(
                 if _timeline:
                     # v1.390.0: the call just billed, as the Timeline draws it.
                     yield _sse(_timeline_mod.MODEL_CALL_EVENT, _timeline_mod.model_call_frame(
-                        route_provider, route_model, _u, (time.monotonic() - _call_t0) * 1000,
+                        route_provider, route_model, _u, (time.perf_counter() - _call_t0) * 1000,
                     ))
                 calls = final_resp.tool_calls or []
                 # IJ HARNESS (v1.366.0) — TRANSLATION AT THE BOUNDARY, the
@@ -5617,11 +5617,11 @@ async def chat_stream(
                 _own_ms: dict[int, int] = {}
 
                 async def _timed_invoke(i: int) -> tuple[Any, str]:
-                    _t0 = time.monotonic()
+                    _t0 = time.perf_counter()
                     try:
                         return await _invoke(i)
                     finally:
-                        _own_ms[i] = int((time.monotonic() - _t0) * 1000)
+                        _own_ms[i] = int((time.perf_counter() - _t0) * 1000)
 
                 def _own(i: int) -> dict[str, int]:
                     return {"ms": _own_ms[i]} if _timeline and i in _own_ms else {}
@@ -6013,7 +6013,7 @@ async def chat_stream(
             )):
                 _f_resp = None
                 _f_route = ("", "")
-                _call_t0 = time.monotonic()  # v1.390.0 (Timeline)
+                _call_t0 = time.perf_counter()  # v1.390.0 (Timeline)
                 try:
                     async with contextlib.aclosing(_frames_until_stop(_bounded_frames(
                         d.platform.router,
@@ -6075,7 +6075,7 @@ async def chat_stream(
                     if _timeline:
                         # v1.390.0: the final-answer call, as the Timeline draws it.
                         yield _sse(_timeline_mod.MODEL_CALL_EVENT, _timeline_mod.model_call_frame(
-                            _f_route[0], _f_route[1], _fu, (time.monotonic() - _call_t0) * 1000, "final",
+                            _f_route[0], _f_route[1], _fu, (time.perf_counter() - _call_t0) * 1000, "final",
                         ))
                     reply_text = (_f_resp.text or "").strip() or reply_text
                     # v1.323.0: the nudge was the final answering call.
@@ -6088,7 +6088,7 @@ async def chat_stream(
                 _r_resp = None
                 _r_route = ("", "")
                 _reset_sent = False
-                _call_t0 = time.monotonic()  # v1.390.0 (Timeline)
+                _call_t0 = time.perf_counter()  # v1.390.0 (Timeline)
                 try:
                     async with contextlib.aclosing(_frames_until_stop(_bounded_frames(
                         d.platform.router,
@@ -6140,7 +6140,7 @@ async def chat_stream(
                     if _timeline:
                         # v1.390.0: the rewrite's call, as the Timeline draws it.
                         yield _sse(_timeline_mod.MODEL_CALL_EVENT, _timeline_mod.model_call_frame(
-                            _r_route[0], _r_route[1], _ru, (time.monotonic() - _call_t0) * 1000, "rewrite",
+                            _r_route[0], _r_route[1], _ru, (time.perf_counter() - _call_t0) * 1000, "rewrite",
                         ))
                     _before_rewrite = reply_text or ""
                     reply_text, lang_note = _rewrite_verdict(

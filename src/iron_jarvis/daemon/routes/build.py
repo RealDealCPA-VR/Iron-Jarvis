@@ -621,6 +621,7 @@ class _ReplyWatch:
 
         self.clock = ReplyClock(self.started_at)
         self.first_token_at: float | None = None
+        self.first_token_ms: int | None = None
         #: (plan text) of an exit_plan_mode call that ran (the user allowed it).
         self.approved_plans: list[str] = []
         #: The last plan the user approved this turn — kept on the reply line
@@ -638,6 +639,9 @@ class _ReplyWatch:
         #: v1.372.0: the helper agents this turn started (``helper`` frames),
         #: by call id, in the order they started — kept on the reply line.
         self.helpers: dict[str, dict[str, Any]] = {}
+        #: v1.390.0: (helper id, step id) -> what a helper's step that has
+        #: not finished was done to (its saved ``target``).
+        self._helper_targets: dict[tuple[str, str], str] = {}
         #: v1.374.0: the turn's task list as its last ``plan_update`` left it
         #: (``[{step, status}]``, the plan tool's own vocabulary) — the
         #: checklist the reply line keeps (:func:`saved_plan`).
@@ -648,9 +652,9 @@ class _ReplyWatch:
 
     def see(self, event: str, raw: str) -> "dict[str, Any] | None":
         """Fold one frame. Answers the frame's data with its Timeline offsets
-        added (v1.390.0) for a frame the clock stamps — ``tool_call``,
-        ``model_call``, ``helper`` — and None for every other frame (sent on
-        unchanged)."""
+        added (v1.390.0) for a frame the clock stamps — ``round``,
+        ``tool_call``, ``model_call``, ``helper`` — and None for every other
+        frame (sent on unchanged)."""
         try:
             data = json.loads(raw) if raw else {}
         except ValueError:
@@ -661,6 +665,9 @@ class _ReplyWatch:
         if event == "token":
             if self.first_token_at is None:
                 self.first_token_at = time.time()
+                # v1.390.0: on the reply's own (precise) clock — the line's
+                # `timing` is read off it (see :meth:`lines`).
+                self.first_token_ms = self.clock.offset()
             self.text.append(str(data.get("text") or ""))
         elif event == "reset":
             # The lane discarded what was streamed (a nudge, a rewrite).
@@ -675,8 +682,8 @@ class _ReplyWatch:
             if data.get("steer"):
                 self.steers.append(str(data["steer"]))
             # v1.390.0: the tool loop is about to ask the model (a call in
-            # flight until its `model_call` frame).
-            self.clock.round_started()
+            # flight until its `model_call` frame) — the frame says from when.
+            stamped = {**data, "start": self.clock.round_started()}
         elif event == "meta":
             self.clock.meta(data.get("provider"), data.get("model"))
         elif event == "model_call":
@@ -789,6 +796,12 @@ class _ReplyWatch:
             h["startedAt"] = data["since"]
         if isinstance(data.get("ended"), int):
             h["endedAt"] = data["ended"]
+        # v1.390.0 (the Timeline): its row on the reply's clock (stamped by
+        # `ReplyClock.helper`): when its first frame came, and its end.
+        if isinstance(data.get("start"), int) and "start" not in h:
+            h["start"] = data["start"]
+        if isinstance(data.get("end"), int):
+            h["end"] = data["end"]
         # v1.390.0 (the Timeline): the model the helper ran on (its run's own
         # `meta`) and, once it ended, what it used (its session's row) — the
         # helper's cost is its OWN, never part of the reply's receipt.
@@ -803,7 +816,18 @@ class _ReplyWatch:
         if isinstance(data.get("plan"), dict) and isinstance(data["plan"].get("steps"), list):
             h["plan"] = {"steps": list(data["plan"]["steps"])[:50], "total": data["plan"].get("total")}
         step = data.get("step")
+        sid = str(step.get("id") or "") if isinstance(step, dict) else ""
+        if isinstance(step, dict) and step.get("status") != "finished" and sid:
+            # v1.390.0: what the helper's step was done to ("util.py"), from
+            # its started frame's (redacted) arguments — the run log's words
+            # the Timeline names it by, the same rule as the reply's own.
+            from ...harness.step_target import step_target
+
+            target = step_target(str(step.get("name") or ""), step.get("args"))
+            if target:
+                self._helper_targets[(hid, sid)] = target
         if isinstance(step, dict) and step.get("status") == "finished":
+            target = self._helper_targets.pop((hid, sid), None)
             if len(h["work"]) < MAX_SAVED_STEPS:
                 item: dict[str, Any] = {
                     "name": str(step.get("name") or ""),
@@ -814,6 +838,8 @@ class _ReplyWatch:
                 }
                 if isinstance(step.get("start"), int):
                     item["start"] = step["start"]
+                if target:
+                    item["target"] = target
                 if isinstance(step.get("detail"), dict):
                     item["detail"] = step["detail"]
                 h["work"].append(item)
@@ -827,6 +853,9 @@ class _ReplyWatch:
             if row.get("state") not in ("done", "failed", "stopped"):
                 row["state"] = "stopped"
                 row.setdefault("endedAt", int(time.time() * 1000))
+                # v1.390.0: its bar ends where the reply did.
+                if "start" in row:
+                    row.setdefault("end", self.clock.offset())
             out.append(row)
         return out
 
@@ -961,10 +990,15 @@ class _ReplyWatch:
         if self.last_plan:
             # v1.374.0: the turn's task list as it last stood (the reply folds it).
             line["plan"] = saved_plan(self.last_plan)
+        # v1.390.0: read off the reply's own clock (the start's wall-clock
+        # stamp plus the precise offsets), so the reply's measured time and
+        # every bar on its Timeline are one clock's numbers.
         line["timing"] = {
-            "startedAt": int(self.started_at * 1000),
-            "firstTokenAt": int(self.first_token_at * 1000) if self.first_token_at else None,
-            "endedAt": int(time.time() * 1000),
+            "startedAt": self.clock.started_ms,
+            "firstTokenAt": (
+                self.clock.epoch_ms(self.first_token_ms) if self.first_token_ms is not None else None
+            ),
+            "endedAt": self.clock.epoch_ms(),
         }
         out.append(line)
         return out

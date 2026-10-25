@@ -28,11 +28,14 @@ THE CLOCK (:class:`ReplyClock`, Build only): the reply writer
 offset — ms from the reply's start, the same origin as the reply line's
 ``timing.startedAt`` — to the frames it stamps: ``start`` on a ``tool_call``
 (started and finished; a finished one's ``ms`` is settled here), ``start`` on a
-``model_call`` (its end is when it passed, minus its ``ms``), ``start`` /
-``end`` on a ``helper`` frame (from its ``since`` / ``ended``) and
-``start`` / ``ms`` on the helper's own step. The page draws the running reply
-from those, and the saved line keeps the same numbers — so a reload, a rejoin
-and the live view draw the same picture.
+``model_call`` (its end is when it passed, minus its ``ms``), ``start`` on a
+``round`` (the call it opens works from there), ``start`` / ``end`` on a
+``helper`` frame (its first frame / the one that says it ended) and ``start``
+/ ``ms`` on the helper's own step. The page draws the running reply from
+those, and the saved line keeps the same numbers — so a reload, a rejoin and
+the live view draw the same picture. ONE precise clock (``perf_counter``)
+measures every offset and every length, and the line's ``timing.endedAt`` is
+read off it too, so every bar lies inside the reply.
 
 The words a person reads are the run log's ("Read app.py", the model's name,
 helpers); never the engine room's.
@@ -113,11 +116,19 @@ class ReplyClock:
     def __init__(self, started_at: float, now: Any = None) -> None:
         self.started_at = float(started_at)
         self.started_ms = int(self.started_at * 1000)
-        self._now = now or time.time
+        # ONE PRECISE CLOCK for every offset: on Windows (Python 3.12)
+        # `time.time()` and `time.monotonic()` tick every 15.6 ms, so a start
+        # measured on one and a length on the other put a model call 11 ms
+        # BEFORE the `round` frame that opened it (seen in this phase's own
+        # pins). The lane measures its lengths on `perf_counter` too.
+        self._now = now or time.perf_counter
+        self._t0 = self._now()
         #: call id -> start offset of a step that started and has not finished.
         self._steps: dict[str, int] = {}
         #: (helper id, step id) -> start offset of a helper's own step.
         self._helper_steps: dict[tuple[str, str], int] = {}
+        #: helper id -> the offset its row's first frame passed at.
+        self._helpers: dict[str, int] = {}
         #: The model calls seen, in order (what the reply line keeps).
         self.calls: list[dict[str, Any]] = []
         #: The model call in flight: the offset its ``round`` frame passed at,
@@ -128,12 +139,12 @@ class ReplyClock:
 
     def offset(self) -> int:
         """ms from the reply's start, now (never negative)."""
-        return max(0, int(self._now() * 1000) - self.started_ms)
+        return max(0, int((self._now() - self._t0) * 1000))
 
-    def at(self, epoch_ms: Any) -> "int | None":
-        """An epoch-ms stamp (a helper's ``since``) as an offset, or None."""
-        v = _int(epoch_ms)
-        return None if v is None else max(0, v - self.started_ms)
+    def epoch_ms(self, offset: "int | None" = None) -> int:
+        """An offset (now, by default) as ms since the epoch: the reply's
+        start plus the offset — the line's ``timing`` on the same clock."""
+        return self.started_ms + (self.offset() if offset is None else int(offset))
 
     # -- steps -------------------------------------------------------------- #
 
@@ -157,10 +168,12 @@ class ReplyClock:
 
     # -- model calls -------------------------------------------------------- #
 
-    def round_started(self) -> None:
-        """A ``round`` frame: the tool loop is about to ask the model."""
+    def round_started(self) -> int:
+        """A ``round`` frame: the tool loop is about to ask the model. Answers
+        the call's start (the page draws it working from there)."""
         if self._open is None:
             self._open = {"start": self.offset()}
+        return int(self._open["start"])
 
     def meta(self, provider: Any, model: Any) -> None:
         if self._open is not None:
@@ -208,29 +221,29 @@ class ReplyClock:
     # -- helpers ------------------------------------------------------------ #
 
     def helper(self, data: dict[str, Any]) -> dict[str, Any]:
-        """A ``helper`` frame with its row's ``start`` / ``end`` offsets, and
-        its step's ``start`` (and ``ms`` once finished)."""
+        """A ``helper`` frame with its row's ``start`` (its first frame — the
+        call that started it began then) and, once it ended, ``end``, on the
+        reply's clock; and its step's ``start`` (and ``ms`` once finished).
+        The frame's own ``since`` / ``ended`` (epoch ms) are kept as they
+        were — they tick on the coarse wall clock."""
         out = dict(data)
-        start = self.at(data.get("since"))
-        if start is not None:
-            out["start"] = start
-        end = self.at(data.get("ended"))
-        if end is not None:
-            out["end"] = end
-        step = data.get("step")
         hid = str(data.get("id") or "")
+        now = self.offset()
+        start = self._helpers.setdefault(hid, now)
+        out["start"] = start
+        if data.get("ended") is not None:
+            out["end"] = max(start, now)
+        step = data.get("step")
         if isinstance(step, dict):
             sid = str(step.get("id") or "")
             stamped = dict(step)
             if step.get("status") == "finished":
-                now = self.offset()
                 s = self._helper_steps.pop((hid, sid), now)
                 stamped["start"] = s
                 stamped["ms"] = max(0, now - s)
             else:
-                s = self.offset()
-                self._helper_steps[(hid, sid)] = s
-                stamped["start"] = s
+                self._helper_steps[(hid, sid)] = now
+                stamped["start"] = now
             out["step"] = stamped
         return out
 

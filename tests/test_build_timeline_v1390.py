@@ -33,7 +33,6 @@ import pytest
 
 from iron_jarvis.daemon import durable_turns as DT
 from iron_jarvis.daemon.app import create_app
-from iron_jarvis.daemon.routes import build as B
 from iron_jarvis.harness import sessions as S
 from iron_jarvis.harness import timeline as TL
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
@@ -331,6 +330,9 @@ async def test_a_stopped_reply_keeps_the_call_that_was_in_flight(app, work):
     calls = line[-1]["calls"]
     assert [c.get("state") for c in calls] == [None, "stopped"], calls
     assert calls[-1]["ms"] >= 250 and "usage" not in calls[-1]  # an unfinished call is never billed
+    # It started where its `round` frame said (the page drew it working from there).
+    rounds = [json.loads(d)["start"] for e, d in lg.frames if e == "round"]
+    assert calls[-1]["start"] == rounds[-1]
     duration = line[-1]["timing"]["endedAt"] - line[-1]["timing"]["startedAt"]
     assert calls[-1]["start"] + calls[-1]["ms"] <= duration
 
@@ -365,16 +367,20 @@ async def test_a_helper_row_says_its_model_its_own_usage_and_its_steps_times(app
     assert line["usage"]["input_tokens"] == USAGE["input_tokens"] * len(line["calls"])
     # Its step: start and length on the reply's clock, inside its own bar.
     [work_step] = h["work"]
-    started = line["timing"]["startedAt"]
-    h_start, h_end = h["startedAt"] - started, h["endedAt"] - started
+    h_start, h_end = h["start"], h["end"]
+    duration = line["timing"]["endedAt"] - line["timing"]["startedAt"]
+    assert 0 <= h_start < h_end <= duration
     assert work_step["ms"] >= int(READ_S * 1000) - 20
     assert h_start <= work_step["start"] and work_step["start"] + work_step["ms"] <= h_end
     # The call that started it is marked (the helper's row stands in for it).
     [delegate] = [s for s in line["steps"] if s.get("helper")]
     assert delegate["name"] in ("delegate", "spawn_agent")
-    # Live: the helper's frames carry the same offsets.
-    last = [d for e, d in frames if e == "helper"][-1]
+    # Live: the helper's frames carry the same offsets — and its model while
+    # it still works (its run's own `meta`), not only once it ended.
+    rows = [d for e, d in frames if e == "helper"]
+    last = rows[-1]
     assert last["start"] == h_start and last["end"] == h_end and last["usage"] == h["usage"]
+    assert any(d.get("model") == CLAUDE[1] and not d.get("ended") for d in rows[:-1])
 
 
 # --------------------------------------------------------------------------- #
@@ -479,3 +485,77 @@ def test_the_line_store_keeps_calls_and_the_clock_never_runs_backwards():
     assert TL.call_usage("anthropic", "claude-sonnet-4-5", {"input_tokens": 10, "output_tokens": 2})["cost_usd"] > 0
     # A model nobody prices has no cost — never a made-up 0.
     assert "cost_usd" not in TL.call_usage("custom", "glm", {"input_tokens": 10, "output_tokens": 2})
+
+
+# --------------------------------------------------------------------------- #
+# 6. the dashboard's fixture: a REAL recorded reply (line + its frames)
+# --------------------------------------------------------------------------- #
+
+FIXTURE = Path(__file__).resolve().parents[1] / "dashboard" / "__tests__" / "fixtures" / "build-timeline-v1390.json"
+
+
+def _shape(line: dict, frames: list) -> dict:
+    """The KEYS a reply line and its frames carry (times differ per run)."""
+    return {
+        "line": sorted(k for k in line if k not in ("at",)),
+        "step": sorted({k for s in line.get("steps") or [] for k in s}),
+        "call": sorted({k for c in line.get("calls") or [] for k in c}),
+        "call_usage": sorted({k for c in line.get("calls") or [] for k in (c.get("usage") or {})}),
+        "helper": sorted({k for h in line.get("helpers") or [] for k in h}),
+        "helper_step": sorted({k for h in line.get("helpers") or [] for w in h.get("work") or [] for k in w}),
+        "events": sorted({e for e, _d in frames}),
+    }
+
+
+async def test_the_dashboards_fixture_is_a_real_recorded_reply(app, work, monkeypatch):
+    """dashboard/__tests__/fixtures/build-timeline-v1390.json holds a REAL
+    recorded coding reply — the model's calls, two reads that ran together,
+    a helper and a write — as the session saved it (`line`) and as the turn's
+    log stored its frames (`frames`). The dashboard draws the live fold of
+    the frames and the saved line as ONE picture. Regenerate with
+    IJ_REGEN_BUILD_TIMELINE=1; otherwise a fresh recording must carry the
+    fixture's shape (the times differ per run)."""
+    import os
+
+    sid = new_session(app, work, approval_mode="yolo")
+    slow_reads(app, monkeypatch)
+
+    def helper(task, results):
+        if not results:
+            return [ToolCall(id="hr-1", name="read_file", arguments={"path": "util.py"})]
+        return "util.py returns 2."
+
+    wire(app, Timed(
+        [
+            [
+                ToolCall(id="r1", name="Read", arguments={"file_path": "app.py"}),
+                ToolCall(id="r2", name="Read", arguments={"file_path": "util.py"}),
+            ],
+            [ToolCall(id="a1", name="Agent", arguments={"description": "look", "prompt": "What does util.py return?"})],
+            [ToolCall(id="w1", name="Write", arguments={"file_path": "made.py", "content": "y = 2\n"})],
+            "Read both, asked a helper, and made made.py.",
+        ],
+        helper=helper,
+    ))
+    await _turn(app, sid, "read both files, ask a helper, make made.py", "tl-fx")
+    msgs = messages_of(app, sid)
+    question = [m for m in msgs if m.get("role") == "user"][-1]
+    line = _reply(app, sid)
+    frames = [[e, json.loads(d)] for e, d in app.state.platform.turn_logs.get("tl-fx").frames]
+    # The round frames carry the call's start (the page draws it working).
+    rounds = [d for e, d in frames if e == "round"]
+    calls_ = [d for e, d in frames if e == "model_call"]
+    assert rounds and all(isinstance(r.get("start"), int) for r in rounds)
+    assert rounds[0]["start"] <= calls_[0]["start"]
+    if os.environ.get("IJ_REGEN_BUILD_TIMELINE") == "1":
+        FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+        FIXTURE.write_text(json.dumps({
+            "_doc": "v1.390.0: a REAL recorded coding reply (tests/test_build_timeline_v1390.py): "
+                    "question + line = the session's saved lines; frames = the turn log's stored "
+                    "frames (what a rejoin replays). Regenerate with IJ_REGEN_BUILD_TIMELINE=1.",
+            "question": question,
+            "line": line,
+            "frames": frames,
+        }, indent=1) + "\n", encoding="utf-8", newline="\n")
+    fx = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    assert _shape(fx["line"], fx["frames"]) == _shape(line, frames)

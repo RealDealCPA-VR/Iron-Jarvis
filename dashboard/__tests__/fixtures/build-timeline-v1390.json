@@ -1,0 +1,708 @@
+{
+ "_doc": "v1.390.0: a REAL recorded coding reply (tests/test_build_timeline_v1390.py): question + line = the session's saved lines; frames = the turn log's stored frames (what a rejoin replays). Regenerate with IJ_REGEN_BUILD_TIMELINE=1.",
+ "question": {
+  "role": "user",
+  "content": "read both files, ask a helper, make made.py",
+  "turnId": "tl-fx",
+  "at": "2026-10-25T23:00:36.335849+00:00"
+ },
+ "line": {
+  "role": "assistant",
+  "content": "Read both, asked a helper, and made made.py.\n\nDone.",
+  "turnId": "tl-fx",
+  "route": {
+   "requested": "anthropic",
+   "provider": "anthropic",
+   "model": "claude-sonnet-4-5",
+   "reason": "",
+   "from": "",
+   "why": "",
+   "reasoning": "",
+   "label": "",
+   "text_only": false,
+   "local_only": false,
+   "allowed_once": false,
+   "on_this_network": false,
+   "harness": {
+    "family": "claude",
+    "dialect": "claude",
+    "fingerprint": "400d7132af4ab0ecdb012409313a9db3b48f642dcc7645c47ca012d96cf82480",
+    "layers": [
+     "default",
+     "family:claude"
+    ],
+    "nudged": false,
+    "map": {
+     "files": 2,
+     "chars": 413,
+     "limit": 2560,
+     "complete": true
+    }
+   }
+  },
+  "toolsUsed": [
+   "read_file",
+   "read_file",
+   "delegate",
+   "write_file"
+  ],
+  "documents": [
+   "C:\\Users\\VR\\AppData\\Local\\Temp\\pytest-of-VR\\pytest-26000\\test_the_dashboards_fixture_is0\\work\\made.py"
+  ],
+  "deniedTools": [],
+  "usage": {
+   "input_tokens": 6000,
+   "output_tokens": 1500,
+   "cost_usd": 0.0405
+  },
+  "steps": [
+   {
+    "name": "read_file",
+    "ok": true,
+    "ms": 222,
+    "start": 391,
+    "target": "app.py",
+    "detail": {
+     "input": "{\"numbered\": true, \"path\": \"app.py\"}",
+     "output": "     1\tx = 1"
+    }
+   },
+   {
+    "name": "read_file",
+    "ok": true,
+    "ms": 411,
+    "start": 392,
+    "target": "util.py",
+    "detail": {
+     "input": "{\"numbered\": true, \"path\": \"util.py\"}",
+     "output": "     1\tdef f():\n     2\t    return 2"
+    }
+   },
+   {
+    "name": "delegate",
+    "ok": true,
+    "ms": 934,
+    "start": 1018,
+    "helper": true,
+    "detail": {
+     "input": "{\"agent_type\": \"builder\", \"task\": \"look\\n\\nWhat does util.py return?\"}",
+     "output": "[builder agent_run_id=run_12529b179d13 session=session_0c9d2f5eaece]\nutil.py returns 2."
+    }
+   },
+   {
+    "name": "write_file",
+    "ok": true,
+    "ms": 7,
+    "start": 2164,
+    "target": "made.py",
+    "detail": {
+     "input": "{\"content\": \"y = 2\\n\", \"path\": \"made.py\"}",
+     "output": "wrote 6 bytes to made.py\nCheck: the file parses."
+    }
+   }
+  ],
+  "truncated": false,
+  "folderRules": [],
+  "approved": [],
+  "doors": [],
+  "timing": {
+   "startedAt": 1792969236337,
+   "firstTokenAt": 1792969238721,
+   "endedAt": 1792969238944
+  },
+  "helpers": [
+   {
+    "id": "a1",
+    "work": [
+     {
+      "name": "read_file",
+      "ok": true,
+      "ms": 408,
+      "start": 1306,
+      "target": "util.py",
+      "detail": {
+       "input": "{\"path\": \"util.py\"}",
+       "output": "def f():\n    return 2\n"
+      }
+     }
+    ],
+    "steps": 1,
+    "agent": "builder",
+    "task": "look What does util.py return?",
+    "state": "done",
+    "startedAt": 1792969237356,
+    "start": 1019,
+    "session": "session_0c9d2f5eaece",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "result": "util.py returns 2.",
+    "endedAt": 1792969238291,
+    "end": 1953,
+    "usage": {
+     "input_tokens": 2400,
+     "output_tokens": 600,
+     "cost_usd": 0.0162
+    }
+   }
+  ],
+  "context": {
+   "window": 32000,
+   "used": 1251,
+   "tokens": 1251,
+   "percent": 4,
+   "suggest_at": 70,
+   "auto_at": 92,
+   "level": "ok",
+   "window_known": false
+  },
+  "finish": {
+   "tests": "none",
+   "command": "",
+   "removed": 0,
+   "kept": 0,
+   "points": 1,
+   "unmet": 0,
+   "after": ""
+  },
+  "calls": [
+   {
+    "start": 185,
+    "ms": 206,
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+     "input_tokens": 1200,
+     "output_tokens": 300,
+     "cost_usd": 0.0081
+    }
+   },
+   {
+    "start": 807,
+    "ms": 211,
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+     "input_tokens": 1200,
+     "output_tokens": 300,
+     "cost_usd": 0.0081
+    }
+   },
+   {
+    "start": 1954,
+    "ms": 210,
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+     "input_tokens": 1200,
+     "output_tokens": 300,
+     "cost_usd": 0.0081
+    }
+   },
+   {
+    "start": 2172,
+    "ms": 212,
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+     "input_tokens": 1200,
+     "output_tokens": 300,
+     "cost_usd": 0.0081
+    }
+   },
+   {
+    "start": 2389,
+    "ms": 214,
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+     "input_tokens": 1200,
+     "output_tokens": 300,
+     "cost_usd": 0.0081
+    }
+   }
+  ],
+  "at": "2026-10-25T23:00:38.946171+00:00"
+ },
+ "frames": [
+  [
+   "phase",
+   {
+    "phase": "recalling"
+   }
+  ],
+  [
+   "phase",
+   {
+    "phase": "choosing_tools"
+   }
+  ],
+  [
+   "round",
+   {
+    "round": 0,
+    "start": 184
+   }
+  ],
+  [
+   "model_call",
+   {
+    "ms": 206,
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+     "input_tokens": 1200,
+     "output_tokens": 300,
+     "cost_usd": 0.0081
+    },
+    "start": 185
+   }
+  ],
+  [
+   "tool_call",
+   {
+    "id": "r1",
+    "name": "read_file",
+    "status": "started",
+    "args": {
+     "path": "app.py",
+     "numbered": true
+    },
+    "start": 391
+   }
+  ],
+  [
+   "tool_call",
+   {
+    "id": "r2",
+    "name": "read_file",
+    "status": "started",
+    "args": {
+     "path": "util.py",
+     "numbered": true
+    },
+    "start": 392
+   }
+  ],
+  [
+   "tool_call",
+   {
+    "id": "r1",
+    "name": "read_file",
+    "status": "finished",
+    "ok": true,
+    "output": "     1\tx = 1",
+    "detail": {
+     "input": "{\"numbered\": true, \"path\": \"app.py\"}",
+     "output": "     1\tx = 1"
+    },
+    "ms": 222,
+    "start": 391
+   }
+  ],
+  [
+   "tool_call",
+   {
+    "id": "r2",
+    "name": "read_file",
+    "status": "finished",
+    "ok": true,
+    "output": "     1\tdef f():\n     2\t    return 2",
+    "detail": {
+     "input": "{\"numbered\": true, \"path\": \"util.py\"}",
+     "output": "     1\tdef f():\n     2\t    return 2"
+    },
+    "ms": 411,
+    "start": 392
+   }
+  ],
+  [
+   "round",
+   {
+    "round": 1,
+    "start": 806
+   }
+  ],
+  [
+   "model_call",
+   {
+    "ms": 211,
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+     "input_tokens": 1200,
+     "output_tokens": 300,
+     "cost_usd": 0.0081
+    },
+    "start": 807
+   }
+  ],
+  [
+   "tool_call",
+   {
+    "id": "a1",
+    "name": "delegate",
+    "status": "started",
+    "args": {
+     "agent_type": "builder",
+     "task": "look\n\nWhat does util.py return?"
+    },
+    "start": 1018
+   }
+  ],
+  [
+   "helper",
+   {
+    "id": "a1",
+    "agent": "builder",
+    "task": "look What does util.py return?",
+    "state": "starting",
+    "steps": 0,
+    "since": 1792969237356,
+    "start": 1019
+   }
+  ],
+  [
+   "helper",
+   {
+    "id": "a1",
+    "agent": "builder",
+    "task": "look What does util.py return?",
+    "state": "running",
+    "steps": 0,
+    "since": 1792969237356,
+    "session": "session_0c9d2f5eaece",
+    "start": 1019
+   }
+  ],
+  [
+   "helper",
+   {
+    "id": "a1",
+    "agent": "builder",
+    "task": "look What does util.py return?",
+    "state": "running",
+    "steps": 0,
+    "since": 1792969237356,
+    "session": "session_0c9d2f5eaece",
+    "phase": "running",
+    "detail": "working the task",
+    "start": 1019
+   }
+  ],
+  [
+   "helper",
+   {
+    "id": "a1",
+    "agent": "builder",
+    "task": "look What does util.py return?",
+    "state": "running",
+    "steps": 0,
+    "since": 1792969237356,
+    "session": "session_0c9d2f5eaece",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "start": 1019
+   }
+  ],
+  [
+   "helper",
+   {
+    "id": "a1",
+    "agent": "builder",
+    "task": "look What does util.py return?",
+    "state": "running",
+    "steps": 0,
+    "since": 1792969237356,
+    "session": "session_0c9d2f5eaece",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "step": {
+     "id": "hr-1",
+     "name": "read_file",
+     "status": "started",
+     "args": {
+      "path": "util.py"
+     },
+     "start": 1306
+    },
+    "start": 1019
+   }
+  ],
+  [
+   "helper",
+   {
+    "id": "a1",
+    "agent": "builder",
+    "task": "look What does util.py return?",
+    "state": "running",
+    "steps": 1,
+    "since": 1792969237356,
+    "session": "session_0c9d2f5eaece",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "step": {
+     "id": "hr-1",
+     "name": "read_file",
+     "status": "finished",
+     "ok": true,
+     "output": "def f(): return 2",
+     "detail": {
+      "input": "{\"path\": \"util.py\"}",
+      "output": "def f():\n    return 2\n"
+     },
+     "start": 1306,
+     "ms": 408
+    },
+    "start": 1019
+   }
+  ],
+  [
+   "helper",
+   {
+    "id": "a1",
+    "agent": "builder",
+    "task": "look What does util.py return?",
+    "state": "done",
+    "steps": 1,
+    "since": 1792969237356,
+    "session": "session_0c9d2f5eaece",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "result": "util.py returns 2.",
+    "ended": 1792969238291,
+    "ask": null,
+    "usage": {
+     "input_tokens": 2400,
+     "output_tokens": 600,
+     "cost_usd": 0.0162
+    },
+    "start": 1019,
+    "end": 1953
+   }
+  ],
+  [
+   "tool_call",
+   {
+    "id": "a1",
+    "name": "delegate",
+    "status": "finished",
+    "ok": true,
+    "output": "[builder agent_run_id=run_12529b179d13 session=session_0c9d2f5eaece]\nutil.py returns 2.",
+    "detail": {
+     "input": "{\"agent_type\": \"builder\", \"task\": \"look\\n\\nWhat does util.py return?\"}",
+     "output": "[builder agent_run_id=run_12529b179d13 session=session_0c9d2f5eaece]\nutil.py returns 2."
+    },
+    "ms": 934,
+    "start": 1018
+   }
+  ],
+  [
+   "round",
+   {
+    "round": 2,
+    "start": 1953
+   }
+  ],
+  [
+   "model_call",
+   {
+    "ms": 210,
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+     "input_tokens": 1200,
+     "output_tokens": 300,
+     "cost_usd": 0.0081
+    },
+    "start": 1954
+   }
+  ],
+  [
+   "tool_call",
+   {
+    "id": "w1",
+    "name": "write_file",
+    "status": "started",
+    "args": {
+     "path": "made.py",
+     "content": "y = 2\n"
+    },
+    "start": 2164
+   }
+  ],
+  [
+   "tool_call",
+   {
+    "id": "w1",
+    "name": "write_file",
+    "status": "finished",
+    "ok": true,
+    "output": "wrote 6 bytes to made.py\nCheck: the file parses.",
+    "detail": {
+     "input": "{\"content\": \"y = 2\\n\", \"path\": \"made.py\"}",
+     "output": "wrote 6 bytes to made.py\nCheck: the file parses."
+    },
+    "ms": 7,
+    "start": 2164
+   }
+  ],
+  [
+   "round",
+   {
+    "round": 3,
+    "start": 2172
+   }
+  ],
+  [
+   "token",
+   {
+    "text": "Read both, asked a helper, and made made.py."
+   }
+  ],
+  [
+   "model_call",
+   {
+    "ms": 212,
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+     "input_tokens": 1200,
+     "output_tokens": 300,
+     "cost_usd": 0.0081
+    },
+    "start": 2172
+   }
+  ],
+  [
+   "token",
+   {
+    "text": "\n\n"
+   }
+  ],
+  [
+   "round",
+   {
+    "round": 4,
+    "start": 2389
+   }
+  ],
+  [
+   "token",
+   {
+    "text": "Done."
+   }
+  ],
+  [
+   "model_call",
+   {
+    "ms": 214,
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+     "input_tokens": 1200,
+     "output_tokens": 300,
+     "cost_usd": 0.0081
+    },
+    "start": 2389
+   }
+  ],
+  [
+   "done",
+   {
+    "reply": "Read both, asked a helper, and made made.py.\n\nDone.",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "route": {
+     "requested": "anthropic",
+     "provider": "anthropic",
+     "model": "claude-sonnet-4-5",
+     "reason": "",
+     "from": "",
+     "why": "",
+     "reasoning": "",
+     "label": "",
+     "text_only": false,
+     "local_only": false,
+     "allowed_once": false,
+     "on_this_network": false,
+     "harness": {
+      "family": "claude",
+      "dialect": "claude",
+      "fingerprint": "400d7132af4ab0ecdb012409313a9db3b48f642dcc7645c47ca012d96cf82480",
+      "layers": [
+       "default",
+       "family:claude"
+      ],
+      "nudged": false,
+      "map": {
+       "files": 2,
+       "chars": 413,
+       "limit": 2560,
+       "complete": true
+      }
+     }
+    },
+    "tools_used": [
+     "read_file",
+     "read_file",
+     "delegate",
+     "write_file"
+    ],
+    "resources": [],
+    "thread_refs": [],
+    "folder_rules": [],
+    "truncated": false,
+    "remembered": [],
+    "config_cards": [],
+    "suggestion": null,
+    "doors": [],
+    "adapted": null,
+    "trust": "full",
+    "trust_reason": "",
+    "trust_note": null,
+    "denied_tools": [],
+    "approved": [],
+    "auto_armed": [],
+    "documents": [
+     "C:\\Users\\VR\\AppData\\Local\\Temp\\pytest-of-VR\\pytest-26000\\test_the_dashboards_fixture_is0\\work\\made.py"
+    ],
+    "escalate": false,
+    "escalate_reason": "",
+    "escalate_agent": null,
+    "workflow_draft": null,
+    "usage": {
+     "input_tokens": 6000,
+     "output_tokens": 1500,
+     "cost_usd": 0.0405
+    },
+    "context": {
+     "window": 32000,
+     "used": 1251,
+     "headroom": 30749,
+     "dropped": 0,
+     "tools_trimmed": 0,
+     "clipped": false,
+     "recap": false,
+     "suggest_larger": false,
+     "tokens": 1251,
+     "percent": 4,
+     "level": "ok",
+     "suggest_at": 70,
+     "auto_at": 92,
+     "compacted": false,
+     "window_known": false
+    },
+    "refit": null,
+    "finish": {
+     "tests": "none",
+     "command": "",
+     "removed": 0,
+     "kept": 0,
+     "points": 1,
+     "unmet": 0,
+     "after": ""
+    }
+   }
+  ]
+ ]
+}
