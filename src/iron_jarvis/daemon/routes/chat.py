@@ -5935,7 +5935,7 @@ async def chat_stream(
             reply = reply.strip()
             # v1.344.0 (M3): one line per refused (tool, reason) — lock-step
             # with chat_turn.
-            reply += refusal_footnotes(refused_tools)
+            reply += refusal_footnotes(refused_tools, surface=_surface_for(body))  # 12A: lock-step
         else:
             if not reply.strip():
                 # v1.246.0 — lock-step with chat_turn (v1.378.0: a declined
@@ -5944,7 +5944,7 @@ async def chat_stream(
                     tools_used, last_tool_output, _f_refusal, surface=_surface_for(body),
                 )
                 _declined_reply = _f_refusal is not None
-            reply += refusal_footnotes(refused_tools)
+            reply += refusal_footnotes(refused_tools, surface=_surface_for(body))  # 12A: lock-step
             if stopped_note:
                 reply += f"\n\n_Note: {stopped_note}._"
             if lang_note:
