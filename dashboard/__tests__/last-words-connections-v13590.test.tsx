@@ -179,7 +179,12 @@ describe("the subscription rows say the product's name", () => {
     expect(banner.textContent).not.toMatch(/\bCLI\b/);
     fireEvent.click(screen.getByRole("button", { name: /Rescan local CLIs/ }));
     await waitFor(() => expect(document.body.textContent).toContain("Rescan complete: Claude Code ready to use (1 model)"));
-    expect(document.body.textContent).toContain("Codex found but not usable (not signed in)");
+    // Readiness 12A (G33, moved on purpose): a signed-out CLI has its own
+    // line and its Sign in press, never a place inside the green note.
+    expect(screen.getByTestId("rescan-signed-out-codex-cli").textContent).toMatch(
+      /^Codex is on this PC but not signed in\./,
+    );
+    expect(document.body.textContent).not.toContain("Codex found but not usable");
     expect(document.body.textContent).not.toMatch(/Claude Code CLI|Codex CLI/);
   });
 

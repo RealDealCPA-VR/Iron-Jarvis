@@ -1,5 +1,8 @@
 "use client";
 
+import { CliSignInPress } from "@/components/connections/CliSignInPress";
+import { providerWords, sentenceStart, type NamedRow } from "@/lib/onboarding";
+
 /**
  * Preflight warning for the chat composer: the ACTIVE provider is known to be
  * unreachable, so the turn the user is about to type WILL fail. Shown before
@@ -19,7 +22,14 @@
  * user does not type a paragraph into a model that will not be asked.
  * Unreachable wins over cooldown when both are true.
  *
- * Deliberately: no buttons, one fixed-height single line (h-5 + truncate) so a
+ * Readiness 12A (G33): the provider is named as a person knows it ("Claude
+ * Code", the machine's name or "your model server" — lib/onboarding
+ * providerWords), never its id ("claude-cli", "fleet-custom"), and a
+ * signed-out Claude Code or Codex gets the ONE Sign in press
+ * (components/connections/CliSignInPress) — never "run `claude` in a
+ * terminal, then /login". That press is the only control this row ever has.
+ *
+ * Deliberately: no other buttons, one fixed-height single line (h-5 + truncate) so a
  * message SWAP (hard warning ↔ stale softening, or a long provider name) never
  * changes the row's height. Honesty note: the component returns null when
  * healthy, so the row APPEARING does insert one 20px line — reserving a
@@ -32,6 +42,7 @@ export function PreflightNote({
   stale,
   cooldownS,
   signedOut,
+  catalog,
 }: {
   provider: string;
   available: boolean | undefined;
@@ -43,13 +54,15 @@ export function PreflightNote({
    *  row says it first. Beats the generic "isn't reachable" wording, which
    *  sent a user to debug an endpoint that was never the problem. */
   signedOut?: boolean;
+  /** Readiness 12A: the /models rows, so the user's own model server reads
+   *  by the name they gave the machine. */
+  catalog?: readonly NamedRow[] | null;
 }) {
   const cooldown = available !== false && (cooldownS ?? 0) > 0;
   if (available !== false && !cooldown) return null;
   const signedOutCase = available === false && Boolean(signedOut);
-  const signInWords = /codex/i.test(provider)
-    ? "run `codex login` in a terminal"
-    : "run `claude` in a terminal, then /login";
+  const name = providerWords(provider, catalog) || provider;
+  const Name = sentenceStart(name);
   return (
     <div
       role="status"
@@ -60,13 +73,18 @@ export function PreflightNote({
       <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-tone-warn" />
       <span className="truncate">
         {cooldown
-          ? `${provider} is in cooldown, retry in ${cooldownS} s. It failed repeatedly, so a turn sent to it now is refused. Pick another model or wait.`
+          ? `${Name} is in cooldown, retry in ${cooldownS} s. It failed repeatedly, so a turn sent to it now is refused. Pick another model or wait.`
           : signedOutCase
-            ? `${provider} is installed but not signed in. This turn will fail. ${signInWords[0].toUpperCase()}${signInWords.slice(1)}, then Test on Connections.`
+            ? `${Name} is installed but not signed in, so this turn will fail.`
           : stale
-            ? `${provider} may be offline. The last check couldn't reach Iron Jarvis. Pick another model or check the endpoint.`
-            : `${provider} isn't reachable right now. This turn will fail. Pick another model or bring the endpoint back.`}
+            ? `${Name} may be offline. The last check couldn't reach Iron Jarvis. Pick another model or check the endpoint.`
+            : `${Name} isn't reachable right now. This turn will fail. Pick another model or bring the endpoint back.`}
       </span>
+      {signedOutCase && (
+        <span className="shrink-0">
+          <CliSignInPress provider={provider} variant="inline" testIdPrefix="preflight" />
+        </span>
+      )}
     </div>
   );
 }

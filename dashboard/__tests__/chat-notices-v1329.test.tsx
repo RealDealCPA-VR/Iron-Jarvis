@@ -126,8 +126,9 @@ describe("the step line for provider.downgraded reads `used`", () => {
 describe("the PreflightNote speaks in plain sentences", () => {
   it("cooldown: the daemon's words first, then plain sentences", () => {
     render(<PreflightNote provider="fleet-custom" available={true} cooldownS={23} />);
+    // Readiness 12A (G33, moved on purpose): the plain name, never "fleet-custom".
     expect(screen.getByTestId("ij-preflight-note").textContent).toBe(
-      "fleet-custom is in cooldown, retry in 23 s. It failed repeatedly, so a turn sent to it now is refused. Pick another model or wait.",
+      "Your model server is in cooldown, retry in 23 s. It failed repeatedly, so a turn sent to it now is refused. Pick another model or wait.",
     );
   });
 
@@ -148,9 +149,11 @@ describe("the PreflightNote speaks in plain sentences", () => {
   });
 
   it("signed out keeps its remedy", () => {
+    // Readiness 12A (G33, moved on purpose): the remedy is the one Sign in
+    // press (sign-in-press-v1387), never "Run `claude` in a terminal".
     render(<PreflightNote provider="claude-cli" available={false} signedOut />);
     expect(screen.getByTestId("ij-preflight-note").textContent).toBe(
-      "claude-cli is installed but not signed in. This turn will fail. Run `claude` in a terminal, then /login, then Test on Connections.",
+      "Claude Code is installed but not signed in, so this turn will fail.Sign in to Claude Code",
     );
   });
 });

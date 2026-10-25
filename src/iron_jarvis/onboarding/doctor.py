@@ -785,12 +785,16 @@ def _runtime_checks(platform, *, probe: bool) -> list[dict]:
                     continue
                 signed = st.get("signed_in")
                 ok = signed is not False
+                # Readiness 12A (G33): the program by the name a person knows
+                # it ("Claude Code", never "claude CLI"), and the fix is the
+                # one Sign in press (cli_auth.SIGN_IN_FIX), never a terminal.
+                shown = "Claude Code" if binary == "claude" else "Codex"
                 if signed:
-                    detail = f"{binary} CLI installed and signed in"
+                    detail = f"{shown} is installed and signed in"
                 elif ok:
-                    detail = f"{binary} CLI installed; sign-in status not confirmed yet"
+                    detail = f"{shown} is installed; whether it is signed in isn't known yet"
                 else:
-                    detail = f"{binary} CLI installed but NOT signed in — it refuses every request"
+                    detail = f"{shown} is installed but not signed in, so it can't answer yet"
                 checks.append(
                     _result(
                         f"{prov}_login",

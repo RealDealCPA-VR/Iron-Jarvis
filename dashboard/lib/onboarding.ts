@@ -382,6 +382,30 @@ export function machineName(
   return fromRows(p) || (p.startsWith("fleet-") ? "" : fromRows(`fleet-${p}`));
 }
 
+/** Readiness 12A (G33): a provider named in the MIDDLE of a sentence a
+ *  person reads ("Claude Code isn't signed in", "DGX Spark isn't reachable
+ *  right now"): the user's own model server by the name they gave the
+ *  machine (`machineName`, with the /models `catalog` when the caller has
+ *  it) else "your model server"; every other provider by `providerDisplay`.
+ *  The chat's warning above the message box and the New task door printed
+ *  "claude-cli" / "fleet-custom" there. "" for no provider. Pure. */
+export function providerWords(
+  provider: string | null | undefined,
+  catalog?: readonly NamedRow[] | null,
+): string {
+  const p = (provider ?? "").trim();
+  if (!p) return "";
+  if (p === "custom" || p.startsWith("fleet-")) return machineName(p, { catalog }) || SERVER_PICK_WORDS;
+  return providerDisplay(p);
+}
+
+/** *words* opening a sentence: OUR lower-case phrases get a capital ("Your
+ *  model server …"); a brand keeps its own casing ("llama.cpp", "xAI"). */
+export function sentenceStart(words: string): string {
+  if (!words || !/^your\b/.test(words)) return words;
+  return words[0].toUpperCase() + words.slice(1);
+}
+
 /** What a model-menu ROW calls its model (v1.359.0, lane 9B), from the
  *  words this file already has: the picker's own label ("Opus 5.5"); a
  *  provider-default row by the plan or server it runs on ("Your Claude

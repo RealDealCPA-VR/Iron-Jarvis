@@ -1,0 +1,51 @@
+{
+  "about": "Readiness 12A (G33): the REAL daemon's answers with Claude Code and Codex on this PC but signed out — POST /providers/rescan's rows, GET /health's rows and the use-model refusal. Written by tests/test_sign_in_press_v1387.py (IJ_REGEN_SIGN_IN_PRESS=1); read by dashboard/__tests__/sign-in-press-v1387.test.tsx.",
+  "rescan": [
+    {
+      "provider": "claude-cli",
+      "model": "subscription",
+      "name": "Claude Code CLI",
+      "available": false,
+      "source": "cli",
+      "base_url": null,
+      "exec_path": null,
+      "context_window": null,
+      "detail": "Claude Code isn't signed in. Press Sign in beside Claude Code in Settings › Connections.",
+      "signed_in": false
+    },
+    {
+      "provider": "codex-cli",
+      "model": "subscription",
+      "name": "Codex CLI",
+      "available": false,
+      "source": "cli",
+      "base_url": null,
+      "exec_path": null,
+      "context_window": null,
+      "detail": "Codex isn't signed in. Press Sign in beside Codex in Settings › Connections.",
+      "signed_in": false
+    }
+  ],
+  "health": [
+    {
+      "provider": "claude-cli",
+      "available": false,
+      "installed": true,
+      "signed_in": false,
+      "sign_in_fix": "Claude Code isn't signed in. Press Sign in beside Claude Code in Settings › Connections.",
+      "class": "cli"
+    },
+    {
+      "provider": "codex-cli",
+      "available": false,
+      "installed": true,
+      "signed_in": false,
+      "sign_in_fix": "Codex isn't signed in. Press Sign in beside Codex in Settings › Connections.",
+      "class": "cli"
+    }
+  ],
+  "use_model": {
+    "status": 409,
+    "detail": "Claude Code isn't signed in. Press Sign in beside Claude Code in Settings › Connections."
+  }
+}

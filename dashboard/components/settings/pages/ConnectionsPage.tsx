@@ -18,7 +18,6 @@ import {
   HardDrive,
   KeyRound,
   Loader2,
-  LogIn,
   MessagesSquare,
   MoonStar,
   Pencil,
@@ -47,7 +46,8 @@ import { useApi } from "@/lib/useApi";
 import { useFocusRef } from "@/lib/useFocusRef";
 import { useDaemon } from "@/lib/daemon";
 import { OLLAMA_LOCAL_URL, providerDisplay, type HealthRow } from "@/lib/onboarding";
-import { codeParts, paneHref, subscriptionCliFor, useCliSignIn } from "@/lib/cliSignIn";
+import { subscriptionCliFor } from "@/lib/cliSignIn";
+import { CliSignInPress } from "@/components/connections/CliSignInPress";
 import {
   OWN_ENDPOINT_LABEL,
   connectionTitle,
@@ -1718,64 +1718,18 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
 /** Where to get Ollama (the connect doors' own link). */
 const OLLAMA_DOWNLOAD_URL = "https://ollama.com/download";
 
-/** A sentence with `backticked` words to type, drawn as code. */
-function withCode(text: string) {
-  return codeParts(text).map((part, i) =>
-    part.code ? (
-      <code key={i} className="font-mono text-zinc-300">
-        {part.text}
-      </code>
-    ) : (
-      part.text
-    ),
-  );
-}
-
 const ROW_LINK =
   "font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent";
 
 /** v1.353.0 (G33): what a signed-out Claude Code / Codex row offers — the
  *  ONE sign-in press (lib/cliSignIn): a Build pane opens with the CLI running
  *  on this PC's own login, and the row turns green by itself once the user
- *  finishes there. Never a terminal instruction. */
+ *  finishes there. Never a terminal instruction. Readiness 12A: the press is
+ *  the shared components/connections/CliSignInPress (the Rescan note, the
+ *  welcome card, the chat's warning and the New task door offer the same). */
 function CliSignInAction({ provider }: { provider: string }) {
-  const cli = subscriptionCliFor(provider);
   const { refresh } = useDaemon();
-  const { signIn, start } = useCliSignIn(() => refresh());
-  if (!cli) return null;
-  const si = signIn[cli.cli] ?? {};
-  return (
-    <div data-testid={`cli-sign-in-${provider}`} className="mt-1 text-[11px] leading-relaxed text-zinc-500">
-      {si.paneId !== undefined ? (
-        <span data-testid={`cli-pane-hint-${provider}`}>
-          A Build terminal opened with {cli.name} running. {withCode(cli.paneHint)} This turns green by
-          itself once you&apos;re signed in.{" "}
-          <Link href={paneHref(si.paneId)} className={ROW_LINK}>
-            Open the Build terminal
-          </Link>
-        </span>
-      ) : (
-        <button
-          type="button"
-          onClick={() => void start(cli)}
-          disabled={si.busy}
-          className={`-ml-2.5 ${CALM_ACTION}`}
-        >
-          {si.busy ? (
-            <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden />
-          ) : (
-            <LogIn size={13} aria-hidden />
-          )}
-          Sign in to {cli.name}
-        </button>
-      )}
-      {si.error && (
-        <span role="alert" className="mt-0.5 block text-tone-danger">
-          {si.error}
-        </span>
-      )}
-    </div>
-  );
+  return <CliSignInPress provider={provider} onLaunched={() => refresh()} />;
 }
 
 /** v1.353.0 (G34): Ollama answers on this PC but its address is not saved,
@@ -2142,7 +2096,14 @@ export default function ConnectionsPage() {
   // CLIs) on demand, so a CLI installed mid-session shows up without a
   // daemon restart.
   const [rescanBusy, setRescanBusy] = useState(false);
-  const [rescanNote, setRescanNote] = useState<{ ok: boolean; text: string } | null>(null);
+  // Readiness 12A (G33): `signIn` — subscription CLIs found but not signed
+  // in (a Sign in press each); `short` — other rows found but not usable.
+  const [rescanNote, setRescanNote] = useState<{
+    ok: boolean;
+    text: string;
+    signIn?: string[];
+    short?: string[];
+  } | null>(null);
 
   async function rescanClis() {
     setRescanBusy(true);
@@ -2162,15 +2123,27 @@ export default function ConnectionsPage() {
           `${ready.map(label).join(", ")} ready to use (${n} model${n === 1 ? "" : "s"})`,
         );
       }
-      for (const p of notReady) {
+      // Readiness 12A (G33): a subscription CLI that is on this PC but not
+      // signed in is NOT part of a green "complete" note, and never a typed
+      // terminal recipe: it gets its own line with the one Sign in press
+      // (the same press its row below offers). Any other not-usable row
+      // keeps its reason, in the same non-green line.
+      const signIn = notReady.filter((p) => !!subscriptionCliFor(p));
+      const other = notReady.filter((p) => !subscriptionCliFor(p));
+      const short: string[] = [];
+      for (const p of other) {
         const d = detected.find((m) => m.provider === p && m.detail)?.detail;
-        parts.push(`${label(p)} found but not usable${d ? ` (${d})` : ""}`);
+        short.push(`${label(p)} found but not usable${d ? ` (${d})` : ""}`);
       }
       setRescanNote({
         ok: true,
         text: parts.length
           ? `Rescan complete: ${parts.join("; ")}.`
-          : "Rescan complete. Nothing found on this PC yet. Install Claude Code, Codex or the Grok CLI and sign in, and it appears here.",
+          : notReady.length
+            ? "Rescan complete."
+            : "Rescan complete. Nothing found on this PC yet. Install Claude Code, Codex or the Grok CLI and sign in, and it appears here.",
+        signIn,
+        short,
       });
       reload(); // connections list
       refreshHealth(); // /health providers → the "Detected" pills below
@@ -2409,11 +2382,29 @@ export default function ConnectionsPage() {
           }
         >
           {rescanNote && (
-            <div className="mb-3">
+            <div className="mb-3 space-y-2">
               {rescanNote.ok ? (
                 <SuccessNote>{rescanNote.text}</SuccessNote>
               ) : (
                 <ErrorNote>{rescanNote.text}</ErrorNote>
+              )}
+              {/* Readiness 12A (G33): what was found but cannot answer yet,
+                  in a quiet line of its own — never inside the green note. */}
+              {(rescanNote.signIn ?? []).map((p) => (
+                <div key={p} data-testid={`rescan-signed-out-${p}`} className="text-xs text-tone-warn">
+                  {subscriptionCliFor(p)?.name ?? p} is on this PC but not signed in.{" "}
+                  <CliSignInPress
+                    provider={p}
+                    variant="inline"
+                    testIdPrefix="rescan"
+                    onLaunched={() => refreshHealth()}
+                  />
+                </div>
+              ))}
+              {(rescanNote.short ?? []).length > 0 && (
+                <div data-testid="rescan-not-usable" className="text-xs text-tone-warn">
+                  {`${(rescanNote.short ?? []).join("; ")}.`}
+                </div>
               )}
             </div>
           )}

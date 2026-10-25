@@ -11383,6 +11383,8 @@ export default function ChatPage() {
           splitChoice(choice).provider || health.defaultProvider
         ]
       }
+      // Readiness 12A (G33): the machine's own name, never "fleet-custom".
+      catalog={models}
     />
   );
 

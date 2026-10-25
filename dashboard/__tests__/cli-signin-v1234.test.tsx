@@ -22,13 +22,17 @@ describe("PreflightNote (v1.234.0)", () => {
     const row = screen.getByTestId("ij-preflight-note");
     expect(row.getAttribute("data-kind")).toBe("signed-out");
     expect(row.textContent).toMatch(/installed but not signed in/);
-    expect(row.textContent).toMatch(/run `claude` in a terminal, then \/login/i);
+    // Readiness 12A (G33, moved on purpose): the one Sign in press, never a
+    // terminal recipe (sign-in-press-v1387).
+    expect(row.textContent).toMatch(/Sign in to Claude Code/);
+    expect(row.textContent).not.toMatch(/terminal|\/login/i);
     expect(row.textContent).not.toMatch(/isn't reachable/);
   });
 
-  it("says codex login for codex", () => {
+  it("offers Codex's own Sign in for codex (readiness 12A, moved on purpose)", () => {
     render(<PreflightNote provider="codex-cli" available={false} signedOut />);
-    expect(screen.getByTestId("ij-preflight-note").textContent).toMatch(/codex login/);
+    expect(screen.getByTestId("ij-preflight-note").textContent).toMatch(/Sign in to Codex/);
+    expect(screen.getByTestId("ij-preflight-note").textContent).not.toMatch(/codex login/);
   });
 
   it("keeps the unreachable wording when not signed-out", () => {

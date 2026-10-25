@@ -287,8 +287,9 @@ describe("PreflightNote", () => {
     render(<PreflightNote provider="fleet-custom" available={false} />);
     const note = screen.getByTestId("ij-preflight-note");
     // v1.329.0 (K1): plain sentences, no dash aside.
+    // Readiness 12A (G33, moved on purpose): the plain name, never the id.
     expect(note.textContent).toContain(
-      "fleet-custom isn't reachable right now. This turn will fail.",
+      "Your model server isn't reachable right now. This turn will fail.",
     );
     expect(note.textContent).toContain("Pick another model or bring the endpoint back.");
     // v1.329.0: the warn TONE (amber on the dark themes, a deep ink on the
