@@ -17,6 +17,7 @@ tool, real Git bash on this PC); only the model is scripted.
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 
@@ -263,6 +264,13 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _capture_files() -> set[str]:
+    import glob
+    import tempfile
+
+    return set(glob.glob(os.path.join(tempfile.gettempdir(), "ij-out-*")))
+
+
 def _pid_alive(pid: int) -> bool:
     import psutil
 
@@ -297,6 +305,7 @@ async def test_a_background_job_without_a_redirect_returns_at_once_and_keeps_ser
     )
     (work / "hello.txt").write_bytes(b"hello from the server\n")
     pid = 0
+    before = _capture_files()
     try:
         sid = new_session(app, work, approval_mode="yolo")["id"]
         # The model's line, as Claude writes it: the server in the background,
@@ -323,6 +332,11 @@ async def test_a_background_job_without_a_redirect_returns_at_once_and_keeps_ser
         while _pid_alive(pid) and time.monotonic() < deadline:
             time.sleep(0.1)
         assert not _pid_alive(pid), "the session ended and its background job kept running"
+        # ... and its output file went with it (delete-on-close: nothing left)
+        deadline = time.monotonic() + 5
+        while _capture_files() - before and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert not (_capture_files() - before), "a capture file outlived the job that wrote it"
     finally:
         procs.end_all()
         if pid and _pid_alive(pid):
@@ -841,3 +855,62 @@ def test_a_setting_naming_wsl_is_never_run(monkeypatch, tmp_path, setting):
     monkeypatch.setattr(GB.os.path, "isfile", lambda p: True)  # even when the file is there
     assert GB.is_wsl_launcher(setting)
     assert GB.find() is None and ran == []
+
+
+# --------------------------------------------------------------------------- #
+# 11. bash's Job lets nothing leave; every other caller's Job still does
+# --------------------------------------------------------------------------- #
+
+
+_BREAKAWAY_CHILD = (
+    "import subprocess, sys\n"
+    "try:\n"
+    "    p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'], "
+    "creationflags=0x01000000)\n"  # CREATE_BREAKAWAY_FROM_JOB
+    "    print('LEFT', p.pid)\n"
+    "except OSError as exc:\n"
+    "    print('REFUSED', exc.winerror)\n"
+)
+
+
+@needs_bash
+def test_bashs_job_lets_nothing_leave_and_every_other_job_still_does(tmp_path):
+    """The doer's cost, measured and pinned both ways: a program a bash
+    command starts that ASKS to leave its job is refused ("Access is denied",
+    WinError 5) — that is what keeps MSYS's python/node inside the tree kill
+    (no pin held this before the review: deleting `breakaway_ok=False` kept
+    every test green). Every other caller's Job (cmd.exe, procs.run's default)
+    still lets such a program start."""
+    import psutil
+
+    from iron_jarvis.core import procs
+    from iron_jarvis.sandbox import git_bash as GB
+    from iron_jarvis.sandbox.native import NativeSandbox
+    from iron_jarvis.sandbox.policy import SandboxPolicy
+
+    script = tmp_path / "brk.py"
+    script.write_text(_BREAKAWAY_CHILD, encoding="utf-8")
+    # The BASE interpreter: a venv's python.exe is a launcher that keeps the
+    # real one in a nested job of its own, which a breakaway leaves (the
+    # program then stays in ours and dies with it — measured).
+    base = getattr(sys, "_base_executable", "") or sys.executable
+    py = base.replace("\\", "/")
+    sb = NativeSandbox(SandboxPolicy())
+    with procs.owned_by("brk-test"):
+        res = sb.run(f'"{py}" brk.py', cwd=tmp_path, timeout=30, bash=GB.find())
+    assert "REFUSED 5" in res.stdout, (res.stdout, res.stderr)
+    procs.end_session("brk-test")
+    # CONTROL: cmd.exe's Job (BREAKAWAY_OK, as every caller before) lets it go.
+    left = 0
+    try:
+        with procs.owned_by("brk-test"):
+            res = sb.run(f'"{base}" brk.py', cwd=tmp_path, timeout=30)
+        assert "LEFT" in res.stdout, (res.stdout, res.stderr)
+        left = int(res.stdout.split("LEFT", 1)[1].split()[0])
+    finally:
+        procs.end_session("brk-test")
+        if left:
+            try:
+                psutil.Process(left).kill()
+            except psutil.Error:
+                pass
