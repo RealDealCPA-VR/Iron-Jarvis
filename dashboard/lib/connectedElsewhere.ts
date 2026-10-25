@@ -27,10 +27,13 @@ export const APPS_DOOR_HREF = "/settings?section=connections-apps";
 /** "Connect <names> in Settings" (`daemon/doors.connect_label`). */
 const DOOR_RE = /^Connect (.+) in Settings$/;
 
-/** An app the chat offered to connect: by its name (a door says names), its
- *  catalog id (an app's key card, `app.<id>`) or its provider (a key card
- *  for a service, `connection.<provider>`). */
+/** An app the chat offered to connect: a Connect door's names (`door` — the
+ *  words between "Connect " and " in Settings", read against the Directory's
+ *  own names, see `doorRows`), a single name, its catalog id (an app's key
+ *  card, `app.<id>`) or its provider (a key card for a service,
+ *  `connection.<provider>`). */
 export interface OfferedApp {
+  door?: string;
   name?: string;
   id?: string;
   provider?: string;
@@ -105,11 +108,16 @@ export function offeredApps(m: MessageLike | null | undefined): OfferedApp[] {
   if (!m || m.role !== "assistant") return [];
   const out: OfferedApp[] = [];
   const add = (a: OfferedApp) => {
-    if (!out.some((o) => o.name === a.name && o.id === a.id && o.provider === a.provider)) out.push(a);
+    if (!out.some((o) => o.door === a.door && o.name === a.name && o.id === a.id && o.provider === a.provider))
+      out.push(a);
   };
   for (const d of Array.isArray(m.doors) ? (m.doors as DoorLike[]) : []) {
     if (!d || str(d.href) !== APPS_DOOR_HREF) continue;
-    for (const name of doorAppNames(str(d.label))) add({ name });
+    // Readiness 12B review: the door's WHOLE list of names, read against the
+    // Directory's own names when its list is in hand (a catalog name may hold
+    // ", " itself — "Microsoft 365 (Outlook, Calendar, OneDrive)").
+    const m2 = DOOR_RE.exec(str(d.label).trim());
+    if (m2 && doorAppNames(str(d.label)).length > 0) add({ door: m2[1] });
   }
   const ranConnect = Array.isArray(m.toolsUsed) && (m.toolsUsed as unknown[]).includes("app_connect");
   if (ranConnect) {
@@ -135,7 +143,7 @@ export function connectOffer(
   if (index < 0) return null;
   const apps = offeredApps(messages[index]);
   if (apps.length === 0) return null;
-  const key = `${index}:${apps.map((a) => `${a.name ?? ""}|${a.id ?? ""}|${a.provider ?? ""}`).join(",")}`;
+  const key = `${index}:${apps.map((a) => `${a.door ?? ""}|${a.name ?? ""}|${a.id ?? ""}|${a.provider ?? ""}`).join(",")}`;
   return { index, apps, key };
 }
 
@@ -157,6 +165,61 @@ function matches(app: OfferedApp, row: RowLike): boolean {
   return false;
 }
 
+const SEPARATORS = [", ", " and ", " or "];
+
+/** The Directory rows a door's list names, in its order (readiness 12B
+ *  review). The list is read item by item: at each item the LONGEST Directory
+ *  name that fills it (up to a separator or the end) is the app — so
+ *  "Gmail or Microsoft 365 (Outlook, Calendar, OneDrive)" is Gmail and
+ *  Microsoft 365, never "Calendar"; on a tie the first row (the Directory
+ *  lists its catalog first) wins; an item no row fills ("2 more apps") is
+ *  skipped. */
+export function doorRows(names: string, rows: readonly unknown[]): RowLike[] {
+  const text = str(names);
+  const lower = text.toLowerCase();
+  const valid = rows.filter((r): r is RowLike => !!r && typeof r === "object" && !!str((r as RowLike).name));
+  const out: RowLike[] = [];
+  let i = 0;
+  while (i < lower.length) {
+    let best: RowLike | null = null;
+    let bestLen = 0;
+    for (const r of valid) {
+      const n = str(r.name).toLowerCase();
+      if (n.length <= bestLen || !lower.startsWith(n, i)) continue;
+      const end = i + n.length;
+      if (end === lower.length || SEPARATORS.some((s) => lower.startsWith(s, end))) {
+        best = r;
+        bestLen = n.length;
+      }
+    }
+    if (best) {
+      out.push(best);
+      i += bestLen;
+    }
+    // On to the next item: past the nearest separator.
+    let next = -1;
+    let sepLen = 0;
+    for (const s of SEPARATORS) {
+      const at = lower.indexOf(s, i);
+      if (at >= 0 && (next < 0 || at < next)) {
+        next = at;
+        sepLen = s.length;
+      }
+    }
+    if (next < 0) break;
+    i = next + sepLen;
+  }
+  return out;
+}
+
+function connectedRow(raw: RowLike, fallbackName: string): ConnectedNow | null {
+  if (str(raw.status) !== "connected" || raw.enabled === false) return null;
+  const id = str(raw.id);
+  if (!id) return null;
+  const tools = typeof raw.tools_loaded === "number" && raw.tools_loaded > 0 ? Math.floor(raw.tools_loaded) : 0;
+  return { app: id, name: str(raw.name) || fallbackName || id, tools, mcp: str(raw.connect_via) === "mcp" };
+}
+
 /** The first offered app whose Directory card now reads "connected" (it
  *  works — an extension's tools loaded and signed in, an app signed in, a
  *  key that was not refused) and is switched on; null when none. The
@@ -165,13 +228,18 @@ function matches(app: OfferedApp, row: RowLike): boolean {
 export function nowConnected(apps: readonly OfferedApp[], rows: unknown): ConnectedNow | null {
   if (!Array.isArray(rows)) return null;
   for (const app of apps) {
+    if (app.door) {
+      for (const raw of doorRows(app.door, rows)) {
+        const hit = connectedRow(raw, "");
+        if (hit) return hit;
+      }
+      continue;
+    }
     for (const raw of rows as RowLike[]) {
       if (!raw || typeof raw !== "object" || !matches(app, raw)) continue;
-      if (str(raw.status) !== "connected" || raw.enabled === false) break;
-      const id = str(raw.id);
-      if (!id) break;
-      const tools = typeof raw.tools_loaded === "number" && raw.tools_loaded > 0 ? Math.floor(raw.tools_loaded) : 0;
-      return { app: id, name: str(raw.name) || app.name || id, tools, mcp: str(raw.connect_via) === "mcp" };
+      const hit = connectedRow(raw, app.name ?? "");
+      if (hit) return hit;
+      break;
     }
   }
   return null;

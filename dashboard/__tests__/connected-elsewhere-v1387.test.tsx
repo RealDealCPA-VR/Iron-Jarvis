@@ -325,7 +325,9 @@ describe("the reading, directly", () => {
     const msgs = [{ role: "user" }, { role: "assistant", doors: [door] }];
     const offer = connectOffer(msgs)!;
     expect(offer.index).toBe(1);
-    expect(offer.apps).toEqual([{ name: "Google Drive" }]);
+    // (Review) A door is kept WHOLE and read against the Directory's own
+    // names — a catalog name may hold ", " itself (connected-elsewhere-doors).
+    expect(offer.apps).toEqual([{ door: "Google Drive" }]);
     expect(connectOffer([...msgs, { role: "user" }])).toBeNull();
     expect(connectOffer([])).toBeNull();
   });

@@ -1,0 +1,45 @@
+{
+  "doors": {
+    "outlook": "Connect Microsoft 365 (Outlook, Calendar, OneDrive) in Settings",
+    "inbox": "Connect Gmail or Microsoft 365 (Outlook, Calendar, OneDrive) in Settings",
+    "three": "Connect Notion, Google Drive and Dropbox in Settings"
+  },
+  "rows": {
+    "gmail": {
+      "id": "gmail",
+      "name": "Gmail",
+      "connect_via": "mcp",
+      "status": "disconnected"
+    },
+    "microsoft_365": {
+      "id": "microsoft_365",
+      "name": "Microsoft 365 (Outlook, Calendar, OneDrive)",
+      "connect_via": "mcp",
+      "status": "disconnected"
+    },
+    "notion": {
+      "id": "notion",
+      "name": "Notion",
+      "connect_via": "mcp",
+      "status": "disconnected"
+    },
+    "google_drive": {
+      "id": "google_drive",
+      "name": "Google Drive",
+      "connect_via": "oauth",
+      "status": "disconnected"
+    },
+    "onedrive": {
+      "id": "onedrive",
+      "name": "OneDrive",
+      "connect_via": "oauth",
+      "status": "disconnected"
+    },
+    "dropbox": {
+      "id": "dropbox",
+      "name": "Dropbox",
+      "connect_via": "oauth",
+      "status": "disconnected"
+    }
+  }
+}
