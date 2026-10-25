@@ -1404,6 +1404,56 @@ def _needs_words(needs: str) -> str:
     return f" {n} first."
 
 
+#: Readiness 12B (G39): where a connected app's tools CAN be used, said to the
+#: model and to the user from the phone's conversation.
+PHONE_APPS_PLACE = "Chat in Iron Jarvis on the PC"
+
+
+def phone_unreachable(text: str, rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """The connected apps *text* names for the user's OWN data that the
+    PHONE's conversation cannot use (readiness 12B, G39): ``[{id, name}]``,
+    rows order. Only an app whose tools are its way in (``state ==
+    "connected"`` with tools loaded — an extension); a drive that signed in
+    through the browser reaches chat through a memory base, which the phone
+    reads too. The own-data rule is the Connect door's (:func:`own_data_apps`
+    — research about the app needs none of its tools). Never raises."""
+    try:
+        cands = [
+            r for r in rows or []
+            if isinstance(r, dict) and r.get("state") == "connected"
+            and int(r.get("tools") or 0) > 0 and r.get("id") and r.get("id") not in CLI_WORDS
+        ]
+        if not cands:
+            return []
+        own = set(own_data_apps(text))
+        return [
+            {"id": str(r["id"]), "name": str(r.get("name") or r["id"])}
+            for r in cands if r["id"] in own
+        ]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def phone_apps_note(names: "list[str] | tuple[str, ...]") -> str:
+    """The note under a reply in the PHONE's conversation (readiness 12B,
+    G39) for the connected apps it named and could not use — "" when none.
+    Fixed words (never the model's), in the chat's note shape; each app
+    named once."""
+    seen: list[str] = []
+    for n in names or []:
+        n = " ".join(str(n or "").split())
+        if n and n not in seen:
+            seen.append(n)
+    if not seen:
+        return ""
+    apps = seen[0] if len(seen) == 1 else ", ".join(seen[:-1]) + " and " + seen[-1]
+    it = "it" if len(seen) == 1 else "them"
+    return (
+        f"\n\n_Note: I can't use {apps} from this conversation with your phone. To have me"
+        f" use {it}, ask in Chat in Iron Jarvis on your PC._"
+    )
+
+
 def connected_ids(rows: list[dict[str, Any]]) -> list[str]:
     """The catalog ids of the rows :func:`app_states` read as ``connected``
     (v1.358.0): the apps a search may be taken over by (the web rule's
@@ -1417,13 +1467,22 @@ def connected_ids(rows: list[dict[str, Any]]) -> list[str]:
         return []
 
 
-def apps_section(rows: list[dict[str, Any]]) -> str:
+def apps_section(
+    rows: list[dict[str, Any]], *, phone_own: "list[str] | tuple[str, ...] | None" = None,
+) -> str:
     """The grounding section for the named apps ("" when none). Plain facts
     the model must not contradict, plus what to do for an app that is not
     connected — say so and offer to connect it, never search the web for
     what is inside it. v1.358.0 (the re-audit's regression): a question ABOUT
     the app itself (its docs, pricing, how to use it) is ordinary web
-    research, so the line no longer forbids the web outright. Never raises."""
+    research, so the line no longer forbids the web outright. Never raises.
+
+    *phone_own* (readiness 12B, G39) is given ONLY for the PHONE's
+    conversation (``failure_words.phone_surface``): a connected app whose
+    tools are its way in says those tools cannot be used there — only from
+    Chat on the PC — and, for the apps listed (named for the user's own data,
+    :func:`phone_unreachable`), that a note under the reply tells the user
+    how. ``None`` (every other turn): the bytes are what they were."""
     if not rows:
         return ""
     lines: list[str] = []
@@ -1465,6 +1524,26 @@ def apps_section(rows: list[dict[str, Any]]) -> str:
                 )
                 if r.get("note"):
                     line = line.rstrip(".") + f"; {r['note']}."
+                if phone_own is not None and n:
+                    # Readiness 12B (G39): this conversation (the phone's)
+                    # arms no app tool — it cannot show a card, so a tool
+                    # armed here would run with nobody's OK.
+                    line = line.rstrip(".") + (
+                        ", but its tools can't be used in this conversation with the phone"
+                        f" — only from {PHONE_APPS_PLACE}."
+                    )
+                    if r.get("id") in phone_own:
+                        line += (
+                            " Never guess what is in it or say you looked; say in a few"
+                            " words that you can't reach it from here — a line under your"
+                            " reply already tells the user how to have it done from the PC,"
+                            " so do not repeat that."
+                        )
+                    else:
+                        line += (
+                            f" If answering needs what is in the user's own {name}, say"
+                            " plainly that it can't be reached from here."
+                        )
             elif state == "not_working":
                 why = f" ({r['note']})" if r.get("note") else ""
                 # v1.354.0 re-review: said only when answering NEEDS the app
