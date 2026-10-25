@@ -735,3 +735,104 @@ def test_a_window_learned_on_one_endpoint_is_never_used_for_another():
     assert a.window("m") == 6_000
     assert b.window("m") is None and b.cap("m") == 32_768
     assert a.window("other-model") is None
+
+
+# --------------------------------------------------------------------------- #
+# 12. claude-cli: a call cut at the limit never becomes a runnable call.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("closed", [True, False])
+def test_claude_clis_relay_never_hands_on_a_cut_call(closed):
+    """Evidence for the report (not red-first: nothing changed here). A
+    claude-cli answer cut inside a tool call's streamed input: the relay's
+    Capture either cannot parse the block it closes (a ValueError — the
+    relay's handler records it as a failure) or never sees it close
+    (``complete`` False) — `transport.assemble` then raises
+    `upstream_failure`: the turn fails honestly; the half call is never
+    run. (The CLI keeps its own output limit; the reply budget does not
+    reach it.)"""
+    from iron_jarvis.providers.adapters.claude_native.admission import Capture
+
+    events = [
+        {"type": "message_start", "message": {"content": [], "usage": {"input_tokens": 5}}},
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "tool_use", "id": "t1", "name": "mcp__ij__write_file", "input": {}}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "input_json_delta", "partial_json": '{"path": "calc.py", "content": "class C'}},
+        *([{"type": "content_block_stop", "index": 0}] if closed else []),
+        {"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, "usage": {"output_tokens": 32000}},
+        {"type": "message_stop"},
+    ]
+    data = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
+    capture = Capture()
+    if closed:
+        with pytest.raises(ValueError):
+            capture.feed(data)
+    else:
+        capture.feed(data)
+        assert capture.complete is False
+
+
+# --------------------------------------------------------------------------- #
+# 13. The rules the doer's pins left unchecked (each mutation survived them).
+# --------------------------------------------------------------------------- #
+def test_litellms_legacy_max_tokens_is_an_output_limit_only_when_it_differs_from_the_input_one():
+    """LiteLLM's ``max_tokens`` is the OUTPUT limit when a provider states one
+    and a copy of the INPUT limit otherwise: equal to ``max_input_tokens``
+    it says nothing about the output. ``max_output_tokens`` wins over it;
+    two deployments of one name keep the smaller limit."""
+    from iron_jarvis.fleet.upstreams import parse_model_info
+
+    def entry(name, **info):
+        return {"model_name": name, "litellm_params": {"model": f"hosted_vllm/{name}",
+                                                       "api_base": "http://10.0.0.5:8000/v1"},
+                "model_info": info}
+
+    table = parse_model_info({"data": [
+        entry("same", max_input_tokens=131_072, max_tokens=131_072),
+        entry("legacy", max_input_tokens=131_072, max_tokens=8_192),
+        entry("both", max_input_tokens=131_072, max_tokens=8_192, max_output_tokens=16_384),
+        entry("pair", max_output_tokens=16_384),
+        entry("pair", max_output_tokens=8_000),
+    ]})
+    caps = {e.alias: e.max_output for e in table.entries}
+    assert caps == {"same": None, "legacy": 8_192, "both": 16_384, "pair": 8_000}
+
+
+def test_a_stated_limit_is_taken_up_to_the_ceiling_and_an_unknown_window_never_asks_below_the_old_budget():
+    from iron_jarvis.providers.reply_budget import (
+        DEFAULT_REPLY_TOKENS,
+        REPLY_CEILING,
+        ask_for,
+        cap_for,
+    )
+
+    assert cap_for(None) == DEFAULT_REPLY_TOKENS == 32_768
+    assert cap_for(200_000) == REPLY_CEILING == 65_536
+    assert cap_for(16_384) == 16_384
+    assert cap_for(200_000, learned=12_000) == 12_000
+    # an UNKNOWN window with a prompt that would leave little room: the old 4,096
+    assert ask_for(32_768, None, 30_000) == 4_096
+    # a KNOWN window is honoured below it (down to 1,024)
+    assert ask_for(32_768, 32_000, 29_000) == 1_024
+
+
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_a_reply_that_keeps_being_cut_ends_at_the_total_even_with_progress_between(env, lane):
+    """The total bound (CUT_OFF_TOTAL_MAX): a model that is cut, recovers,
+    and is cut again on every file still reaches an end — each cut can cost
+    a whole budget of generation — and the end says "in this reply", not
+    "in a row"."""
+    from iron_jarvis.providers.reply_budget import CUT_OFF_TOTAL_MAX
+
+    platform, ws, wire = env
+    script: list = []
+    for i in range(CUT_OFF_TOTAL_MAX + 2):
+        script += [_cut(cut_calls=["write_file"]), _write(f"f{i}.py", "X = 1\n", f"w{i}")]
+    model = wire(script + ["never reached"])
+    done = await _lane(lane, platform, _body(ws), round_budget=60)
+    assert done["route"]["cut_off"] == {"times": CUT_OFF_TOTAL_MAX + 1, "recovered": False}
+    assert f"cut off at its output limit {CUT_OFF_TOTAL_MAX + 1} times in this reply" in done["reply"]
+    assert "in a row" not in done["reply"]
+    assert (ws / f"f{CUT_OFF_TOTAL_MAX - 1}.py").exists()
+    assert not (ws / f"f{CUT_OFF_TOTAL_MAX}.py").exists()
+    assert all(c["tools"] for c in model.calls)
