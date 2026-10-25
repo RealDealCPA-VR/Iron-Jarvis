@@ -1847,7 +1847,8 @@ def build_platform(
     platform.settle_stopped_waiting = _settle_stopped_waiting
 
     def _deliver_outcome(
-        task, payload: dict, status: str, detail: str, *, bell_says: bool = False
+        task, payload: dict, status: str, detail: str, *, bell_says: bool = False,
+        asked: bool = False,
     ) -> None:
         # A schedule is explicit intent, so the default audience is EVERY
         # destination ("This PC" included) — the pre-v1.119 default (default
@@ -1875,6 +1876,16 @@ def build_platform(
                 # case; every other destination still gets the schedule's
                 # own line.
                 targets = platform.notifier.without_desktop(targets)
+            if asked:
+                # Readiness 12B (0e.4): the fire PARKED a workflow on a
+                # question, and the phone already gets that question in the
+                # copy it can answer (comm/prompts) — this "needs you" line
+                # was a second (with the engine's park line, a third) message
+                # about the same thing. Every other destination keeps it.
+                from .comm.prompts import question_destinations
+
+                skip = question_destinations(platform.notifier, engine)
+                targets = [t for t in targets if t not in skip]
             if targets:
                 platform.notifier.notify(message, targets)
         except Exception:  # noqa: BLE001
@@ -2320,6 +2331,9 @@ def build_platform(
                 # the row reads "Needs you" and the notice "needs you", never
                 # "ok"/"Done" over work that waits for the person.
                 fired["outcome"] = _run_outcome.STATUS_NEEDS_YOU
+                # Readiness 12B (0e.4): the phone's answerable copy of the
+                # question is this fire's one line there (`_deliver_outcome`).
+                fired["asked"] = True
                 # (integrate) remembered, so the answer settles the row.
                 await asyncio.to_thread(
                     _parked_runs.park,
@@ -2507,7 +2521,8 @@ def build_platform(
             _record_outcome(task.name, status, detail, fired["session_id"])
             if status != _run_outcome.STATUS_CANCELLED:
                 _deliver_outcome(
-                    task, payload, status, detail, bell_says=_bell_says(fired, status)
+                    task, payload, status, detail, bell_says=_bell_says(fired, status),
+                    asked=bool(fired.get("asked")),
                 )
 
         return _fire()

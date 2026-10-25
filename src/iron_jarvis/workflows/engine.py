@@ -639,6 +639,10 @@ class WorkflowEngine:
                     # bell counts and pings the parked question (its waiting
                     # row), so "This PC" stays quiet — one notice per ask.
                     skip_desktop=True,
+                    # Readiness 12B (0e.4): a destination the ANSWERABLE
+                    # question reaches (comm/prompts, the phone) gets that
+                    # one line only — this one said the same question again.
+                    skip_asked=True,
                 )
                 refreshed = self._get_record(run_id)
                 return refreshed if refreshed is not None else record
@@ -1338,7 +1342,9 @@ class WorkflowEngine:
                 return f"step summary does not contain '{text}'"
         return None
 
-    def _deliver(self, message: str, *, skip_desktop: bool = False) -> tuple[bool, str]:
+    def _deliver(
+        self, message: str, *, skip_desktop: bool = False, skip_asked: bool = False
+    ) -> tuple[bool, str]:
         """Send to EVERY destination (schedule-delivery semantics — a workflow
         speaking to nobody is indistinguishable from a broken one). Returns
         (any_delivered, detail); never raises. Messages are capped below
@@ -1347,7 +1353,13 @@ class WorkflowEngine:
         ``skip_desktop`` (v1.360.0 integrate): leave out "This PC" — for a
         parked run's question, which the bell already counts and pings on
         this PC. A notify STEP keeps every destination: it is the user's own
-        message, and nothing else says it."""
+        message, and nothing else says it.
+
+        ``skip_asked`` (readiness 12B, 0e.4): leave out every destination the
+        ANSWERABLE copy of a parked run's question reaches
+        (``comm.prompts.question_destinations`` — the phone's own chat), so
+        the phone hears the question ONCE, in the copy it can answer. BLOCKING
+        read (this method already runs off the loop)."""
         try:
             notifier = self.platform.notifier
             msg = message if len(message) <= 3500 else message[:3500] + "…"
@@ -1356,11 +1368,16 @@ class WorkflowEngine:
                 without = getattr(notifier, "without_desktop", None)
                 if callable(without):
                     targets = list(without(targets))
-                if not targets:
-                    # An EMPTY list would fall back to the default channel
-                    # (Notifier._targets) — "This PC" again. Nothing else to
-                    # send to: the bell is the notice.
-                    return False, "no destination besides This PC (the bell says it)"
+            if skip_asked:
+                from ..comm.prompts import question_destinations
+
+                asked = question_destinations(notifier, getattr(self.platform, "engine", None))
+                targets = [t for t in targets if t not in asked]
+            if (skip_desktop or skip_asked) and not targets:
+                # An EMPTY list would fall back to the default channel
+                # (Notifier._targets) — "This PC" again. Nothing else to
+                # send to: the bell (and the phone's answerable copy) say it.
+                return False, "no destination besides This PC (the bell says it)"
             results = notifier.notify(msg, targets)
             oks = [k for k, v in (results or {}).items() if v.get("ok")]
             if oks:
