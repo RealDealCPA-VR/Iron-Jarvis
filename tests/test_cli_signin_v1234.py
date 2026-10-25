@@ -307,7 +307,11 @@ def test_rescan_reports_installed_not_signed_in(tmp_path, monkeypatch):
     codex = [r for r in rows if r["provider"] == "codex-cli"]
     assert len(codex) == 1
     assert codex[0]["available"] is False
-    assert "codex login" in codex[0]["detail"]
+    # Readiness 12A (G33, moved on purpose): the one Sign in press, never a
+    # typed terminal recipe ("run `codex login`").
+    assert codex[0]["detail"] == SIGN_IN_FIX["codex"]
+    assert "codex login" not in codex[0]["detail"] and "terminal" not in codex[0]["detail"]
+    assert codex[0]["signed_in"] is False
     assert not [r for r in rows if r["provider"] == "claude-cli"]  # not installed → no row
 
 
@@ -323,6 +327,7 @@ def test_doctor_names_a_signed_out_cli(tmp_path, monkeypatch):
     checks = {c["name"]: c for c in runtime_checks(platform)}
     c = checks["claude-cli_login"]
     assert c["ok"] is False
-    assert "NOT signed in" in c["detail"]
+    # Readiness 12A (G33, moved on purpose): the program's own name, plain.
+    assert c["detail"] == "Claude Code is installed but not signed in, so it can't answer yet"
     assert c["fix"] == SIGN_IN_FIX["claude"]
     assert "codex-cli_login" not in checks  # not installed → silent

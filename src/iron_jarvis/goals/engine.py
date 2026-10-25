@@ -154,6 +154,25 @@ def _agent_type(name: str) -> AgentType:
         return AgentType.BUILDER
 
 
+def _breaker_reason(exc: BaseException, row: Any, platform: Any) -> str:
+    """A goal iteration's failure in the run's plain words (readiness 12A
+    review): ``failure_words.plain_reason`` — the sentence
+    ``Orchestrator._finalize_failed`` puts after "The run failed: " in the
+    run's own summary, with the run's provider as its hint (and never the
+    run's folder note, which is not a reason). Never the class name or the
+    raw text. Bounded; never raises."""
+    try:
+        from ..providers.failure_words import plain_reason
+
+        return plain_reason(
+            exc,
+            manager=getattr(platform, "providers", None),
+            provider=str(getattr(row, "provider", "") or ""),
+        )[:400]
+    except Exception:  # noqa: BLE001 — wording only
+        return "the run could not finish"
+
+
 class GoalEngine:
     """Runs goal iterations via the orchestrator. See the module docstring.
 
@@ -380,8 +399,15 @@ class GoalEngine:
             # is the goal-side half, and it returns the honest failure dict
             # rather than re-raising, exactly like a failed-but-completed run.
             elapsed, _waited = self._worked_s(started, session.id)
-            reason = f"session {session.id} raised {type(exc).__name__}: {exc}"[:400]
             row = self._session_row(session.id) or session
+            # Readiness 12A review (G28): the breaker's reason — shown
+            # verbatim on the Autonomy page and sent to the phone ("Goal
+            # breaker tripped: … — <reason>") — is the run's ONE rule
+            # (failure_words.plain_reason), never "session X raised
+            # ProviderError: codex-cli: CLI exited 1: …". The raw text stays
+            # on the run itself (its page's folded Details); the checkpoint
+            # names that run (`last_session_id`).
+            reason = _breaker_reason(exc, row, self.p)
             self._settle_spend(goal, row, elapsed)
             checkpoint.pop("running_session_id", None)
             checkpoint["last_session_id"] = session.id

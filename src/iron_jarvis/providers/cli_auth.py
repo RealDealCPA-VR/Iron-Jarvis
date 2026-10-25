@@ -47,14 +47,23 @@ CLI_BINARIES: dict[str, str] = {"claude-cli": "claude", "codex-cli": "codex"}
 
 #: The remedy, per CLI, in the words the user needs (the Handbook and the
 #: Connections row say the same thing — one source).
+#:
+#: Readiness 12A (G33): the ONE press, never a typed terminal recipe. The app
+#: has had a Sign in button beside each of them since v1.353.0 (Settings ›
+#: Connections, ``failure_words.ACCOUNTS_PLACE``: a Build terminal opens with
+#: the CLI started in it), yet this sentence still said "Open a terminal, run
+#: `claude`, then `/login`" — after Rescan (inside a green note), on the
+#: welcome card, in Jarvis's own health answers and in the use-model refusal.
+#: A surface with a press beside it shows the press; a surface with none (the
+#: phone, a model's answer) says where the press is, in these words.
 SIGN_IN_FIX: dict[str, str] = {
     "claude": (
-        "Claude Code isn't signed in. Open a terminal, run `claude`, then "
-        "`/login`, then click Test on Connections."
+        "Claude Code isn't signed in. Press Sign in beside Claude Code in "
+        "Settings › Connections."
     ),
     "codex": (
-        "Codex isn't signed in. Open a terminal, run `codex login`, then "
-        "click Test on Connections."
+        "Codex isn't signed in. Press Sign in beside Codex in "
+        "Settings › Connections."
     ),
 }
 
@@ -79,8 +88,16 @@ PROBE_TIMEOUT_S = 12.0
 
 
 def is_sign_in_refusal(text: str) -> bool:
-    """True when *text* (a CLI's own words) says the user is not signed in."""
-    return bool(text) and _SIGN_IN_RE.search(text) is not None
+    """True when *text* (a CLI's own words) says the user is not signed in —
+    or carries this module's own remedy (:data:`SIGN_IN_FIX`), which every
+    sign-in refusal an adapter raises puts in its message (readiness 12A:
+    the remedy no longer says "run `codex login`", the phrase that used to
+    make the Codex adapter's own refusal recognisable here)."""
+    if not text:
+        return False
+    if _SIGN_IN_RE.search(text) is not None:
+        return True
+    return any(fix in text for fix in SIGN_IN_FIX.values())
 
 
 def _result_text(stdout: str) -> tuple[str | None, bool]:

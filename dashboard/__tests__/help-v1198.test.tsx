@@ -291,20 +291,20 @@ describe("Troubleshooting card (v1.198.0)", () => {
     expect(screen.getByText(/%APPDATA%\\Iron Jarvis/)).toBeInTheDocument();
   });
 
-  it("'Something else?' points at the Overview's System health (Advanced), not Settings", () => {
-    // The System health panel renders on the OVERVIEW behind the Advanced nav
-    // toggle (app/page.tsx `{advanced && ...}`); Settings has no such card.
-    // This entry once mirrored a stale README sentence linking /settings.
+  it("'Something else?' points at Everything › Status, where problems are shown (readiness 12A)", () => {
+    // Moved on purpose (readiness 12A, 0d.6): it pointed at "the System health
+    // card on the Overview (switch on Advanced at the bottom of the nav)" —
+    // the calm UI (v1.321.0) retired that card and the Advanced switch.
     renderHelp();
 
     const row = screen.getByText("Something else?").closest("li");
     expect(row).not.toBeNull();
     const link = within(row as HTMLElement).getByRole("link");
-    expect(link).toHaveAttribute("href", "/");
-    expect(link.getAttribute("href")).not.toContain("/settings");
-    expect(row!.textContent).toMatch(/System health card on the Overview/);
-    // The Advanced gate is real — the copy must tell the user how to see it.
-    expect(row!.textContent).toContain("Advanced");
-    expect(row!.textContent).not.toContain("Settings");
+    expect(link).toHaveAttribute("href", "/everything#status");
+    expect(link.textContent).toBe("Everything › Status");
+    expect(row!.textContent).toMatch(/ask Jarvis in chat/);
+    for (const gone of ["System health card", "Overview", "Advanced", "/settings"]) {
+      expect(row!.textContent).not.toContain(gone);
+    }
   });
 });

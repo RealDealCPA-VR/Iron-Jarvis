@@ -216,7 +216,8 @@ describe("the Schedules page row", () => {
     expect(screen.queryByText("Done")).toBeNull();
     expect(screen.queryByText("Not run yet")).toBeNull();
     const cell = word.parentElement as HTMLElement;
-    expect(within(cell).getByText(/open session/).closest("a")?.getAttribute("href")).toBe(
+    // Readiness 12A (0d.6, moved on purpose): "open run", never "open session".
+    expect(within(cell).getByText(/open run/).closest("a")?.getAttribute("href")).toBe(
       "/sessions/session_abc",
     );
     expect(screen.getByTestId("schedule-detail-nightly").textContent).toBe(NEEDS_YOU_DETAIL);
@@ -322,7 +323,7 @@ describe("a project's Schedules list", () => {
     expect(word.className).toMatch(/text-tone-warn/);
     expect(word.getAttribute("title")).toBe(NEEDS_YOU_DETAIL);
     expect(screen.queryByText(/not run yet/i)).toBeNull();
-    expect(screen.getByText(/open session/).closest("a")?.getAttribute("href")).toBe("/sessions/session_abc");
+    expect(screen.getByText(/open run/).closest("a")?.getAttribute("href")).toBe("/sessions/session_abc");
   });
 
   it("a failure names its reason once", async () => {

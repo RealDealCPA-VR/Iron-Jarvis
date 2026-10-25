@@ -296,7 +296,8 @@ def test_every_new_verb_reads_in_the_present(builtins):
         head = did.split(" ", 1)[0]
         assert head in mission._PRESENT, (name, did)
     assert mission.do_words("assign_work") == "queue a task for a teammate"
-    assert mission.do_words("sentinel_update") == "switch a watcher on or off"
+    # Readiness 12A (G22/G24, moved on purpose): the card's own words (mission.card_words).
+    assert mission.do_words("sentinel_update") == "pause or resume a watcher"
     assert mission.do_words("pane_send") == "type into a terminal"
 
 

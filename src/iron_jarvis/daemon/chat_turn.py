@@ -2604,7 +2604,42 @@ def builtin_tool_place(tool: str) -> str:
     return ""
 
 
-def refusal_footnotes(refused: "list[tuple[str, str]]") -> str:
+#: Readiness 12A (the Phase 3 review): a "not armed" refusal's words where the
+#: reply was NOT made on the chat page. Only the chat page has a Tools menu
+#: (Web & research, Auto tools, Connections) — a Build session, a Build
+#: terminal's chat and the phone have none, so the footnote there says only
+#: what is true where it is read and names no place to turn the tool on.
+#: (The model-facing refusal is unchanged: Phase 3's harness list of "the
+#: tools you can call in this reply" rides that, not this footnote.)
+NOT_ARMED_ELSEWHERE: dict[str, str] = {
+    "build": "not available in this reply",
+    "pane": "not available in this terminal's chat",
+    "phone": "not available from your phone",
+    # 12A review (the lane's open point 2): the browser add-on's sidebar —
+    # a footnote-only surface (never a failure_words surface): the stream lane
+    # passes it for a turn the panel made (`arm_family`, the panel's seam).
+    "sidebar": "not available in the browser sidebar",
+}
+#: The browser sidebar's footnote surface (``routes/chat.chat_stream``).
+SIDEBAR_FOOTNOTES = "sidebar"
+
+
+def _footnote_surface(surface: "str | None") -> str:
+    """Where this turn's footnotes are read: *surface* when the caller knows
+    it (a Build pane's chat — :func:`surface_for`), else the turn's own
+    (``failure_words.current_surface``: "build" inside a Build session's turn,
+    "phone" inside the phone's, else "chat"). Never raises."""
+    if surface:
+        return str(surface)
+    try:
+        from ..providers.failure_words import current_surface
+
+        return current_surface()
+    except Exception:  # noqa: BLE001 — wording only
+        return "chat"
+
+
+def refusal_footnotes(refused: "list[tuple[str, str]]", *, surface: "str | None" = None) -> str:
     """The reply footnotes for this turn's refused calls: ONE line per
     (tool, refusal), in first-seen order, deduped — ``not armed`` reads
     ``(not turned on for this chat)``, ``low trust`` ``(blocked under low
@@ -2623,24 +2658,36 @@ def refusal_footnotes(refused: "list[tuple[str, str]]") -> str:
     chat) — turn on Auto tools in the chat's Tools menu, then ask for it in
     your message._"), never by its raw id, and a "not armed" refusal says
     where to turn it on (:func:`builtin_tool_place`). An id that is neither
-    keeps its raw line."""
+    keeps its raw line.
+
+    Readiness 12A (the Phase 3 review): the Tools menu is the CHAT PAGE's. A
+    reply made anywhere else (*surface*, see :func:`_footnote_surface`: a
+    Build session, a Build terminal's chat, the phone) says "not armed" in
+    words true there (:data:`NOT_ARMED_ELSEWHERE`) and names no place — the
+    chat page's footnotes are byte for byte as before. Both lanes pass
+    ``surface_for(body)``, lock-step."""
+    where = _footnote_surface(surface)
+    page = where not in NOT_ARMED_ELSEWHERE
     out = ""
     for name, label in dict.fromkeys(refused):
         words = REFUSAL_FOOTNOTE_WORDS.get(label)
         if not words:
             continue
+        if label == "not armed" and not page:
+            words = NOT_ARMED_ELSEWHERE[where]
+        place_ok = label == "not armed" and page
         parts = app_tool_words(name)
         if parts is None:
             does = builtin_tool_words(name)
             if does is None:
                 out += f"\n\n_Note: {name} could not run ({words})._"
                 continue
-            place = builtin_tool_place(name) if label == "not armed" else ""
+            place = builtin_tool_place(name) if place_ok else ""
             fix = f" — {place}" if place else ""
             out += f"\n\n_Note: Jarvis couldn't {does} ({words}){fix}._"
             continue
         app, tool_words = parts
-        fix = f" — turn {app} on in the chat's Tools menu › Connections" if label == "not armed" else ""
+        fix = f" — turn {app} on in the chat's Tools menu › Connections" if place_ok else ""
         out += f"\n\n_Note: {app} › {tool_words} could not run ({words}){fix}._"
     return out
 
@@ -9460,7 +9507,7 @@ async def run_chat_turn(
         reply = reply.strip()
         # v1.344.0 (M3): one line per refused (tool, reason) — permission
         # denied, not armed, low trust. MIRROR NOTE (lock-step): routes/chat.py.
-        reply += refusal_footnotes(refused_tools)
+        reply += refusal_footnotes(refused_tools, surface=surface_for(body))  # 12A: words true where read
     else:
         if _cut_end:
             # v1.387.0: the honest end of a turn whose replies kept being cut
@@ -9474,7 +9521,7 @@ async def run_chat_turn(
                 tools_used, last_tool_output, _f_refusal, surface=surface_for(body),
             )
             _declined_reply = _f_refusal is not None
-        reply += refusal_footnotes(refused_tools)
+        reply += refusal_footnotes(refused_tools, surface=surface_for(body))  # 12A: words true where read
         if stopped_note:
             reply += f"\n\n_Note: {stopped_note}._"
         if lang_note:

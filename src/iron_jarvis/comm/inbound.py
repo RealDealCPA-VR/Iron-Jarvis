@@ -127,21 +127,31 @@ def _failure_words_for_phone(exc: HTTPException) -> str:
     return str(exc.detail)
 
 
-def _run_problem(exc: BaseException) -> str:
+def _run_problem(exc: BaseException, *, manager: Any = None, provider: str = "") -> str:
     """What the phone hears after "I hit a problem: " when a job it started
     FAILED (v1.378.0 review). A provider's SAFETY REFUSAL says the run's
     plain sentence (``failure_words.plain_reason``) — never the class name and
-    the vendor's words ("ProviderRefusal: … stop_reason refusal …"). Any other
-    failure keeps its own text exactly as before. Never raises."""
-    try:
-        from ..providers.failure_words import refusal_reason
+    the vendor's words ("ProviderRefusal: … stop_reason refusal …").
 
-        refused = refusal_reason(exc)
-        if refused:
-            return refused
+    Readiness 12A review (G28): EVERY failure does — the run's ONE rule
+    (``failure_words.plain_reason``, what ``Orchestrator._finalize_failed``
+    writes into the run's own summary), so the phone hears "Codex couldn't
+    finish this task. Run it again. …" where it heard "ProviderError:
+    codex-cli: CLI exited 1: error: unexpected status 400 …" — the phone has
+    no hover to fold the raw text away (the run page keeps it, folded).
+    *manager* / *provider* name the run's provider as the run's summary does.
+    Never raises."""
+    try:
+        from ..providers.failure_words import plain_reason, refusal_reason
+
+        # A refusal first, as before: nothing of a JOB reached the phone, so
+        # ``refusal_reason`` reads it as not partial ("The reply above is
+        # incomplete" would be a lie here).
+        return refusal_reason(exc, manager=manager) or plain_reason(
+            exc, manager=manager, provider=provider
+        )
     except Exception:  # noqa: BLE001 — wording only
-        pass
-    return f"{type(exc).__name__}: {exc}"
+        return "the task could not finish."
 
 
 def _words_beyond_mentions(text: str) -> bool:
@@ -490,7 +500,11 @@ class InboundPoller:
             raise
         except Exception as exc:  # noqa: BLE001 — deliver, don't vanish
             log.exception("phone-started session %s failed on %r", session.id, name)
-            summary = f"I hit a problem: {_run_problem(exc)}"
+            summary = "I hit a problem: " + _run_problem(  # 12A review: the run's one rule
+                exc,
+                manager=getattr(getattr(self, "platform", None), "providers", None),
+                provider=str(getattr(session, "provider", "") or ""),
+            )
         async with self._identity_lock(name, msg.sender_id):
             if tid:
                 self._safe_append(

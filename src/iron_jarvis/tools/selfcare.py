@@ -217,6 +217,22 @@ def pack_words(p: dict[str, Any]) -> str:
 # ------------------------------------------------------------- app_health
 
 
+def _model_label(provider: str, model: str) -> str:
+    """The model as a person names it (readiness 12A): the provider by its
+    plain name ("Claude Code", never "claude-cli") and the model id after it
+    unless it is the provider's own default ("subscription"). The raw pair
+    stays in the answer's ``provider`` / ``model`` fields. Never raises."""
+    try:
+        from ..providers.failure_words import plain_name
+
+        name = plain_name(provider) or provider
+    except Exception:  # noqa: BLE001 — wording only
+        name = provider
+    m = str(model or "").strip()
+    if not m or m.lower() in ("subscription", "default", "auto"):
+        return name
+    return f"{name} ({m})"
+
 class AppHealthTool(Tool):
     name = "app_health"
     description = (
@@ -360,11 +376,13 @@ class AppHealthTool(Tool):
         try:
             data["interrupted_sessions"] = read_interrupted_count(platform)
             n = data["interrupted_sessions"]
+            # Readiness 12A: "task", never the retired "job" (VOCABULARY.md).
             lines.append(
-                f"Interrupted jobs offered Continue: {n}." if n else "No interrupted jobs."
+                f"Tasks a restart cut off, offered Continue: {n}." if n
+                else "No tasks were cut off by a restart."
             )
         except Exception as exc:  # noqa: BLE001
-            broken("interrupted jobs", exc)
+            broken("interrupted tasks", exc)
 
         # --- the doctor's runtime rows that are not ok ---------------------
         try:
@@ -401,7 +419,7 @@ class AppHealthTool(Tool):
     def _model_section(provider: str, model: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
         by_name = {str(r.get("provider") or ""): r for r in rows}
         out: dict[str, Any] = {"provider": provider, "model": model, "reachable": None, "detail": ""}
-        label = f"{provider} / {model}" if model else provider
+        label = _model_label(provider, model)
         if provider == "mock":
             out["reachable"] = True
             out["detail"] = "demo replies; no real model chosen"
@@ -460,7 +478,7 @@ class AppHealthTool(Tool):
     @staticmethod
     def _packs_words(packs: list[dict[str, Any]]) -> str:
         if not packs:
-            return "No tool packs configured."
+            return "No extensions are set up."
         counts = []
         for state in PACK_STATES:
             n = sum(1 for p in packs if p["state"] == state)
@@ -469,7 +487,7 @@ class AppHealthTool(Tool):
         unknown = sum(1 for p in packs if p["state"] not in PACK_STATES)
         if unknown:
             counts.append(f"{unknown} not started")
-        s = f"Packs: {', '.join(counts)}."
+        s = f"Extensions: {', '.join(counts)}."
         for p in packs:
             if p["state"] in ("failed", "failing"):
                 why = p["reason"] or ("its calls fail" if p["state"] == "failing" else "did not start")
@@ -526,7 +544,7 @@ class PackStatusTool(Tool):
                     data={"packs": [], "known": known},
                 )
         if not packs:
-            return ToolResult(ok=True, output="No tool packs are configured.", data={"packs": []})
+            return ToolResult(ok=True, output="No extensions are set up.", data={"packs": []})
         return ToolResult(ok=True, output="\n".join(pack_words(p) for p in packs), data={"packs": packs})
 
     def _rows(self) -> list[dict[str, Any]]:

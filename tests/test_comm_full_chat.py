@@ -663,15 +663,21 @@ def test_desktop_send_escalate_failure_delivers_honest_error(tmp_path):
         msgs: list[dict[str, str]] = []
         while time.time() < deadline:
             msgs = store.history_body(t.id)
-            if len(msgs) >= 3 and any("agent runtime melted" in s for s in ch.sent):
+            if len(msgs) >= 3 and any("couldn't finish this task" in s for s in ch.sent):
                 break
             time.sleep(0.05)
         # user, ack, honest error — appended by the background task.
+        # Readiness 12A review (G28): the run's ONE rule on the phone — never
+        # the class name and raw text ("RuntimeError: agent runtime melted").
         assert msgs[2] == {
             "role": "assistant",
-            "content": "I hit a problem: RuntimeError: agent runtime melted",
+            "content": (
+                "I hit a problem: Iron Jarvis couldn't finish this task. Run it again. "
+                "If it happens again, open the run to see the details."
+            ),
         }
-        assert any("agent runtime melted" in s for s in ch.sent)
+        assert any("couldn't finish this task" in s for s in ch.sent)
+        assert not any("melted" in s or "RuntimeError" in s for s in ch.sent)
 
 
 def test_desktop_send_shares_the_rate_cap(tmp_path):

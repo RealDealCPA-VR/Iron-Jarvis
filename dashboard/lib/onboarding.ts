@@ -281,6 +281,9 @@ export function providerHeading(provider: string | null | undefined): string {
 export function modelGroupName(m: { provider: string; model?: string; name?: string }): string {
   const name = (m.name || "").trim();
   if (name && name !== m.model) return name;
+  // Readiness 12A (0f.3): a model server the user set up (a fleet node) that
+  // carries no label reads as theirs, never its raw id ("fleet-spark").
+  if ((m.provider ?? "").startsWith("fleet-")) return providerHeading("custom");
   return providerHeading(m.provider) || m.provider;
 }
 
@@ -382,6 +385,30 @@ export function machineName(
   return fromRows(p) || (p.startsWith("fleet-") ? "" : fromRows(`fleet-${p}`));
 }
 
+/** Readiness 12A (G33): a provider named in the MIDDLE of a sentence a
+ *  person reads ("Claude Code isn't signed in", "DGX Spark isn't reachable
+ *  right now"): the user's own model server by the name they gave the
+ *  machine (`machineName`, with the /models `catalog` when the caller has
+ *  it) else "your model server"; every other provider by `providerDisplay`.
+ *  The chat's warning above the message box and the New task door printed
+ *  "claude-cli" / "fleet-custom" there. "" for no provider. Pure. */
+export function providerWords(
+  provider: string | null | undefined,
+  catalog?: readonly NamedRow[] | null,
+): string {
+  const p = (provider ?? "").trim();
+  if (!p) return "";
+  if (p === "custom" || p.startsWith("fleet-")) return machineName(p, { catalog }) || SERVER_PICK_WORDS;
+  return providerDisplay(p);
+}
+
+/** *words* opening a sentence: OUR lower-case phrases get a capital ("Your
+ *  model server …"); a brand keeps its own casing ("llama.cpp", "xAI"). */
+export function sentenceStart(words: string): string {
+  if (!words || !/^your\b/.test(words)) return words;
+  return words[0].toUpperCase() + words.slice(1);
+}
+
 /** What a model-menu ROW calls its model (v1.359.0, lane 9B), from the
  *  words this file already has: the picker's own label ("Opus 5.5"); a
  *  provider-default row by the plan or server it runs on ("Your Claude
@@ -438,7 +465,14 @@ export function modelPickWords(
   if (m.provider === "mock") return providerDisplay("mock");
   const words = modelRowName(m, catalog);
   if (isProviderDefaultModel(m.model)) return words;
-  const group = modelGroupName({ provider: m.provider, model: m.model, name: m.name });
+  // Readiness 12A (0f.3): a fleet node's group is the MACHINE — its name
+  // (from the row or the catalog's rows for it) else "Your model server" —
+  // never its raw id: a list said "fleet-spark · Spark B" when the caller
+  // handed the pick without its row's `name`.
+  const node = m.provider.startsWith("fleet-")
+    ? machineName(m.provider, { name: m.name, model: m.model, catalog }) || providerHeading("custom")
+    : "";
+  const group = node || modelGroupName({ provider: m.provider, model: m.model, name: m.name });
   if (!group || group === words) return words;
   return `${group} · ${words}`;
 }

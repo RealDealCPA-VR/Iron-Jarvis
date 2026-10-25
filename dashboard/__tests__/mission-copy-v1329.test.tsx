@@ -51,6 +51,8 @@ afterEach(() => {
 type Health = Parameters<typeof preflightProblem>[0];
 
 function health(row: Record<string, unknown>): Health {
+  // Readiness 12A (G33, moved on purpose): the default reads as "your model
+  // server" below, never its raw id "fleet-custom".
   return { default_provider: "fleet-custom", providers: [{ provider: "fleet-custom", ...row }] } as unknown as Health;
 }
 
@@ -58,21 +60,21 @@ describe("the mission door's default-model warnings are plain sentences", () => 
   it("not signed in: says it will fail, in sentences", () => {
     const p = preflightProblem(health({ available: false, installed: true, signed_in: false }));
     expect(p?.text).toBe(
-      "Your default model, fleet-custom, is installed but not signed in. A task started now will fail. Sign it in on Connections first.",
+      "Your default model, your model server, is installed but not signed in. A task started now will fail. Sign it in on Connections first.",
     );
   });
 
   it("unreachable: says it will fail, in sentences", () => {
     const p = preflightProblem(health({ available: false }));
     expect(p?.text).toBe(
-      "Your default model, fleet-custom, isn't reachable right now. A task started now will fail. Bring it back, or choose another default on Connections.",
+      "Your default model, your model server, isn't reachable right now. A task started now will fail. Bring it back, or choose another default on Connections.",
     );
   });
 
   it("paused by the breaker: says the wait, in sentences", () => {
     const p = preflightProblem(health({ available: true, circuit: { open: true, retry_in_s: 30 } }));
     expect(p?.text).toBe(
-      "Your default model, fleet-custom, failed repeatedly and is paused for 30 s. A task started now is refused. Wait, or choose another default on Connections.",
+      "Your default model, your model server, failed repeatedly and is paused for 30 s. A task started now is refused. Wait, or choose another default on Connections.",
     );
   });
 
@@ -80,7 +82,7 @@ describe("the mission door's default-model warnings are plain sentences", () => 
     const p = preflightProblem(health({ available: false }), true);
     expect(p?.text).toBe(
       // v1.354.0 (G59, updated on purpose): the app's name, never "the daemon".
-      "Iron Jarvis isn't responding, so it could not check your default model, fleet-custom. The model looked unavailable at the last check. If a task fails, check it on Connections.",
+      "Iron Jarvis isn't responding, so it could not check your default model, your model server. The model looked unavailable at the last check. If a task fails, check it on Connections.",
     );
     expect(p?.text).not.toMatch(/will fail/i);
   });

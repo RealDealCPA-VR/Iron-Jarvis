@@ -459,6 +459,11 @@ class EmergencyStopOn(RuntimeError):
     start into a recorded failure (a reflex row, a workflow step, the memory
     review's 400) says the sentence without a new branch."""
 
+    #: Readiness 12A (G28): its message IS the person's sentence, so a run
+    #: summary keeps it as it is (``failure_words.worded_message``) instead of
+    #: the generic "Iron Jarvis couldn't finish this task".
+    plain_words = True
+
 
 def emergency_stop_on(config) -> bool:
     """Is Emergency stop engaged? Read live (a settings write flips the
@@ -2151,17 +2156,23 @@ class Orchestrator:
         except Exception:  # noqa: BLE001 — a reply miss must never break a finalize
             log.exception("could not start the reply for session %s", session.id)
 
-    def _plain_failure(self, error: Exception) -> str:
-        """One plain sentence for a failed run's summary (v1.354.0, G28):
-        ``providers.failure_words.plain_reason`` (the headline and its fix
-        when the failure is recognised, else the failure's own masked
-        message). Never raises, never empty."""
+    def _plain_failure(self, error: Exception, provider: str = "") -> tuple[str, str]:
+        """``(reason, technical)`` for a failed run (v1.354.0, G28; readiness
+        12A): ``providers.failure_words.run_failure_words`` — one plain
+        sentence for the summary (a recognised failure's headline and fix, a
+        failure already worded for a person, else WHAT failed and what to do
+        next — never the raw text), and the failure's own masked text for the
+        run page's folded Details. ``provider`` is the run's provider (it
+        names a provider's failure that names none itself). Never raises,
+        never an empty reason."""
         try:
-            from ..providers.failure_words import plain_reason
+            from ..providers.failure_words import run_failure_words
 
-            return plain_reason(error, manager=getattr(self.p, "providers", None))
+            return run_failure_words(
+                error, manager=getattr(self.p, "providers", None), provider=provider
+            )
         except Exception:  # noqa: BLE001 - wording only
-            return "it stopped with an error"
+            return "it stopped with an error", ""
 
     async def _finalize_failed(self, session: Session, error: Exception) -> None:
         """Mark a crashed run FAILED, persist, emit SESSION_COMPLETED(ok=False), GC
@@ -2185,10 +2196,15 @@ class Orchestrator:
         # and to the run rows' own record (`error_text`, below).
         error_text = f"{type(error).__name__}: {error}"
         log.warning("session %s failed: %s", session.id, error_text[:500])
+        # Readiness 12A (G28): the summary never carries the raw text; the
+        # failure's own (masked) words ride the row apart, for the run page's
+        # folded Details — the chat's title/fix/technical split, for a run.
+        reason, technical = self._plain_failure(error, str(getattr(session, "provider", "") or ""))
         session.summary = _with_folder_note(
             session.summary,
-            _prose(session.summary) or f"The run failed: {self._plain_failure(error)}",
+            _prose(session.summary) or f"The run failed: {reason}",
         )
+        session.failure_detail = technical
         session.finished_at = utcnow()
 
         def _settle_failed() -> tuple[list[str], str | None]:

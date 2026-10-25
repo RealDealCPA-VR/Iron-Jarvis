@@ -161,7 +161,8 @@ def test_a_switched_off_pack_reads_off_on_every_surface_and_on_again_needs_no_to
     summary = selfcare.AppHealthTool._packs_words(
         [{"name": NAME, "state": "off", "tools_loaded": 0, "reason": "", "fix": ""}]
     )
-    assert summary.startswith("Packs: 1 switched off.") and "not started" not in summary
+    # Readiness 12A (moved on purpose): "Extensions", never the retired "Packs".
+    assert summary.startswith("Extensions: 1 switched off.") and "not started" not in summary
 
     # --- the Status map and the doctor count it apart ----------------------
     smap = client.get("/ui/system-map").json()

@@ -40,19 +40,19 @@
   },
   "signed_out": {
     "post": {
-      "detail": "claude-cli: Claude Code isn't signed in. Open a terminal, run `claude`, then `/login`, then click Test on Connections. (the CLI said: Not logged in · Please run /login)",
+      "detail": "claude-cli: Claude Code isn't signed in. Press Sign in beside Claude Code in Settings › Connections. (the CLI said: Not logged in · Please run /login)",
       "fix": "Press Sign in beside Claude Code in Settings › Connections, then retry.",
       "fix_kind": "sign_in",
       "fix_provider": "claude-cli",
-      "technical": "claude-cli: Claude Code isn't signed in. Open a terminal, run `claude`, then `/login`, then click Test on Connections. (the CLI said: Not logged in · Please run /login)",
+      "technical": "claude-cli: Claude Code isn't signed in. Press Sign in beside Claude Code in Settings › Connections. (the CLI said: Not logged in · Please run /login)",
       "title": "Claude Code isn't signed in"
     },
     "stream": {
-      "detail": "claude-cli: Claude Code isn't signed in. Open a terminal, run `claude`, then `/login`, then click Test on Connections. (the CLI said: Not logged in · Please run /login)",
+      "detail": "claude-cli: Claude Code isn't signed in. Press Sign in beside Claude Code in Settings › Connections. (the CLI said: Not logged in · Please run /login)",
       "fix": "Press Sign in beside Claude Code in Settings › Connections, then retry.",
       "fix_kind": "sign_in",
       "fix_provider": "claude-cli",
-      "technical": "claude-cli: Claude Code isn't signed in. Open a terminal, run `claude`, then `/login`, then click Test on Connections. (the CLI said: Not logged in · Please run /login)",
+      "technical": "claude-cli: Claude Code isn't signed in. Press Sign in beside Claude Code in Settings › Connections. (the CLI said: Not logged in · Please run /login)",
       "title": "Claude Code isn't signed in"
     }
   }

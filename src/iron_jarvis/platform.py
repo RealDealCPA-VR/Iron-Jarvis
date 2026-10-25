@@ -160,7 +160,25 @@ class _ScheduledRunFailed(RuntimeError):
     """A scheduled task's session ended FAILED (v1.351.0, G01). Its message is
     the run's own reason in plain words; ``_run_scheduled`` words the row
     ("The run failed: <reason>"). A class of its own only so the log line can
-    say which kind of failure it was — the row never shows a class name."""
+    say which kind of failure it was — the row never shows a class name.
+
+    Readiness 12A review: ``plain_words`` — its message IS the person's
+    sentence, so the row's one rule (``failure_words.plain_reason``) keeps it
+    as it is (a scheduled workflow that stopped at a step raises it too)."""
+
+    plain_words = True
+
+
+class _ScheduleRefused(RuntimeError):
+    """A fire the schedule itself refused, in a sentence written for a person
+    (readiness 12A review): a paused agent, an agent that was deleted, a
+    workflow that no longer exists (and a goal iteration's own verdict, kept
+    as it was). ``plain_words`` keeps that sentence on the row — the generic
+    "couldn't start this task" never replaces a real reason — while any OTHER
+    failure before a run existed is worded by the run's one rule instead of
+    its raw ``str(exc)``."""
+
+    plain_words = True
 
 
 @dataclass
@@ -2096,7 +2114,9 @@ def build_platform(
                     return "nothing new to review" + (f" — {reason}" if reason else "")
                 prompt = str(review.get("task") or "").strip() or prompt
             if not prompt:
-                raise ValueError("scheduled task has no 'task' text")
+                # 12A review: a sentence for the row (it read "scheduled task
+                # has no 'task' text").
+                raise _ScheduleRefused("this schedule has no task to run. Edit it to add one, or remove it")
             if platform.orchestrator is None:
                 raise RuntimeError(
                     "task schedules need Iron Jarvis's agent orchestrator"
@@ -2134,7 +2154,7 @@ def build_platform(
                         # reroutes SUPERVISOR-typed sessions to the builtin
                         # supervisor, which would silently discard this
                         # record's custom system prompt.
-                        raise RuntimeError(
+                        raise _ScheduleRefused(
                             f"dynamic agent '{agent_name}' is based on "
                             "'supervisor' and cannot take a schedule — "
                             "re-create it with a non-supervisor base type"
@@ -2152,7 +2172,7 @@ def build_platform(
 
                     _reason = _allowance.refusal_for(rec, platform.engine)
                     if _reason:
-                        raise RuntimeError(_reason)
+                        raise _ScheduleRefused(_reason)
                     provider = provider or (
                         rec.provider if (rec and rec.provider) else None
                     )
@@ -2169,7 +2189,7 @@ def build_platform(
                         # never silently degrade to the builder, which would
                         # run the task without the prompt/tools the user
                         # scheduled it for.
-                        raise ValueError(
+                        raise _ScheduleRefused(
                             f"scheduled agent '{agent_name}' no longer exists "
                             "— it may have been deleted; re-create it or "
                             "re-add the schedule with another agent"
@@ -2356,7 +2376,7 @@ def build_platform(
 
             halted, skipped = record_failures(result)
             if status == "failed":
-                raise RuntimeError(
+                raise _ScheduledRunFailed(  # 12A review: its words are the person's
                     _run_outcome.workflow_failed_reason(
                         ref,
                         halted[0] if halted else "",
@@ -2379,6 +2399,13 @@ def build_platform(
                     str(ref),
                 )
                 return _run_outcome.workflow_waiting_detail(ref)
+            if status == "cancelled":
+                # Readiness 12A (0f.3): a workflow STOPPED mid-run (a Cancel on
+                # the Workflows page, Emergency stop) is not "ok — workflow
+                # ran": the row reads Stopped, like a stopped task fire, and —
+                # the stop being the user's — nothing is delivered.
+                fired["outcome"] = _run_outcome.STATUS_CANCELLED
+                return _run_outcome.workflow_cancelled_detail(ref)
             detail = f"workflow “{ref}” ran"
             if status == "completed" and skipped:
                 # v1.361.0 (lane 11A): it finished, but part of it failed —
@@ -2426,7 +2453,9 @@ def build_platform(
             # ``_run_scheduled`` catches and records (the v1.119 discipline).
             goal_id = str(payload.get("goal_id") or "").strip()
             if not goal_id:
-                raise ValueError("goal schedule has no 'goal_id' in its payload")
+                # 12A review: a sentence for the row (it read "goal schedule
+                # has no 'goal_id' in its payload").
+                raise _ScheduleRefused("this schedule names no goal to work on. Edit it to pick one, or remove it")
             goal_engine = platform.goal_engine
             if goal_engine is None:
                 raise RuntimeError("goal schedules need Iron Jarvis's goal engine")
@@ -2440,8 +2469,10 @@ def build_platform(
             if not result.get("ok"):
                 if sid:
                     # A session really ran and did not complete — surface it
-                    # exactly like a failed task fire.
-                    raise RuntimeError(
+                    # exactly like a failed task fire. (12A review: its words
+                    # are kept as they were; a FAILED session's own summary
+                    # still replaces them on the row.)
+                    raise _ScheduleRefused(
                         f"goal iteration {result.get('status') or 'failed'}: "
                         f"{str(result.get('reason') or result.get('unmet') or '')[:200]}"
                     )
@@ -2533,8 +2564,24 @@ def build_platform(
                 # v1.359.0 (lane 9A): a fire whose run started and then
                 # RAISED reads the run's OWN sentence (its summary, worded for
                 # a run), never the raw exception text.
-                reason = str(exc)
+                # Readiness 12A review (the lane's open point 4): every other
+                # failure — one BEFORE any run existed included — is worded by
+                # the run's ONE rule (``failure_words.plain_reason``), never
+                # ``str(exc)``: a sentence the schedule wrote for a person
+                # (``plain_words``) is kept, Iron Jarvis's own fault with no
+                # run says so without pointing at a run there is none of.
                 sid = fired["session_id"]
+                try:
+                    from .providers.failure_words import plain_reason as _plain_reason
+
+                    reason = _plain_reason(
+                        exc,
+                        manager=getattr(platform, "providers", None),
+                        provider=str((payload.get("provider") if isinstance(payload, dict) else "") or ""),
+                        started=bool(sid),
+                    )
+                except Exception:  # noqa: BLE001 — the row still lands
+                    reason = ""
                 if (
                     sid
                     and platform.orchestrator is not None
@@ -2576,7 +2623,11 @@ def build_platform(
             store = WorkflowStore(platform.engine)
             rec = store.get(ref)
             if rec is None:
-                raise ValueError(f"scheduled workflow {ref!r} not found")
+                # 12A review: a sentence for the row, kept as it is.
+                raise _ScheduleRefused(
+                    f"the workflow “{ref}” this schedule runs no longer exists. "
+                    "Edit the schedule to pick another, or remove it"
+                )
             payload = {
                 "name": rec.name,
                 "steps": json.loads(rec.steps_json or "[]"),
@@ -2587,9 +2638,11 @@ def build_platform(
         # Never silently "complete" a zero-step workflow — that masked every
         # mis-configured schedule as a success.
         if not payload.get("steps"):
-            raise ValueError(
-                "scheduled workflow has no steps — set a 'workflow' name or "
-                "inline 'steps' in the schedule payload"
+            # 12A review: a sentence for the row (it read "… set a 'workflow'
+            # name or inline 'steps' in the schedule payload").
+            raise _ScheduleRefused(
+                "the workflow this schedule runs has no steps. Add steps to it on the "
+                "Workflows page, or edit the schedule to pick another"
             )
         # The SHARED orchestrator (attached in v1.119.0), so the cancel route
         # can find and stop a scheduled run's step sessions — a throwaway

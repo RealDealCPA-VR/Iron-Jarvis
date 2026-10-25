@@ -1,0 +1,8 @@
+{
+  "about": "Readiness 12A (0f.3): the REAL daemon's Schedules row after a scheduled workflow was stopped mid-run. Written by tests/test_cancelled_scheduled_workflow_v1387.py (IJ_REGEN_CANCELLED_WORKFLOW=1); read by dashboard/__tests__/engine-room-words-v1387.test.tsx.",
+  "row": {
+    "name": "tidy",
+    "last_status": "cancelled",
+    "last_detail": "Your workflow “nightly-tidy” was stopped before it finished."
+  }
+}

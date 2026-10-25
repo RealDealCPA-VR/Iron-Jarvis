@@ -1,0 +1,30 @@
+{
+  "about": "Readiness 12A (G28): the REAL daemon's answers for a scheduled run whose agent work failed with an untyped CLI error. Written by tests/test_run_failure_words_v1387.py (IJ_REGEN_RUN_FAILURE_WORDS=1), read by dashboard/__tests__/run-failure-words-v1387.test.tsx through the real run page, Schedules words and bell.",
+  "session": {
+    "status": "failed",
+    "summary": "The run failed: Codex couldn't finish this task. Run it again. If it happens again, choose another model in Settings.",
+    "failure_detail": "codex-cli: CLI exited 1: error: unexpected status 400 Bad Request: model is not supported",
+    "provider": "mock",
+    "model": "claude-opus-4-8",
+    "task": "Write the Friday digest.",
+    "outcome": null
+  },
+  "schedule_row": {
+    "name": "nightly",
+    "last_status": "error",
+    "last_detail": "The run failed: Codex couldn't finish this task. Run it again. If it happens again, choose another model in Settings."
+  },
+  "event": {
+    "type": "session.completed",
+    "payload": {
+      "status": "failed",
+      "summary": "The run failed: Codex couldn't finish this task. Run it again. If it happens again, choose another model in Settings.",
+      "ok": false,
+      "origin": "schedule:nightly",
+      "outcome": null
+    }
+  },
+  "phone": [
+    "Schedule “nightly”: FAILED — The run failed: Codex couldn't finish this task. Run it again. If it happens again, choose another model in Settings."
+  ]
+}

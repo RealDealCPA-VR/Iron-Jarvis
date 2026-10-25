@@ -635,4 +635,6 @@ async def test_goal_schedule_without_goal_id_is_a_recorded_error(platform):
     await platform.scheduler.run_now("goal-blank")
     row = _sched_row(platform, "goal-blank")
     assert row.last_status == "error"
-    assert "goal_id" in row.last_detail
+    # Readiness 12A review: said for a person ("goal_id" / "payload" were the
+    # engine's words).
+    assert "names no goal" in row.last_detail and "goal_id" not in row.last_detail

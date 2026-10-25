@@ -527,9 +527,15 @@ def register(app: FastAPI, d) -> None:
                     summary = (s.summary or "(no result)").strip()
                 except Exception as exc:  # noqa: BLE001 — deliver, don't vanish
                     # v1.378.0 review: a refusal in words (comm.inbound).
+                    # Readiness 12A review (G28): every failure, by the run's
+                    # one rule — the provider named as the run's summary does.
                     from ...comm.inbound import _run_problem
 
-                    summary = f"I hit a problem: {_run_problem(exc)}"
+                    summary = "I hit a problem: " + _run_problem(
+                        exc,
+                        manager=getattr(d.platform, "providers", None),
+                        provider=str(getattr(session, "provider", "") or ""),
+                    )
                 _append_reply(summary)
                 await poller.send_chunked(ch, summary, chat_id=sender_id)
 

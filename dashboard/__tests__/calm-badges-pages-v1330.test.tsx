@@ -165,7 +165,9 @@ describe("the Agents page's rows draw the calm Badge and ConfirmButton", () => {
     fireEvent.click(del);
     await waitFor(() => expect(hooks.dels).toEqual(["/agents/skeptic"]));
 
-    const model = screen.getByText("fleet-lab · glm");
+    // Readiness 12A (0f.3, moved on purpose): a fleet node reads as the
+    // machine ("Your model server" with no label), never "fleet-lab".
+    const model = screen.getByText("Your model server · glm");
     expect(noBorder(model)).toEqual([]);
     expect(tokens(model).filter((c) => /^bg-/.test(c))).toEqual([]);
     expect(tokens(model)).toEqual(expect.arrayContaining(["font-mono", "text-[11px]", "text-zinc-400"]));

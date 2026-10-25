@@ -216,7 +216,7 @@ describe("the receipt says the steps in the work line's words", () => {
     expect(receiptRows).toEqual([
       "Read sales-harbor-st.xlsx · 0.4 s",
       "Searched the web for pier 9 opening hours · 0.9 s",
-      "Ran excel_query · 1.2 s",
+      "Queried a workbook · 1.2 s",
       "Read · read_file · 0.3 s · failed",
     ]);
     // Each receipt row opens with exactly the words the work line's row says.
@@ -243,7 +243,8 @@ describe("the receipt says the steps in the work line's words", () => {
     fireEvent.click(screen.getByRole("button", { expanded: false }));
     expect(screen.getAllByTestId("turn-tool").map((r) => r.textContent)).toEqual([
       "Searched the web · web_search",
-      "Ran excel_query",
+      // Readiness 12A (G22, moved on purpose): a registered built-in in words.
+      "Queried a workbook",
     ]);
   });
 

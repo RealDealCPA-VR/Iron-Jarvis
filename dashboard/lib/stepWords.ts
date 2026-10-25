@@ -23,11 +23,31 @@
  * reads "Called crm" and counts "called a web service" (the `service` kind,
  * lib/workTarget), where it read "Ran rest_call" and "ran 1 tool".
  *
+ * Readiness 12A (G22): every OTHER registered built-in — the ones this file
+ * does not word by kind (history_search, guide_search, assign_work …) — reads
+ * in the run log's own words ("Searched your chats", "Searching your chats"
+ * while it runs; counted "searched your chats 3 times"), generated from the
+ * one source (agents/mission.step_line_words → lib/builtinToolWords). They
+ * read "Ran guide_search" and counted "ran 1 tool". A custom tool still reads
+ * "Ran <its id>": the app does not describe what it cannot vouch for.
+ *
  * Icons stay in WorkLine (this file is plain data, importable anywhere).
  */
 
 import { toolKind, type WorkKind } from "@/lib/workTarget";
 import { appNameWords, appToolNameWords, appToolParts, browserActionWords } from "@/lib/toolWords";
+import { BUILTIN_STEP_WORDS } from "@/lib/builtinToolWords";
+
+/** Readiness 12A (G22): a "tool"-kind built-in's [done, running] words, or
+ *  null for a custom tool (exact name; never trimmed, never a prefix). */
+export function builtinStepWords(name: string): readonly [string, string] | null {
+  if (typeof name !== "string") return null;
+  return Object.prototype.hasOwnProperty.call(BUILTIN_STEP_WORDS, name) ? BUILTIN_STEP_WORDS[name] : null;
+}
+
+function lowerFirst(s: string): string {
+  return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;
+}
 
 function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
@@ -138,6 +158,9 @@ export function appCountWords(app: string, n: number): string {
 export function stepCounts(steps: ReadonlyArray<{ name: string; ok?: boolean | null }>): string[] {
   const n = new Map<WorkKind, number>();
   const apps = new Map<string, number>();
+  // Readiness 12A (G22): a worded built-in counts as itself ("searched your
+  // chats 2 times"), never into "ran N tools".
+  const builtins = new Map<string, number>();
   let failed = 0;
   for (const st of steps) {
     if (st.ok === false) {
@@ -153,12 +176,23 @@ export function stepCounts(steps: ReadonlyArray<{ name: string; ok?: boolean | n
         continue;
       }
     }
+    if (k === "tool") {
+      const words = builtinStepWords(st.name);
+      if (words) {
+        const done = lowerFirst(words[0]);
+        builtins.set(done, (builtins.get(done) ?? 0) + 1);
+        continue;
+      }
+    }
     n.set(k, (n.get(k) ?? 0) + 1);
   }
   const out: string[] = [];
   for (const k of KIND_ORDER) {
     if (k === "app") {
       for (const [app, c] of apps) out.push(appCountWords(app, c));
+    }
+    if (k === "tool") {
+      for (const [done, c] of builtins) out.push(`${done}${times(c)}`);
     }
     const c = n.get(k);
     if (c) out.push(STEP_WORDS[k].count(c));
@@ -192,7 +226,7 @@ export function rowSubject(
   name: string,
   target: string | null,
 ): { text: string; file: boolean } | null {
-  if (kind === "tool") return { text: name, file: false };
+  if (kind === "tool") return builtinStepWords(name) ? null : { text: name, file: false };
   if (kind === "app") {
     const parts = appToolParts(name);
     return { text: parts ? appToolNameWords(parts.tool) : name, file: false };
@@ -235,6 +269,11 @@ export function kindWords(kind: WorkKind, name: string, opts: { subject: boolean
     const parts = appToolParts(name);
     if (parts) return `${appNameWords(parts.app)}:`;
   }
+  if (kind === "tool") {
+    // Readiness 12A (G22): a worded built-in, done or running.
+    const words = builtinStepWords(name);
+    if (words) return opts.running ? words[1] : words[0];
+  }
   const w = (kind === "site" && Object.prototype.hasOwnProperty.call(SITE_WORDS, name) ? SITE_WORDS[name] : null) ??
     STEP_WORDS[kind];
   if (opts.subject) return opts.running ? w.doingOn : w.doneOn;
@@ -254,6 +293,8 @@ export function stepHint(kind: WorkKind, name: string): string {
   if (kind === "service") return "";
   // v1.376.0: the agent's browser's own verbs say it all ("Read the page").
   if (kind === "site") return "";
+  // Readiness 12A (G22): so do a worded built-in's ("Searched your chats").
+  if (kind === "tool" && builtinStepWords(name)) return "";
   return name;
 }
 

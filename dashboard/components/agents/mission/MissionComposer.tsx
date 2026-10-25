@@ -29,6 +29,9 @@ import { useApi } from "@/lib/useApi";
 import { useDaemon } from "@/lib/daemon";
 import type { Health, Project } from "@/lib/types";
 import { clock, decodeMissions, missionRowWords, type MissionRow } from "@/lib/mission";
+import { providerWords } from "@/lib/onboarding";
+import { subscriptionCliFor } from "@/lib/cliSignIn";
+import { CliSignInPress } from "@/components/connections/CliSignInPress";
 
 /** One sentence when the DEFAULT provider is known not to answer, else "".
  *  Unknown is never a warning: no /health yet, no row for it, or "auto".
@@ -41,35 +44,44 @@ import { clock, decodeMissions, missionRowWords, type MissionRow } from "@/lib/m
 export function preflightProblem(
   health: Health | null | undefined,
   stale = false,
-): { provider: string; text: string } | null {
+): { provider: string; text: string; signIn?: boolean } | null {
   const provider = (health?.default_provider ?? "").trim();
   if (!provider || provider === "auto") return null;
   const row = (health?.providers ?? []).find((p) => p && p.provider === provider);
   if (!row) return null;
   const wait = row.circuit?.open ? Math.max(0, Number(row.circuit.retry_in_s) || 0) : 0;
   if (row.available !== false && wait <= 0) return null;
+  // Readiness 12A (G33): the default named as a person knows it ("Claude
+  // Code", "your model server"), never "claude-cli" / "fleet-custom".
+  const name = providerWords(provider) || provider;
   if (stale) {
     return {
       provider,
       // v1.354.0 (G59): the app's name, never "the daemon".
-      text: `Iron Jarvis isn't responding, so it could not check your default model, ${provider}. The model looked unavailable at the last check. If a task fails, check it on Connections.`,
+      text: `Iron Jarvis isn't responding, so it could not check your default model, ${name}. The model looked unavailable at the last check. If a task fails, check it on Connections.`,
     };
   }
   if (row.available === false) {
     if (row.installed && row.signed_in === false) {
+      // Readiness 12A (G33): the ONE Sign in press sits under these words
+      // (`signIn`), for Claude Code and Codex; nothing to type anywhere.
+      const press = !!subscriptionCliFor(provider);
       return {
         provider,
-        text: `Your default model, ${provider}, is installed but not signed in. A task started now will fail. Sign it in on Connections first.`,
+        signIn: press,
+        text: press
+          ? `Your default model, ${name}, is installed but not signed in. A task started now will fail. Sign in first:`
+          : `Your default model, ${name}, is installed but not signed in. A task started now will fail. Sign it in on Connections first.`,
       };
     }
     return {
       provider,
-      text: `Your default model, ${provider}, isn't reachable right now. A task started now will fail. Bring it back, or choose another default on Connections.`,
+      text: `Your default model, ${name}, isn't reachable right now. A task started now will fail. Bring it back, or choose another default on Connections.`,
     };
   }
   return {
     provider,
-    text: `Your default model, ${provider}, failed repeatedly and is paused for ${wait} s. A task started now is refused. Wait, or choose another default on Connections.`,
+    text: `Your default model, ${name}, failed repeatedly and is paused for ${wait} s. A task started now is refused. Wait, or choose another default on Connections.`,
   };
 }
 
@@ -225,9 +237,18 @@ export function MissionComposer({
         {preflight && (
           <p data-testid="mission-preflight" role="status" className="px-2 text-[13px] leading-relaxed text-tone-warn">
             {preflight.text}{" "}
-            <Link href="/connections" className="font-medium text-tone-warn underline hover:opacity-80">
-              Open Connections
-            </Link>
+            {preflight.signIn ? (
+              <CliSignInPress
+                provider={preflight.provider}
+                variant="inline"
+                testIdPrefix="mission"
+                onLaunched={() => daemon.refresh()}
+              />
+            ) : (
+              <Link href="/connections" className="font-medium text-tone-warn underline hover:opacity-80">
+                Open Connections
+              </Link>
+            )}
           </p>
         )}
         {error && (

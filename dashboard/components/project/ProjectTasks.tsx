@@ -820,7 +820,7 @@ export function ProjectTasks({
                 href={`/sessions/${encodeURIComponent(taskRun.id)}`}
                 className="shrink-0 text-[11px] text-accent-soft transition-colors hover:text-accent"
               >
-                open session →
+                open run →
               </Link>
             </div>
 

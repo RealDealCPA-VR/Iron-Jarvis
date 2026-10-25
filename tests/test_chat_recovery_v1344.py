@@ -243,7 +243,8 @@ def test_refusal_footnotes_are_one_line_per_tool_deduped_and_keep_the_old_words(
     # image info"), never the raw id; one line per tool, deduped, as before.
     assert refusal_footnotes([]) == ""
     assert refusal_footnotes([("image_info", "permission denied")]) == (
-        "\n\n_Note: Jarvis couldn't use image info (permission denied)._"
+        # Readiness 12A (G24, moved on purpose): the card's words, never the spaced id.
+        "\n\n_Note: Jarvis couldn't read a file (permission denied)._"
     )
     out = refusal_footnotes([
         ("a", "not armed"), ("b", "low trust"), ("a", "not armed"), ("c", "mystery"),
@@ -494,7 +495,9 @@ def test_the_two_lanes_hold_the_three_seams_lock_step():
         assert src.count("with_second_failure_note(content, _failed_calls[_call_key])") == 1, where
         # M3: the refusal is classified at the result and footnoted at the reply.
         assert src.count('refusal_label(result.error or "")') == 1, where
-        assert src.count("refusal_footnotes(refused_tools)") == 2, where
+        # Readiness 12A (moved on purpose): each site also names where the
+        # reply is read (tests/test_build_footnote_words_v1387.py).
+        assert src.count("refusal_footnotes(refused_tools, surface=") == 2, where
         assert "could not run (permission denied)._\"" not in src, (
             f"{where}: the hand-written permission footnote must go through refusal_footnotes"
         )

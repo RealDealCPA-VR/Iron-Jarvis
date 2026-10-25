@@ -763,7 +763,9 @@ describe("the mission door warns before Start when the default model is down", (
     render(<AgentsPage />);
     const composer = await screen.findByTestId("mission-composer");
     const warn = within(composer).getByTestId("mission-preflight");
-    expect(warn.textContent).toContain("fleet-custom");
+    // Readiness 12A (G33, moved on purpose): the default by its plain name.
+    expect(warn.textContent).toContain("Your default model, your model server,");
+    expect(warn.textContent).not.toContain("fleet-custom");
     expect(warn.querySelector('a[href="/connections"]')).not.toBeNull();
     // never a poller of its own: the app's shared /health is the source
     expect(H.gets.filter((g) => g.startsWith("/health"))).toEqual([]);
@@ -1057,7 +1059,8 @@ describe("the preflight never says 'will fail' on a stale /health (review: chat'
     render(<AgentsPage />);
     const warn = within(await screen.findByTestId("mission-composer")).getByTestId("mission-preflight");
     expect(warn.textContent).toMatch(/could not check your default model/i);
-    expect(warn.textContent).toContain("fleet-custom");
+    // Readiness 12A (G33, moved on purpose): the default by its plain name.
+    expect(warn.textContent).toContain("your model server");
     expect(warn.textContent).not.toMatch(/will fail/i);
   });
 

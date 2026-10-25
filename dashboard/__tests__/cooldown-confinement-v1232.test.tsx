@@ -166,7 +166,8 @@ describe("PreflightNote — a provider in cooldown", () => {
     render(<PreflightNote provider="fleet-custom" available={true} cooldownS={23} />);
     const note = screen.getByTestId("ij-preflight-note");
     expect(note).toHaveAttribute("data-kind", "cooldown");
-    expect(note).toHaveTextContent("fleet-custom is in cooldown, retry in 23 s");
+    // Readiness 12A (G33, moved on purpose): the plain name, never the id.
+    expect(note).toHaveTextContent("Your model server is in cooldown, retry in 23 s");
   });
 
   it("stays silent for a healthy provider with a closed circuit", () => {

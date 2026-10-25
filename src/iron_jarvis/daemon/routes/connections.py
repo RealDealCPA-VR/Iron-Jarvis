@@ -1078,7 +1078,13 @@ def rescan_providers(d) -> dict[str, Any]:
                     "base_url": None,
                     "exec_path": None,
                     "context_window": None,
-                    "detail": "" if usable else f"{st.detail}. {SIGN_IN_FIX[binary]}",
+                    # Readiness 12A (G33): the CLI's own words stay out (the
+                    # probe's ``detail`` is for the log); the sentence names
+                    # the one Sign in press, never a terminal recipe. The
+                    # Connections page draws that press itself, in a line of
+                    # its own outside the green "Rescan complete" note.
+                    "detail": "" if usable else SIGN_IN_FIX[binary],
+                    "signed_in": st.signed_in,
                 }
             )
     except Exception:  # noqa: BLE001 — a probe fault never breaks the rescan

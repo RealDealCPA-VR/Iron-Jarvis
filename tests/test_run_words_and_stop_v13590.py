@@ -200,7 +200,8 @@ def test_a_declined_ask_names_no_builtin_by_its_id_either(kind):
         assert not line["text"].endswith(f"use {tool.replace('_', ' ')}"), (tool, line)
     by_tool = dict(zip(tools, (line["text"] for line in lines)))
     assert by_tool["read_file"] == "Builder needed your OK to read a file"
-    assert by_tool["browser_click"] == "Builder needed your OK to use your browser"
+    # Readiness 12A (G22/G24, moved on purpose): the card's own words (mission.card_words).
+    assert by_tool["browser_click"] == "Builder needed your OK to act in a browser tab"
     # The card's own words win where it has them (byte-identical to before).
     assert by_tool["write_file"] == "Builder needed your OK to save a file"
 
@@ -221,7 +222,8 @@ def test_the_waiting_line_says_the_same_words_as_the_refusal(tmp_path):
         ))
     texts = [line["text"] for line in mission.mission_view(p, root.id)["activity"]]
     waiting = [t for t in texts if "is waiting for your OK to" in t]
-    assert any(t.endswith("is waiting for your OK to use your browser") for t in waiting), waiting
+    # Readiness 12A (G22/G24, moved on purpose): the card's own words (mission.card_words).
+    assert any(t.endswith("is waiting for your OK to act in a browser tab") for t in waiting), waiting
     assert any(t.endswith("is waiting for your OK to read a file") for t in waiting), waiting
     assert any(t.endswith("is waiting for your OK to save a file") for t in waiting), waiting
     assert not any("browser click" in t or "read file" in t for t in waiting), waiting
@@ -233,7 +235,8 @@ def test_do_words_reads_the_approval_card_first_then_the_logs_line():
     assert mission.do_words("history_search") == "search your chats"
     assert mission.do_words("read_file") == "read a file"
     assert mission.do_words("list_files") == "look in a folder"
-    assert mission.do_words("browser_click") == "use your browser"
+    # Readiness 12A (G22/G24, moved on purpose): the card's own words (mission.card_words).
+    assert mission.do_words("browser_click") == "act in a browser tab"
     assert mission.do_words("consult") == "ask a teammate for advice"
     # A custom tool has no other name: said by its own.
     assert mission.do_words("rename_real_file") == "use rename real file"

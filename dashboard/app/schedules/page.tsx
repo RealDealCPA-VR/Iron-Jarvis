@@ -1045,7 +1045,7 @@ export default function SchedulesPage() {
                                 href={`/sessions/${s.last_session_id}`}
                                 className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-accent-soft transition-colors hover:text-accent"
                               >
-                                open session <ArrowUpRight size={11} />
+                                open run <ArrowUpRight size={11} />
                               </Link>
                             ) : null}
                           </td>

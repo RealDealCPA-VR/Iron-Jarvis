@@ -217,9 +217,13 @@ def test_a_failed_run_reads_the_run_failed_with_no_class_name(tmp_path, monkeypa
     body = client.post("/schedules/nightly/run").json()
 
     assert body["last_status"] == "error", body
-    assert body["last_detail"] == (
-        "The run failed: the model endpoint at the office is not answering"
+    # Readiness 12A (G28), moved on purpose: never the raw text on the row —
+    # what failed and what to do next (the raw text is the run's Details).
+    assert body["last_detail"] == ro.failure_detail(
+        "The run failed: Iron Jarvis couldn't finish this task. Run it again. If it happens "
+        "again, open the run to see the details."
     ), body
+    assert "office is not answering" not in body["last_detail"]
     assert "RuntimeError" not in body["last_detail"]
     sent = _schedule_messages(mock, before, "nightly")
     assert sent and all("FAILED" in m and "RuntimeError" not in m for m in sent), sent

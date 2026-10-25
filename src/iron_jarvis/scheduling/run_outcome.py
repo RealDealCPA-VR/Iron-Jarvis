@@ -176,6 +176,14 @@ def workflow_stopped_waiting(ref: object, *, by_emergency_stop: bool = False) ->
     return STATUS_CANCELLED, f"Your workflow “{name}” was stopped before you answered."
 
 
+def workflow_cancelled_detail(ref: object) -> str:
+    """The row detail for a SCHEDULED workflow that was STOPPED mid-run
+    (readiness 12A, 0f.3): it read "ok" and "workflow “X” ran" — a Cancel on
+    the Workflows page or Emergency stop ended it before it finished."""
+    name = " ".join(str(ref or "").split()) or "inline"
+    return f"Your workflow “{name}” was stopped before it finished."
+
+
 def workflow_step_reason(summary: object) -> str:
     """A workflow step's own words for why it could not finish (v1.361.0,
     lane 11A): plain text, without a run's "The run failed: " lead, cut at a

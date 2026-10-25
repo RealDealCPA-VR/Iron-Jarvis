@@ -102,7 +102,8 @@ describe("ProjectTasks — a stashed run whose session is gone", () => {
 
     await waitFor(() => expect(api.calls).toContain("/sessions/sess_gone?transcript=0"));
     await waitFor(() => expect(window.localStorage.getItem(RUN_KEY)).toBeNull());
-    expect(screen.queryByText(/open session/)).not.toBeInTheDocument();
+    // Readiness 12A (0d.6, moved on purpose): "open run", never "open session".
+    expect(screen.queryByText(/open run/)).not.toBeInTheDocument();
     expect(screen.queryByText(/status check failed/)).not.toBeInTheDocument();
   });
 
@@ -116,6 +117,6 @@ describe("ProjectTasks — a stashed run whose session is gone", () => {
 
     await waitFor(() => expect(screen.getByText(/status check failed/)).toBeInTheDocument());
     expect(window.localStorage.getItem(RUN_KEY)).not.toBeNull();
-    expect(screen.getByText(/open session/)).toBeInTheDocument();
+    expect(screen.getByText(/open run/)).toBeInTheDocument();
   });
 });

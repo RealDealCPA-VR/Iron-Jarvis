@@ -352,7 +352,7 @@ export function SessionCard({
     >
       <Link
         href={`/sessions/${session.id}`}
-        aria-label={`Open session: ${session.task || "untitled task"}`}
+        aria-label={`Open run: ${session.task || "untitled task"}`}
         className="absolute inset-0 z-0 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       />
       <div className="pointer-events-none relative z-10 [&_button]:pointer-events-auto">

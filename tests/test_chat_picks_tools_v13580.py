@@ -596,7 +596,8 @@ def test_a_built_in_tools_refusal_reads_in_tool_words_with_its_place():
     )
     # Permission denied / low trust: the tool's words, no false place.
     assert refusal_footnotes([("image_info", "permission denied")]) == (
-        "\n\n_Note: Jarvis couldn't use image info (permission denied)._"
+        # Readiness 12A (G24, moved on purpose): the card's words, never the spaced id.
+        "\n\n_Note: Jarvis couldn't read a file (permission denied)._"
     )
     assert refusal_footnotes([("shell", "not armed")]) == (
         "\n\n_Note: Jarvis couldn't run a command (not turned on for this chat)._"
