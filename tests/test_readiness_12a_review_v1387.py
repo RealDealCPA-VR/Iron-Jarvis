@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import select
 
@@ -433,3 +434,25 @@ async def test_a_goal_whose_run_raised_records_the_runs_plain_words(tmp_path, mo
     assert CODEX_REASON in line, line
     for text in (first["reason"], breaker["last_reason"], line):
         assert _raw(text) == [] and "session_" not in text, text
+
+
+# --------------------------------------------------------------------------- #
+# 8. The bell's 140-character row with the user's own machine name (the
+#    lane's open point 9)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("label", ["DGX Spark", "Spark B", "DGX Spark B (RTX6000ada)", "W" * 28])
+def test_a_model_servers_name_up_to_28_characters_fits_a_bell_row_whole(label):
+    """A fleet node is named by the label the user gave it (up to 80
+    characters). The bell clips a row at 140 (NotificationBell ``clip``): the
+    generic run sentence is read WHOLE for a name of up to 28 characters —
+    every name seen on this PC is shorter. A longer one is cut with "…" in
+    the bell row only (the run page and the Schedules row say all of it); the
+    sentence is never wrong, only shortened."""
+    from types import SimpleNamespace as NS
+
+    manager = NS(get=lambda p: NS(node=NS(label=label)))
+    exc = ProviderError("an unrecognised failure")
+    exc.failed_provider = "fleet-node"  # what the router stamps on the primary's failure
+    reason = fw.plain_reason(exc, manager=manager)
+    assert reason.startswith(f"{label} couldn't finish this task."), reason
+    assert len(f"The run failed: {reason}") <= 140, (len(f"The run failed: {reason}"), reason)
