@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.386.2 (2026-10-25).*
+holds itself to. Current as of v1.387.0 (2026-10-25).*
 
 ---
 
@@ -1896,6 +1896,29 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A Build session knows your project and checks your code (v1.387.0)
+
+- **A map of the project from the first message.** Each reply in a Build
+  session starts with the folder's layout and the main classes and functions
+  in its source files, so the agent does not spend steps listing folders. The
+  names are read without running any of your code. The map takes a small,
+  fixed share of what the model can read at once, and says so when a big
+  project does not fit.
+- **Your project's own checkers after an edit.** When the project already has
+  ruff, mypy, ESLint or TypeScript set up (both its settings and the program),
+  they run on the files the agent just changed, and any problem they find goes
+  straight back to the agent with that edit. They run your project's own
+  programs, so they ask first under every approval setting (one card per
+  round), unless you allowed the command tool for longer. A project without
+  them works exactly as before. Iron Jarvis never installs a checker.
+- **Several files in one read** for the generic and Codex model families, so
+  fewer rounds are spent reading.
+- **Long results are cut honestly.** In a Build session a long command output
+  or file keeps more (up to about 32,000 characters), and what is left out is
+  said in the middle.
+- **A made-up tool name no longer ends the reply.** If a model calls a tool it
+  was not given, it is told plainly which tools it has and carries on.
 
 ## A Build session on Claude runs its commands in bash (v1.386.2)
 

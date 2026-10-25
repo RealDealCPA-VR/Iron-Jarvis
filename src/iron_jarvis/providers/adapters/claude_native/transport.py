@@ -953,7 +953,11 @@ def assemble(
     calls: list[ToolCall] = []
     for block in blocks:
         if block.get("type") == "tool_use":
-            ours = names.ours(block.get("name"))  # outside the inventory -> raises
+            # A name outside this request's inventory is handed on as the model
+            # wrote it (part 3, Phase 3): the lane's registry refuses it as an
+            # ordinary tool result ("unknown tool" / "not armed") and the turn
+            # goes on — it used to raise and fail the whole turn.
+            ours = names.lane_name(block.get("name"))
             args = block.get("input")
             calls.append(ToolCall(id=str(block.get("id") or ""), name=ours,
                                   arguments=args if isinstance(args, dict) else {}))
