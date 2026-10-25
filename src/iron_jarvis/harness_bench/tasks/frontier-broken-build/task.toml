@@ -1,0 +1,6 @@
+category = "shell"
+tier = "frontier"
+title = "A project that will not build: vendored dependencies, the right versions, a reproducible report"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 240

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.383.1 (2026-10-23).*
+holds itself to. Current as of v1.384.0 (2026-10-23).*
 
 ---
 
@@ -1896,6 +1896,33 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The coding benchmark can rank harnesses (v1.384.0)
+
+`ironjarvis bench-harness` (a developer tool, not in the app's menus) was too
+easy to tell the best coding harnesses apart: Claude Code, Codex and Iron
+Jarvis on Codex all scored 30 of 30. This release makes it able to rank them.
+
+- **Each task can run several times.** `--repeats 3` runs every task three
+  times (every task's first run before any second run). The report gives each
+  setup its average pass rate and its lowest-to-highest range across the
+  runs, and lists which tasks passed every time, some of the time or never.
+  One run per task reads as before.
+- **The record says exactly which model ran.** `--model` is now required,
+  and `--effort` (low, medium or high; medium by default) is passed to every
+  setup. A run never uses "whatever the settings say". The report also shows
+  the model each run said it used, and flags any run that used a different
+  one.
+- **Twelve harder tasks (`--tier frontier`).** They include long changes
+  across many files, a page checked in a real browser, a search through about
+  2,000 files, a project that will not build, a half-finished git merge, a
+  running server to debug, and traps where the obvious fix is wrong. Each has
+  a hidden check and a "plausible but wrong" fix that must fail it. A review
+  wrote 54 more such wrong fixes, and every one fails.
+- **Every run works alone.** Each run works in its own random folder outside
+  the benchmark's folder, so a second run of a task cannot see the first
+  run's work. Its prompt and environment do not name where the results are
+  kept.
 
 ## Fixes in v1.382.0
 

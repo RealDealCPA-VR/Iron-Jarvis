@@ -1,0 +1,9 @@
+﻿order_id,customer,amount,date
+BOS-100230,Beacon Hill Books,14286.14,2026-11-12
+BOS-100237,Bob's Diner,11482.84,2026-11-25
+BOS-100222,Bob's Diner,835.66,2026-11-28
+BOS-100226,Fenway Sports Co.,597.24,2026-11-15
+BOS-100231,"Charles River Labs, LLC",989.80,2026-11-03
+BOS-100224,"Charles River Labs, LLC",-128.78,2026-11-27
+BOS-100235,"Joe's ""Best"" Pizza",452.96,2026-11-25
+BOS-100272,Beacon Hill Books,"12,34",2026-11-05

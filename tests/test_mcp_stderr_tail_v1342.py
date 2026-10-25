@@ -261,8 +261,14 @@ def test_a_chattering_child_does_not_block_the_transports_own_deadline():
     """The product path: the child never answers, the transport's deadline
     kills it. The reader is a DAEMON thread, the call ends well inside the
     hang guard although the child would chatter for 120 s, the child is
-    dead, the reader thread ends with the pipe, and the tail is kept."""
-    transport = _transport("--mode", "chatter", request_timeout=0.5)
+    dead, the reader thread ends with the pipe, and the tail is kept.
+
+    The deadline is 5 s, not 0.5 s: the tail can only hold what the child
+    printed before the deadline killed it, and a Python child on a loaded PC
+    took 1.2–2.1 s to print its first line (measured 2026-10-24), so at
+    0.5 s the tail was empty every time the machine was busy. 5 s is still
+    well inside the 20 s hang guard, against a child that chatters for 120."""
+    transport = _transport("--mode", "chatter", request_timeout=5.0)
     box: dict = {}
 
     def work():
@@ -282,7 +288,7 @@ def test_a_chattering_child_does_not_block_the_transports_own_deadline():
     try:
         assert not th.is_alive(), "close() was blocked by the chattering child"
         assert isinstance(box.get("exc"), MCPServerStopped), box.get("exc")
-        assert "did not answer within 0.5 s" in str(box["exc"])
+        assert "did not answer within 5 s" in str(box["exc"])
         assert transport.pid is None
         if pid is not None:
             _wait_until(lambda: not _alive(pid), "the chattering child to die")

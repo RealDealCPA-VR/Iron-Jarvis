@@ -1,0 +1,6 @@
+body { font-family: system-ui, sans-serif; margin: 2rem; color: #222; }
+h1 { font-size: 1.4rem; }
+.controls { display: flex; gap: 1.5rem; align-items: center; margin-bottom: 0.75rem; }
+table { border-collapse: collapse; min-width: 32rem; }
+th, td { text-align: left; padding: 0.3rem 0.8rem; border-bottom: 1px solid #ddd; }
+tr.low td { color: #a33; }

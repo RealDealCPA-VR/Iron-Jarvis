@@ -17,6 +17,11 @@ runner observes it:
   planned task is either a reused result or exactly one rollout, and the run
   records sum to the ledger.
 
+REPEATS (v1.383.0): with ``--repeats N`` a task runs N times, each its own
+rollout. A plan, a rollout and a record are keyed by RUN (:func:`run_key`):
+the task id for repeat 1 — exactly the key a one-run plan always used — and
+``<task id>.r<k>`` for repeat k ≥ 2.
+
 Cost is kept as two numbers that are never added together (v1.300.0):
 METERED money (an API bill) and the LIST-PRICE EQUIVALENT of work a
 subscription already covers. A local model costs 0. An unknown price or token
@@ -38,6 +43,19 @@ TOTAL_FIELDS: tuple[str, ...] = (
 
 class BudgetMismatch(RuntimeError):
     """A record's totals differ from the ledger's, or the plan is not covered."""
+
+
+def run_key(task_id: str, repeat: int = 1) -> str:
+    """The key of one RUN of a task: the task id for repeat 1 (a one-run
+    plan's key, unchanged), ``<task id>.r<k>`` for repeat k ≥ 2. Also the
+    run's folder name under ``runs/``."""
+    k = int(repeat or 1)
+    return task_id if k <= 1 else f"{task_id}.r{k}"
+
+
+def record_key(record: Mapping[str, Any]) -> str:
+    """:func:`run_key` of a run record (a record with no ``repeat`` is repeat 1)."""
+    return run_key(str(record.get("task_id") or ""), int(record.get("repeat") or 1))
 
 
 @dataclass
@@ -155,8 +173,9 @@ class BudgetLedger:
         reused: Iterable[str],
         records: Iterable[Mapping[str, Any]],
     ) -> None:
-        """Every planned task is either reused or exactly one rollout, nothing
-        ran that was not planned, and the executed records sum to the ledger."""
+        """Every planned run (:func:`run_key`) is either reused or exactly one
+        rollout, nothing ran that was not planned, and the executed records
+        sum to the ledger."""
         planned_ids = list(planned)
         reused_ids = set(reused)
         ran = [r.task_id for r in self.rollouts]
@@ -178,11 +197,11 @@ class BudgetLedger:
             )
         # A record already flagged by :meth:`verify_record` (``ledger_ok``
         # False) carries its own mismatch; the sum covers every other one.
-        flagged = {r.get("task_id") for r in executed if r.get("ledger_ok") is False}
+        flagged = {record_key(r) for r in executed if r.get("ledger_ok") is False}
         grand = sum_fields(
             asdict(c) for r in self.rollouts if r.task_id not in flagged for c in r.calls
         )
-        counted = [r for r in executed if r.get("task_id") not in flagged]
+        counted = [r for r in executed if record_key(r) not in flagged]
         problems += differences(sum_fields(counted), grand, records=len(counted))
         if problems:
             raise BudgetMismatch("the run plan does not add up: " + "; ".join(problems))

@@ -233,10 +233,18 @@ def _rel(p: Path) -> str:
     return p.relative_to(ROOT).as_posix()
 
 
+#: v1.383.0: the harness benchmark's task data — standalone projects handed to
+#: a coding agent and their hidden checks — speaks the PROJECT's words ("nothing
+#: to pack" in a shipping package), never Iron Jarvis's. Only that subtree.
+TASK_DATA = SRC / "harness_bench" / "tasks"
+
+
 def _all_hits() -> list[tuple[str, int, str, str]]:
     hits: set[tuple[str, int, str, str]] = set()
     full = {p.resolve() for p in FULL_READ}
     for path in sorted(SRC.rglob("*.py")):
+        if TASK_DATA in path.parents:
+            continue
         src = path.read_text(encoding="utf-8")
         reader = py_user_strings if path.resolve() in full else answer_strings
         for line, text in reader(src):
@@ -252,6 +260,15 @@ def _listed(hit, entries) -> bool:
 # --------------------------------------------------------------------------- #
 # The scan
 # --------------------------------------------------------------------------- #
+
+
+def test_only_the_benchmarks_task_data_is_left_out():
+    """The skip is that one subtree: the benchmark's own reports and refusals
+    (``harness_bench/*.py``) are still read like every other answer."""
+    assert TASK_DATA.is_dir()
+    bench_own = sorted((SRC / "harness_bench").glob("*.py"))
+    assert bench_own and all(TASK_DATA not in p.parents for p in bench_own)
+    assert any(TASK_DATA in p.parents for p in SRC.rglob("*.py"))
 
 
 def test_no_retired_word_in_anything_iron_jarvis_answers():

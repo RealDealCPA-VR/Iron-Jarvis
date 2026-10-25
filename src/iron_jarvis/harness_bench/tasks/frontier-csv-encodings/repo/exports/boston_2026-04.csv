@@ -1,0 +1,11 @@
+order_id,customer,amount,date
+BOS-100074,  Back Bay Florist  ,185.69,2026-04-05
+BOS-100075,"Acme, Inc.",215.34,2026-04-28
+BOS-100064,Bob's Diner,608.24,2026-04-25
+BOS-100068,"Charles River Labs, LLC",696.63,2026-04-20
+BOS-100060,Beacon Hill Books,716.86,2026-04-18
+BOS-100056,Fenway Sports Co.,284.75,2026-04-20
+BOS-100053,"Harbor Supply
+Attn: Billing",837.49,2026-04-12
+BOS-100072,Fenway Sports Co.,5049.27,2026-04-02
+BOS-100050,North End Bakery,"4,551.8",2026-04-27

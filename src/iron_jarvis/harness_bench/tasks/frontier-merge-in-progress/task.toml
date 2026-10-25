@@ -1,0 +1,15 @@
+category = "shell"
+tier = "frontier"
+title = "Finish a git merge without losing either side"
+timeout_s = 1800
+# The check needs git; without it the check exits 3 (unscored, never a fail).
+check = ["{python}", "-I", "test_hidden_merge.py"]
+check_timeout_s = 180
+
+# The repository with its history and the merge in progress is MADE in the
+# agent's copy before it starts (history cannot be committed into a task
+# folder): fixed authors and dates make the same commit ids every time.
+[setup]
+script = "make_history.py"
+seed = 1
+timeout_s = 120

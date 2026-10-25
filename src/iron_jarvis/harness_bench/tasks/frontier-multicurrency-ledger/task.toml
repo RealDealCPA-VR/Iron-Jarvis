@@ -1,0 +1,6 @@
+category = "feature"
+tier = "frontier"
+title = "Multi-currency support across a bookkeeping package"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 240

@@ -26,12 +26,24 @@ def _split(names: str | None) -> list[str] | None:
 @bench_app.command("run")
 def run_command(
     runner: str = typer.Option(..., "--runner", help="jarvis, claude or codex."),
-    provider: str = typer.Option("", "--provider", help="Jarvis only: the provider to answer with."),
-    model: str = typer.Option("", "--model", help="The model to answer with."),
+    provider: str = typer.Option(
+        "", "--provider", help="Jarvis only, and required for it: the provider to answer with."),
+    model: str = typer.Option(
+        "", "--model",
+        help="Required: the model to answer with, passed to the runner explicitly so the record says "
+        "which one ran (a run without it is refused; --dry-run may list without it)."),
+    effort: str = typer.Option(
+        "medium", "--effort",
+        help="low, medium or high (default medium), passed to every runner explicitly (Claude Code "
+        "--effort, Codex model_reasoning_effort, Jarvis's reasoning level where the model offers one)."),
+    repeats: int = typer.Option(
+        1, "--repeats",
+        help="Run every task this many times (1 to 10, default 1). The report gives each setup its mean "
+        "pass rate, the range across repeats, and which tasks passed every time, some of the time or never."),
     tasks: str = typer.Option("", "--tasks", help="Only these tasks, comma-separated."),
     seed: int = typer.Option(None, "--seed", help="Shuffles the task order (same seed, same order)."),
     max_tasks: int = typer.Option(None, "--max-tasks", help="Run at most this many tasks."),
-    tier: str = typer.Option("all", "--tier", help="core, hard or all (default all)."),
+    tier: str = typer.Option("all", "--tier", help="core, hard, frontier or all (default all)."),
     rounds: int = typer.Option(None, "--rounds", help="Jarvis only: tool rounds per task (default 60)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="List what would run; no model is called."),
     root: str = typer.Option(".", "--root", help="Where the benchmark keeps its state (a scratch folder)."),
@@ -57,7 +69,15 @@ def run_command(
 ) -> None:
     """Run one configuration over the tasks and write JSON + report.md
     (with --refine: run the harness improvement loop instead)."""
-    from .bench import BenchRefused, make_runner, resolve_bench_home, run_bench
+    from .bench import (
+        BenchRefused,
+        check_effort,
+        check_repeats,
+        make_runner,
+        require_model,
+        resolve_bench_home,
+        run_bench,
+    )
     from .ledger import BudgetMismatch
     from .runners import DEFAULT_ROUNDS
 
@@ -73,11 +93,27 @@ def run_command(
     if runner != "jarvis" and rounds is not None:
         typer.echo("--rounds applies to the jarvis runner only.")
         raise typer.Exit(code=2)
+    if refine and runner != "jarvis":
+        typer.echo("--refine improves Iron Jarvis's own harness: run it with --runner jarvis.")
+        raise typer.Exit(code=2)
+    try:
+        # v1.383.0: refused BEFORE any task starts (and before the Jarvis
+        # runner builds its platform), in one plain sentence each.
+        effort = check_effort(effort)
+        repeats = check_repeats(repeats)
+        if not dry_run:
+            require_model(runner, provider, model)
+    except BenchRefused as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=2) from exc
+    if refine and repeats != 1:
+        typer.echo("--repeats does not apply to --refine (each harness runs each task once there).")
+        raise typer.Exit(code=2)
     if refine:
         _refine(
             runner=runner, provider=provider, model=model, tasks=tasks, seed=seed,
             max_tasks=max_tasks, tier=tier, rounds=rounds if rounds is not None else DEFAULT_ROUNDS,
-            dry_run=dry_run, root=root, dialect=dialect, k=k, mode=mode,
+            dry_run=dry_run, root=root, dialect=dialect, k=k, mode=mode, effort=effort,
         )
         return
     try:
@@ -85,11 +121,11 @@ def run_command(
         bench_runner = make_runner(
             runner, root=root, provider=provider, model=model,
             rounds=rounds if rounds is not None else DEFAULT_ROUNDS, binary=binary or None,
-            dialect=dialect,
+            dialect=dialect, effort=effort,
         )
         result = asyncio.run(run_bench(
             runner=bench_runner, home=home, names=_split(tasks), seed=seed,
-            max_tasks=max_tasks, dry_run=dry_run, echo=typer.echo, tier=tier,
+            max_tasks=max_tasks, dry_run=dry_run, echo=typer.echo, tier=tier, repeats=repeats,
         ))
     except (BenchRefused, ValueError) as exc:
         typer.echo(str(exc))
@@ -105,18 +141,33 @@ def run_command(
     passed = sum(1 for r in result.records if r.get("passed") is True)
     scored = sum(1 for r in result.records if r.get("passed") is not None)
     unscored = len(result.records) - scored
-    typer.echo(
-        f"{passed} of {scored} scored task(s) passed"
-        + (f"; {unscored} unscored" if unscored else "")
-        + f". Results: {result.config_dir}"
-    )
+    if repeats > 1:
+        from .report import summarize
+
+        s = summarize(result.records)
+        rng = s["range"]
+        shy = repeats - s["scored_repeats"]
+        typer.echo(
+            f"{passed} of {scored} scored runs passed across {repeats} repeats"
+            + (f" ({shy} had no scored run)" if shy > 0 else "")
+            + (f"; {unscored} unscored" if unscored else "")
+            + (f"; mean pass rate {s['mean_pass_rate'] * 100:.0f}%, range {rng[0] * 100:.0f}%–{rng[1] * 100:.0f}%"
+               if rng else "")
+            + f". Results: {result.config_dir}"
+        )
+    else:
+        typer.echo(
+            f"{passed} of {scored} scored task(s) passed"
+            + (f"; {unscored} unscored" if unscored else "")
+            + f". Results: {result.config_dir}"
+        )
     if result.report_path is not None:
         typer.echo(f"Report across every setup: {result.report_path}")
 
 
 def _refine(*, runner: str, provider: str, model: str, tasks: str, seed: int | None,
             max_tasks: int | None, tier: str, rounds: int, dry_run: bool, root: str,
-            dialect: str, k: int, mode: str) -> None:
+            dialect: str, k: int, mode: str, effort: str = "") -> None:
     from .bench import BenchRefused, resolve_bench_home
     from .ledger import BudgetMismatch
     from .refine import SMALL_SAMPLE, RefineSettings, run_refine
@@ -127,7 +178,7 @@ def _refine(*, runner: str, provider: str, model: str, tasks: str, seed: int | N
         raise typer.Exit(code=2)
     settings = RefineSettings(
         provider=provider, model=model, dialect=dialect or "auto", rounds=rounds, tier=tier,
-        tasks=tuple(_split(tasks) or ()), max_tasks=max_tasks, k=k, mode=mode,
+        tasks=tuple(_split(tasks) or ()), max_tasks=max_tasks, k=k, mode=mode, effort=effort,
     )
     try:
         home = resolve_bench_home(root)

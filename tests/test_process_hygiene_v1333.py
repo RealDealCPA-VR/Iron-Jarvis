@@ -632,6 +632,15 @@ def test_the_word_script_names_the_word_it_started_before_opening_the_file():
 # The door is the only door: no new raw spawn in src/                          #
 # --------------------------------------------------------------------------- #
 
+#: v1.383.0: the harness benchmark's TASK DATA is not Iron Jarvis code. Each
+#: ``harness_bench/tasks/<id>/`` holds a standalone project handed to a coding
+#: agent (``repo/``), its hidden check and its setup step — stdlib-only
+#: programs that run as CHILDREN the bench starts through ``core.procs``
+#: (``grading.run_check``, ``setup_step.run_setup``), with their own
+#: ``subprocess`` calls inside (a merge task must start git; a build task must
+#: build). Nothing in the app imports them. Only this one subtree is skipped.
+TASK_DATA = "harness_bench/tasks/"
+
 #: Files that still start a process WITHOUT ``core.procs``, each for a reason.
 #: Adding a file here is a decision; say why.
 ALLOWED_RAW_SPAWNS: dict[str, str] = {
@@ -689,10 +698,18 @@ def _raw_spawns(tree: ast.AST) -> list[int]:
     return lines
 
 
-def _scan() -> dict[str, list[int]]:
+def _is_task_data(rel: str) -> bool:
+    return rel.startswith(TASK_DATA)
+
+
+def _scan(*, task_data: bool = False) -> dict[str, list[int]]:
+    """Raw spawns in the app's code (``task_data=True``: in the benchmark's
+    task data only — see :data:`TASK_DATA`)."""
     found: dict[str, list[int]] = {}
     for path in sorted(PKG.rglob("*.py")):
         rel = path.relative_to(PKG).as_posix()
+        if _is_task_data(rel) != task_data:
+            continue
         lines = _raw_spawns(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
         if lines:
             found[rel] = lines
@@ -708,6 +725,26 @@ def test_no_new_raw_subprocess_spawn_appears_outside_the_allowlist():
         "a child is started outside core.procs (use procs.run / run_async / spawn, "
         f"or add the file to ALLOWED_RAW_SPAWNS with a reason): {stray}"
     )
+
+
+def test_only_the_benchmarks_task_data_is_left_out_of_the_scan():
+    """The skip is narrow: it covers the task folders and nothing else (the
+    benchmark's own modules, which start every task child through
+    ``core.procs``, are scanned like any other), and it is not vacuous: the
+    task data really does start children of its own."""
+    tasks = PKG / TASK_DATA
+    assert tasks.is_dir() and (PKG / "harness_bench" / "grading.py").is_file()
+    for rel in ("harness_bench/grading.py", "harness_bench/setup_step.py", "harness_bench/runners.py",
+                "harness_bench/tasks_index.py", "core/procs.py"):
+        assert not _is_task_data(rel), rel
+    assert _is_task_data("harness_bench/tasks/frontier-merge-in-progress/setup/make_history.py")
+    skipped = _scan(task_data=True)
+    assert skipped and all(f.startswith(TASK_DATA) for f in skipped)
+    assert not any(f.startswith(TASK_DATA) for f in _scan())
+    assert not any(f.startswith("harness_bench/") for f in _scan()), "the bench's own code spawns raw"
+    for module in ("grading.py", "setup_step.py"):
+        text = (PKG / "harness_bench" / module).read_text(encoding="utf-8")
+        assert "procs.run(" in text, module
 
 
 def test_every_allowlisted_file_still_spawns_so_the_list_cannot_go_stale():

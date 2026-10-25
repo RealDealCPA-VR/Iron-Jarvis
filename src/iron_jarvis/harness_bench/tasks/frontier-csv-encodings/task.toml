@@ -1,0 +1,6 @@
+category = "shell"
+tier = "frontier"
+title = "Consolidate 60 order exports in mixed encodings and formats, and verify the result"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 240

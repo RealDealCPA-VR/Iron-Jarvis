@@ -1,0 +1,5 @@
+Our small bookkeeping package `ledger` only knows US dollars. Please add multi-currency support exactly as section 7 of `SPEC.md` describes it — all of it: the new `currency` column, `Money` that carries a currency, balances per account per currency, exchange rates in `ledger/rates.py`, the report's per-currency lines and grand total, and the command line (`--base`, `--rates`, the `balance` command, the exit code for a missing rate).
+
+Read the whole of `SPEC.md` before you start, and check your work against it: the details there (how currency codes may be written, the order lines are listed in, how and when converted amounts are rounded, which error gives which exit code and which message) are exactly what will be checked, well beyond the few tests in the repository. `examples/` holds the example of section 7.6, with the output the command must print.
+
+`test_multicurrency.py` holds the first tests for this (they fail today); the other tests pass today, and every test must pass when you are done. Do not change any existing `test_*.py` file — add tests of your own in new files if you want. Python 3.12, standard library only.
