@@ -131,9 +131,11 @@ class AssignmentDispatcher:
             pass
 
     async def drain(self) -> None:
-        """Await every run this dispatcher started (tests)."""
-        while self._inflight:
-            await asyncio.gather(*list(self._inflight), return_exceptions=True)
+        """Await every run this dispatcher started (tests). Never spins on a
+        run that finished just before (core/tasks)."""
+        from ..core.tasks import drain_tasks
+
+        await drain_tasks(self._inflight)
 
     # -- the loop ---------------------------------------------------------- #
 

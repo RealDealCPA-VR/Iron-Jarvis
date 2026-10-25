@@ -345,9 +345,11 @@ class MediaJobs:
         return len(live)
 
     async def drain(self) -> None:
-        """Wait for every tracked task to land (tests + graceful stops)."""
-        while self._tasks:
-            await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        """Wait for every tracked task to land (tests + graceful stops).
+        Never spins on a task that finished just before (core/tasks)."""
+        from ..core.tasks import drain_tasks
+
+        await drain_tasks(self._tasks)
 
     def live_ids(self) -> list[str]:
         return list(self._live)

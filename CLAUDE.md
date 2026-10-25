@@ -3681,6 +3681,24 @@ does not need a bump, stop and bump it.
   approvals and refit, cannot use connected apps, the name), common phrasings
   ("summarize my latest emails", feature questions) and owner-decided setup.
 
+- **NEVER `while tasks: await asyncio.gather(*tasks)` — it SPINS** (v1.388.2;
+  found when v1.388.1's Tests gate hung once in `test_phone_apps_agent_v1387`
+  and a 120-run loop under full-suite load hung 5 times, every dump the main
+  thread STEPPING the phone poller's `drain()`). A tracked task leaves its set
+  through a done callback the loop runs with `call_soon`; when every task
+  given to `gather` has already finished, Python 3.12's `gather` completes
+  EAGERLY and awaiting a finished future never yields, so the removal never
+  runs and the `while` spins at full CPU forever — and the daemon's shutdown
+  awaits these drains under `asyncio.wait_for(..., 5)`, which cannot fire
+  while nothing yields (a tidy stop or update could hang). `core/tasks.
+  drain_tasks(tasks)` waits only for tasks not `done()` and gives the loop one
+  turn at the end; `InboundPoller.drain`, `MediaJobs.drain` and
+  `AssignmentDispatcher.drain` use it. A new drain of a tracked-task set uses
+  it too. Pin: `tests/test_drain_never_spins_v13882.py` (each REAL drain()
+  with a finished task whose removal has not run, on its own loop in a thread
+  with a deadline — the old shape fails in seconds instead of hanging pytest;
+  all three old drains and a helper without the final turn go red).
+
 - **A LOCAL endpoint's reply budget fits the work; a reply CUT at the limit
   never runs its half call and is picked up again** (v1.387.2; found by the
   Phase 2 glm benchmark: every local endpoint asked the OpenAI adapter's

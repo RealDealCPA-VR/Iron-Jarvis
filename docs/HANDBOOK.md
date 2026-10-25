@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.388.1 (2026-10-25).*
+holds itself to. Current as of v1.388.2 (2026-10-25).*
 
 ---
 
@@ -1896,6 +1896,15 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Closing Iron Jarvis never gets stuck waiting on finished work (v1.388.2)
+
+When Iron Jarvis stops (Quit, or an update's tidy stop), it waits up to five
+seconds for jobs started from your phone and for picture and video renders to
+finish. If one of them had finished a moment before the stop began, that wait
+could get stuck forever, using a whole processor core, and the five-second
+limit could not end it. The wait now counts only the jobs that are still
+running.
 
 ## A terminal link opens the terminal (v1.388.1)
 

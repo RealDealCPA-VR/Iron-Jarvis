@@ -453,9 +453,11 @@ class InboundPoller:
         return len(live)
 
     async def drain(self) -> None:
-        """Wait for every tracked session to land (tests + graceful stops)."""
-        while self._session_tasks:
-            await asyncio.gather(*list(self._session_tasks), return_exceptions=True)
+        """Wait for every tracked session to land (tests + graceful stops).
+        Never spins on a task that finished just before (core/tasks)."""
+        from ..core.tasks import drain_tasks
+
+        await drain_tasks(self._session_tasks)
 
     async def _deliver_session(
         self,
