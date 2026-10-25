@@ -7,7 +7,8 @@ folder per configuration)::
         config.json                        what it is; refuses an incompatible resume
         runs/<task_id>/                    a task's run (repeat 1)
         runs/<task_id>.r<k>/               the same task's repeat k (``--repeats``, k ≥ 2)
-            work/                          the agent's fresh copy of the task's repo
+            work/                          the agent's copy of the task's repo, moved here
+                                           once the run has ended (see "ALONE" below)
             prompt.txt                     what it was told
             grade/                         work + the hidden check, made AFTER the run
             result.json                    the run record
@@ -45,15 +46,35 @@ v1.383.0 (IJ harness part 3, Phase 1):
   ``effort_passed`` and ``model_reported`` (``None`` = the run named none).
 * A task's SETUP step (:mod:`.setup_step`) makes its tree after the copy and
   before the tripwire; a step that fails is "did not run", never a fail.
+
+EVERY RUN IS WORKED ALONE (v1.383.0 review). An agent used to work in
+``runs/<key>/work`` itself — two folders from repeat 1's finished work of the
+same task (and every other finished run of the setup), with that path in its
+prompt. Now each run's agent works in a fresh, randomly named folder under the
+system temp, OUTSIDE the bench root (:func:`agent_runs_root`, one folder per
+run holding ``work/`` and the owner marker :data:`OWNER_NAME`). When the run
+has ended its ``work/`` is moved into ``runs/<key>/work`` and graded, marked
+and reused there exactly as before. The outside-folder snapshot covers the
+temporary folder too (a write beside ``work/`` is reported as ``../<file>``).
+The runners are handed no path to the bench root (:data:`runners.HIDDEN_PATHS`:
+a CLI's environment and a Jarvis turn's Build session lose ``PWD``/``OLDPWD``
+and any value naming it). A run cut off in this process removes its folder; a
+run whose process was killed leaves one, swept at the next start
+(:func:`sweep_agent_roots`: only a folder whose owner process is gone).
 """
 
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import json
+import logging
 import os
 import re
+import secrets
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -66,7 +87,7 @@ from .failures import INFRASTRUCTURE, Failure, classify_failure
 from .grading import Grade, _remove_tree, grade
 from .ledger import BudgetLedger, BudgetMismatch, record_key, run_key
 from .report import combined_report, config_report
-from .runners import DEFAULT_ROUNDS, EFFORTS, RUNNERS, RunOutcome, render_prompt
+from .runners import DEFAULT_ROUNDS, EFFORTS, HIDDEN_PATHS, RUNNERS, RunOutcome, render_prompt
 from .setup_step import SetupFailed, run_setup
 from .tripwire import HiddenCheckLeak, assert_context_clean
 
@@ -100,8 +121,114 @@ PROVIDER_REQUIRED = (
 )
 
 
+#: v1.383.0 review: where the agents work while a run is going on — a folder
+#: of its own per run under ``<AGENT_RUNS_PARENT or the system temp>/``
+#: :data:`AGENT_RUNS_DIRNAME` (never under the bench root). Tests point
+#: ``AGENT_RUNS_PARENT`` at a folder of their own.
+AGENT_RUNS_DIRNAME = "ij-bench-runs"
+AGENT_RUNS_PARENT: Path | None = None
+#: In each agent folder: who made it (process id and start time), so a sweep
+#: removes only a folder whose owner is gone. No path is written in it: the
+#: agent can read it (it sits beside its ``work/``).
+OWNER_NAME = "owner.json"
+#: How long a finished run's folder is tried to be MOVED home (a program the
+#: agent started may hold a file for a moment after it was stopped); after
+#: that it is copied.
+MOVE_WAIT_S = 15.0
+
+_log = logging.getLogger(__name__)
+
+
 class BenchRefused(RuntimeError):
     """The benchmark will not run as asked; the message says why in plain words."""
+
+
+def agent_runs_root() -> Path:
+    """The folder every run's agent folder is made in (outside any bench root)."""
+    return Path(AGENT_RUNS_PARENT or tempfile.gettempdir()) / AGENT_RUNS_DIRNAME
+
+
+def _process_started(pid: int) -> float | None:
+    try:
+        import psutil
+
+        return float(psutil.Process(int(pid)).create_time())
+    except Exception:  # noqa: BLE001 — gone, or not readable
+        return None
+
+
+def make_agent_root() -> Path:
+    """A fresh, randomly named agent folder with its owner marker in it. It
+    is made under a hidden name and renamed into place, so every folder a
+    sweep can see already names its owner."""
+    parent = agent_runs_root()
+    parent.mkdir(parents=True, exist_ok=True)
+    name = secrets.token_hex(8)
+    staging = parent / f".{name}.new"
+    staging.mkdir()
+    _write_json(staging / OWNER_NAME, {"pid": os.getpid(), "started": _process_started(os.getpid())})
+    final = parent / name
+    os.replace(staging, final)
+    return final
+
+
+def _owner_gone(folder: Path) -> bool:
+    """True only when the folder's owner marker names a process that has
+    ended (or a process id now used by another process). No marker, or a
+    marker that cannot be read, is never "gone": the folder is not ours to
+    judge."""
+    owner = _read_json(folder / OWNER_NAME)
+    if not isinstance(owner, dict) or not isinstance(owner.get("pid"), int):
+        return False
+    started = _process_started(owner["pid"])
+    if started is None:
+        return True
+    want = owner.get("started")
+    return isinstance(want, (int, float)) and abs(started - float(want)) > 1.0
+
+
+def discard_agent_root(folder: Path) -> bool:
+    """Remove one agent folder (inside :func:`agent_runs_root` only). Never
+    raises: a folder a program still holds is left for the next sweep."""
+    try:
+        _remove_tree(folder, agent_runs_root())
+        return True
+    except (OSError, ValueError):
+        _log.warning("could not remove the agent folder %s yet; the next start sweeps it", folder,
+                     exc_info=True)
+        return False
+
+
+def sweep_agent_roots() -> list[str]:
+    """Remove the agent folders left by runs whose process was killed (their
+    owner process is gone). Returns the names removed. A folder another live
+    bench owns, or one with no owner marker, is left alone."""
+    root = agent_runs_root()
+    if not root.is_dir():
+        return []
+    removed = []
+    for folder in sorted(root.iterdir()):
+        if folder.is_dir() and not folder.is_symlink() and _owner_gone(folder) and discard_agent_root(folder):
+            removed.append(folder.name)
+    return removed
+
+
+def _bring_home(work: Path, dest: Path) -> str:
+    """Move the agent's finished ``work`` folder to ``dest`` (``runs/<key>/work``).
+    Returns "" — or a note when it had to be COPIED instead (another drive,
+    or a file still held after :data:`MOVE_WAIT_S`)."""
+    deadline = time.monotonic() + MOVE_WAIT_S
+    while True:
+        try:
+            os.replace(work, dest)
+            return ""
+        except OSError as exc:
+            other_drive = exc.errno == errno.EXDEV or getattr(exc, "winerror", None) == 17
+            if other_drive or time.monotonic() > deadline:
+                break
+            time.sleep(0.25)
+    shutil.copytree(work, dest, symlinks=True)
+    return "the run's folder was copied into the results (it could not be moved)"
 
 
 def _now() -> str:
@@ -206,12 +333,12 @@ def reusable_result(run_dir: Path, fingerprint: str) -> dict[str, Any] | None:
     return record
 
 
-def _snapshot(root: Path, exclude: Path) -> dict[str, tuple[int, int]]:
+def _snapshot(root: Path, exclude: Path | None = None) -> dict[str, tuple[int, int]]:
     out: dict[str, tuple[int, int]] = {}
-    exclude = exclude.resolve()
+    exclude = exclude.resolve() if exclude is not None else None
     for folder, dirs, files in os.walk(root):
         here = Path(folder)
-        if here.resolve() == exclude:
+        if exclude is not None and here.resolve() == exclude:
             dirs[:] = []
             continue
         for name in files:
@@ -321,12 +448,15 @@ def _record(
     }
 
 
-def _fresh_run_folder(task: Task, run_dir: Path, runs: Path, repeat: int = 1) -> tuple[Path, str]:
-    """A clean ``run_dir`` with a fresh copy of the task's repo — SET UP when
-    the task declares a setup step — and the prompt the runner will be
-    given. A stale folder (no usable marker) is removed — it is the bench's
-    own disposable copy, inside its own ``runs`` folder. Raises
-    :class:`SetupFailed` when the setup step did not make the tree."""
+def _fresh_run_folder(task: Task, run_dir: Path, runs: Path, repeat: int = 1) -> tuple[Path, str, Path]:
+    """A clean ``run_dir`` (its start noted) and, OUTSIDE the bench root, a
+    fresh agent folder (:func:`make_agent_root`) holding a copy of the task's
+    repo — SET UP when the task declares a setup step — plus the prompt the
+    runner will be given. Returns ``(work, prompt, agent_root)``. A stale
+    ``run_dir`` (no usable marker) is removed — it is the bench's own
+    disposable copy, inside its own ``runs`` folder. Raises
+    :class:`SetupFailed` when the setup step did not make the tree (its agent
+    folder removed)."""
     if run_dir.exists():
         _remove_tree(run_dir, runs)
     run_dir.mkdir(parents=True)
@@ -335,11 +465,16 @@ def _fresh_run_folder(task: Task, run_dir: Path, runs: Path, repeat: int = 1) ->
         **({"repeat": int(repeat)} if int(repeat or 1) > 1 else {}),
         "started_at": _now(),
     })
-    work = materialize(task, run_dir / "work")
-    run_setup(task, work)
+    agent_root = make_agent_root()
+    try:
+        work = materialize(task, agent_root / "work")
+        run_setup(task, work)
+    except BaseException:
+        discard_agent_root(agent_root)
+        raise
     prompt = render_prompt(task, work)
     (run_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-    return work, prompt
+    return work, prompt, agent_root
 
 
 def _write_marker(run_dir: Path, work: Path, fingerprint: str, config: Configuration, task: Task,
@@ -387,7 +522,7 @@ async def run_task(
         return {**stored, "reused": True}
     started = _now()
     try:
-        work, prompt = await asyncio.to_thread(_fresh_run_folder, task, run_dir, runs, repeat)
+        work, prompt, agent_root = await asyncio.to_thread(_fresh_run_folder, task, run_dir, runs, repeat)
     except SetupFailed as exc:
         # The tree the agent was to start from was never made: "did not
         # run" (infrastructure), no marker, and the runner never starts.
@@ -401,6 +536,27 @@ async def run_task(
         await asyncio.to_thread(_write_json, run_dir / RESULT_NAME, record)
         echo(f"  {name}: did not run ({exc})")
         return record
+    try:
+        return await _run_in_agent_folder(
+            task, runner, config, cfg_dir, ledger, run_dir=run_dir, key=key, work=work, prompt=prompt,
+            agent_root=agent_root, fingerprint=fingerprint, passed_as=passed_as, repeat=repeat,
+            started=started, name=name, echo=echo,
+        )
+    finally:
+        # However the run was left (finished, refused, cut off), its agent
+        # folder goes: its work/ has been moved home, or is not wanted. A
+        # folder a program still holds is left for the next start's sweep.
+        if agent_root.exists():
+            discard_agent_root(agent_root)
+
+
+async def _run_in_agent_folder(
+    task: Task, runner: Any, config: Configuration, cfg_dir: Path, ledger: BudgetLedger, *,
+    run_dir: Path, key: str, work: Path, prompt: str, agent_root: Path, fingerprint: str,
+    passed_as: Mapping[str, Any], repeat: int, started: str, name: str, echo: Callable[[str], None],
+) -> dict[str, Any]:
+    """The run itself, in its agent folder outside the bench root; its
+    ``work/`` is moved into ``run_dir`` before it is graded."""
     rollout = ledger.begin(key, runner.name)
     try:
         await asyncio.to_thread(assert_context_clean, task, work, prompt)
@@ -411,12 +567,20 @@ async def run_task(
         record = _record(task, config, fingerprint, outcome, None, wall_s=0.0, started=started,
                          files_outside=[], model_calls=0, passed_as=passed_as, repeat=repeat)
         ledger.verify_record(record, rollout)
+        # The refused copy is kept for inspection, where a run's work lives.
+        await asyncio.to_thread(_bring_home, work, run_dir / "work")
         await asyncio.to_thread(_write_json, run_dir / RESULT_NAME, record)
         echo(f"  {name}: refused. {exc}")
         return record
-    before = await asyncio.to_thread(_snapshot, cfg_dir, work)
+    # What the agent may change outside its own work/: this setup's folder,
+    # and its agent folder (a write beside work/ is reported as ``../<file>``).
+    before = await asyncio.to_thread(_snapshot, cfg_dir)
+    before_beside = await asyncio.to_thread(_snapshot, agent_root, work)
     t0 = time.monotonic()
     echo(f"  {name}: running...")
+    # No path to the bench root reaches the runner (its children's
+    # environment, a Jarvis turn's Build session): the setup's state home.
+    hidden = HIDDEN_PATHS.set((str(cfg_dir.parent.parent),))
     try:
         outcome = await runner.run(task, work, rollout, timeout_s=task.timeout_s)
     except Exception as exc:  # noqa: BLE001 — a runner bug is a recorded failure, not a crash
@@ -426,9 +590,20 @@ async def run_task(
         outcome.cost_metered_usd = totals["cost_metered_usd"]
         outcome.cost_list_price_usd = totals["cost_list_price_usd"]
         outcome.usage_source = "ledger"
+    finally:
+        HIDDEN_PATHS.reset(hidden)
     wall = time.monotonic() - t0
-    after = await asyncio.to_thread(_snapshot, cfg_dir, work)
-    outside = changed_outside(before, after)
+    after = await asyncio.to_thread(_snapshot, cfg_dir)
+    after_beside = await asyncio.to_thread(_snapshot, agent_root, work)
+    outside = changed_outside(before, after) + [
+        f"../{p}" for p in changed_outside(before_beside, after_beside)
+    ]
+    # The run has ended: its work/ comes home, then everything below reads it
+    # there (grading, the marker's workspace hash, a later reuse).
+    note = await asyncio.to_thread(_bring_home, work, run_dir / "work")
+    if note:
+        outcome.notes.append(note)
+    work = run_dir / "work"
     # v1.370.0: the run's trajectory (Jarvis runner) is kept beside the
     # record, not inside it — evidence for the refine loop, never a column.
     # Written AFTER the "outside its folder" snapshot: it is the bench's own
@@ -617,6 +792,11 @@ async def run_bench(
             )
         return result
     await asyncio.to_thread(_save_config, cfg_dir, config, use_seed)
+    # A run whose process was killed left its agent folder behind: swept now
+    # (only a folder whose owner process is gone).
+    swept = await asyncio.to_thread(sweep_agent_roots)
+    if swept:
+        _log.info("removed %d agent folder(s) left by a run that was killed", len(swept))
     ledger = ledger if ledger is not None else BudgetLedger()
     echo(f"{config.folder_name}: {len(selected)} task(s), seed {use_seed}"
          + (f", {repeats} repeats" if repeats > 1 else ""))

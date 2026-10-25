@@ -53,14 +53,17 @@ TIMING = ("started_at", "finished_at", "wall_s")
 
 
 class _RepeatStub(_StubRunner):
-    """The stub runner, also noting WHICH run folder each call worked in."""
+    """The stub runner, also noting WHICH run each call worked for (its run
+    key, ``<task>`` or ``<task>.r<k>`` — the ledger rollout's key; the agent's
+    folder itself is a temporary one outside the bench root, v1.383.0
+    review)."""
 
     def __init__(self, **kw) -> None:
         super().__init__(**kw)
         self.folders: list[str] = []
 
     async def run(self, task, workspace, rollout, *, timeout_s):
-        self.folders.append(Path(workspace).parent.name)
+        self.folders.append(rollout.task_id)
         return await super().run(task, workspace, rollout, timeout_s=timeout_s)
 
 
@@ -156,7 +159,7 @@ async def test_a_run_cut_short_keeps_whole_repeats_and_names_the_interrupted_one
     class _Cut(_RepeatStub):
         async def run(self, task, workspace, rollout, *, timeout_s):
             if len(self.folders) == 2:  # the third run: repeat 2's first task
-                self.folders.append(Path(workspace).parent.name)
+                self.folders.append(rollout.task_id)
                 raise asyncio.CancelledError()
             return await super().run(task, workspace, rollout, timeout_s=timeout_s)
 
@@ -192,7 +195,7 @@ async def test_the_ledger_matches_every_record_across_repeats(tmp_path):
     # One repeat's record that does not add up is flagged — that run only.
     class _LiesOnce(_RepeatStub):
         async def run(self, task, workspace, rollout, *, timeout_s):
-            self.lie = 5 if Path(workspace).parent.name.endswith(".r2") else 0
+            self.lie = 5 if rollout.task_id.endswith(".r2") else 0
             return await super().run(task, workspace, rollout, timeout_s=timeout_s)
 
     res = await run_bench(runner=_LiesOnce(harness="h2"), home=tmp_path, tasks=list(TASKS.values()), names=NAMES,

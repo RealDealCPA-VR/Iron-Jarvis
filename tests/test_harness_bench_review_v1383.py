@@ -158,8 +158,10 @@ def _kill_tree(pid: int) -> None:
 
 def test_a_run_killed_inside_a_repeat_resumes_without_rerunning_or_counting_unfinished(tmp_path):
     env = {k: v for k, v in os.environ.items() if k not in ("IRONJARVIS_HOME", "ANTHROPIC_API_KEY")}
-    env.update({"FAKE_BENCH_SCENARIO": "hang_r2", "FAKE_BENCH_SOLUTION": str(SOLUTIONS / "bugfix-pagination"),
-                "PYTHONIOENCODING": "utf-8"})
+    # The third call — repeat 2's first run — hangs (two tasks, repeat 1 first).
+    env.update({"FAKE_BENCH_SCENARIO": "hang_at", "FAKE_BENCH_HANG_AT": "3",
+                "FAKE_BENCH_COUNT": str(tmp_path / "calls.txt"),
+                "FAKE_BENCH_SOLUTION": str(SOLUTIONS / "bugfix-pagination"), "PYTHONIOENCODING": "utf-8"})
     claude = _shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py")
     root = tmp_path / "bench-root"
     argv = [sys.executable, "-c", _CLI, "run", "--runner", "claude", "--binary", claude, "--model", "sonnet",

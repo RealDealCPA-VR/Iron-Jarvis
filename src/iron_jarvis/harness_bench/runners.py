@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import hashlib
 import json
 import os
@@ -568,8 +569,10 @@ class JarvisRunner:
         # (review: the session is ended however the block is left — a Stop
         # included — and the hold is armed inside it, so nothing can leave
         # it armed.)
+        # v1.383.0 review: the turn's Build session reads os.environ for its
+        # commands' environment — without the bench root in it.
         with session_ended_on_escape(session), counting_router(self.platform, rollout, observed), \
-                layer_source(self.layer_dir):
+                layer_source(self.layer_dir), hidden_environ():
             hold_token = set_hold(*_harness_model(self.platform, self.provider, self.model))
             try:
                 gen = await stream_chat_turn(
@@ -733,6 +736,62 @@ def find_cli(name: str) -> str | None:
         import shutil
 
         return shutil.which(name)
+
+
+#: v1.383.0 review: the paths no runner may be handed — the bench's state home
+#: (its results, every other run's finished work). ``bench.run_task`` sets it
+#: around each run; :func:`hide_paths` applies it.
+HIDDEN_PATHS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar(
+    "ij_bench_hidden_paths", default=()
+)
+#: Variables that describe the folders of the SHELL the bench was started
+#: from — meaningless to a child whose folder is set, and a path to wherever
+#: that shell stood (the bench root, the source checkout). Never handed on.
+_SHELL_FOLDERS = frozenset({"PWD", "OLDPWD"})
+
+
+def _path_key(text: str) -> str:
+    return text.replace("\\", "/").rstrip("/").lower()
+
+
+def hide_paths(env: dict[str, str], hidden: tuple[str, ...] | None = None) -> dict[str, str]:
+    """``env`` without the shell's own folders (``PWD``/``OLDPWD``) and
+    without any value that names a :data:`HIDDEN_PATHS` path: a list of
+    folders (``PATH``-like) loses just those entries, any other value goes.
+    ``hidden`` defaults to the current run's."""
+    marks = [_path_key(h) for h in (HIDDEN_PATHS.get() if hidden is None else hidden) if h]
+    out: dict[str, str] = {}
+    for name, value in env.items():
+        if name.upper() in _SHELL_FOLDERS:
+            continue
+        if not marks or not any(m in _path_key(value) for m in marks):
+            out[name] = value
+            continue
+        parts = value.split(os.pathsep)
+        kept = [part for part in parts if not any(m in _path_key(part) for m in marks)]
+        if len(parts) > 1 and kept:
+            out[name] = os.pathsep.join(kept)
+    return out
+
+
+@contextlib.contextmanager
+def hidden_environ(hidden: tuple[str, ...] | None = None):
+    """This process's environment through :func:`hide_paths` while the block
+    runs (a Jarvis turn's Build session reads ``os.environ`` for its
+    commands' environment), put back exactly afterwards."""
+    saved = dict(os.environ)
+    clean = hide_paths(saved, hidden)
+    for name in saved:
+        if name not in clean:
+            os.environ.pop(name, None)
+        elif clean[name] != saved[name]:
+            os.environ[name] = clean[name]
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if os.environ.get(name) != value:
+                os.environ[name] = value
 
 
 def cli_env() -> dict[str, str]:
@@ -1016,7 +1075,9 @@ class _CliRunner:
         return None
 
     async def _execute(self, workspace: Path, prompt: str, timeout_s: float):
-        env = self.child_env()
+        # v1.383.0 review: nothing in the child's environment leads to the
+        # bench root (the shell's PWD, a value naming it).
+        env = hide_paths(self.child_env())
         result = await procs.run_async(
             self.argv(workspace), timeout=float(timeout_s), input=prompt.encode("utf-8"),
             cwd=workspace, env=env, background=False,

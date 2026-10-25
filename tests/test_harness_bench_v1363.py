@@ -1150,9 +1150,14 @@ async def test_the_claude_runner_runs_headless_in_the_copy(tmp_path, monkeypatch
     assert seen["argv"][seen["argv"].index("--output-format") + 1] == "stream-json"
     assert seen["argv"][seen["argv"].index("--permission-mode") + 1] == "bypassPermissions"
     assert seen["argv"][seen["argv"].index("--model") + 1] == "claude-sonnet-4-5"
-    work = res.config_dir / "runs" / "bugfix-pagination" / "work"
-    assert Path(seen["cwd"]).resolve() == work.resolve()
-    assert TASKS["bugfix-pagination"].prompt in seen["prompt"] and str(work) in seen["prompt"]
+    # v1.383.0 review: the agent works in a folder of its own OUTSIDE the
+    # bench root; its work comes home to runs/<key>/work when the run ends.
+    worked = Path(seen["cwd"]).resolve()
+    assert worked.name == "work" and bench_mod.agent_runs_root().resolve() in worked.parents
+    assert (tmp_path / "home").resolve() not in worked.parents
+    assert (res.config_dir / "runs" / "bugfix-pagination" / "work" / "pagination.py").is_file()
+    assert TASKS["bugfix-pagination"].prompt in seen["prompt"] and str(worked) in seen["prompt"]
+    assert str(tmp_path / "home") not in seen["prompt"]
     # The parent Claude Code session's markers never reach the child.
     assert seen["env"]["CLAUDECODE"] is None and seen["env"]["CLAUDE_CODE_SESSION_ID"] is None
     assert res.config.harness["cli_version"].startswith("9.9.9")
@@ -1213,7 +1218,9 @@ async def test_a_write_outside_the_copy_is_reported(tmp_path, monkeypatch):
     _fake_env(monkeypatch, tmp_path, "outside")
     runner = ClaudeRunner(model="fake-model", binary=_shim(tmp_path, "claude", FIXTURES / "fake_claude_bench_v1363.py"))
     res = await run_bench(runner=runner, home=tmp_path / "home", tasks=list(TASKS.values()), names=["bugfix-pagination"])
-    assert res.records[0]["files_outside"] == ["runs/bugfix-pagination/stray.txt"]
+    # (v1.383.0 review: the agent works in a folder of its own outside the
+    # bench root, so "next to its folder" is that folder: ``../stray.txt``.)
+    assert res.records[0]["files_outside"] == ["../stray.txt"]
     assert "outside its folder" in (res.config_dir / "report.md").read_text(encoding="utf-8")
 
 
@@ -1236,8 +1243,9 @@ async def test_the_codex_runner_runs_exec_in_the_copy(tmp_path, monkeypatch):
     # ``--sandbox workspace-write`` on Windows every command was refused.
     assert "--dangerously-bypass-approvals-and-sandbox" in argv
     assert "--sandbox" not in argv and "workspace-write" not in argv
-    work = res.config_dir / "runs" / "bugfix-pagination" / "work"
-    assert Path(argv[argv.index("-C") + 1]).resolve() == work.resolve()
+    worked = Path(argv[argv.index("-C") + 1]).resolve()
+    assert worked.name == "work" and bench_mod.agent_runs_root().resolve() in worked.parents
+    assert (tmp_path / "home").resolve() not in worked.parents
     assert argv[argv.index("-m") + 1] == "gpt-5"
     assert seen["env"]["CLAUDECODE"] is None
 

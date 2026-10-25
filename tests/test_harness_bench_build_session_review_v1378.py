@@ -24,6 +24,7 @@ import pytest
 
 from iron_jarvis.core import procs
 from iron_jarvis.harness.command_env import is_build_call
+from iron_jarvis.harness_bench import bench as bench_mod
 from iron_jarvis.harness_bench.bench import run_bench
 from iron_jarvis.harness_bench.catalog import load_tasks
 from iron_jarvis.harness_bench.runners import JarvisRunner
@@ -49,6 +50,7 @@ async def test_a_cancelled_run_still_ends_its_build_session(tmp_path, monkeypatc
     import psutil
 
     procs.end_all()
+    monkeypatch.setattr(bench_mod, "AGENT_RUNS_PARENT", tmp_path / "agent-temp")
     platform = build_platform(str(tmp_path / "root"))
     seen: dict = {}
     _wrap_lane(monkeypatch, seen)
@@ -81,7 +83,9 @@ async def test_a_cancelled_run_still_ends_its_build_session(tmp_path, monkeypatc
         await asyncio.wait_for(second_call.wait(), 60)
         session = seen["calls"][0].get("session_id")
         assert session and is_build_call(session)
-        pid_files = list((tmp_path / "root").rglob("kid.pid"))
+        # (v1.383.0 review: the turn works in its own folder under the
+        # agent folders' root, pointed into this test's folder below.)
+        pid_files = list(tmp_path.rglob("kid.pid"))
         assert len(pid_files) == 1, pid_files
         pid = int(pid_files[0].read_text(encoding="utf-8").strip())
         # Precondition: the program is kept for the turn's session.
