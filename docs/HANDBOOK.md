@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.388.2 (2026-10-25).*
+holds itself to. Current as of v1.389.0 (2026-10-25).*
 
 ---
 
@@ -761,8 +761,9 @@ with the request typed in.
   "approval timed out" receipt).
 
 ### Terminals, Creative, and the rest
-Build: live terminals with AI assist per terminal, and the IJ harness coding
-screen (v1.369.0); a Creative gallery for
+Build: live terminals with AI assist per terminal, and **Coding sessions**,
+where Jarvis works as a coding agent in one of your folders (v1.369.0; called
+the IJ harness before v1.389.0); a Creative gallery for
 generated media (Pixio); Skills (yours + auto-suggested from successful
 sessions, approval-gated); Connections (providers/health); Usage (token
 costs); Activity (the full undo-capable action ledger); the **/you** page
@@ -795,7 +796,7 @@ seam); Train (teach it your writing voice, suggest-only).
   page no longer closes your terminals. Each pane's terminal and its link to
   the shell stay open in the background, so coming back is instant — exactly
   the screen you left, with no replay, no redraw and no stray characters.
-  Switching between the Terminals and IJ harness views keeps every terminal
+  Switching between the Terminals and Coding sessions views keeps every terminal
   the same way. A Claude or Codex
   you left working keeps working: a pane nobody is watching is still read, so
   the program never stalls waiting for you to come back. A reload or a daemon
@@ -1897,6 +1898,41 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Coding sessions: seen everywhere, with a way forward when a reply fails (v1.389.0)
+
+- **The name.** Build's coding-agent view is now called **Coding sessions**,
+  and the switch at the top of Build reads **Terminals | Coding sessions**.
+  Older notes in this Handbook call it the IJ harness; it is the same view,
+  and searching for "IJ harness" still finds it. The button on the meter that
+  shows how full the conversation is now reads **Summarize**, the chat's word.
+  Typing `/compact` still works.
+- **A running reply shows outside Build.** While a coding session works,
+  **Running now** lists it by its title, adding "Waiting on you" while it
+  needs your answer, and its link opens the session. The status orb says
+  **Working** while any chat or coding-session reply runs. The home line and
+  Everything › Status count it too. Before, a coding session could work for an
+  hour while the rest of the app said nothing was running.
+- **A failed reply gives you a way forward.** Under the newest reply that
+  failed or was cut off, you get:
+  - **Retry**, which sends that question again with its files, pictures,
+    skill or command.
+  - **Details**, the technical text. It is kept after you reopen the session,
+    with keys and sign-in tokens removed.
+  - **Sign in**, when Claude Code or Codex is signed out.
+
+  Retry is not offered while a reply runs, on a reply the provider declined
+  (Rewind is the way out there), or beside an account-limit card. A coding
+  session's failure now says "pick another model for this session", not
+  "for this chat".
+- **The receipt says what the chat's does.** The approvals you gave, the older
+  messages left out to fit the model, and the chat's other receipt lines now
+  show under a coding-session reply and in a Build terminal's chat. They are
+  still there after you reopen the session.
+- **The Plan tab shows the plan.** It said "No plan yet" beside a reply that
+  showed an 11-step plan, because it read a copy cut at 300 characters. It now
+  shows the running reply's plan, else whichever is newer: the newest reply's
+  plan or the plan you approved.
+
 ## Closing Iron Jarvis never gets stuck waiting on finished work (v1.388.2)
 
 When Iron Jarvis stops (Quit, or an update's tidy stop), it waits up to five
@@ -2680,9 +2716,10 @@ The view also keeps the conversation readable on a smaller window. Below about
 1280 px wide, the session list, the conversation and the panes stack. Before,
 at 1024 px the conversation was squeezed to a sliver between them.
 
-## The IJ harness and accounts
+## Coding sessions and accounts
 
-The IJ harness is Iron Jarvis working as a coding agent in one of your
+Coding sessions (called the IJ harness before v1.389.0) are Iron Jarvis
+working as a coding agent in one of your
 project folders, on whichever model you choose — the way Claude Code or Codex
 work, but inside Iron Jarvis, with its approvals, Undo and activity log. It
 lives in Build, beside your terminals. It was built in steps (v1.366.0 to

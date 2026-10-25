@@ -3699,6 +3699,57 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **A coding-session reply is a reply the whole app can see; a failed one
+  has a press; the view's name lives in ONE constant** (v1.389.0, the v1.388.0
+  re-audit's harness gaps; a doer + a reviewer that found 9 more defects).
+  RUNNING: `durable_turns.running_replies` / `reply_counts` / `reply_titles`
+  read MEMORY (titles: one primary-key read of the title column); `TurnLog.
+  open_asks` COPIES `_asks` first — `GET /chat/turns/running` is a sync route,
+  so it reads the loop's registry from a worker thread, and a live dict raised
+  mid-iteration and the listing came back EMPTY. `/health.replies {chat,
+  build}` carries counts only, never titles; the orb counts them only while
+  online (the last /health survives an outage); `ui.status_line` and
+  `system_map._status` count a Build reply, never as a chat; Running now
+  lists it ("Coding session · 12 min", "· Waiting on you") linking
+  `/terminals?session=<id>`. No Session rows. FAILURE: the reply line keeps
+  `errorTitle`, `errorDetail` (≤ 2,000, through `failure_words.
+  mask_failure_text`, which adds a bare Bearer value and AIza / xai- / gsk_ /
+  hf_ keys to the shared mask — the live frame of BOTH chat lanes reads it
+  too), `errorKind` sign_in | key | refusal and `errorProvider`
+  (`harness/sessions.LINE_KEYS` + the decoder). `HarnessFailureLine` + `lib/
+  buildRetry`: Retry on the NEWEST failed or cut-off reply only, never while
+  a reply runs, on an archived session, on a refusal, or beside a limit card
+  or a wait; `QueuedItem.resend` carries a Claude Code command BY NAME and
+  skips the "/" reading (a "/model…" skill question opened the menu; a
+  command was lost when the list could not be read). `BUILD_TERMINAL_EVENT`
+  makes a same-page "Finish signing in there" link re-read Build's terminal
+  list. `failure_words.this_place` / `GENERIC_FIX_BUILD`: a Build turn's fix
+  says "this session". RECEIPT: `lib/receiptFacts` decodes approved / refit /
+  adapted / remembered / folderRules / threadRefs for the coding session AND
+  PaneChat (which saves them on its reply). NAME: `lib/buildWords.ts`
+  `CODING_VIEW_NAME` "Coding sessions" / `CODING_SESSION_LABEL` /
+  `BUILD_BLURB`; every reader imports them and a pin refuses the words spelled
+  elsewhere — a different name is a one-line change. "harness" is a retired
+  word for the scans; internal ids, routes, test ids, `ij.build.shape`
+  "harness" and the `harness/` package are unchanged, and "IJ harness" is a
+  search alias. An ALLOW / PENDING piece that is only a retired word is
+  refused (one silenced a whole file). "Summarize" replaced "Compact";
+  `/compact` keeps Claude Code's name. PLAN TAB: `HarnessPanes.keptPlan` —
+  the live plan, else the newest reply's saved `plan` through `replyPlan` (the
+  reply's own reading), else the step detail (cut at 300 chars — the cause of
+  "No plan yet" beside an 11-step plan), else the approved plan; a reply's
+  plan beats an approved one only when written at or after `approvedAt`.
+  OPEN: "Build session" in the bell, desktop notices and daemon sentences (the
+  one-notice fixture holds them equal — a separate sweep); the orb says
+  Working while a session is parked on the user; a retried question is saved
+  twice; the shared `detections.redact.mask` still misses the bare Bearer
+  and the four key shapes; never driven in the packaged app. Pins:
+  `tests/test_harness_gaps_{running,failure_receipt,names,review}_v1389.py`,
+  `tests/test_build_fix_words_v1389.py`, `dashboard/__tests__/{harness-gaps-
+  running,harness-gaps-failure-receipt,pane-chat-receipt,harness-gaps-plan-
+  pane,harness-gaps-names,harness-gaps-review,harness-gaps-review-orb,
+  harness-gaps-review-map}-v1389.test.tsx`.
+
 - **A LOCAL endpoint's reply budget fits the work; a reply CUT at the limit
   never runs its half call and is picked up again** (v1.387.2; found by the
   Phase 2 glm benchmark: every local endpoint asked the OpenAI adapter's
