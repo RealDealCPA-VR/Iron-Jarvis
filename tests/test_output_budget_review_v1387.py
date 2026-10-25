@@ -836,3 +836,94 @@ async def test_a_reply_that_keeps_being_cut_ends_at_the_total_even_with_progress
     assert (ws / f"f{CUT_OFF_TOTAL_MAX - 1}.py").exists()
     assert not (ws / f"f{CUT_OFF_TOTAL_MAX}.py").exists()
     assert all(c["tools"] for c in model.calls)
+
+
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_a_long_answer_that_mentions_a_tool_call_tag_is_not_taken_for_a_leak(env, lane):
+    """The leak rule's guard: an unclosed ``<tool_call>`` counts as a call
+    only when what follows it names a tool THIS turn offered — a long answer
+    ABOUT the format, cut at the limit, keeps v1.323.0's `truncated` +
+    Continue (and its words)."""
+    platform, ws, wire = env
+    answer = ("GLM writes its calls like <tool_call>name, then <arg_key>… and so on. "
+              "Here is the long explanation, part one …")
+    model = wire([LLMResponse(text=answer, finish_reason="max_tokens")])
+    # (a plain chat turn with file tools armed: a harness turn has its own,
+    # older answer to text that LOOKS like a call — the text-call nudge)
+    done = await _lane(lane, platform, _body(
+        ws, "explain how GLM writes tool calls", tools=["read_file", "write_file", "edit_file"],
+    ), harness=None)
+    assert not any(str(u).startswith(NOTE_HEAD) for u in model.users())
+    assert done["truncated"] is True
+    assert "cut_off" not in done["route"]
+    assert done["reply"].startswith("GLM writes its calls like <tool_call>name")
+
+
+# --------------------------------------------------------------------------- #
+# 14. THE HOSTED ANTHROPIC API: a call the limit stopped in never runs.
+# --------------------------------------------------------------------------- #
+def _anthropic_cut_sse(name: str = "write_file") -> bytes:
+    events = [
+        {"type": "message_start", "message": {
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5",
+            "content": [], "stop_reason": None, "stop_sequence": None,
+            "usage": {"input_tokens": 9, "output_tokens": 1}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Writing it."}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1,
+         "content_block": {"type": "tool_use", "id": "toolu_1", "name": name, "input": {}}},
+        {"type": "content_block_delta", "index": 1, "delta": {
+            "type": "input_json_delta", "partial_json": '{"path": "calc.py", "content": "class Calc:\\n    def add'}},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "message_delta", "delta": {"stop_reason": "max_tokens", "stop_sequence": None},
+         "usage": {"output_tokens": 4096}},
+        {"type": "message_stop"},
+    ]
+    return "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_the_hosted_anthropic_api_never_runs_a_call_cut_at_the_limit(monkeypatch, stream):
+    """RED before this review (not the doer's: the hosted adapter was out of
+    its scope, but the rule "a half-parsed call is NEVER run" is the lanes'
+    and they are provider-agnostic). The SDK hands back a tool_use the limit
+    stopped in with a PARTIALLY PARSED input (`{"path": "calc.py", "content":
+    "class Calc:\n    def add"}`), and the lanes ran it — half a file. Now
+    the last block of a reply stopped at max_tokens, when a tool call, is a
+    cut call (reported by name; the lanes' recovery takes over). The request
+    is unchanged."""
+    import httpx
+    from anthropic import AsyncAnthropic
+
+    from iron_jarvis.providers.adapters.anthropic import AnthropicAdapter
+    from iron_jarvis.providers.adapters.base import LLMMessage
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if stream:
+            return httpx.Response(200, content=_anthropic_cut_sse(),
+                                  headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json={
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "Writing it."},
+                        {"type": "tool_use", "id": "toolu_1", "name": "write_file",
+                         "input": {"path": "calc.py", "content": "class Calc:\n    def add"}}],
+            "stop_reason": "max_tokens", "stop_sequence": None,
+            "usage": {"input_tokens": 9, "output_tokens": 4096}})
+
+    a = AnthropicAdapter(model="claude-sonnet-4-5", api_key="sk-ant-test")
+    client = AsyncAnthropic(api_key="sk-ant-test",
+                            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(a, "_client", lambda: client)
+    spec = {"name": "write_file", "description": "w", "input_schema": {"type": "object"}}
+    msgs = [LLMMessage(role="user", content="write calc.py")]
+    if stream:
+        final = None
+        async for frame in a.stream(system="", messages=msgs, tools=[spec]):
+            if frame["type"] == "final":
+                final = frame["response"]
+    else:
+        final = await a.complete(system="", messages=msgs, tools=[spec])
+    assert final.finish_reason == "max_tokens"
+    assert final.tool_calls == [] and final.cut_calls == ["write_file"]
+    assert final.text == "Writing it."

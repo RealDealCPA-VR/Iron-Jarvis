@@ -563,14 +563,18 @@ def leaked_call(text: Any) -> "tuple[str, int] | None":
         return None
 
 
-def cut_off_round(response: Any, *, has_tools: bool) -> "list[str] | None":
+def cut_off_round(
+    response: Any, *, has_tools: bool, tool_names: Any = None,
+) -> "list[str] | None":
     """The names of the calls a round's reply was CUT OFF in (``""`` for a
     call whose name never arrived; ``[]`` when it wrote no text and no
     complete call at all), or ``None`` when the round was not such a cut:
     it did not stop at the output limit, the turn has no tools, or it is a
     long TEXT answer (the ``truncated`` + Continue case). A call the server
-    handed back as unclosed TEXT (:func:`leaked_call`) is a cut call too.
-    Never raises."""
+    handed back as unclosed TEXT (:func:`leaked_call`) is a cut call too —
+    only when it names a tool this turn offered (``tool_names``, the names
+    the model was shown; a long answer ABOUT the tag format is still a long
+    answer). Never raises."""
     try:
         if response is None or not has_tools:
             return None
@@ -584,21 +588,26 @@ def cut_off_round(response: Any, *, has_tools: bool) -> "list[str] | None":
         text = getattr(response, "text", "") or ""
         if text.strip():
             leak = leaked_call(text)
-            return [leak[0]] if leak is not None else None
+            if leak is None or not leak[0] or leak[0] not in set(tool_names or ()):
+                return None
+            return [leak[0]]
         return []
     except Exception:  # noqa: BLE001 — not a cut, the old path
         return None
 
 
-def cut_off_text(response: Any) -> str:
+def cut_off_text(response: Any, tool_names: Any = None) -> str:
     """The words a cut-off round keeps — what the model wrote BEFORE a call
-    it leaked as text (:func:`leaked_call`), else its whole text. The markup
-    of a half call is never given back to the model (it would copy the
-    format) nor kept in the reply. Never raises."""
+    it leaked as text (:func:`leaked_call`, naming one of ``tool_names``),
+    else its whole text. The markup of a half call is never given back to
+    the model (it would copy the format) nor kept in the reply. Never
+    raises."""
     try:
         text = str(getattr(response, "text", "") or "")
         leak = leaked_call(text)
-        return text[: leak[1]].rstrip() if leak is not None else text
+        if leak is None or not leak[0] or leak[0] not in set(tool_names or ()):
+            return text
+        return text[: leak[1]].rstrip()
     except Exception:  # noqa: BLE001
         return str(getattr(response, "text", "") or "")
 

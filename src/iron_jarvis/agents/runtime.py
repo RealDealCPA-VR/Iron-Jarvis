@@ -3152,7 +3152,8 @@ class AgentRuntime:
                 cut_off_text as _cut_text,
             )
 
-            _cut = _cut_off_round(resp, has_tools=bool(tool_specs))
+            _offered = {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)}
+            _cut = _cut_off_round(resp, has_tools=bool(tool_specs), tool_names=_offered)
             if _cut is None:
                 _cut_streak = 0  # review: a step that was not cut
             else:
@@ -3163,13 +3164,13 @@ class AgentRuntime:
                     return False, _cut_end_for(_cut, _cut_count, _cut_streak)
                 _cut_note = _cut_note_for(
                     _cut,
-                    {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)},
+                    _offered,
                     limit=(getattr(resp, "extra", None) or {}).get("max_tokens"),
                     ran_others=bool(resp.tool_calls),
                 )
                 if not resp.wants_tools:
                     # Review: never a half call's markup (`cut_off_text`).
-                    _kept = _cut_text(resp)
+                    _kept = _cut_text(resp, _offered)
                     if _kept.strip():
                         messages.append(LLMMessage(
                             role="assistant", content=_kept,

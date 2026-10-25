@@ -8637,7 +8637,8 @@ async def run_chat_turn(
             # branch below) is read FIRST — it is never the finish check's
             # answer (an empty "answer" heard there hid the real one that
             # follows the cut-off note). Lock-step: the stream lane.
-            _cut = cut_off_round(route.response, has_tools=bool(armed))
+            _offered = {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)}
+            _cut = cut_off_round(route.response, has_tools=bool(armed), tool_names=_offered)
             if _finish is not None and _cut is None:
                 # The first answer after the finish note is the model's
                 # point-by-point answer (lock-step: the stream lane).
@@ -8673,14 +8674,14 @@ async def run_chat_turn(
                     _cut_end = cut_off_end(_cut, _cut_times, _cut_streak)
                     break
                 _cut_note = cut_off_note(
-                    _cut, {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)},
+                    _cut, _offered,
                     limit=(getattr(route.response, "extra", None) or {}).get("max_tokens"),
                     ran_others=bool(calls),
                 )
                 if not calls:
                     # Review: the words before a call leaked as text — never
                     # the half call's markup (`cut_off_text`).
-                    _kept = cut_off_text(route.response)
+                    _kept = cut_off_text(route.response, _offered)
                     if _kept.strip():
                         msgs.append(LLMMessage(
                             role="assistant", content=_kept,
@@ -9249,7 +9250,9 @@ async def run_chat_turn(
     if _cut_end:
         # v1.387.0 review: a turn that ENDED on a cut round keeps that round's
         # words only — never a half call's markup (`cut_off_text`).
-        model_text = cut_off_text(route.response)
+        model_text = cut_off_text(
+            route.response, {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)},
+        )
     # THE FINISH CHECK (part 3, Phase 2): the reply is what the model wrote
     # before the check, then its answer to it. MIRROR NOTE (lock-step): the
     # stream lane combines at the same point.

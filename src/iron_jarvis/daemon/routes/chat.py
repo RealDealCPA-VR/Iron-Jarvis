@@ -4609,7 +4609,10 @@ async def chat_stream(
                 # v1.387.0 review: a reply CUT OFF at the output limit is read
                 # FIRST — it is never the finish check's answer (lock-step:
                 # chat_turn).
-                _cut = _chat_turn.cut_off_round(final_resp, has_tools=bool(armed or ask_armed))
+                _offered = {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)}
+                _cut = _chat_turn.cut_off_round(
+                    final_resp, has_tools=bool(armed or ask_armed), tool_names=_offered,
+                )
                 if _finish is not None and _cut is None:
                     # The first answer after the finish note is the model's
                     # point-by-point answer (lock-step: chat_turn).
@@ -4643,7 +4646,7 @@ async def chat_stream(
                     _cut_times += 1
                     _cut_streak += 1
                     _truncated = False  # a cut CALL is not a long answer to Continue
-                    _kept = _chat_turn.cut_off_text(final_resp)
+                    _kept = _chat_turn.cut_off_text(final_resp, _offered)
                     if _kept != reply_text:
                         # Review: a call the server handed back as TEXT (the
                         # GLM parser's unclosed <tool_call>) was streamed to
@@ -4659,7 +4662,7 @@ async def chat_stream(
                         break
                     _cut_note = _chat_turn.cut_off_note(
                         _cut,
-                        {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)},
+                        _offered,
                         limit=(getattr(final_resp, "extra", None) or {}).get("max_tokens"),
                         ran_others=bool(calls),
                     )
