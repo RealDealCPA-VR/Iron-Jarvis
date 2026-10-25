@@ -113,7 +113,10 @@ def test_the_default_agent_folder_is_under_the_system_temp():
 
     assert bench_mod.AGENT_RUNS_PARENT is None
     root = bench_mod.agent_runs_root()
-    assert root.parent == Path(tempfile.gettempdir()) and root.name == "ij-bench-runs"
+    # v1.384.1: the parent is the temp folder RESOLVED — on GitHub's runners
+    # TEMP is an 8.3 short name (C:\Users\RUNNER~1\...), and the agent is
+    # told the full one (tests/test_harness_bench_short_temp_v13841.py).
+    assert root.parent == Path(tempfile.gettempdir()).resolve() and root.name == "ij-bench-runs"
 
 
 async def test_a_cancelled_run_leaves_no_agent_folder(tmp_path, agent_parent):
