@@ -150,6 +150,79 @@ def test_a_window_too_small_for_any_map_says_so_or_stays_silent_within_its_share
     assert tiny.text == "" and tiny.left_out
 
 
+def test_a_link_out_of_the_folder_is_never_followed(tmp_path):
+    """A junction / symbolic link inside the folder that points OUTSIDE it is
+    not walked: the map holds the session folder's names, never another
+    folder's."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret_module.py").write_text("def leaked():\n    pass\n", encoding="utf-8")
+    ws = tmp_path / "p"
+    ws.mkdir()
+    (ws / "ok.py").write_text("def fine():\n    pass\n", encoding="utf-8")
+    link = ws / "linked"
+    if os.name == "nt":
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(link))
+    else:
+        os.symlink(outside, link, target_is_directory=True)
+    m = PM.build(ws, limit=PM.share_chars(200_000))
+    assert "ok.py — fine()" in m.text
+    assert "secret_module" not in m.text and "leaked" not in m.text and "linked" not in m.text
+
+
+def test_only_the_files_the_map_can_show_are_parsed(tmp_path):
+    ws = tmp_path / "p"
+    deep = ws / "a" / "b" / "c"
+    deep.mkdir(parents=True)
+    (ws / "top.py").write_text("def top():\n    pass\n", encoding="utf-8")
+    (deep / "deep.py").write_text("def deep():\n    pass\n", encoding="utf-8")
+    before = PM.BUILDS["parsed"]
+    m = PM.build(ws, limit=PM.share_chars(200_000))
+    assert "top.py — top()" in m.text and "c/ (1 file)" in m.text
+    assert PM.BUILDS["parsed"] == before + 1  # deep.py is below the shown levels
+
+
+def test_a_huge_folder_is_counted_not_listed_so_the_rest_keeps_its_depth(tmp_path):
+    ws = tmp_path / "p"
+    (ws / "tests").mkdir(parents=True)
+    (ws / "src" / "pkg").mkdir(parents=True)
+    for i in range(PM.MAX_FILES_PER_FOLDER + 25):
+        (ws / "tests" / f"test_{i:03d}.py").write_text(f"def test_{i}():\n    pass\n", encoding="utf-8")
+    (ws / "src" / "pkg" / "core.py").write_text("class Engine:\n    pass\n", encoding="utf-8")
+    before = PM.BUILDS["parsed"]
+    m = PM.build(ws, limit=PM.share_chars(200_000))
+    lines = m.text.splitlines()
+    assert "  … and 25 more files" in lines
+    assert "    core.py — Engine" in lines  # the third level is still shown
+    assert sum(ln.startswith("  test_") for ln in lines) == PM.MAX_FILES_PER_FOLDER
+    # The counted files are never parsed.
+    assert PM.BUILDS["parsed"] == before + PM.MAX_FILES_PER_FOLDER + 1
+
+
+def test_a_source_files_own_warnings_never_reach_the_log(tmp_path):
+    """A project file's own SyntaxWarning ("invalid escape sequence") never
+    reaches the daemon's stderr / log. Run in a CLEAN interpreter: pytest's
+    own warning capture replaces the filters a module installs."""
+    import subprocess
+    import sys
+
+    script = (
+        "import ast\n"
+        "from iron_jarvis.harness import project_map as PM\n"
+        "src = 'X = \"\\\\`\"\\n\\ndef f():\\n    pass\\n'\n"
+        "assert PM.python_names(src) == ['f()']\n"
+        "print('---')\n"
+        "ast.parse(src, filename='<another>')\n"  # control: any other parse warns
+    )
+    done = subprocess.run([sys.executable, "-W", "default", "-c", script], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace", timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert done.stderr.count("SyntaxWarning") == 1 and "<another>" in done.stderr, done.stderr
+    assert "<ij-project-map>" not in done.stderr
+
+
 def test_a_walk_that_stopped_says_where(tmp_path, monkeypatch):
     ws = _project(tmp_path)
     monkeypatch.setattr(B, "_MAX_WALK_ENTRIES", 3)

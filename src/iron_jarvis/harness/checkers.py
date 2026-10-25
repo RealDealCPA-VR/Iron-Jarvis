@@ -638,6 +638,12 @@ class ProjectCheckers:
                 f" ({pend.left_out} more changed file{'' if pend.left_out == 1 else 's'} not checked: "
                 f"one run takes at most {MAX_FILES_PER_RUN})"
             )
+        if not lines and name == "ruff" and "No Python files found" in output:
+            # --force-exclude honoured the project's own `exclude`: nothing was
+            # checked, and "no problems" would be a claim about a file ruff
+            # never looked at.
+            record["verdict"] = "excluded"
+            return f"Check (ruff): {where} is excluded by the project's own ruff settings, so it was not checked."
         if not lines:
             record["verdict"] = "clean"
             if code not in (0, None) and not others and name != "eslint":

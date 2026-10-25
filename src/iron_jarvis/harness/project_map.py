@@ -52,6 +52,7 @@ import os
 import re
 import threading
 import time
+import warnings
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,6 +70,10 @@ MAP_MIN_CHARS = 400
 CHARS_PER_TOKEN = 4
 #: Folder levels shown (1 = only the folder's own entries).
 MAP_DEPTH = 3
+#: Files named per folder; the rest of a bigger folder is one count line
+#: ("… and 1,430 more files"), so one huge folder (a tests/ of 1,500 files)
+#: does not push the whole map down to one level.
+MAX_FILES_PER_FOLDER = 40
 #: Top-level names shown per file (the rest counted).
 MAX_NAMES = 12
 MAX_NAME_CHARS = 60
@@ -81,6 +86,12 @@ WALK_DEADLINE_S = 3.0
 PY_SUFFIXES = frozenset({".py", ".pyi"})
 SCRIPT_SUFFIXES = frozenset({".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"})
 HEADING = "## Project map"
+#: The file name ``ast.parse`` is given: a source file's own SyntaxWarnings
+#: ("invalid escape sequence") are the project's business, never the daemon
+#: log's — silenced for THIS name only (any other parse warns as before).
+_PARSE_NAME = "<ij-project-map>"
+for _category in (SyntaxWarning, DeprecationWarning):
+    warnings.filterwarnings("ignore", category=_category, module=re.escape(_PARSE_NAME))
 #: How many folders' maps / files' names are remembered.
 _MAX_MAPS = 16
 _MAX_NAMED_FILES = 20_000
@@ -143,7 +154,7 @@ def python_names(source: str) -> list[str]:
     from ``ast.parse`` — a parse, never an import. [] for a file that does
     not parse."""
     try:
-        tree = ast.parse(source)
+        tree = ast.parse(source, filename=_PARSE_NAME)
     except (SyntaxError, ValueError, MemoryError, RecursionError):
         return []
     out: list[str] = []
@@ -242,6 +253,11 @@ def _walk(base: Path) -> tuple[list[_Entry], int, str]:
         subdirs: list[tuple[Path, tuple[str, ...]]] = []
         for child in children:
             try:
+                # A link or a Windows junction may point OUTSIDE the folder:
+                # never followed, never listed (Python counts a junction as a
+                # plain folder unless asked).
+                if child.is_symlink() or (hasattr(child, "is_junction") and child.is_junction()):
+                    continue
                 is_dir = child.is_dir(follow_symlinks=False)
             except OSError:
                 continue
@@ -251,6 +267,8 @@ def _walk(base: Path) -> tuple[list[_Entry], int, str]:
                 entries.append(_Entry(parts + (child.name,), True))
                 subdirs.append((Path(child.path), parts + (child.name,)))
                 continue
+            if child.name in _SKIP_DIRS:
+                continue  # (a worktree's `.git` is a FILE)
             try:
                 if not child.is_file(follow_symlinks=False):
                     continue
@@ -321,7 +339,13 @@ def _render_lines(
     def walk(node: _Node, level: int) -> None:
         nonlocal named, collapsed
         pad = "  " * level
-        for fname, parts in node.files:
+        for count, (fname, parts) in enumerate(node.files):
+            if count >= MAX_FILES_PER_FOLDER:
+                more = len(node.files) - MAX_FILES_PER_FOLDER
+                lines.append(f"{pad}… and {more:,} more file{'' if more == 1 else 's'}")
+                is_file.append(False)
+                has_names.append(False)
+                break
             got = names.get(parts) or []
             if got and named < name_budget:
                 named += 1
@@ -357,7 +381,8 @@ def _header(folder_name: str, files: int, depth: int, any_names: bool) -> str:
     ) if any_names else ""
     return (
         f"{HEADING}\n"
-        f"The session folder ({folder_name}) to {depth} level{'' if depth == 1 else 's'}{named}. "
+        f"The session folder ({folder_name}) to {depth} level{'' if depth == 1 else 's'} (at most "
+        f"{MAX_FILES_PER_FOLDER} files named per folder){named}. "
         f"Heavy and hidden folders (node_modules, .git, build output) are left out. "
         f"{files:,} file{'' if files == 1 else 's'}. You need not list what it shows."
     )
@@ -495,11 +520,19 @@ def _signature(entries: list[_Entry], note: str) -> str:
     return h.hexdigest()
 
 
-def _names_for(base: Path, entries: list[_Entry]) -> dict[tuple[str, ...], list[str]]:
+def _names_for(base: Path, entries: list[_Entry], depth: int = MAP_DEPTH) -> dict[tuple[str, ...], list[str]]:
+    """The top-level names of every source file the map can SHOW (at most
+    ``depth`` levels down — a deeper file is only counted, so it is never
+    parsed), from the per-file cache when the file did not change."""
     out: dict[tuple[str, ...], list[str]] = {}
+    per_folder: dict[tuple[str, ...], int] = {}
     for e in entries:
-        if e.is_dir:
+        if e.is_dir or len(e.parts) > depth:
             continue
+        folder_key = e.parts[:-1]
+        per_folder[folder_key] = per_folder.get(folder_key, 0) + 1
+        if per_folder[folder_key] > MAX_FILES_PER_FOLDER:
+            continue  # shown as a count, never named
         suffix = os.path.splitext(e.parts[-1])[1].lower()
         if suffix not in PY_SUFFIXES and suffix not in SCRIPT_SUFFIXES:
             continue
@@ -550,7 +583,7 @@ def build(folder: Any, *, limit: int, depth: int = MAP_DEPTH) -> "MapResult | No
             _MAPS.move_to_end(key)
             cached = hit[1]
             return MapResult(**{**cached.__dict__, "left_out": list(cached.left_out)})
-    names = _names_for(base, entries)
+    names = _names_for(base, entries, depth)
     result = render(base.name or str(base), entries, names, files=files, walk_note=note,
                     limit=limit, depth=depth)
     with _LOCK:

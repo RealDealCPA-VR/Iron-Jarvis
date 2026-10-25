@@ -431,23 +431,34 @@ def test_scheduling_on_the_loop_touches_no_disk(tmp_path, monkeypatch):
     assert out[2].arguments["command"].endswith(" pkg/a.py b.py")
 
 
-def test_the_finish_check_never_reads_a_checker_run_as_the_models_command(env):
-    """A project check's ``shell`` row is not a command the model ran: the
-    finish check's source of "the test command you ran" (a carried-on
-    reply's earlier commands) skips it like its own runs."""
-    from iron_jarvis.core.db import session_scope
-    from iron_jarvis.core.models import ToolInvocation
-
-    platform, _ws, _log = env
-    with session_scope(platform.engine) as db:
-        for called_as, cmd in (("", "python -m pytest -q"), (C.CALLED_AS, "ruff check --no-fix a.py"),
-                               (F.CALLED_AS, "python -m pytest -q")):
-            db.add(ToolInvocation(session_id=SESSION, agent_run_id="", tool="shell",
-                                  args_json=json.dumps({"command": cmd}), confinement="native",
-                                  called_as=called_as))
-        db.commit()
-    got = F.ran_commands(platform.engine, SESSION, 0, 10**9)
-    assert [(a["command"], c) for _t, a, c in got] == [("python -m pytest -q", "")]
+async def test_a_checker_run_is_never_the_finish_checks_test_command(env, monkeypatch):
+    """The lanes never hand a checker's call to the finish check (it is not
+    the model's command), and by the finish check's OWN detection rule no
+    checker's command line is a test run — so the test command the finish
+    check runs again is the model's. (``harness/finish.py`` is untouched by
+    Phase 3.)"""
+    platform, ws, _log = env
+    _ruff_on(ws)
+    (ws / ".ironjarvis" / "harness" / "finish.toml").unlink()  # the finish check ON
+    (ws / "test_mini.py").write_text("import unittest\n\n\nclass T(unittest.TestCase):\n    def test_x(self):\n"
+                                     "        self.assertTrue(True)\n", encoding="utf-8")
+    test_cmd = "python -m unittest -q test_mini"
+    wire(platform, monkeypatch, [
+        [call("write_file", "w1", path="app.py", content="import os\nX = 2\n")],
+        [call("shell", "s1", command=test_cmd)],
+        "Set X to 2; the tests pass.",
+        "1. met: X is 2 and the tests pass.",
+    ])
+    out = await stream(platform, body(ws, text="set X to 2 in app.py and run the tests"))
+    finish = out["done"]["finish"]
+    assert finish["command"] == test_cmd and finish["tests"] == "passed"
+    assert len(_check_rows(platform)) == 1  # the checker ran — and was not mistaken for the tests
+    for checker in (C.Checker("ruff", "ruff", "path", "ruff.toml", C.PY_SUFFIXES),
+                    C.Checker("mypy", "mypy", "path", "mypy.ini", C.PY_SUFFIXES),
+                    C.Checker("eslint", "eslint", "path", "eslint.config.js", C.JS_SUFFIXES),
+                    C.Checker("tsc", r"node_modules\.bin\tsc.cmd", "project", "tsconfig.json", C.TS_SUFFIXES)):
+        line = C.command_line(checker.argv(["src/a.py"]))
+        assert F.test_part(line) == "" and not F.status_is_tests(line), line
 
 
 # --------------------------------------------------------------------------- #
@@ -503,6 +514,22 @@ async def test_the_real_ruff_takes_the_flags_and_its_finding_comes_back(tmp_path
     # `fix = true` in the config, and the file is untouched (--no-fix).
     assert (ws / "app.py").read_text(encoding="utf-8") == "import os\nX = 1\n"
     assert not (ws / ".ruff_cache").exists()
+
+
+@pytest.mark.skipif(_real_ruff() is None, reason="ruff is not on this machine's PATH")
+async def test_a_file_the_projects_ruff_settings_exclude_is_said_not_passed(tmp_path, monkeypatch):
+    platform = build_platform(str(tmp_path / "home"))
+    ws = tmp_path / "proj"
+    ws.mkdir()
+    no_finish_check(ws)
+    (ws / "pyproject.toml").write_text('[tool.ruff]\nexclude = ["generated.py"]\n', encoding="utf-8")
+    model = wire(platform, monkeypatch, [
+        [call("write_file", "w1", path="generated.py", content="import os\n")], "Done.",
+    ])
+    await stream(platform, body(ws))
+    text = model.tool_messages(1)["w1"]
+    assert text.endswith("Check (ruff): generated.py is excluded by the project's own ruff settings, so it was "
+                         "not checked."), text
 
 
 def test_eslint_json_is_read_as_lines_for_the_changed_files(tmp_path):
