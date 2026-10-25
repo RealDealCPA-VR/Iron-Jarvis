@@ -82,8 +82,15 @@ MAX_TURN_CHARS = 200_000
 MAX_ANSWER_CHARS = 20_000
 #: The thinking a reply line keeps (the chat page's THINKING_CAP).
 THINKING_CAP = 20_000
-#: Steps a reply line records, at most.
+#: Steps a reply line records WITH their detail, at most.
 MAX_STEPS = 60
+#: v1.384.0 review: steps a reply line COUNTS, at most. A reply with no step
+#: limit (the default) often takes more than ``MAX_STEPS``, and a line that
+#: kept only the first 60 made its work line under-report ("read 54 files"
+#: for 70). Past ``MAX_STEPS`` a step is kept COMPACT — its name, outcome,
+#: time and target, never its detail (a few dozen bytes) — up to this many:
+#: two calls a round at the safety stop (``harness.mode.BUILD_SAFETY_ROUNDS``).
+MAX_COUNTED_STEPS = 2000
 
 RUNNING_SENTENCE = (
     "This session is still answering. Steer it, queue your message, or stop it first."
@@ -633,7 +640,7 @@ class _ReplyWatch:
             elif data.get("status") == "finished":
                 began = self._started.pop(cid, None)
                 ok = data.get("ok")
-                if len(self.steps) < MAX_STEPS:
+                if len(self.steps) < MAX_COUNTED_STEPS:
                     step: dict[str, Any] = {
                         "name": name,
                         "ok": bool(ok) if ok is not None else None,
@@ -648,7 +655,9 @@ class _ReplyWatch:
                     target = step_target(name, began[2] if began else None)
                     if target:
                         step["target"] = target
-                    if isinstance(data.get("detail"), dict):
+                    # v1.384.0 review: only the first MAX_STEPS keep their
+                    # detail; the rest are counted, compact.
+                    if isinstance(data.get("detail"), dict) and len(self.steps) < MAX_STEPS:
                         step["detail"] = data["detail"]
                     self.steps.append(step)
                 if name == "plan_update" and ok is True:
