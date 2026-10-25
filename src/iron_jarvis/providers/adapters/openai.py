@@ -148,16 +148,27 @@ def _stream_error(provider: str, err: Any, resp: Any) -> ProviderError:
     )
 
 
-def _error_detail(resp: Any) -> str:
-    """Best-effort human-readable message from an HTTP error response body."""
+def _error_detail(resp: Any, limit: int = 300) -> str:
+    """Best-effort human-readable message from an HTTP error response body.
+
+    ``limit``: 300 characters for what is SHOWN; the reply budget's retry
+    reads the refusal with a larger one (v1.387.0 review) — a proxy's
+    prefixes ("litellm.ContextWindowExceededError: litellm.BadRequestError:
+    Hosted_vllmException - Error code: 400 - {…") can push the numbers it
+    needs past the display cut, and an unreadable refusal is answered with
+    the old 4,096 for the rest of the process."""
     try:
         data = resp.json()
         err = data.get("error")
         if isinstance(err, dict):
-            return str(err.get("message") or err)[:300]
-        return str(err or data)[:300]
+            return str(err.get("message") or err)[:limit]
+        return str(err or data)[:limit]
     except Exception:
-        return (getattr(resp, "text", "") or "")[:300]
+        return (getattr(resp, "text", "") or "")[:limit]
+
+
+#: How much of a 400's words the reply budget's retry reads (v1.387.0 review).
+_BUDGET_DETAIL_CHARS = 4_000
 
 
 #: v1.323.0: the field names an OpenAI-compatible server uses for the model's
@@ -905,7 +916,9 @@ class OpenAIAdapter(LLMAdapter):
             # REFUSES a request whose budget plus prompt overflows the model's
             # window ("This model's maximum context length is …"). Retry ONCE
             # with the budget it says fits, and remember what it said.
-            smaller = self._budget_retry_body(body, _error_detail(resp), raw_prompt)
+            smaller = self._budget_retry_body(
+                body, _error_detail(resp, _BUDGET_DETAIL_CHARS), raw_prompt
+            )
             if smaller is not None:
                 body = smaller
                 resp = await self._client().post(
@@ -1056,7 +1069,7 @@ class OpenAIAdapter(LLMAdapter):
                         # the budget the server says fits, spliced in ahead of
                         # every remaining attempt (each of which takes it).
                         smaller = self._budget_retry_body(
-                            attempt_body, _error_detail(resp), raw_prompt
+                            attempt_body, _error_detail(resp, _BUDGET_DETAIL_CHARS), raw_prompt
                         )
                         if smaller is not None:
                             budget_retried = True

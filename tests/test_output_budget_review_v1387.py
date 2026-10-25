@@ -24,6 +24,17 @@ from tests.test_cut_off_recovery_v1387 import (  # noqa: F401 — `env` is a fix
 )
 
 
+@pytest.fixture(autouse=True)
+def _forget_learned():
+    """What servers taught the adapters is process memory: every test starts
+    clean and leaves nothing behind."""
+    from iron_jarvis.providers import reply_budget
+
+    reply_budget.forget_learned()
+    yield
+    reply_budget.forget_learned()
+
+
 # --------------------------------------------------------------------------- #
 # 1. THE FINISH CHECK hears the model's ANSWER, never a cut-off reply.
 # --------------------------------------------------------------------------- #
@@ -289,3 +300,88 @@ def test_the_honest_end_says_in_a_row_only_when_they_were():
     assert "3 times in a row" in cut_off_end_text(["write_file"], 3)
     total = cut_off_end_text(["write_file"], 8, in_a_row=False)
     assert "8 times in this reply" in total and "in a row" not in total
+
+
+# --------------------------------------------------------------------------- #
+# 6. A PICTURE IS NOT 100,000 TOKENS OF TEXT.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("stream", [False, True])
+async def test_a_picture_does_not_shrink_the_reply_below_the_old_budget(tmp_path, stream):
+    """RED on the doer's code: the request estimate counted a picture's
+    base64 as TEXT (a 300 KB photo ≈ 100k "tokens"), so on a KNOWN 32k
+    window a question about one photo asked for the 1,024-token floor —
+    a QUARTER of the 4,096 every local request had before. A server counts
+    a picture as a bounded number of tokens; so does the estimate now."""
+    import base64
+
+    from iron_jarvis.providers.adapters.base import LLMMessage
+    from tests.fixtures.fake_openai_endpoint_v1387 import FakeEndpoint, text_reply
+    from tests.test_reply_budget_v1387 import MODEL, _platform
+
+    photo = base64.b64encode(bytes(range(256)) * 1200).decode()  # ~400 KB of base64
+    msgs = [LLMMessage(role="user", content="what is in this photo?",
+                       images=[{"data_b64": photo, "media_type": "image/png"}])]
+    with FakeEndpoint(lambda b: text_reply("a cat")) as srv:
+        platform = _platform(tmp_path, srv.url, pins={f"custom::{MODEL}": 32_000})
+        adapter = platform.providers.get("custom", MODEL)
+        if stream:
+            async for _ in adapter.stream(system="s", messages=msgs, tools=[]):
+                pass
+        else:
+            await adapter.complete(system="s", messages=msgs, tools=[])
+        body = srv.chats()[-1]
+    assert body["max_tokens"] >= 4_096, body["max_tokens"]
+    assert body["max_tokens"] <= 32_000
+
+
+def test_the_estimate_counts_a_picture_as_a_bounded_number_of_tokens():
+    from iron_jarvis.providers.reply_budget import IMAGE_TOKENS, request_tokens
+
+    data = "A" * 400_000
+    openai_wire = [{"role": "user", "content": [
+        {"type": "text", "text": "hi"},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{data}"}}]}]
+    anthropic_wire = [{"role": "user", "content": [
+        {"type": "text", "text": "hi"},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}}]}]
+    for wire in (openai_wire, anthropic_wire):
+        n = request_tokens("", wire, None)
+        assert IMAGE_TOKENS <= n <= IMAGE_TOKENS + 200, n
+
+
+# --------------------------------------------------------------------------- #
+# 7. THE RETRY READS THE WHOLE REFUSAL, not the 300 characters a screen shows.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("stream", [False, True])
+async def test_a_refusal_whose_numbers_sit_past_the_display_cut_is_still_read(tmp_path, monkeypatch, stream):
+    """RED on the doer's code: the retry parsed `_error_detail(resp)`, cut at
+    300 characters for DISPLAY. A proxy that stacks its own prefixes in
+    front of vLLM's words pushes the window past that cut; the refusal then
+    read as "budget refused, no number" and the endpoint was answered with —
+    and REMEMBERED at — the old 4,096 for the rest of the process. Now the
+    retry reads the whole refusal and asks exactly what the server says
+    fits."""
+    from tests.fixtures import fake_openai_endpoint_v1387 as fake
+    from tests.test_reply_budget_v1387 import MODEL, _ask, _platform
+
+    long_words = (
+        "litellm.ContextWindowExceededError: litellm.BadRequestError: Hosted_vllmException - "
+        "Error code: 400 - {{'object': 'error', 'message': \"Received Model Group=glm-5.3-flash, "
+        "deployment=hosted_vllm/zai-org/GLM-5.3-Flash-FP8 on spark-a (Available Model Group "
+        "Fallbacks=None, context_window_fallbacks=None) — 'max_tokens' or 'max_completion_tokens' "
+        "is too large: {asked}. This model's maximum context length is {ctx} tokens and your "
+        "request has {prompt} input tokens ({asked} > {ctx} - {prompt}).\", 'code': 400}}"
+    )
+    assert long_words.index("maximum context length") > 300
+    monkeypatch.setitem(fake.REFUSALS, "litellm_long", long_words)
+    from iron_jarvis.providers import reply_budget
+
+    with fake.FakeEndpoint(lambda b: fake.text_reply("ok"), context_len=24_000,
+                           refusal="litellm_long") as srv:
+        platform = _platform(tmp_path, srv.url, pins={f"custom::{MODEL}": 200_000})
+        await _ask(platform, stream=stream)
+        bodies = srv.chats()
+    assert bodies[0]["max_tokens"] == 32_768
+    second = bodies[1]["max_tokens"]
+    assert second > 4_096 and srv.prompt_tokens(bodies[1]) + second <= 24_000
+    assert reply_budget.learned(srv.url, MODEL).get("output_cap") != 4_096

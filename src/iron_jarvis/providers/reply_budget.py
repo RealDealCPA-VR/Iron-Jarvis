@@ -286,15 +286,55 @@ def forget_learned() -> None:
 # --------------------------------------------------------------------------- #
 # The per-adapter budget.
 # --------------------------------------------------------------------------- #
+#: What one PICTURE in a request is counted as (v1.387.0 review). A vision
+#: model's server turns a picture into a bounded number of tokens — LLaVA's
+#: 576, a Qwen-VL photo around a thousand or two at its default resolution —
+#: never its base64 length: counted as text, a 300 KB photo read as ~100k
+#: tokens and a question about it on a known 32k window asked for the
+#: 1,024-token floor, a quarter of what every local request had before.
+#: Generous on purpose (an overestimate only asks a little less).
+IMAGE_TOKENS = 2_048
+
+
+def _without_pictures(obj: Any) -> "tuple[Any, int]":
+    """``(wire, pictures)`` — the wire with every picture's DATA taken out
+    (an OpenAI ``image_url`` part, an Anthropic ``image`` block, any
+    ``data:image/…`` string), and how many there were."""
+    if isinstance(obj, str):
+        return ("", 1) if obj.startswith("data:image/") else (obj, 0)
+    if isinstance(obj, list):
+        out, n = [], 0
+        for item in obj:
+            v, k = _without_pictures(item)
+            out.append(v)
+            n += k
+        return out, n
+    if isinstance(obj, dict):
+        if obj.get("type") in ("image_url", "image", "input_image"):
+            return {"type": obj.get("type")}, 1
+        out_d, n = {}, 0
+        for key, value in obj.items():
+            v, k = _without_pictures(value)
+            out_d[key] = v
+            n += k
+        return out_d, n
+    return obj, 0
+
+
 def request_tokens(system: str, wire: Any, tools: Any, ratio: float | None = None) -> int:
     """A request's size in tokens, estimated from the WIRE shape the adapter
     sends (JSON escapes and role keys included — a slight overestimate, which
-    is the safe direction). Never raises."""
+    is the safe direction); a picture counts :data:`IMAGE_TOKENS`, never its
+    base64 length. Never raises."""
     try:
+        wire, pictures = _without_pictures(wire)
         blob = json.dumps(wire, ensure_ascii=False, default=str)
         if tools:
             blob += json.dumps(tools, ensure_ascii=False, default=str)
-        return estimate_tokens(system or "", ratio) + estimate_tokens(blob, ratio)
+        return (
+            estimate_tokens(system or "", ratio) + estimate_tokens(blob, ratio)
+            + pictures * IMAGE_TOKENS
+        )
     except Exception:  # noqa: BLE001 — a guess, never a crash
         return estimate_tokens(str(system or "") + str(wire) + str(tools or ""), ratio)
 
