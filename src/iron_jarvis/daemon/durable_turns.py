@@ -16,7 +16,8 @@ NOW, for a NAMED turn (``body.turn_id`` — the chat page always mints one):
   longer looks at any connection — only the turn's own Stop
   (``POST /chat/turns/{id}/stop``) ends it, plus one guard: a turn nobody
   has watched for ``ORPHAN_STOP_S`` stops (it would otherwise hold an
-  unanswered question forever);
+  unanswered question forever) — a chat turn; v1.384.0: never a Build
+  session's turn (``routes/build._never_orphaned``);
 * every frame goes into a :class:`TurnLog` — consecutive token and thinking
   frames merged — which is written to ``ChatTurnRecord`` about once a second
   (``PERSIST_EVERY_S``) and when the turn ends;
@@ -33,6 +34,25 @@ NOW, for a NAMED turn (``body.turn_id`` — the chat page always mints one):
   shows what was written and offers Retry.
 
 Unnamed turns (API callers, the browser sidebar's own lane) are untouched.
+
+RESUME POINTS (v1.384.0). Returning to a Build session whose reply still runs
+used to replay EVERY frame from the start (the user's: ~840 frames, 1.2 MB)
+and redraw the conversation frame by frame — "my work jumped, there was a lag
+getting back". A follower that asks for them (``follow(with_ids=True)`` —
+Build's page; every other caller is byte-identical) gets each frame tagged
+with its POSITION, ``id: <i>:<c>``: ``i`` is the index of the STORED frame it
+landed in, ``c`` that frame's text length once it landed (0 for a frame with
+no text). Token and thinking frames are merged on disk, so a position names
+"frame i, the first c characters of its text" — a page that kept what it had
+and comes back with ``after=<i>:<c>`` is sent the REST of frame i (its text
+from character c on) and every frame after it, then the live frames: nothing
+lost, nothing twice, by construction (:meth:`TurnLog.frames_after`). The
+tagged answer opens with ``event: resume`` (``{"resumed": bool}`` — false =
+this is the WHOLE turn from its start: drop what you hold) and the stored part
+ends with ``event: caught_up`` (``{"id": <position>}``), so a page can draw a
+whole replay in ONE pass. A position this log does not hold (another turn's,
+past its end, mid-text past what is stored) and a turn replayed from its
+record are the full replay (``resumed: false``).
 """
 
 from __future__ import annotations
@@ -52,6 +72,15 @@ log = logging.getLogger("iron_jarvis.daemon.durable_turns")
 
 #: How often a running turn's log is written to disk (at most).
 PERSIST_EVERY_S = 1.0
+#: v1.384.0 review: the record is rewritten WHOLE (``frames_json``) each
+#: time, so its interval grows with its size — at most about this many bytes
+#: a second, averaged (``TurnLog.persist_interval``). A chat-sized turn (under
+#: 64 KB) is still written every second; the user's 60-round Build reply
+#: (0.44 MB) every ~7 s; a 300-round one (~2 MB) about every half minute —
+#: it was ~2 MB EVERY second, ~8 GB an hour, and a Build reply with no step
+#: limit can run for a day. A crash loses at most one interval of what the
+#: record shows (the files, the ledger and a clean end are untouched).
+PERSIST_BYTES_PER_S = 64_000
 #: How long a finished turn's log stays in memory for a late rejoin.
 FINISHED_KEEP_S = 600.0
 #: A turn nobody has followed for this long is stopped (see the module doc).
@@ -75,6 +104,49 @@ def sse(event: str, data: Any) -> str:
     """The wire format of ``routes.chat._sse`` (kept identical)."""
     payload = data if isinstance(data, str) else json.dumps(data)
     return f"event: {event}\ndata: {payload}\n\n"
+
+
+def tagged(position: str, event: str, data: Any) -> str:
+    """One frame with its resume position (v1.384.0): an SSE ``id:`` line,
+    then the frame exactly as :func:`sse` writes it."""
+    return f"id: {position}\n" + sse(event, data)
+
+
+def _text_len(event: str, data: str) -> int:
+    """The text length a stored frame carries (0 for a frame without text)."""
+    if event not in _MERGEABLE:
+        return 0
+    try:
+        parsed = json.loads(data)
+    except ValueError:
+        return 0
+    return len(str(parsed.get("text") or "")) if isinstance(parsed, dict) else 0
+
+
+def position_of(frames: list[list[str]], index: int) -> str:
+    """The resume position of stored frame ``index`` as it stands."""
+    event, data = frames[index]
+    return f"{index}:{_text_len(event, data)}"
+
+
+def tagged_replay(frames: list[list[str]], *, resumed: bool = False, running: bool = False,
+                  started_ms: "int | None" = None) -> str:
+    """The WHOLE stored turn as a tagged answer: ``resume`` (``resumed``
+    false = drop what you hold), every frame with its position, ``caught_up``.
+    The answer for a page with no usable resume point, and for a turn replayed
+    from its record.
+
+    ``started_ms`` (v1.384.0 review): when the turn STARTED (ms since the
+    epoch), sent as ``resume.started_at`` — a page coming back after a reload
+    counts "Working for" from it, not from the rejoin. Given only for a turn
+    still running in memory; absent otherwise (the frame as before)."""
+    head: dict[str, Any] = {"resumed": resumed, "running": running}
+    if started_ms is not None:
+        head["started_at"] = int(started_ms)
+    out = [sse("resume", head)]
+    out += [tagged(position_of(frames, j), e, d) for j, (e, d) in enumerate(frames)]
+    out.append(sse("caught_up", {"id": position_of(frames, len(frames) - 1) if frames else ""}))
+    return "".join(out)
 
 
 def parse_chunk(chunk: str) -> list[tuple[str, str]]:
@@ -109,6 +181,9 @@ class TurnLog:
         self.status = "running"
         self.started_at = utcnow()
         self._chars = 0
+        #: v1.384.0: (index, text length) of the last stored frame (see
+        #: :meth:`position`).
+        self._tail: "tuple[int, int] | None" = None
         self._followers: set[asyncio.Queue] = set()
         self._last_seen = time.monotonic()
         self._dirty = False
@@ -124,11 +199,64 @@ class TurnLog:
 
     # -- writing --------------------------------------------------------------
     def add(self, chunk: str) -> None:
-        for q in list(self._followers):
-            q.put_nowait(chunk)
+        # Stored FIRST (v1.384.0): each frame's position is the store's state
+        # once it landed, and a tagged follower is sent exactly that. A plain
+        # follower still gets the chunk as it came (comments included).
+        parts: list[str] = []
         for event, data in parse_chunk(chunk):
             self._note_ask(event, data)
             self._store(event, data)
+            parts.append(tagged(self.position(), event, data))
+        item = (chunk, "".join(parts))
+        for q in list(self._followers):
+            q.put_nowait(item)
+
+    def position(self) -> str:
+        """Where the store stands now (the last frame's position; "" when
+        nothing is stored yet). The last frame's text length is kept as it is
+        stored (``_tail``), so a long reply's thousands of deltas never parse
+        its growing text again just to say where they landed."""
+        if not self.frames:
+            return ""
+        last = len(self.frames) - 1
+        if self._tail is not None and self._tail[0] == last:
+            return f"{last}:{self._tail[1]}"
+        return position_of(self.frames, last)
+
+    def frames_after(self, after: str) -> "list[tuple[str, str, str]] | None":
+        """``[(position, event, data)]`` — everything stored after resume
+        position ``after`` (see the module doc): the rest of frame ``i``'s
+        text past character ``c`` when it is a token/thinking frame that grew,
+        then every later frame. None when this log does not hold that position
+        (malformed, past the end, a text frame shorter than ``c``, a frame with
+        no text given a ``c``) — the caller then sends the whole turn."""
+        try:
+            i_s, c_s = str(after or "").split(":", 1)
+            i, c = int(i_s), int(c_s)
+        except (TypeError, ValueError):
+            return None
+        if i < 0 or c < 0 or i >= len(self.frames):
+            return None
+        event, data = self.frames[i]
+        out: list[tuple[str, str, str]] = []
+        if event in _MERGEABLE:
+            try:
+                parsed = json.loads(data)
+            except ValueError:
+                return None
+            if not isinstance(parsed, dict):
+                return None
+            text = str(parsed.get("text") or "")
+            if c > len(text):
+                return None
+            if c < len(text):
+                out.append((f"{i}:{len(text)}", event, json.dumps({**parsed, "text": text[c:]})))
+        elif c != 0:
+            return None
+        for j in range(i + 1, len(self.frames)):
+            e, d = self.frames[j]
+            out.append((position_of(self.frames, j), e, d))
+        return out
 
     def _note_ask(self, event: str, data: str) -> None:
         """Keep the open approval cards' ids and tool names (v1.351.0, G05)."""
@@ -165,6 +293,7 @@ class TurnLog:
                 self.frames[-1][1] = json.dumps(prev)
                 self._chars += len(more.get("text") or "")
                 self._dirty = True
+                self._tail = (len(self.frames) - 1, len(prev["text"]))
                 return
             except (ValueError, AttributeError, TypeError):
                 pass
@@ -173,6 +302,7 @@ class TurnLog:
         self.frames.append([event, data])
         self._chars += len(data)
         self._dirty = True
+        self._tail = (len(self.frames) - 1, _text_len(event, data))
 
     def last_event(self) -> str:
         return self.frames[-1][0] if self.frames else ""
@@ -189,12 +319,31 @@ class TurnLog:
     def snapshot(self) -> str:
         return "".join(sse(e, d) for e, d in self.frames)
 
-    async def follow(self) -> AsyncIterator[str]:
+    def tagged_head(self, after: "str | None") -> str:
+        """The tagged answer's stored part (v1.384.0): ``resume``, what is
+        stored after ``after`` (or the whole turn when that position is not
+        held), ``caught_up``."""
+        running = self.status == "running"
+        tail = self.frames_after(after) if after else None
+        if tail is None:
+            started = int(self.started_at.timestamp() * 1000) if running else None
+            return tagged_replay(self.frames, resumed=False, running=running, started_ms=started)
+        out = [sse("resume", {"resumed": True, "running": running})]
+        out += [tagged(p, e, d) for p, e, d in tail]
+        out.append(sse("caught_up", {"id": self.position()}))
+        return "".join(out)
+
+    async def follow(self, *, with_ids: bool = False, after: "str | None" = None) -> AsyncIterator[str]:
         """The turn so far as ONE chunk, then each new chunk, until it ends.
         Snapshot and subscription happen in one step (no await between), so
-        nothing is missed or sent twice."""
+        nothing is missed or sent twice.
+
+        ``with_ids`` (v1.384.0): every frame tagged with its resume position,
+        the stored part between ``resume`` and ``caught_up``, and — with
+        ``after`` — only what came after that position (see the module doc).
+        False: byte-for-byte what it always sent."""
         q: asyncio.Queue = asyncio.Queue()
-        head = self.snapshot()
+        head = self.tagged_head(after) if with_ids else self.snapshot()
         running = self.status == "running"
         if running:
             self._followers.add(q)
@@ -207,7 +356,10 @@ class TurnLog:
                 item = await q.get()
                 if item is _END:
                     return
-                yield item
+                raw, ids = item
+                out = ids if with_ids else raw
+                if out:
+                    yield out
         finally:
             self._followers.discard(q)
             self._last_seen = time.monotonic()
@@ -225,9 +377,14 @@ class TurnLog:
             "updated_at": utcnow(),
         }
 
+    def persist_interval(self) -> float:
+        """Seconds between two writes of the running record (v1.384.0 review:
+        it grows with the record — see :data:`PERSIST_BYTES_PER_S`)."""
+        return max(PERSIST_EVERY_S, self._chars / PERSIST_BYTES_PER_S)
+
     def maybe_persist(self, engine: Any) -> None:
         now = time.monotonic()
-        if not self._dirty or now - self._last_persist < PERSIST_EVERY_S:
+        if not self._dirty or now - self._last_persist < self.persist_interval():
             return
         if self._persisting is not None and not self._persisting.done():
             return
@@ -420,9 +577,11 @@ def waiting_unwatched(
 
 
 def stop_predicate(get_log: Any) -> Any:
-    """The lane's ``should_stop`` for a daemon-owned turn: never a
+    """The lane's ``should_stop`` for a daemon-owned CHAT turn: never a
     connection — only the orphan guard (Stop itself goes through the turn
-    registry's handle, which the lane checks first)."""
+    registry's handle, which the lane checks first). v1.384.0: a BUILD turn
+    is never stopped for being unwatched (``routes/build._never_orphaned``):
+    a long Build reply is meant to run while the user works elsewhere."""
 
     def _stop() -> bool:
         lg = get_log()
@@ -431,9 +590,11 @@ def stop_predicate(get_log: Any) -> Any:
     return _stop
 
 
-def replay_record(engine: Any, turn_id: str) -> "tuple[str, str] | None":
+def replay_record(engine: Any, turn_id: str, *, with_ids: bool = False) -> "tuple[str, str] | None":
     """``(sse_text, status)`` of a turn this process does not hold, from its
-    record; None when there is none."""
+    record; None when there is none. ``with_ids`` (v1.384.0): the tagged
+    WHOLE turn (``resume`` with ``resumed: false``, every frame with its
+    position, ``caught_up``) — a record is never resumed part-way."""
     with session_scope(engine) as db:
         row = db.get(ChatTurnRecord, turn_id)
         if row is None:
@@ -442,6 +603,9 @@ def replay_record(engine: Any, turn_id: str) -> "tuple[str, str] | None":
             frames = json.loads(row.frames_json or "[]")
         except ValueError:
             frames = []
+        frames = [f for f in frames if isinstance(f, list) and len(f) == 2]
+        if with_ids:
+            return tagged_replay(frames, resumed=False, running=False), row.status
         return "".join(sse(e, d) for e, d in frames), row.status
 
 

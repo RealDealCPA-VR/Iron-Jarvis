@@ -2745,17 +2745,29 @@ def register(app: FastAPI, d) -> None:
         return {"ok": True, "stopped": True}
 
     @app.get("/chat/turns/{turn_id}/stream")
-    async def follow_chat_turn(turn_id: str):
+    async def follow_chat_turn(turn_id: str, after: str = "", ids: int = 0):
         """REJOIN a daemon-owned turn (v1.336.0): everything it has sent so
         far as one snapshot, then each new frame, then the end — the same
         frames ``POST /chat/stream`` sends, so the page reads both with one
         parser. A turn this process no longer holds is replayed from its
         record (a restart left it ``interrupted``, ending in an error frame
-        that says so). 404 for a turn never recorded."""
+        that says so). 404 for a turn never recorded.
+
+        v1.384.0 — RESUME: ``ids=1`` tags every frame with its position
+        (``id: <i>:<c>``) and brackets the stored part with ``resume`` /
+        ``caught_up``; ``after=<i>:<c>`` (implies ids) sends only what came
+        after that position — Build's page, coming back to a reply it was
+        drawing. A position the turn does not hold, and a record replay, are
+        the whole turn (``resume`` says ``resumed: false``). Neither given:
+        byte-for-byte the old answer (the chat page, the pane chat)."""
+        after = (after or "").strip()[:40]
+        with_ids = bool(ids) or bool(after)
         lg = _turn_logs(d).get(turn_id)
         if lg is not None:
-            return _follow_response(lg.follow())
-        found = await asyncio.to_thread(_durable.replay_record, d.platform.engine, turn_id)
+            return _follow_response(lg.follow(with_ids=with_ids, after=after or None))
+        found = await asyncio.to_thread(
+            _durable.replay_record, d.platform.engine, turn_id, with_ids=with_ids,
+        )
         if found is None:
             raise HTTPException(status_code=404, detail=f"no such chat turn: {turn_id}")
         text, _status = found
@@ -4611,7 +4623,11 @@ async def chat_stream(
                 if _round == _rounds - 1:
                     # LAST allowed round (mirrors chat_complete): no round is
                     # left to show the model these results — skip, say so.
-                    stopped_note = (
+                    # v1.384.0: a HARNESS turn says it on its reply line
+                    # (`step_limit`, the screen's "Keep going") and in the
+                    # model's own progress report — no engine note under it.
+                    # MIRROR NOTE (lock-step): chat_turn.
+                    stopped_note = "" if _harness is not None else (
                         f"stopped after {_round} tool rounds; "
                         f"{len(calls)} tool call(s) not executed"
                     )
@@ -5652,7 +5668,12 @@ async def chat_stream(
                         # browser wording for a browser-agent turn, else office.
                         messages=_final_answer_messages(
                             _send,
-                            _out_of_rounds_instruction({*armed, *ask_armed})
+                            # v1.384.0: a harness turn's own wording (a
+                            # progress report; lock-step with chat_turn).
+                            _out_of_rounds_instruction(
+                                {*armed, *ask_armed},
+                                harness=_harness is not None, limit=_rounds,
+                            )
                             if _cut_office else "",
                         ),
                         # EMPTY LIST, never None — a nudge must not run tools.
@@ -5997,6 +6018,14 @@ async def chat_stream(
         # neither.
         if workflow_run_info is not None:
             done_frame["workflow_run"] = workflow_run_info
+        # STEP LIMIT (v1.384.0): {"limit": n} when a caller-budgeted turn (a
+        # Build reply, the benchmark) was cut at its last round — present
+        # ONLY then (a Build reply line keeps it; the screen offers "Keep
+        # going"). MIRROR NOTE (lock-step): chat_turn.py's response carries
+        # the same conditional key — edit both or neither.
+        _step_limit = _chat_turn.step_limit_receipt(round_budget, _cut_office, _rounds)
+        if _step_limit is not None:
+            done_frame["step_limit"] = _step_limit
         # ESCALATION CARRIES THE TURN (v1.344.0, P1): present on EVERY
         # escalation (possibly []), absent otherwise — the page hands it to
         # POST /sessions. MIRROR NOTE (lock-step): chat_turn.py's response

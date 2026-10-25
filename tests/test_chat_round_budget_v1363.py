@@ -208,7 +208,7 @@ async def test_post_lane_default_is_untouched(wired):
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("bad", [0, -1, 201, True, "5", 2.5])
+@pytest.mark.parametrize("bad", [0, -1, 1001, True, "5", 2.5])
 async def test_a_bad_budget_is_refused_before_the_turn_starts(wired, bad):
     platform, model, _invoked = wired
     with pytest.raises(ValueError, match="round_budget"):
@@ -221,7 +221,7 @@ async def test_a_bad_budget_is_refused_before_the_turn_starts(wired, bad):
 def test_the_bound_is_inclusive():
     assert chat_turn.turn_round_budget(None) is None
     assert chat_turn.turn_round_budget(1) == 1
-    assert chat_turn.turn_round_budget(chat_turn.MAX_TURN_ROUNDS) == 200
+    assert chat_turn.turn_round_budget(chat_turn.MAX_TURN_ROUNDS) == 1000  # v1.384.0: the Build safety stop
 
 
 def test_both_lanes_take_the_same_two_arguments():

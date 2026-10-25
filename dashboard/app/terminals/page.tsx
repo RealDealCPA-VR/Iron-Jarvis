@@ -59,6 +59,7 @@ import {
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { viewFromSaved, type BuildView } from "@/lib/buildSessions";
 import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
+import { cachedShape, keepShape } from "@/lib/turnCache";
 
 // xterm only runs in the browser — never during SSR / `next build`.
 const TerminalPane = dynamic(
@@ -114,6 +115,7 @@ const paneViewKey = (id: string) => `${PANE_VIEW_PREFIX}${id}`;
  *  harness view (lib/buildSessions `viewFromSaved`). */
 const SHAPE_KEY = "ij.build.shape";
 
+
 /** The folder this window last worked in (v1.337.2): the last folder picked
  *  or the pane in front's (a new terminal is put in front). "New terminal" opens
  *  there when nothing is picked, so a restart or an update does not send the
@@ -145,7 +147,15 @@ export default function TerminalsPage() {
   // harness took its place in the switch), so a saved "canvas" opens the
   // harness. A link to a session (`?session=<id>`) opens the harness on it; a
   // link to a terminal (`?focus=<id>`) opens the rail on it.
-  const [shape, setShape] = useState<BuildView>("rail");
+  // v1.384.0: the view this WINDOW last showed (lib/turnCache) — a return to
+  // Build opens on it at its first render, instead of the rail and then
+  // (once the saved choice is read) the harness: "my work jumped" on every
+  // return. Module state, so a real reload starts from the default, exactly
+  // as the server renders it.
+  const [shape, setShape] = useState<BuildView>(() => cachedShape<BuildView>() ?? "rail");
+  useEffect(() => {
+    keepShape(shape);
+  }, [shape]);
   const [linkSession, setLinkSession] = useState<string | null>(null);
   useEffect(() => {
     let params: URLSearchParams | null = null;

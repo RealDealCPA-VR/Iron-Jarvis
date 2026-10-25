@@ -22,6 +22,7 @@ import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
 import type { BranchDraft } from "@/lib/buildNext";
 import { useHarnessKeys } from "@/lib/harnessKeys";
+import { cachedFolders, dropEndedTurns, keepFolders, viewFor } from "@/lib/turnCache";
 import {
   LAST_SESSION_KEY,
   createSession,
@@ -80,17 +81,27 @@ export function IjHarnessView({
   defaultFolder: string | null;
   terminal: SessionTerminalApi;
 }) {
-  const [folders, setFolders] = useState<BuildFolder[] | null>(null);
+  // v1.384.0: a RETURN to Build paints the list and the session this window
+  // had open at once (lib/turnCache — this window's own memory of them),
+  // then reads both again. A first visit waits for the list, as before.
+  const [initial] = useState(() => {
+    const kept = cachedFolders<{ folders: BuildFolder[]; workRoot: string }>();
+    const wanted = initialSession ?? readLastSession();
+    const known = !!wanted && (viewFor(wanted) !== null || !!kept?.folders.some((f) => f.sessions.some((s) => s.id === wanted)));
+    return { kept, pick: known ? wanted : null };
+  });
+  const [folders, setFolders] = useState<BuildFolder[] | null>(initial.kept?.folders ?? null);
   // v1.379.0: where a session with no folder keeps its files (the list says).
-  const [workRoot, setWorkRoot] = useState("");
+  const [workRoot, setWorkRoot] = useState(initial.kept?.workRoot ?? "");
   const [listError, setListError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initial.pick);
   // The first pick (the address, else the session this window had open) is
   // made when the list answers. Until then `selected` is only "not picked
   // yet" and must not be written back: the write ran BEFORE the pick and
   // erased the remembered session, so Build came back to the newest session
-  // instead of the one it had open (v1.369.0 review).
-  const pickedRef = useRef(false);
+  // instead of the one it had open (v1.369.0 review). v1.384.0: a session
+  // this window already knows is the pick at once.
+  const pickedRef = useRef(initial.pick !== null);
 
   const refresh = useCallback(async () => {
     try {
@@ -98,6 +109,10 @@ export function IjHarnessView({
       setFolders(list);
       setWorkRoot(root);
       setListError(null);
+      keepFolders({ folders: list, workRoot: root });
+      // v1.384.0 review: a kept reply of a session that no longer answers is
+      // dropped now, not only when that session is opened again.
+      dropEndedTurns(new Set(list.flatMap((f) => f.sessions.filter((s) => s.running).map((s) => s.id))));
       return list;
     } catch (e) {
       setListError(

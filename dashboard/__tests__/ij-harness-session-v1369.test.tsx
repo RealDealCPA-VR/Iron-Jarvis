@@ -487,7 +487,7 @@ describe("an account limit", () => {
     fetchMock.mockImplementation(async () => sse([["done", { reply: "Carried on." }]]));
     fireEvent.click(screen.getByTestId("account-limit-resume"));
     await waitFor(() =>
-      expect(fetchMock.mock.calls.some((c) => (c as unknown[])[0] === "http://d/chat/turns/tr_now/stream")).toBe(true),
+      expect(fetchMock.mock.calls.some((c) => (c as unknown[])[0] === "http://d/chat/turns/tr_now/stream?ids=1")).toBe(true),
     );
     await waitFor(() => expect(screen.queryByTestId("account-limit-card")).toBeNull());
   });
@@ -511,7 +511,7 @@ describe("an account limit", () => {
       }),
     );
     await waitFor(() =>
-      expect(fetchMock.mock.calls.some((c) => (c as unknown[])[0] === "http://d/chat/turns/bt_9/stream")).toBe(true),
+      expect(fetchMock.mock.calls.some((c) => (c as unknown[])[0] === "http://d/chat/turns/bt_9/stream?ids=1")).toBe(true),
     );
     expect(screen.queryByTestId("account-limit-card")).toBeNull();
   });
@@ -706,7 +706,8 @@ describe("following a turn already running, and stopping one", () => {
     renderSession();
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("http://d/chat/turns/tr1/stream");
+    // v1.384.0: a TAGGED rejoin (every frame with its resume position).
+    expect(url).toBe("http://d/chat/turns/tr1/stream?ids=1");
     expect(init.method).toBe("GET");
   });
 
@@ -728,7 +729,7 @@ describe("following a turn already running, and stopping one", () => {
       <HarnessSession threadId="s1" terminal={terminal} listRunning onChanged={() => {}} onGone={() => {}} />,
     );
     await waitFor(() =>
-      expect(fetchMock.mock.calls.some((c) => (c as unknown[])[0] === "http://d/chat/turns/tr_resumed/stream")).toBe(true),
+      expect(fetchMock.mock.calls.some((c) => (c as unknown[])[0] === "http://d/chat/turns/tr_resumed/stream?ids=1")).toBe(true),
     );
     await waitFor(() => expect(screen.queryByTestId("account-limit-card")).toBeNull());
   });

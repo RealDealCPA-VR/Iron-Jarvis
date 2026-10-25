@@ -271,11 +271,12 @@ async def test_a_lane_that_raises_leaves_an_error_line_not_a_bare_question(app, 
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("value, used", [(500, 200), (-3, 1), (0, 60)])
+@pytest.mark.parametrize("value, used", [(5000, 1000), (-3, 1), (0, 1000), (500, 500)])
 async def test_a_hand_edited_round_budget_is_clamped_not_refused(app, work, monkeypatch, value, used):
-    """The settings writer checks 1..200, a hand-edited config.toml does not:
-    ``int(... or 60)`` handed 500 (or -3) to the lane, whose eager check
-    raised — every turn of every session answered 400."""
+    """The settings writer checks the range, a hand-edited config.toml does
+    not: ``int(... or 60)`` handed 500 (or -3) to the lane, whose eager check
+    raised — every turn of every session answered 400. v1.384.0: 0 is NO
+    LIMIT (the 1,000-step safety stop) and the range is 0..1000."""
     from iron_jarvis.daemon.routes import build as build_routes
 
     seen: list[int] = []

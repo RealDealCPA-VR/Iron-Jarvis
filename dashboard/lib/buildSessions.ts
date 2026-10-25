@@ -230,7 +230,36 @@ export type BuildMessage = PaneMessage & {
    *  provider's safety check declined the conversation (the screen offers
    *  Rewind, never Retry). */
   errorKind?: string;
+  /** v1.384.0: the reply met its STEP LIMIT (raw; `decodeStepLimit`) — the
+   *  screen says so and offers "Keep going". */
+  stepLimit?: unknown;
 };
+
+/** v1.384.0: a reply's step limit, as the daemon kept it: how many steps,
+ *  and whether that was the SAFETY stop of a reply with no limit. */
+export interface StepLimit {
+  limit: number;
+  safety: boolean;
+}
+
+export function decodeStepLimit(raw: unknown): StepLimit | null {
+  const r = rec(raw);
+  if (!r) return null;
+  const limit = r.limit;
+  if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1) return null;
+  return { limit, safety: r.safety === true };
+}
+
+/** What the screen says under a reply that met its step limit. */
+export function stepLimitWords(s: StepLimit): string {
+  const n = s.limit.toLocaleString("en-US");
+  return s.safety
+    ? `This reply stopped at the safety limit of ${n} steps.`
+    : `This reply stopped at its step limit (${n} steps).`;
+}
+
+/** "Keep going": the message it sends — the same as typing it. */
+export const KEEP_GOING_TEXT = "continue";
 
 /** The keys a line may carry (the daemon's LINE_KEYS). Anything else dies. */
 const LINE_KEYS = [
@@ -278,6 +307,8 @@ const LINE_KEYS = [
   // v1.379.0: a question typed as one of Claude Code's own commands — its
   // name (the expanded text it sent stays with the daemon).
   "command",
+  // v1.384.0: a reply that met its step limit ({limit, safety}).
+  "stepLimit",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {

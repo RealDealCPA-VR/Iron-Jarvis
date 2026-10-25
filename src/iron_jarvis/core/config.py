@@ -451,8 +451,13 @@ class Config(BaseModel):
     busy_runs_notice_at: int = 4
     #: v1.367.0 (IJ harness Phase 4): how many tool rounds ONE Build session
     #: turn may take before it ends in its own conversation with an answer
-    #: (it never hands the work to an agent run). 1..200; the plan's 60.
-    build_round_budget: int = 60
+    #: (it never hands the work to an agent run).
+    #: v1.384.0: 0 = NO LIMIT, the default — like Claude Code, a Build reply
+    #: works until the model is done or the user presses Stop, with a safety
+    #: stop at ``harness.mode.BUILD_SAFETY_ROUNDS`` (1,000). A number the user
+    #: sets (1..1000) is honoured. (The old default, 60, ended the user's
+    #: 117-minute reply on "Nothing is built yet".)
+    build_round_budget: int = 0
     #: v1.370.0 (IJ harness Phase 7): once a Build session has been idle
     #: after replies that changed files or ran commands, the EXPERIENCE
     #: LIBRARY may suggest one lesson for that folder (and one edit to its

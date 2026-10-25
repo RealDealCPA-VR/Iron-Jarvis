@@ -18,7 +18,9 @@ What these routes add:
   root's name IS the project's name; the folder on disk is never renamed);
 * ``POST /build/sessions/{id}/turn {text, turn_id?}`` — ONE build turn: the
   stream lane in HARNESS mode (the model family's dialect), the session's
-  folder as its workspace, ``build_round_budget`` rounds (60), never handed
+  folder as its workspace, ``build_round_budget`` rounds (v1.384.0: no limit
+  by default — the 1,000-step safety stop; a number the user set otherwise),
+  never stopped for being unwatched, never handed
   to an agent run (it ends in the conversation), every tool call under the
   session's OWN ``build:<id>`` (never "chat"), the session's mode (plan:
   read-only tools + ``exit_plan_mode``) and ``ask_user`` (the screen draws
@@ -80,8 +82,15 @@ MAX_TURN_CHARS = 200_000
 MAX_ANSWER_CHARS = 20_000
 #: The thinking a reply line keeps (the chat page's THINKING_CAP).
 THINKING_CAP = 20_000
-#: Steps a reply line records, at most.
+#: Steps a reply line records WITH their detail, at most.
 MAX_STEPS = 60
+#: v1.384.0 review: steps a reply line COUNTS, at most. A reply with no step
+#: limit (the default) often takes more than ``MAX_STEPS``, and a line that
+#: kept only the first 60 made its work line under-report ("read 54 files"
+#: for 70). Past ``MAX_STEPS`` a step is kept COMPACT — its name, outcome,
+#: time and target, never its detail (a few dozen bytes) — up to this many:
+#: two calls a round at the safety stop (``harness.mode.BUILD_SAFETY_ROUNDS``).
+MAX_COUNTED_STEPS = 2000
 
 RUNNING_SENTENCE = (
     "This session is still answering. Steer it, queue your message, or stop it first."
@@ -200,6 +209,12 @@ class BuildTurnBody(BaseModel):
     #: ``/<command> <words>`` (``harness/claude_commands``). ``text`` holds
     #: the words after the name — its ARGUMENTS. Not with a skill.
     command: str = Field(default="", max_length=200)
+    #: v1.384.0: tag every frame of the answer with its RESUME POSITION
+    #: (``durable_turns``: ``id: <i>:<c>``, ``resume`` / ``caught_up``), so
+    #: the page can come back to this reply with
+    #: ``GET /chat/turns/{id}/stream?after=<i>:<c>`` and be sent only what it
+    #: missed. False (an API caller): the frames exactly as before.
+    ids: bool = False
 
 
 class BuildCompactBody(BaseModel):
@@ -268,9 +283,11 @@ def _running_turn(d: Any, thread_id: str) -> str:
     return "running" if state.get("running") else ""
 
 
-def _turn_record(engine: Any, turn_id: str) -> "tuple[str, str] | None":
+def _turn_record(engine: Any, turn_id: str, *, with_ids: bool = False) -> "tuple[str, str] | None":
     """``(thread_id, sse_text)`` of a turn's RECORD (``ChatTurnRecord``), or
-    None when it was never recorded. BLOCKING: call it off the loop."""
+    None when it was never recorded. BLOCKING: call it off the loop.
+    ``with_ids`` (v1.384.0): the tagged whole turn (``durable_turns.
+    tagged_replay`` — a record is never resumed part-way)."""
     from ...core.db import session_scope
     from ...core.models import ChatTurnRecord
 
@@ -282,10 +299,10 @@ def _turn_record(engine: Any, turn_id: str) -> "tuple[str, str] | None":
             frames = json.loads(row.frames_json or "[]")
         except ValueError:
             frames = []
-        text = "".join(
-            _durable.sse(f[0], f[1]) for f in frames
-            if isinstance(f, list) and len(f) == 2
-        )
+        frames = [f for f in frames if isinstance(f, list) and len(f) == 2]
+        if with_ids:
+            return str(row.thread_id or ""), _durable.tagged_replay(frames)
+        text = "".join(_durable.sse(f[0], f[1]) for f in frames)
         return str(row.thread_id or ""), text
 
 
@@ -294,19 +311,45 @@ async def _replay_once(text: str):
         yield text
 
 
-def build_round_budget(config: Any) -> int:
-    """The ``build_round_budget`` setting as a turn can use it: a whole number
-    from 1 to ``chat_turn.MAX_TURN_ROUNDS`` (the lane's own bounds). The
-    settings writer checks the range, but a hand-edited ``config.toml`` does
-    not — an out-of-range value is CLAMPED, never a 400 on every turn of every
-    session (Phase 4 review)."""
+def build_step_limit(config: Any) -> tuple[int, bool]:
+    """``(rounds, no_limit)`` — the ``build_round_budget`` setting as a turn
+    can use it (v1.384.0).
+
+    0 (the default) is NO LIMIT: the turn gets the safety stop,
+    ``harness.mode.BUILD_SAFETY_ROUNDS`` (1,000), and ``no_limit`` is True — a
+    reply that ever meets it says it reached the SAFETY stop, not "your
+    limit". A number the user set (1..1000) is honoured. The settings writer
+    checks the range, but a hand-edited ``config.toml`` does not — an
+    out-of-range value is CLAMPED, never a 400 on every turn of every session
+    (Phase 4 review): above the ceiling is the ceiling, below 1 (other than
+    0) is 1, and anything unreadable is no limit."""
+    from ...harness.mode import BUILD_SAFETY_ROUNDS
     from ..chat_turn import MAX_TURN_ROUNDS
 
+    ceiling = min(BUILD_SAFETY_ROUNDS, MAX_TURN_ROUNDS)
     try:
-        value = int(getattr(config, "build_round_budget", 60) or 60)  # unset / 0 = the default
+        value = int(getattr(config, "build_round_budget", 0) or 0)
     except (TypeError, ValueError):
-        value = 60
-    return max(1, min(MAX_TURN_ROUNDS, value))
+        value = 0
+    if value == 0:
+        return ceiling, True
+    return max(1, min(ceiling, value)), False
+
+
+def build_round_budget(config: Any) -> int:
+    """The turn's round budget (see :func:`build_step_limit`)."""
+    return build_step_limit(config)[0]
+
+
+def _never_orphaned() -> bool:
+    """A BUILD turn's ``should_stop`` (v1.384.0): never. A chat turn nobody
+    has watched for ``durable_turns.ORPHAN_STOP_S`` (an hour) is stopped — it
+    would otherwise hold an unanswered question forever. A Build reply is a
+    long task the user starts and then works elsewhere: it ends only by the
+    model, Stop (the turn registry's handle, which the lane checks first),
+    archive or delete, a shutdown, the account limit card, or its step
+    limit. Leaving it unwatched is what the user is meant to do."""
+    return False
 
 
 def _clean_answer(answer: Any) -> Any:
@@ -563,6 +606,9 @@ class _ReplyWatch:
         #: (``[{step, status}]``, the plan tool's own vocabulary) — the
         #: checklist the reply line keeps (:func:`saved_plan`).
         self.last_plan: list[dict[str, str]] = []
+        #: v1.384.0: the turn ran with NO step limit (the default), so a
+        #: ``step_limit`` it met is the SAFETY stop (the reply line says so).
+        self.no_limit = False
 
     def see(self, event: str, raw: str) -> None:
         try:
@@ -594,7 +640,7 @@ class _ReplyWatch:
             elif data.get("status") == "finished":
                 began = self._started.pop(cid, None)
                 ok = data.get("ok")
-                if len(self.steps) < MAX_STEPS:
+                if len(self.steps) < MAX_COUNTED_STEPS:
                     step: dict[str, Any] = {
                         "name": name,
                         "ok": bool(ok) if ok is not None else None,
@@ -609,7 +655,9 @@ class _ReplyWatch:
                     target = step_target(name, began[2] if began else None)
                     if target:
                         step["target"] = target
-                    if isinstance(data.get("detail"), dict):
+                    # v1.384.0 review: only the first MAX_STEPS keep their
+                    # detail; the rest are counted, compact.
+                    if isinstance(data.get("detail"), dict) and len(self.steps) < MAX_STEPS:
                         step["detail"] = data["detail"]
                     self.steps.append(step)
                 if name == "plan_update" and ok is True:
@@ -740,6 +788,13 @@ class _ReplyWatch:
             ctx = context_receipt(done.get("context"))
             if ctx is not None:
                 line["context"] = ctx
+            # v1.384.0: the reply met its STEP LIMIT (the lane's `step_limit`)
+            # — the line keeps how many steps and whether that was the safety
+            # stop of a reply with no limit; the screen says so under the
+            # reply and offers "Keep going" (a new turn, never automatic).
+            sl = done.get("step_limit")
+            if isinstance(sl, dict) and isinstance(sl.get("limit"), int) and not isinstance(sl.get("limit"), bool):
+                line["stepLimit"] = {"limit": int(sl["limit"]), "safety": bool(self.no_limit)}
             if done.get("trust") and done.get("trust") != "full":
                 line["trust"] = done.get("trust")
                 line["trustReason"] = done.get("trust_reason") or ""
@@ -1094,7 +1149,7 @@ async def _record_turn_end(engine: Any, thread_id: str, turn_id: str, watch: "_R
 
 
 async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, *,
-                        pin: Any = None, platform: Any = None):
+                        pin: Any = None, platform: Any = None, no_limit: bool = False):
     """``frames`` (the lane's SSE iterator), passed through unchanged, with
     the session kept up to date: an approved plan and a conversation grant
     land as they happen, and the reply line (plus any steer notes) is written
@@ -1103,8 +1158,12 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
     v1.368.0: ``pin`` — the turn's ONE account (``iron_proxy.pin``). When it
     could not serve (parked, needs sign-in), a typed ``account_limit`` frame
     goes out right BEFORE the turn's last frame and the card is kept on the
-    session; the ``done`` frame's ``route.account`` names the account."""
+    session; the ``done`` frame's ``route.account`` names the account.
+
+    v1.384.0: ``no_limit`` — the turn ran with no step limit, so a step limit
+    it meets is the safety stop (kept on the reply line's ``stepLimit``)."""
     watch = _ReplyWatch()
+    watch.no_limit = bool(no_limit)
     status = "stopped"
     limit_sent = False
     # THE END IS WRITTEN BEFORE IT IS SAID (v1.369.0 review). The reply line
@@ -1647,7 +1706,6 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             local_only=setup.get("local_only") is True,
             skill=str(skill or "").strip(),
         )
-        holder: dict[str, Any] = {}
         token = set_pin(pin) if pin is not None else None
         # v1.371.0: the Browser pane's address for this turn — armed while the
         # lane is built and the driver task created (the task copies the
@@ -1683,16 +1741,21 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         surface_token = _failure_words.set_build_surface()
         # v1.381.0: the command rule (read above), armed last and reset first.
         command_token = _cmd_shell.set_turn_rule(command_rule)
+        # v1.384.0: the reply's step limit — none by default (the safety
+        # stop), else the user's number.
+        rounds, no_limit = build_step_limit(platform.config)
         try:
             try:
                 gen = await stream_chat_turn(
                     platform,
                     getattr(d, "_PERSONAS", {}),
                     chat_body,
-                    should_stop=_durable.stop_predicate(lambda: holder.get("log")),
+                    # v1.384.0: NEVER the orphan guard — a Build reply keeps
+                    # working while nobody watches (see `_never_orphaned`).
+                    should_stop=_never_orphaned,
                     suggest_preferences=False,
                     harness="auto",
-                    round_budget=build_round_budget(platform.config),
+                    round_budget=rounds,
                     stay_in_chat=True,
                     session_id=S.session_id_for(thread_id),
                     plan_mode=S.mode_of(row) == S.MODE_PLAN,
@@ -1727,6 +1790,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 raise HTTPException(status_code=404, detail="no such Build session")
             lg = logs.start(turn_id, thread_id, recorded_turn(
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
+                no_limit=no_limit,
             ))
             started = True
         finally:
@@ -1740,7 +1804,6 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             if token is not None:
                 reset_pin(token)
         lg.surface = "build"  # the waiting row says it is not a chat
-        holder["log"] = lg
     finally:
         _STARTING.discard(thread_id)
         if made_folder and not started:
@@ -2727,7 +2790,8 @@ def register(app: FastAPI, d: Any) -> None:
                 # rejoin route's answer), never a second run that would apply
                 # the same edits and commands again and append the question
                 # twice. Off the loop.
-                recorded = await asyncio.to_thread(_turn_record, platform.engine, turn_id)
+                recorded = await asyncio.to_thread(_turn_record, platform.engine, turn_id,
+                                                   with_ids=body.ids)
                 # A twin request may have started it during that read.
                 existing = logs.get(turn_id)
                 if existing is None and recorded is not None:
@@ -2738,7 +2802,7 @@ def register(app: FastAPI, d: Any) -> None:
             if existing is not None:
                 if existing.thread_id != thread_id:
                     raise HTTPException(status_code=409, detail="That turn belongs to another conversation.")
-                return _follow_response(existing.follow())
+                return _follow_response(existing.follow(with_ids=body.ids))
         else:
             turn_id = "bt_" + secrets.token_hex(8)
         try:
@@ -2754,7 +2818,9 @@ def register(app: FastAPI, d: Any) -> None:
                 status_code=409,
                 content={"detail": RUNNING_SENTENCE, "turn_id": _running_turn(d, thread_id)},
             )
-        return _follow_response(lg.follow())
+        # v1.384.0: `ids` — every frame tagged with its resume position, so a
+        # page that leaves mid-reply comes back with only what it missed.
+        return _follow_response(lg.follow(with_ids=body.ids))
 
     @app.post("/build/sessions/{thread_id}/answer")
     def answer_build_question(thread_id: str, body: BuildAnswerBody) -> dict[str, Any]:
