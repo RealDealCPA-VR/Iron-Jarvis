@@ -881,9 +881,9 @@ _BREAKAWAY_CHILD = (
 def test_bashs_job_lets_nothing_leave_and_every_other_job_still_does(tmp_path):
     """The doer's cost, measured and pinned both ways: a program a bash
     command starts that ASKS to leave its job is refused ("Access is denied",
-    WinError 5) — that is what keeps MSYS's python/node inside the tree kill
-    (no pin held this before the review: deleting `breakaway_ok=False` kept
-    every test green). Every other caller's Job (cmd.exe, procs.run's default)
+    WinError 5) — the price of keeping MSYS's python/node inside the tree
+    kill (which the doer's test_bash_timeout_kills_the_whole_tree pins by
+    behaviour). Every other caller's Job (cmd.exe, procs.run's default)
     still lets such a program start."""
     import psutil
 
