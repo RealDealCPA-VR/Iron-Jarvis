@@ -3641,6 +3641,15 @@ does not need a bump, stop and bump it.
   compared with the temp folder AS NAMED. To reproduce the runners before a
   push, run the touched files with TMP/TEMP set to the short name of a
   long-named folder (`GetShortPathNameW`); all 382 benchmark tests pass so.
+  v1.384.3 (test-only; v1.384.2's Release gate failed, Tests passed, nothing
+  published): `test_approval_words_v13520`'s `_ask_and_list` read the pending
+  listing ONCE after its publish spy saw the ask, but the spy records BEFORE
+  the real publish writes the event row the listing reads (the v1.373.1
+  shape) — IndexError on the loaded runner. It now polls until the ask is
+  listed (15 s bound). Holding the real publish 0.5 s reproduced it: old
+  helper 3 failed, new 3 passed. 18 test files read
+  `/chat/approvals/pending`; any that reads it once right after an ask is
+  the same risk.
 - **The composer's model menu is PORTALED, FIXED at its chip and always
   inside the window** (v1.382.0, a USER BUG: in a new chat, the centred
   composer's menu opened upward and its top — the filter box, Recent — was

@@ -211,7 +211,18 @@ async def _ask_and_list(rt, sid: str, origin: str, tool: str, args: dict) -> tup
     task = asyncio.create_task(rt.runtime._pause_for_approval(sess, tc, agent_def, set()))
     try:
         assert await _wait_for(lambda: bool(_asks(rt, sid))), "the run never asked"
-        rows = [r for r in await _listing(rt.app) if r.get("session_id") == sid]
+        # v1.384.3: wait for the ask to be LISTED, not only published. The
+        # spy records the ask before the real publish writes the event row
+        # the listing reads (the v1.373.1 shape), so one read could come back
+        # empty on a loaded runner (v1.384.2's Release gate: IndexError).
+        rows: list[dict] = []
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 15.0
+        while True:
+            rows = [r for r in await _listing(rt.app) if r.get("session_id") == sid]
+            if rows or loop.time() > deadline:
+                break
+            await asyncio.sleep(0.05)
         payload = _asks(rt, sid)[-1]
         assert rt.platform.approvals.resolve(payload["approval_id"], "once")
         await asyncio.wait_for(task, 10)
