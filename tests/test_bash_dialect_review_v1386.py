@@ -695,7 +695,7 @@ async def test_the_qwen_dialects_command_tool_keeps_cmd(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def _finder_env(monkeypatch, tmp_path, **env):
+def _finder_env(monkeypatch, tmp_path, **install):
     """An environment with ONLY the given install variables (no setting, an
     empty PATH unless given): the REAL standard-folder list is read."""
     from iron_jarvis.sandbox import git_bash as GB
@@ -706,8 +706,8 @@ def _finder_env(monkeypatch, tmp_path, **env):
         monkeypatch.delenv(var, raising=False)
     empty = tmp_path / "empty-path"
     empty.mkdir(exist_ok=True)
-    monkeypatch.setenv("PATH", str(env.pop("PATH", empty)))
-    for k, v in env.items():
+    monkeypatch.setenv("PATH", str(install.pop("PATH", empty)))
+    for k, v in install.items():
         monkeypatch.setenv(k, str(v))
     # the two literal Program Files folders of the real PC are not this test's
     real_isfile = os.path.isfile
