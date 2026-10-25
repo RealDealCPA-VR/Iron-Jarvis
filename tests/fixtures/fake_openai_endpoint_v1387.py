@@ -123,6 +123,8 @@ class FakeEndpoint:
         chars_per_token: float = 3.6,
         refusal: str = "vllm_old",
         model_info: dict[str, dict[str, Any]] | None = None,
+        output_limit: int | None = None,
+        output_limit_words: str = "Invalid value for 'max_tokens': the value is too big for this model.",
     ) -> None:
         self.handler = handler or (lambda body: text_reply("ok"))
         self.models = models
@@ -130,6 +132,10 @@ class FakeEndpoint:
         self.chars_per_token = chars_per_token
         self.refusal = refusal
         self.model_info = model_info
+        #: A server that refuses a budget over this in words with NO number
+        #: in them (the case the adapter can only answer with the old 4,096).
+        self.output_limit = output_limit
+        self.output_limit_words = output_limit_words
         self.requests: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._server: ThreadingHTTPServer | None = None
@@ -203,6 +209,10 @@ class FakeEndpoint:
                 if not self.path.rstrip("/").endswith("/chat/completions"):
                     return self._send(404, {"detail": "Not Found"})
                 asked = int(body.get("max_tokens") or body.get("max_completion_tokens") or 0)
+                if outer.output_limit is not None and asked > outer.output_limit:
+                    return self._send(400, {"error": {
+                        "message": outer.output_limit_words, "type": "BadRequestError", "code": 400,
+                    }})
                 if outer.context_len is not None:
                     prompt = outer.prompt_tokens(body)
                     if prompt + asked > outer.context_len:

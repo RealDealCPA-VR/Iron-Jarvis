@@ -397,6 +397,13 @@ class ReplyBudget:
                 fits = ctx - used - SERVER_FIT_MARGIN
             if cap:
                 fits = min(fits, cap) if fits is not None else cap
+            if fits is None and asked > REPLY_FLOOR:
+                # The server refused the BUDGET in words we cannot read a
+                # number from ("invalid max_tokens"): never worse than before
+                # this budget existed — the old 4,096, remembered as this
+                # model's limit so the next request does not ask again.
+                _learn(self.endpoint, model, output_cap=REPLY_FLOOR)
+                return REPLY_FLOOR
             if fits is None or fits >= asked or fits < RETRY_MIN:
                 return None
             return int(fits)

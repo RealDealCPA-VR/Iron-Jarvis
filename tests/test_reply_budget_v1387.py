@@ -215,6 +215,22 @@ async def test_an_adapter_without_the_platforms_facts_still_remembers_what_the_s
     assert srv.prompt_tokens(bodies[2]) + bodies[2]["max_tokens"] <= 4_800
 
 
+@pytest.mark.parametrize("stream", [False, True])
+async def test_a_budget_refused_in_words_without_a_number_falls_back_to_the_old_budget(tmp_path, stream):
+    """NEVER WORSE THAN BEFORE: a server that refuses the bigger budget in
+    words that name ``max_tokens`` but no number (nothing to fit to) gets the
+    old 4,096 once — and keeps getting it: the next request asks 4,096 from
+    the start. (Not red-first: the old code asked 4,096 and was accepted —
+    this pins that the new budget cannot make such a server fail.)"""
+    with FakeEndpoint(lambda b: text_reply("ok"), output_limit=8_192) as srv:
+        platform = _platform(tmp_path, srv.url)
+        first = await _ask(platform, stream=stream)
+        second = await _ask(platform, stream=stream)
+        asked = [b["max_tokens"] for b in srv.chats()]
+    assert first.text == "ok" and second.text == "ok"
+    assert asked[0] > 8_192 and asked[1:] == [4_096, 4_096], asked
+
+
 async def test_a_prompt_that_itself_does_not_fit_is_raised_for_the_lanes_refit(tmp_path):
     """Unchanged (v1.335.0): when the PROMPT is what overflows, the adapter
     does not shrink the answer into nothing — the refusal is raised as before,
