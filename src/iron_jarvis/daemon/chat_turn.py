@@ -5556,8 +5556,14 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws) 
         _carry_on = ""
     # Review: a daemon "carry on" (Resume when ready / Continue on another
     # account) continues a reply an account limit cut off — the check covers
-    # that WHOLE reply, from the question it continues (its `at`).
-    since = await asyncio.to_thread(_continued_question_at, d, body, _carry_on)
+    # that WHOLE reply, from the question it continues (its `at`), and
+    # compares the folder with the snapshot taken when THAT reply began (its
+    # turn id; harness/folder_changes).
+    since, continues = await asyncio.to_thread(_continued_question, d, body, _carry_on)
+    try:
+        custom = frozenset(d.platform.registry.custom_names())
+    except Exception:  # noqa: BLE001 — no registry here: nothing is known as custom
+        custom = frozenset()
     return await _finish.start(
         engine=getattr(d.platform, "engine", None),
         home=getattr(getattr(d.platform, "config", None), "home", None),
@@ -5568,36 +5574,40 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws) 
         harness=harness_turn,
         carry_on=[_carry_on] if _carry_on else [],
         since=since or None,
+        custom_tools=custom,
+        turn_id=str(getattr(body, "turn_id", "") or ""),
+        continues=continues,
     )
 
 
-def _continued_question_at(d, body, carry_on: str) -> str:
-    """BLOCKING. The ``at`` of the question a daemon "carry on" continues —
-    "" unless this turn's own message IS the carry-on text and the Build
-    session's transcript names the question (``command_shell.continued_turn``
-    — never a continuation, never a steer note)."""
+def _continued_question(d, body, carry_on: str) -> tuple[str, str]:
+    """BLOCKING. ``(at, turn id)`` of the question a daemon "carry on"
+    continues — ``("", "")`` unless this turn's own message IS the carry-on
+    text and the Build session's transcript names the question
+    (``command_shell.continued_turn`` — never a continuation, never a steer
+    note)."""
     try:
         users = [m for m in (getattr(body, "messages", None) or []) if getattr(m, "role", "") == "user"]
         if not carry_on or not users or str(getattr(users[-1], "content", "") or "").strip() != carry_on.strip():
-            return ""
+            return "", ""
         thread_id = str(getattr(body, "thread_id", "") or "")
         if not thread_id:
-            return ""
+            return "", ""
         from ..harness import sessions as _S
         from ..harness.command_shell import continued_turn
 
         row = _S.get_row(d.platform.engine, thread_id)
         if row is None:
-            return ""
+            return "", ""
         lines = _S._messages(row)
         turn = continued_turn(lines)
         for line in lines:
             if (isinstance(line, dict) and line.get("role") == "user" and turn
                     and str(line.get("turnId") or "") == turn and not line.get("continuation")):
-                return str(line.get("at") or "")
+                return str(line.get("at") or ""), turn
     except Exception:  # noqa: BLE001 — the reply's own part is still checked
         log.debug("finish check: reading the continued question failed", exc_info=True)
-    return ""
+    return "", ""
 
 
 #: A stand-in tool object that makes :func:`_fence_tool_output` fence and
@@ -5981,6 +5991,55 @@ def custom_tools_used(platform, tools_used) -> frozenset[str]:
     return frozenset(str(n) for n in tools_used if str(n) in names)
 
 
+def _writes_local_files_unnamed(name: str, custom_tools=(), readonly=frozenset()) -> bool:
+    """Can a call of this tool have WRITTEN A LOCAL FILE without a file tool
+    (so without the undo journal, and without naming it)? A command, code, a
+    program and what is typed into it, a hand-off to an agent or a workflow
+    (``harness/folder_changes.unjournaled`` — the folder comparison's own
+    list), a Build pane's CLI (``pane_send``), a user-made command tool
+    (*custom_tools*), an app's (``mcp__``) tool — unless its server declared
+    it read-only (*readonly*: those names, read off the live registry by
+    :func:`ran_local_writer`; with no registry every app tool counts).
+
+    Narrower than :func:`_may_have_changed_files` on purpose: a browser
+    click, a vault note, an agent's notebook or a read-only app tool change
+    no file the user asked to be MADE, so after one a creation claim is
+    still judged, exactly as before the finish-check review."""
+    from ..harness.folder_changes import unjournaled
+
+    n = str(name or "")
+    if n in readonly:
+        return False
+    return n == "pane_send" or unjournaled(n, frozenset(str(c) for c in custom_tools or ()))
+
+
+def ran_local_writer(platform, tools_used, custom_tools=()) -> bool:
+    """Did a tool that may have written a local file without a file tool
+    (:func:`_writes_local_files_unnamed`) succeed this turn? The app tools a
+    server declared read-only are read off the platform's live registry (a
+    platform without one counts every app tool). Never raises. MIRROR NOTE
+    (lock-step): both chat lanes hand it to the two honesty notes."""
+    readonly: set[str] = set()
+    for n in tools_used or ():
+        if str(n).startswith("mcp__"):
+            try:
+                tool = platform.registry.get(str(n))
+                if str(getattr(getattr(tool, "reversibility", ""), "value", "")) == "readonly":
+                    readonly.add(str(n))
+            except Exception:  # noqa: BLE001 — not known read-only: it may write
+                pass
+    return any(_writes_local_files_unnamed(n, custom_tools, frozenset(readonly)) for n in tools_used or ())
+
+
+def _ran_writer(ran_writer, tools_used, custom_tools) -> bool:
+    """The honesty notes' one reading of "a local writer ran": the caller's
+    verdict (``ran_writer``, the lanes' :func:`ran_local_writer` and a Build
+    turn's ``FinishCheck.may_have_written``), else the names alone."""
+    if ran_writer is not None:
+        return bool(ran_writer)
+    return any(_writes_local_files_unnamed(n, custom_tools) for n in tools_used or ())
+
+
 def _may_have_changed_files(tools_used: list[str], custom_tools=()) -> bool:
     """True when a tool that can change a file WITHOUT naming it succeeded
     this turn (v1.351.0 review): a shell line, code, a hand-off to an agent
@@ -6014,7 +6073,7 @@ def _may_have_changed_files(tools_used: list[str], custom_tools=()) -> bool:
     return False
 
 
-def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=()) -> str:
+def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), ran_writer=None) -> str:
     """'' unless the REPLY claims a file exists that no tool actually wrote.
 
     The sibling note above keys off the USER's phrasing, which is why it stayed
@@ -6043,8 +6102,23 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=()) -
     (:func:`_may_have_changed_files`: shell, code, a hand-off, a pack, a vault
     note, a browser action, a custom tool — *custom_tools* names the
     user-made ones that ran; a caller without a registry passes none).
+
+    Finish-check review (part 3): NO claim is judged after a tool that may
+    have WRITTEN A LOCAL FILE without a file tool
+    (:func:`_writes_local_files_unnamed`) — "saved its /status body to
+    status.json" after a shell command wrote status.json was told "nothing
+    was written to disk this turn … that file does not exist" (every
+    process-http-server reply). *ran_writer* is the caller's verdict: the
+    lanes' :func:`ran_local_writer` (the live registry knows which app tools
+    are read-only) or a Build turn's ``harness/finish.FinishCheck.
+    may_have_written`` (a command that RAN and failed — a heredoc writes
+    before a failing test ends the line — which ``tools_used``, the calls
+    that succeeded, cannot show); None = judged from the names. MIRROR NOTE
+    (lock-step): both chat lanes pass it.
     """
     if not reply or set(tools_used) & _FILE_CHANGING_TOOLS:
+        return ""
+    if _ran_writer(ran_writer, tools_used, custom_tools):
         return ""
     named: list[str] = []
     for m in _FILE_CLAIM_RX.finditer(reply):
@@ -6171,19 +6245,30 @@ def _write_directive(body, armed: list[str]) -> str:
     )
 
 
-def _creation_honesty_note(body, armed: list[str], tools_used: list[str]) -> str:
+def _creation_honesty_note(body, armed: list[str], tools_used: list[str], *, custom_tools=(), ran_writer=None) -> str:
     """'' unless the user asked for a FILE and none was written this turn — a
     model (local ones especially) narrating a save that never happened must
     never go unflagged, and the note tells the user exactly how to fix it.
 
     Shares :func:`_asked_for_a_file` with the DIRECTIVE that tries to prevent
     this outcome in the first place — see there for why that is one function.
+
+    Finish-check review (part 3): NEVER after a tool that may have written
+    the file without a file tool (both lost hard-expression-evaluator runs
+    wrote calc.py with a bash heredoc and still ended with "no file was
+    actually written this turn"): :func:`_writes_local_files_unnamed`,
+    *ran_writer* the caller's verdict as in :func:`_claimed_write_note`.
+    Nothing can say it wrote nothing: a folder snapshot never sees an ignored
+    or pruned folder, or a file outside the session's folder. MIRROR NOTE
+    (lock-step): both chat lanes.
     """
     if not _asked_for_a_file(body):
         return ""
     # v1.351.0 (G06): any tool that really changed a file counts — a resized
     # photo or a split PDF is the file the user asked for.
     if set(tools_used) & _FILE_CHANGING_TOOLS:
+        return ""
+    if _ran_writer(ran_writer, tools_used, custom_tools):
         return ""
     if set(armed) & _FILE_WRITING_TOOLS:
         return (
@@ -9229,15 +9314,23 @@ async def run_chat_turn(
             # for a scripted reply. MIRROR NOTE (lock-step): routes/chat.py.
             reply += demo_note(tools_used, reply)
         else:
-            reply += _creation_honesty_note(body, armed, tools_used)
+            # v1.351.0 fix round: the custom tools that ran are named from
+            # the live registry — a user-made tool can change a file it never
+            # names. Finish-check review: and a Build turn's finish check
+            # knows a command RAN even when it exited non-zero
+            # (`FinishCheck.may_have_written`), so neither note says "nothing
+            # was written" after a command that may have written a file.
+            # MIRROR NOTE (lock-step): routes/chat.py.
+            _custom_ran = custom_tools_used(d.platform, tools_used)
+            _ran_writer = (_finish is not None and _finish.may_have_written()) or ran_local_writer(
+                d.platform, tools_used, _custom_ran,
+            )
+            reply += _creation_honesty_note(body, armed, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)
             # v1.153.2: and check the reply's own CLAIMS against the
             # ledger — the note above keys off the user's phrasing and
             # so missed a reply announcing a saved file after only a
-            # scan had run. MIRROR NOTE (lock-step): both lanes. v1.351.0 fix
-            # round: the custom tools that ran are named from the live
-            # registry — a user-made tool can change a file it never names.
-            _custom_ran = custom_tools_used(d.platform, tools_used)
-            reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran)
+            # scan had run. MIRROR NOTE (lock-step): both lanes.
+            reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did ("I'm passing this to builder") gets the plain note.
         # MIRROR NOTE (lock-step): routes/chat.py appends the same helper.

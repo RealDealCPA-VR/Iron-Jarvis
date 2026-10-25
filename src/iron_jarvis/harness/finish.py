@@ -21,7 +21,12 @@ note goes to the model first, and the model answers it in one more round:
     guessed — that still exist, that the request does not name, and that the
     folder's ``.gitignore`` does not ignore. The model is asked to keep or
     remove each one, with its own tools (so a removal is ledgered, and
-    undoable through ``apply_patch``).
+    undoable through ``apply_patch``). BESIDE them (``harness/folder_changes``,
+    after the part 3 Phase 2 measurement): when the reply ran a command, the
+    files that APPEARED in the folder while it ran — a program may have
+    written them, so the model is asked to keep what the task needs — and the
+    files that were there when the reply began and are GONE; a file a command
+    changed makes the reply one that changed files, journal or not.
 (c) THE REQUEST. The user's request put back as a checklist of its points
     (:func:`request_points`), plus — when a point says the work must follow a
     written description in a file of the folder ("exactly as that file's
@@ -59,11 +64,14 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import logging
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
+
+log = logging.getLogger(__name__)
 
 #: The component's name (the harness's ninth: it renders nothing into the
 #: system prompt — a reply that changed nothing makes exactly the calls it
@@ -73,6 +81,14 @@ COMPONENT = "finish"
 FINISH_FILE = "finish.toml"
 #: What the ledger row of the check's own calls says (``called_as``).
 CALLED_AS = "finish check"
+#: What the ledger row of a project's own checker says (ruff / mypy / eslint /
+#: tsc run after an edit by part 3 Phase 3, a synthetic call of the turn's
+#: command tool, ``HarnessTurn.mark_called_as``).
+PROJECT_CHECK_CALLED_AS = "project check"
+#: Calls the HARNESS makes itself: never the reply's own work — not a command
+#: the model ran (its test command, a later test run), and never a sign the
+#: reply changed files through a command (``harness/folder_changes``).
+HARNESS_CALLED_AS = frozenset({CALLED_AS, PROJECT_CHECK_CALLED_AS})
 #: The check's own calls' ids (never a model's).
 CALL_ID_PREFIX = "ij-finish-"
 #: The command tools whose calls the check reads and runs through.
@@ -90,6 +106,9 @@ MAX_SPEC_POINTS = 20
 MAX_POINT_CHARS = 400
 MAX_SPEC_CHARS = 8_000
 MAX_SPEC_FILE_BYTES = 256 * 1024
+#: How many files a reply's request points to that are read when it BEGINS
+#: (``FinishCheck.first_readings``: the description as it was before).
+MAX_SPEC_READS = 8
 MAX_NEW_FILES = 20
 #: Characters of a test run's output the note carries (its END: a failing run
 #: says why on its last lines).
@@ -115,6 +134,33 @@ PROCESS_BUDGET_S = 120
 _PROCESS_STEP_MS = 30_000
 #: What separates the reply the model wrote before the check from its answer.
 SEPARATOR = "\n\n"
+
+#: The note's words for the files the FOLDER says changed (``harness/
+#: folder_changes``) — apart from the journal's, because no file tool made
+#: them: a command the model ran wrote them, or a PROGRAM did (a server's log
+#: and port file, a watcher's results and the files it moved). The task's own
+#: check may read exactly those (``process-http-server`` reads server.log,
+#: ``hard-file-watcher-process`` reads results.json and done/), so the words
+#: ask the model to KEEP them and remove only a scratch file it wrote itself.
+APPEARED_HEAD = (
+    "These appeared in the folder during this reply: a command run in this reply wrote them, "
+    "or a program running here (a server, a watcher):"
+)
+APPEARED_ALSO_HEAD = (
+    "These also appeared in the folder during this reply, made by no file tool: a command run in "
+    "this reply wrote them, or a program running here (a server, a watcher):"
+)
+APPEARED_KEEP = (
+    "A program's log, port or output file may be just what the task needs, so leave these as "
+    "they are; remove one only if you wrote it yourself as a scratch file and nothing needs it "
+    "(a scratch script or test file left in the folder can break the project's own test run)."
+)
+GONE_HEAD = "## Files that were here when this reply began and are gone now"
+GONE_ASK = (
+    "No file tool removed them: a command run in this reply did, a program running here, or "
+    "someone working in this folder. If a command you ran removed one the task did not ask to "
+    "remove, put it back."
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -243,7 +289,188 @@ _PM_VALUE_OPTS = frozenset({
 _JS_RUNNERS = frozenset({"vitest", "jest", "mocha"})
 
 
+def _is_posix(posix: bool | None) -> bool:
+    return (os.name != "nt") if posix is None else bool(posix)
+
+
+#: A word ends at a blank or one of bash's metacharacters.
+_WORD_END = " \t\r\n;&|<>()"
+
+
+def strip_heredocs(command: str) -> str:
+    """The command LINE of a bash-written command: every here-document's BODY
+    left out (review: the lost ``hard-expression-evaluator`` runs wrote
+    calc.py with ``python - <<'EOF' … EOF`` and ran ``python -m unittest`` on
+    the next line — the body made the command 5,871 characters, past
+    :data:`MAX_COMMAND_CHARS`, so the test part was never read and the note
+    said "No tests found"; and a body line that LOOKED like a test command
+    was read as one, so it could have been run again).
+
+    A here-document is ``<<WORD`` or ``<<-WORD`` (WORD quoted or not, blanks
+    after the operator allowed); its body is the lines after the line that
+    holds the operator, up to the line that is exactly WORD (with ``<<-``,
+    after its leading tabs) — bodies of several on one line follow in order,
+    and a body never closed runs to the end (bash reads it so). The operator
+    line itself is kept, so the segment it is in is still seen (and never
+    taken for a test or a setup step: :func:`_fed_by_heredoc`). Not a
+    here-document: ``<<<`` (a here-string), ``<<`` inside quotes, in a
+    comment, or inside ``(( … ))`` arithmetic. Never raises."""
+    return _scan_heredocs(command)[0]
+
+
+def _scan_heredocs(command: str) -> tuple[str, int]:
+    """``(the text with every here-document body left out, how many
+    here-document operators it holds)``: :func:`strip_heredocs`'s reading."""
+    text = str(command or "")
+    if "<<" not in text:
+        return text, 0
+    operators = 0
+    out: list[str] = []
+    pending: list[tuple[str, bool]] = []
+    quote = ""
+    arith = 0
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if quote == "'":
+            out.append(ch)
+            if ch == "'":
+                quote = ""
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if quote == '"':
+            out.append(ch)
+            if ch == '"':
+                quote = ""
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "#" and (i == 0 or text[i - 1] in " \t\r\n;&|(") and not arith:
+            # A comment, to the end of its line (its `<<` is text).
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append(text[i:end])
+            i = end
+            continue
+        if text.startswith("((", i):
+            arith += 1
+            out.append("((")
+            i += 2
+            continue
+        if arith and text.startswith("))", i):
+            arith -= 1
+            out.append("))")
+            i += 2
+            continue
+        if not arith and text.startswith("<<", i):
+            # (a here-string, `<<<`, reads as an operator with no word: its
+            # third `<` ends the word, so nothing is taken for a body)
+            j = i + 2
+            tabs = j < n and text[j] == "-"
+            if tabs:
+                j += 1
+            while j < n and text[j] in " \t":
+                j += 1
+            word: list[str] = []
+            m = j
+            while m < n and text[m] not in _WORD_END:
+                c = text[m]
+                if c in "'\"":
+                    close = text.find(c, m + 1)
+                    close = n if close < 0 else close
+                    word.append(text[m + 1:close])
+                    m = close + 1
+                    continue
+                if c == "\\" and m + 1 < n:
+                    word.append(text[m + 1])
+                    m += 2
+                    continue
+                word.append(c)
+                m += 1
+            if word:
+                pending.append(("".join(word), tabs))
+                operators += 1
+            out.append(text[i:m])
+            i = m
+            continue
+        if ch == "\n" and pending:
+            out.append("\n")
+            i += 1
+            for delim, tabs in pending:
+                while i < n:
+                    eol = text.find("\n", i)
+                    end = n if eol < 0 else eol
+                    line = text[i:end]
+                    i = n if eol < 0 else eol + 1
+                    if (line.lstrip("\t") if tabs else line) == delim:
+                        break
+            pending = []
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out), operators
+
+
+def _drop_comment(segment: str) -> str:
+    """A bash segment without its trailing ``# comment`` (a ``#`` that starts
+    a word, outside quotes). Review: the test part JOINS its segments with
+    ``&&``, so a kept segment's comment commented out every segment after it
+    — ``cd /w # go there`` + ``pytest -q`` was run again as ``cd /w # go there
+    && pytest -q``: bash ran only ``cd``, exit 0, and the check said the tests
+    PASSED. (cmd has no ``#`` comments.)"""
+    text = str(segment or "")
+    if "#" not in text:
+        return text
+    quote = ""
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+        elif ch == "\\":
+            i += 2
+            continue
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "#" and (i == 0 or text[i - 1] in " \t"):
+            return text[:i].rstrip()
+        i += 1
+    return text
+
+
+def _fed_by_heredoc(segment: str) -> bool:
+    """Is this segment (of a bash-written command, bodies already left out)
+    fed by a here-document? Run again it would read another input — never
+    re-run, never a setup step (a ``<<`` in quotes or a ``<<<`` is not one)."""
+    return _scan_heredocs(segment)[1] > 0
+
+
+def _command_line(command: str, posix: bool | None) -> str:
+    """The text a command's test part is read from: bash's here-document
+    bodies left out (:func:`strip_heredocs`); cmd's text as written."""
+    text = str(command or "")
+    return strip_heredocs(text) if _is_posix(posix) else text
+
+
 def _split(command: str, *, posix: bool | None = None) -> tuple[list[str], list[str]]:
+    """``(segments, separators)`` of a command as the model wrote it — under
+    POSIX, its here-document bodies left out first (:func:`_command_line`)."""
+    return _pieces(_command_line(command, posix), posix=posix)
+
+
+def _pieces(command: str, *, posix: bool | None = None) -> tuple[list[str], list[str]]:
     """``(segments, separators)``: the command's top-level pieces (see the
     rule above) and, between each two, the separator that joined them
     (``&&``, ``||``, ``;``, ``&`` or a line break, ``\\n``). Quotes (' and ")
@@ -544,22 +771,34 @@ def is_test_segment(segment: str, named: Iterable[str] = ()) -> bool:
     return _is_test_head(_words(head)) or _named(head, named)
 
 
+def _test_segment(segment: str, named: Iterable[str], posix: bool | None) -> bool:
+    """:func:`is_test_segment`, and never one a bash here-document feeds."""
+    return is_test_segment(segment, named) and not (_is_posix(posix) and _fed_by_heredoc(segment))
+
+
+def _setup_segment(segment: str, posix: bool | None) -> bool:
+    """:func:`_is_setup`, and never one a bash here-document feeds."""
+    return _is_setup(segment) and not (_is_posix(posix) and _fed_by_heredoc(segment))
+
+
 def test_part(command: str, named: Iterable[str] = (), *, posix: bool | None = None) -> str:
     """The TEST PART of a command the model ran (the rule above), or "" when
-    it has none. Never a word the command did not have."""
-    text = str(command or "")
+    it has none. Never a word the command did not have. Under bash, its
+    here-document bodies are left out FIRST (:func:`strip_heredocs`): the
+    length limit is the command line's, and a body is never a test."""
+    text = _command_line(command, posix)
     if not text.strip() or len(text) > MAX_COMMAND_CHARS:
         return ""
     named = list(named)
     keep: list[str] = []
     setup: list[str] = []
-    for seg in _segments(text, posix=posix):
-        if is_test_segment(seg, named):
+    for seg in _pieces(text, posix=posix)[0]:
+        if _test_segment(seg, named, posix):
             keep.extend(setup)
             setup = []
-            keep.append(_pipeline_head(seg))
-        elif _is_setup(seg):
-            setup.append(_pipeline_head(seg))
+            keep.append(_pipeline_head(_drop_comment(seg) if _is_posix(posix) else seg))
+        elif _setup_segment(seg, posix):
+            setup.append(_pipeline_head(_drop_comment(seg) if _is_posix(posix) else seg))
     if not any(is_test_segment(k, named) for k in keep):
         return ""
     return " && ".join(keep)
@@ -572,20 +811,20 @@ def status_is_tests(command: str, named: Iterable[str] = (), *, posix: bool | No
     tail``, ``pytest || echo failed``, ``pytest; echo done`` and ``pytest &
     exit 0`` all exit 0 when the tests FAIL (review: the work line said "tests
     failed, then fixed" for a run whose tests still failed)."""
-    text = str(command or "")
+    text = _command_line(command, posix)
     if not text.strip() or len(text) > MAX_COMMAND_CHARS:
         return False
     named = list(named)
-    segments, seps = _split(text, posix=posix)
+    segments, seps = _pieces(text, posix=posix)
     if not segments or any(s != "&&" for s in seps):
         return False
     tests = 0
     for seg in segments:
-        if is_test_segment(seg, named):
+        if _test_segment(seg, named, posix):
             if _has_pipe(seg):
                 return False
             tests += 1
-        elif not _is_setup(seg):
+        elif not _setup_segment(seg, posix):
             return False
     return tests > 0
 
@@ -601,9 +840,9 @@ def test_heads(command: str, named: Iterable[str] = (), *, posix: bool | None = 
     named = list(named)
     out: list[str] = []
     for seg in _segments(command, posix=posix):
-        if not is_test_segment(seg, named):
+        if not _test_segment(seg, named, posix):
             continue
-        words = _words(_pipeline_head(seg))
+        words = _words(_pipeline_head(_drop_comment(seg) if _is_posix(posix) else seg))
         kept: list[str] = []
         skip = False
         for w in words:
@@ -1050,7 +1289,7 @@ def ran_commands(engine: Any, session_id: str, after: int, upto: int) -> list[tu
         return []
     out: list[tuple[str, dict[str, Any], str]] = []
     for args_json, confinement, called_as in rows:
-        if confinement not in _RAN_CONFINEMENTS or called_as == CALLED_AS:
+        if confinement not in _RAN_CONFINEMENTS or called_as in HARNESS_CALLED_AS:
             continue
         try:
             args = _json.loads(args_json or "{}")
@@ -1059,6 +1298,54 @@ def ran_commands(engine: Any, session_id: str, after: int, upto: int) -> list[tu
         if isinstance(args, dict) and isinstance(args.get("command"), str):
             out.append(("shell", args, str(called_as or "")))
     return out
+
+
+def ran_unjournaled(engine: Any, session_id: str, after: int, upto: int, custom: Iterable[str] = ()) -> bool:
+    """Did the session — or a helper agent it started — RUN, between two
+    ledger marks, a tool that can change a file without an undo-journal row
+    (``folder_changes.unjournaled``: a command, a program, a hand-off, an
+    app's tool)? The part of a reply a "carry on" continues: whether the
+    folder comparison counts for it. A ``shell`` row counts when its command
+    ran (it says how it was confined); any other row when it succeeded. A
+    call the harness made itself (``HARNESS_CALLED_AS``: this check's test
+    run, a project's checker) is not the reply's. BLOCKING; False on any
+    failure."""
+    from .folder_changes import unjournaled
+
+    names = frozenset(str(c) for c in custom or ())
+    try:
+        from sqlalchemy import literal_column
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..core.models import ToolInvocation
+
+        rowid = literal_column("toolinvocation.rowid")
+        with session_scope(engine) as db:
+            try:
+                helpers = _helper_sessions(db, session_id, after)
+            except Exception:  # noqa: BLE001 — the reply's own rows still count
+                helpers = []
+            rows = db.exec(
+                select(ToolInvocation.tool, ToolInvocation.ok, ToolInvocation.confinement,
+                       ToolInvocation.called_as)
+                .where(ToolInvocation.session_id.in_([session_id, *helpers]))  # type: ignore[attr-defined]
+                .where(rowid > int(after)).where(rowid <= int(upto))
+                .order_by(rowid)  # type: ignore[arg-type]
+                .limit(MAX_LEDGER_ROWS)
+            ).all()
+    except Exception:  # noqa: BLE001
+        return False
+    for tool, ok, confinement, called_as in rows:
+        if called_as in HARNESS_CALLED_AS or not unjournaled(str(tool or ""), names):
+            continue
+        if tool == "shell":
+            if confinement in _RAN_CONFINEMENTS:
+                return True
+            continue
+        if ok:
+            return True
+    return False
 
 
 def read_turn_files(engine: Any, session_id: str, mark: int) -> TurnFiles:
@@ -1275,8 +1562,12 @@ class GitIgnore:
     (``core.excludesFile``) and the exclude file of a linked worktree's main
     repository. BLOCKING (small reads, cached per folder); never raises."""
 
-    def __init__(self, folder: Any) -> None:
+    def __init__(self, folder: Any, *, max_files: "int | None" = MAX_GITIGNORE_FILES) -> None:
         self.folder = Path(str(folder))
+        #: how many folders' ``.gitignore`` are read (None: every one the
+        #: caller asks about — a walk, bounded by its own caps:
+        #: ``folder_changes.ignore_for``)
+        self._max_files = max_files
         self._files: dict[str, list[tuple[bool, bool, bool, Any]]] = {}
         try:
             git = self.folder / ".git"
@@ -1287,19 +1578,28 @@ class GitIgnore:
     def _at(self, rel_dir: str) -> list[tuple[bool, bool, bool, Any]]:
         if rel_dir in self._files:
             return self._files[rel_dir]
-        if len(self._files) >= MAX_GITIGNORE_FILES:
+        if self._max_files is not None and len(self._files) >= self._max_files:
             return []
         rules = gitignore_rules(self.folder / rel_dir if rel_dir else self.folder)
         self._files[rel_dir] = rules
         return rules
 
-    def ignored(self, rel_posix: str) -> bool:
+    def no_file_in(self, rel_dir: str) -> None:
+        """The folder ``rel_dir`` holds no ``.gitignore`` (a walk's own listing
+        of it said so): nothing to read there, so none is ever opened."""
+        self._files.setdefault(rel_dir, [])
+
+    def ignored(self, rel_posix: str, *, is_dir: bool = False) -> bool:
+        """Does git ignore this file — or, with ``is_dir``, this FOLDER (a
+        ``dir/`` rule matches it; the folder snapshot of
+        ``harness/folder_changes`` never walks into one)?"""
+        last_is_dir = bool(is_dir)
         parts = [p for p in str(rel_posix or "").replace("\\", "/").split("/") if p and p != "."]
         if not parts or ".." in parts:
             return False
         for depth in range(1, len(parts) + 1):
             target = parts[:depth]
-            is_dir = depth < len(parts)
+            is_dir = depth < len(parts) or last_is_dir
             # (base folder, its rules): the exclude file, then each folder
             # from the top down to the one that holds this target.
             sources = [((), self._exclude)] + [
@@ -1445,6 +1745,7 @@ class FinishCheck:
         carrier: str = "shell",
         delete_name: str = "",
         harness: Any = None,
+        unjournaled: Iterable[str] = (),
     ) -> None:
         self.engine = engine
         self.home = home
@@ -1488,6 +1789,29 @@ class FinishCheck:
         self._answer_heard = False
         self._answer = ""
         self._calls_made = 0
+        # WHAT COMMANDS CHANGED (``harness/folder_changes``): the folder as
+        # this reply began (taken by :func:`start` before any tool ran), the
+        # request's written description as it was then, and whether the
+        # reply RAN something that can change a file without the journal —
+        # only then does the comparison count.
+        #: user-made command tools (they can change files unjournaled too)
+        self._custom = frozenset(str(n) for n in unjournaled or ())
+        self._may_write = False
+        self._before: Any = None
+        #: key(path) -> the file's bytes when the reply began (None: it did
+        #: not exist then) — the description a point points to
+        self._spec_before: dict[str, "bytes | None"] = {}
+        #: True once the folder was really compared (both snapshots whole)
+        self.compared = False
+        #: why it could not be (said in the note, and logged)
+        self.folder_problem = ""
+        #: files that APPEARED while commands ran (no file tool made them)
+        self.appeared: list[str] = []
+        self.appeared_left_out = 0
+        #: files that were there when the reply began and are GONE (no file
+        #: tool removed them; a move is neither)
+        self.gone: list[str] = []
+        self.gone_left_out = 0
 
     # -- what the lane tells it -------------------------------------------- #
 
@@ -1522,7 +1846,15 @@ class FinishCheck:
         name = str(getattr(call, "name", "") or "")
         if result is None or refused:
             return
+        if self._harness_made(call):
+            # A call the HARNESS made (a project's checker, part 3 Phase 3):
+            # neither a command the model ran nor the reply's own work.
+            return
         data = dict(getattr(result, "data", None) or {})
+        if not self._may_write and _wrote_unjournaled(name, result, self._custom):
+            # A command, a program, a hand-off or an app's tool RAN: what it
+            # did to the folder counts (``harness/folder_changes``).
+            self._may_write = True
         if name in COMMAND_TOOLS and _never_ran(name, result):
             # Review: a command the TOOL refused before any program started
             # (the git guard's force push, low trust's sandbox, a folder
@@ -1589,6 +1921,17 @@ class FinishCheck:
             return True
         return mine <= set(test_heads(command, named, posix=_posix(syntax)))
 
+    def _harness_made(self, call: Any) -> bool:
+        """Was ``call`` made by the harness itself (``HARNESS_CALLED_AS``,
+        marked through ``HarnessTurn.mark_called_as``)? Never raises."""
+        fn = getattr(self.harness, "called_as", None) if self.harness is not None else None
+        if fn is None:
+            return False
+        try:
+            return str(fn(call) or "") in HARNESS_CALLED_AS
+        except Exception:  # noqa: BLE001 — a double without it: the model's own call
+            return False
+
     def _syntax_of(self, call: Any) -> str:
         """The shell language a command call was written in ("bash" for
         Claude Code's ``Bash`` — the harness knows which dialect tool the
@@ -1620,11 +1963,14 @@ class FinishCheck:
         if self.ran or not self.config.enabled or truncated or round_index >= rounds - 2:
             return None
         files = await asyncio.to_thread(read_turn_files, self.engine, self.session_id, self.mark)
-        if not files.changed:
+        # The journal's witness, then the folder's (`harness/folder_changes`):
+        # a file a COMMAND changed makes a reply that changed files too.
+        seen = await self._folder_changes()
+        if not files.changed and not (seen is not None and seen.any):
             return None
         self.ran = True
         self.draft = str(reply or "")
-        await asyncio.to_thread(self._gather, files)
+        await asyncio.to_thread(self._gather, files, seen)
         calls = self._test_calls(low_trust=low_trust)
         if self.harness is not None:
             for call in calls:
@@ -1639,7 +1985,51 @@ class FinishCheck:
                     pass
         return calls
 
-    def _gather(self, files: TurnFiles) -> None:
+    async def _folder_changes(self) -> Any:
+        """What the folder says this reply changed (``folder_changes.Changes``),
+        or None: the reply ran nothing that can change a file without the
+        journal (then the folder's changes are not its own — the user's
+        editor, a server an earlier reply started — and it is not walked
+        again), or the folder could not be compared (:attr:`folder_problem`
+        says why; the journal alone decides). OFF THE LOOP."""
+        from . import folder_changes as FC
+
+        if not self._may_write or self._before is None:
+            return None
+        if not self._before.usable:
+            self.folder_problem = self._before.problem
+            log.info("finish check: %s, so only files made with file tools are known", self.folder_problem)
+            return None
+        after = await FC.walk_bounded(self.folder, FC.take, self.folder)
+        if after is None:
+            after = FC.too_slow(self.folder)
+        if not after.usable:
+            self.folder_problem = after.problem
+            log.info("finish check: %s, so only files made with file tools are known", self.folder_problem)
+            return None
+        before = self._before
+        seen = await asyncio.to_thread(lambda: FC.compare(before, after, FC.ignore_for(self.folder)))
+        self.compared = True
+        return seen
+
+    def may_have_written(self) -> bool:
+        """Did this reply RUN something that can write a file without the
+        undo journal — a command (whatever its exit status: a heredoc writes
+        before a failing test ends the line), code, a program, a hand-off, an
+        app's or a user-made tool — in the reply or in the cut part a carry-on
+        continues? For the chat's honesty notes
+        (``daemon/chat_turn._creation_honesty_note`` and
+        ``_claimed_write_note``): after one, neither may say "no file was
+        written" (review: both lost hard-expression-evaluator runs wrote
+        calc.py with a bash heredoc and still ended with "no file was
+        actually written this turn"). The folder comparison cannot settle it
+        the other way: it never sees an ignored or pruned folder (``dist/``,
+        an ``out/`` the .gitignore names, a dot-folder) or a file outside the
+        session's folder — a snapshot can prove a write, never that none
+        happened."""
+        return bool(self._may_write)
+
+    def _gather(self, files: TurnFiles, seen: Any = None) -> None:
         """BLOCKING: the docs' test commands, the new files, the points."""
         self._named = doc_test_commands(self.folder)
         self._changed_rels = []
@@ -1650,6 +2040,23 @@ class FinishCheck:
                 continue
             if not inner.startswith("../"):
                 self._changed_rels.append(inner)
+        if seen is not None:
+            # A folder check applies to a file a COMMAND changed too.
+            for rel in seen.paths():
+                if rel not in self._changed_rels:
+                    self._changed_rels.append(rel)
+        if self.config.new_files and seen is not None:
+            # The folder's witness, apart from the journal's: files no file
+            # tool made (or removed) — never one the journal already names.
+            known = {_key(p) for p in files.changed}
+            root = Path(self._before.root)
+            appeared = [r for r in seen.created
+                        if _key(root / r) not in known and not _named_in(r, self.request)]
+            gone = [r for r in seen.deleted if _key(root / r) not in known]
+            self.appeared = appeared[:MAX_NEW_FILES]
+            self.appeared_left_out = max(0, len(appeared) - MAX_NEW_FILES)
+            self.gone = gone[:MAX_NEW_FILES]
+            self.gone_left_out = max(0, len(gone) - MAX_NEW_FILES)
         if self.config.new_files:
             ignore = GitIgnore(self.folder)
             kept: list[tuple[Path, str]] = []
@@ -1678,9 +2085,11 @@ class FinishCheck:
             self.spec_label = label
             self.points_left_out += spec_left
 
-    def _spec(self, files: TurnFiles, points: list[str]) -> tuple[list[str], str, int]:
-        """The written description the request points to, as points."""
-        from ..core.promptguard import publish_blocked, scan_context
+    def _spec_candidates(self, points: list[str]) -> Iterable[tuple[bool, str, Path]]:
+        """``(docstring, name, target)`` of each file a point says the work
+        must follow, in the points' order — inside the folder and past the
+        file tools' read gate only. BLOCKING (the read gate)."""
+        from ..core.fs_policy import fs_read_ok
         from ..tools.base import safe_path
 
         for point in points:
@@ -1695,29 +2104,70 @@ class FinishCheck:
                     target = safe_path(self.folder, name)
                 except Exception:  # noqa: BLE001 — outside the folder: never read
                     continue
-                from ..core.fs_policy import fs_read_ok
-
                 if not fs_read_ok(str(target))[0]:
                     continue  # the same read gate as the agent's own file tools
-                data = before_bytes(self.home, files.first.get(_key(target)), target)
-                if not data or len(data) > MAX_SPEC_FILE_BYTES:
-                    continue
-                text = data.decode("utf-8", errors="replace")
-                if target.suffix.lower() == ".py":
-                    if not docstring:
+                yield docstring, name, target
+
+    def first_readings(self) -> "tuple[Any, dict[str, bytes | None]]":
+        """BLOCKING, before any tool of the reply runs (:func:`start`): the
+        folder's snapshot (``folder_changes.take``) and — when the request
+        points to a written description — that file as it is NOW, so the
+        check reads it as it was BEFORE the reply even when a command (which
+        writes no journal row) changed it. Never raises."""
+        from . import folder_changes as FC
+
+        snapshot = FC.take(self.folder)
+        spec: dict[str, "bytes | None"] = {}
+        if self.config.request:
+            try:
+                points, _left = request_points(self.request)
+                for _docstring, _name, target in self._spec_candidates(points):
+                    key = _key(target)
+                    if key in spec:
                         continue
-                    text = module_docstring(text)
-                    label = f"the docstring of `{name}`"
-                else:
-                    label = f"`{name}`"
-                if not text.strip():
+                    if len(spec) >= MAX_SPEC_READS:
+                        break
+                    try:
+                        if not target.exists():
+                            spec[key] = None  # the reply would CREATE it: no description before
+                        elif target.is_file() and target.stat().st_size <= MAX_SPEC_FILE_BYTES:
+                            spec[key] = target.read_bytes()
+                    except OSError:
+                        continue
+            except Exception:  # noqa: BLE001 — the journal's copy still stands in
+                log.debug("finish check: reading the description first failed", exc_info=True)
+        return snapshot, spec
+
+    def _spec(self, files: TurnFiles, points: list[str]) -> tuple[list[str], str, int]:
+        """The written description the request points to, as points."""
+        from ..core.promptguard import publish_blocked, scan_context
+
+        for docstring, name, target in self._spec_candidates(points):
+            key = _key(target)
+            if key in self._spec_before:
+                # Read before any tool of this reply ran: right even when a
+                # command (which writes no journal row) changed it since.
+                data = self._spec_before[key]
+            else:
+                data = before_bytes(self.home, files.first.get(key), target)
+            if not data or len(data) > MAX_SPEC_FILE_BYTES:
+                continue
+            text = data.decode("utf-8", errors="replace")
+            if target.suffix.lower() == ".py":
+                if not docstring:
                     continue
-                scanned = scan_context(text, source=f"{label} (finish check)", cap=MAX_SPEC_CHARS)
-                if scanned.blocked:
-                    publish_blocked(self.event_bus, self.session_id, scanned)
-                spec, left = spec_points(scanned.text)
-                if spec:
-                    return spec, label, left
+                text = module_docstring(text)
+                label = f"the docstring of `{name}`"
+            else:
+                label = f"`{name}`"
+            if not text.strip():
+                continue
+            scanned = scan_context(text, source=f"{label} (finish check)", cap=MAX_SPEC_CHARS)
+            if scanned.blocked:
+                publish_blocked(self.event_bus, self.session_id, scanned)
+            spec, left = spec_points(scanned.text)
+            if spec:
+                return spec, label, left
         return [], "", 0
 
     def _test_calls(self, *, low_trust: bool) -> list[Any]:
@@ -1910,6 +2360,8 @@ class FinishCheck:
             parts.append("## Tests\n" + await self._tests_text(fence))
         if self.config.new_files:
             parts.append("## Files this reply made that the request does not name\n" + self._files_text())
+            if self.gone:
+                parts.append(GONE_HEAD + "\n" + self._gone_text())
         if self.config.request and self.points:
             parts.append("## The request, point by point\n" + self._points_text())
         ask = []
@@ -1970,9 +2422,28 @@ class FinishCheck:
         "may have made others: check for any scratch file it left.)"
     )
 
+    #: The same, when the folder could not be compared (``harness/folder_changes``):
+    #: the reason is said — never a half list.
+    CANNOT_COMPARE = (
+        "(Only files made with your file tools are listed: {why}, so the files a command made "
+        "could not be found. A command you ran in this reply may have made others: check for "
+        "any scratch file it left.)"
+    )
+
     def _files_text(self) -> str:
-        caveat = ("\n" + self.COMMANDS_CAVEAT) if self._commands else ""
+        if self.compared:
+            # The folder was compared: what a command made is listed below,
+            # so "None." is a claim the check can make.
+            caveat = ""
+        elif self._commands or self._may_write:
+            caveat = "\n" + (self.CANNOT_COMPARE.format(why=self.folder_problem)
+                             if self.folder_problem else self.COMMANDS_CAVEAT)
+        else:
+            caveat = ""
+        appeared = self._appeared_text()
         if not self.new_files:
+            if appeared:
+                return "None made with your file tools. " + APPEARED_HEAD + "\n" + appeared
             return "None." + caveat
         listed = "\n".join(f"- `{rel}`" for _p, rel in self.new_files)
         more = f"\n(and {self.new_files_left_out} more)" if self.new_files_left_out else ""
@@ -1984,7 +2455,24 @@ class FinishCheck:
         return (
             listed + more + "\nKeep each one only if the work needs it; " + how + ". A scratch "
             "script or test file left in the folder can break the project's own test run." + caveat
+            + (("\n" + APPEARED_ALSO_HEAD + "\n" + appeared) if appeared else "")
         )
+
+    def _appeared_text(self) -> str:
+        """The files that APPEARED while commands ran — a program's own
+        output among them, so the model is asked to KEEP what the task needs
+        (a server's log, a watcher's results) and to remove only a scratch
+        file it wrote itself. Never one the request names (left out)."""
+        if not self.appeared:
+            return ""
+        listed = "\n".join(f"- `{rel}`" for rel in self.appeared)
+        more = f"\n(and {self.appeared_left_out} more)" if self.appeared_left_out else ""
+        return listed + more + "\n" + APPEARED_KEEP
+
+    def _gone_text(self) -> str:
+        listed = "\n".join(f"- `{rel}`" for rel in self.gone)
+        more = f"\n(and {self.gone_left_out} more)" if self.gone_left_out else ""
+        return listed + more + "\n" + GONE_ASK
 
     def _points_text(self) -> str:
         lines = []
@@ -2130,6 +2618,19 @@ def _never_ran(name: str, result: Any) -> bool:
     return "returncode" not in data and not data.get("timed_out")
 
 
+def _wrote_unjournaled(name: str, result: Any, custom: Iterable[str] = ()) -> bool:
+    """Did a SETTLED (never refused) call of ``name`` run a tool that can
+    change a file without an undo-journal row? A command tool only when its
+    program really started (:func:`_never_ran`)."""
+    from .folder_changes import unjournaled
+
+    if not unjournaled(name, frozenset(custom or ())):
+        return False
+    if name in COMMAND_TOOLS or name == "process_write":
+        return not _never_ran(name, result)
+    return True
+
+
 def drop_met_lines(text: str, total: int) -> str:
     """The model's answer without its "N. met: ..." lines (N within the
     note's points); every other line — what was not met, the closing
@@ -2168,6 +2669,9 @@ async def start(
     harness: Any,
     carry_on: Iterable[str] = (),
     since: Any = None,
+    custom_tools: Iterable[str] = (),
+    turn_id: str = "",
+    continues: str = "",
 ) -> "FinishCheck | None":
     """The reply's finish check, or None when it does not apply: no harness
     turn, not a Build session's own turn (``build:<id>``), plan mode, no
@@ -2176,7 +2680,18 @@ async def start(
     continues (a reply cut off by an account limit and resumed) — the check
     then covers the WHOLE reply from that question: the files the cut part
     made, and its test command. MIRROR NOTE (lock-step): both chat lanes call
-    this at the same seam."""
+    this at the same seam.
+
+    WHAT COMMANDS CHANGED (``harness/folder_changes``): before it returns —
+    before any tool of the reply runs — it snapshots the folder, off the
+    loop. ``turn_id`` names this reply, so a carry-on of it can compare with
+    the same first snapshot (kept in this process: the newest reply of each
+    session); a carry-on (``since``) names the reply it continues
+    (``continues``) and uses that reply's snapshot — or, when the cut part
+    ran no tool at all, a fresh one (nothing had changed yet) — and with
+    none kept (let go for newer replies, or a restart since), it falls back
+    to the journal alone and says so. ``custom_tools``: the user-made command tools, which can change
+    files without the journal too."""
     if harness is None or getattr(harness, "plan_mode", False):
         return None
     from .command_env import is_build_call
@@ -2197,11 +2712,15 @@ async def start(
         return None
     mark = await asyncio.to_thread(ledger_mark, engine)
     earlier: list[tuple[str, dict[str, Any], str]] = []
+    custom = frozenset(str(c) for c in custom_tools or ())
+    carried = cut_wrote = False
     if since:
         before = await asyncio.to_thread(ledger_mark_before, engine, since)
         if before is not None and before < mark:
             earlier = await asyncio.to_thread(ran_commands, engine, sid, before, mark)
+            cut_wrote = await asyncio.to_thread(ran_unjournaled, engine, sid, before, mark, custom)
             mark = before
+            carried = True
     plan = getattr(harness, "plan", None)
     gate = frozenset(getattr(plan, "gate", None) or ())
     from .mode import _shown_name
@@ -2213,7 +2732,7 @@ async def start(
         engine=engine, home=home, event_bus=event_bus, session_id=sid, folder=base, mark=mark,
         request=request_text(messages, carry_on), config=config,
         checks=getattr(plugins, "checks", ()) or (), gate=gate, carrier=carrier,
-        delete_name=delete_name, harness=harness,
+        delete_name=delete_name, harness=harness, unjournaled=custom,
     )
     called_syntax = getattr(harness, "shell_syntax_called", None)
 
@@ -2224,6 +2743,26 @@ async def start(
             return ""
 
     check._commands.extend((name, args, "", _syntax(called)) for name, args, called in earlier)
+    # The folder as this reply BEGAN (harness/folder_changes) — before any of
+    # its tools runs, off the loop. A carry-on compares with the snapshot of
+    # the reply it continues (the cut part changed the folder already).
+    from . import folder_changes as FC
+
+    check._may_write = bool(earlier) or cut_wrote
+    reply_id = str(continues or "") if since else str(turn_id or "")
+    if carried:
+        got = FC.kept(sid, reply_id, base)
+        if got is None:
+            check._before = FC.unavailable(base, FC.PROBLEM_NOT_KEPT)
+        else:
+            check._before, spec = got
+            check._spec_before = dict(spec or {})
+    else:
+        # Bounded (review): a listing that never returns (a network folder
+        # gone away) must not hold the reply's first model call.
+        got = await FC.walk_bounded(base, check.first_readings)
+        check._before, check._spec_before = got if got is not None else (FC.too_slow(base), {})
+        FC.keep(sid, reply_id, check._before, dict(check._spec_before))
     return check
 
 
@@ -2250,5 +2789,6 @@ __all__ = [
     "request_text",
     "spec_points",
     "start",
+    "strip_heredocs",
     "test_part",
 ]

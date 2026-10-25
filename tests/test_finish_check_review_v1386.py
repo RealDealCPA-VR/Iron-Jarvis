@@ -427,13 +427,23 @@ async def test_the_written_description_is_read_as_it_was_before_the_reply(env): 
 async def test_a_reply_that_ran_a_command_is_told_its_files_may_not_all_be_listed(env):  # noqa: F811 — the fixture
     """The new-file list is the FILE TOOLS' journal; a command can make files
     too (the replayed glm run patched calc.py with `python -c`). "None." was
-    a claim the journal cannot make once a command ran."""
+    a claim the journal cannot make once a command ran.
+
+    MOVED ON PURPOSE (finish check sees commands, after the part 3 Phase 2
+    measurement): the folder is now compared (``harness/folder_changes``),
+    so the file the command made IS listed — apart from the journal's, in
+    words that ask to keep what a program wrote — and "None." is a claim the
+    check can make. The caveat stays for a folder that cannot be compared
+    (``tests/test_finish_shell_writes_v1387.py``)."""
     platform, ws, wire = env
     side = 'python -c "open(\'made_by_shell.py\', \'w\').write(\'x\')"'
     model = wire([_write("app.py", "X = 2\n"), _shell(side), "Done.", "1. met."])
     await _stream(platform, _body(ws, text="set X to 2 in app.py"))
     files = model.notes()[0].split("## Files this reply made that the request does not name\n", 1)[1]
-    assert files.startswith("None.\n" + F.FinishCheck.COMMANDS_CAVEAT)
+    assert files.startswith(
+        "None made with your file tools. " + F.APPEARED_HEAD + "\n- `made_by_shell.py`\n" + F.APPEARED_KEEP
+    )
+    assert F.FinishCheck.COMMANDS_CAVEAT not in files
     # ...and a reply that ran no command keeps the plain "None.".
     (ws / "app.py").write_bytes(b"X = 1\n")
     model = wire([_write("app.py", "X = 2\n"), "Done.", "1. met."])
