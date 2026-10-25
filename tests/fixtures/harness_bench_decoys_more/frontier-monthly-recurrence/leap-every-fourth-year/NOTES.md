@@ -1,0 +1,2 @@
+Decoy (review): the series is counted from START (no drift) but February's length comes from a hand-made table with the 4-year leap rule only, so 2100 and 1900 get a February 29 that does not exist and monthly() raises.
+Breaks README.md "monthly": "In a month without that day, it falls on the month's last day" / "February 28 (February 29 in a leap year)" (2100 is not a leap year; dates are datetime.date values).

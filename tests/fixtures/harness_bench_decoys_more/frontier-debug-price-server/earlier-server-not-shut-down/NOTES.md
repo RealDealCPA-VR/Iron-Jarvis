@@ -1,0 +1,2 @@
+The right code fix, but the first server (on the old code) is never stopped with /shutdown: a second one is started beside it, replayed clean and shut down, so server.log ends with "stopped" while an earlier "listening" has none.
+Breaks task.md ("/shutdown is the only way to stop it"; leave no server running) and README.md ("It runs until it gets GET /shutdown ... That is the only way to stop it cleanly").

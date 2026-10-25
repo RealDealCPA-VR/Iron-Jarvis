@@ -10,7 +10,9 @@ A benchmark number is only honest when it measures the agent. Two kinds of
   failover). Such a run is UNSCORED (``passed=None``): it leaves the pass
   rate's denominator and the report counts it as "did not run: <reason>".
   A run the tripwire refused (the agent would have seen the grader) is
-  infrastructure too: nothing was measured.
+  infrastructure too: nothing was measured — and so is a run whose task
+  SETUP step failed (v1.383.0: the tree the agent was to start from was never
+  made).
 * AGENT — the agent had its go and did not finish the job: it reached the
   time limit, used every round / turn it had, or STOPPED PART-WAY for a
   reason no infrastructure words explain after it had started work (a
@@ -54,11 +56,13 @@ AGENT = "agent"
 #: (``sign_in`` / ``key``); ``acted`` (bool) — the agent had started work
 #: before it stopped: the model answered at least once, or a tool ran;
 #: ``sandbox_refused`` (bool) — the CLI's own sandbox refused the model's
-#: commands (round 3: Codex on Windows), so it never had a fair go.
+#: commands (round 3: Codex on Windows), so it never had a fair go;
+#: ``setup_failed`` (str) — the task's setup step did not make the tree the
+#: agent was to start from (v1.383.0), so no runner started.
 FACT_KEYS = frozenset({
     "finished", "timed_out", "cut_off", "cli_missing", "start_failed",
     "demo_answered", "answered_by", "refused", "fix_kind", "acted",
-    "sandbox_refused",
+    "sandbox_refused", "setup_failed",
 })
 
 #: An infrastructure failure, by its own words → the plain reason. First
@@ -113,6 +117,8 @@ def classify_failure(runner: str, ok_run: bool, facts: Mapping[str, Any], error:
     f = {k: v for k, v in dict(facts or {}).items() if k in FACT_KEYS}
     if f.get("refused"):
         return Failure(INFRASTRUCTURE, str(f["refused"]))
+    if f.get("setup_failed"):
+        return Failure(INFRASTRUCTURE, str(f["setup_failed"]))
     if f.get("cli_missing"):
         return Failure(INFRASTRUCTURE, f"{name} is not installed on this PC")
     if f.get("start_failed"):

@@ -1,0 +1,6 @@
+category = "refactor"
+tier = "frontier"
+title = "Replace a global settings dict with explicit settings across a package"
+timeout_s = 3000
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 240

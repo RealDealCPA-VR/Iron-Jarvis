@@ -1,0 +1,6 @@
+category = "bugfix"
+tier = "frontier"
+title = "A test suite that fails in some orders"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_hidden_*.py"]
+check_timeout_s = 300

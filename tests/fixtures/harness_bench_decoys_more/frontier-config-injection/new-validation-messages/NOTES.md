@@ -1,0 +1,2 @@
+Decoy (review): settings.py drops validate() (REFACTOR.md allows that) and checks each field in __post_init__ with new, friendlier messages, so the command line's error for a bad settings file changes ("region must be one of US, EU, not 'Mars'").
+Breaks task.md: "every result (return values, error messages, the command line's output) stays exactly the same" (REFACTOR.md 5: "The command line prints exactly what it prints today").

@@ -1,0 +1,9 @@
+# The example of SPEC.md, section 7.6.
+date,account,amount,description,currency
+2024-03-01,Assets:Bank,1000.00,opening balance,USD
+2024-03-02,Assets:Bank,200.00,transfer in,eur
+2024-03-03,Expenses:Travel,-46.00,train,EUR
+2024-03-04,Expenses:Food,-12.00,lunch,
+2024-03-05,Assets:Wallet,30.00,cash,gbp
+2024-03-06,Expenses:Coffee,-3.00,espresso,Eur
+2024-03-07,Expenses:Snacks,-3.00,crisps,EUR

@@ -191,6 +191,10 @@ class RefineSettings:
     max_tasks: int | None = None
     k: int = 2
     mode: str = "parallel"
+    #: v1.383.0: the effort every turn is given (the bench's ``--effort``):
+    #: the reasoning level where the pair offers it. "" = none asked (absent
+    #: from the identity, so an earlier refine keeps its key).
+    effort: str = ""
 
     def identity(self) -> dict[str, Any]:
         return {
@@ -198,6 +202,7 @@ class RefineSettings:
             "dialect": self.dialect, "rounds": self.rounds, "tier": self.tier,
             "tasks": list(self.tasks), "max_tasks": self.max_tasks, "k": self.k, "mode": self.mode,
             "version": __version__, "loop_sha256": _module_sha(),
+            **({"effort": self.effort} if self.effort else {}),
         }
 
     @property
@@ -615,7 +620,8 @@ class Probed:
 
 def _rendered_tree(platform: Any, settings: RefineSettings, layer_base: Path | None) -> str:
     runner = JarvisRunner(platform, provider=settings.provider, model=settings.model,
-                          round_budget=settings.rounds, dialect=settings.dialect, layer_dir=layer_base)
+                          round_budget=settings.rounds, dialect=settings.dialect, layer_dir=layer_base,
+                          effort=settings.effort)
     return runner.harness().rendered
 
 
@@ -749,10 +755,14 @@ async def propose(
     if retry_why:
         prompt += "\n\n" + RETRY_NOTE.format(why=retry_why)
     (workspace / "proposal").mkdir(parents=True, exist_ok=True)
+    from ..providers.reasoning import supports
+
+    level = settings.effort if settings.effort and supports(settings.provider, settings.model, settings.effort) else ""
     body = ChatBody(
         messages=[ChatMessageBody(role="user", content=prompt)],
         provider=settings.provider, model=settings.model,
         workspace_dir=str(workspace), approval_mode=JARVIS_APPROVAL_MODE,
+        **({"reasoning": level} if level else {}),
     )
     deadline = time.monotonic() + PROPOSER_TIMEOUT_S
     approvals = _approvals(SimpleNamespace(platform=platform))
@@ -855,7 +865,8 @@ async def _probe(
     echo: Callable[[str], None],
 ) -> Probed:
     runner = JarvisRunner(platform, provider=settings.provider, model=settings.model,
-                          round_budget=settings.rounds, dialect=settings.dialect, layer_dir=layer_base)
+                          round_budget=settings.rounds, dialect=settings.dialect, layer_dir=layer_base,
+                          effort=settings.effort)
     probe_ledger = BudgetLedger()
     st = ledger.stage(stage, label)
     echo(f"probe {label}:")

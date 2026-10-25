@@ -1,0 +1,17 @@
+category = "explain"
+tier = "frontier"
+title = "Every caller of a deprecated function in a 2,000-file repository"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_hidden_*.py"]
+check_timeout_s = 120
+
+# The answer file (the hidden check grades its contents).
+[rubric]
+answer_file = "answer.json"
+
+# The ~2,000-file tree is GENERATED in the agent's copy before it starts (too
+# big to commit): the same seed makes the same tree on every run and machine.
+[setup]
+script = "make_monorepo.py"
+seed = 4207
+timeout_s = 180

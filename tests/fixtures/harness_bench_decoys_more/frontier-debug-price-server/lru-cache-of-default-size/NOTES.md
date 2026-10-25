@@ -1,0 +1,2 @@
+Keys the cache on the whole normalized request, through functools.lru_cache() under the lock — whose default maxsize is 128, so the 129th distinct price evicts one and it is computed again when asked for later.
+Breaks PERFORMANCE.md: "The results stay in a cache in memory for as long as the server runs: there is no expiry" and "After any sequence of requests it must equal the number of distinct prices ... never more".

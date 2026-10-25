@@ -1,0 +1,5 @@
+Metadata-Version: 2.1
+Name: minimark
+Version: 1.2.0
+Summary: A very small markup language
+Requires-Python: >=3.8

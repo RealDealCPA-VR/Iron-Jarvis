@@ -1,0 +1,6 @@
+Metadata-Version: 2.1
+Name: minimark
+Version: 2.1.0
+Summary: A very small markup language
+Requires-Python: >=3.9
+Requires-Dist: tinylex (>=0.4,<0.5)

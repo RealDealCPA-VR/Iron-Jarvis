@@ -1,0 +1,6 @@
+category = "bugfix"
+tier = "frontier"
+title = "A monthly series that must not drift"
+timeout_s = 1800
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 180

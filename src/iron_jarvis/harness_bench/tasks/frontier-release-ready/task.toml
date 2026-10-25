@@ -1,0 +1,6 @@
+category = "trap"
+tier = "frontier"
+title = "A small fix that must leave the folder ready to release"
+timeout_s = 1200
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120

@@ -1,0 +1,5 @@
+# What the report build needs. Nothing here is installed with pip: every
+# library is vendored under vendor/ (see vendor/README.md), and buildcfg.py
+# makes the right versions importable.
+minimark>=2.0,<3
+tinylex==0.4.*

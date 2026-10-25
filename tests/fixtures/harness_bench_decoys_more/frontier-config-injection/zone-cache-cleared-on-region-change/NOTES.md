@@ -1,0 +1,2 @@
+Decoy (review): zones.py keeps today's "empty the cache whenever the region changes" but swaps the global statement for a mutable holder (_STATE = {"region": ...}); the cache is still keyed on the postcode alone, so a lookup made while another region's lookup is half done hands back the other region's zone.
+Breaks REFACTOR.md 6: "No module may keep state between calls that depends on the settings of an earlier call. A cache is allowed only if its key includes every setting its value depends on".

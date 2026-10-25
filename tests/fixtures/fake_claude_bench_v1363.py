@@ -13,7 +13,15 @@ Scenarios (``FAKE_BENCH_SCENARIO``): ``solve`` (default), ``error`` (an
 usage limit), ``auth`` (not signed in), ``max_turns`` (``error_max_turns``),
 ``hang`` (never answers), ``outside`` (also writes a file next to its working
 folder), ``silent`` (does its work, then dies with no result line), ``dead``
-(dies before doing anything).
+(dies before doing anything), ``hang_at`` (only the Nth call hangs),
+``leave_server`` (starts the price task's server in the background and never
+stops it), ``peek`` (looks for other runs' work beside its own, keeps what it
+saw and its environment in peek.json, then solves).
+
+v1.383.0: like the real one, its ``system/init`` line names the model it runs
+on — the full id an alias stands for (``--model sonnet`` reports
+``claude-sonnet-4-6``), the ``--model`` value itself otherwise, or
+``FAKE_BENCH_REPORTED_MODEL`` when set (a run that answered on another model).
 NO NETWORK.
 """
 
@@ -30,6 +38,18 @@ MARKERS = (
     "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_EXTRA_BODY",
 )
+
+
+#: What an alias stands for (as Claude Code resolves ``--model sonnet``).
+ALIASES = {"sonnet": "claude-sonnet-4-6", "opus": "claude-opus-4-6", "haiku": "claude-haiku-4-5"}
+
+
+def _count_call() -> int:
+    """This call's number, counted in the file FAKE_BENCH_COUNT names."""
+    counter = pathlib.Path(os.environ["FAKE_BENCH_COUNT"])
+    n = int(counter.read_text(encoding="utf-8") or 0) + 1 if counter.exists() else 1
+    counter.write_text(str(n), encoding="utf-8")
+    return n
 
 
 def emit(obj: dict) -> None:
@@ -50,12 +70,50 @@ def main() -> int:
                 "argv": sys.argv[1:], "cwd": os.getcwd(), "prompt": prompt,
                 "env": {k: os.environ.get(k) for k in MARKERS},
             }, fh)
-    emit({"type": "system", "subtype": "init", "session_id": "fake", "tools": ["Read", "Write"]})
-    if scenario == "hang":
+    argv = sys.argv[1:]
+    passed = argv[argv.index("--model") + 1] if "--model" in argv else "claude-default-fake"
+    reported = os.environ.get("FAKE_BENCH_REPORTED_MODEL") or ALIASES.get(passed, passed)
+    emit({"type": "system", "subtype": "init", "session_id": "fake", "tools": ["Read", "Write"],
+          "model": reported})
+    if scenario == "hang" or (scenario == "hang_at" and _count_call() == int(os.environ["FAKE_BENCH_HANG_AT"])):
+        # ``hang_at`` (v1.383.0 review): only the Nth call hangs (counted in
+        # FAKE_BENCH_COUNT), so a run can be killed part-way through a repeat.
         time.sleep(600)
         return 0
+    if scenario == "leave_server":
+        # v1.383.0 review: the agent starts the task's own server in the
+        # background and never stops it (its PID is left in server.pid).
+        import subprocess
+
+        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        kid = subprocess.Popen([sys.executable, "priceserver.py", "--port", "0"], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+        pathlib.Path("server.pid").write_text(str(kid.pid), encoding="utf-8")
+        deadline = time.monotonic() + 30
+        log = pathlib.Path("server.log")
+        while time.monotonic() < deadline and "listening" not in (log.read_text("utf-8") if log.exists() else ""):
+            time.sleep(0.05)
     if scenario == "dead":
         return 3
+    if scenario == "peek":
+        # v1.383.0 review: an agent that looks around before it works — for
+        # another run's work beside its own (``../../<task>/work``, a repeat of
+        # the same task above all) — and keeps what it saw, its folder and its
+        # whole environment in peek.json. It then solves as ``solve`` does.
+        me = pathlib.Path.cwd()
+        (me / "peek-token.txt").write_text(str(me), encoding="utf-8")
+        found, seen = [], 0
+        for top in (me.parent, me.parent.parent):
+            for folder, _dirs, files in os.walk(top):
+                seen += len(files)
+                if seen > 20000:
+                    break
+                if "peek-token.txt" in files and pathlib.Path(folder) != me:
+                    found.append(str(pathlib.Path(folder) / "peek-token.txt"))
+        task = os.environ.get("FAKE_PEEK_TASK", "")
+        with open(me / "peek.json", "w", encoding="utf-8") as fh:
+            json.dump({"cwd": str(me), "sibling_work": (me.parent.parent / task / "work").exists(),
+                       "found": sorted(set(found)), "env": dict(os.environ), "prompt": prompt}, fh)
     written = []
     solution = os.environ.get("FAKE_BENCH_SOLUTION", "")
     if solution:

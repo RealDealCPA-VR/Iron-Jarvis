@@ -1,0 +1,11 @@
+customer,order_id,amount,date
+Panadería Ibáñez,MAD-115979,798.89,2026-08-07
+Panadería Ibáñez,MAD-115994,7817.68,2026-08-12
+Señora García,MAD-115974,366.81,2026-08-26
+Peña Hermanos,MAD-115972,"10,519.26",2026-08-10
+"Café Olé, S.L.",MAD-115980,425.66,2026-08-03
+"Café Olé, S.L.",MAD-115976,561.80,2026-08-24
+Señora García,MAD-115986,979.09,2026-08-05
+Señora García,MAD-115983,385.54,2026-08-28
+Librería Núñez,MAD-115984,186.30,2026-08-14
+"Café Olé, S.L.",MAD-115990,"1,928.02",2026-08-02

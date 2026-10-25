@@ -12,7 +12,16 @@ Each task is a folder under ``harness_bench/tasks/<task_id>/``:
 * ``task.toml`` — ``category``, ``title``, ``timeout_s``, the ``check`` command
   (an argv list; ``{python}`` is the grading interpreter) and its
   ``check_timeout_s``, and for read-and-explain tasks a ``[rubric]`` table that
-  grades an answer file deterministically — never a model call.
+  grades an answer file deterministically — never a model call;
+* ``setup/`` + a ``[setup]`` table (v1.383.0, the ``frontier`` tier) — a
+  DETERMINISTIC step the bench runs in the fresh copy before the agent starts,
+  for a tree too big to commit (a generated repository of ~2,000 files) or
+  one that needs history (a merge in progress). ``script`` names a file in
+  ``setup/``, ``seed`` is the fixed seed it is given (the same seed makes the
+  same tree, on every run and every machine), ``timeout_s`` its time limit.
+  The setup files are HIDDEN like the check (they know what the tree holds),
+  carry :data:`HIDDEN_CANARY`, and are covered by the content hash.
+  :mod:`.setup_step` runs it.
 
 Nothing here runs a model or a process.
 """
@@ -21,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import random
+import re
 import shutil
 import tomllib
 from dataclasses import dataclass, field
@@ -42,8 +52,14 @@ CATEGORIES: tuple[str, ...] = (
 #: performance bound, a regression the obvious fix reintroduces …), so a
 #: later phase can measure "at or above" below the ceiling. A ``task.toml``
 #: without ``tier`` is core: the core tasks' files stay byte-identical, so a
-#: stored result keeps its fingerprint.
-TIERS: tuple[str, ...] = ("core", "hard")
+#: stored result keeps its fingerprint. ``frontier`` (v1.383.0, IJ harness
+#: part 3 Phase 1) — tasks big enough to separate the harnesses: long work
+#: across several modules, a page checked in a browser, a search through a
+#: generated repository of ~2,000 files, a project that will not build, a
+#: merge in progress, a program debugged while it runs, fixes whose obvious
+#: form breaks something else. A careful harness that plans, explores,
+#: verifies and cleans up passes them; small careful work does not.
+TIERS: tuple[str, ...] = ("core", "hard", "frontier")
 
 #: Every hidden check file carries this text, so a leak is recognisable even
 #: when the file was renamed or pasted into another one.
@@ -52,6 +68,10 @@ HIDDEN_CANARY = "IJ-BENCH-HIDDEN-CHECK"
 #: Files and folders that are never part of a task's content (bytecode a local
 #: run of the task's own tests may have left behind).
 _SKIP_NAMES = frozenset({"__pycache__", ".pytest_cache"})
+#: v1.383.0 review: a repeat's run folder and ledger key is ``<task id>.r<k>``
+#: (``ledger.run_key``), so a task whose id ends that way would share them
+#: with another task's repeat — refused when the task is read.
+_REPEAT_LIKE_ID = re.compile(r"\.r\d+$", re.IGNORECASE)
 
 
 class TaskError(ValueError):
@@ -71,6 +91,11 @@ class Task:
     rubric: dict[str, Any] = field(default_factory=dict)
     content_hash: str = ""
     tier: str = "core"
+    #: v1.383.0: the declared setup step (``""`` = none — every core and hard
+    #: task): a script in ``setup/``, the fixed seed it is given, its limit.
+    setup_script: str = ""
+    setup_seed: int = 0
+    setup_timeout_s: float = 0.0
 
     @property
     def repo_dir(self) -> Path:
@@ -80,12 +105,18 @@ class Task:
     def check_dir(self) -> Path:
         return self.path / "check"
 
+    @property
+    def setup_dir(self) -> Path:
+        return self.path / "setup"
+
     def hidden_files(self) -> list[Path]:
-        """Everything the agent must never see: the hidden check files and the
-        task's own definition (it holds the rubric's expected answers)."""
+        """Everything the agent must never see: the hidden check files, the
+        setup step's files (they know what the tree holds) and the task's own
+        definition (it holds the rubric's expected answers)."""
         out = [self.path / "task.toml"]
-        if self.check_dir.is_dir():
-            out += sorted(p for p in _walk_files(self.check_dir))
+        for folder in (self.check_dir, self.setup_dir):
+            if folder.is_dir():
+                out += sorted(p for p in _walk_files(folder))
         return out
 
 
@@ -142,6 +173,10 @@ def _as_argv(raw: Any, where: str) -> tuple[str, ...]:
 def load_task(task_dir: Path) -> Task:
     task_dir = Path(task_dir)
     where = f"task {task_dir.name}"
+    if _REPEAT_LIKE_ID.search(task_dir.name):
+        raise TaskError(
+            f"{where}: a task id may not end in .r and a number (that is how a repeat's run is named)"
+        )
     toml_path = task_dir / "task.toml"
     md_path = task_dir / "task.md"
     if not toml_path.is_file() or not md_path.is_file():
@@ -167,14 +202,16 @@ def load_task(task_dir: Path) -> Task:
     if rubric and not str(rubric.get("answer_file") or "").strip():
         raise TaskError(f"{where}: a [rubric] needs answer_file")
     check_dir = task_dir / "check"
-    if check_dir.is_dir():
-        for path in _walk_files(check_dir):
-            if HIDDEN_CANARY not in path.read_text(encoding="utf-8", errors="replace"):
-                raise TaskError(f"{where}: hidden file {path.name} must carry {HIDDEN_CANARY}")
+    setup_dir = task_dir / "setup"
+    hidden = [p for folder in (check_dir, setup_dir) if folder.is_dir() for p in _walk_files(folder)]
+    for path in hidden:
+        if HIDDEN_CANARY not in path.read_text(encoding="utf-8", errors="replace"):
+            raise TaskError(f"{where}: hidden file {path.name} must carry {HIDDEN_CANARY}")
     repo_names = {p.name.lower() for p in _walk_files(task_dir / "repo")}
-    for hidden in ([*_walk_files(check_dir)] if check_dir.is_dir() else []):
-        if hidden.name.lower() in repo_names:
-            raise TaskError(f"{where}: hidden file {hidden.name} has the same name as a repo file")
+    for path in hidden:
+        if path.name.lower() in repo_names:
+            raise TaskError(f"{where}: hidden file {path.name} has the same name as a repo file")
+    script, seed, setup_timeout = _setup_table(meta.get("setup"), setup_dir, where)
     prompt = md_path.read_text(encoding="utf-8").strip()
     if not prompt:
         raise TaskError(f"{where}: task.md is empty")
@@ -190,7 +227,34 @@ def load_task(task_dir: Path) -> Task:
         rubric=dict(rubric),
         content_hash=content_hash(task_dir),
         tier=tier,
+        setup_script=script,
+        setup_seed=seed,
+        setup_timeout_s=setup_timeout,
     )
+
+
+def _setup_table(setup: Any, setup_dir: Path, where: str) -> tuple[str, int, float]:
+    """``(script, seed, timeout_s)`` of a task's ``[setup]`` table — or
+    ``("", 0, 0.0)`` when it has none. A ``setup/`` folder without the table
+    (or the table without its script) is refused: a step the bench would not
+    run is a task that cannot be what it says."""
+    if setup is None:
+        if setup_dir.is_dir():
+            raise TaskError(f"{where}: a setup/ folder needs a [setup] table that names its script")
+        return "", 0, 0.0
+    if not isinstance(setup, dict):
+        raise TaskError(f"{where}: [setup] must be a table")
+    script = str(setup.get("script") or "").strip()
+    if not script or "/" in script or "\\" in script or not (setup_dir / script).is_file():
+        raise TaskError(f"{where}: [setup] script must name a file in the task's setup/ folder")
+    try:
+        seed = int(setup.get("seed", 0))
+        timeout_s = float(setup.get("timeout_s") or 120)
+    except (TypeError, ValueError) as exc:
+        raise TaskError(f"{where}: [setup] seed and timeout_s must be numbers") from exc
+    if timeout_s <= 0:
+        raise TaskError(f"{where}: [setup] timeout_s must be more than 0")
+    return script, seed, timeout_s
 
 
 def load_tasks(tasks_dir: Path | None = None) -> list[Task]:
@@ -215,8 +279,9 @@ def select_tasks(
     The order is the ids sorted, then shuffled by ``random.Random(seed)`` —
     the same seed gives the same order on every machine. ``names`` keeps only
     those tasks (in the shuffled order; an unknown name is an error, never
-    silently skipped), ``tier`` (``core`` / ``hard`` / ``all``) keeps only
-    that tier, and ``max_tasks`` keeps the first N after that."""
+    silently skipped), ``tier`` (``core`` / ``hard`` / ``frontier`` /
+    ``all``) keeps only that tier, and ``max_tasks`` keeps the first N after
+    that."""
     if tier not in (*TIERS, "all"):
         raise TaskError(f"--tier must be one of {', '.join((*TIERS, 'all'))}")
     by_id = {t.id: t for t in tasks}
@@ -242,7 +307,9 @@ def select_tasks(
 
 def materialize(task: Task, dest: Path) -> Path:
     """A fresh copy of the task's ``repo/`` at ``dest`` — and nothing else.
-    The hidden check never comes along (see :func:`grading.grade`)."""
+    The hidden check never comes along (see :func:`grading.grade`). A task
+    with a setup step is not ready yet: :func:`setup_step.prepare_workspace`
+    copies AND sets up."""
     dest = Path(dest)
     if dest.exists():
         raise FileExistsError(f"{dest} already exists")
