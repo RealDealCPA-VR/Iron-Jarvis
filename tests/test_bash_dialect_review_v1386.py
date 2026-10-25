@@ -160,3 +160,86 @@ async def test_a_carry_on_reruns_the_cut_parts_bash_command_in_bash(env, monkeyp
     assert out["done"]["finish"]["tests"] == "passed"
     (rerun,) = _of(seen, BASH_TEST_CMD)
     assert rerun["argv"][0] == BASH.path and rerun["shell"] is False
+
+
+# --------------------------------------------------------------------------- #
+# 2. the git guard reads a bash line continuation as ONE command
+# --------------------------------------------------------------------------- #
+#
+# cmd.exe ran only a command's first line, so `git \` + a line break + `push
+# -f` was two broken lines. Bash joins a backslash-newline into one command:
+# the guard read `git push \` (a push: a card) and `git \` (nothing at all)
+# while bash ran a FORCE push.
+
+_BS, _LF, _CR = "\\", "\n", "\r"
+
+
+@pytest.mark.parametrize("command,kinds", [
+    ("git push " + _BS + _LF + "  --force origin HEAD:main", ["force"]),
+    ("git push " + _BS + _CR + _LF + "  --force origin HEAD:main", ["force"]),
+    ("git " + _BS + _LF + "  push -f origin HEAD:main", ["force"]),
+    ("git commit -am wip && " + _BS + _LF + "  git push --force", ["commit", "force"]),
+    ("git reset " + _BS + _LF + " --hard HEAD~2", ["rewrite"]),
+    # a continuation that changes nothing still reads as it did
+    ("git status " + _BS + _LF + "  --short", []),
+    ("git push " + _BS + _LF + "  origin HEAD", ["push"]),
+])
+def test_the_git_guard_joins_a_line_continuation(command, kinds):
+    from iron_jarvis.harness import git_guard as G
+
+    assert [a.kind for a in G.classify(command)] == kinds, repr(command)
+
+
+@needs_bash
+async def test_a_force_push_split_over_lines_is_refused_through_the_real_turn(tmp_path, monkeypatch):
+    """On a session's own branch, through the real Build turn: the split force
+    push is refused with NO card and nothing reaches the remote."""
+    import shutil
+
+    from iron_jarvis.core import procs
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.harness import branches as B
+    from tests.test_bash_dialect_v1386 import _rows
+    from tests.test_build_git_v1375 import git, make_remote, make_repo, new_branch_session, no_real_gh
+    from tests.test_build_plan_ask_v1367 import _finish, _start
+    from tests.test_build_sessions_v1367 import Script, turn_frames, wire
+    from tests.test_chat_turn_stop_v1241 import _asgi_post
+
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    app = create_app(str(tmp_path / "home"))
+    try:
+        no_real_gh(monkeypatch)
+        repo = make_repo(tmp_path / "proj")
+        bare = make_remote(tmp_path, repo)
+        view = await new_branch_session(app, repo, approval_mode="yolo")
+        sid = view["id"]
+        wire(app, Script([
+            [ToolCall(id="f1", name="Bash", arguments={
+                "command": "git push " + _BS + _LF + "  --force origin HEAD:refs/heads/forced-one"})],
+            [ToolCall(id="f2", name="Bash", arguments={
+                "command": "git " + _BS + _LF + "  push -f origin HEAD:refs/heads/forced-two"})],
+            "Done.",
+        ]))
+        drop, task = await _start(app, sid, "go", "bash-cont")
+        answered: set[str] = set()
+        while not task.done():
+            for e, d in turn_frames(app, "bash-cont"):
+                if e == "approval" and d["id"] not in answered:
+                    answered.add(d["id"])
+                    await _asgi_post(app, f"/chat/approvals/{d['id']}", {"decision": "deny"})
+            lg = getattr(app.state.platform, "turn_logs", None)
+            lg = lg.get("bash-cont") if lg is not None else None
+            if lg is not None and lg.status != "running":
+                break
+            await __import__("asyncio").sleep(0.05)
+        await _finish(app, "bash-cont", drop, task)
+        assert not answered, "a card was shown for a force push the guard must refuse"
+        rows = [r for r in _rows(app, "shell") if r.session_id == f"build:{sid}"]
+        assert len(rows) == 2 and all(r.ok is False for r in rows), [(r.ok, r.output) for r in rows]
+        assert all("force push" in (r.output or "").lower() for r in rows), [r.output for r in rows]
+        refs = git("for-each-ref", "--format=%(refname)", cwd=bare)
+        assert "forced-one" not in refs and "forced-two" not in refs, refs
+        B.forget_gh_state()
+    finally:
+        procs.end_all()
