@@ -23,11 +23,26 @@ lost runs themselves, and what the review found past them — or is a GUARD
     folder comparison is not used to say the opposite: it never sees an
     ignored or pruned folder or a file outside the session's folder, so it
     can prove a write, never its absence. Both lanes, lock-step.
+2.  WHAT COUNTS AS A CHANGE: every nested ``.gitignore`` is read (past the
+    64th folder none was — on this PC's own Iron Jarvis checkout the snapshot
+    always fell back as "more than 5000 files"); ``.github`` and the other
+    source dot-folders are walked, every other dot-folder is not; a
+    ``.gitignore`` that ignores everything hides every change (decided); a
+    linked folder is one entry, never followed; the "gone" words restore only
+    what the model's own command removed.
+3.  THE WORDS for a command's files: a scratch file the model wrote can go
+    (and why it should), a program's log stays; a folder the request names
+    does not exempt its files from the keep words (decided); a let-go first
+    snapshot never blames a restart.
+4.  COST: the walk's deadline is the project map's (3 s, both walks run on
+    every reply); one stalled listing never holds the reply (the wait is
+    bounded, the walk left on its thread, never a second beside it).
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -589,3 +604,22 @@ async def test_a_carry_on_whose_first_snapshot_was_let_go_never_blames_a_restart
 
 def _write_call(path: str) -> list[ToolCall]:
     return [ToolCall(id="k1", name="write_file", arguments={"path": path, "content": "- x\n"})]
+
+
+def test_a_linked_folder_is_recorded_as_a_link_and_never_followed(tmp_path):
+    """A symbolic link to a folder OUTSIDE the session's folder is one entry
+    (the link itself), never walked: what changes out there is not this
+    folder's change (the doer pinned the junction; this is the link)."""
+    outside = tmp_path / "outside"
+    _put(outside, "secret.txt", b"x")
+    work = tmp_path / "work"
+    _put(work, "a.txt")
+    try:
+        os.symlink(outside, work / "link", target_is_directory=True)
+    except OSError:
+        pytest.skip("symbolic links cannot be made here (Windows without developer mode)")
+    before = FC.take(work)
+    assert before.usable and sorted(before.files) == ["a.txt", "link"]
+    (outside / "secret.txt").write_bytes(b"changed outside")
+    _put(outside, "new.txt")
+    assert not FC.compare(before, FC.take(work)).any

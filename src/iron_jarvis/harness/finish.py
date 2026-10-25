@@ -2658,8 +2658,8 @@ async def start(
     session); a carry-on (``since``) names the reply it continues
     (``continues``) and uses that reply's snapshot — or, when the cut part
     ran no tool at all, a fresh one (nothing had changed yet) — and with
-    none kept (a restart since), it falls back to the journal alone and
-    says so. ``custom_tools``: the user-made command tools, which can change
+    none kept (let go for newer replies, or a restart since), it falls back
+    to the journal alone and says so. ``custom_tools``: the user-made command tools, which can change
     files without the journal too."""
     if harness is None or getattr(harness, "plan_mode", False):
         return None
