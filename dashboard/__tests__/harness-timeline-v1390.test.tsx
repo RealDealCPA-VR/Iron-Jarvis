@@ -385,6 +385,31 @@ describe("a reply with 2,000 steps stays usable", () => {
     expect(after.length).toBeLessThanOrEqual(80);
     expect(after[0].querySelector("span[title]")?.getAttribute("title")).not.toBe("Sonnet 4.5");
   });
+
+  it("the running reply's once-a-second read stays cheap at 2,000 steps", () => {
+    const store = createLiveTimeline();
+    store.reset("big-live");
+    const f0 = performance.now();
+    for (let i = 0; i < 1000; i += 1) {
+      store.fold("round", { round: i, start: i * 100 });
+      store.fold("model_call", { ms: 30, provider: "anthropic", model: "m", usage: { input_tokens: 1, cost_usd: 0.001 }, start: i * 100 });
+      for (const k of [0, 1]) {
+        const id = `c${i}-${k}`;
+        store.fold("tool_call", { id, name: "read_file", status: "started", args: { path: `f${i}.py` }, start: i * 100 + 40 });
+        store.fold("tool_call", { id, name: "read_file", status: "finished", ok: true, start: i * 100 + 40, ms: 20 });
+      }
+    }
+    const folded = performance.now() - f0;
+    const t0 = performance.now();
+    const snap = store.snapshot(100_500);
+    const rows = timelineRows(snap, new Set());
+    const segs = callSegments(snap.calls, snap.durationMs);
+    const read = performance.now() - t0;
+    expect(rows).toHaveLength(2001);
+    expect(segs.length).toBeLessThanOrEqual(MAX_SEGMENTS);
+    console.log(`[timeline 2000 steps live] 5,000 frames folded in ${folded.toFixed(1)} ms; one read (snapshot + rows + pieces) ${read.toFixed(1)} ms`);
+    expect(read).toBeLessThan(1_000);
+  });
 });
 
 describe("the run log's words", () => {
