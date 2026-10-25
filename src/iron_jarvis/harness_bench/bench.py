@@ -150,8 +150,19 @@ class BenchRefused(RuntimeError):
 
 
 def agent_runs_root() -> Path:
-    """The folder every run's agent folder is made in (outside any bench root)."""
-    return Path(AGENT_RUNS_PARENT or tempfile.gettempdir()) / AGENT_RUNS_DIRNAME
+    """The folder every run's agent folder is made in (outside any bench root).
+
+    The parent is RESOLVED (v1.384.1): GitHub's Windows runners set TEMP to an
+    8.3 short name (``C:\\Users\\RUNNER~1\\...``), so the agent's prompt named
+    its folder one way while the folder resolved to another everywhere else —
+    one folder, two names (v1.384.0's gates failed on it). The agent now sees
+    the full path, the one every record and comparison uses."""
+    parent = Path(AGENT_RUNS_PARENT or tempfile.gettempdir())
+    try:
+        parent = parent.resolve()
+    except OSError:  # an unreadable parent keeps its own name
+        pass
+    return parent / AGENT_RUNS_DIRNAME
 
 
 def _process_started(pid: int) -> float | None:

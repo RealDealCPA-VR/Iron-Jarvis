@@ -3625,6 +3625,17 @@ does not need a bump, stop and bump it.
   RELEASE (test-only): `test_mcp_stderr_tail_v1342`'s chattering child gets a
   5 s transport deadline, not 0.5 s — a Python child on a loaded PC took
   1.2–2.1 s to print its first line, so the kept tail was empty every busy run.
+  v1.384.1 (v1.384.0's Tests AND Release gates both failed; nothing was
+  published): GitHub's Windows runners set TEMP to an 8.3 SHORT name
+  (`C:\Users\RUNNER~1\...`), so the agent's prompt named its folder by the
+  short form while `Path.resolve()` gave the long one —
+  `test_the_claude_runner_runs_headless_in_the_copy` failed there and passed
+  here (this PC's TEMP is long). `bench.agent_runs_root` now RESOLVES its
+  parent, so the agent sees one name. Pin: `tests/test_harness_bench_short_
+  temp_v13841.py` makes a short-named temp folder on this PC (skips where a
+  volume makes no 8.3 names) and reproduced CI's exact failure on the old
+  code. RULE: a path the agent is TOLD and a path a test RESOLVES must come
+  from the same normalisation; on Windows TEMP may be an 8.3 name.
 - **The composer's model menu is PORTALED, FIXED at its chip and always
   inside the window** (v1.382.0, a USER BUG: in a new chat, the centred
   composer's menu opened upward and its top — the filter box, Recent — was
