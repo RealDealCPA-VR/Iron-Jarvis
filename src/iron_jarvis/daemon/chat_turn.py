@@ -5138,7 +5138,94 @@ async def _build_harness(
         shell_description=shell_words,
         bash_description=bash_words,
     )
+    # IJ harness part 3, Phase 3 — MIRROR NOTE (lock-step): both lanes build
+    # their harness turn here, so both get all three.
+    _window = _context_window(d, prov, mod)
+    # (a) One tool result may hold more than the chat's fixed 12,000
+    # characters in a harness turn, and a cut is SAID (`tool_message_text`).
+    turn.tool_message_chars = harness_tool_message_chars(_window)
+    if build_call and folder and not text_only:
+        # (b) A Build session's turn starts with the PROJECT MAP of its
+        # folder (harness/project_map): built off the loop, cached until the
+        # files change, scanned, within its share of the model's window — in
+        # the system prompt BEFORE the planner, so its cost is counted.
+        from ..harness import project_map as _project_map
+
+        turn.project_map = await _project_map.for_turn(
+            folder, window=_window, event_bus=bus, session_id=str(session_id or "chat"),
+        )
+        if not plan_mode:
+            # (c) The project's OWN checkers (ruff, mypy, eslint, tsc) after an
+            # edit, when the folder has them installed (harness/checkers):
+            # found off the loop; each run is a command call of the turn's own
+            # round, so the session's posture decides it like any command.
+            from ..harness import checkers as _checkers
+
+            turn.checkers = await _checkers.for_turn(folder, harness_turn=turn)
     return turn, rules_section
+
+
+#: Every chat lane's cut of ONE tool result the model reads (unchanged since
+#: long before the harness). A harness turn has its own, below.
+TOOL_MESSAGE_CHARS = 12_000
+#: IJ harness part 3, Phase 3: a HARNESS turn's ceiling — a quarter of the
+#: model's window (4 characters a token), between the chat's 12,000 and this
+#: (Claude Code's own Bash output limit is 30,000 characters). The
+#: measurement found a 14,000-character spec cut at 12,000 with no word said,
+#: and the model then spent three calls probing the file's tail.
+HARNESS_TOOL_MESSAGE_MAX = 32_000
+
+
+def harness_tool_message_chars(window_tokens: "int | None") -> int:
+    """The most characters one tool result may hold in a harness turn whose
+    model has ``window_tokens`` (None = unknown: the planner's default)."""
+    from ..context.budget import DEFAULT_WINDOW
+
+    try:
+        window = int(window_tokens or DEFAULT_WINDOW)
+    except (TypeError, ValueError):
+        window = DEFAULT_WINDOW
+    return max(TOOL_MESSAGE_CHARS, min(HARNESS_TOOL_MESSAGE_MAX, int(window * 4 * 0.25)))
+
+
+def attach_check(msgs: list, target: str, text: str, cap: "int | None") -> bool:
+    """IJ harness part 3, Phase 3: a project checker's findings put ON the
+    edit's own tool message (``target`` — the edit call's id), under its
+    "Check:" line: the checker is not a call the model made, so it has no
+    message of its own (a tool result without its ``tool_use`` makes strict
+    providers refuse the conversation). True when the message was found.
+    MIRROR NOTE (lock-step): both lanes call this when a checker settles."""
+    if not text or not target:
+        return False
+    for m in reversed(msgs):
+        if getattr(m, "role", "") == "tool" and getattr(m, "tool_call_id", None) == target:
+            m.content = tool_message_text(f"{m.content}\n{text}", cap)
+            return True
+    return False
+
+
+def tool_message_text(content: Any, cap: "int | None") -> str:
+    """The tool result as the model reads it. ``cap`` None (every turn that
+    is not a harness turn): the old silent cut at :data:`TOOL_MESSAGE_CHARS`,
+    byte for byte. A harness turn's cap: whole up to it, and a cut is SAID —
+    a model reading a file that simply stops treats what it got as the whole
+    file. MIRROR NOTE (lock-step): both lanes call this at every tool message."""
+    text = str(content)
+    if cap is None:
+        return text[:TOOL_MESSAGE_CHARS]
+    if len(text) <= cap:
+        return text
+    # Its START and its END are kept (a test run says why it failed on its
+    # last lines), and the cut is said where it is.
+    note = (
+        f"\n[… {len(text) - cap:,}+ of {len(text):,} characters cut here — ask for less: a "
+        "range of the file (offset / limit), a narrower search, a command that prints less, "
+        "or fewer files at once …]\n"
+    )
+    keep = max(0, cap - len(note))
+    head = keep * 2 // 3
+    tail = keep - head
+    return text[:head] + note + (text[-tail:] if tail else "")
 
 
 def turn_session_id(session_id: "str | None") -> str:
@@ -5541,18 +5628,20 @@ def finish_fence(d, trust_state: dict[str, Any], overrides: dict[str, str], tool
     return fence
 
 
-def finish_invoke(d, ctx, overrides: dict[str, str], grants, gate):
+def finish_invoke(d, ctx, overrides: dict[str, str], grants, gate, *, called_as: str = ""):
     """``async invoke(name, args)`` for the finish check's own follow-up
     calls (``process_read`` / ``process_stop`` of a test run it started
     under the GPT dialect): an ordinary call THROUGH THE REGISTRY — the
     armed-set gate, the permission engine with the reply's current grants,
-    the ledger (``called_as`` "finish check") and the tool deadline."""
+    the ledger (``called_as`` "finish check") and the tool deadline.
+    ``called_as`` (part 3, Phase 3): another harness caller's ledger name
+    (a project checker's ``process_stop``); "" = the finish check's."""
     import dataclasses as _dc
 
     from ..harness.finish import CALLED_AS
 
     try:
-        own_ctx = _dc.replace(ctx, called_as=CALLED_AS)
+        own_ctx = _dc.replace(ctx, called_as=called_as or CALLED_AS)
     except Exception:  # noqa: BLE001
         own_ctx = ctx
 
@@ -8567,6 +8656,19 @@ async def run_chat_turn(
                         "this needs more steps than a quick answer allows"
                     )
                 break
+            if (
+                _harness is not None and getattr(_harness, "checkers", None) is not None
+                and not _finish_round
+            ):
+                # THE PROJECT'S OWN CHECKERS (part 3, Phase 3 — harness/
+                # checkers): one command call per checker after a round's
+                # edit of a file it reads, as this round's own call (this lane
+                # cards nothing, and arms the command tool only where the
+                # user's permissions allow it). Never in low trust. MIRROR
+                # NOTE (lock-step): routes/chat.py's stream loop.
+                calls = _harness.checkers.schedule(
+                    calls, low_trust=finish_low_trust(_trust_state),
+                )
             if not _finish_round:
                 # (The finish check's own round put the model's reply in
                 # above, as words: the model called nothing.)
@@ -8626,6 +8728,12 @@ async def run_chat_turn(
                 try:
                     if _refused[i]:
                         return _ToolResult(ok=False, output="", error=_refused[i]), ""
+                    if _harness is not None and getattr(_harness, "checkers", None) is not None and _harness.checkers.owns(tc):
+                        # Part 3, Phase 3: a checker runs only on files its
+                        # edits REALLY changed (lock-step: the stream lane).
+                        _skip = await _harness.checkers.prepare_async(tc)
+                        if _skip:
+                            return None, _skip
                     # THE ARMED SET IS THE GATE (v1.227.0, RT1). `armed` is
                     # what this turn showed the model; a call naming any
                     # other registered tool (history carries earlier turns'
@@ -8756,6 +8864,25 @@ async def run_chat_turn(
                     result = _slots[_i]["result"]
                     content = _slots[_i]["content"]
                     ran = _slots[_i]["ran"]
+                    if _harness is not None and getattr(_harness, "checkers", None) is not None:
+                        _cks = _harness.checkers
+                        if _cks.owns(tc):
+                            # THE PROJECT'S OWN CHECKERS (part 3, Phase 3): the
+                            # findings go on the EDIT's result — never a tool
+                            # message of their own (the model did not call it).
+                            # Lock-step: the stream lane.
+                            from ..harness.checkers import CALLED_AS as _CK_CALLED_AS
+
+                            _ck_text = await _cks.take(
+                                tc, result, str(content or ""),
+                                stop=finish_invoke(
+                                    d, ctx, overrides, lambda: armed_grant, set(armed),
+                                    called_as=_CK_CALLED_AS,
+                                ),
+                            )
+                            attach_check(msgs, _cks.target(tc), _ck_text, getattr(_harness, "tool_message_chars", None))
+                            continue
+                        _cks.note(tc, ran=ran)
                     # v1.344.0 (P1): what this call was and answered, for the
                     # escalation's `prior_tool_results` — read BEFORE the
                     # second-failure note joins `content` (the carried row is
@@ -8927,7 +9054,11 @@ async def run_chat_turn(
                         _finish.observe(tc, result, refused=_fin_refused)
                     msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                            name=(_harness.called_as(tc) if _harness is not None else tc.name),
-                                           content=str(content)[:12000],
+                                           # Part 3, Phase 3: a harness turn's own cap,
+                                           # and a cut is said (lock-step: routes/chat.py).
+                                           content=tool_message_text(
+                                               content, getattr(_harness, "tool_message_chars", None) if _harness is not None else None,
+                                           ),
                                            # v1.371.0: a picture the tool handed
                                            # back (page_screenshot). MIRROR NOTE
                                            # (lock-step): routes/chat.py.

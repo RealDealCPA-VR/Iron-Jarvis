@@ -300,6 +300,25 @@ def to_events(
         if paths:
             event["path"] = paths[0]
             events += [{**event, "path": p} for p in paths[1:]]
+    if name == "read_file" and not denied and args.get("paths") is not None:
+        # IJ harness part 3, Phase 3 (review): `read_file(paths=[…])` reads
+        # SEVERAL files in one call — one file.read event per file (`path`
+        # first, then `paths` in order; bounded like a patch's paths), so a
+        # multi-read of a project's `.env` raises `credential-file-read`
+        # exactly as reading it alone does. It used to be ONE event with no
+        # path, which no rule could see.
+        many = args.get("paths")
+        if isinstance(many, str):
+            many = [many]
+        reads: list[str] = [event["path"]] if event.get("path") else []
+        for p in many if isinstance(many, list) else []:
+            if isinstance(p, str) and p.strip() and p not in reads:
+                reads.append(p)
+            if len(reads) >= _PATCH_PATHS_MAX:
+                break
+        if reads:
+            event["path"] = reads[0]
+            events += [{**event, "path": p} for p in reads[1:]]
     second = SECOND_PATH.get(name)
     if second:
         other = _first(args, (second,))

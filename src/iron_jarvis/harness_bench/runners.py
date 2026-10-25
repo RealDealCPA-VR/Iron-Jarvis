@@ -477,10 +477,12 @@ class JarvisRunner:
         from ..daemon import chat_turn
         from ..daemon.routes import chat as chat_routes
         from ..harness import components as harness_components
+        from ..harness import checkers as harness_checkers
         from ..harness import dialects as harness_dialects
         from ..harness import finish as harness_finish
         from ..harness import folder_changes as harness_folder_changes
         from ..harness import mode as harness_mode
+        from ..harness import project_map as harness_project_map
         from ..personas.builtins import BUILTIN_PERSONAS
 
         turn = self.harness()
@@ -500,6 +502,11 @@ class JarvisRunner:
                 # ...and its folder comparison (what a reply changed through
                 # commands decides whether the check runs, and what it lists).
                 + b"\0" + _module_bytes(harness_folder_changes)
+                # Part 3, Phase 3: so are the project map every Build turn
+                # starts with and the project's own checkers after an edit
+                # (the map itself is per folder, never in the fingerprint).
+                + b"\0" + _module_bytes(harness_project_map)
+                + b"\0" + _module_bytes(harness_checkers)
             ),
             "dialect": turn.plan.dialect.id,
             "dialect_requested": self.dialect,

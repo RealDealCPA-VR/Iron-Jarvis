@@ -501,6 +501,20 @@ async def test_a_tool_outside_the_offered_set_is_refused_not_returned(tmp_path, 
     assert answer["success"] is False and "nothing was run" in answer["contentItems"][0]["text"]
 
 
+async def test_a_tool_codex_was_not_offered_is_answered_with_the_tools_it_has(tmp_path, monkeypatch):
+    """IJ harness part 3, Phase 3: the refusal names the tools Codex CAN call
+    here (the names it was given on the thread), so its next call is one that
+    runs. FAILS ON THE OLD CODE (the answer named none)."""
+    fake = Fake(tmp_path, monkeypatch, [{"steps": [{"unknown_tool": "shell_out"}, {"text": "fine"}]}])
+    await fake.adapter().complete(system="", messages=[_user()], tools=TOOLS)
+    text = fake.answers()[0]["response"]["contentItems"][0]["text"]
+    offered = sorted(P.ToolNames.build([t["name"] for t in TOOLS]).forward.values())
+    assert text == (
+        "Iron Jarvis does not offer a tool named 'shell_out' in this conversation; nothing was run. "
+        "The tools you can call here: " + ", ".join(offered) + "."
+    )
+
+
 # --------------------------------------------------------------------------- #
 # 5. the feature check: fall back to text-only, said ONCE
 # --------------------------------------------------------------------------- #

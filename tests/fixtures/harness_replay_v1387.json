@@ -1,0 +1,187 @@
+{
+ "source": "Phase 1 measurement (2026-10-25), Jarvis on Claude (claude-cli / sonnet, medium), jarvis-claude-cli-sonnet-5db4a81859e3 — read-only; the run's folder replaced by <WORK>",
+ "runs": {
+  "hard-explain-trace": {
+   "task": "hard-explain-trace",
+   "recorded_tool_calls": 12,
+   "recorded_passed": true,
+   "rounds": [
+    [
+     {
+      "tool": "list_files",
+      "args": {}
+     },
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "example.py"
+      }
+     }
+    ],
+    [
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "shop.py"
+      }
+     },
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "settings.py"
+      }
+     },
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "profiles.py"
+      }
+     },
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "models.py"
+      }
+     },
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "rules/__init__.py"
+      }
+     }
+    ],
+    [
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "rules/discounts.py"
+      }
+     },
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "rules/fees.py"
+      }
+     },
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "rules/promotions.py"
+      }
+     },
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "rules/legacy.py"
+      }
+     }
+    ],
+    [
+     {
+      "tool": "write_file",
+      "args": {
+       "content": "{\"rules\": [\"member_discount\", \"bulk_discount\", \"shipping\", \"tax\"], \"total\": 38.44}\n",
+       "path": "answer.json"
+      }
+     }
+    ]
+   ]
+  },
+  "hard-cross-module-bug.r2": {
+   "task": "hard-cross-module-bug",
+   "recorded_tool_calls": 10,
+   "recorded_passed": true,
+   "rounds": [
+    [
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "<WORK>\\NOTES.md"
+      }
+     },
+     {
+      "tool": "glob",
+      "args": {
+       "path": "<WORK>",
+       "pattern": "**/*.py"
+      }
+     }
+    ],
+    [
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "<WORK>\\money.py"
+      }
+     },
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "<WORK>\\tax.py"
+      }
+     },
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "<WORK>\\order.py"
+      }
+     },
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "<WORK>\\catalog.py"
+      }
+     },
+     {
+      "tool": "read_file",
+      "args": {
+       "numbered": true,
+       "path": "<WORK>\\report.py"
+      }
+     }
+    ],
+    [
+     {
+      "tool": "write_file",
+      "args": {
+       "content": "\"\"\"Money helpers. See NOTES.md for the rules.\"\"\"\n\nfrom decimal import Decimal, ROUND_HALF_UP\n\n\ndef to_cents(amount):\n    \"\"\"``amount`` (a float, int, Decimal or decimal string) in whole cents.\n\n    Rounded as written (str form), half a cent away from zero.\n    \"\"\"\n    if not isinstance(amount, Decimal):\n        amount = Decimal(str(amount).strip())\n    return int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))\n\n\ndef format_cents(cents):\n    \"\"\"12345 -> \"123.45\", -5 -> \"-0.05\".\"\"\"\n    sign = \"-\" if cents < 0 else \"\"\n    cents = abs(cents)\n    return f\"{sign}{cents // 100}.{cents % 100:02d}\"\n",
+       "path": "<WORK>\\money.py"
+      }
+     }
+    ],
+    [
+     {
+      "tool": "write_file",
+      "args": {
+       "content": "\"\"\"Sales tax.\"\"\"\n\nfrom decimal import Decimal\n\nfrom money import to_cents\n\n#: Percent, by region.\nRATES = {\"TX\": 8.25, \"OR\": 0.0, \"NY\": 8.875}\n\n\ndef tax_cents(subtotal_cents, region):\n    \"\"\"The tax on a subtotal (in cents), in cents.\"\"\"\n    rate = Decimal(str(RATES[region]))\n    return to_cents(Decimal(subtotal_cents) / 100 * rate / 100)\n",
+       "path": "<WORK>\\tax.py"
+      }
+     }
+    ],
+    [
+     {
+      "tool": "shell",
+      "args": {
+       "command": "cd <WORK> && python -m pytest -q 2>&1 | tail -15"
+      }
+     }
+    ]
+   ]
+  }
+ }
+}
