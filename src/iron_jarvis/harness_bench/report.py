@@ -22,6 +22,11 @@ v1.383.0 (IJ harness part 3, Phase 1):
   time / some of the time / never. Means of time, tool calls, tokens and cost
   are over every run, as before. A configuration that ran once reads as it
   always did: none of this appears.
+* v1.383.0 review: "over N repeats" counts the repeats that had a scored run
+  ("over 1 of 2 repeats (1 had no scored run)"); and a run of a task this
+  invocation ran, from a repeat beyond this invocation's count (left by an
+  earlier invocation that asked for more), is STALE: left out of every number
+  and said in one line (``bench`` marks it; results.json keeps it).
 * THE EXACT MODEL. Every report names the model AS PASSED (and the effort),
   what the runs REPORTED they ran on ("model not reported" when a run named
   none — never "default"), and flags each run whose reported model differs
@@ -190,6 +195,9 @@ def _repeats(records: list[Mapping[str, Any]], interrupted: list[Mapping[str, An
         rows = [r for r in records if repeat_of(r) == k]
         per_repeat[k] = {**_rates(rows), "interrupted": sum(1 for r in interrupted if repeat_of(r) == k)}
     rates = [v["pass_rate"] for v in per_repeat.values() if v["pass_rate"] is not None]
+    #: (review) how many repeats had a scored run — the ones the mean and the
+    #: range are over.
+    scored_repeats = len(rates)
     per_task: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
     for r in records:
         t = per_task.setdefault(str(r.get("task_id")), {"runs": 0, "scored": 0, "passed": 0, "unscored": 0})
@@ -211,6 +219,7 @@ def _repeats(records: list[Mapping[str, Any]], interrupted: list[Mapping[str, An
             groups["never"].append(task_id)
     return {
         "repeats": max(numbers),
+        "scored_repeats": scored_repeats,
         "per_repeat": dict(per_repeat),
         "mean_pass_rate": (sum(rates) / len(rates)) if rates else None,
         "range": (min(rates), max(rates)) if rates else None,
@@ -220,6 +229,10 @@ def _repeats(records: list[Mapping[str, Any]], interrupted: list[Mapping[str, An
 
 
 def summarize(records: list[Mapping[str, Any]]) -> dict[str, Any]:
+    # (review) A STALE run — a repeat beyond this invocation's count, left by
+    # an earlier one — counts in nothing; the reports say how many there were.
+    stale = [r for r in records if r.get("stale")]
+    records = [r for r in records if not r.get("stale")]
     interrupted = [r for r in records if r.get("interrupted")]
     records = [r for r in records if not r.get("interrupted")]
     scored = [r for r in records if r.get("passed") is not None]
@@ -279,6 +292,8 @@ def summarize(records: list[Mapping[str, Any]]) -> dict[str, Any]:
         "per_category": dict(per_category),
         "per_tier": dict(per_tier),
         "files_outside": sum(1 for r in records if r.get("files_outside")),
+        "stale": len(stale),
+        "stale_repeats": sorted({repeat_of(r) for r in stale}),
         **_repeats(records, interrupted),
         **_model_facts(records),
     }
@@ -386,6 +401,34 @@ def _range_words(s: Mapping[str, Any]) -> str:
     return f"{_pct(rng[0])}–{_pct(rng[1])}"
 
 
+def _repeats_words(s: Mapping[str, Any]) -> str:
+    """``"3 repeats"`` — or ``"1 of 2 repeats (1 had no scored run)"`` when a
+    repeat had no scored run (the mean and the range are over the others)."""
+    n, k = s["repeats"], s.get("scored_repeats", s["repeats"])
+    return f"{n} repeats" if k >= n else f"{k} of {n} repeats ({n - k} had no scored run)"
+
+
+def _repeats_cell(s: Mapping[str, Any]) -> str:
+    n, k = s["repeats"], s.get("scored_repeats", s["repeats"])
+    return f"{n}" if k >= n else f"{n} ({n - k} with no scored run)"
+
+
+def _stale_words(s: Mapping[str, Any]) -> str:
+    """``"repeat 3"`` / ``"repeats 2–3"`` / ``"repeats 2, 4"``: the repeats the
+    stale runs belong to."""
+    reps = list(s.get("stale_repeats") or [])
+    if len(reps) == 1:
+        return f"repeat {reps[0]}"
+    if reps == list(range(reps[0], reps[-1] + 1)):
+        return f"repeats {reps[0]}–{reps[-1]}"
+    return "repeats " + ", ".join(str(k) for k in reps)
+
+
+def _stale_line(s: Mapping[str, Any]) -> str:
+    return (f"Left out of these numbers: {s['stale']} run(s) of {_stale_words(s)} from an earlier "
+            "invocation that asked for more repeats than this one (kept in results.json, marked stale).")
+
+
 def _task_count(t: Mapping[str, Any]) -> str:
     return f"{t['passed']}/{t['scored']}" + (f" (+{t['unscored']} unscored)" if t["unscored"] else "")
 
@@ -434,8 +477,8 @@ def config_report(config: Mapping[str, Any], records: list[Mapping[str, Any]]) -
     s = summarize(records)
     repeated = s["repeats"] > 1
     head = (
-        f"**Mean pass rate {_pct(s['mean_pass_rate'])}, range {_range_words(s)} over {s['repeats']} "
-        "repeats**" if repeated else f"**Pass rate {_pct(s['pass_rate'])}**"
+        f"**Mean pass rate {_pct(s['mean_pass_rate'])}, range {_range_words(s)} over {_repeats_words(s)}**"
+        if repeated else f"**Pass rate {_pct(s['pass_rate'])}**"
     )
     of = "scored runs" if repeated else "scored"
     lines = [
@@ -452,6 +495,7 @@ def config_report(config: Mapping[str, Any], records: list[Mapping[str, Any]]) -
         f"or part-way after starting work; scored); {s['interrupted']} interrupted; "
         f"{s['reused']} reused from an earlier run.",
         "",
+        *([_stale_line(s), ""] if s["stale"] else []),
         _model_sentence(config, s),
         "",
         OUTSIDE_SCOPE,
@@ -462,7 +506,8 @@ def config_report(config: Mapping[str, Any], records: list[Mapping[str, Any]]) -
          "| List-price $ | Note |"),
         "|---|---|---|---|---|---|---|---|---|---|---|---|" if repeated else "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
-    order = sorted(records, key=lambda r: (repeat_of(r), str(r.get("task_id")))) if repeated else records
+    shown = [r for r in records if not r.get("stale")]
+    order = sorted(shown, key=lambda r: (repeat_of(r), str(r.get("task_id")))) if repeated else shown
     for r in order:
         rep = f" {repeat_of(r)} |" if repeated else ""
         if r.get("interrupted"):
@@ -561,7 +606,7 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
     for config, _records, s in summaries:
         tasks = len(s["per_task"]) if repeated else s["tasks"]
         middle = (
-            f"{tasks} | {s['repeats']} | {s['passed']} / {s['scored']} | "
+            f"{tasks} | {_repeats_cell(s)} | {s['passed']} / {s['scored']} | "
             f"{_pct(s['mean_pass_rate'] if s['repeats'] > 1 else s['pass_rate'])} | {_range_words(s)} | "
             if repeated else f"{s['tasks']} | {s['passed']} / {s['scored']} | {_pct(s['pass_rate'])} | "
         )
@@ -575,6 +620,14 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
             f"{_money(s['cost_metered_usd'], s['cost_metered_unknown'], s['tasks'])} | "
             f"{_money(s['cost_list_price_usd'], s['cost_list_price_unknown'], s['tasks'])} |"
         )
+    stale = [(config, s) for config, _records, s in summaries if s["stale"]]
+    if stale:
+        lines += [""] + [
+            f"Left out of {config.get('runner')} · {_model_cell(config)} ({_setup(config)}): {s['stale']} run(s) "
+            f"from an earlier invocation that asked for more repeats ({_stale_words(s)}; kept in its "
+            "results.json, marked stale)."
+            for config, s in stale
+        ]
     lines += ["", "## The model each setup ran on", "",
               "| Runner | Model as passed | Effort | Model the runs reported | Runs that reported another model |",
               "|---|---|---|---|---|"]

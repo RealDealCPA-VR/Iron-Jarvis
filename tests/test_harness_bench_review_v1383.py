@@ -197,7 +197,8 @@ def test_a_run_killed_inside_a_repeat_resumes_without_rerunning_or_counting_unfi
     report = (cfg_dir / "report.md").read_text(encoding="utf-8")
     # (the fake hands every task the pagination fix: pagination passes, leap
     # year fails — a real verdict either way.)
-    assert "**Mean pass rate 50%, range 50%–50% over 2 repeats**" in report, report[:600]
+    # (repeat 2 has no scored run yet: the mean and range are over repeat 1.)
+    assert "**Mean pass rate 50%, range 50%–50% over 1 of 2 repeats (1 had no scored run)**" in report, report[:600]
     assert "| 1 | 50% | 1 / 2 | 0 | 0 | 0 |" in report
     assert "| 2 | n/a | 0 / 0 | 0 | 0 | 1 |" in report
     # Resume: every finished run is reused, the cut-off one (and the repeat-2
@@ -296,3 +297,76 @@ def test_the_grading_copy_keeps_no_compiled_hidden_check(task_id, tmp_path):
     assert not left, f"grader material left in the grading copy: {left}"
     # (the agent's own compiled files stay: only the grader's go)
     assert any((tmp_path / "grade").rglob("*.pyc"))
+
+
+# --------------------------------------------------------------------------- #
+# "over N repeats" counts the repeats that were scored
+# --------------------------------------------------------------------------- #
+
+
+def _rec(task, repeat, passed, **kw):
+    out = {"task_id": task, "category": "bugfix", "tier": "core", "passed": passed, "tool_calls": 1,
+           "wall_s": 1.0, "tokens_in": 10, "tokens_out": 1, "cost_metered_usd": 0.0, "cost_list_price_usd": 0.0,
+           **kw}
+    if repeat > 1:
+        out["repeat"] = repeat
+    return out
+
+
+def test_over_n_repeats_counts_only_the_repeats_with_a_scored_run():
+    from iron_jarvis.harness_bench.report import combined_report, config_report
+
+    lost = {"unscored_by": "infrastructure", "grade_reason": "did not run: the account's usage limit"}
+    records = [_rec("a", 1, True), _rec("b", 1, False), _rec("a", 2, None, **lost), _rec("b", 2, None, **lost)]
+    config = {"runner": "claude", "provider": "claude", "model": "sonnet", "key": "k" * 64}
+    report = config_report(config, records)
+    assert "**Mean pass rate 50%, range 50%–50% over 1 of 2 repeats (1 had no scored run)**" in report
+    assert "## Across 2 repeats" in report
+    assert "range 50%–50% over 2 repeats" not in report
+    combined = combined_report([(config, records)])
+    assert "| 2 (1 with no scored run) |" in combined
+    whole = [_rec("a", 1, True), _rec("a", 2, False)]
+    assert "**Mean pass rate 50%, range 0%–100% over 2 repeats**" in config_report(config, whole)
+
+
+# --------------------------------------------------------------------------- #
+# Stale repeats from an earlier invocation are left out, and said
+# --------------------------------------------------------------------------- #
+
+
+async def test_repeats_beyond_this_invocations_count_are_left_out_and_said(tmp_path):
+    from iron_jarvis.harness_bench.report import summarize
+
+    stub = _StubRunner()
+    await run_bench(runner=stub, home=tmp_path, tasks=list(TASKS.values()), names=NAMES, repeats=3)
+    res = await run_bench(runner=stub, home=tmp_path, tasks=list(TASKS.values()), names=NAMES)
+    report = (res.config_dir / "report.md").read_text(encoding="utf-8")
+    # The numbers are this invocation's one run per task, as a one-run report reads...
+    assert "**Pass rate 100%** — 2 passed, 0 failed of 2 scored" in report
+    assert "Across" not in report
+    # ...and the four runs of repeats 2–3 left from the earlier invocation are said, not counted.
+    assert ("Left out of these numbers: 4 run(s) of repeats 2–3 from an earlier invocation that asked "
+            "for more repeats than this one (kept in results.json, marked stale).") in report
+    data = json.loads((res.config_dir / "results.json").read_text(encoding="utf-8"))["records"]
+    assert sorted(r.get("repeat", 1) for r in data if r.get("stale")) == [2, 2, 3, 3]
+    assert not any(r.get("stale") for r in data if r.get("repeat", 1) == 1)
+    combined = (res.config_dir.parent / "report.md").read_text(encoding="utf-8")
+    assert "| 2 / 2 | 100% |" in combined and "4 run(s) from an earlier invocation" in combined
+    assert summarize(data)["stale"] == 4
+    # Two repeats after three: only repeat 3 is stale.
+    two = await run_bench(runner=stub, home=tmp_path, tasks=list(TASKS.values()), names=NAMES, repeats=2)
+    report = (two.config_dir / "report.md").read_text(encoding="utf-8")
+    assert "over 2 repeats**" in report and "2 run(s) of repeat 3 from an earlier invocation" in report
+
+
+async def test_a_task_this_invocation_did_not_run_keeps_all_its_repeats(tmp_path):
+    """Only a task THIS invocation ran can have stale repeats: a setup run in
+    batches (some tasks now, others later) keeps every batch's runs."""
+    stub = _StubRunner()
+    await run_bench(runner=stub, home=tmp_path, tasks=list(TASKS.values()), names=[NAMES[0]], repeats=2)
+    res = await run_bench(runner=stub, home=tmp_path, tasks=list(TASKS.values()), names=[NAMES[1]])
+    data = json.loads((res.config_dir / "results.json").read_text(encoding="utf-8"))["records"]
+    assert not any(r.get("stale") for r in data)
+    assert sorted((r["task_id"], r.get("repeat", 1)) for r in data) == sorted(
+        [(NAMES[0], 1), (NAMES[0], 2), (NAMES[1], 1)])
+    assert "Left out" not in (res.config_dir / "report.md").read_text(encoding="utf-8")

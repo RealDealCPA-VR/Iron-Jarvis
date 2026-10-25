@@ -146,8 +146,10 @@ def run_command(
 
         s = summarize(result.records)
         rng = s["range"]
+        shy = repeats - s["scored_repeats"]
         typer.echo(
             f"{passed} of {scored} scored runs passed across {repeats} repeats"
+            + (f" ({shy} had no scored run)" if shy > 0 else "")
             + (f"; {unscored} unscored" if unscored else "")
             + (f"; mean pass rate {s['mean_pass_rate'] * 100:.0f}%, range {rng[0] * 100:.0f}%–{rng[1] * 100:.0f}%"
                if rng else "")

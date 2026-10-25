@@ -99,6 +99,10 @@ RESULT_NAME = "result.json"
 STARTED_NAME = "started.json"
 #: v1.370.0: what the agent did, step by step (the refine loop's evidence).
 TRAJECTORY_NAME = "trajectory.json"
+#: v1.383.0 review: the runs THIS invocation planned (written when it
+#: starts): a repeat of one of its tasks beyond them, left by an earlier
+#: invocation that asked for more, is reported as stale (left out).
+PLAN_NAME = "plan.json"
 #: v1.383.0: ``--repeats`` runs every task this many times at most.
 MAX_REPEATS = 10
 #: Said before any task starts when a runner was given no model (a record
@@ -792,6 +796,7 @@ async def run_bench(
             )
         return result
     await asyncio.to_thread(_save_config, cfg_dir, config, use_seed)
+    await asyncio.to_thread(_write_json, cfg_dir / PLAN_NAME, {"planned": result.planned, "at": _now()})
     # A run whose process was killed left its agent folder behind: swept now
     # (only a folder whose owner process is gone).
     swept = await asyncio.to_thread(sweep_agent_roots)
@@ -876,7 +881,29 @@ def _latest_records(cfg_dir: Path) -> list[dict[str, Any]]:
                 "error": "interrupted: the run started but was never recorded",
                 "started_at": started.get("started_at", ""),
             })
-    return out
+    return _mark_stale(cfg_dir, out)
+
+
+def _mark_stale(cfg_dir: Path, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Mark ``stale`` (v1.383.0 review) every run of a task the latest
+    invocation planned (:data:`PLAN_NAME`) whose repeat is beyond the ones it
+    planned: left by an earlier invocation that asked for more repeats. A task
+    the latest invocation did not run keeps every run (a setup run in
+    batches)."""
+    plan = _read_json(cfg_dir / PLAN_NAME)
+    planned = plan.get("planned") if isinstance(plan, dict) else None
+    if not isinstance(planned, list):
+        return records
+    most: dict[str, int] = {}
+    for key in planned:
+        m = _REPEAT_DIR.match(str(key))
+        task_id, k = (m.group("task"), int(m.group("k"))) if m else (str(key), 1)
+        most[task_id] = max(most.get(task_id, 0), k)
+    for r in records:
+        task_id = str(r.get("task_id") or "")
+        if task_id in most and int(r.get("repeat") or 1) > most[task_id]:
+            r["stale"] = True
+    return records
 
 
 def write_config_outputs(cfg_dir: Path, reused: Sequence[str] = ()) -> Path:
