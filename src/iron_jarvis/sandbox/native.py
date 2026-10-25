@@ -622,10 +622,15 @@ def build_env_tools(env: "dict[str, str] | None" = None) -> tuple[str, ...]:
         out = tuple(found)
         # v1.386.0: a few PATHs at once (the Build PATH and the same PATH as
         # Git's bash sees it, Git's tool folders first) -- never unbounded.
-        _TOOLS_CACHE.pop(path, None)
-        while len(_TOOLS_CACHE) >= 4:
-            _TOOLS_CACHE.pop(next(iter(_TOOLS_CACHE)), None)
-        _TOOLS_CACHE[path] = (now, out)
+        # Two threads may store at once: a lost race only forgets an entry,
+        # never the answer just worked out.
+        try:
+            _TOOLS_CACHE.pop(path, None)
+            for stale in list(_TOOLS_CACHE)[: max(0, len(_TOOLS_CACHE) - 3)]:
+                _TOOLS_CACHE.pop(stale, None)
+            _TOOLS_CACHE[path] = (now, out)
+        except Exception:  # noqa: BLE001
+            pass
         return out
     except Exception:  # noqa: BLE001 — unknown is "found nothing", never a claim
         return ()
