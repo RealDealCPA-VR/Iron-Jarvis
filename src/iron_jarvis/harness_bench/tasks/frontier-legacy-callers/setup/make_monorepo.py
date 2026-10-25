@@ -142,6 +142,58 @@ def emit_v2(name, value=1):
 '''
 
 
+#: How a call's value is used — the SAME shapes for real calls and look-alikes,
+#: so no line shape tells one from the other (only the imports do).
+CALL_SHAPES = ["assign", "return", "bare", "append"]
+#: The arguments a call passes (again shared by real calls and look-alikes).
+ARG_STYLES = ["size", "payload", "fields"]
+
+
+def call_lines(rng: random.Random, callee: str, event: str, indent: str = "    ",
+               multiline: bool | None = None) -> tuple[list[str], int]:
+    """The body lines of one call of ``callee`` in a random shape, and the index
+    (0-based, into the returned lines) of the line where the call STARTS."""
+    shape = rng.choice(CALL_SHAPES)
+    args_style = rng.choice(ARG_STYLES)
+    args = {
+        "size": [f'"{event}"', "size=len(payload)"],
+        "payload": [f'"{event}"', "payload=payload"],
+        "fields": [f'"{event}"', "**record"],
+    }[args_style]
+    if multiline is None:
+        multiline = rng.random() < 0.2
+    head = {"assign": "result = ", "return": "return ", "bare": "", "append": "events.append("}[shape]
+    tail = ")" if shape == "append" else ""
+    out: list[str] = []
+    if shape == "append":
+        out.append(f"{indent}events = []")
+    start = len(out)
+    if multiline:
+        out.append(f"{indent}{head}{callee}(")
+        out += [f"{indent}    {a}," for a in args]
+        out.append(f"{indent}){tail}")
+    else:
+        out.append(f"{indent}{head}{callee}({', '.join(args)}){tail}")
+    out.append({"assign": f"{indent}return result", "return": "", "bare": f"{indent}return payload",
+                "append": f"{indent}return events"}[shape])
+    if not out[-1]:
+        out.pop()
+    return out, start
+
+
+def lookalike_function(rng: random.Random, pkg: str, callee: str, indent: str = "",
+                       first: str = "record") -> list[str]:
+    """A function whose body calls a LOOK-ALIKE ``callee`` in one of the very
+    shapes a real call has."""
+    event = f"{pkg}.{rng.choice(EVENTS)}"
+    body, _start = call_lines(rng, callee, event, indent + "    ")
+    params = f"self, {first}" if callee.startswith("self.") else first
+    return [f"{indent}def {ident(rng)}_{rng.randint(0, 1)}({params}):",
+            f'{indent}    """Write one {pkg} record."""',
+            f"{indent}    payload = json.dumps({first}, sort_keys=True)",
+            *body]
+
+
 def emitting_module(rng: random.Random, pkg: str, mod: str, style: str, fake: str | None,
                     truth: list[tuple[str, int]], rel: str) -> str:
     """One module that calls audit's emit_legacy in ``style`` (and carries
@@ -187,43 +239,33 @@ def emitting_module(rng: random.Random, pkg: str, mod: str, style: str, fake: st
         lines.append("    payload = json.dumps(record, sort_keys=True)")
         if fake == "comment" and i == 0:
             lines.append(f"    # TODO: switch emit_legacy(\"{event}\", ...) to audit.log.emit")
-        if style == "multiline":
-            lines.append("    result = emit_legacy(")
-            truth.append((rel, len(lines)))
-            lines.append(f'        "{event}",')
-            lines.append("        size=len(payload),")
-            lines.append("    )")
-        else:
-            lines.append(f'    result = {callee}("{event}", size=len(payload))')
-            truth.append((rel, len(lines)))
-        lines.append("    return result")
+        body, start = call_lines(rng, callee, event, multiline=True if style == "multiline" else None)
+        truth.append((rel, len(lines) + start + 1))
+        lines += body
         lines += ["", ""]
     if fake == "string":
         lines.append(f'HELP = "Events from {pkg} used to go through emit_legacy(event, **fields)."')
         lines += ["", ""]
     if fake == "same_name_other_module":
-        lines.append("def push_metric(name):")
-        lines.append("    return metric_legacy(name, 1)")
+        lines += lookalike_function(rng, pkg, "metric_legacy")
         lines += ["", ""]
     if fake == "method":
         lines += [
             "class Recorder:",
-            "    def emit_legacy(self, event):",
-            "        return {'local': event}",
+            "    def emit_legacy(self, event, **fields):",
+            "        return {'local': event, **fields}",
             "",
-            "    def run(self, event):",
-            "        return self.emit_legacy(event)",
+            *lookalike_function(rng, pkg, "self.emit_legacy", indent="    "),
             "",
             "",
         ]
     if fake == "v2":
         lines += [
-            "def emit_legacy_v2(event):",
-            "    return {'v2': event}",
+            "def emit_legacy_v2(event, **fields):",
+            "    return {'v2': event, **fields}",
             "",
             "",
-            "def send_v2(event):",
-            "    return emit_legacy_v2(event)",
+            *lookalike_function(rng, pkg, "emit_legacy_v2"),
             "",
             "",
         ]
@@ -237,26 +279,27 @@ def emitting_module(rng: random.Random, pkg: str, mod: str, style: str, fake: st
 
 
 def lookalike_module(rng: random.Random, pkg: str, mod: str, fake: str) -> str:
-    """A module that only LOOKS like a caller (never a real call)."""
+    """A module that only LOOKS like a caller (never a real call); its
+    look-alike calls take the same shapes as real ones."""
     lines = [f'"""{pkg}.{mod}: {ident(rng).replace("_", " ")} helpers."""', "", "import json", ""]
     if fake == "same_name_other_module":
         lines += ["from metrics.compat import emit_legacy", "", "",
-                  "def report_count(name, n):", "    return emit_legacy(name, n)", "", ""]
+                  *lookalike_function(rng, pkg, "emit_legacy"), "", ""]
     elif fake == "local_def":
-        lines += ["", "def emit_legacy(message):", "    \"\"\"Print a message the old way.\"\"\"",
-                  "    print(message)", "    return message", "", "",
-                  "def announce(text):", "    return emit_legacy(text.upper())", "", ""]
+        lines += ["", "def emit_legacy(message, **fields):", "    \"\"\"Print a message the old way.\"\"\"",
+                  "    print(message, fields)", "    return message", "", "",
+                  *lookalike_function(rng, pkg, "emit_legacy"), "", ""]
     elif fake == "method":
         lines += ["", "class Bridge:", "    def emit_legacy(self, event, **fields):",
-                  "        return (event, fields)", "", "    def forward(self, event):",
-                  "        return self.emit_legacy(event, forwarded=True)", "", ""]
+                  "        return (event, fields)", "",
+                  *lookalike_function(rng, pkg, "self.emit_legacy", indent="    "), "", ""]
     elif fake == "comment":
         lines += ["", "# emit_legacy(\"x\") was removed from this module in 2023.", ""]
     elif fake == "string":
         lines += ["", "DOC = '''", "    Example (old):", "        emit_legacy(\"orders.created\", id=1)", "'''", "", ""]
     elif fake == "v2":
-        lines += ["", "def emit_legacy_v2(event):", "    return event", "", "",
-                  "def go(event):", "    return emit_legacy_v2(event)", "", ""]
+        lines += ["", "def emit_legacy_v2(event, **fields):", "    return event", "", "",
+                  *lookalike_function(rng, pkg, "emit_legacy_v2"), "", ""]
     elif fake == "docstring":
         lines += ["", "def migrate():", "    \"\"\"Replaces emit_legacy() calls with emit().\"\"\"", "    return None",
                   "", ""]
@@ -271,13 +314,16 @@ def lookalike_module(rng: random.Random, pkg: str, mod: str, fake: str) -> str:
 
 def plain_module(rng: random.Random, pkg: str, mod: str) -> str:
     lines = [f'"""{pkg}.{mod}: {ident(rng).replace("_", " ")} helpers."""', "", "import json"]
-    if rng.random() < 0.3:
+    current = rng.random() < 0.3
+    if current:
         lines.append("from audit.log import emit")
     lines += ["", ""]
     for _ in range(rng.randint(2, 4)):
         lines += filler_function(rng, ident(rng))
-    if "from audit.log import emit" in lines:
-        lines += [f"def record(event):", f'    return emit("{pkg}." + event)', "", ""]
+    if current:
+        # The CURRENT api, called in the same shapes as the old one.
+        lines += lookalike_function(rng, pkg, "emit")
+        lines += ["", ""]
     return "\n".join(lines).rstrip("\n") + "\n"
 
 

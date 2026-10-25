@@ -5,7 +5,9 @@ Run as a script (exit 0 passed, 1 failed, 3 when git is not installed: a
 check that cannot run is never a fail).
 """
 import ast
+import importlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +28,46 @@ BOTH_SIDES_TESTS = {
     # the first commit
     "test_line_amount", "test_subtotal", "test_member_subtotal", "test_order_total_adds_tax",
 }
+#: Every case the two branches' tests (and the first commit's) check, as
+#: (function, args, keyword args, expected). No rule of either branch changes
+#: any of these values, so a merged test file that keeps the tests keeps them
+#: all — in whatever layout (a table, subTest, its own helpers).
+BOTH_SIDES_CASES = [
+    # the first commit
+    ("line_amount", ("2.50", 4), {}, Decimal("10.00")),
+    ("subtotal", ([("2.50", 4), ("1.00", 3)],), {}, Decimal("13.00")),
+    ("subtotal", ([("10.00", 4)],), {"member": True}, Decimal("38.00")),
+    ("order_total", ([("10.00", 6)],), {}, Decimal("64.80")),
+    # main
+    ("line_amount", ("0.125", 1), {}, Decimal("0.12")),
+    ("line_amount", ("0.135", 1), {}, Decimal("0.14")),
+    ("line_amount", ("0.3333", 3), {}, Decimal("1.00")),
+    ("shipping", (Decimal("49.99"),), {}, Decimal("4.95")),
+    ("shipping", (Decimal("50.00"),), {}, Decimal("0.00")),
+    ("order_total", ([("10.00", 2)],), {}, Decimal("26.55")),
+    # feature/bulk-discount
+    ("line_amount", ("2.00", 10), {}, Decimal("18.00")),
+    ("line_amount", ("2.00", 9), {}, Decimal("18.00")),
+    ("line_amount", ("3.00", 20), {}, Decimal("54.00")),
+    ("subtotal", ([("5.00", 3)],), {"member": True}, Decimal("15.00")),
+    ("subtotal", ([("10.00", 2)],), {"member": True}, Decimal("19.00")),
+    ("discounts", ([("2.00", 10), ("1.00", 1)],), {"member": True}, ["bulk: line 1"]),
+    ("discounts", ([("1.00", 1), ("1.00", 12), ("10.00", 2)],), {"member": True}, ["bulk: line 2", "member"]),
+]
+PRICING_FUNCS = ("line_amount", "subtotal", "order_total", "shipping", "discounts")
+#: The rules of both branches, as facts the merged README must still state
+#: (any wording): what each rule says, not the sentence it was written in.
+README_FACTS = [
+    ("the bulk discount (10%)", r"\b10\s*(%|percent)"),
+    ("the bulk threshold (10 or more units)", r"\b(10|ten)\b(?!\s*(%|percent|\.\d))"),
+    ("each line rounded half-even", r"half[- ]?even|banker"),
+    ("the member discount (5%)", r"\b5\s*(%|percent)"),
+    ("the member minimum (20.00)", r"\b20\.00\b"),
+    ("tax (8%)", r"\b8\s*(%|percent)"),
+    ("the total rounded half up", r"half[- ]?up"),
+    ("shipping (4.95)", r"\b4\.95\b"),
+    ("free shipping from 50.00", r"\b50\.00\b"),
+]
 CHANGELOG_BULLETS = [
     "- Line amounts are rounded to cents (half-even).",
     "- Free shipping from 50.00; shipping is 4.95 below that.",
@@ -67,6 +109,19 @@ class TheMergeIsFinished(unittest.TestCase):
         left = [line for line in status.splitlines() if line[3:].strip('"') not in MY_FILES]
         self.assertEqual(left, [], "the working tree is not clean")
 
+    def test_the_merge_holds_exactly_the_files_of_both_branches(self):
+        # task.md: keep both sides, no leftover files, no file neither branch has.
+        def files(rev):
+            code, out = git("ls-tree", "-r", "--name-only", rev)
+            self.assertEqual(code, 0, f"cannot list {rev}")
+            return set(out.splitlines())
+
+        both = files(MAIN_TIP) | files(FEATURE_TIP)
+        merged = files("HEAD")
+        self.assertEqual((sorted(both - merged), sorted(merged - both)), ([], []),
+                         "the merge commit must hold exactly the files of the two branches "
+                         "(missing, extra)")
+
     def test_no_conflict_markers_in_any_tracked_file(self):
         _code, files = git("ls-files")
         for name in files.splitlines():
@@ -107,6 +162,12 @@ class BothSidesSurvived(unittest.TestCase):
         self.assertEqual(sub([("0.95", 20)], member=True), Decimal("17.10"))
         self.assertEqual(sub([("5.00", 3)], member=True), Decimal("15.00"))
         self.assertEqual(sub([("10.00", 2)], member=True), Decimal("19.00"))
+        # The list price reaches 20.00, the lines' amounts (after the bulk
+        # discount) do not: no member discount.
+        self.assertEqual(sub([("2.00", 10), ("1.00", 1)], member=True), Decimal("19.00"))
+        self.assertEqual(sub([("1.00", 21)], member=True), Decimal("18.90"))
+        self.assertEqual(self.p.order_total([("1.00", 21)], member=True), Decimal("25.36"))
+        self.assertEqual(self.p.discounts([("1.00", 21)], member=True), ["bulk: line 1"])
 
     def test_order_totals_follow_every_rule(self):
         total = self.p.order_total
@@ -134,16 +195,62 @@ class BothSidesSurvived(unittest.TestCase):
         tree = ast.parse(read("test_pricing.py"))
         names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
         self.assertEqual(sorted(BOTH_SIDES_TESTS - names), [], "tests from one side were dropped")
-        suite = unittest.defaultTestLoader.loadTestsFromName("test_pricing")
-        result = unittest.TextTestRunner(stream=open(os.devnull, "w"), verbosity=0).run(suite)
+        calls = []  # [function, args, kwargs, result, values it was compared with]
+        pricing_name = self.p.__name__
+
+        def watched(name, func):
+            def call(*args, **kwargs):
+                result = func(*args, **kwargs)
+                # Only the TESTS' own calls count (subtotal calling
+                # line_amount inside pricing.py is not a test case).
+                if sys._getframe(1).f_globals.get("__name__") != pricing_name:
+                    calls.append([name, args, kwargs, result, []])
+                return result
+            return call
+
+        def comparing(original):
+            def compare(case, first, second, *args, **kwargs):
+                for entry in calls:
+                    if entry[3] is first:
+                        entry[4].append(second)
+                    elif entry[3] is second:
+                        entry[4].append(first)
+                return original(case, first, second, *args, **kwargs)
+            return compare
+
+        compare_names = ("assertEqual", "assertListEqual", "assertSequenceEqual", "assertTupleEqual")
+        originals = {name: getattr(unittest.TestCase, name) for name in compare_names}
+        functions = {name: getattr(self.p, name) for name in PRICING_FUNCS if hasattr(self.p, name)}
+        try:
+            # Watched BEFORE the tests import them, so a name the tests bind
+            # (an alias, a table of functions, ``pricing.<name>``) is watched.
+            for name, func in functions.items():
+                setattr(self.p, name, watched(name, func))
+            for name, original in originals.items():
+                setattr(unittest.TestCase, name, comparing(original))
+            sys.modules.pop("test_pricing", None)
+            module = importlib.import_module("test_pricing")
+            suite = unittest.defaultTestLoader.loadTestsFromModule(module)
+            with open(os.devnull, "w") as sink:
+                result = unittest.TextTestRunner(stream=sink, verbosity=0).run(suite)
+        finally:
+            for name, original in originals.items():
+                setattr(unittest.TestCase, name, original)
+            for name, func in functions.items():
+                setattr(self.p, name, func)
         self.assertTrue(result.wasSuccessful(), "the merged test suite does not pass")
         self.assertGreaterEqual(result.testsRun, len(BOTH_SIDES_TESTS))
+        lost = [
+            f"{name}{args!r} {kwargs or ''} == {want!r}"
+            for name, args, kwargs, want in BOTH_SIDES_CASES
+            if not any(e[0] == name and e[1] == args and e[2] == kwargs and want in e[4] for e in calls)
+        ]
+        self.assertEqual(lost, [], "cases of the two branches' tests that the merged tests no longer check")
 
     def test_the_readme_states_both_sides_rules(self):
         readme = " ".join(read("README.md").split())
-        for words in ("10% off", "per-line adjustment", "half-even", "20.00 or more",
-                      "Shipping costs 4.95", "50.00 or more", "Tax (8%)"):
-            self.assertIn(words, readme)
+        missing = [what for what, pattern in README_FACTS if not re.search(pattern, readme, re.I)]
+        self.assertEqual(missing, [], "rules of the two branches the merged README no longer states")
 
     def test_the_changelog_keeps_every_entry_once(self):
         log = read("CHANGELOG.md")

@@ -2,7 +2,8 @@
 """Hidden check: serve the page and use it in a real (headless) browser.
 
 Run as a script: exit 0 passed, 1 failed, 3 when no browser can start
-(Playwright missing, no Microsoft Edge, or it would not launch) — a check
+(Playwright missing or its driver would not start, no Microsoft Edge,
+or it would not launch) — a check
 that cannot run is never a pass or a fail.
 """
 import hashlib
@@ -28,15 +29,19 @@ EDGE_PLACES = (
     "/usr/bin/microsoft-edge", "/opt/microsoft/msedge/msedge",
 )
 STATE_JS = """() => {
+  // Hidden any way at all counts as hidden: not rendered, display:none, the
+  // hidden attribute, visibility:hidden/collapse or opacity:0 (UI.md says
+  // only "hidden", never how).
+  const seen = el => el.checkVisibility({visibilityProperty: true, opacityProperty: true});
   const rows = Array.from(document.querySelectorAll('#items tbody tr'));
-  const shown = rows.filter(tr => tr.checkVisibility()).map(tr => tr.cells[0] ? tr.cells[0].textContent.trim() : '');
+  const shown = rows.filter(seen).map(tr => tr.cells[0] ? tr.cells[0].textContent.trim() : '');
   const count = document.getElementById('count');
   const empty = document.getElementById('empty');
   return {
     rows: shown,
     count: count ? count.textContent.replace(/\\s+/g, ' ').trim() : null,
-    count_shown: count ? count.checkVisibility() : false,
-    empty_shown: empty ? empty.checkVisibility() : false,
+    count_shown: count ? seen(count) : false,
+    empty_shown: empty ? seen(empty) : false,
     empty_text: empty ? empty.textContent.replace(/\\s+/g, ' ').trim() : null,
   };
 }"""
@@ -76,7 +81,13 @@ def run_page_checks(edge, items):
     thread.start()
     url = f"http://127.0.0.1:{srv.server_address[1]}/"
     try:
-        with sync_playwright() as pw:
+        try:
+            # Playwright's own driver (a node process) must start before any
+            # browser can: one that cannot is "no browser can start" too.
+            pw = sync_playwright().start()
+        except Exception as exc:  # noqa: BLE001
+            raise BrowserMissing(f"Playwright could not start ({type(exc).__name__}: {exc})") from exc
+        try:
             try:
                 browser = pw.chromium.launch(
                     executable_path=edge, headless=True,
@@ -88,62 +99,75 @@ def run_page_checks(edge, items):
             except Exception as exc:  # noqa: BLE001
                 raise BrowserMissing(f"the browser would not start ({exc})") from exc
             try:
-                page = browser.new_page()
-                errors = []
-                page.on("pageerror", lambda exc: errors.append(str(exc)))
-                page.goto(url, wait_until="load", timeout=30000)
-                total = len(items)
-
-                def settle(step, want_rows):
-                    want = {
-                        "rows": want_rows,
-                        "count": f"Showing {len(want_rows)} of {total} items",
-                        "count_shown": True,
-                        "empty_shown": not want_rows,
-                    }
-                    state = None
-                    deadline = time.monotonic() + 6
-                    while time.monotonic() < deadline:
-                        state = page.evaluate(STATE_JS)
-                        if all(state.get(k) == v for k, v in want.items()) and (
-                            want_rows or state.get("empty_text") == "No items match"
-                        ):
-                            return
-                        page.wait_for_timeout(50)
-                    problems.append(f"{step}: wanted {want} (and #empty saying 'No items match' when no row "
-                                    f"shows), the page shows {state}")
-
-                page.wait_for_function("document.querySelectorAll('#items tbody tr').length > 0", timeout=20000)
-                settle("after loading", expected(items, "", False))
-                search = page.locator("#search")
-                if search.count() != 1:
-                    problems.append("there is no #search box")
-                    return problems
-                search.click()
-                search.press_sequentially("bolt", delay=25)
-                settle("typing 'bolt'", expected(items, "bolt", False))
-                page.click("#low-stock")
-                settle("'bolt' + ticking Low stock only", expected(items, "bolt", True))
-                search.fill("  WASHER  ")
-                settle("'  WASHER  ' + Low stock only", expected(items, "washer", True))
-                search.fill("zzz")
-                settle("a search that matches nothing", [])
-                search.fill("")
-                settle("clearing the search (Low stock only still ticked)", expected(items, "", True))
-                page.click("#low-stock")
-                settle("unticking Low stock only", expected(items, "", False))
-                search.fill("m8")
-                settle("'m8'", expected(items, "m8", False))
-                page.click("#low-stock")
-                settle("'m8' + Low stock only", expected(items, "m8", True))
-                if errors:
-                    problems.append("the page raised errors: " + "; ".join(errors[:3]))
+                drive_the_page(browser, url, items, problems)
             finally:
                 browser.close()
+        finally:
+            pw.stop()
     finally:
         srv.shutdown()
         srv.server_close()
     return problems
+
+
+def drive_the_page(browser, url, items, problems):
+    page = browser.new_page()
+    errors = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    page.goto(url, wait_until="load", timeout=30000)
+    total = len(items)
+
+    def settle(step, want_rows):
+        want = {
+            "rows": want_rows,
+            "count": f"Showing {len(want_rows)} of {total} items",
+            "count_shown": True,
+            "empty_shown": not want_rows,
+        }
+        state = None
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            state = page.evaluate(STATE_JS)
+            if all(state.get(k) == v for k, v in want.items()) and (
+                want_rows or state.get("empty_text") == "No items match"
+            ):
+                return
+            page.wait_for_timeout(50)
+        problems.append(f"{step}: wanted {want} (and #empty saying 'No items match' when no row "
+                        f"shows), the page shows {state}")
+
+    page.wait_for_function("document.querySelectorAll('#items tbody tr').length > 0", timeout=20000)
+    settle("after loading", expected(items, "", False))
+    search = page.locator("#search")
+    if search.count() != 1:
+        problems.append("there is no #search box")
+        return
+    search.click()
+    search.press_sequentially("bolt", delay=25)
+    settle("typing 'bolt'", expected(items, "bolt", False))
+    page.click("#low-stock")
+    settle("'bolt' + ticking Low stock only", expected(items, "bolt", True))
+    search.fill("  WASHER  ")
+    settle("'  WASHER  ' + Low stock only", expected(items, "washer", True))
+    search.fill("zzz")
+    settle("a search that matches nothing", [])
+    search.fill("")
+    settle("clearing the search (Low stock only still ticked)", expected(items, "", True))
+    page.click("#low-stock")
+    settle("unticking Low stock only", expected(items, "", False))
+    search.fill("m8")
+    settle("'m8'", expected(items, "m8", False))
+    page.click("#low-stock")
+    settle("'m8' + Low stock only", expected(items, "m8", True))
+    page.click("#low-stock")
+    # UI.md: only the SKU or the NAME is searched, it CONTAINS the text (not a
+    # word start, not a pattern), and only the spaces before and after it are
+    # ignored.
+    for text in ("12", "hex bolt", "olt", "(per"):
+        search.fill(text)
+        settle(f"{text!r}", expected(items, text, False))
+    if errors:
+        problems.append("the page raised errors: " + "; ".join(errors[:3]))
 
 
 class BrowserMissing(RuntimeError):

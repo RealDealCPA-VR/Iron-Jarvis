@@ -336,14 +336,14 @@ def test_the_page_check_is_unscored_when_no_browser_can_start(tmp_path, monkeypa
 def test_the_legacy_callers_answer_key_is_what_a_real_resolver_finds(tmp_path):
     """The hidden list was recorded by the generator as it wrote each call; the
     reference solution resolves the calls from the code's imports alone. They
-    agree exactly (62 calls), and the name-only decoy finds others."""
+    agree exactly (63 calls), and the name-only decoy finds others."""
     task = TASKS["frontier-legacy-callers"]
     check = (task.check_dir / "test_hidden_callers.py").read_text(encoding="utf-8")
     expected = re.findall(r'^    "(src/[^"]+:\d+)",$', check, re.M)
     work = prepare_workspace(task, tmp_path / "w")
     apply_solution(task.id, work)
     answer = json.loads((work / "answer.json").read_text(encoding="utf-8"))
-    assert answer["calls"] == expected and answer["count"] == len(expected) == 62
+    assert answer["calls"] == expected and answer["count"] == len(expected) == 63
     decoy = prepare_workspace(task, tmp_path / "d")
     apply_solution(task.id, decoy, root=DECOYS)
     got = json.loads((decoy / "answer.json").read_text(encoding="utf-8"))["calls"]
