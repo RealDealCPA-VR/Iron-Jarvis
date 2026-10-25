@@ -1897,6 +1897,33 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Long Build replies finish (v1.385.0)
+
+A Build session's reply used to stop after 60 steps: a two-hour task once
+ended with "Nothing is built yet" because it ran out of steps while still
+reading. It also stopped if nobody had looked at it for an hour.
+
+- **No step limit unless you set one.** "Steps per Build session reply"
+  (Settings) is 0 (no limit) by default: a reply works until it is done or
+  you press Stop. A safety stop at 1,000 steps remains. A number you set is
+  still honoured.
+- **At a limit it says what it did, and offers Keep going.** The reply lists
+  what it finished and what comes next. Keep going continues the same task
+  in the same session. Nothing continues on its own.
+- **Leaving does not stop it.** A Build reply keeps working while you are
+  elsewhere in the app, for as long as it needs. It still stops on Stop,
+  archive, delete, closing Iron Jarvis, your account's limit, or its step
+  limit. A reply waiting for your OK on a card waits until you answer.
+- **Coming back shows it at once.** The reply is on screen as you left it,
+  your question included, and it carries on from there: no replay, no jump,
+  and the page keeps your scroll position. After a reload, "Working for…"
+  counts from when the reply really started.
+- **The plan stays on the right.** While a reply works, its plan is in the
+  right-hand Plan pane on a wide window, and under the reply only when the
+  panes sit below the conversation. When a plan appears while you are on
+  another pane tab, the Plan tab gets a dot; it never switches tabs for you.
+- **The work line counts every step** of a long reply, not just the first 60.
+
 ## The coding benchmark can rank harnesses (v1.384.0)
 
 `ironjarvis bench-harness` (a developer tool, not in the app's menus) was too

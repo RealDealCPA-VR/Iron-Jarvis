@@ -3569,6 +3569,72 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A Build reply works until it is DONE: no fixed step limit, never stopped
+  for being unwatched, resumed from where the page was, the plan on the
+  right** (v1.385.0; a USER BUG: a reply ran 117 minutes — Opus 5.5 high,
+  60 rounds, 606,863 output tokens, 120 tool calls, nearly all reads — hit
+  the 60-round `build_round_budget` and answered "Nothing is built yet", and
+  a return mid-reply replayed the whole turn and jumped; a doer + a reviewer
+  that found 6 more defects, each red first and mutation-checked).
+  - **STEPS.** `config.build_round_budget` defaults to 0 = no limit
+    (`routes/build.build_step_limit()` → (rounds, no_limit)), with a safety
+    stop at `harness/mode.BUILD_SAFETY_ROUNDS` = 1000 (the agent run's own
+    `max_steps` ceiling). The schema range is 0..1000, and
+    `chat_turn.MAX_TURN_ROUNDS` is 1000 (the validator only): plain chat,
+    POST, agents and the bench keep their budgets, pinned. At a limit, a
+    HARNESS turn gets `OUT_OF_STEPS_BUILD_INSTRUCTION` (a progress report,
+    never "nothing was done") and no "_Note: stopped after…_". `step_limit`
+    rides the frame and answer only when the caller set a budget and the turn
+    was cut. The reply line keeps `stepLimit` (`chat_append.LINE_KEYS`), and
+    the page shows the line plus **Keep going** (sends "continue"; newest
+    reply only, only when nothing runs). The bench and refine proposer get
+    the same Build wording at their limit ("Keep going" is untrue there;
+    grading unaffected).
+  - **NEVER ORPHANED.** A Build turn's `should_stop` is `_never_orphaned`;
+    chat turns keep `durable_turns.stop_predicate`'s 1-hour guard (both
+    pinned). A turn parked on an unanswered card waits forever. It holds no
+    account lease (leases are per model call), no helper slot and no
+    process, but it counts as in flight, so "Install when idle" never sees
+    the app idle.
+  - **RESUME.** `GET /chat/turns/{id}/stream?ids=1&after=<i>:<c>` (no params
+    = byte-identical): `TurnLog.add` stores a frame, then tags it
+    `id: <index>:<text length>`. `frames_after` returns the rest of frame i
+    from char c plus later frames, or None (→ whole replay). `resume
+    {resumed, running, started_at}` … `caught_up` bracket the stored part,
+    and a record replay is always whole. The property is pinned at every cut
+    of real recorded logs, on both the daemon and the page. A long record is
+    persisted every max(1 s, size ÷ 64 KB/s): rewriting a 2–7 MB
+    `frames_json` every second was about 8 GB an hour.
+  - **THE PAGE.** `lib/turnCache.ts` (bounded, ≤ 8 kept replies) holds the
+    running reply's seed, folds, last position and the question
+    (`page.pending`), plus the session view, scroll, folder list and Build
+    view. It paints at mount and resumes once the session read confirms the
+    same turn runs. Frames between `resume` and `caught_up` are folded
+    undrawn, then drawn once. A run-generation guard and follow-once guard
+    apply. The list drops kept replies of sessions not running.
+    `useChatStream` takes `ids`/`resume`/`seed` and a rejoin's real
+    `started_at`.
+  - **STEPS ON THE LINE.** `_ReplyWatch` keeps the first 60 steps with detail
+    and the rest compact, up to `MAX_COUNTED_STEPS` = 2000.
+  - **PLAN.** `LivePlan` is `xl:hidden`; the pane's live plan is
+    `hidden xl:block`, with a note below xl. The Plan tab dot (sr-only "(a new
+    plan)") never switches tabs.
+  - **GUIDANCE.** The DEFAULT layer adds one change at a time (checked before
+    reading for the next) and independent reads in one round. `compose`
+    drops the change sentence in plan mode, and no dialect is told reads run
+    "at the same time" (GPT's do not). `CONCURRENT_READ_TOOLS` gains `grep`
+    and `glob`. Measured with sonnet medium: no measurable speed change. Each
+    round already sends the turn's earlier signed thinking (evidence pin, the
+    real adapter on a fake CLI).
+  - **OPEN.**
+    - Mid-turn, `_fit_turn_transcript` drops the oldest rounds silently and
+      no model-written compaction runs, so a very long reply may re-read.
+    - The context meter measures the history at the turn's start.
+    - Round texts are glued with no space; a plan never updated reads "2 of
+      4 done" under a finished answer.
+  - **Pins:** `tests/test_build_{long_replies,resume,faster_rounds,thinking_continuity,long_replies_review}_v1384.py`,
+    `dashboard/__tests__/{build-resume,build-resume-kinds,ij-harness-long-replies,ij-harness-long-replies-review,ij-harness-turn-cache-drop-review}-v1384.test.ts(x)`
+    (+ fixtures `build-resume*-v1384.json`).
 - **The benchmark can RANK: repeats with a range, the exact model, a
   `frontier` tier, and every run worked ALONE** (v1.384.0, IJ harness part 3
   Phase 1, `docs/IJ-HARNESS-PLAN-3.md`; a doer + a reviewer whose 4 hunters
