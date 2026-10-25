@@ -688,3 +688,156 @@ async def test_the_qwen_dialects_command_tool_keeps_cmd(tmp_path, monkeypatch):
         assert call["shell"] is True and call["argv"] == "echo qwen-shell" and call["startupinfo"] is False
     finally:
         procs.end_all()
+
+
+# --------------------------------------------------------------------------- #
+# 10. finding bash: the places Git really lives, and a bash that hangs
+# --------------------------------------------------------------------------- #
+
+
+def _finder_env(monkeypatch, tmp_path, **env):
+    """An environment with ONLY the given install variables (no setting, an
+    empty PATH unless given): the REAL standard-folder list is read."""
+    from iron_jarvis.sandbox import git_bash as GB
+
+    monkeypatch.delenv(GB.ENV_OVERRIDE, raising=False)
+    for var in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA", "USERPROFILE",
+                "SCOOP", "SCOOP_GLOBAL", "ProgramData"):
+        monkeypatch.delenv(var, raising=False)
+    empty = tmp_path / "empty-path"
+    empty.mkdir(exist_ok=True)
+    monkeypatch.setenv("PATH", str(env.pop("PATH", empty)))
+    for k, v in env.items():
+        monkeypatch.setenv(k, str(v))
+    # the two literal Program Files folders of the real PC are not this test's
+    real_isfile = os.path.isfile
+    monkeypatch.setattr(GB.os.path, "isfile",
+                        lambda p: False if str(p).lower().startswith(("c:\\program files\\git",
+                                                                      "c:\\program files (x86)\\git"))
+                        else real_isfile(p))
+    GB.forget()
+
+
+@pytest.fixture()
+def _stand_ins(monkeypatch):
+    from tests.test_git_bash_v1386 import FAKE, FAKE_VERSION
+    from iron_jarvis.sandbox import git_bash as GB
+
+    def verify(path):
+        try:
+            with open(path, "rb") as fh:
+                return FAKE_VERSION if fh.read(len(FAKE) + 1) == FAKE else ""
+        except OSError:
+            return ""
+
+    monkeypatch.setattr(GB, "_verify", verify)
+    yield
+    GB.forget()
+
+
+@pytest.mark.skipif(not WIN, reason="Windows only")
+def test_git_installed_only_for_the_user_is_found(monkeypatch, tmp_path, _stand_ins):
+    from iron_jarvis.sandbox import git_bash as GB
+    from tests.test_git_bash_v1386 import _git_tree
+
+    _git_tree(tmp_path / "LocalAppData" / "Programs" / "Git")
+    _finder_env(monkeypatch, tmp_path, LOCALAPPDATA=tmp_path / "LocalAppData")
+    found = GB.find()
+    assert found is not None and found.source == "standard"
+    assert found.path == str(tmp_path / "LocalAppData" / "Programs" / "Git" / "bin" / "bash.exe")
+
+
+@pytest.mark.skipif(not WIN, reason="Windows only")
+@pytest.mark.parametrize("var", ["SCOOP", "SCOOP_GLOBAL", "USERPROFILE"])
+def test_a_scoop_git_is_found_where_scoop_keeps_it(monkeypatch, tmp_path, _stand_ins, var):
+    """RED on the doer's code for a MOVED scoop (SCOOP / SCOOP_GLOBAL): only
+    `%USERPROFILE%\\scoop` was looked in."""
+    from iron_jarvis.sandbox import git_bash as GB
+    from tests.test_git_bash_v1386 import _git_tree
+
+    base = tmp_path / "home" if var == "USERPROFILE" else tmp_path / "elsewhere"
+    scoop = base / "scoop" if var == "USERPROFILE" else base
+    _git_tree(scoop / "apps" / "git" / "current")
+    _finder_env(monkeypatch, tmp_path, **{var: base})
+    found = GB.find()
+    assert found is not None
+    assert found.path == str(scoop / "apps" / "git" / "current" / "bin" / "bash.exe")
+
+
+@pytest.mark.skipif(not WIN, reason="Windows only")
+def test_a_git_shim_on_path_falls_through_to_where_git_is_installed(monkeypatch, tmp_path, _stand_ins):
+    """`git` on PATH is a shim (a .cmd, chocolatey's or scoop's stub): no Git
+    folder around it, so its bash is looked for where Git is installed —
+    never a bash beside the shim."""
+    from iron_jarvis.sandbox import git_bash as GB
+    from tests.test_git_bash_v1386 import _fake_bash, _git_tree
+
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    (shims / "git.cmd").write_bytes(b"@echo off\r\n")
+    _fake_bash(shims / "bash.exe")  # a loose bash beside the shim: never used
+    _git_tree(tmp_path / "LocalAppData" / "Programs" / "Git")
+    _finder_env(monkeypatch, tmp_path, PATH=shims, LOCALAPPDATA=tmp_path / "LocalAppData")
+    found = GB.find()
+    assert found is not None and found.source == "standard"
+    assert "shims" not in found.path
+
+
+@pytest.mark.skipif(not WIN, reason="Windows only")
+def test_two_gits_the_one_on_path_wins(monkeypatch, tmp_path, _stand_ins):
+    from iron_jarvis.sandbox import git_bash as GB
+    from tests.test_git_bash_v1386 import _git_tree
+
+    on_path = _git_tree(tmp_path / "A" / "Git")
+    _git_tree(tmp_path / "LocalAppData" / "Programs" / "Git")
+    _finder_env(monkeypatch, tmp_path, PATH=on_path.parent, LOCALAPPDATA=tmp_path / "LocalAppData")
+    found = GB.find()
+    assert found is not None and found.source == "git"
+    assert found.path == str(tmp_path / "A" / "Git" / "bin" / "bash.exe")
+
+
+@pytest.mark.skipif(not WIN, reason="Windows only")
+def test_a_bash_that_hangs_on_version_costs_one_bounded_wait(monkeypatch, tmp_path):
+    """The ``--version`` check runs with a bound, and a bash that did not
+    answer is remembered as no bash: the next look does not wait again."""
+    from iron_jarvis.core import procs
+    from iron_jarvis.sandbox import git_bash as GB
+
+    hung = tmp_path / "bin" / "bash.exe"
+    hung.parent.mkdir()
+    hung.write_bytes(b"x")
+    calls: list = []
+
+    def run(argv, **kw):
+        calls.append(kw.get("timeout"))
+        return procs.Result(-1, b"", b"", timed_out=True, args=argv, timeout=kw.get("timeout"))
+
+    monkeypatch.setattr(procs, "run", run)
+    GB.forget()
+    try:
+        assert GB._verify(str(hung)) == ""
+        assert GB._verify(str(hung)) == ""
+        assert calls == [GB.VERSION_TIMEOUT_S]
+    finally:
+        GB.forget()
+
+
+@pytest.mark.skipif(not WIN, reason="Windows only")
+@pytest.mark.parametrize("setting", [
+    r"C:\Windows\System32\bash.exe",
+    r"C:\Windows\Sysnative\bash.exe",
+    r"C:\Users\x\AppData\Local\Microsoft\WindowsApps\bash.exe",
+    r"C:\Windows\System32\wsl.exe",
+])
+def test_a_setting_naming_wsl_is_never_run(monkeypatch, tmp_path, setting):
+    """Never even ``--version`` for WSL's launchers (it would start Linux)."""
+    from iron_jarvis.core import procs
+    from iron_jarvis.sandbox import git_bash as GB
+
+    ran: list = []
+    monkeypatch.setattr(procs, "run", lambda argv, **kw: ran.append(argv) or pytest.fail("ran"))
+    _finder_env(monkeypatch, tmp_path, **{GB.ENV_OVERRIDE: setting})
+    monkeypatch.setattr(GB, "_standard_roots", lambda: [])
+    monkeypatch.setattr(GB.os.path, "isfile", lambda p: True)  # even when the file is there
+    assert GB.is_wsl_launcher(setting)
+    assert GB.find() is None and ran == []

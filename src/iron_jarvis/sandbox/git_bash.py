@@ -222,8 +222,15 @@ def _standard_roots() -> list[str]:
     roots += [r"C:\Program Files\Git", r"C:\Program Files (x86)\Git"]
     if env.get("LOCALAPPDATA"):
         roots.append(os.path.join(env["LOCALAPPDATA"], "Programs", "Git"))
+    # scoop: its own folder when moved (SCOOP / SCOOP_GLOBAL — v1.386.0
+    # review: a moved scoop was missed), else the default user and global ones.
+    for var in ("SCOOP", "SCOOP_GLOBAL"):
+        if env.get(var):
+            roots.append(os.path.join(env[var], "apps", "git", "current"))
     if env.get("USERPROFILE"):
         roots.append(os.path.join(env["USERPROFILE"], "scoop", "apps", "git", "current"))
+    if env.get("ProgramData"):
+        roots.append(os.path.join(env["ProgramData"], "scoop", "apps", "git", "current"))
     return roots
 
 
