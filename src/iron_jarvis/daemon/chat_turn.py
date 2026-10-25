@@ -5458,6 +5458,10 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws) 
         from .routes.build import CONTINUE_TEXT as _carry_on
     except Exception:  # noqa: BLE001 — the route module is optional here
         _carry_on = ""
+    # Review: a daemon "carry on" (Resume when ready / Continue on another
+    # account) continues a reply an account limit cut off — the check covers
+    # that WHOLE reply, from the question it continues (its `at`).
+    since = await asyncio.to_thread(_continued_question_at, d, body, _carry_on)
     return await _finish.start(
         engine=getattr(d.platform, "engine", None),
         home=getattr(getattr(d.platform, "config", None), "home", None),
@@ -5467,7 +5471,37 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws) 
         messages=list(getattr(body, "messages", None) or []),
         harness=harness_turn,
         carry_on=[_carry_on] if _carry_on else [],
+        since=since or None,
     )
+
+
+def _continued_question_at(d, body, carry_on: str) -> str:
+    """BLOCKING. The ``at`` of the question a daemon "carry on" continues —
+    "" unless this turn's own message IS the carry-on text and the Build
+    session's transcript names the question (``command_shell.continued_turn``
+    — never a continuation, never a steer note)."""
+    try:
+        users = [m for m in (getattr(body, "messages", None) or []) if getattr(m, "role", "") == "user"]
+        if not carry_on or not users or str(getattr(users[-1], "content", "") or "").strip() != carry_on.strip():
+            return ""
+        thread_id = str(getattr(body, "thread_id", "") or "")
+        if not thread_id:
+            return ""
+        from ..harness import sessions as _S
+        from ..harness.command_shell import continued_turn
+
+        row = _S.get_row(d.platform.engine, thread_id)
+        if row is None:
+            return ""
+        lines = _S._messages(row)
+        turn = continued_turn(lines)
+        for line in lines:
+            if (isinstance(line, dict) and line.get("role") == "user" and turn
+                    and str(line.get("turnId") or "") == turn and not line.get("continuation")):
+                return str(line.get("at") or "")
+    except Exception:  # noqa: BLE001 — the reply's own part is still checked
+        log.debug("finish check: reading the continued question failed", exc_info=True)
+    return ""
 
 
 #: A stand-in tool object that makes :func:`_fence_tool_output` fence and
@@ -8323,6 +8357,15 @@ async def run_chat_turn(
         await finish_for_turn(d, body, _harness, tool_session=_tool_session, tool_ws=tool_ws)
         if armed and _harness is not None else None
     )
+    # ...and its TURN SCOPE (review; `providers.turn_scope`): the finish note
+    # continues a codex-cli thread whose answer just ended instead of
+    # replaying the conversation to a new process. Closed when the tool loop
+    # ends. MIRROR NOTE (lock-step): the stream lane opens the same scope.
+    from ..providers import turn_scope as _turn_scope
+
+    _fin_scope, _fin_scope_token = (
+        _turn_scope.open_scope() if _finish is not None else (None, None)
+    )
     # (provider_choice/model_choice were resolved above the attachments —
     # budgets needed them early; the values are identical.)
     # Accumulate token usage + completion count ACROSS the (up to 4) tool
@@ -8705,6 +8748,7 @@ async def run_chat_turn(
                         tc.name, redacted_args(d.platform.registry, tc.name, tc.arguments),
                         ran, content,
                     ))
+                    _label = ""  # (read by the finish check below)
                     if ran:
                         last_tool_output = str(result.output or "")
                     elif result is not None:
@@ -8847,10 +8891,9 @@ async def run_chat_turn(
                         # the stream lane: its own test run is read into the
                         # finish note (never a tool message: the model did not
                         # call it); a command the MODEL ran is noted.
-                        _fin_refused = bool(
-                            _refused[_i]
-                            or (result is not None and not ran and refusal_label(result.error or ""))
-                        )
+                        # (the refusal's ONE classification is `_label`
+                        # above — the v1.344.0 M3 seam; review)
+                        _fin_refused = bool(_refused[_i] or (result is not None and not ran and _label))
                         if _finish.owns(tc):
                             if _refused[_i]:
                                 _finish.refused_call(tc, _refused[_i])
@@ -8911,6 +8954,14 @@ async def run_chat_turn(
             _payload["detail"],
             {k: v for k, v in _payload.items() if k != "detail"},
         ) from exc
+    finally:
+        # The finish check's turn scope (review): nothing is continued after
+        # the tool loop — every session still kept for it stops now.
+        if _fin_scope is not None:
+            try:
+                await _turn_scope.close(_fin_scope)
+            finally:
+                _turn_scope.reset(_fin_scope_token)
     # LANGUAGE GUARD (v1.144.0) — runs BEFORE the ledger below so a corrective
     # completion is billed like any other. Operates on the MODEL's text, not on
     # the assembled reply: our own honesty notes are written in English by

@@ -59,6 +59,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable
 
+from ... import turn_scope as _scope
 from ..base import LLMAdapter, LLMMessage, LLMResponse, ProviderError, ToolCall
 from . import protocol as P
 from . import session as S
@@ -150,6 +151,10 @@ class _Attempt:
 class _Segment:
     parked: bool = False
     done: bool = False
+    #: The turn's answer and how it ended (a turn that ENDED may be kept for
+    #: the lane's next call — :func:`_keep_done`).
+    text: str = ""
+    finish: str = ""
 
 
 async def _teardown(s: S.CodexSession, *, graceful: bool = False) -> None:
@@ -179,6 +184,40 @@ async def _teardown(s: S.CodexSession, *, graceful: bool = False) -> None:
 async def _teardown_all(sessions: list[S.CodexSession]) -> None:
     for s in sessions:
         await _teardown(s)
+
+
+async def _keep_done(s: S.CodexSession, seg: "_Segment", key: str) -> bool:
+    """PART 3, PHASE 2 REVIEW — the finish note. Keep a session whose turn
+    just ENDED, when the lane's turn scope is open (``providers.turn_scope``:
+    a Build reply whose finish check may still send its note): the lane's next
+    call — this conversation, the model's answer, one new user message — then
+    continues the SAME thread (``turn/start``) instead of a new process with
+    the whole conversation replayed as text. Never for a helper agent's run
+    (its turn is its own; the scope is its parent's), never for an answer cut
+    off for length, never without tools (the note's call carries the turn's
+    tools). The scope's close stops it."""
+    scope = _scope.current()
+    if scope is None or not seg.done or seg.finish != "stop" or not key:
+        return False
+    try:
+        from ....harness.helpers import HELPER_PARENT
+
+        if HELPER_PARENT.get() is not None:
+            return False
+    except Exception:  # noqa: BLE001 — no helpers module: nothing to exclude
+        pass
+    done_key = (scope.id, key, seg.text.strip())
+    if not S.POOL.park_done(s, done_key):
+        return False
+
+    async def _stop() -> None:
+        if S.POOL.release_done(s):
+            await _teardown(s, graceful=True)
+
+    if not scope.on_close(_stop):
+        await _stop()
+        return True
+    return True
 
 
 def _alive(s: S.CodexSession) -> bool:
@@ -328,7 +367,32 @@ class CodexNativeAdapter(LLMAdapter):
 
         tried: list[str] = []
         lease: Any = _UNSET
-        answered = P.answered_calls(messages)
+        # The key a session that ends this call's turn is kept under (part 3,
+        # Phase 2 review): only inside an open turn scope, only with tools.
+        keep = P.conversation_key(system, messages, tools) if (_scope.current() and tools) else ""
+        cont = P.continuation_of(messages) if keep else None
+        if cont is not None:
+            prefix, said, items = cont
+            claimed = S.POOL.claim_done((_scope.current().id, P.conversation_key(system, prefix, tools),
+                                         said.strip()))
+            if claimed is not None and (not _alive(claimed) or not _on_pinned_account(claimed)):
+                await _teardown(claimed)
+                claimed = None
+            if claimed is not None:
+                attempt = _Attempt()
+                try:
+                    async for frame in self._run_continue(claimed, items, reasoning, attempt, keep):
+                        yield frame
+                    return
+                except _Missed:
+                    log.info("codex-cli: the ended Codex turn could not be continued; starting a new one")
+                except Exception as exc:  # noqa: BLE001 — sorted below (CancelledError is not caught)
+                    if claimed.lease is None:
+                        raise
+                    lease = await accounts.retry_lease(
+                        claimed.lease, exc, attempt.signal, tried, retry_ok=not attempt.emitted
+                    )
+        answered = P.answered_calls(messages) if lease is _UNSET else None
         if answered is None:
             # The conversation moved past calls a parked session waits on (an
             # exit tool, a final-answer nudge, an edit): stop it now.
@@ -350,7 +414,7 @@ class CodexNativeAdapter(LLMAdapter):
                 attempt = _Attempt()
                 try:
                     async for frame in self._run_resume(
-                        claimed, results, attempt, P.answered_images(messages),
+                        claimed, results, attempt, P.answered_images(messages), keep,
                     ):
                         yield frame
                     return
@@ -370,7 +434,8 @@ class CodexNativeAdapter(LLMAdapter):
         while True:
             attempt = _Attempt()
             try:
-                async for frame in self._run_new(exe, key, lease, system, messages, tools, reasoning, attempt):
+                async for frame in self._run_new(exe, key, lease, system, messages, tools, reasoning,
+                                                 attempt, keep):
                     yield frame
                 return
             except _Unsupported as exc:
@@ -431,6 +496,7 @@ class CodexNativeAdapter(LLMAdapter):
         tools: list[dict[str, Any]],
         reasoning: str,
         attempt: _Attempt,
+        keep: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         env = lease.apply(dict(os.environ)) if lease is not None else None
         _note_env(env if env is not None else os.environ)
@@ -459,7 +525,7 @@ class CodexNativeAdapter(LLMAdapter):
             async for frame in self._segment(s, attempt, seg):
                 yield frame
         finally:
-            if not seg.parked:
+            if not seg.parked and not await _keep_done(s, seg, keep):
                 await _teardown(s, graceful=seg.done)
 
     async def _start(
@@ -575,7 +641,7 @@ class CodexNativeAdapter(LLMAdapter):
     # ------------------------------------------------------------------ #
     async def _run_resume(
         self, s: S.CodexSession, results: dict[str, str], attempt: _Attempt,
-        images: "dict[str, list[dict[str, Any]]] | None" = None,
+        images: "dict[str, list[dict[str, Any]]] | None" = None, keep: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         seg = _Segment()
         try:
@@ -588,7 +654,40 @@ class CodexNativeAdapter(LLMAdapter):
             async for frame in self._segment(s, attempt, seg):
                 yield frame
         finally:
-            if not seg.parked:
+            if not seg.parked and not await _keep_done(s, seg, keep):
+                await _teardown(s, graceful=seg.done)
+
+    async def _run_continue(
+        self, s: S.CodexSession, items: list[dict[str, Any]], reasoning: str, attempt: _Attempt,
+        keep: str = "",
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Part 3, Phase 2 review: a NEW turn on a kept session's thread — the
+        conversation it answered goes on with the lane's new user message
+        (the finish note), no process start, nothing replayed."""
+        seg = _Segment()
+        timeout = float(S.START_TIMEOUT_S)
+        effort = reasoning if reasoning in ("low", "medium", "high") else ""
+        try:
+            try:
+                turn = await s.request("turn/start", P.turn_start_params(s.thread_id, items, effort), timeout)
+            except S.SessionGone:
+                raise _Missed() from None
+            except TimeoutError:
+                raise P.typed(ProviderError(
+                    f"{P.TIMEOUT_PREFIX} — turn/start did not answer in {timeout:.0f}s", transient=True),
+                    "timeout") from None
+            if "error" in turn:
+                # This Codex would not start a second turn on the thread: the
+                # conversation goes to a new session, as before.
+                log.info("codex-cli: Codex would not continue the ended turn (%s)", _rpc_words(turn))
+                raise _Missed()
+            tid = ((turn.get("result") or {}).get("turn") or {}).get("id")
+            if isinstance(tid, str):
+                s.turn_id = tid
+            async for frame in self._segment(s, attempt, seg):
+                yield frame
+        finally:
+            if not seg.parked and not await _keep_done(s, seg, keep):
                 await _teardown(s, graceful=seg.done)
 
     # ------------------------------------------------------------------ #
@@ -795,6 +894,7 @@ class CodexNativeAdapter(LLMAdapter):
             seg.parked = True
         else:
             seg.done = True
+            seg.text, seg.finish = text, finish
         if s.lease is not None:
             from ....iron_proxy import accounts
 

@@ -373,8 +373,10 @@ def test_a_refused_command_was_not_run_and_is_never_the_test_command():
 def test_a_program_that_never_ended_is_not_the_test_command_until_it_ends():
     fc = _check()
     fc.observe(_call("shell", command="pytest -q"), _res(True, returncode=0), refused=False)
-    # a watcher started after it: still running when its start answered
-    fc.observe(_call("process_start", command="npm test -- --watch"), _res(True, id="p1", running=True),
+    # a test run started after it: still running when its start answered
+    # (review: a `--watch` run is no test run at all now, so the pin names a
+    # run that IS one and only its unended start keeps it out)
+    fc.observe(_call("process_start", command="npm run test:slow"), _res(True, id="p1", running=True),
                refused=False)
     assert fc._last_test_command()[2] == "pytest -q"
     # a later run that ENDED (its process_read saw the exit) counts

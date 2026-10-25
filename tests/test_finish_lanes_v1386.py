@@ -223,8 +223,10 @@ async def test_a_reply_that_changed_files_gets_one_note_and_one_extra_round(env,
     assert "## The request, point by point\n1. set X to 2 in app.py and run the tests" in note
     assert "## Files this reply made that the request does not name\nNone." in note
     assert '"<number>. met: <how you checked>"' in note
-    # The model's answer follows its reply; the record rides the answer LAST.
-    assert done["reply"].startswith("Set X to 2; the tests pass.\n\n1. met:")
+    # The model's answer follows its reply — its "1. met: ..." line is the
+    # check's bookkeeping (the record counts it), so the reply a person reads
+    # keeps only the closing words (review); the record rides the answer LAST.
+    assert done["reply"] == "Set X to 2; the tests pass.\n\nNothing needed changing."
     assert list(done)[-1] == "finish"
     assert done["finish"] == {"tests": "passed", "command": TEST_CMD, "removed": 0, "kept": 0,
                               "points": 1, "unmet": 0, "after": ""}
@@ -240,8 +242,11 @@ async def test_a_reply_that_changed_files_gets_one_note_and_one_extra_round(env,
         # The screen sees the check's test run as a step, then the answer.
         ids = [d["id"] for e, d in frames if e == "tool_call" and d.get("status") == "finished"]
         assert ids[-1].startswith(F.CALL_ID_PREFIX)
+        # (The live bubble streamed the whole answer; the saved reply is the
+        # done frame's.)
         tokens = "".join(d["text"] for e, d in frames if e == "token")
-        assert tokens == done["reply"]
+        assert tokens == ("Set X to 2; the tests pass.\n\n1. met: app.py says X = 2 and the tests pass."
+                          "\nNothing needed changing.")
 
 
 @pytest.mark.parametrize("lane", ["stream", "post"])
@@ -681,6 +686,8 @@ async def test_a_test_run_cut_off_by_its_time_limit_counts_as_failed(env):
         f'[[checks]]\nfiles = ["*.md"]\ncommand = "{slow}"\ntimeout_s = 1\n', encoding="utf-8"
     )
     model = wire([_write("notes.md", "x\n"), "Done.", "1. met."])
-    out = await _stream(platform, _body(ws, text="write notes.md"))
+    # (Review: the folder's own check never runs on auto-approve's per-call
+    # grant — under yolo it cards; allowed once here.)
+    out = await _stream(platform, _body(ws, text="write notes.md"), answer=lambda f: "once")
     assert out["done"]["finish"]["tests"] == "failed"
     assert "cut off by its time limit, so it counts as failed" in model.notes()[0]

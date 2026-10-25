@@ -96,6 +96,10 @@ describe("the finish check's one sentence", () => {
     [rec({ tests: "none", command: "" }), "Checked: no tests found"],
     [rec({ tests: "not_run", why: "you declined it" }), "Checked: tests not run"],
     [rec({ tests: "not_run", after: "passed" }), "Checked: tests passed after the check"],
+    // Review: no test command found, then the model ran its tests — never
+    // "no tests found" over that run.
+    [rec({ tests: "none", command: "", after: "passed" }), "Checked: tests passed after the check"],
+    [rec({ tests: "none", command: "", after: "failed" }), "Checked: tests failed after the check"],
     [rec({ unmet: 2, tests: "failed", after: "passed" }), "Checked: tests failed, then fixed, 2 points needed more work"],
     [rec({ unmet: 1 }), "Checked: tests passed, 1 point needed more work"],
   ])("%j reads %s", (r, words) => {
@@ -113,9 +117,12 @@ describe("the finish check's one sentence", () => {
 
   it("its hover names the command, and why the tests did not run", () => {
     expect(finishTitle(rec())).toBe("Ran: python -m unittest -q test_calc");
+    // Review: a command that did NOT run is never "Ran:" (the hover said
+    // "Ran: X" above "Not run: you declined it").
     expect(finishTitle(rec({ tests: "not_run", why: "you declined it" }))).toBe(
-      "Ran: python -m unittest -q test_calc\nNot run: you declined it",
+      "Not run: python -m unittest -q test_calc\nWhy: you declined it",
     );
+    expect(finishTitle(rec({ tests: "not_run", command: "", why: "low trust" }))).toBe("Why: low trust");
     expect(finishTitle(rec({ tests: "none", command: "" }))).toBeUndefined();
   });
 });
@@ -145,7 +152,7 @@ describe("the decoder", () => {
       id: "s1", title: "t", messages: [{ role: "assistant", content: "x", finish: rec(), secret: "no" }],
     });
     expect(v?.messages[0].finish).toEqual(rec());
-    expect((v?.messages[0] as Record<string, unknown>).secret).toBeUndefined();
+    expect((v?.messages[0] as unknown as Record<string, unknown>).secret).toBeUndefined();
   });
 });
 

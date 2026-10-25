@@ -78,6 +78,7 @@ from ...harness.helpers import asking as _helper_asking
 # Part 3, Phase 2: what separates a Build reply's words from its answer to
 # the finish check (lock-step with chat_turn's `combine`).
 from ...harness.finish import SEPARATOR as _FINISH_SEPARATOR
+from ...providers import turn_scope as _turn_scope
 from ..chat_turn import (
     preference_block,
     remembered_from_result,
@@ -4341,6 +4342,16 @@ async def chat_stream(
         )
         if ctx is not None and _harness is not None else None
     )
+    # ...and its TURN SCOPE (review): while the reply's tool loop runs, an
+    # adapter whose turn lives in a process (codex-cli) may keep a session
+    # whose answer just ended, so the finish note CONTINUES that thread
+    # instead of a new process with the whole conversation replayed as text
+    # (`providers.turn_scope`). Set here, in the task that iterates the
+    # stream (the model pump copies it); closed with the stream below.
+    # MIRROR NOTE (lock-step): chat_turn.run_chat_turn opens the same scope.
+    _fin_scope, _fin_scope_token = (
+        _turn_scope.open_scope() if _finish is not None else (None, None)
+    )
 
     def _helper_emit(event: str, data: dict[str, Any]) -> None:
         # A helper's row frames ride the turn's side channel: yielded while
@@ -4822,7 +4833,8 @@ async def chat_stream(
                     _cp = _ct.perm_key() if _ct is not None else _c.name
                     _cm = d.platform.permissions.mode_for(_cp, overrides)
                     _sc = _spend.get(id(_c))
-                    if approval_mode == "yolo" and _c.name not in ALWAYS_CARD_TOOLS:
+                    if (approval_mode == "yolo" and _c.name not in ALWAYS_CARD_TOOLS
+                            and not _finish_needs_a_person(_c)):
                         # v1.346.0: a priced call cards even here.
                         return _cp if (_sc is not None and _sc.ask and _cm is not PermissionMode.DENY) else ""
                     _asks = (
@@ -4845,6 +4857,18 @@ async def chat_stream(
                         # priced asks, whatever a grant said.
                         _asks = bool(_sc.ask)
                     return _cp if _asks else ""
+
+                def _finish_needs_a_person(_c) -> bool:
+                    # THE FINISH CHECK (part 3, Phase 2; review): the folder's
+                    # own check — text the FOLDER wrote, never a call the model
+                    # chose — is never run on auto-approve's per-call grant
+                    # (the v1.366.0 plugin-check rule): under yolo it is
+                    # judged as under approve-for-me, so it cards unless a
+                    # grant wider than one call covers the command tool.
+                    # MIRROR NOTE: the POST lane never auto-grants a call, so
+                    # it needs no twin; `_would_card` and the per-call branch
+                    # below read it the same way.
+                    return _finish is not None and _finish.needs_a_person(_c)
 
                 _round_asks: dict[str, list] = {}
                 for _c in calls:
@@ -4939,7 +4963,8 @@ async def chat_stream(
                     # MIRROR NOTE (lock-step): chat_turn.py passes its
                     # armed set the same way — edit both or neither.
                     _unarmed = tc.name not in _turn_tools
-                    if approval_mode == "yolo" and tc.name not in ALWAYS_CARD_TOOLS:
+                    if (approval_mode == "yolo" and tc.name not in ALWAYS_CARD_TOOLS
+                            and not _finish_needs_a_person(tc)):
                         if _engine_asks:
                             _grant_extra = {tc.name, _perm_name}
                         _needs_card = False
@@ -5469,6 +5494,7 @@ async def chat_stream(
                                                    name=(_harness.called_as(tc) if _harness is not None else tc.name),
                                                    content=str(content)[:12000]))
                             continue
+                        _label = ""  # (read by the finish check below)
                         if ran:
                             last_tool_output = str(result.output or "")
                         elif result is not None:
@@ -5644,9 +5670,9 @@ async def chat_stream(
                             # finish note (never a tool message: the model did
                             # not call it); a command the MODEL ran is noted
                             # (the test command it ran / a later test run).
-                            _fin_refused = bool(
-                                result is not None and not ran and refusal_label(result.error or "")
-                            )
+                            # (the refusal's ONE classification is
+                            # `_label` above — the v1.344.0 M3 seam; review)
+                            _fin_refused = bool(result is not None and not ran and _label)
                             if _finish.owns(tc):
                                 await _finish.take(
                                     tc, result, str(content), refused=_fin_refused,
@@ -6153,3 +6179,10 @@ async def chat_stream(
         # dropped connection) — every ask still parked is resolved "stopped"
         # so no pack waits on a card nobody can answer any more.
         _ti.close()
+        # The finish check's turn scope (review): nothing is continued after
+        # this — every session still kept for it stops now.
+        if _fin_scope is not None:
+            try:
+                await _turn_scope.close(_fin_scope)
+            finally:
+                _turn_scope.reset(_fin_scope_token)

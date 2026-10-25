@@ -210,30 +210,67 @@ _RUNNER_VALUE_OPTS = frozenset({
     "--with", "--python", "-p", "--project", "--directory", "--env-file",
     "--extra", "--group", "--package", "--from", "--env", "-e",
 })
-#: Python options that take a value (`python -X utf8 -m pytest`).
-_PY_VALUE_OPTS = frozenset({"-x", "-w", "-c"})
+#: Python options that take a value (`python -X utf8 -m pytest`) — read in
+#: lower case, so `-x`/`-w` stand for `-X`/`-W` too. (`-c` is not one: Python
+#: runs the code after it and treats everything later as ITS arguments, so
+#: `python -c "<code>" -m pytest` never runs pytest — review: it read as a
+#: test run, and the check re-ran the model's code.)
+_PY_VALUE_OPTS = frozenset({"-x", "-w"})
 _PY_RX = re.compile(r"^(?:python(?:\d+(?:\.\d+)*)?w?|py)$")
 _PROGRAM_SUFFIXES = (".exe", ".cmd", ".bat", ".ps1", ".sh")
 _ASSIGN_RX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _SETUP_PROGRAMS = frozenset({"cd", "chdir", "pushd", "set-location", "sl"})
+#: Options that make a test runner ASK about itself instead of running the
+#: tests (review: `python -m pytest --version` passed, so the work line said
+#: "tests passed" for a reply whose tests never ran). Case-sensitive, as the
+#: runners read them (`-V` is pytest's version, `-v` its verbose).
+_INFO_ONLY_FLAGS = frozenset({
+    "--version", "-V", "--help", "-h", "-?", "--collect-only", "--co", "--fixtures",
+    "--markers", "--no-run", "--list-tests", "--dry-run", "-list", "--listTests",
+})
+_INFO_ONLY_PREFIXES = ("-DskipTests", "-Dmaven.test.skip")
+#: A watch mode never ends on its own: the check would wait out its time limit
+#: and call the tests "failed". (`-w` / `watch` mean it only for the
+#: JavaScript runners — npm's `-w` is a workspace, gradle's a warning level.)
+_WATCH_FLAGS = frozenset({"--watch", "--watchAll"})
+_JS_WATCH_WORDS = frozenset({"-w", "watch"})
+#: Package-manager options that take a value before the subcommand
+#: (`pnpm -C dashboard test`, `npm --prefix web test`, `yarn --cwd web test`).
+_PM_VALUE_OPTS = frozenset({
+    "-c", "--dir", "--prefix", "--cwd", "--filter", "-f", "--workspace", "-w", "--loglevel",
+})
+#: Test runners a JavaScript project calls directly or through `npx` / `pnpm`.
+_JS_RUNNERS = frozenset({"vitest", "jest", "mocha"})
 
 
-def _segments(command: str, *, posix: bool | None = None) -> list[str]:
-    """The command's top-level pieces (see the rule above). Quotes (' and ")
+def _split(command: str, *, posix: bool | None = None) -> tuple[list[str], list[str]]:
+    """``(segments, separators)``: the command's top-level pieces (see the
+    rule above) and, between each two, the separator that joined them
+    (``&&``, ``||``, ``;``, ``&`` or a line break, ``\\n``). Quotes (' and ")
     are respected; under POSIX a backslash escapes the next character."""
     if posix is None:
         posix = os.name != "nt"
     text = str(command or "")
     out: list[str] = []
+    seps: list[str] = []
     cur: list[str] = []
     quote = ""
     i, n = 0, len(text)
+    pending = ""
 
-    def cut() -> None:
+    def cut(sep: str) -> None:
+        nonlocal pending
         piece = "".join(cur).strip()
         if piece:
+            if out:
+                seps.append(pending or ";")
             out.append(piece)
+            pending = ""
         cur.clear()
+        if sep and out:
+            # The strongest separator since the last piece wins (a `;` after
+            # an `&&` with nothing between still breaks the chain).
+            pending = sep if pending in ("", "&&") else pending
 
     while i < n:
         ch = text[i]
@@ -253,12 +290,12 @@ def _segments(command: str, *, posix: bool | None = None) -> list[str]:
             i += 1
             continue
         if ch in "\r\n;":
-            cut()
+            cut("\n" if ch in "\r\n" else ";")
             i += 1
             continue
         if ch == "&":
             if text.startswith("&&", i):
-                cut()
+                cut("&&")
                 i += 2
                 continue
             prev = text[i - 1] if i else ""
@@ -268,17 +305,26 @@ def _segments(command: str, *, posix: bool | None = None) -> list[str]:
                 cur.append(ch)
                 i += 1
                 continue
-            cut()  # cmd's lone `&` (and a POSIX background job): a new piece
+            cut("&")  # cmd's lone `&` (and a POSIX background job): a new piece
             i += 1
             continue
         if ch == "|" and text.startswith("||", i):
-            cut()
+            cut("||")
             i += 2
             continue
         cur.append(ch)
         i += 1
-    cut()
-    return out
+    cut("")
+    return out, seps
+
+
+def _segments(command: str, *, posix: bool | None = None) -> list[str]:
+    """The command's top-level pieces (see the rule above)."""
+    return _split(command, posix=posix)[0]
+
+
+def _has_pipe(segment: str) -> bool:
+    return _pipeline_head(segment) != str(segment or "").strip()
 
 
 def _pipeline_head(segment: str) -> str:
@@ -357,14 +403,58 @@ def _first_plain(rest: list[str]) -> tuple[int, str]:
     return -1, ""
 
 
+def _info_only(words: list[str]) -> bool:
+    """Does a runner's command line only ask it about itself (its version,
+    its help, the tests it WOULD run), or start a watch that never ends?"""
+    for w in words:
+        if w in _INFO_ONLY_FLAGS or w.startswith(_INFO_ONLY_PREFIXES) or w in _WATCH_FLAGS:
+            return True
+    return False
+
+
+def _pm_first(rest: list[str]) -> tuple[int, str]:
+    """A package manager's first plain word (its subcommand), its options
+    with a value skipped: ``(index, word)`` or (-1, "")."""
+    i = 0
+    while i < len(rest):
+        w = rest[i]
+        if not w.startswith("-") and not w.startswith("+"):
+            return i, w
+        if "=" not in w and w in _PM_VALUE_OPTS:
+            i += 1
+        i += 1
+    return -1, ""
+
+
+def _js_runner(rest: list[str]) -> bool:
+    """``vitest run`` / ``vitest --run`` / ``jest`` / ``mocha`` (``rest`` is
+    the runner's own words, lower case, its name first)."""
+    if not rest:
+        return False
+    name = _program(rest[0])
+    if name not in _JS_RUNNERS or _JS_WATCH_WORDS & set(rest[1:]):
+        return False
+    if name == "vitest":
+        # Plain `vitest` is a WATCH on a developer's machine.
+        return "run" in rest[1:] or "--run" in rest[1:]
+    return True
+
+
 def _is_test_head(words: list[str]) -> bool:
     words = _strip_prefix(words)
     if not words:
         return False
+    if _info_only(words[1:]):
+        return False
     prog = _program(words[0])
     rest = [w.lower() for w in words[1:]]
-    if prog in ("pytest", "py.test"):
+    if prog in ("pytest", "py.test", "tox", "nox"):
         return True
+    if _js_runner([prog, *rest]):
+        return True
+    if prog in ("npx", "pnpx", "bunx"):
+        _i, first = _first_plain(rest)
+        return _js_runner(rest[rest.index(first):] if first else [])
     if _PY_RX.match(prog):
         i = 0
         while i < len(rest):
@@ -373,21 +463,28 @@ def _is_test_head(words: list[str]) -> bool:
                 return i + 1 < len(rest) and rest[i + 1] in ("pytest", "unittest", "py.test")
             if w.startswith("-m") and len(w) > 2:
                 return w[2:] in ("pytest", "unittest")
-            if not w.startswith("-"):
-                return False  # a script (`python test_spec.py`) is not the rule's
+            if w == "-c" or w.startswith("-c") or not w.startswith("-") or w == "-":
+                # `-c <code>` / a script (`python test_spec.py`) / stdin: what
+                # follows is that code's arguments, never a test runner.
+                return False
             if w in _PY_VALUE_OPTS:
                 i += 1
             i += 1
         return False
     if prog in ("npm", "pnpm", "yarn"):
-        i, first = _first_plain(rest)
+        i, first = _pm_first(rest)
         if first == "test" or (first == "t" and prog == "npm"):
             return True
         if first in ("run", "run-script"):
-            _j, script = _first_plain(rest[i + 1:])
+            _j, script = _pm_first(rest[i + 1:])
             return script.startswith("test")
+        if first in ("exec", "x", "dlx"):
+            _j, runner = _first_plain(rest[i + 1:])
+            return _js_runner(rest[rest.index(runner, i + 1):] if runner else [])
+        if prog in ("pnpm", "yarn") and first:
+            return _js_runner(rest[i:])
         return False
-    if prog in ("go", "cargo", "dotnet"):
+    if prog in ("go", "cargo", "dotnet", "bun", "deno"):
         return _first_plain(rest)[1] == "test"
     if prog in ("mvn", "mvnw", "gradle", "gradlew"):
         return "test" in [w for w in rest if not w.startswith("-")]
@@ -416,6 +513,8 @@ def _named(head: str, named: Iterable[str]) -> bool:
 
 
 def _is_setup(segment: str) -> bool:
+    if _SUBSTITUTION_RX.search(str(segment or "")):
+        return False
     words = _words(segment)
     if not words:
         return False
@@ -431,8 +530,16 @@ def _is_setup(segment: str) -> bool:
     return prog.startswith("activate")
 
 
+#: Command substitution inside a segment (`pytest $(curl …)`, backticks,
+#: process substitution): running the segment again would run what it
+#: substitutes again — never a test run, never a setup step (review).
+_SUBSTITUTION_RX = re.compile(r"\$\(|`|<\(|>\(")
+
+
 def is_test_segment(segment: str, named: Iterable[str] = ()) -> bool:
     """Is this ONE segment a test run (the rule above)?"""
+    if _SUBSTITUTION_RX.search(str(segment or "")):
+        return False
     head = _pipeline_head(segment)
     return _is_test_head(_words(head)) or _named(head, named)
 
@@ -456,6 +563,74 @@ def test_part(command: str, named: Iterable[str] = (), *, posix: bool | None = N
     if not any(is_test_segment(k, named) for k in keep):
         return ""
     return " && ".join(keep)
+
+
+def status_is_tests(command: str, named: Iterable[str] = (), *, posix: bool | None = None) -> bool:
+    """Is a command's OWN exit status its tests' — so a model's later run can
+    say whether the tests passed? Only for a chain of setup and test
+    segments joined by ``&&`` with no pipe in a test segment: ``pytest |
+    tail``, ``pytest || echo failed``, ``pytest; echo done`` and ``pytest &
+    exit 0`` all exit 0 when the tests FAIL (review: the work line said "tests
+    failed, then fixed" for a run whose tests still failed)."""
+    text = str(command or "")
+    if not text.strip() or len(text) > MAX_COMMAND_CHARS:
+        return False
+    named = list(named)
+    segments, seps = _split(text, posix=posix)
+    if not segments or any(s != "&&" for s in seps):
+        return False
+    tests = 0
+    for seg in segments:
+        if is_test_segment(seg, named):
+            if _has_pipe(seg):
+                return False
+            tests += 1
+        elif not _is_setup(seg):
+            return False
+    return tests > 0
+
+
+_REDIRECT_RX = re.compile(r"^\d?(?:>>?|<)&?\d*$")
+_REDIRECT_TO_RX = re.compile(r"^\d?(?:>>?|<)\S+$")
+
+
+def test_heads(command: str, named: Iterable[str] = (), *, posix: bool | None = None) -> list[str]:
+    """The TEST segments of a command, normalised (lower case, quotes and
+    redirections — ``2>&1``, ``> out.txt`` — left out): what a later run must
+    cover to say whether THESE tests passed (review)."""
+    named = list(named)
+    out: list[str] = []
+    for seg in _segments(command, posix=posix):
+        if not is_test_segment(seg, named):
+            continue
+        words = _words(_pipeline_head(seg))
+        kept: list[str] = []
+        skip = False
+        for w in words:
+            if skip:
+                skip = False
+                continue
+            if _REDIRECT_RX.match(w):
+                skip = "&" not in w  # `>` / `2>` / `<` alone: its file is the next word
+                continue
+            if _REDIRECT_TO_RX.match(w):
+                continue
+            kept.append(w)
+        head = _normal(" ".join(kept))
+        if head:
+            out.append(head)
+    return out
+
+
+def builtin_only(command: str, *, posix: bool | None = None) -> bool:
+    """Is every segment of a test part a setup step or a test run by the
+    BUILT-IN rule (not one the folder's docs or checks name)? A part that is
+    not was written by the folder, not the model: it never runs on
+    auto-approve's per-call grant (:meth:`FinishCheck.needs_a_person`)."""
+    segments = _segments(command, posix=posix)
+    return bool(segments) and all(
+        _is_setup(seg) or _is_test_head(_words(_pipeline_head(seg))) for seg in segments
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -539,17 +714,36 @@ _SETUP_ONLY_PROGRAMS = frozenset({
 _SETUP_ONLY_VERBS = frozenset({
     "install", "i", "ci", "add", "sync", "update", "upgrade", "uninstall", "remove", "get",
     "clone", "init",
+    # review: never a test run, and not something to run twice
+    "publish", "deploy", "release", "version", "push", "login",
 })
+#: Programs a doc's test line can name that never RUN tests — they remove,
+#: move, fetch, ship or start things (review: a README's "Before running the
+#: tests, …: `<cmd>`" made `<cmd>` a test segment, so the check re-ran a
+#: command whose effect is not a test's).
+_NEVER_A_TEST_PROGRAMS = frozenset({
+    "rm", "del", "erase", "rd", "rmdir", "remove-item", "ri", "mv", "move", "move-item", "cp",
+    "copy", "copy-item", "xcopy", "robocopy", "curl", "wget", "iwr", "invoke-webrequest", "irm",
+    "invoke-restmethod", "ssh", "scp", "rsync", "docker", "docker-compose", "podman", "kubectl",
+    "helm", "terraform", "sudo", "su", "kill", "taskkill", "pkill", "killall", "shutdown", "start",
+    "start-process", "open", "explorer", "code", "echo", "cat", "type", "mkdir", "md", "touch",
+    "ln", "chmod", "chown", "gh", "az", "aws", "gcloud", "vercel", "netlify", "fly", "heroku",
+})
+#: A doc-named command must SAY it runs tests (or checks) somewhere in its
+#: own words: `make test`, `./run_tests.sh`, `npm run e2e`, `make check`.
+_TESTISH_RX = re.compile(r"test|spec|check|e2e|verify", re.IGNORECASE)
 
 
 def _not_a_run(cmd: str) -> bool:
     words = _words(cmd)
     if not words:
         return True
-    if _program(words[0]) in _SETUP_ONLY_PROGRAMS:
+    if _program(words[0]) in _SETUP_ONLY_PROGRAMS | _NEVER_A_TEST_PROGRAMS:
         return True
     plain = [w.lower() for w in words[1:] if not w.startswith("-")]
-    return bool(plain) and plain[0] in _SETUP_ONLY_VERBS
+    if plain and plain[0] in _SETUP_ONLY_VERBS:
+        return True
+    return not _is_test_head(words) and not _TESTISH_RX.search(" ".join(words))
 
 
 # --------------------------------------------------------------------------- #
@@ -777,10 +971,99 @@ def ledger_mark(engine: Any) -> int:
         return 0
 
 
+def _helper_sessions(db: Any, session_id: str, mark: int) -> list[str]:
+    """The sessions of the helper agents this Build session started (v1.372.0:
+    a helper's run carries ``options["build_session"]`` = the session's
+    thread) that wrote ledger rows above ``mark`` — their changes are this
+    reply's too (review: a helper's scratch file was never listed)."""
+    from sqlalchemy import text
+
+    from .helpers import BUILD_SESSION_OPTION, build_thread_of
+
+    thread = build_thread_of(session_id)
+    if not thread:
+        return []
+    rows = db.exec(text(  # type: ignore[call-overload]
+        "SELECT DISTINCT t.session_id FROM toolinvocation AS t JOIN session AS s ON s.id = t.session_id "
+        "WHERE t.rowid > :mark AND json_valid(s.options_json) "
+        "AND json_extract(s.options_json, :key) = :thread LIMIT 50"
+    ).bindparams(mark=int(mark), key=f"$.{BUILD_SESSION_OPTION}", thread=thread)).all()
+    return [str(r[0]) for r in rows if r and r[0]]
+
+
+def ledger_mark_before(engine: Any, at: Any) -> "int | None":
+    """The ledger's newest row number BEFORE ``at`` (an ISO stamp, a reply
+    line's ``at``): where a reply that began then starts. None when it cannot
+    be read (the caller keeps its own mark). BLOCKING."""
+    try:
+        from datetime import datetime, timezone
+
+        from sqlalchemy import text
+
+        from ..core.db import session_scope
+
+        when = datetime.fromisoformat(str(at).replace("Z", "+00:00"))
+        if when.tzinfo is not None:
+            when = when.astimezone(timezone.utc).replace(tzinfo=None)
+        with session_scope(engine) as db:
+            row = db.exec(text(  # type: ignore[call-overload]
+                "SELECT MAX(rowid) FROM toolinvocation WHERE created_at < :at"
+            ).bindparams(at=when.strftime("%Y-%m-%d %H:%M:%S.%f"))).first()  # SQLAlchemy's own text form
+            value = row[0] if row is not None else None
+            return int(value or 0)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+#: A ``shell`` row whose command really RAN says how it was confined (the
+#: tool writes it for every run; a call it refused first carries none).
+_RAN_CONFINEMENTS = frozenset({"sandbox", "native", "native-unconfined"})
+
+
+def ran_commands(engine: Any, session_id: str, after: int, upto: int) -> list[tuple[str, dict[str, Any]]]:
+    """The ``shell`` commands the session RAN between two ledger marks, in
+    order — the part of a reply a "carry on" continues (the cut turn's own
+    test command). The check's own runs are not the model's. BLOCKING; [] on
+    any failure."""
+    import json as _json
+
+    try:
+        from sqlalchemy import literal_column
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..core.models import ToolInvocation
+
+        rowid = literal_column("toolinvocation.rowid")
+        with session_scope(engine) as db:
+            rows = db.exec(
+                select(ToolInvocation.args_json, ToolInvocation.confinement, ToolInvocation.called_as)
+                .where(ToolInvocation.session_id == session_id)
+                .where(ToolInvocation.tool == "shell")
+                .where(rowid > int(after)).where(rowid <= int(upto))
+                .order_by(rowid)  # type: ignore[arg-type]
+                .limit(MAX_LEDGER_ROWS)
+            ).all()
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[tuple[str, dict[str, Any]]] = []
+    for args_json, confinement, called_as in rows:
+        if confinement not in _RAN_CONFINEMENTS or called_as == CALLED_AS:
+            continue
+        try:
+            args = _json.loads(args_json or "{}")
+        except ValueError:
+            continue
+        if isinstance(args, dict) and isinstance(args.get("command"), str):
+            out.append(("shell", args))
+    return out
+
+
 def read_turn_files(engine: Any, session_id: str, mark: int) -> TurnFiles:
-    """The reply's file changes from its undo journal: the session's rows
-    above ``mark`` that succeeded and were not undone. BLOCKING; never
-    raises (an unreadable ledger reads as nothing changed)."""
+    """The reply's file changes from its undo journal: the rows above
+    ``mark`` of the session — and of the helper agents it started — that
+    succeeded and were not undone. BLOCKING; never raises (an unreadable
+    ledger reads as nothing changed)."""
     out = TurnFiles()
     try:
         from sqlalchemy import literal_column
@@ -793,10 +1076,14 @@ def read_turn_files(engine: Any, session_id: str, mark: int) -> TurnFiles:
 
         rowid = literal_column("toolinvocation.rowid")
         with session_scope(engine) as db:
+            try:
+                helpers = _helper_sessions(db, session_id, mark)
+            except Exception:  # noqa: BLE001 — the reply's own rows still count
+                helpers = []
             rows = db.exec(
                 select(ToolInvocation, UndoJournal)
                 .join(UndoJournal, UndoJournal.action_id == ToolInvocation.id)  # type: ignore[arg-type]
-                .where(ToolInvocation.session_id == session_id)
+                .where(ToolInvocation.session_id.in_([session_id, *helpers]))  # type: ignore[attr-defined]
                 .where(rowid > int(mark))
                 .order_by(rowid)  # type: ignore[arg-type]
                 .limit(MAX_LEDGER_ROWS)
@@ -904,19 +1191,25 @@ def before_bytes(home: Any, first: "tuple[str, dict, dict, dict | None] | None",
 # --------------------------------------------------------------------------- #
 
 
-def gitignore_rules(folder: Any) -> list[tuple[bool, bool, bool, Any]]:
-    """The folder's top-level ``.gitignore`` as ``(negate, dir_only,
-    anchored, compiled)`` rules (bounded). BLOCKING; never raises."""
-    from .globmatch import GlobError, compile_glob
-
+def gitignore_rules(folder: Any, name: str = ".gitignore") -> list[tuple[bool, bool, bool, Any]]:
+    """The ``.gitignore`` in ``folder`` (or another rules file, ``name``) as
+    ``(negate, dir_only, anchored, compiled)`` rules (bounded). BLOCKING;
+    never raises."""
     rules: list[tuple[bool, bool, bool, Any]] = []
     try:
-        path = Path(str(folder)) / ".gitignore"
+        path = Path(str(folder)) / name
         if not path.is_file() or path.stat().st_size > MAX_GITIGNORE_BYTES:
             return rules
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return rules
+    return _parse_ignore(text)
+
+
+def _parse_ignore(text: str) -> list[tuple[bool, bool, bool, Any]]:
+    from .globmatch import GlobError, compile_glob
+
+    rules: list[tuple[bool, bool, bool, Any]] = []
     for raw in text.splitlines():
         line = raw.rstrip()
         if not line or line.startswith("#"):
@@ -961,6 +1254,69 @@ def ignored(rel_posix: str, rules: list[tuple[bool, bool, bool, Any]]) -> bool:
         if verdict and is_dir:
             return True  # an ignored folder: nothing under it comes back
     return verdict
+
+
+#: How many ``.gitignore`` files one check reads (each folder above a new file).
+MAX_GITIGNORE_FILES = 64
+
+
+class GitIgnore:
+    """What git would ignore in ``folder``, as git reads it (review: only the
+    top-level ``.gitignore`` was read, so a file a NESTED ``.gitignore``
+    ignores was listed as a stray file for the model to remove).
+
+    The rules, in git's order (a later match wins): ``.git/info/exclude``,
+    then the ``.gitignore`` of the folder, then of each folder below it on the
+    way to the file — each read relative to the folder it sits in. A folder
+    an earlier level ignores hides everything under it (git never re-includes
+    a file below an ignored folder). Not read: the user's global excludes file
+    (``core.excludesFile``) and the exclude file of a linked worktree's main
+    repository. BLOCKING (small reads, cached per folder); never raises."""
+
+    def __init__(self, folder: Any) -> None:
+        self.folder = Path(str(folder))
+        self._files: dict[str, list[tuple[bool, bool, bool, Any]]] = {}
+        try:
+            git = self.folder / ".git"
+            self._exclude = gitignore_rules(git / "info", "exclude") if git.is_dir() else []
+        except OSError:
+            self._exclude = []
+
+    def _at(self, rel_dir: str) -> list[tuple[bool, bool, bool, Any]]:
+        if rel_dir in self._files:
+            return self._files[rel_dir]
+        if len(self._files) >= MAX_GITIGNORE_FILES:
+            return []
+        rules = gitignore_rules(self.folder / rel_dir if rel_dir else self.folder)
+        self._files[rel_dir] = rules
+        return rules
+
+    def ignored(self, rel_posix: str) -> bool:
+        parts = [p for p in str(rel_posix or "").replace("\\", "/").split("/") if p and p != "."]
+        if not parts or ".." in parts:
+            return False
+        for depth in range(1, len(parts) + 1):
+            target = parts[:depth]
+            is_dir = depth < len(parts)
+            # (base folder, its rules): the exclude file, then each folder
+            # from the top down to the one that holds this target.
+            sources = [((), self._exclude)] + [
+                (tuple(parts[:k]), self._at("/".join(parts[:k]))) for k in range(0, depth)
+            ]
+            verdict = False
+            for base, rules in sources:
+                rel = "/".join(target[len(base):])
+                name = target[-1]
+                for negate, dir_only, anchored, rx in rules:
+                    if dir_only and not is_dir:
+                        continue
+                    if bool(rx.match(rel)) if anchored else bool(rx.match(name)):
+                        verdict = not negate
+            if is_dir and verdict:
+                return True
+            if not is_dir:
+                return verdict
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -1114,6 +1470,7 @@ class FinishCheck:
         self._changed_rels: list[str] = []
         self._note_sent = False
         self._answer_heard = False
+        self._answer = ""
         self._calls_made = 0
 
     # -- what the lane tells it -------------------------------------------- #
@@ -1121,6 +1478,22 @@ class FinishCheck:
     def owns(self, call: Any) -> bool:
         """Is ``call`` one of the check's own calls?"""
         return str(getattr(call, "id", "") or "") in self._by_id
+
+    def needs_a_person(self, call: Any) -> bool:
+        """Must this call of the check's be allowed by a PERSON (a card, or a
+        grant wider than one call) — never by auto-approve's per-call grant?
+        True for the folder's own check and for a test part with a segment
+        only the folder's docs or checks name: text the FOLDER wrote, which
+        the model never chose to run. The v1.366.0 rule for a folder's plugin
+        checks (``chat_turn.harness_check_runner``: "never the per-call
+        auto-approve grant") — review: under auto-approve the finish check ran
+        the folder's ``plugins.toml`` command with no card, in the same reply
+        whose after-edit check said that command "needs the user's approval".
+        False for the model's own test command, run again as it ran it."""
+        run = self._by_id.get(str(getattr(call, "id", "") or ""))
+        if run is None:
+            return False
+        return run.source == "folder" or not builtin_only(run.command)
 
     def observe(self, call: Any, result: Any, *, refused: bool) -> None:
         """A model call settled. An EXECUTED command call (one the registry
@@ -1134,6 +1507,12 @@ class FinishCheck:
         if result is None or refused:
             return
         data = dict(getattr(result, "data", None) or {})
+        if name in COMMAND_TOOLS and _never_ran(name, result):
+            # Review: a command the TOOL refused before any program started
+            # (the git guard's force push, low trust's sandbox, a folder
+            # outside the session's) ran nothing: it is neither the test
+            # command the check runs again nor a later test run.
+            return
         if name == "process_read":
             handle = str(data.get("id") or "")
             if handle and not data.get("running") and isinstance(data.get("exit_code"), int):
@@ -1155,7 +1534,14 @@ class FinishCheck:
         if not self._note_sent:
             return
         command = str(args.get("command") or "")
-        if not command or not test_part(command, self._named_names()):
+        if not command or not status_is_tests(command, self._named_names()):
+            # Review: only a run whose OWN exit status is its tests' decides
+            # `after` (`pytest | tail`, `pytest || echo x` exit 0 when the
+            # tests fail; the line said "tests failed, then fixed").
+            return
+        if not self._covers(command):
+            # Review: and only a run of the SAME tests the check ran (one
+            # test of a failing suite passing is not "then fixed").
             return
         verdict = _verdict(name, result)
         if verdict:
@@ -1170,8 +1556,21 @@ class FinishCheck:
         if not self._note_sent or self._answer_heard:
             return
         self._answer_heard = True
+        self._answer = str(text or "")
         _met, unmet = answered_points(text, len(self.points))
         self.unmet = len(unmet)
+
+    def _covers(self, command: str) -> bool:
+        """Does a later run cover every test the check's own runs ran (same
+        test segments, setup steps and redirections aside)? True when the
+        check ran nothing (no tests found / not run): any test run then says
+        what it says."""
+        named = self._named_names()
+        mine = {h for r in self.runs if r.verdict in (TESTS_PASSED, TESTS_FAILED)
+                for h in test_heads(r.command, named)}
+        if not mine:
+            return True
+        return mine <= set(test_heads(command, named))
 
     def _named_names(self) -> list[str]:
         return [*self._named, *(str(getattr(c, "command", "") or "") for c in self.checks)]
@@ -1185,7 +1584,11 @@ class FinishCheck:
         the check does not run (the reply ends exactly as before). A list:
         it runs — its own test calls (possibly none: the note then goes
         straight to the model)."""
-        if self.ran or not self.config.enabled or truncated or round_index >= rounds - 1:
+        # Review: never when the ANSWER would be the reply's last round — its
+        # fixes could not run there (a round with tool calls at the limit is
+        # the step-limit report), so a reply that had ENDED would end on the
+        # step-limit report instead.
+        if self.ran or not self.config.enabled or truncated or round_index >= rounds - 2:
             return None
         files = await asyncio.to_thread(read_turn_files, self.engine, self.session_id, self.mark)
         if not files.changed:
@@ -1214,7 +1617,7 @@ class FinishCheck:
             if not inner.startswith("../"):
                 self._changed_rels.append(inner)
         if self.config.new_files:
-            rules = gitignore_rules(self.folder)
+            ignore = GitIgnore(self.folder)
             kept: list[tuple[Path, str]] = []
             for target, rel in files.created:
                 try:
@@ -1225,7 +1628,7 @@ class FinishCheck:
                     continue
                 if inner.startswith("../") or inner == "..":
                     inner = rel
-                if inner.split("/", 1)[0] == ".git" or ignored(inner, rules):
+                if inner.split("/", 1)[0] == ".git" or ignore.ignored(inner):
                     continue
                 if _named_in(inner, self.request):
                     continue
@@ -1302,13 +1705,17 @@ class FinishCheck:
                 name, args, part = mine
                 runs.append(_Run(command=part, args=args, source="yours",
                                  timeout_s=_int_or_none(args.get("timeout_s"))))
+        if low_trust:
+            # Before "no tests found": in low trust the model's own commands
+            # are refused before they run (no sandbox), so none is ever the
+            # test command — "no tests found" would be a wrong reason (review).
+            self.runs = runs
+            self._not_run_all("this reply is in low trust, so the check runs no command")
+            return []
         if not runs:
             self.tests = TESTS_NONE
             return []
         self.runs = runs
-        if low_trust:
-            self._not_run_all("this reply is in low trust, so the check runs no command")
-            return []
         if self.carrier not in self.gate:
             self._not_run_all("this reply has no command tool")
             return []
@@ -1378,11 +1785,7 @@ class FinishCheck:
             return
         data = dict(getattr(result, "data", None) or {})
         text = str(content or "")
-        never_ran = (
-            ("id" not in data) if call.name == "process_start"
-            else ("returncode" not in data and not data.get("timed_out"))
-        )
-        if not getattr(result, "ok", False) and never_ran:
+        if _never_ran(call.name, result):
             # The tool refused it before any program ran (the git guard, a
             # folder outside the session's, low trust's sandbox): no exit
             # status exists, so it is "not run", never "failed".
@@ -1486,7 +1889,8 @@ class FinishCheck:
         if self.tests == TESTS_NONE:
             return (
                 "No tests found: this folder has no checks in .ironjarvis/harness/plugins.toml for "
-                "these files, and you ran no test command in this reply."
+                "these files, and no command you ran in this reply reads as a test run (pytest, "
+                "python -m unittest, npm test, go test, cargo test and the like)."
             )
         if not self.runs:
             return f"The tests were not run: {self.why}."
@@ -1516,9 +1920,19 @@ class FinishCheck:
             lines.append(head + (f" Its output:\n{out}" if out else ""))
         return "\n".join(lines)
 
+    #: Review: the list is the FILE TOOLS' (the undo journal). A command the
+    #: model ran can make files too (the glm run this phase replays patched
+    #: calc.py with `python -c`), and "None." would then be a claim the
+    #: journal cannot make — so a reply that ran a command is told so.
+    COMMANDS_CAVEAT = (
+        "(Only files made with your file tools are listed. A command you ran in this reply "
+        "may have made others: check for any scratch file it left.)"
+    )
+
     def _files_text(self) -> str:
+        caveat = ("\n" + self.COMMANDS_CAVEAT) if self._commands else ""
         if not self.new_files:
-            return "None."
+            return "None." + caveat
         listed = "\n".join(f"- `{rel}`" for _p, rel in self.new_files)
         more = f"\n(and {self.new_files_left_out} more)" if self.new_files_left_out else ""
         how = (
@@ -1528,7 +1942,7 @@ class FinishCheck:
         )
         return (
             listed + more + "\nKeep each one only if the work needs it; " + how + ". A scratch "
-            "script or test file left in the folder can break the project's own test run."
+            "script or test file left in the folder can break the project's own test run." + caveat
         )
 
     def _points_text(self) -> str:
@@ -1556,8 +1970,14 @@ class FinishCheck:
             return final
         head = str(self.draft or "").rstrip()
         tail = str(final or "").strip()
+        if self._answer_heard and tail and tail == self._answer.strip():
+            # The reply ENDED on its answer to the note: its "N. met: ..."
+            # lines are the check's bookkeeping (the record counts them, the
+            # work line says "Checked: ..."), not what a person reads. What
+            # was NOT met, and the model's closing words, stay (review).
+            tail = drop_met_lines(tail, len(self.points))
         if not head:
-            return final
+            return tail if tail else final
         if not tail or tail == head:
             return head
         return head + SEPARATOR + tail
@@ -1654,6 +2074,35 @@ def _refusal_shaped(result: Any) -> bool:
     return err.startswith(_REFUSAL_PREFIXES)
 
 
+def _never_ran(name: str, result: Any) -> bool:
+    """Did a command call end WITHOUT any program running (the tool refused it
+    first: the git guard, low trust's sandbox, a working folder outside the
+    session's)? ``shell`` answers ``returncode`` for every run (or
+    ``timed_out``); ``process_start`` answers its program's ``id``."""
+    if result is None:
+        return True
+    if getattr(result, "ok", False):
+        return False
+    data = dict(getattr(result, "data", None) or {})
+    if name == "process_start":
+        return "id" not in data
+    return "returncode" not in data and not data.get("timed_out")
+
+
+def drop_met_lines(text: str, total: int) -> str:
+    """The model's answer without its "N. met: ..." lines (N within the
+    note's points); every other line — what was not met, the closing
+    sentence — as the model wrote it. Pure."""
+    kept: list[str] = []
+    for line in str(text or "").splitlines():
+        m = _ANSWER_RX.match(line)
+        if m and 1 <= int(m.group(1)) <= total and " ".join(m.group(2).lower().split()) in ("met", "done"):
+            continue
+        kept.append(line)
+    out = "\n".join(kept).strip()
+    return re.sub(r"\n{3,}", "\n\n", out)
+
+
 def _verdict(name: str, result: Any) -> str:
     """A model command run's own verdict: "passed" / "failed", or "" when it
     did not end (a program still running)."""
@@ -1677,11 +2126,16 @@ async def start(
     messages: Iterable[Any],
     harness: Any,
     carry_on: Iterable[str] = (),
+    since: Any = None,
 ) -> "FinishCheck | None":
     """The reply's finish check, or None when it does not apply: no harness
     turn, not a Build session's own turn (``build:<id>``), plan mode, no
     folder, or the folder turned it off. Reads the ledger mark off the loop.
-    MIRROR NOTE (lock-step): both chat lanes call this at the same seam."""
+    ``since`` (review): the stamp of the question a daemon's "carry on"
+    continues (a reply cut off by an account limit and resumed) — the check
+    then covers the WHOLE reply from that question: the files the cut part
+    made, and its test command. MIRROR NOTE (lock-step): both chat lanes call
+    this at the same seam."""
     if harness is None or getattr(harness, "plan_mode", False):
         return None
     from .command_env import is_build_call
@@ -1701,6 +2155,12 @@ async def start(
     if not str(folder or "").strip():
         return None
     mark = await asyncio.to_thread(ledger_mark, engine)
+    earlier: list[tuple[str, dict[str, Any]]] = []
+    if since:
+        before = await asyncio.to_thread(ledger_mark_before, engine, since)
+        if before is not None and before < mark:
+            earlier = await asyncio.to_thread(ran_commands, engine, sid, before, mark)
+            mark = before
     plan = getattr(harness, "plan", None)
     gate = frozenset(getattr(plan, "gate", None) or ())
     from .mode import _shown_name
@@ -1714,6 +2174,7 @@ async def start(
         checks=getattr(plugins, "checks", ()) or (), gate=gate, carrier=carrier,
         delete_name=delete_name, harness=harness,
     )
+    check._commands.extend((name, args, "") for name, args in earlier)
     return check
 
 

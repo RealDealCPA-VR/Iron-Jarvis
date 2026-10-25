@@ -447,6 +447,55 @@ def answered_calls(messages: list[Any]) -> tuple[list[str], dict[str, str]] | No
     return ids, results
 
 
+def conversation_key(system: str, messages: list[Any], tools: list[dict[str, Any]]) -> str:
+    """A digest of what one call ASKED (its system prompt, its tool names and
+    every message: role, words, calls, results, how many pictures) — the key a
+    session whose turn ended is kept under, so only the SAME conversation, one
+    answer and one new user message further on, can continue it (part 3,
+    Phase 2 review: the finish note)."""
+    rows: list[Any] = [str(system or ""), sorted(str(t.get("name") or "") for t in tools or [])]
+    for m in messages or []:
+        if getattr(m, "role", "") in ("system", "developer"):
+            rows.append(["system", str(getattr(m, "content", "") or "")])
+            continue
+        rows.append([
+            getattr(m, "role", ""),
+            getattr(m, "content", "") if isinstance(getattr(m, "content", ""), str)
+            else str(getattr(m, "content", "") or ""),
+            str(getattr(m, "tool_call_id", "") or ""),
+            str(getattr(m, "name", "") or ""),
+            [[str(tc.id), str(tc.name), _args_text(tc.arguments)]
+             for tc in getattr(m, "tool_calls", None) or []],
+            len(getattr(m, "images", None) or []),
+        ])
+    blob = json.dumps(rows, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def continuation_of(messages: list[Any]) -> "tuple[list[Any], str, list[dict[str, Any]]] | None":
+    """``(the messages before the answer, its words, the new turn's input
+    items)`` when
+    the conversation ENDS with new user message(s) right after an assistant
+    answer that called no tool — the shape of the lane's finish note (the
+    model ended its reply; Iron Jarvis asks one more thing) — else None."""
+    msgs = list(messages or [])
+    k = len(msgs)
+    while k > 0 and getattr(msgs[k - 1], "role", "") == "user":
+        k -= 1
+    if k == len(msgs) or k == 0:
+        return None
+    answer = msgs[k - 1]
+    if getattr(answer, "role", "") != "assistant" or getattr(answer, "tool_calls", None):
+        return None
+    try:
+        items = [item for m in msgs[k:] for item in _user_items(m)]
+    except HistoryError:
+        return None
+    if not items:
+        return None
+    return msgs[: k - 1], str(getattr(answer, "content", "") or ""), items
+
+
 def last_call_ids(messages: list[Any]) -> list[str]:
     """The call ids of the conversation's LAST assistant turn that asked for
     tools (anywhere before the end), or []: a parked session waiting on them

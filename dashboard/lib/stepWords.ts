@@ -316,7 +316,9 @@ export function finishWords(f: FinishRecord): string {
     parts.push(f.after === "failed" ? "tests passed, then failed" : "tests passed");
   } else if (f.tests === "failed") {
     parts.push(f.after === "passed" ? "tests failed, then fixed" : "tests failed");
-  } else if (f.tests === "not_run") {
+  } else if (f.tests === "not_run" || f.after) {
+    // (A reply with no test run of the check's own whose model then ran its
+    // tests says what that run did — never "no tests found" over it.)
     parts.push(
       f.after === "passed"
         ? "tests passed after the check"
@@ -340,12 +342,14 @@ export function finishWarn(f: FinishRecord): boolean {
   return f.tests === "failed" && f.after !== "passed";
 }
 
-/** The finish line's hover: the command it ran, and why the tests did not
- *  run when they did not. */
+/** The finish line's hover: the command it ran — or, when the tests did not
+ *  run, the command it did NOT run and why (review: the hover said "Ran: X"
+ *  over a command that never ran). */
 export function finishTitle(f: FinishRecord): string | undefined {
   const bits: string[] = [];
-  if (f.command) bits.push(`Ran: ${f.command}`);
-  if (f.tests === "not_run" && f.why) bits.push(`Not run: ${f.why}`);
+  const ran = f.tests === "passed" || f.tests === "failed";
+  if (f.command) bits.push(`${ran ? "Ran" : "Not run"}: ${f.command}`);
+  if (f.tests === "not_run" && f.why) bits.push(`Why: ${f.why}`);
   return bits.length ? bits.join("\n") : undefined;
 }
 

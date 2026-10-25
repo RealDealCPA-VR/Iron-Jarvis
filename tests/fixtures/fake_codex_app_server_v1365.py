@@ -15,7 +15,10 @@ Environment:
   FAKE_CODEX_SCRIPT  path to JSON: {"processes": [proc0, proc1, ...]} — the Nth
                      process started (counted in FAKE_CODEX_STATE) plays
                      proc N (the last one repeats). A proc is
-                     {"steps": [...], and optionally "exit_on_start",
+                     {"steps": [...] — or "turns": [[...], [...]], the Nth
+                     turn/start of that process playing turns[N] (the last
+                     repeats; part 3, Phase 2 review: a thread that goes on
+                     after its turn ended) — and optionally "exit_on_start",
                      "initialize_error", "thread_start_error",
                      "thread_start" (fields merged into the thread answer),
                      "result" (fields merged into thread/start's result),
@@ -133,10 +136,17 @@ def main() -> int:
             if msg.get("id") == rid and "method" not in msg:
                 return msg
 
+    turns_run = [0]
+
     def run_turn(turn_id: str) -> int:
         emit({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "items": [], "status": "inProgress"}}})
         n_item = 0
-        for step in proc.get("steps", []):
+        if proc.get("turns"):
+            steps = proc["turns"][min(turns_run[0], len(proc["turns"]) - 1)]
+        else:
+            steps = proc.get("steps", [])
+        turns_run[0] += 1
+        for step in steps:
             n_item += 1
             item_id = f"item_{n_item}"
             if "text" in step:
