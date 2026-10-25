@@ -417,9 +417,12 @@ def switch_refusal(command: object) -> str:
         for words in _commands(str(command or "")):
             if _program(words[0]) != "start" or len(words) < 2:
                 continue
-            m = _SWITCH_RX.match(words[1])
-            if m and m.group(1).lower() in _START_SWITCHES:
-                sw = words[1]
+            # `start /b x`, and after a window title (`start "" /b x`,
+            # `start "My app" /min x` — the quotes are gone here): the first
+            # few words are where start's own switches go.
+            sw = next((w for w in words[1:4]
+                       if (m := _SWITCH_RX.match(w)) and m.group(1).lower() in _START_SWITCHES), "")
+            if sw:
                 return (
                     f"This shell is Git for Windows' bash: it turns `{sw}` into a path before "
                     "`start` sees it, and Windows would open an error window on the user's screen. "

@@ -473,6 +473,9 @@ async def test_start_with_a_cmd_switch_is_refused_before_it_opens_an_error_windo
     assert GB.switch_refusal("start /c/Users/me/report.html") == ""
     assert GB.switch_refusal("start //b python server.py") == ""
     assert GB.switch_refusal("cmd //c start /b x") == ""  # inside cmd, /b is cmd's own
+    # a window title first (cmd's own idiom): the switch after it is caught too
+    assert GB.switch_refusal('start "" /b python server.py')
+    assert GB.switch_refusal('start "My app" /min python server.py')
 
 
 # --------------------------------------------------------------------------- #
