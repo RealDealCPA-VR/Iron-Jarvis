@@ -33,7 +33,7 @@ const api = vi.hoisted(() => {
       this.status = status;
     }
   }
-  return { responses: {} as Record<string, unknown>, FakeApiError };
+  return { responses: {} as Record<string, unknown>, FakeApiError, harnessRenders: 0 };
 });
 
 vi.mock("@/lib/api", () => ({
@@ -55,6 +55,7 @@ vi.mock("next/dynamic", () => ({
     function DynamicStub(props: Record<string, unknown>) {
       if (typeof props.onOpenTerminal === "function") {
         // The IJ harness view: what the page hands it is what is asserted.
+        api.harnessRenders += 1; // v1.388.1: counts even a one-frame flash
         const open = props.onOpenTerminal as (id: string) => void;
         const terms = (props.terminals as { id: string }[]) ?? [];
         return (
@@ -241,6 +242,30 @@ describe("links into Build", () => {
     render(<TerminalsPage />);
     expect(await screen.findByTestId("pane-rail")).toBeInTheDocument();
     expect(screen.queryByTestId("ij-harness-view")).toBeNull();
+  });
+
+  // v1.388.1 (found by the v1.388.0 re-audit, lane E-J): the view this WINDOW
+  // last showed is kept in module state (lib/turnCache, v1.384.0), and the
+  // ?focus= branch returned without forcing the Terminals view — so once the
+  // IJ harness had been shown, every in-app terminal link (Sign in's "Open
+  // the Build terminal", the starter model, Microsoft 365's sign-in, the
+  // bell's "a terminal needs you") opened the harness and hid the pane. The
+  // test setup resets that cache, so the localStorage case above never saw it.
+  it("?focus=<id> opens the Terminals view after the IJ harness was shown in this window", async () => {
+    render(<TerminalsPage />);
+    await screen.findByTestId("terminal-pane-t1");
+    fireEvent.click(screen.getByTestId("build-view-harness"));
+    expect(await screen.findByTestId("ij-harness-view")).toBeInTheDocument();
+    cleanup(); // leave Build: a client-side navigation keeps module state
+    at("/terminals?focus=t2");
+    api.harnessRenders = 0;
+    render(<TerminalsPage />);
+    expect(await screen.findByTestId("pane-rail")).toBeInTheDocument();
+    expect(screen.queryByTestId("ij-harness-view")).toBeNull();
+    // From the first frame: the harness view never renders for a terminal
+    // link (render() flushes effects inside act(), so a one-frame flash would
+    // not show in the DOM — the count does).
+    expect(api.harnessRenders).toBe(0);
   });
 });
 

@@ -1,4 +1,4 @@
-# Iron Jarvis Product-Readiness Audit: Final Report (v1.350.2, HEAD 94043cfb) and Re-audits (v1.357.0, final v1.359.0)
+# Iron Jarvis Product-Readiness Audit: Final Report (v1.350.2, HEAD 94043cfb) and Re-audits (v1.357.0, v1.359.0, latest v1.388.0)
 
 **What this report is built on.** Seven audit lanes covered sections A to O. Each lane's PARTIAL and FAIL findings were then re-checked against the code by a hostile verifier, and against the running app using read-only requests. Where the auditors and verifiers disagreed, the verifier's version is used. Claims the verifiers disproved are left out, for example the bell's "Computer-use run failed — awaiting_approval" row, which is dead code because nothing publishes that event.
 
@@ -11,6 +11,158 @@ This synthesis re-confirmed six anchors directly in the tree:
 - Both chat lanes tell every model "You run locally on the user's machine" (`chat_turn.py:5640`, `routes/chat.py:2954`).
 
 The checklist has **213 items: 41 PASS, 169 PARTIAL, 3 FAIL.**
+
+---
+
+## 0g. Re-audit after the closing wave (v1.388.0, 2026-10-25)
+
+**What was re-checked, and how.** Since the last full re-audit (0d, v1.359.0), waves 10 and 11 (0e, 0f) closed its regressions, the IJ harness work (v1.363.0 to v1.387.2) added Build's coding sessions, and the closing wave (v1.388.0, lanes 12A and 12B) worked through the open gaps from 0d.4: plain failure words at every door, one Sign in press, every built-in tool in words, a waiting chat seen where you are, Continue after connecting elsewhere, the phone honest about apps, and one phone message for a waiting workflow.
+
+Seven re-audit lanes re-marked all 213 checklist items against the release commit `4c88c2cd`, in a read-only copy of the tree. They used the same groups as before: A-B, C-D-O, E-J, F-K, G-N, H-I-M and L. Each lane:
+- re-read the code behind every item in its sections and checked each open gap against its acceptance;
+- ran the pinned tests for its areas a few files at a time (about 4,500 pytest and 3,500 vitest test runs in all, every pinned test green; one lane ran the whole dashboard suite by mistake, and its 8 failures were the unbuilt add-on bundle and load flakes that pass alone);
+- ran read-only probes where reading was not enough: the app matchers and the tool selector on 54 everyday phrasings (byte-identical output at v1.361.0 and v1.388.0), the Connect door on 55 sentences, the failure-words classifier on 32 real error shapes, a fresh scratch home through the real app factory, and a jsdom copy of Build's real page;
+- sent read-only GET requests to the running app, which reports v1.387.0, so the closing wave is not on the user's install yet.
+
+Old per-item marks were not kept, so each lane marked from scratch and explained every move against 0d.3. Where two lanes scored one category, I used the median, rounded down, as before.
+
+### 0g.1 Overall score: **77 / 100** (55 at the first audit, 70 at v1.357.0, 74 at v1.359.0)
+
+The twelve categories average 77.9. I score 77, one point lower, for the same two reasons as in 0d.1:
+- **Several of the larger pieces have never run against the real thing:** Microsoft 365, GitHub's remote server, Gmail and Drive, a Gemini key, Ollama and LM Studio, the task door between two PCs, the tray notices and the Sign in press in the packaged app.
+- **The closing wave is not on the user's install yet.** It runs v1.387.0; v1.388.0 is published.
+
+155 of 213 items pass, up from 152. None fail. Items moved both ways (0g.3 names them). The ones that moved away from PASS are not fixes that were undone (0g.5): they are new surfaces the checklist now reaches, mostly Build's IJ harness, and two older gaps the 0d lanes understated.
+
+What the closing wave fixed, confirmed in the code by the lanes:
+- A failed task reads in one plain sentence on the run page, Schedules, the bell, the phone, the desktop notice, workflow steps and goals, with the technical text folded under Details.
+- One Sign in press for Claude Code and Codex in Connections, after Rescan, above the chat box and on the Agents page; no terminal recipe remains for either.
+- Every registered built-in tool reads in words on approval cards, the work line, the folded count and the desktop notice, generated from the registry and drift-checked in CI.
+- A chat waiting for an OK is listed in the bell from another page of the same window; tray notices for failed unattended runs (wave 10) hold.
+- After connecting an app in the Directory, by signing in, with a key or by turning an extension on, the chat that asked shows Continue.
+- The phone says plainly how a connected app can be used.
+- Replies name the user's own machine ("answered by GLM 4.6 on DGX Spark"), and the access summary follows the readable-folders setting.
+
+What holds the score at 77:
+- **Build's IJ harness is behind the rest of the app.** It is invisible outside Build (Running now, the status orb and the home line say nothing is running while a reply runs for an hour), its receipt leaves out the approvals given and the refit, its failure line says "Press Retry" with no Retry and keeps no technical detail, it cannot use connected apps, and its name ("IJ harness") is engine-room on a primary page.
+- **Common phrasings still miss.** "summarize my latest emails" goes to web search; "what apps can you work with?", "what are missions" and "what is build for" arm nothing; chat never suggests a mission; about 1 in 4 of a deliberately tricky set of sentences offers a wrong Connect door.
+- **Older dead ends now named.** A risky website step from a chat or agent run is refused with "approve it, then try again" while nothing is waiting to approve; a remote agent's task has no end state, a 202 reads "done", and the mission card shows the untrusted-content header instead of its answer; a failed @-agent says only "couldn't answer".
+- **Setup still needed.** Gmail, Google Drive, OneDrive and Dropbox need a one-time Google/Microsoft developer setup; Slack needs a Slack-app token; a user with no key and no CLI still needs Ollama and a 2 GB download (G86, the owner's call).
+- **One regression** (0g.5), fixed in v1.388.1.
+
+### 0g.2 Category scores
+
+| Category | First audit | v1.357.0 | v1.359.0 | Now | Why |
+|---|---|---|---|---|---|
+| Action clarity | 60 | 77 | 83 | **85** | Every built-in is worded, failures are plain at every door, replies name the machine, one Sign in press, and the harness's finish line says whether the code worked. Held back by: the harness is not named on the chat line, four surfaces state the same run's model and place differently, Build replies hide approvals and refit, @-agent failures give no reason, remote tasks have no end state, and the website risk door is a dead end. (A-B 85, L 86) |
+| Execution visibility | 62 | 76 | 78 | **82** | B passes in full. Failed unattended runs and long Build turns reach the tray; a waiting chat on another page is in the bell. An hours-long IJ harness reply leaves Running now, the orb and the home line saying nothing runs; chat turns, chat-started helper runs, missions, queued agent tasks and media end silently in the tray. (A-B 81, L 84) |
+| Connections | 42 | 58 | 66 | **72** | Continue after connecting elsewhere, the phone's honest words, one Sign in press, endpoint keys used on every background read, fewer false doors. Still: Gmail and Drive need a developer setup, Slack an app token with no warning, three "connected" counts and no single view, two model-server forms (Fleet's has no key field), a saved endpoint's key cannot be changed, the remote node unproven, web services Bearer-only, the harness cannot use connected apps. |
+| Import/discovery | 45 | 74 | 76 | **80** | Every found server now gets a line saying what it is (G49). Still: nothing is offered at first run, and some lines read "(index)" or "(cmd)". |
+| First-run experience | 52 | 70 | 74 | **76** | The terminal sign-in recipe is gone from every first-run surface and failures are plain. Still: no five-minute path with no key and no CLI (G86) and the free Gemini key is not offered as free, subscribers without the CLI install it from docs, sign-in and the model download happen in a terminal, four big apps need a developer setup, the key door prints raw Test text, and the terminal-link regression (fixed in v1.388.1). |
+| Error/recovery UX | 60 | 70 | 75 | **80** | Plain run words with Details, one Sign in press, a way out of a safety refusal, recovery that says so, waiting chats found. Still: the IJ harness lacks Retry, Sign in and Details while saying "Press Retry"; chat hides Iron-Proxy's exact account sentence behind "Press Retry"; a helper's failure reads raw on the mission log and Build helper rows; rare phone crash lines and @-agent failures. |
+| Consistency | 40 | 60 | 68 | **70** | One model name, one generated tool-words table, one failure rule, one Sign in press, one notice per outcome. Still: the Session board's red "Failed" lane for stopped runs, 73 boxed error notes, the mission screen's own ask card, Slack and email in two places, the phone's "FAILED". New with the harness: different failure UI, "Compact" where chat says "Summarize", "session" with two meanings. |
+| Discoverability | 50 | 63 | 65 | **66** | Continue after connecting, the phone's words, fewer false doors. Still: "summarize my latest emails" goes to web search, feature questions arm nothing, chat never suggests a mission or Build, coding sessions sit behind a tab named "IJ harness", and the Guide answers mission questions from the developer manual. (E-J 65, F-K 68) |
+| Beginner friendliness | 45 | 63 | 69 | **71** | The claude-cli preflight, "tool packs", "panes", "the pack", raw tool ids and Help's stale catch-all are gone. New: "IJ harness", "worktree", "Compact", Iron-Proxy in the harness accounts. Unchanged: "Local fleet", "Rescan local CLIs", the OAuth client id, Channels / SMTP / IMAP, and the nav's Sentinels, Reflexes and Artifacts. |
+| Trust | 55 | 70 | 76 | **79** | Reading follows the setting, the machine is named, the run page says local or cloud, and the harness added strong safety mechanics (once-only safety cards, the git guard, command-file asks, worktree branches, all-or-nothing Rewind, the account pin, per-model proxy egress). Still: "Don't ask" does not say it also sends with connected apps, the mission screen never says local or cloud, Local only says "this PC" while LAN hosts pass, an @-agent round has no Stop, and harness replies are invisible to Running now. |
+| Stability | 85 | 92 | 93 | **94** | All 14 items pass, including the real-daemon update rehearsal with the new `failure_detail` column. Small: an @-agent round has no Stop; kept `&` jobs survive a crash by design. |
+| Marketplace/capability readiness | 58 | 76 | 78 | **80** | One catalog and one door; needs, permissions, on/off, repair and sign-in carried as data; the false-door regression fixed. Still: models, channels, agents, web services and fleet nodes keep their own row shapes; key verdicts reset on restart; intent matching is by name only and stops at the phone and Build. |
+
+### 0g.3 PASS / PARTIAL / FAIL (first audit → v1.357.0 → v1.359.0 → now)
+
+| Section | Items | PASS | PARTIAL | FAIL |
+|---|---|---|---|---|
+| A. Actions self-evident | 33 | 3 → 13 → 24 → **22** | 30 → 20 → 9 → **11** | 0 |
+| B. Execution receipt | 24 | 10 → 22 → 23 → **24** | 14 → 2 → 1 → **0** | 0 |
+| C. Connections | 21 | 2 → 10 → 12 → **13** | 17 → 11 → 9 → **8** | 2 → 0 → 0 → 0 |
+| D. Import | 16 | 1 → 13 → 14 → **15** | 15 → 3 → 2 → **1** | 0 |
+| E. First run | 11 | 1 → 5 → 6 → **6** | 10 → 6 → 5 → **5** | 0 |
+| F. Natural-language discovery | 6 | 0 → 0 → 1 → **3** | 6 → 6 → 5 → **3** | 0 |
+| G. Error & recovery | 10 | 4 → 7 → 8 → **7** | 6 → 3 → 2 → **3** | 0 |
+| H. Consistency | 15 | 2 → 9 → 9 → **9** | 13 → 6 → 6 → **6** | 0 |
+| I. Engine room | 14 | 2 → 10 → 12 → **11** | 11 → 4 → 2 → **3** | 1 → 0 → 0 → 0 |
+| J. Discoverability | 5 | 0 → 2 → 2 → **2** | 5 → 3 → 3 → **3** | 0 |
+| K. Trust | 11 | 1 → 5 → 8 → **8** | 10 → 6 → 3 → **3** | 0 |
+| L. "Did it work?" | 14 | 2 → 9 → 8 → **11** | 12 → 5 → 6 → **3** | 0 |
+| M. "What does this mean?" | 8 | 0 → 3 → 3 → **2** | 8 → 5 → 5 → **6** | 0 |
+| N. Stability | 14 | 11 → 14 → 14 → **14** | 3 → 0 → 0 → **0** | 0 |
+| O. Marketplace readiness | 11 | 2 → 8 → 8 → **8** | 9 → 3 → 3 → **3** | 0 |
+| **Total** | **213** | **41 → 130 → 152 → 155** | **169 → 83 → 61 → 58** | **3 → 0 → 0 → 0** |
+
+The moves. The v1.359.0 lanes' per-item marks were not kept, so each move below is inferred from 0d's text and the lanes' own evidence:
+- **To PASS:**
+  - A "did it fail", "does it need me", "which machine", "which tools" and "scheduled work": tray notices and one notice per outcome (wave 10), the waiting chat (12B), the machine named (G21), every built-in worded (12A).
+  - B "machine/node": `route_label` covers custom and Ollama endpoints, and the run page says local or cloud.
+  - C, most likely Claude Code or Codex: the one Sign in press (12A).
+  - D "explains what was found": every found server gets a line (G49).
+  - F two items, "available" or "configured", and "resume after connecting": the phone's honest words, the sign-in state rule and Continue after connecting elsewhere (12B).
+  - K "what access" and "which machine": reading follows the setting; G21.
+  - L "tool call", "scheduled/background" and "approval flow": 12A words, tray notices, one phone line.
+- **Away from PASS:**
+  - A "is it working", "what is it doing" and "background work": one cause. Build's IJ harness replies are invisible to Running now, the orb and the home line.
+  - A "Build": the harness receipt never shows approvals or refit, although the reply line saves both.
+  - A "browser" and "approvals": the website risk door's dead end from chat and agent runs. It was already true at v1.359.0 and understated then.
+  - A "why did it fail" and "failures": a failed @-agent gives no reason. Also older.
+  - G "technical detail available": the harness keeps none, and chat's is a hover only.
+  - I "harness": "IJ harness" labels one of Build's two views and appears in the bell.
+  - K "what is it doing": the harness, as above. K "what will need approval": a stricter reading of unchanged words ("Don't ask" runs connected-app actions without asking and does not say so).
+  - M "ambiguous labels": "IJ harness", "Compact", and "session" with two meanings.
+
+### 0g.4 Gaps from 0d.4 and their remainders
+
+| Gap | Now | What remains |
+|---|---|---|
+| G21 Replies say where they ran | **Met** | The helper row names no machine for a named model on the user's server; the mission receipt never says local or cloud. |
+| G28 Failures in plain words | **Met at every run door** | A helper's failure to its parent (mission log, Build helper rows), chat's Iron-Proxy account refusals, phone crash paths, the Channels row, and @-agent failures. |
+| G33 Sign in from Accounts | **Met** for Claude Code and Codex | Grok has no Sign in press. |
+| G03 / G05 Notices and waiting chats | **Met** | Missions, queued agent tasks, media, chat turns and chat-started helper runs are not toasted from the tray. |
+| G15 Continue after connecting | **Met** | Newest reply only; a connected Drive still needs a memory base. |
+| G22 / G24 Tool and approval words | **Met** | Custom tools by id (by design); "channel" and "computer control" in generated words; `config_undo`'s card. |
+| G39 Apps by name | **Partly met, by decision** | The phone is honest and offers an agent hand-off; arming is by name, in the chat stream lane only, never in Build. |
+| G41 Connect-door misfires | **Partly met** | The 0f.3 trade-offs still offer a door, plus "Should I move my team from Slack to Teams?" and a Google Maps presentation. |
+| G49 Import explains itself | **Met** | Polish: "(index)", "(cmd)". |
+| G61 Remote Jarvis node | **Partly met** (unchanged) | Never run on two PCs; no Windows Firewall help. |
+| G76 One vocabulary | **Partly met** | The canon was not extended for the harness ("IJ harness", "Build session", "session" twice); "channel" is retired in the canon but not on the scanners' list (about 15 lines survive); the nav renames are the owner's call. |
+| G81 Readable folders | **Met** | — |
+| G54 Website approvals resume | **Still open** | Approving does not resume; from chat and agent runs nothing is even queued. |
+| G62 Remote end state | **Partly met** | See 0g.1. |
+
+### 0g.5 Regressions found
+
+1. **A link to a terminal opened the IJ harness instead** (since v1.385.0). Build keeps the view a window last showed in module state, and the `?focus=` branch returned without switching to Terminals. Once the harness had been shown in a window, every in-app terminal link landed on it and hid the pane: "Open the Build terminal" after Sign in or the starter model, Microsoft 365's sign-in, the bell's "a terminal needs you", Creative's "Open in Build" and the Iron-Proxy sign-in. The pinned test missed it because the test setup resets that cache. Found by lane E-J with a copy of the pinned test; **fixed in v1.388.1** (a terminal link starts on Terminals from the first frame), pinned with the same-window case and a render count, mutation-checked.
+
+No fix from v1.359.0 to v1.388.0 was found undone. The lanes' other findings are gaps on surfaces added since (the IJ harness) or older gaps now named; 0g.3 lists them.
+
+### 0g.6 Engine-room words still reaching users
+
+On primary paths:
+- "IJ harness" (Build's view switch, its sidebar label, the bell's "A change to a harness file is suggested", "relaunch the harness" in terminal refusals).
+- "worktree" in the harness's branch panel and sidebar; "Compact" in the harness where chat says "Summarize".
+- Raw failure text: a helper's "crashed: ProviderError: codex-cli: …" on the mission log and Build helper rows; "Pending approval id=appr_…" from the website risk door; phone crash lines with class names.
+- The first-run key door and Connections print the key Test text raw ("could not reach anthropic: ConnectError: [Errno 11001]…", "openai probe returned HTTP 500: {json}", "served through the logged-in claude CLI").
+- Connections: "Subscription & local providers", "Rescan local CLIs", "Sessions use this provider by default", an always-shown "Server type: OpenAI-/Anthropic-compatible", and `<provider>_oauth_client_id` on the Gmail and Drive paths; Grok's "run `grok login`".
+- Channels: "Open Channels", "the Channels page", SMTP and IMAP; "notification channel" in generated tool words.
+- The nav's Sentinels, Reflexes, Artifacts and "Local fleet"; "Your model fleet" on a first-run door; the Fleet page's "Add a node" form.
+- The status orb's "Thinking — a session is in flight"; "Attaching to sessions…"; "this action has no safe inverse".
+- A chat panel's raw "done" label over a remote's failed reply; the mission card's untrusted-content header in place of a remote's answer.
+
+Advanced or rare (unchanged): "HTTP server", "http-task (task API)", "Config (JSON)", "An MCP memory server", "ollama pull llama3.2", the extension fix's PATH / npx advice, "dashboard did not start".
+
+### 0g.7 Not built, by the owner's decision
+
+Unchanged: G83, G85 (control of other desktop apps) and G86 (a bundled model for a user with no key and no CLI). The nav renames (Sentinels → Watchers, Reflexes → Rules, Artifacts → What agents made) are proposals; the canon's rename procedure supports them once rows are added, and "Rules" may collide with Build's folder rules.
+
+### 0g.8 Never proven live
+
+- None of the closing wave on the user's install (it runs v1.387.0) or in the packaged app: the Sign in press on a really signed-out CLI, the waiting-chat bell, Continue with real OAuth, the phone's notes on the real phone, the tray notices as real Windows toasts.
+- Microsoft 365 sign-in; GitHub's remote server; Gmail, Drive, OneDrive and Dropbox OAuth; Slack, Notion and Stripe with real accounts; a Gemini key.
+- Ollama, LM Studio and llama.cpp detection and the one press (none installed on this PC).
+- The task door and the LAN setting on two physical PCs, including the Windows Firewall prompt; a real remote answering 202.
+- The website approval queue on a real site; the git guard against real GitHub pushes; Iron-Proxy rotation with two signed-in accounts.
+- A clean-profile packaged first run, and the five-minute timing with a real new user.
+
+### 0g.9 Verdict
+
+Iron Jarvis is at 77. The closing wave did what it set out to do: the failure words, the Sign in press, the tool words, the waiting chat and Continue all hold in the code, and nothing that worked was undone apart from one link regression, fixed in v1.388.1. The score is held by three things: Build's IJ harness, which was built after the last audit and has not yet been brought up to the rest of the app's honesty and visibility rules; the common phrasings chat still misreads ("summarize my latest emails", "what can you work with"); and setup the owner has chosen not to remove or that needs the user's accounts to prove. The fastest points left are in the harness (visible in Running now, Retry and Details on failure, approvals and refit on its receipt, an everyday name) and in the matcher (mail and feature questions).
 
 ---
 

@@ -3662,6 +3662,24 @@ does not need a bump, stop and bump it.
   tool-words-everywhere,engine-room-words,chat-waiting-where-you-are,
   chat-waiting-review,connected-elsewhere,connected-elsewhere-doors}-v1387.test.ts(x)`,
   e2e `dashboard/e2e/chat-waiting-where-you-are.spec.ts`.
+  v1.388.1 (a REGRESSION the v1.388.0 re-audit found, lane E-J): Build
+  keeps the view a WINDOW last showed in module state (`lib/turnCache`,
+  v1.384.0) and the `?focus=` branch returned without switching to Terminals,
+  so after the IJ harness was shown once, every in-app terminal link (Sign
+  in's "Open the Build terminal", the starter model, Microsoft 365's sign-in,
+  the bell's "a terminal needs you") opened the harness and hid the pane; the
+  pinned case passed because `__tests__/setup.ts` resets that cache. Now
+  `focusLinkInAddress()` starts the view on "rail" from the FIRST frame (and
+  the mount effect sets it too). Pin: `ij-harness-switch-v1369` same-window
+  case, which counts the harness stub's renders (`render()` flushes effects
+  inside act(), so a one-frame flash never shows in the DOM — an
+  effect-only fix survived a DOM assertion and failed the count). A NEW piece
+  of window-scoped module state needs a test that does NOT reset it.
+  The re-audit itself (docs/PRODUCT-READINESS-RESULTS.md 0g): 77/100, 155
+  PASS / 58 PARTIAL / 0 FAIL; what holds it is the IJ harness (invisible to
+  Running now/orb/home line, no Retry/Details on failure, receipt hides
+  approvals and refit, cannot use connected apps, the name), common phrasings
+  ("summarize my latest emails", feature questions) and owner-decided setup.
 
 - **A LOCAL endpoint's reply budget fits the work; a reply CUT at the limit
   never runs its half call and is picked up again** (v1.387.2; found by the

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.388.0 (2026-10-25).*
+holds itself to. Current as of v1.388.1 (2026-10-25).*
 
 ---
 
@@ -1896,6 +1896,14 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A terminal link opens the terminal (v1.388.1)
+
+Since v1.385.0, once you had looked at the IJ harness in a window, a link to
+one terminal opened the IJ harness instead and hid the terminal: "Open the
+Build terminal" after pressing Sign in, the starter model download, the
+Microsoft 365 sign-in, and the bell's "a terminal needs you". Every such link
+now opens the Terminals view on that terminal.
 
 ## Plain words at every door, and help where you are (v1.388.0)
 

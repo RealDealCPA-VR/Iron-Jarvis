@@ -128,6 +128,17 @@ const BUILD_PANEL_TABS = [
   { value: "files", label: "Files" },
 ] as const;
 
+/** True when this page was opened by a link to one terminal
+ *  (`/terminals?focus=<id>`). Read once, at the first render; false on the
+ *  server (no window). */
+function focusLinkInAddress(): boolean {
+  try {
+    return typeof window !== "undefined" && !!new URLSearchParams(window.location.search).get("focus");
+  } catch {
+    return false;
+  }
+}
+
 export default function TerminalsPage() {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
 
@@ -152,7 +163,12 @@ export default function TerminalsPage() {
   // (once the saved choice is read) the harness: "my work jumped" on every
   // return. Module state, so a real reload starts from the default, exactly
   // as the server renders it.
-  const [shape, setShape] = useState<BuildView>(() => cachedShape<BuildView>() ?? "rail");
+  // v1.388.1: a link to a terminal (`?focus=<id>`) opens the Terminals view
+  // from the FIRST frame, whatever this window last showed — "Open the Build
+  // terminal" after Sign in landed on the IJ harness and hid the pane.
+  const [shape, setShape] = useState<BuildView>(() =>
+    focusLinkInAddress() ? "rail" : (cachedShape<BuildView>() ?? "rail"),
+  );
   useEffect(() => {
     keepShape(shape);
   }, [shape]);
@@ -170,7 +186,10 @@ export default function TerminalsPage() {
       setShape("harness");
       return;
     }
-    if (params?.get("focus")) return; // a terminal link: the rail
+    if (params?.get("focus")) {
+      setShape("rail"); // a terminal link: the rail, never the cached view
+      return;
+    }
     try {
       setShape(viewFromSaved(window.localStorage.getItem(SHAPE_KEY)));
     } catch {
