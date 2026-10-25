@@ -982,3 +982,17 @@ def test_ordinary_lines_with_a_semicolon_still_run(command):
     from iron_jarvis.sandbox import cmd_guard as G
 
     assert G.semicolon_refusal(command) == "", command
+
+
+@needs_bash
+async def test_a_command_with_crlf_line_ends_runs_as_written(tmp_path):
+    """A model's command can arrive with Windows line ends: Git's bash
+    reads them as plain line breaks (measured) -- nothing gets a stray CR."""
+    from iron_jarvis.sandbox import shell_tool as ST
+
+    ws, ctx = _shell_ctx(tmp_path, "build:crlf", bash=True)
+    cr, lf = chr(13), chr(10)
+    command = "printf a > crlf.txt" + cr + lf + "echo done" + cr + lf
+    res = await ST.SandboxedShellTool().execute({"command": command}, ctx)
+    assert res.ok and res.output.strip().endswith("done"), res.output
+    assert (ws / "crlf.txt").read_bytes() == b"a"
