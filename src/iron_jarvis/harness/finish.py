@@ -1553,6 +1553,11 @@ class GitIgnore:
         self._files[rel_dir] = rules
         return rules
 
+    def no_file_in(self, rel_dir: str) -> None:
+        """The folder ``rel_dir`` holds no ``.gitignore`` (a walk's own listing
+        of it said so): nothing to read there, so none is ever opened."""
+        self._files.setdefault(rel_dir, [])
+
     def ignored(self, rel_posix: str, *, is_dir: bool = False) -> bool:
         """Does git ignore this file — or, with ``is_dir``, this FOLDER (a
         ``dir/`` rule matches it; the folder snapshot of

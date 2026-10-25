@@ -246,6 +246,10 @@ def take(
                     return Snapshot(root=str(root), problem=PROBLEM_UNREADABLE)
                 skipped.add(rel_dir)
                 continue
+            if not any(e.name == ".gitignore" for e in entries):
+                tell = getattr(ignore, "no_file_in", None)
+                if tell is not None:
+                    tell(rel_dir)  # every folder's rules are read: never open a file that is not there
             for entry in entries:
                 name = entry.name
                 rel = f"{rel_dir}/{name}" if rel_dir else name
