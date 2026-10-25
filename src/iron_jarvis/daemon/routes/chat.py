@@ -6026,14 +6026,19 @@ async def chat_stream(
                 # NOTE (lock-step): chat_turn.run_chat_turn.
                 reply += _chat_turn.demo_note(tools_used, reply)
             else:
-                reply += _creation_honesty_note(body, armed, tools_used)
+                # v1.351.0 fix round: the custom tools that ran, from the live
+                # registry. Finish-check review: and a Build turn's folder says
+                # what its commands wrote (`FinishCheck.folder_wrote`), so
+                # neither note says "nothing was written" after a command wrote
+                # a file. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+                _custom_ran = _chat_turn.custom_tools_used(d.platform, tools_used)
+                _wrote = _finish.folder_wrote() if _finish is not None else None
+                reply += _creation_honesty_note(body, armed, tools_used, custom_tools=_custom_ran, wrote=_wrote)
                 # v1.153.2: and check the reply's own CLAIMS against the
                 # ledger — the note above keys off the user's phrasing and
                 # so missed a reply announcing a saved file after only a
-                # scan had run. MIRROR NOTE (lock-step): both lanes. v1.351.0
-                # fix round: the custom tools that ran, from the live registry.
-                _custom_ran = _chat_turn.custom_tools_used(d.platform, tools_used)
-                reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran)
+                # scan had run. MIRROR NOTE (lock-step): both lanes.
+                reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran, wrote=_wrote)
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did gets the plain note. MIRROR NOTE (lock-step): chat_turn.
         # Only an AGENT-shaped receiver counts (the roster's names, read off

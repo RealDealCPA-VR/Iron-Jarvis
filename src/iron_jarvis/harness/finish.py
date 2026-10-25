@@ -287,7 +287,159 @@ _PM_VALUE_OPTS = frozenset({
 _JS_RUNNERS = frozenset({"vitest", "jest", "mocha"})
 
 
+def _is_posix(posix: bool | None) -> bool:
+    return (os.name != "nt") if posix is None else bool(posix)
+
+
+#: A word ends at a blank or one of bash's metacharacters.
+_WORD_END = " \t\r\n;&|<>()"
+
+
+def strip_heredocs(command: str) -> str:
+    """The command LINE of a bash-written command: every here-document's BODY
+    left out (review: the lost ``hard-expression-evaluator`` runs wrote
+    calc.py with ``python - <<'EOF' … EOF`` and ran ``python -m unittest`` on
+    the next line — the body made the command 5,871 characters, past
+    :data:`MAX_COMMAND_CHARS`, so the test part was never read and the note
+    said "No tests found"; and a body line that LOOKED like a test command
+    was read as one, so it could have been run again).
+
+    A here-document is ``<<WORD`` or ``<<-WORD`` (WORD quoted or not, blanks
+    after the operator allowed); its body is the lines after the line that
+    holds the operator, up to the line that is exactly WORD (with ``<<-``,
+    after its leading tabs) — bodies of several on one line follow in order,
+    and a body never closed runs to the end (bash reads it so). The operator
+    line itself is kept, so the segment it is in is still seen (and never
+    taken for a test or a setup step: :func:`_fed_by_heredoc`). Not a
+    here-document: ``<<<`` (a here-string), ``<<`` inside quotes, in a
+    comment, or inside ``(( … ))`` arithmetic. Never raises."""
+    return _scan_heredocs(command)[0]
+
+
+def _scan_heredocs(command: str) -> tuple[str, int]:
+    """``(the text with every here-document body left out, how many
+    here-document operators it holds)``: :func:`strip_heredocs`'s reading."""
+    text = str(command or "")
+    if "<<" not in text:
+        return text, 0
+    operators = 0
+    out: list[str] = []
+    pending: list[tuple[str, bool]] = []
+    quote = ""
+    arith = 0
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if quote == "'":
+            out.append(ch)
+            if ch == "'":
+                quote = ""
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if quote == '"':
+            out.append(ch)
+            if ch == '"':
+                quote = ""
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "#" and (i == 0 or text[i - 1] in " \t\r\n;&|(") and not arith:
+            # A comment, to the end of its line (its `<<` is text).
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append(text[i:end])
+            i = end
+            continue
+        if text.startswith("((", i):
+            arith += 1
+            out.append("((")
+            i += 2
+            continue
+        if arith and text.startswith("))", i):
+            arith -= 1
+            out.append("))")
+            i += 2
+            continue
+        if not arith and text.startswith("<<", i):
+            if text.startswith("<<<", i):
+                out.append("<<<")
+                i += 3
+                continue
+            j = i + 2
+            tabs = j < n and text[j] == "-"
+            if tabs:
+                j += 1
+            while j < n and text[j] in " \t":
+                j += 1
+            word: list[str] = []
+            m = j
+            while m < n and text[m] not in _WORD_END:
+                c = text[m]
+                if c in "'\"":
+                    close = text.find(c, m + 1)
+                    close = n if close < 0 else close
+                    word.append(text[m + 1:close])
+                    m = close + 1
+                    continue
+                if c == "\\" and m + 1 < n:
+                    word.append(text[m + 1])
+                    m += 2
+                    continue
+                word.append(c)
+                m += 1
+            if word:
+                pending.append(("".join(word), tabs))
+                operators += 1
+            out.append(text[i:m])
+            i = m
+            continue
+        if ch == "\n" and pending:
+            out.append("\n")
+            i += 1
+            for delim, tabs in pending:
+                while i < n:
+                    eol = text.find("\n", i)
+                    end = n if eol < 0 else eol
+                    line = text[i:end]
+                    i = n if eol < 0 else eol + 1
+                    if (line.lstrip("\t") if tabs else line) == delim:
+                        break
+            pending = []
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out), operators
+
+
+def _fed_by_heredoc(segment: str) -> bool:
+    """Is this segment (of a bash-written command, bodies already left out)
+    fed by a here-document? Run again it would read another input — never
+    re-run, never a setup step (a ``<<`` in quotes or a ``<<<`` is not one)."""
+    return _scan_heredocs(segment)[1] > 0
+
+
+def _command_line(command: str, posix: bool | None) -> str:
+    """The text a command's test part is read from: bash's here-document
+    bodies left out (:func:`strip_heredocs`); cmd's text as written."""
+    text = str(command or "")
+    return strip_heredocs(text) if _is_posix(posix) else text
+
+
 def _split(command: str, *, posix: bool | None = None) -> tuple[list[str], list[str]]:
+    """``(segments, separators)`` of a command as the model wrote it — under
+    POSIX, its here-document bodies left out first (:func:`_command_line`)."""
+    return _pieces(_command_line(command, posix), posix=posix)
+
+
+def _pieces(command: str, *, posix: bool | None = None) -> tuple[list[str], list[str]]:
     """``(segments, separators)``: the command's top-level pieces (see the
     rule above) and, between each two, the separator that joined them
     (``&&``, ``||``, ``;``, ``&`` or a line break, ``\\n``). Quotes (' and ")
@@ -588,21 +740,33 @@ def is_test_segment(segment: str, named: Iterable[str] = ()) -> bool:
     return _is_test_head(_words(head)) or _named(head, named)
 
 
+def _test_segment(segment: str, named: Iterable[str], posix: bool | None) -> bool:
+    """:func:`is_test_segment`, and never one a bash here-document feeds."""
+    return is_test_segment(segment, named) and not (_is_posix(posix) and _fed_by_heredoc(segment))
+
+
+def _setup_segment(segment: str, posix: bool | None) -> bool:
+    """:func:`_is_setup`, and never one a bash here-document feeds."""
+    return _is_setup(segment) and not (_is_posix(posix) and _fed_by_heredoc(segment))
+
+
 def test_part(command: str, named: Iterable[str] = (), *, posix: bool | None = None) -> str:
     """The TEST PART of a command the model ran (the rule above), or "" when
-    it has none. Never a word the command did not have."""
-    text = str(command or "")
+    it has none. Never a word the command did not have. Under bash, its
+    here-document bodies are left out FIRST (:func:`strip_heredocs`): the
+    length limit is the command line's, and a body is never a test."""
+    text = _command_line(command, posix)
     if not text.strip() or len(text) > MAX_COMMAND_CHARS:
         return ""
     named = list(named)
     keep: list[str] = []
     setup: list[str] = []
-    for seg in _segments(text, posix=posix):
-        if is_test_segment(seg, named):
+    for seg in _pieces(text, posix=posix)[0]:
+        if _test_segment(seg, named, posix):
             keep.extend(setup)
             setup = []
             keep.append(_pipeline_head(seg))
-        elif _is_setup(seg):
+        elif _setup_segment(seg, posix):
             setup.append(_pipeline_head(seg))
     if not any(is_test_segment(k, named) for k in keep):
         return ""
@@ -616,20 +780,20 @@ def status_is_tests(command: str, named: Iterable[str] = (), *, posix: bool | No
     tail``, ``pytest || echo failed``, ``pytest; echo done`` and ``pytest &
     exit 0`` all exit 0 when the tests FAIL (review: the work line said "tests
     failed, then fixed" for a run whose tests still failed)."""
-    text = str(command or "")
+    text = _command_line(command, posix)
     if not text.strip() or len(text) > MAX_COMMAND_CHARS:
         return False
     named = list(named)
-    segments, seps = _split(text, posix=posix)
+    segments, seps = _pieces(text, posix=posix)
     if not segments or any(s != "&&" for s in seps):
         return False
     tests = 0
     for seg in segments:
-        if is_test_segment(seg, named):
+        if _test_segment(seg, named, posix):
             if _has_pipe(seg):
                 return False
             tests += 1
-        elif not _is_setup(seg):
+        elif not _setup_segment(seg, posix):
             return False
     return tests > 0
 
@@ -645,7 +809,7 @@ def test_heads(command: str, named: Iterable[str] = (), *, posix: bool | None = 
     named = list(named)
     out: list[str] = []
     for seg in _segments(command, posix=posix):
-        if not is_test_segment(seg, named):
+        if not _test_segment(seg, named, posix):
             continue
         words = _words(_pipeline_head(seg))
         kept: list[str] = []
@@ -1599,6 +1763,11 @@ class FinishCheck:
         self._spec_before: dict[str, "bytes | None"] = {}
         #: True once the folder was really compared (both snapshots whole)
         self.compared = False
+        #: what the comparison found (``folder_changes.Changes``), and
+        #: whether something that can write without the journal ran AFTER it
+        #: (the finish round) — :meth:`folder_wrote`
+        self._seen: Any = None
+        self._wrote_after_compare = False
         #: why it could not be (said in the note, and logged)
         self.folder_problem = ""
         #: files that APPEARED while commands ran (no file tool made them)
@@ -1647,10 +1816,13 @@ class FinishCheck:
             # neither a command the model ran nor the reply's own work.
             return
         data = dict(getattr(result, "data", None) or {})
-        if not self._may_write and _wrote_unjournaled(name, result, self._custom):
+        if _wrote_unjournaled(name, result, self._custom):
             # A command, a program, a hand-off or an app's tool RAN: what it
-            # did to the folder counts (``harness/folder_changes``).
+            # did to the folder counts (``harness/folder_changes``) — and once
+            # the folder was compared, it may have written since.
             self._may_write = True
+            if self.compared:
+                self._wrote_after_compare = True
         if name in COMMAND_TOOLS and _never_ran(name, result):
             # Review: a command the TOOL refused before any program started
             # (the git guard's force push, low trust's sandbox, a folder
@@ -1804,7 +1976,29 @@ class FinishCheck:
         before = self._before
         seen = await asyncio.to_thread(lambda: FC.compare(before, after, GitIgnore(self.folder)))
         self.compared = True
+        self._seen = seen
         return seen
+
+    def folder_wrote(self) -> "bool | None":
+        """What the folder says about files this reply WROTE — for the chat's
+        honesty notes (``daemon/chat_turn._creation_honesty_note`` and
+        ``_claimed_write_note``), which must never say "no file was written"
+        after a command wrote one (review: both lost hard-expression-evaluator
+        runs wrote calc.py with a bash heredoc and their replies still ended
+        with "no file was actually written this turn").
+
+        True: the comparison found a file created, changed or moved in — or
+        something that can write without the journal ran and the folder was
+        not compared (or it ran again after the comparison), so nothing can
+        be claimed. False: the folder was compared, nothing was written in
+        it, and nothing that writes ran afterwards. None: nothing that can
+        write without the journal ran (the notes' own rule decides)."""
+        seen = self._seen
+        if seen is not None and (seen.created or seen.changed or seen.moved):
+            return True
+        if self._may_write and (not self.compared or self._wrote_after_compare):
+            return True
+        return False if self.compared else None
 
     def _gather(self, files: TurnFiles, seen: Any = None) -> None:
         """BLOCKING: the docs' test commands, the new files, the points."""
@@ -2563,5 +2757,6 @@ __all__ = [
     "request_text",
     "spec_points",
     "start",
+    "strip_heredocs",
     "test_part",
 ]

@@ -207,7 +207,8 @@ async def test_the_lost_run_is_shown_the_one_argument_point_and_then_passes(tmp_
                        arguments={"file_path": "calc.py", "old_string": old, "new_string": new})
         return ("\n".join(lines), [fix])
 
-    rerun = [ToolCall(id="rerun", name="Bash", arguments={"command": "python -m unittest -q test_calc"})]
+    # (Review: the same run as the check's own, so it can say "then passed".)
+    rerun = [ToolCall(id="rerun", name="Bash", arguments={"command": "python -m unittest -q"})]
     out = await _replay_lost_run(tmp_path, name, [answer, rerun, "Fixed min and max with one argument."],
                                  monkeypatch)
     note = _note(out["model"])
@@ -215,11 +216,20 @@ async def test_the_lost_run_is_shown_the_one_argument_point_and_then_passes(tmp_
     assert "The request points to the docstring of `calc.py`" in note
     assert "``min`` and ``max`` (one or more arguments)" in note
     assert _files(note) == "None."  # calc.py was CHANGED, nothing was made
-    # (OPEN, not this change: the recorded command is longer than the test-part
-    # reader's MAX_COMMAND_CHARS, so its own `python -m unittest` is not found.)
-    assert "No tests found" in note
+    # Review (moved on purpose): the model's OWN test run is found past the
+    # heredoc's body and run again in bash — the note said "No tests found"
+    # (the body made the command longer than MAX_COMMAND_CHARS).
+    work = str(out["work"]).replace("\\", "/")
+    part = f"cd {work} && python -m unittest -q 2>&1"
+    assert "No tests found" not in note
+    assert f"`{part}` (the test part of a command you ran in this reply) passed (exit code 0)." in note
     finish = out["done"]["finish"]
-    assert finish["tests"] == "none" and finish["unmet"] == 1 and finish["after"] == "passed"
+    assert finish["tests"] == "passed" and finish["command"] == part
+    assert finish["unmet"] == 1 and finish["after"] == "passed"
+    # Review: the recorded reply ended with "no file was actually written
+    # this turn" although its heredoc WROTE calc.py — the folder says so now.
+    assert "no file was actually written" not in out["done"]["reply"]
+    assert "nothing was written to disk" not in out["done"]["reply"]
     hidden = _hidden_check("hard-expression-evaluator", out["work"], tmp_path, "test_*.py")
     assert hidden.returncode == 0, hidden.stderr[-2000:]
 
@@ -328,6 +338,9 @@ async def test_the_http_server_task_keeps_the_servers_log_and_its_check_passes(t
     )
     assert F.GONE_HEAD not in note
     assert out["done"]["finish"]["tests"] == "none" and out["done"]["finish"]["kept"] == 0
+    # Review: "saved its /status body to status.json" — a command wrote it —
+    # was told "nothing was written to disk … that file does not exist".
+    assert "nothing was written to disk" not in out["done"]["reply"], out["done"]["reply"]
     for name in ("server.log", "server.port", "status.json"):
         assert (out["work"] / name).exists(), name
     hidden = _hidden_check("process-http-server", out["work"], tmp_path, "test_*.py")

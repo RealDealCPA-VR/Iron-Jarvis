@@ -661,10 +661,13 @@ def test_a_custom_tool_that_ran_can_have_changed_the_file():
     assert _claimed_write_note(reply, used, custom_tools={"bump_notes"}) == ""
     # A custom tool that exists but did not RUN this turn silences nothing.
     assert _claimed_write_note(reply, ["read_document"], custom_tools={"bump_notes"})
-    # The creation claim keeps its v1.153.2 behaviour byte for byte.
-    assert _claimed_write_note(
-        "Saved to report.docx.", ["bump_notes"], custom_tools={"bump_notes"}
-    ) == _claimed_write_note("Saved to report.docx.", ["read_document"]) != ""
+    # Finish-check review (part 3, moved on purpose): a CREATION claim after
+    # one is not judged either — the tool may have written the very file the
+    # reply names ("saved … to status.json" after a command wrote it was
+    # told "that file does not exist"). A Build turn's folder decides when it
+    # was compared (`wrote=`; tests/test_finish_shell_writes_review_v1387).
+    assert _claimed_write_note("Saved to report.docx.", ["bump_notes"], custom_tools={"bump_notes"}) == ""
+    assert _claimed_write_note("Saved to report.docx.", ["read_document"]) != ""
 
 
 def test_custom_tools_used_reads_the_live_registry(tmp_path):
@@ -723,12 +726,21 @@ def test_a_file_a_custom_tool_really_changed_is_not_accused(tmp_path, lane):
             assert "The reply says it changed `notes.md`" in out["reply"], out["reply"]
 
 
-def test_a_creation_claim_after_shell_is_judged_as_it_always_was():
-    """Only the CHANGE claims G06 added are left alone after a shell line —
-    the creation claim keeps its v1.153.2 behaviour byte for byte."""
-    assert _claimed_write_note("Saved to report.docx.", ["shell"]) == _claimed_write_note(
-        "Saved to report.docx.", ["read_document"]
-    ) != ""
+def test_a_creation_claim_after_shell_is_left_alone_unless_the_folder_says_nothing_was_written():
+    """Finish-check review (part 3, moved on purpose): v1.351.0 kept judging
+    a CREATION claim after a shell line byte for byte — and so every
+    process-http-server reply ("saved its /status body to status.json", the
+    command wrote it) ended with "nothing was written to disk this turn …
+    that file does not exist". A shell line can write the file it names, so
+    without a folder comparison nothing is claimed; with one (a Build turn,
+    ``wrote=``) the folder decides, and a claim the folder contradicts reads
+    exactly as before."""
+    assert _claimed_write_note("Saved to report.docx.", ["shell"]) == ""
+    judged = _claimed_write_note("Saved to report.docx.", ["read_document"])
+    assert judged != ""
+    assert _claimed_write_note("Saved to report.docx.", ["shell"], wrote=False) == judged
+    assert _claimed_write_note("Saved to report.docx.", ["shell"], wrote=True) == ""
+    assert _claimed_write_note("Saved to report.docx.", ["read_document"], wrote=True) == ""
 
 
 def test_a_file_shell_really_changed_is_not_accused(tmp_path):
