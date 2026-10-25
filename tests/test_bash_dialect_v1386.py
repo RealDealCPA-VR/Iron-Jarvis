@@ -711,8 +711,13 @@ async def test_a_plugin_check_still_runs_in_cmd_beside_a_bash_call(app, tmp_path
     ]))
     status, raw = await open_turn(app, sid, {"text": "go", "turn_id": "bash-check"}, timeout=60)
     assert status == 200
-    (check,) = _of(seen, "echo checked")
-    assert check["shell"] is True and check["argv"] == "echo checked"
+    # Merge with v1.386.0: the folder's check runs twice — after the edit, and
+    # again as the reply's FINISH CHECK (the folder's checks that apply to the
+    # changed files are its tests). Both are the folder's words: cmd.
+    checks = _of(seen, "echo checked")
+    assert len(checks) == 2, checks
+    for check in checks:
+        assert check["shell"] is True and check["argv"] == "echo checked"
     (model,) = _of(seen, "echo from-bash; echo two")
     assert model["argv"][0] == BASH.path and model["shell"] is False
 

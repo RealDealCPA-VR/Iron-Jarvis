@@ -252,11 +252,16 @@ def test_both_chat_loops_fence_on_the_same_attribute(site, module_name):
     assert inspect.getsource(loop).count("await _fence_tool_output(") == 1
     # v1.366.0: chat_turn holds ONE more call, outside both loops — an IJ
     # harness folder's plugin check is a `shell` result and is fenced by the
-    # same helper (`harness_check_runner`).
+    # same helper (`harness_check_runner`). v1.386.0: and one more — the
+    # finish check's note fences its test run's output (`finish_fence`,
+    # which BOTH lanes call).
     extra = (
         inspect.getsource(chat_turn.harness_check_runner).count("await _fence_tool_output(")
+        + inspect.getsource(chat_turn.finish_fence).count("await _fence_tool_output(")
         if module is chat_turn else 0
     )
+    if module is chat_turn:
+        assert extra == 2
     assert src.count("await _fence_tool_output(") == 1 + extra
     helper = inspect.getsource(chat_turn._fence_tool_output)
     assert helper.count('"returns_untrusted_content", False)') == 1
@@ -285,8 +290,11 @@ def test_the_two_chat_fence_sites_total_exactly_two():
     # v1.366.0: the IJ harness's plugin-check runner fences its `shell`
     # output with the same helper — one call, outside both loops.
     harness = inspect.getsource(chat_turn.harness_check_runner).count("await _fence_tool_output(")
-    assert loops == 2 and harness == 1
-    assert total == loops + harness
+    # v1.386.0: the finish check's note fences its test run's output with the
+    # same helper — one call in `finish_fence`, which both loops use.
+    finish = inspect.getsource(chat_turn.finish_fence).count("await _fence_tool_output(")
+    assert loops == 2 and harness == 1 and finish == 1
+    assert total == loops + harness + finish
     assert sum(
         inspect.getsource(m).count('"returns_untrusted_content", False)')
         for m in (chat_turn, chat)

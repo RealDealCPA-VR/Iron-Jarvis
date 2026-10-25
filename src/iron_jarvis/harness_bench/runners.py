@@ -478,6 +478,7 @@ class JarvisRunner:
         from ..daemon.routes import chat as chat_routes
         from ..harness import components as harness_components
         from ..harness import dialects as harness_dialects
+        from ..harness import finish as harness_finish
         from ..harness import mode as harness_mode
         from ..personas.builtins import BUILTIN_PERSONAS
 
@@ -492,6 +493,9 @@ class JarvisRunner:
             "harness_sha256": _sha(
                 _module_bytes(harness_mode) + b"\0" + _module_bytes(harness_dialects)
                 + b"\0" + _module_bytes(harness_components)
+                # Part 3, Phase 2: the finish check is part of the harness
+                # (a Build turn runs it), so a change to it is a new harness.
+                + b"\0" + _module_bytes(harness_finish)
             ),
             "dialect": turn.plan.dialect.id,
             "dialect_requested": self.dialect,
@@ -712,6 +716,9 @@ class JarvisRunner:
             # v1.366.0: the harness the turn really ran (family, dialect, the
             # component tree's fingerprint, whether it was nudged).
             "harness": route.get("harness"),
+            # Part 3, Phase 2: what the reply's finish check did (None when
+            # it did not run: the reply changed no file).
+            "finish": done.get("finish"),
         })
         out.ok_run = True
         out.facts["finished"] = True

@@ -255,6 +255,31 @@ The "Done when" items that need the full measurement (the three setups at
 `--repeats 3 --tier all`, and whether the frontier tier separates them) are
 run on the released version and recorded below when they finish.
 
+**The measurement (2026-10-25, `--repeats 3 --tier all --seed 0`, effort
+medium; read from the bench's own reports).**
+
+| Setup | Model | Passed / scored | Mean | Range | core | hard | frontier |
+|---|---|---|---|---|---|---|---|
+| Claude Code | sonnet | 123 / 126 | 98% | 95%–100% | 60/60 | 27/30 | 36/36 |
+| Jarvis on Claude | sonnet | 115 / 126 | 91% | 90%–93% | 57/60 | 25/30 | 33/36 |
+| Jarvis on glm | glm-5.3-flash | 114 / 126 | 90% | 90%–90% | 58/60 | 24/30 | 32/36 |
+| Jarvis on Codex | gpt-6-astra | pending | | | | | |
+
+- The frontier tier does separate them: Claude Code 36/36, Jarvis on Claude
+  33/36.
+- **The Codex row is pending.** The first Codex run (v1.385.0) is not
+  counted: all 26 of its failed runs ended with "the folder is read-only",
+  which was fixed in v1.385.1, and the ChatGPT account hit its Codex usage
+  limit part-way through. It is being run again on v1.385.1.
+- **Most of Jarvis on Claude's gap is one defect, found by this run.** The
+  claude dialect shows Claude its trained `Bash` tool, but on Windows the
+  command ran in cmd.exe. In `process-http-server` the line
+  `rm -f server.port; python server.py & …` made Git's `rm` delete
+  `server.py`, in 2 of 3 repeats. Heredocs, `;` chains and `/dev/null` failed
+  the same way in the shell and background-program tasks (process category:
+  4/9 against Claude Code's 9/9). The fix (run `Bash` in Git for Windows'
+  bash, as Claude Code does) is being built as its own release.
+
 ## Phase 2 — The finish check (target v1.384.0)
 
 **What you see.** When a turn changed files and the model is about to say it
@@ -291,6 +316,31 @@ removed".
   in Phase 1's run, and the mean time grows by at most 20%.
 - A turn that changed nothing, and every plain chat turn, makes exactly the
   calls it made before (pinned).
+
+**Result (v1.386.1, 2026-10-25; v1.386.0 was not published, its gates
+failed on a test).** Built by a doer agent and checked by a
+separate reviewer, who found 17 more defects (each red first, fixed and
+mutation-checked).
+- **What shipped:** the `finish` component as planned (`harness/finish.py`,
+  `finish.toml` to turn it off per folder), the "Checked: …" work line and
+  the `finish` record on the reply.
+- **The two lost runs are caught, replayed from their trajectories through
+  the real lane:** the request check put "min and max (one or more
+  arguments)" in front of the model on the Claude run, and the new-file list
+  named `test_spec.py` (with two other scratch files) on the glm run. Both
+  hidden checks pass after the scripted fix; both fail without the check.
+- **What the review fixed:** a command the git guard had refused was re-run;
+  a docs line could make the check run a reset script; a folder's own check
+  ran with no card under yolo; "then fixed" could be claimed from a run whose
+  exit status was not the tests'; `pytest --version` read as "tests passed";
+  nested `.gitignore` files and helper agents' writes were missed; on Codex
+  every finish round started a second process and replayed the whole
+  conversation (it now continues the same thread).
+- **A reply that changed nothing makes exactly the calls it made before**
+  (pinned), and plain chat never runs the check.
+- **Not yet measured:** the `--repeats 3` comparison with Phase 1 (no task
+  passing fewer times, mean time at most 20% longer) runs on the released
+  version and is recorded here when it finishes.
 
 ## Phase 3 — Fewer steps, and code awareness (target v1.385.0)
 

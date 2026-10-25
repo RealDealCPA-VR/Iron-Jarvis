@@ -75,6 +75,10 @@ from .. import durable_turns as _durable
 from ...settings.tools import ALWAYS_CARD_TOOLS
 from ...harness.helpers import STOPPED_RESULT as _HELPER_STOPPED
 from ...harness.helpers import asking as _helper_asking
+# Part 3, Phase 2: what separates a Build reply's words from its answer to
+# the finish check (lock-step with chat_turn's `combine`).
+from ...harness.finish import SEPARATOR as _FINISH_SEPARATOR
+from ...providers import turn_scope as _turn_scope
 from ..chat_turn import (
     preference_block,
     remembered_from_result,
@@ -4325,6 +4329,29 @@ async def chat_stream(
         )
         if ctx is not None else None
     )
+    # THE FINISH CHECK (part 3, Phase 2 — harness/finish): a Build reply that
+    # changed files is checked once before it ends — the tests, the files it
+    # made that nobody asked for, the request point by point. None on every
+    # other turn (plain chat, plan mode, a folder that turned it off), which
+    # then runs exactly as before. Its ledger mark is read here, before any
+    # tool of this reply runs. MIRROR NOTE (lock-step): chat_turn.run_chat_turn
+    # builds it at the same seam.
+    _finish = (
+        await _chat_turn.finish_for_turn(
+            d, body, _harness, tool_session=_tool_session, tool_ws=tool_ws,
+        )
+        if ctx is not None and _harness is not None else None
+    )
+    # ...and its TURN SCOPE (review): while the reply's tool loop runs, an
+    # adapter whose turn lives in a process (codex-cli) may keep a session
+    # whose answer just ended, so the finish note CONTINUES that thread
+    # instead of a new process with the whole conversation replayed as text
+    # (`providers.turn_scope`). Set here, in the task that iterates the
+    # stream (the model pump copies it); closed with the stream below.
+    # MIRROR NOTE (lock-step): chat_turn.run_chat_turn opens the same scope.
+    _fin_scope, _fin_scope_token = (
+        _turn_scope.open_scope() if _finish is not None else (None, None)
+    )
 
     def _helper_emit(event: str, data: dict[str, Any]) -> None:
         # A helper's row frames ride the turn's side channel: yielded while
@@ -4564,6 +4591,10 @@ async def chat_stream(
                     return
                 reply_text = final_resp.text or ""
                 _truncated = _chat_turn._truncated_by(final_resp)
+                if _finish is not None:
+                    # The first answer after the finish note is the model's
+                    # point-by-point answer (lock-step: chat_turn).
+                    _finish.heard(reply_text)
                 _u = final_resp.usage or {}
                 usage_in += int(_u.get("input_tokens", 0) or 0)
                 usage_out += int(_u.get("output_tokens", 0) or 0)
@@ -4616,6 +4647,36 @@ async def chat_stream(
                     msgs.append(LLMMessage(role="user", content=TEXT_TOOL_CALL_NUDGE))
                     yield _sse("reset", {"reason": "text_tool_call"})
                     continue
+                # THE FINISH CHECK (part 3, Phase 2): the model ends a Build
+                # reply that changed files — ONCE, before the reply ends, its
+                # tests run (as this round's own calls, through the same
+                # cards, gate and ledger as any call below), and ONE note goes
+                # to the model, which answers it in the next round. None = it
+                # does not run (nothing changed, cut off, no round left, run
+                # already): the reply ends exactly as before. MIRROR NOTE
+                # (lock-step): chat_turn.run_chat_turn.
+                _finish_round = False
+                if not calls and _finish is not None:
+                    _fin_calls = await _finish.prepare(
+                        reply=reply_text, round_index=_round, rounds=_rounds,
+                        truncated=_truncated,
+                        low_trust=_chat_turn.finish_low_trust(_trust_state),
+                    )
+                    if _fin_calls is not None:
+                        if reply_text.strip():
+                            msgs.append(LLMMessage(
+                                role="assistant", content=reply_text,
+                                raw_blocks=list(getattr(final_resp, "raw_blocks", None) or []),
+                            ))
+                        if not _fin_calls:
+                            msgs.append(LLMMessage(role="user", content=await _finish.note(
+                                _chat_turn.finish_fence(d, _trust_state, overrides, _finish.carrier),
+                            )))
+                            if reply_text.strip():
+                                yield _sse("token", {"text": _FINISH_SEPARATOR})
+                            continue
+                        calls = _fin_calls
+                        _finish_round = True
                 # ask_armed counts (v1.187.0): a turn whose ONLY armed
                 # verbs are approval-gated still has real calls to run.
                 if not calls or not (armed or ask_armed):
@@ -4642,15 +4703,18 @@ async def chat_stream(
                             "this needs more steps than a quick answer allows"
                         )
                     break
-                msgs.append(LLMMessage(role="assistant",
-                                       content=final_resp.text,
-                                       # v1.366.0: what the MODEL called (its
-                                       # dialect's names) — lock-step.
-                                       tool_calls=_model_calls,
-                                       # v1.263.0: provider-native blocks, replayed
-                                       # verbatim by the adapter that wrote them
-                                       # (Anthropic thinking + tools). [] otherwise.
-                                       raw_blocks=list(getattr(final_resp, "raw_blocks", None) or [])))
+                if not _finish_round:
+                    # (The finish check's own round put the model's reply in
+                    # above, as words: the model called nothing.)
+                    msgs.append(LLMMessage(role="assistant",
+                                           content=final_resp.text,
+                                           # v1.366.0: what the MODEL called (its
+                                           # dialect's names) — lock-step.
+                                           tool_calls=_model_calls,
+                                           # v1.263.0: provider-native blocks, replayed
+                                           # verbatim by the adapter that wrote them
+                                           # (Anthropic thinking + tools). [] otherwise.
+                                           raw_blocks=list(getattr(final_resp, "raw_blocks", None) or [])))
                 # ONE CARD FOR THE BATCH (v1.247.0) — the stream half of the
                 # runtime's grouping. Read this round's calls AHEAD with the
                 # same predicate the per-call card uses below, grouped by
@@ -4769,7 +4833,8 @@ async def chat_stream(
                     _cp = _ct.perm_key() if _ct is not None else _c.name
                     _cm = d.platform.permissions.mode_for(_cp, overrides)
                     _sc = _spend.get(id(_c))
-                    if approval_mode == "yolo" and _c.name not in ALWAYS_CARD_TOOLS:
+                    if (approval_mode == "yolo" and _c.name not in ALWAYS_CARD_TOOLS
+                            and not _finish_needs_a_person(_c)):
                         # v1.346.0: a priced call cards even here.
                         return _cp if (_sc is not None and _sc.ask and _cm is not PermissionMode.DENY) else ""
                     _asks = (
@@ -4792,6 +4857,18 @@ async def chat_stream(
                         # priced asks, whatever a grant said.
                         _asks = bool(_sc.ask)
                     return _cp if _asks else ""
+
+                def _finish_needs_a_person(_c) -> bool:
+                    # THE FINISH CHECK (part 3, Phase 2; review): the folder's
+                    # own check — text the FOLDER wrote, never a call the model
+                    # chose — is never run on auto-approve's per-call grant
+                    # (the v1.366.0 plugin-check rule): under yolo it is
+                    # judged as under approve-for-me, so it cards unless a
+                    # grant wider than one call covers the command tool.
+                    # MIRROR NOTE: the POST lane never auto-grants a call, so
+                    # it needs no twin; `_would_card` and the per-call branch
+                    # below read it the same way.
+                    return _finish is not None and _finish.needs_a_person(_c)
 
                 _round_asks: dict[str, list] = {}
                 for _c in calls:
@@ -4886,7 +4963,8 @@ async def chat_stream(
                     # MIRROR NOTE (lock-step): chat_turn.py passes its
                     # armed set the same way — edit both or neither.
                     _unarmed = tc.name not in _turn_tools
-                    if approval_mode == "yolo" and tc.name not in ALWAYS_CARD_TOOLS:
+                    if (approval_mode == "yolo" and tc.name not in ALWAYS_CARD_TOOLS
+                            and not _finish_needs_a_person(tc)):
                         if _engine_asks:
                             _grant_extra = {tc.name, _perm_name}
                         _needs_card = False
@@ -5405,11 +5483,18 @@ async def chat_stream(
                             _prior_results.append(prior_tool_result_entry(
                                 tc.name, _plans[_i]["safe_args"], False, content,
                             ))
+                            if _finish is not None and _finish.owns(tc):
+                                # The finish check's own call: its result goes
+                                # into the finish note, never a tool message
+                                # (the model did not call it). Lock-step.
+                                _finish.refused_call(tc, str(content))
+                                continue
                             msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                                    # v1.366.0: the name the model called.
                                                    name=(_harness.called_as(tc) if _harness is not None else tc.name),
                                                    content=str(content)[:12000]))
                             continue
+                        _label = ""  # (read by the finish check below)
                         if ran:
                             last_tool_output = str(result.output or "")
                         elif result is not None:
@@ -5526,7 +5611,12 @@ async def chat_stream(
                         # user's tool card) keeps the bare content. MIRROR
                         # NOTE (lock-step): chat_turn.py's tool loop.
                         _tool_content = content
-                        if not ran:
+                        # (Part 3, Phase 2: the finish check's own test run is
+                        # not the MODEL's call — a failure of it never counts
+                        # toward the model's repeated-call limit, or the
+                        # model's own re-run after its fix would be refused.
+                        # Lock-step: chat_turn.)
+                        if not ran and not (_finish is not None and _finish.owns(tc)):
                             _call_key = _plans[_i]["key"]
                             _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
                             _tool_content = with_second_failure_note(content, _failed_calls[_call_key])
@@ -5574,6 +5664,24 @@ async def chat_stream(
                                 tc.name, _plans[_i]["safe_args"], content,
                             ),
                         })
+                        if _finish is not None:
+                            # THE FINISH CHECK (part 3, Phase 2) — lock-step
+                            # with chat_turn: its own test run is read into the
+                            # finish note (never a tool message: the model did
+                            # not call it); a command the MODEL ran is noted
+                            # (the test command it ran / a later test run).
+                            # (the refusal's ONE classification is
+                            # `_label` above — the v1.344.0 M3 seam; review)
+                            _fin_refused = bool(result is not None and not ran and _label)
+                            if _finish.owns(tc):
+                                await _finish.take(
+                                    tc, result, str(content), refused=_fin_refused,
+                                    invoke=_chat_turn.finish_invoke(
+                                        d, ctx, overrides, lambda: armed_grant, _turn_tools,
+                                    ),
+                                )
+                                continue
+                            _finish.observe(tc, result, refused=_fin_refused)
                         msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                                # v1.366.0: the name the model called.
                                                name=(_harness.called_as(tc) if _harness is not None else tc.name),
@@ -5584,6 +5692,15 @@ async def chat_stream(
                                                images=_chat_turn.tool_result_images(result, ran)))
                         if msgs[-1].images:
                             _chat_turn.trim_tool_images(msgs)
+                if _finish_round:
+                    # The finish check's tests ran (or were refused / declined
+                    # on their card): its ONE note goes to the model now, and
+                    # the next round is its answer. Lock-step: chat_turn.
+                    msgs.append(LLMMessage(role="user", content=await _finish.note(
+                        _chat_turn.finish_fence(d, _trust_state, overrides, _finish.carrier),
+                    )))
+                    if reply_text.strip():
+                        yield _sse("token", {"text": _FINISH_SEPARATOR})
         except Exception as exc:  # noqa: BLE001 — honest error, never fabricate
             # Completed rounds were still billed — persist BEFORE the error
             # frame (mirrors chat_complete's failure path); the client sees
@@ -5641,6 +5758,12 @@ async def chat_stream(
         # MIRROR NOTE (lock-step): chat_turn — same rules via the shared
         # `_final_answer_messages` / `_language_leak` / `_rewrite_messages` /
         # `_rewrite_verdict`.
+        # THE FINISH CHECK (part 3, Phase 2): the reply the user keeps is what
+        # the model wrote before the check, then its answer to it (the live
+        # bubble showed both, split by the separator token). MIRROR NOTE
+        # (lock-step): chat_turn.run_chat_turn.
+        if _finish is not None:
+            reply_text = _finish.combine(reply_text)
         # v1.378.0: the nudge's safety refusal, when it had one — the reply
         # says so instead of "Press Retry". MIRROR NOTE (lock-step):
         # chat_turn's `_f_refusal`.
@@ -6035,6 +6158,13 @@ async def chat_stream(
         # v1.287.0: present ONLY when a note was left unread (see above).
         if unread_steers:
             done_frame["unread_steers"] = unread_steers
+        # THE FINISH CHECK (part 3, Phase 2): {tests, command, removed, kept,
+        # points, unmet, after[, why]} — LAST, and present ONLY when the check
+        # ran this reply (every other turn's frame is byte-identical). The
+        # Build reply line keeps it (`finish`). MIRROR NOTE (lock-step):
+        # chat_turn.py's response carries the same conditional key.
+        if _finish is not None and _finish.ran:
+            done_frame["finish"] = await _finish.record()
         yield _sse("done", done_frame)
 
     # v1.312.0: the prep above ran AS the stream's first frames (the 400/404
@@ -6049,3 +6179,10 @@ async def chat_stream(
         # dropped connection) — every ask still parked is resolved "stopped"
         # so no pack waits on a card nobody can answer any more.
         _ti.close()
+        # The finish check's turn scope (review): nothing is continued after
+        # this — every session still kept for it stops now.
+        if _fin_scope is not None:
+            try:
+                await _turn_scope.close(_fin_scope)
+            finally:
+                _turn_scope.reset(_fin_scope_token)

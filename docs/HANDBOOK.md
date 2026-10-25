@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.385.1 (2026-10-23).*
+holds itself to. Current as of v1.386.1 (2026-10-25).*
 
 ---
 
@@ -1896,6 +1896,37 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A Build reply checks its own work before it ends (v1.386.1)
+
+When a Build session's reply changed files, it now takes one short extra
+step before its final answer:
+
+- **The tests run again.** The folder's own checks if it has them, else the
+  test command the agent itself ran in this reply (only its test part: a
+  `rm` or `git push` beside it never runs again). If neither exists, it says
+  "no tests found". The command goes through the same approval rules as any
+  other: a card where your setting asks, never a command your setting would
+  refuse. "Tests passed" means the command's own exit code said so; a run cut
+  off by its time limit counts as failed.
+- **Files it made that you did not ask for are listed**, so the agent keeps
+  or removes each one (a removal can be undone like any other change).
+  Ignored files (`.gitignore`) are left out.
+- **Your request is put back as a checklist**, including any written
+  description your request points to (a docstring, a spec file). The agent
+  checks its work against each point and fixes what it missed.
+
+The reply's work line then reads, for example, "Checked: tests passed, 1
+scratch file removed" or "Checked: tests failed, then fixed". It costs one
+extra round, only for a reply that changed files; plain chat never does it. A
+folder can turn it off with `.ironjarvis/harness/finish.toml`
+(`enabled = false`). On Codex the extra round continues the same
+conversation instead of starting a new one.
+
+Known limits: files changed only through a shell command are not seen as
+changes (the check does not run for that reply on their account), and
+"tests passed" can describe code from before a later fix if the agent did not
+run the tests again.
 
 ## Codex no longer thinks your folder is read-only (v1.385.1)
 

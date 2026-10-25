@@ -94,7 +94,19 @@ import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { secondsText, type ReceiptStep, type ReceiptTiming } from "@/components/chat/TurnReceipt";
 import { elapsedWords, useNow } from "@/components/chat/TurnClock";
 import { cleanTarget, secretLooking, stepTarget, toolKind, type WorkKind } from "@/lib/workTarget";
-import { failedSteps, failedWords, kindWords, rowSubject, stepCounts, stepHint, stepPhrase } from "@/lib/stepWords";
+import {
+  failedSteps,
+  failedWords,
+  finishTitle,
+  finishWarn,
+  finishWords,
+  kindWords,
+  rowSubject,
+  stepCounts,
+  stepHint,
+  stepPhrase,
+  type FinishRecord,
+} from "@/lib/stepWords";
 import { appToolParts } from "@/lib/toolWords";
 import {
   STEP_OUTPUT_LINES,
@@ -160,6 +172,12 @@ export interface WorkInput {
    *  under the warn mark, never a check mark over a reply the line below
    *  calls cut off. Absent: a reply that ended on its own, as before. */
   cutOff?: "truncated" | "interrupted" | null;
+  /** IJ harness part 3, Phase 2: what a Build reply's FINISH CHECK did (the
+   *  reply line's `finish`, decoded). One quiet sentence under the line —
+   *  "Checked: tests passed, 1 scratch file removed" (lib/stepWords
+   *  finishWords). Absent (the chat, an older daemon, a reply that changed no
+   *  file): the line reads exactly as before. */
+  finish?: FinishRecord | null;
 }
 
 /** The steps to account for: the stored steps (one per call, with timing)
@@ -903,6 +921,31 @@ function StepRow({ step }: { step: ReceiptStep }) {
   );
 }
 
+/**
+ * IJ harness part 3, Phase 2: the FINISH CHECK's one sentence, under the
+ * work line, in the line's own quiet words and marks — a check, or the
+ * theme's warn triangle when the tests were last seen failing. Its hover says
+ * the command it ran (and why the tests did not run, when they did not).
+ */
+function FinishLine({ finish }: { finish: FinishRecord }) {
+  const warn = finishWarn(finish);
+  return (
+    <p
+      data-testid="work-line-finish"
+      data-outcome={warn ? "warn" : "ok"}
+      title={finishTitle(finish)}
+      className="mt-1.5 flex w-full min-w-0 items-center gap-2 text-[13px] text-zinc-500"
+    >
+      {warn ? (
+        <TriangleAlert size={14} aria-hidden="true" className="shrink-0 text-tone-warn" />
+      ) : (
+        <Check size={14} aria-hidden="true" className="shrink-0" />
+      )}
+      <span className={`min-w-0 truncate ${warn ? "text-tone-warn" : ""}`.trim()}>{finishWords(finish)}</span>
+    </p>
+  );
+}
+
 /* --------------------------------------------------------------- the fold */
 
 /**
@@ -1011,6 +1054,7 @@ export function WorkLine(props: WorkInput) {
           className={`shrink-0 transition-transform motion-reduce:transition-none ${open ? "rotate-180" : ""}`}
         />
       </button>
+      {props.finish ? <FinishLine finish={props.finish} /> : null}
       {open && (
         <div id={panelId} data-testid="work-rows" className="mt-2 grid gap-1">
           {thinking.trim() ? (

@@ -469,7 +469,11 @@ class HarnessTurn:
         self.layer = layer
         self.tree = tree
         self.rendered = rendered
-        self.fingerprint = _components.fingerprint(rendered, plan.dialect.id)
+        # Part 3, Phase 2: a folder that changed its finish check's switch
+        # (``finish.toml``) is a different harness; the default adds nothing.
+        _finish = getattr(tree, "finish", None)
+        _mark = _finish.mark() if hasattr(_finish, "mark") else ""
+        self.fingerprint = _components.fingerprint(rendered, plan.dialect.id, _mark)
         self.today = today
         #: v1.367.0: a Build session's plan-mode turn (set by :func:`build`).
         self.plan_mode = False
@@ -576,6 +580,14 @@ class HarnessTurn:
         """The name the model used for ``call`` (its real name when nothing
         translated)."""
         return self._called_as.get(getattr(call, "id", ""), getattr(call, "name", ""))
+
+    def mark_called_as(self, call_id: str, name: str) -> None:
+        """Part 3, Phase 2: a call the HARNESS makes itself (the finish
+        check's test run, ``harness/finish``) is ledgered under ``name``
+        (``ToolInvocation.called_as``) — through :meth:`ctx_for`, the same
+        path a translated call takes."""
+        if call_id and name:
+            self._called_as[str(call_id)] = str(name)
 
     def ctx_for(self, ctx: Any, call: Any) -> Any:
         """``ctx`` carrying the model's name for a translated call, so the
