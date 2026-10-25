@@ -959,3 +959,21 @@ async def test_a_cut_call_is_never_replayed_in_the_thinking_blocks(monkeypatch):
     assert final.cut_calls == ["write_file"] and final.tool_calls == []
     kinds = [b.get("type") for b in final.raw_blocks]
     assert kinds == ["thinking"], kinds
+
+
+def test_a_cloud_name_asks_exactly_the_old_budget_however_long_the_prompt():
+    """The cloud rule is "the request it had before v1.387.0", byte for byte:
+    the old 4,096 whatever the window and the prompt (a fit could only make
+    it ASK LESS than it used to — never the old request). R19 of the review's
+    mutation run survived every other pin."""
+    from iron_jarvis.providers.reply_budget import ReplyBudget
+
+    facts = {"window": 8_000, "max_output": None, "ratio": None, "cloud": True}
+    budget = ReplyBudget("custom", "http://gw.test/v1/chat/completions", facts=lambda p, m: facts)
+    wire = [{"role": "user", "content": "word " * 20_000}]  # far more than 8k tokens
+    assert budget.ask("frontier-x", system="", wire=wire, tools=None) == 4_096
+    assert budget.ask("frontier-x", system="", wire=wire, tools=None, stream=False) == 4_096
+    assert budget.cap("frontier-x") == 4_096
+    local = ReplyBudget("custom", "http://gw.test/v1/chat/completions",
+                        facts=lambda p, m: {**facts, "cloud": False})
+    assert local.ask("glm", system="", wire=wire, tools=None) < 4_096  # a local name IS fitted
