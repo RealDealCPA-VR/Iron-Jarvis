@@ -224,6 +224,14 @@ class DialectTool:
     #: here" — the shell's runtime facts (cmd.exe on Windows, no POSIX
     #: tools…) belong to every dialect's command tool, not only to Jarvis's.
     runtime_from: str = ""
+    #: The shell language this command tool's model WRITES (v1.386.0):
+    #: ``"bash"`` for Claude Code's ``Bash`` — Claude was trained on bash, and
+    #: Claude Code runs it in Git for Windows' bash on Windows — so its calls
+    #: carry it on their context (``mode.HarnessTurn.ctx_for`` →
+    #: ``ToolContext.shell_syntax``) and run in bash there
+    #: (``sandbox/git_bash``). "" = the platform's own shell (Codex's
+    #: ``exec_command`` and Qwen Code's ``run_shell_command`` keep cmd.exe).
+    shell_syntax: str = ""
 
     def reach(self, armed: Iterable[str]) -> set[str]:
         if self.reaches is None:
@@ -861,7 +869,7 @@ _CLAUDE_TOOLS: tuple[DialectTool, ...] = (
             "run_in_background": _d("Run as a background task", _B),
         }, ["command"]),
         ("shell", "process_start"), _shell_or_background("run_in_background", "cwd"),
-        runtime_from="shell",
+        runtime_from="shell", shell_syntax="bash",
     ),
     DialectTool(
         "BashOutput",
@@ -1320,6 +1328,17 @@ DIALECTS: dict[str, Dialect] = {d.id: d for d in (CLAUDE, GPT, QWEN, GENERIC)}
 
 def dialect_for_family(family: str) -> Dialect:
     return DIALECTS[FAMILY_DIALECT.get(family, "generic")]
+
+
+#: The real tools a bash-written command tool reaches (v1.386.0): only these
+#: carry ``shell_syntax`` on their context.
+SHELL_TARGETS = frozenset({"shell", "process_start"})
+
+
+def speaks_bash(dialect: Dialect) -> bool:
+    """Does ``dialect`` show a command tool whose model writes bash
+    (v1.386.0: Claude Code's ``Bash``)?"""
+    return any(t.shell_syntax == "bash" for t in dialect.tools)
 
 
 def resolve(requested: str, provider: str, model: str) -> tuple[str, Dialect]:

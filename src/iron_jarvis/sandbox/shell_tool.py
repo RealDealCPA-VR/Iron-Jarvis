@@ -19,8 +19,14 @@ from ..core import procs
 from ..core.trust import LOW_TRUST_SHELL_REFUSAL
 from ..tools.base import Tool, ToolContext, ToolResult
 from .base import Sandbox, SandboxResult
+from .cmd_guard import semicolon_refusal
 from .manager import SandboxManager
-from .native import NativeSandbox, build_env_description, scrubbed_env_description
+from .native import (
+    NativeSandbox,
+    bash_env_description,
+    build_env_description,
+    scrubbed_env_description,
+)
 from .policy import SandboxPolicy
 
 logger = logging.getLogger(__name__)
@@ -79,6 +85,39 @@ def runtime_description(os_name: str | None = None, *, build_tools: "tuple[str, 
     native = (
         scrubbed_env_description(os_name) if build_tools is None
         else build_env_description(build_tools, os_name)
+    )
+    return (
+        "Run a shell command inside the sandboxed session workspace "
+        "(§16/§17). The runtime is decided per call: when Docker is "
+        "available the command runs in an isolated Linux container; "
+        "otherwise it runs on the native runtime — "
+        + native
+    )
+
+
+#: v1.386.0: what a BASH-WRITTEN command tool (the IJ harness's Claude
+#: dialect, ``Bash``) adds when no Git for Windows bash was found and cmd.exe
+#: runs its commands: the model was trained on bash, so the differences that
+#: break (or, with ``;``, destroy) are named.
+NOT_BASH_NOTE = (
+    "This is Windows cmd.exe, not bash (no Git for Windows bash was found on this PC): ';' does "
+    "not separate commands (use '&&'), there are no heredocs ('<<'), '/dev/null' is 'nul', $VAR "
+    "and $(...) are not expanded (%VAR% is), single quotes do not quote, and a trailing '&' does "
+    "not start a background job (use run_in_background)."
+)
+
+
+def bash_runtime_description(found: Any, *, build_tools: "tuple[str, ...] | None" = None) -> str:
+    """The ``shell`` words for a command written in BASH (v1.386.0) on
+    Windows — what really runs it: Git for Windows' bash when ``found`` (a
+    ``sandbox/git_bash.GitBash``), else cmd.exe with :data:`NOT_BASH_NOTE`.
+    ``build_tools``: a Build session's tools found on the PATH that shell
+    sees (``native.build_env_tools``); None = a run with the scrubbed
+    environment. Never claims bash when cmd runs, nor cmd when bash runs."""
+    if found is None:
+        return runtime_description("nt", build_tools=build_tools) + " " + NOT_BASH_NOTE
+    native = bash_env_description(
+        getattr(found, "version", ""), build_tools or (), build=build_tools is not None,
     )
     return (
         "Run a shell command inside the sandboxed session workspace "
@@ -300,13 +339,37 @@ class SandboxedShellTool(Tool):
         from ..harness.command_env import is_build_call
 
         build = is_build_call(ctx.session_id)
+        # v1.386.0: a command the MODEL WROTE IN BASH — the IJ harness's
+        # Claude dialect (`Bash`; `HarnessTurn.ctx_for` sets it on the call's
+        # context, never a model argument) — runs in Git for Windows' bash on
+        # Windows when one is found (`sandbox/git_bash`). Everything else, and
+        # every other OS, keeps the platform's own shell exactly as before.
+        bash_written = getattr(ctx, "shell_syntax", "") == "bash" and os.name == "nt"
+        #: What ran it, for the result (and the POSIX-guess hint below).
+        ran: dict[str, Any] = {"bash": None, "refused": ""}
 
-        def _native_run(sandbox: Sandbox) -> SandboxResult:
+        def _native_run(sandbox: Sandbox) -> SandboxResult | None:
+            bash = None
+            if bash_written:
+                from .git_bash import find
+
+                bash = find()
+            if bash is None and os.name == "nt":
+                # cmd.exe runs it: a POSIX file command (or an installer)
+                # before an unquoted ';' would get the rest of the line as its
+                # arguments (`rm -f a; python b` deletes b) — refused before
+                # anything runs (`cmd_guard`).
+                refused = semicolon_refusal(args["command"])
+                if refused:
+                    ran["refused"] = refused
+                    return None
             if type(sandbox).run is NativeSandbox.run:
+                ran["bash"] = bash
                 return sandbox.run(  # type: ignore[call-arg]
                     args["command"], cwd=run_cwd, timeout=timeout,
                     on_spawn=_published, cancelled=_was_cancelled,
                     **({"build": True} if build else {}),
+                    **({"bash": bash} if bash is not None else {}),
                 )
             return sandbox.run(args["command"], cwd=run_cwd, timeout=timeout)
 
@@ -350,6 +413,15 @@ class SandboxedShellTool(Tool):
                 except asyncio.CancelledError:
                     pass
             raise
+        if result is None and ran["refused"]:
+            # The `;` guard (v1.386.0): an ordinary failed result, ledgered
+            # like any other; nothing was started.
+            return ToolResult(
+                ok=False,
+                output="",
+                data={"shell": "cmd", "refused": "semicolon"},
+                error=ran["refused"],
+            )
         if result is None:
             logger.warning("shell refused under low trust: %s", LOW_TRUST_SHELL_REFUSAL)
             return ToolResult(
@@ -379,12 +451,16 @@ class SandboxedShellTool(Tool):
                 else CONFINEMENT_NATIVE
             ),
         }
+        if native_fallback and ran["bash"] is not None:
+            # v1.386.0 (additive, only when bash ran): which shell ran it.
+            data["shell"] = "bash"
         output = result.combined.strip()
         # POSIX-guess hint (v1.205.0): a failed native command whose first
         # token is a POSIX tool absent on this platform gets ONE appended line
         # pointing at the built-in tools. Deterministic, failure-only, and the
-        # real output is never rewritten.
-        if native_fallback and not ok:
+        # real output is never rewritten. Never after bash ran it (v1.386.0):
+        # "this shell is Windows cmd" would be a lie there.
+        if native_fallback and not ok and ran["bash"] is None:
             hint = _posix_guess_hint(args["command"])
             if hint:
                 output = f"{output}\n{hint}" if output else hint

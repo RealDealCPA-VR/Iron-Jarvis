@@ -5104,11 +5104,19 @@ async def _build_harness(
         )
     prov, mod = _harness_model(d.platform, provider, model)
     shell_words = ""
-    if session_id:
-        from ..harness.command_env import build_shell_description, is_build_call
+    bash_words = ""
+    from ..harness.command_env import bash_shell_description, build_shell_description, is_build_call
 
-        if is_build_call(session_id):
-            shell_words = await asyncio.to_thread(build_shell_description)
+    build_call = bool(session_id) and is_build_call(session_id)
+    # v1.386.0: a dialect whose command tool's model writes BASH (Claude
+    # Code's `Bash`) is told what really runs it on Windows — Git for
+    # Windows' bash, or cmd.exe and what differs ("" on another OS, where the
+    # shell words below apply as before). Worked out off the loop; every
+    # other dialect does no extra work and keeps its words byte for byte.
+    if _mode.speaks_bash(requested, prov, mod):
+        bash_words = await asyncio.to_thread(bash_shell_description, build_call)
+    if build_call and not bash_words:
+        shell_words = await asyncio.to_thread(build_shell_description)
     turn = _mode.build(
         registry=d.platform.registry,
         permissions=d.platform.permissions,
@@ -5128,6 +5136,7 @@ async def _build_harness(
         ask_user=bool(ask_user) and stream,
         library=library,
         shell_description=shell_words,
+        bash_description=bash_words,
     )
     return turn, rules_section
 

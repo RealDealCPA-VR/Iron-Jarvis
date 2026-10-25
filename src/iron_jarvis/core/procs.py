@@ -60,7 +60,11 @@ asks to leave its job (``CREATE_BREAKAWAY_FROM_JOB`` — some launchers and
 updaters do) fails to START with "Access is denied" (measured); with it, only
 a process that asks in so many words leaves. Children that merely nest a job
 of their own (Node/libuv puts its children in one with silent breakaway) stay
-inside ours and still die with it (measured).
+inside ours and still die with it (measured). ONE EXCEPTION (v1.386.0): Git
+for Windows' bash (the IJ harness's Claude dialect) asks for every Windows
+program it starts, so its Job is made WITHOUT ``BREAKAWAY_OK``
+(``breakaway_ok=False``) — the MSYS2 runtime then asks nothing and every
+member stays inside (measured).
 """
 
 from __future__ import annotations
@@ -299,7 +303,7 @@ class _Job:
         self.kept = False
 
     @classmethod
-    def create(cls, *, kill_on_close: bool, below_normal: bool) -> "_Job | None":
+    def create(cls, *, kill_on_close: bool, below_normal: bool, breakaway_ok: bool = True) -> "_Job | None":
         k = _kernel()
         if k is None:
             return None
@@ -308,7 +312,7 @@ class _Job:
             if not handle:
                 return None
             info = k.EXTENDED()
-            flags = _JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            flags = _JOB_OBJECT_LIMIT_BREAKAWAY_OK if breakaway_ok else 0
             if kill_on_close:
                 flags |= _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             if below_normal:
@@ -684,6 +688,7 @@ def spawn(
     background: bool | None = None,
     no_window: bool = True,
     keep_windows: bool = False,
+    breakaway_ok: bool = True,
     **popen_kw: Any,
 ) -> subprocess.Popen:
     """Start a child for a caller that streams its pipes itself.
@@ -695,7 +700,15 @@ def spawn(
     its own session, so :func:`kill_tree`'s ``killpg`` reaches the tree. The
     caller owns the handle and ends it with :func:`kill_tree` and
     :func:`release` (an unreleased job is released when the Popen object is
-    collected)."""
+    collected).
+
+    ``breakaway_ok`` (v1.386.0): False makes a Job that lets NO member leave.
+    Git for Windows' bash needs it: the MSYS2 runtime starts every Windows
+    program (``python``, ``node``) with ``CREATE_BREAKAWAY_FROM_JOB`` whenever
+    the job allows it — measured: in a ``BREAKAWAY_OK`` job a bash command's
+    ``python`` was not a member and outlived the tree kill; without it MSYS
+    adds no such flag and every member dies with the job. The cost: a program
+    a bash command starts that ASKS to leave its job fails to start."""
     bg = in_background_lane() if background is None else bool(background)
     windows = sys.platform == "win32"
     if not windows:
@@ -704,7 +717,7 @@ def spawn(
     flags = int(popen_kw.pop("creationflags", 0) or 0) | priority_flags(bg)
     if no_window:
         flags |= CREATE_NO_WINDOW
-    job = _Job.create(kill_on_close=not keep_windows, below_normal=bg)
+    job = _Job.create(kill_on_close=not keep_windows, below_normal=bg, breakaway_ok=breakaway_ok)
     try:
         proc = subprocess.Popen(  # noqa: S603 — callers own argv
             argv, creationflags=flags | (CREATE_SUSPENDED if job else 0), **popen_kw
@@ -838,6 +851,8 @@ def run(
     drain_timeout: float = DRAIN_TIMEOUT_S,
     on_spawn: Callable[[Any], bool] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    startupinfo: Any = None,
+    breakaway_ok: bool = True,
 ) -> Result:
     """Blocking: run a child to completion with a REAL bound, output as bytes.
 
@@ -852,18 +867,22 @@ def run(
     handle and answers whether the caller was already cancelled, the second
     tells a call the await gave up on (its child ended by that kill, not on
     its own) from one that finished, so a keep-windows job is swept rather
-    than kept."""
+    than kept. ``startupinfo`` (v1.386.0): handed to ``Popen`` only when
+    given (Git's bash gets the hidden console ``shell=True`` gives cmd.exe).
+    ``breakaway_ok``: :func:`spawn`'s (False for Git's bash)."""
     proc = spawn(
         argv,
         background=background,
         no_window=no_window,
         keep_windows=keep_windows,
+        **({} if breakaway_ok else {"breakaway_ok": False}),
         shell=shell,
         cwd=None if cwd is None else str(cwd),
         env=env,
         stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        **({"startupinfo": startupinfo} if startupinfo is not None else {}),
     )
     ended_early = True  # a timeout, a cancel or an error: stop what it left
     try:

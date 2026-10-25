@@ -29,6 +29,7 @@ only (it still cards every command).
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 
@@ -82,4 +83,46 @@ def build_shell_description(os_name: "str | None" = None) -> str:
     return runtime_description(os_name, build_tools=build_env_tools())
 
 
-__all__ = ["build_session_of", "build_shell_description", "command_env", "is_build_call"]
+def bash_shell_description(build: bool) -> str:
+    """The shell facts a BASH-WRITTEN command tool (the IJ harness's Claude
+    dialect, ``Bash``) carries on Windows (v1.386.0) — what really runs its
+    commands: Git for Windows' bash when ``sandbox/git_bash.find`` finds one,
+    else cmd.exe and what differs from bash. ``build``: the turn is a Build
+    session's (its commands get the user's PATH; the words name the tools
+    found on the PATH THAT shell sees). "" on any other OS: there the
+    platform's own shell is POSIX sh and its words already say so. BLOCKING
+    (the first look runs ``bash --version``; tools are looked up on PATH):
+    async callers use ``asyncio.to_thread``."""
+    if os.name != "nt":
+        return ""
+    from ..sandbox.git_bash import bash_path_for, find
+    from ..sandbox.native import build_env, build_env_tools
+    from ..sandbox.shell_tool import bash_runtime_description
+
+    found = find()
+    tools = None
+    if build:
+        env = build_env()
+        if found is not None:
+            key = next((k for k in env if k.upper() == "PATH"), "PATH")
+            env = {**env, key: bash_path_for(found, env.get(key, ""))}
+        tools = build_env_tools(env)
+    return bash_runtime_description(found, build_tools=tools)
+
+
+def bash_identity() -> str:
+    """What runs a bash-written command on THIS PC, for the benchmark's
+    identity (v1.386.0): ``bash: <its --version line>``, ``cmd.exe`` (none
+    found), "" on another OS. BLOCKING."""
+    if os.name != "nt":
+        return ""
+    from ..sandbox.git_bash import find
+
+    found = find()
+    return f"bash: {found.version}" if found is not None else "cmd.exe"
+
+
+__all__ = [
+    "bash_identity", "bash_shell_description", "build_session_of", "build_shell_description",
+    "command_env", "is_build_call",
+]

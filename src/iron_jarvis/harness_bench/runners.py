@@ -450,17 +450,22 @@ class JarvisRunner:
         task's copy carries no harness layer; a refine probe's candidate
         layer when one is set), for the identity."""
         from ..daemon.chat_turn import _harness_model
-        from ..harness.command_env import build_shell_description
-        from ..harness.mode import build
+        from ..harness.command_env import bash_shell_description, build_shell_description
+        from ..harness.mode import build, speaks_bash
 
         provider, model = _harness_model(self.platform, self.provider, self.model)
+        # v1.386.0: a dialect whose command tool's model writes bash (Claude
+        # Code's `Bash`) is shown what really runs it on Windows (Git for
+        # Windows' bash, or cmd.exe) — exactly as a Build turn builds it.
+        bash_words = bash_shell_description(True) if speaks_bash(self.dialect, provider, model) else ""
         return build(
             registry=self.platform.registry, permissions=self.platform.permissions,
             requested=self.dialect, provider=provider, model=model, stream=True,
             approval_mode=JARVIS_APPROVAL_MODE, today="", layer=self._layer(),
             # v1.378.0: the turn runs as a Build session, so its shell is the
             # one a Build session's model is shown (the user's PATH).
-            shell_description=build_shell_description(),
+            shell_description="" if bash_words else build_shell_description(),
+            bash_description=bash_words,
         )
 
     def identity(self) -> dict[str, Any]:
@@ -510,7 +515,19 @@ class JarvisRunner:
             # default harness, so every earlier configuration keeps its key).
             **({"layer_sha256": layer_tree_hash(self.layer_dir), "layer_used": bool(turn.layer.used)}
                if self.layer_dir is not None else {}),
+            # v1.386.0: the shell a bash-written command tool (Claude Code's
+            # `Bash`) runs in IS part of the harness — Git for Windows' bash
+            # (its version) or cmd.exe — so a run under one is never reused
+            # for the other (absent for a dialect without one).
+            **({"command_shell": shell} if (shell := self._command_shell(turn)) else {}),
         }
+
+    @staticmethod
+    def _command_shell(turn: Any) -> str:
+        from ..harness import dialects as harness_dialects
+        from ..harness.command_env import bash_identity
+
+        return bash_identity() if harness_dialects.speaks_bash(turn.plan.dialect) else ""
 
     async def run(self, task: Task, workspace: Path, rollout: Rollout, *, timeout_s: float) -> RunOutcome:
         from ..core.fs_policy import usable_workspace_root

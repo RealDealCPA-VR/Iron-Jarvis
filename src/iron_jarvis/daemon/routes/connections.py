@@ -1028,6 +1028,11 @@ def rescan_providers(d) -> dict[str, Any]:
     # the catalog itself (again at the end, after the sign-in probes).
     invalidate_cli_presence()
     forget_detection_memos()
+    # v1.386.0: and look for Git for Windows' bash again (the shell a
+    # bash-written command runs in) — a Git installed a moment ago is found.
+    from ...sandbox import git_bash
+
+    git_bash.forget()
     invalidate_model_catalog(discovery=True)
     detected = detect_cli_providers(
         configured={"ollama": getattr(d.platform.config, "ollama_base_url", None)}
