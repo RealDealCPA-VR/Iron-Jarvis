@@ -197,27 +197,54 @@ def _unquoted_semicolon(text: str, *, single_quotes: bool, needs_space: bool) ->
             elif ch == ";" and i < last_word:
                 return True
         return False
-    words: list[bool] = []  # per word: holds an unquoted ';'
+    words: list[tuple[str, bool]] = []  # per word: its text, holds an unquoted ';'
     quote = ""
     in_word = has_semi = False
+    cur: list[str] = []
     for ch in text:
         if quote:
+            cur.append(ch)
             if ch == quote:
                 quote = ""
             continue
         if ch.isspace():
             if in_word:
-                words.append(has_semi)
+                words.append(("".join(cur), has_semi))
                 in_word = has_semi = False
+                cur = []
             continue
         in_word = True
+        cur.append(ch)
         if ch == '"' or (single_quotes and ch == "'"):
             quote = ch
         elif ch == ";":
             has_semi = True
     if in_word:
-        words.append(has_semi)
-    return any(words[:-1])
+        words.append(("".join(cur), has_semi))
+    # v1.386.0 review: a REDIRECTION is never one of the program's words —
+    # cmd.exe takes `2>nul`, `>out.txt`, `> out.txt` off the line before the
+    # program starts — so `rm -f a; 2>nul` hands rm only the odd name `a;`
+    # (refused by the first cut).
+    # A ';' that ends a redirection's file name (`< list.txt; echo x`) still
+    # hands what follows to the program (measured: `echo hi > o.txt; echo x`
+    # wrote "hi ; echo x" into o.txt), so such a word counts as one with a ';'.
+    handed: list[bool] = []
+    target_next = False
+    for word, semi in words:
+        bare = word.rstrip(";")
+        if target_next:
+            target_next = False
+            if semi:
+                handed.append(True)
+            continue
+        if _REDIRECT_RX.match(bare):
+            if semi:
+                handed.append(True)
+            elif bare in _BARE_REDIRECTS or re.fullmatch(r"\d?>>?|<", bare):
+                target_next = True
+            continue
+        handed.append(semi)
+    return any(handed[:-1])
 
 
 def _inner_of_cmd(text: str) -> str:
@@ -335,6 +362,28 @@ def semicolon_refusal(command: object) -> str:
     except Exception:  # noqa: BLE001 — a guard that crashes must not stop a turn
         return ""
     return refusal_sentence(prog) if prog else ""
+
+
+def has_unquoted_semicolon(command: object) -> bool:
+    """Does the line cmd.exe runs (its first) hold a ';' outside double
+    quotes that is written the way bash SEPARATES commands — a space after it
+    and more words (v1.386.0 review: the shell tool's hint after a FAILED cmd
+    line, `sleep 2; cat x` -> "invalid time interval '2;'"). A ';' inside a
+    word (`set PATH=%PATH%;C:\\x`) is cmd's own and never counts. Never
+    raises."""
+    try:
+        line = _first_line(str(command or ""))
+        quoted = False
+        for i, ch in enumerate(line):
+            if ch == '"':
+                quoted = not quoted
+            elif ch == ";" and not quoted:
+                rest = line[i + 1:]
+                if rest[:1].isspace() and rest.strip():
+                    return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
 
 
 def is_interactive_cmd(command: object) -> bool:

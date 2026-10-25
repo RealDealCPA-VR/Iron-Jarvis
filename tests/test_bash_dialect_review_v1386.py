@@ -329,3 +329,195 @@ async def test_a_background_job_without_a_redirect_returns_at_once_and_keeps_ser
             import psutil
 
             psutil.Process(pid).kill()
+
+
+# --------------------------------------------------------------------------- #
+# 4. hints say only what is true
+# --------------------------------------------------------------------------- #
+
+
+def _shell_ctx(tmp_path, session: str, *, bash: bool):
+    from types import SimpleNamespace
+
+    from iron_jarvis.tools.base import ToolContext
+
+    ws = tmp_path / "ws"
+    ws.mkdir(exist_ok=True)
+    return ws, ToolContext(workspace=ws, session_id=session, agent_run_id="r",
+                           config=SimpleNamespace(home=tmp_path, sandbox={}), event_bus=None, engine=None,
+                           called_as="Bash" if bash else "", shell_syntax="bash" if bash else "")
+
+
+@pytest.mark.skipif(not WIN, reason="cmd.exe is Windows'")
+async def test_a_tool_that_ran_is_never_called_missing(tmp_path, monkeypatch):
+    """RED on the doer's code: a Build session's cmd line whose PATH HAS
+    Git's cp (`cp a b && sleep 2; cat x` — the hard-file-watcher command) ran
+    cp and failed at `sleep 2;`, and the hint said "'cp' is a POSIX command;
+    this shell is Windows cmd": the model copied the files a SECOND time. Now:
+    no claim that cp is missing, and the failure's real cause, cmd's ';'."""
+    import shutil as _sh
+
+    from iron_jarvis.sandbox import native as N
+    from iron_jarvis.sandbox import shell_tool as ST
+
+    benv = N.build_env()
+    path = next((v for k, v in benv.items() if k.upper() == "PATH"), "")
+    if _sh.which("cp", path=path) is None:
+        pytest.skip("Git's cp is not on this PC's PATH")
+    ws, ctx = _shell_ctx(tmp_path, "build:hint-cp", bash=False)
+    (ws / "a.txt").write_bytes(b"x\n")
+    res = await ST.SandboxedShellTool().execute({"command": "cp a.txt b.txt && sleep 2; echo done"}, ctx)
+    assert res.ok is False
+    assert (ws / "b.txt").exists(), "cp ran"
+    assert "is a POSIX command" not in res.output, res.output
+    assert ST.SEMICOLON_HINT in res.output, res.output
+
+
+def test_the_posix_hint_checks_the_path_the_line_ran_with(tmp_path):
+    from iron_jarvis.sandbox import shell_tool as ST
+
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    (tools / "cp.exe").write_bytes(b"")
+    assert ST._posix_guess_hint("cp a b", "nt", str(tools)) is None
+    assert "is a POSIX command" in ST._posix_guess_hint("cp a b", "nt", str(tmp_path / "empty"))
+    # a ';' inside a word is cmd's own (a PATH list), never the bash shape
+    assert ST._posix_guess_hint("set PATH=%PATH%;C:\\x && foo", "nt", "") is None
+    assert ST._posix_guess_hint('python -c "import x; y"', "nt", "") is None
+    assert ST._posix_guess_hint("sleep 2; cat x", "nt", "") == ST.SEMICOLON_HINT
+
+
+@needs_bash
+async def test_cmd_habits_in_bash_get_one_true_line(tmp_path):
+    from iron_jarvis.sandbox import shell_tool as ST
+
+    ws, ctx = _shell_ctx(tmp_path, "build:hint-bash", bash=True)
+    (ws / "f.txt").write_bytes(b"alpha\nBeta\n")
+    res = await ST.SandboxedShellTool().execute({"command": "type f.txt"}, ctx)
+    assert res.ok is False and "type: f.txt: not found" in res.output
+    assert "`type` is a cmd.exe command; in bash write type -> cat" in res.output, res.output
+    res = await ST.SandboxedShellTool().execute({"command": "findstr /i beta f.txt"}, ctx)
+    assert res.ok is False and "`/i` is turned into a path" in res.output and "//i" in res.output
+    # `cmd /c` starts an interactive cmd that runs nothing and exits 0
+    res = await ST.SandboxedShellTool().execute({"command": "cmd /c echo hi"}, ctx)
+    assert "`/c` is turned into a path" in res.output, res.output
+    # a bash line that works gets nothing added
+    res = await ST.SandboxedShellTool().execute({"command": "cat f.txt; cmd //c echo hi"}, ctx)
+    assert res.ok and "Git for Windows' bash, not cmd.exe" not in res.output
+
+
+@needs_bash
+async def test_start_with_a_cmd_switch_is_refused_before_it_opens_an_error_window(tmp_path, monkeypatch):
+    """`start /b x` in bash: MSYS hands start `B:/`, Windows opens an error
+    window on the user's screen ("Windows cannot find 'B:/'"), the call waits
+    for it until the timeout and the window STAYS (measured in this review:
+    a cmd.exe titled "B:/" was still open after the call). Refused before
+    anything runs — RED on the doer's code, proven WITHOUT running it (the
+    runners are stand-ins here: a real run would open the window)."""
+    from iron_jarvis.core import procs
+    from iron_jarvis.harness import process as P
+    from iron_jarvis.sandbox import git_bash as GB
+    from iron_jarvis.sandbox import shell_tool as ST
+
+    ran: list = []
+
+    def _no(*a, **k):
+        ran.append(a)
+        raise AssertionError("a command ran")
+
+    monkeypatch.setattr(procs, "run", _no)
+    monkeypatch.setattr(procs, "run_to_files", _no, raising=False)
+    monkeypatch.setattr(procs, "spawn", _no)
+    ws, ctx = _shell_ctx(tmp_path, "build:start-b", bash=True)
+    res = await ST.SandboxedShellTool().execute({"command": "start /b python server.py"}, ctx)
+    assert res.ok is False and "error window" in (res.error or "") and "//b" in res.error
+    res = await P.ProcessStartTool().execute({"command": "start /min python server.py"}, ctx)
+    assert res.ok is False and "error window" in (res.error or "")
+    assert ran == []
+    # a POSIX path after start is a path, never a switch
+    assert GB.switch_refusal("start /c/Users/me/report.html") == ""
+    assert GB.switch_refusal("start //b python server.py") == ""
+    assert GB.switch_refusal("cmd //c start /b x") == ""  # inside cmd, /b is cmd's own
+
+
+# --------------------------------------------------------------------------- #
+# 5. a long command runs; one bash cannot be handed fails in words
+# --------------------------------------------------------------------------- #
+
+
+@needs_bash
+async def test_a_40_kb_heredoc_is_written_byte_for_byte(tmp_path):
+    """RED on the doer's code: refused at 32,000 characters ("Windows caps one
+    environment variable at 32,767") — but an environment handed to
+    CreateProcessW is not capped so (measured: 40,000,000 characters reached
+    bash). A model writing a 40 KB file through `cat <<'EOF'` now writes it,
+    non-ASCII and all."""
+    from iron_jarvis.sandbox import shell_tool as ST
+
+    ws, ctx = _shell_ctx(tmp_path, "build:long", bash=True)
+    line = "line {i}: caf\u00e9 \u4e2d\u6587 \U0001F600 $HOME `x` \\ \"q\" 'sq'\n"
+    body = "".join(line.format(i=i) for i in range(1100))
+    assert len(body) > 40_000
+    res = await ST.SandboxedShellTool().execute(
+        {"command": "cat > big.txt <<'EOF'\n" + body + "EOF\nwc -c < big.txt"}, ctx)
+    assert res.ok, (res.error, res.output[-300:])
+    assert (ws / "big.txt").read_bytes() == body.encode("utf-8")
+
+
+@needs_bash
+async def test_a_command_bash_cannot_be_handed_fails_in_words(tmp_path):
+    from iron_jarvis.sandbox import shell_tool as ST
+
+    ws, ctx = _shell_ctx(tmp_path, "build:nul", bash=True)
+    res = await ST.SandboxedShellTool().execute({"command": "echo a\x00b"}, ctx)
+    assert res.ok is False and "Nothing was run" in (res.error or "") and "NUL" in res.error
+
+
+# --------------------------------------------------------------------------- #
+# 6. the ';' guard: redirections are not the program's words
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("command", [
+    "rm -f a; 2>nul",          # the doer's own over-refusal: rm gets only the odd name `a;`
+    "rm -f a; > nul",
+    "rm -f a; 2>&1",
+    "del a.txt 2>nul",
+])
+def test_a_redirection_after_the_semicolon_is_not_a_word(command):
+    from iron_jarvis.sandbox import cmd_guard as G
+
+    assert G.semicolon_refusal(command) == "", command
+
+
+@pytest.mark.parametrize("command,program", [
+    ("rm -f a 2>nul; python b", "rm"),
+    ("rm -f a; >out.txt b", "rm"),
+    ("xargs rm < list.txt; echo done", "rm"),
+    ("rm x > log.txt; python y", "rm"),
+])
+def test_a_redirection_never_hides_a_word_after_the_semicolon(command, program):
+    from iron_jarvis.sandbox import cmd_guard as G
+
+    assert G.semicolon_refusal(command) == G.refusal_sentence(program), command
+
+
+# --------------------------------------------------------------------------- #
+# 7. the words say what really happens
+# --------------------------------------------------------------------------- #
+
+
+def test_the_bash_words_match_the_behaviour(tmp_path):
+    """RED on the doer's code: the words said a job left running with '&'
+    makes the call wait until the timeout (true of the pipe it used, false
+    now), said nothing of a cmd-style switch, and said nothing of where each
+    call starts (Claude Code keeps the folder between calls; ours does not)."""
+    from iron_jarvis.harness import dialects as D
+    from iron_jarvis.sandbox.native import bash_env_description
+
+    words = bash_env_description("GNU bash, version 5.2.37(1)-release", ("git", "python"), build=True)
+    assert "until the timeout" not in words
+    assert "keeps running after this call returns, until the session ends" in words
+    assert "'/b' reaches a Windows program as 'B:/', so write '//b'" in words
+    (bash,) = [t for t in D.DIALECTS["claude"].tools if t.name == "Bash"]
+    assert "Every call starts in the session folder again: a cd lasts for that command only" in bash.description

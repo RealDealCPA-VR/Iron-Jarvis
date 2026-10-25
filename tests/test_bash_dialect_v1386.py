@@ -597,9 +597,12 @@ async def test_a_failed_bash_command_is_never_told_it_ran_in_cmd(tmp_path):
     assert res.ok is False and "No such file" in res.output, res.output
     assert "this shell is Windows cmd" not in res.output
     assert res.data["shell"] == "bash"
-    # CONTROL: the same command through cmd.exe still gets its hint.
+    # CONTROL: the same command through cmd.exe with the scrubbed PATH (plain
+    # chat: no `rm` on it) still gets its hint. (Review: a Build session's
+    # cmd line, whose PATH HAS Git's rm, no longer does — the rm ran; see
+    # test_bash_dialect_review_v1386.)
     cmd = await ST.SandboxedShellTool().execute({"command": "rm no-such-file-here"},
-                                                dataclasses.replace(ctx, shell_syntax=""))
+                                                dataclasses.replace(ctx, shell_syntax="", session_id="chat"))
     assert cmd.ok is False and "this shell is Windows cmd" in cmd.output
     assert "shell" not in cmd.data
 

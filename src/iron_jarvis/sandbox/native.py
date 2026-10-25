@@ -704,10 +704,12 @@ def bash_env_description(version: str, tools: "tuple[str, ...] | list[str]", *, 
         f"{found}{who}{secrets} Write bash: ';', '&&', '||', pipes, $(...), heredocs and "
         "'2>/dev/null' work as in bash, and Git's POSIX tools (ls, cat, grep, sed, rm, cp, "
         "curl...) resolve. Paths can be written C:/Users/... or /c/Users/...; a Windows program "
-        "gets them converted. A job left running with a trailing '&' must send its output to a "
-        "file ('cmd > out.log 2>&1 &') or this call waits for it until the timeout; for a "
-        "server or a watcher use run_in_background. Prefer the built-in tools (rename_file, "
-        "list_files, grep, read_document/write_document) for file work."
+        "gets them converted, and so does a cmd-style switch: '/b' reaches a Windows program as "
+        "'B:/', so write '//b' (or run the line as cmd //c \"...\"). A job started with a trailing "
+        "'&' keeps running after this call returns, until the session ends, and "
+        "what it prints after that is not shown: for a server or a watcher whose output you "
+        "need, use run_in_background. Prefer the built-in tools (rename_file, list_files, grep, "
+        "read_document/write_document) for file work."
     )
 
 
@@ -780,6 +782,18 @@ class NativeSandbox(Sandbox):
     def available(self) -> bool:
         """Native execution is always available."""
         return True
+
+    def command_path(self, *, build: bool = False) -> str:
+        """The PATH a cmd.exe line of :meth:`run` runs with (v1.386.0 review:
+        what the shell tool's POSIX-guess hint looks a program up on, so it
+        never calls a tool on that PATH missing). BLOCKING (it builds the
+        environment :meth:`run` would)."""
+        if self.policy.modify_env == "deny":
+            env = build_env() if build else scrubbed_env()
+        else:
+            env = dict(os.environ)
+        key = next((k for k in env if k.upper() == "PATH"), "PATH")
+        return str(env.get(key, ""))
 
     def run(
         self, command: str, *, cwd: Path, timeout: float | None = None,

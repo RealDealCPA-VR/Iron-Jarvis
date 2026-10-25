@@ -441,6 +441,14 @@ class ProcessStartTool(Tool):
             from ..sandbox.git_bash import find
 
             bash = await asyncio.to_thread(find)
+            if bash is not None:
+                # v1.386.0 review: `start /b x` in bash opens an error window
+                # on the user's screen (`git_bash.switch_refusal`).
+                from ..sandbox.git_bash import switch_refusal
+
+                refused = switch_refusal(command)
+                if refused:
+                    return ToolResult(ok=False, error=refused, data={"shell": "bash", "refused": "bash"})
         if bash is None and os.name == "nt":
             from ..sandbox.cmd_guard import semicolon_refusal
 

@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import threading
 import time
@@ -62,8 +63,13 @@ COMMAND_VAR = "IJ_BASH_COMMAND"
 #: bash's whole command line: take the command out of the environment the
 #: command's own children get, then run it.
 RUNNER = f'export -n {COMMAND_VAR}; eval "${COMMAND_VAR}"'
-#: The longest command an environment variable can carry on Windows.
-MAX_COMMAND_CHARS = 32_000
+#: The longest command this runs (v1.386.0 review). NOT the 32,767-character
+#: limit ``SetEnvironmentVariable`` documents: an environment handed to
+#: ``CreateProcessW`` carries far more (measured on this PC: a 40,000,000-
+#: character heredoc reached bash byte for byte), and the first cut's 32,000
+#: refused a model writing a 40 KB file through ``cat <<'EOF'``. This bound
+#: only keeps a runaway argument out of a child's environment.
+MAX_COMMAND_CHARS = 1_000_000
 #: How long ``bash --version`` may take when a file is first verified.
 VERSION_TIMEOUT_S = 10.0
 #: How long "not found" is believed before looking again.
@@ -320,6 +326,147 @@ def invocation(found: GitBash, command: str, env: "dict[str, str] | None") -> tu
         current = out.get(key, "")
         out[key] = os.pathsep.join([*found.path_dirs, *([current] if current else [])])
     return [found.path, "-c", RUNNER], out
+
+
+# --------------------------------------------------------------------------- #
+# Windows commands written in bash (v1.386.0 review)
+# --------------------------------------------------------------------------- #
+#
+# The MSYS2 runtime turns an argument that looks like a POSIX path into a
+# Windows path for a Windows program — a cmd-style switch included (measured
+# on this PC's Git 5.2.37: `/b` reaches the program as `B:/`, `/min` as
+# `C:/Program Files/Git/min`). Claude Code's bash does the same. Two harms
+# follow, and both are named before or after the command:
+#
+# * `start /b server` becomes `start B:/ server`: Windows shows an ERROR
+#   WINDOW ("Windows cannot find 'B:/'") on the user's screen, the call waits
+#   for it until its timeout, and the window stays (a keep-windows call never
+#   stops a window). REFUSED before anything runs (:func:`switch_refusal`).
+# * every other cmd-ism fails in a way that misleads: `type f.txt` says
+#   "type: f.txt: not found" (bash's own `type` names commands), `findstr /i
+#   x f` says "Cannot open x", `cmd /c dir` starts an interactive cmd that runs
+#   nothing and exits 0. ONE plain line is added to the result
+#   (:func:`windows_command_hint`); the real output is never rewritten.
+
+#: cmd.exe's own commands a model writes out of habit, with bash's word.
+CMD_ONLY_COMMANDS = {
+    "del": "rm", "erase": "rm", "copy": "cp", "move": "mv", "ren": "mv", "rename": "mv",
+    "md": "mkdir", "rd": "rm -r", "cls": "clear", "type": "cat",
+}
+#: Windows programs whose cmd-style switches MSYS turns into paths.
+WINDOWS_SWITCH_PROGRAMS = frozenset({
+    "start", "cmd", "findstr", "taskkill", "tasklist", "robocopy", "xcopy", "where", "schtasks",
+    "reg", "sc", "attrib", "icacls", "ipconfig", "netstat", "shutdown", "choice", "systeminfo",
+    "wmic", "net", "powercfg", "msiexec",
+})
+#: Names that are GNU programs in Git's bash (no path conversion happens:
+#: the switch IS the file name it reads) — with what a cmd user meant.
+GNU_NAMESAKES = {"dir": "ls", "find": "find (GNU's)", "sort": "sort (GNU's)", "timeout": "sleep"}
+#: `start`'s own switches (``start /?``).
+_START_SWITCHES = frozenset({
+    "b", "min", "max", "wait", "d", "i", "low", "normal", "high", "realtime", "abovenormal",
+    "belownormal", "separate", "shared", "node", "affinity", "machine",
+})
+_SWITCH_RX = re.compile(r"^/([A-Za-z?][A-Za-z0-9?]{0,15})(?::.*)?$")
+_SEPARATORS_RX = re.compile(r"&&|\|\||[;|&\n(){}`]|\$\(")
+_EXE_RX = re.compile(r"\.(?:exe|com|cmd|bat)$", re.IGNORECASE)
+
+
+def _bash_words(segment: str) -> list[str]:
+    """``segment``'s words, bash quotes removed (``shlex``, POSIX rules);
+    [] when it does not parse."""
+    import shlex
+
+    try:
+        return shlex.split(segment, comments=False, posix=True)
+    except ValueError:
+        return []
+
+
+def _program(word: str) -> str:
+    return _EXE_RX.sub("", re.split(r"[\\/]", word)[-1].lower())
+
+
+def _commands(command: str) -> list[list[str]]:
+    """The commands of a bash line, split at its operators (a rough reading:
+    quotes are not tracked across operators — a guardrail, never a parser),
+    each as words; ``VAR=value`` prefixes dropped."""
+    out: list[list[str]] = []
+    for segment in _SEPARATORS_RX.split(str(command or "")):
+        words = _bash_words(segment)
+        while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+            words = words[1:]
+        if words:
+            out.append(words)
+    return out
+
+
+def switch_refusal(command: object) -> str:
+    """The refusal for a bash command that hands ``start`` a cmd-style
+    switch (``start /b ...``): MSYS turns it into a path and Windows shows an
+    error window that stays on the user's screen. "" for anything else. Pure,
+    never raises."""
+    try:
+        for words in _commands(str(command or "")):
+            if _program(words[0]) != "start" or len(words) < 2:
+                continue
+            m = _SWITCH_RX.match(words[1])
+            if m and m.group(1).lower() in _START_SWITCHES:
+                sw = words[1]
+                return (
+                    f"This shell is Git for Windows' bash: it turns `{sw}` into a path before "
+                    "`start` sees it, and Windows would open an error window on the user's screen. "
+                    f"Nothing was run; write the switch as `/{sw}` (`start /{sw} ...`), or for a "
+                    "program that keeps running use run_in_background."
+                )
+    except Exception:  # noqa: BLE001 — a guard that crashes must not stop a turn
+        return ""
+    return ""
+
+
+def windows_command_hint(command: object, output: str = "") -> str:
+    """ONE line for a bash command that used cmd.exe's own commands or a
+    Windows program's cmd-style switch (``findstr /i``, ``cmd /c``), else "".
+    Deterministic; the caller adds it only after a FAILED run — or for a
+    ``cmd /c`` that started an interactive cmd instead (it exits 0 having run
+    nothing)."""
+    try:
+        cmd_words: list[str] = []
+        switched: list[str] = []
+        namesakes: list[tuple[str, str]] = []
+        for words in _commands(str(command or "")):
+            prog = _program(words[0])
+            switch = next((w for w in words[1:] if _SWITCH_RX.match(w)), "")
+            if prog in CMD_ONLY_COMMANDS:
+                if prog == "type" and ": not found" not in str(output or ""):
+                    continue  # bash's own `type` asked about a command: fine
+                cmd_words.append(prog)
+            elif prog in WINDOWS_SWITCH_PROGRAMS and switch:
+                switched.append(switch)
+            elif prog in GNU_NAMESAKES and switch:
+                namesakes.append((prog, switch))
+        parts: list[str] = []
+        if cmd_words:
+            seen = list(dict.fromkeys(cmd_words))
+            pairs = ", ".join(f"{w} -> {CMD_ONLY_COMMANDS[w]}" for w in seen)
+            parts.append(f"`{seen[0]}` is a cmd.exe command; in bash write {pairs}")
+        if namesakes:
+            prog, sw = namesakes[0]
+            parts.append(
+                f"`{prog}` here is the GNU program, not cmd.exe's, and `{sw}` is a file name to it "
+                f"(use {GNU_NAMESAKES[prog]})"
+            )
+        if switched:
+            sw = switched[0]
+            parts.append(
+                f"a Windows program's switch like `{sw}` is turned into a path here before the "
+                f"program sees it: write it `/{sw}`, or run the line as cmd //c \"...\""
+            )
+        if not parts:
+            return ""
+        return "(This shell is Git for Windows' bash, not cmd.exe: " + "; ".join(parts) + ".)"
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def bash_path_for(found: GitBash, path: str) -> str:

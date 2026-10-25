@@ -859,7 +859,8 @@ _CLAUDE_TOOLS: tuple[DialectTool, ...] = (
     ),
     DialectTool(
         "Bash",
-        "Runs a command in the session folder and returns its output. timeout is in "
+        "Runs a command in the session folder and returns its output. Every call starts in the "
+        "session folder again: a cd lasts for that command only ('cd sub && pytest'). timeout is in "
         "milliseconds (max 600000). For a program that keeps running (a dev server, a watcher) "
         "set run_in_background: true; read its output with BashOutput and stop it with TaskStop.",
         _obj({
