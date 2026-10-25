@@ -84,7 +84,7 @@ export type SSEEvent =
    *  daemon/durable_turns): `resumed` false = the frames after it are the
    *  WHOLE turn from its start (drop what you hold); true = only what came
    *  after the resume position the page sent. */
-  | { type: "resume"; resumed: boolean; running: boolean }
+  | { type: "resume"; resumed: boolean; running: boolean; startedAt?: number }
   /** v1.384.0: the STORED part of a tagged follow ended — what follows is
    *  live. A page draws everything up to here in ONE pass. */
   | { type: "caught_up"; id: string }
@@ -603,8 +603,17 @@ export function sseEventFrom(
       return { type: "thinking", text: typeof data.text === "string" ? data.text : "" };
     case "reset":
       return { type: "reset" };
-    case "resume":
-      return { type: "resume", resumed: data.resumed === true, running: data.running === true };
+    case "resume": {
+      // v1.384.0 review: a WHOLE replay of a running turn says when it
+      // started (ms), so a reload counts "Working for" from there.
+      const at = data.started_at;
+      return {
+        type: "resume",
+        resumed: data.resumed === true,
+        running: data.running === true,
+        ...(typeof at === "number" && Number.isFinite(at) && at > 0 ? { startedAt: at } : {}),
+      };
+    }
     case "caught_up":
       return { type: "caught_up", id: str(data.id) };
     case "tool_call": {
@@ -1574,7 +1583,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
       // folds below start from it, and the rejoin asks only for the rest.
       const from = runOpts.resume?.seed ?? null;
       setStreaming(true);
-      const t0 = from?.startedAt ?? Date.now();
+      // `let`: a rejoin's whole replay moves it to the turn's real start.
+      let t0 = from?.startedAt ?? Date.now();
       if (!from) {
         setText("");
         textRef.current = "";
@@ -1729,6 +1739,14 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
           if (ev.type === "resume") {
             replaying = true;
             if (!ev.resumed) restart();
+            // v1.384.0 review: a REJOIN's whole replay (a reload) counts from
+            // the turn's real start, never from now — the daemon says when
+            // it was (never ahead of this clock: it may be another
+            // machine's). A POST keeps its own clock: it started it.
+            if (!ev.resumed && runOpts.rejoin && ev.startedAt !== undefined) {
+              t0 = Math.min(ev.startedAt, Date.now());
+              setStartedAt(t0);
+            }
             keep();
             continue;
           }

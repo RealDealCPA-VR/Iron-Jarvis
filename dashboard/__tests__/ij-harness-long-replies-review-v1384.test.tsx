@@ -10,6 +10,8 @@
  *      it when the read landed: the jump the user reported.
  *  R2. Leaving and coming back many times leaves ONE open stream — every
  *      earlier one closed (counted on the fetches' own signals).
+ *  R3. A WHOLE replay (a reload) counts "Working for" from the turn's real
+ *      start (the daemon's `resume.started_at`), not from the rejoin.
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -259,6 +261,76 @@ describe("R1 — the question sent here is on screen at once on return", () => {
       back.push("done", { reply: "Working on it, done." }, "1:0");
       back.end();
       await new Promise((r) => setTimeout(r, 30));
+    });
+  });
+});
+
+describe("R3 — a reload's whole replay counts from the turn's real start", () => {
+  it("a rejoin takes the daemon's start; a POST keeps its own clock", async () => {
+    const { renderHook } = await import("@testing-library/react");
+    const { useChatStream } = await import("@/lib/useChatStream");
+    const started = Date.now() - 2 * 3600 * 1000; // two hours in
+    const s = controlledStream();
+    fetchMock.mockImplementation(s.fetch);
+    const { result } = renderHook(() => useChatStream({ textInState: false }));
+    let done!: Promise<unknown>;
+    act(() => {
+      done = result.current.run(undefined, undefined, undefined, { rejoin: "tr1", ids: true });
+    });
+    await act(async () => {
+      s.push("resume", { resumed: false, running: true, started_at: started });
+      s.push("token", { text: "Long work" }, "0:9");
+      s.push("caught_up", { id: "0:9" });
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(result.current.startedAt).toBe(started);
+    expect(result.current.seedOf?.()?.startedAt).toBe(started);
+    await act(async () => {
+      s.push("done", { reply: "Long work" }, "1:0");
+      s.end();
+      await done;
+    });
+    // A POST: the daemon's clock never moves the page's (it may be another
+    // machine's — a phone over the network).
+    const p = controlledStream();
+    fetchMock.mockImplementation(p.fetch);
+    const before = Date.now();
+    act(() => {
+      done = result.current.run({ text: "go", ids: true }, undefined, undefined, { path: "/build/sessions/s1/turn" });
+    });
+    await act(async () => {
+      p.push("resume", { resumed: false, running: true, started_at: before - 50_000 });
+      p.push("caught_up", { id: "" });
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(result.current.startedAt).toBeGreaterThanOrEqual(before);
+    await act(async () => {
+      p.push("done", { reply: "ok" }, "0:0");
+      p.end();
+      await done;
+    });
+  });
+
+  it("a start from the future (another machine's clock) is never ahead of now", async () => {
+    const { renderHook } = await import("@testing-library/react");
+    const { useChatStream } = await import("@/lib/useChatStream");
+    const s = controlledStream();
+    fetchMock.mockImplementation(s.fetch);
+    const { result } = renderHook(() => useChatStream({ textInState: false }));
+    let done!: Promise<unknown>;
+    act(() => {
+      done = result.current.run(undefined, undefined, undefined, { rejoin: "tr1", ids: true });
+    });
+    const now = Date.now();
+    await act(async () => {
+      s.push("resume", { resumed: false, running: true, started_at: now + 3_600_000 });
+      s.push("caught_up", { id: "" });
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(result.current.startedAt).toBeLessThanOrEqual(Date.now());
+    await act(async () => {
+      s.end();
+      await done;
     });
   });
 });

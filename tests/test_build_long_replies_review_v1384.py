@@ -6,6 +6,9 @@
   The first ``MAX_STEPS`` keep their detail as before; the rest are kept
   compact (name, outcome, time, target — never their detail), up to
   ``MAX_COUNTED_STEPS``.
+* A WHOLE tagged replay of a turn that is still running says when the turn
+  STARTED (``resume.started_at``, ms), so a page that comes back after a
+  reload counts "Working for" from the turn's start, not from the rejoin.
 """
 
 from __future__ import annotations
@@ -65,3 +68,30 @@ def test_the_line_keeps_at_most_max_counted_steps():
     # Bounded in size too: a compact step is a few dozen bytes.
     compact = json.dumps(w.steps[build_routes.MAX_STEPS:])
     assert len(compact) < 80 * (build_routes.MAX_COUNTED_STEPS - build_routes.MAX_STEPS)
+
+
+
+# --------------------------------------------------------------------------- #
+# a reload's whole replay says when the turn started
+# --------------------------------------------------------------------------- #
+
+
+def test_a_whole_replay_of_a_running_turn_says_when_it_started():
+    lg = dt.TurnLog("t")
+    lg.add(dt.sse("token", {"text": "abc"}))
+    started_ms = int(lg.started_at.timestamp() * 1000)
+    head = lg.tagged_head(None)
+    first = head.split("\n\n", 1)[0]
+    data = json.loads(first.split("data: ", 1)[1])
+    assert data == {"resumed": False, "running": True, "started_at": started_ms}
+    # A position the log holds: the page has its own start already.
+    data = json.loads(lg.tagged_head("0:1").split("\n\n", 1)[0].split("data: ", 1)[1])
+    assert data == {"resumed": True, "running": True}
+    # A finished turn shows no clock: no start.
+    lg.status = "done"
+    data = json.loads(lg.tagged_head(None).split("\n\n", 1)[0].split("data: ", 1)[1])
+    assert data == {"resumed": False, "running": False}
+    # A record replay (a finished turn this process no longer holds): as before.
+    assert json.loads(dt.tagged_replay([["token", '{"text": "a"}']]).split("\n\n", 1)[0].split("data: ", 1)[1]) == {
+        "resumed": False, "running": False,
+    }

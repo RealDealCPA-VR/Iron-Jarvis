@@ -120,12 +120,21 @@ def position_of(frames: list[list[str]], index: int) -> str:
     return f"{index}:{_text_len(event, data)}"
 
 
-def tagged_replay(frames: list[list[str]], *, resumed: bool = False, running: bool = False) -> str:
+def tagged_replay(frames: list[list[str]], *, resumed: bool = False, running: bool = False,
+                  started_ms: "int | None" = None) -> str:
     """The WHOLE stored turn as a tagged answer: ``resume`` (``resumed``
     false = drop what you hold), every frame with its position, ``caught_up``.
     The answer for a page with no usable resume point, and for a turn replayed
-    from its record."""
-    out = [sse("resume", {"resumed": resumed, "running": running})]
+    from its record.
+
+    ``started_ms`` (v1.384.0 review): when the turn STARTED (ms since the
+    epoch), sent as ``resume.started_at`` — a page coming back after a reload
+    counts "Working for" from it, not from the rejoin. Given only for a turn
+    still running in memory; absent otherwise (the frame as before)."""
+    head: dict[str, Any] = {"resumed": resumed, "running": running}
+    if started_ms is not None:
+        head["started_at"] = int(started_ms)
+    out = [sse("resume", head)]
     out += [tagged(position_of(frames, j), e, d) for j, (e, d) in enumerate(frames)]
     out.append(sse("caught_up", {"id": position_of(frames, len(frames) - 1) if frames else ""}))
     return "".join(out)
@@ -308,7 +317,8 @@ class TurnLog:
         running = self.status == "running"
         tail = self.frames_after(after) if after else None
         if tail is None:
-            return tagged_replay(self.frames, resumed=False, running=running)
+            started = int(self.started_at.timestamp() * 1000) if running else None
+            return tagged_replay(self.frames, resumed=False, running=running, started_ms=started)
         out = [sse("resume", {"resumed": True, "running": running})]
         out += [tagged(p, e, d) for p, e, d in tail]
         out.append(sse("caught_up", {"id": self.position()}))

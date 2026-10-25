@@ -187,7 +187,10 @@ async def _get(app, path: str) -> str:
 async def test_the_recorded_turn_merges_tokens_and_thinking_and_has_a_helper(app, work):
     _sid, raw, lg = await _recorded(app, work, "rs-shape")
     live = blocks(raw)
-    assert live[0][1] == "resume" and json.loads(live[0][2]) == {"resumed": False, "running": True}
+    head = json.loads(live[0][2])
+    # (review) a whole replay of a running turn says when it started.
+    assert live[0][1] == "resume" and isinstance(head.pop("started_at"), int)
+    assert head == {"resumed": False, "running": True}
     assert any(e == "caught_up" for _i, e, _d in live)
     events = [e for e, _d in lg.frames]
     assert {"thinking", "token", "tool_call", "helper", "round", "done"} <= set(events)
