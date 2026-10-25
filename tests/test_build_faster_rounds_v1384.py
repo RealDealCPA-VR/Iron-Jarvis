@@ -30,7 +30,8 @@ from iron_jarvis.harness import dialects as D
 from iron_jarvis.providers.adapters.base import ToolCall
 from tests.test_build_sessions_v1367 import Script, frames_of, new_session, open_turn, wire
 
-BATCH = "call those tools together in ONE reply (they run at the same time), not one per step"
+# (review) the batch sentence claims no simultaneity: GPT reads through commands.
+BATCH = "ask for them together in ONE reply, not one per step"
 INCREMENTAL = "make a change and check it before you read for the next one"
 NOT_ALL = "Do not read the whole codebase before your first change"
 

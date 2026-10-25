@@ -119,18 +119,25 @@ _TRIGGER_LINE_RX = re.compile(r"^\s*(?:trigger|use when)\s*[:\-]?\s*(.+)$", re.I
 # the built-in default layer
 # --------------------------------------------------------------------------- #
 
-DEFAULT_SYSTEM_PROMPT = (
+DEFAULT_SYSTEM_PROMPT_BASE = (
     "You are a coding agent working in one project folder on the user's PC. Do the "
     "task end to end with your tools: read the code you need, make the change, run "
     "the tests or the command that proves it works, and fix what fails. Keep going "
     "until the task is done. When you finish, reply with a short summary of what "
     "you changed and how you checked it."
-    # v1.384.0 (the user's 117-minute reply read for 60 rounds and changed
-    # nothing): work INCREMENTALLY. True for every dialect.
+)
+
+#: v1.384.0 (the user's 117-minute reply read for 60 rounds and changed
+#: nothing): work INCREMENTALLY. True for every dialect — in ACT mode only:
+#: a planning turn has no editors (review: "make a change and check it" beside
+#: "Plan only: do not change files"), so :func:`compose` leaves it out there.
+INCREMENTAL_WORK = (
     " Given a list of changes, do them one at a time: make a change and check it "
     "before you read for the next one. Do not read the whole codebase before your "
     "first change."
 )
+
+DEFAULT_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT_BASE + INCREMENTAL_WORK
 
 #: THE FLOOR. Learned the hard way (2026-10-21): in a Phase 0 review run the
 #: model finished a task with ``taskkill /f /im python.exe``, which ended every
@@ -163,11 +170,13 @@ DEFAULT_TOOL_GUIDANCE = (
     "project's tests or the relevant command and read the result. If a call fails, "
     "read the error, fix the call and try again instead of repeating it unchanged."
     # v1.384.0: BATCH independent reads — each step is a whole model round
-    # (minutes on a large model), and the lane runs a round's readers at the
-    # same time (`chat_turn.CONCURRENT_READ_TOOLS`).
+    # (minutes on a large model). (The lane runs a round's file readers at
+    # the same time, `chat_turn.CONCURRENT_READ_TOOLS` — but not a dialect
+    # that reads through a command, GPT's exec_command; review: so this text,
+    # shared by every dialect, does not claim it.)
     " When you need several files or searches that do not depend on each other, "
-    "call those tools together in ONE reply (they run at the same time), not one "
-    "per step."
+    "ask for them together in ONE reply, not one per step: every step is a whole "
+    "round of your work."
 )
 
 
@@ -658,7 +667,11 @@ def compose(
     replaced; memory is additive. ``mode`` (v1.367.0) is the session's
     plan-mode text (:func:`plan_mode_text`); "" renders nothing."""
     texts = project.texts if project.used else {}
-    system_prompt = texts.get("system_prompt", "").strip() or DEFAULT_SYSTEM_PROMPT
+    # v1.384.0 review: a planning turn (``mode``) is never told to make
+    # changes one at a time — it has no editors.
+    system_prompt = texts.get("system_prompt", "").strip() or (
+        DEFAULT_SYSTEM_PROMPT_BASE if str(mode or "").strip() else DEFAULT_SYSTEM_PROMPT
+    )
     guardrails = list(DEFAULT_GUARDRAILS)
     extra_guard = texts.get("guardrails", "").strip()
     if extra_guard:

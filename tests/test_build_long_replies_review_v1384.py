@@ -9,6 +9,10 @@
 * A WHOLE tagged replay of a turn that is still running says when the turn
   STARTED (``resume.started_at``, ms), so a page that comes back after a
   reload counts "Working for" from the turn's start, not from the rejoin.
+* The harness guidance is TRUE for every dialect and mode: a planning turn
+  (no editors) is never told to make changes one at a time, and no dialect
+  is told its reads run at the same time unless they do (GPT reads through
+  exec_command, which runs one call after another).
 """
 
 from __future__ import annotations
@@ -95,3 +99,57 @@ def test_a_whole_replay_of_a_running_turn_says_when_it_started():
     assert json.loads(dt.tagged_replay([["token", '{"text": "a"}']]).split("\n\n", 1)[0].split("data: ", 1)[1]) == {
         "resumed": False, "running": False,
     }
+
+
+# --------------------------------------------------------------------------- #
+# the guidance is TRUE for every dialect and every mode
+# --------------------------------------------------------------------------- #
+
+from iron_jarvis.daemon import chat_turn  # noqa: E402
+from iron_jarvis.harness import components as C  # noqa: E402
+from iron_jarvis.harness import dialects as D  # noqa: E402
+
+BATCH = "together in ONE reply"
+INCREMENTAL = "make a change and check it"
+NOT_ALL = "before your first change"
+
+
+def _plan_text() -> str:
+    return C.plan_mode_text(exit_name="ExitPlanMode", plan_name="TodoWrite")
+
+
+@pytest.mark.parametrize("dialect", sorted(D.DIALECTS))
+def test_a_planning_turn_is_never_told_to_make_changes(dialect):
+    """OLD: plan mode (no editors) was told "make a change and check it
+    before you read for the next one" and "do not read the whole codebase
+    before your first change" — beside "Plan only: do not change files"."""
+    text = C.render(C.compose(dialect_section="Your tools: x.", dialect_id=dialect, mode=_plan_text()))
+    assert "Plan only" in text
+    assert INCREMENTAL not in text and NOT_ALL not in text
+    assert BATCH in text, "reading several files in one reply still holds while planning"
+    # An act-mode turn keeps all three.
+    act = C.render(C.compose(dialect_section="Your tools: x.", dialect_id=dialect))
+    assert INCREMENTAL in act and NOT_ALL in act and BATCH in act
+
+
+def _reads_run_together(dialect_id: str) -> bool:
+    """Does this dialect read and search through tools the lane runs at the
+    same time (``chat_turn.CONCURRENT_READ_TOOLS``)? The generic dialect
+    shows Jarvis's own tools (read_file, grep, glob); a dialect with no
+    file reader of its own reads through a COMMAND (GPT's exec_command:
+    shell / process_start), and commands run one after another."""
+    dialect = D.DIALECTS[dialect_id]
+    if not dialect.tools:
+        return True
+    readers = {t.targets[0] for t in dialect.tools if t.targets} & {"read_file", "grep", "glob"}
+    return bool(readers) and readers <= set(chat_turn.CONCURRENT_READ_TOOLS)
+
+
+def test_the_guidance_claims_nothing_a_dialect_cannot_keep():
+    """OLD: every dialect was told its independent reads "run at the same
+    time" — the GPT dialect reads through exec_command (shell /
+    process_start), which runs one call after another."""
+    for dialect in sorted(D.DIALECTS):
+        text = C.render(C.compose(dialect_section="Your tools: x.", dialect_id=dialect))
+        if "run at the same time" in text.split("## Tools\n", 1)[1].split("\n## ", 1)[0]:
+            assert _reads_run_together(dialect), f"{dialect}: told its reads run together; they do not"
