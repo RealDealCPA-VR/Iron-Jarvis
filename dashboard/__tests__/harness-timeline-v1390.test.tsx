@@ -119,6 +119,11 @@ describe("a saved reply and the live fold of its frames are ONE picture", () => 
     // The helper's own usage is NOT in the reply's receipt.
     expect(totals.helperUsage?.cost_usd).toBeGreaterThan(0);
     expect(totals.usage?.input_tokens).toBe(receipt.input_tokens);
+    // LIVE (no receipt yet): the top adds the calls up, to the same numbers.
+    const live = liveOf().usage!;
+    expect(Math.abs((live.cost_usd ?? 0) - receipt.cost_usd)).toBeLessThanOrEqual(1e-6);
+    expect(live.input_tokens).toBe(receipt.input_tokens);
+    expect(live.output_tokens).toBe(receipt.output_tokens);
   });
 
   it("TIME: every bar lies inside the reply; the reply bar IS its measured time", () => {
@@ -141,8 +146,15 @@ describe("a saved reply and the live fold of its frames are ONE picture", () => 
     const reads = replyTimeline(LINE)!.steps.filter((s) => s.name === "read_file");
     expect(reads).toHaveLength(2);
     const [a, b] = reads;
-    const end = (s: (typeof reads)[number]) => (s.start ?? 0) + (s.ms ?? 0);
+    expect(typeof a.start).toBe("number");
+    expect(typeof b.start).toBe("number");
+    // Started together (laid end to end, the second would start at the
+    // first's end) …
+    expect(Math.abs(a.start! - b.start!)).toBeLessThan(100);
+    expect(a.start).toBeGreaterThan(0);
+    const end = (s: (typeof reads)[number]) => s.start! + (s.ms ?? 0);
     expect(Math.max(a.start!, b.start!)).toBeLessThan(Math.min(end(a), end(b)));
+    // … each its own length.
     expect(a.ms).not.toBe(b.ms);
   });
 
@@ -214,8 +226,13 @@ describe("the Timeline tab draws a saved reply", () => {
     expect(labels).toEqual(["Sonnet 4.5", "Read app.py", "Read util.py", "The builder · Sonnet 4.5", "Read util.py", "Made made.py"]);
     // One bar each, and the model's calls as pieces of its bar.
     expect(screen.getAllByTestId("timeline-segment")).toHaveLength((FIXTURE.line.calls as unknown[]).length);
-    // The model's bar ends in its time and cost.
-    expect(within(rows[0]).getByTestId("timeline-bar-end")).toHaveTextContent(`${secondsText(DURATION)} · ~$0.04`);
+    // The model's bar ends in its time and cost — inside its end (it spans
+    // the axis, so after it or before it would be off the axis); a short
+    // early step says its time after its bar.
+    const end0 = within(rows[0]).getByTestId("timeline-bar-end");
+    expect(end0).toHaveTextContent(`${secondsText(DURATION)} · ~$0.04`);
+    expect(end0).toHaveAttribute("data-place", "inside");
+    expect(within(rows[1]).getByTestId("timeline-bar-end")).toHaveAttribute("data-place", "after");
   });
 
   it("a press on a step opens its card with what went in and what came out", () => {

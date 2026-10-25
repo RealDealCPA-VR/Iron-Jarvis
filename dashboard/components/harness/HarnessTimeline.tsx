@@ -369,7 +369,9 @@ const Row = memo(function Row({
 }) {
   const left = pct(row.start, duration);
   const width = Math.max(pct(row.end - row.start, duration), 0.6);
-  const endsLate = left + width > 62;
+  // Where the bar's words go: after the bar while there is room, else before
+  // it, else (a bar across most of the axis) inside its end.
+  const place: "after" | "before" | "inside" = left + width <= 62 ? "after" : left >= 30 ? "before" : "inside";
   const kind = row.kind === "reply" ? "reply" : row.kind === "helper" ? "helper" : "step";
   const Icon =
     row.kind === "reply" ? Sparkles : row.kind === "helper" ? Bot : STEP_ICON[toolKind(row.step.name)];
@@ -438,8 +440,15 @@ const Row = memo(function Row({
         <span
           aria-hidden
           data-testid="timeline-bar-end"
-          className="pointer-events-none absolute top-1/2 -translate-y-1/2 whitespace-nowrap px-1 text-[11px] text-zinc-500"
-          style={endsLate ? { right: `${100 - left}%` } : { left: `${left + width}%` }}
+          data-place={place}
+          className={`pointer-events-none absolute top-1/2 -translate-y-1/2 whitespace-nowrap px-1 text-[11px] ${place === "inside" ? "text-zinc-200" : "text-zinc-500"}`}
+          style={
+            place === "after"
+              ? { left: `${left + width}%` }
+              : place === "before"
+                ? { right: `${100 - left}%` }
+                : { right: `${Math.max(0, 100 - left - width)}%` }
+          }
         >
           {barEnd(row.end - row.start, usage)}
         </span>
