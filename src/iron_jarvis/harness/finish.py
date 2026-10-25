@@ -1048,9 +1048,13 @@ def ran_commands(engine: Any, session_id: str, after: int, upto: int) -> list[tu
             ).all()
     except Exception:  # noqa: BLE001
         return []
+    from .checkers import CALLED_AS as _CHECKER_CALLED_AS
+
     out: list[tuple[str, dict[str, Any], str]] = []
     for args_json, confinement, called_as in rows:
-        if confinement not in _RAN_CONFINEMENTS or called_as == CALLED_AS:
+        # Part 3, Phase 3: a project checker's run (harness/checkers) is not
+        # the model's command either.
+        if confinement not in _RAN_CONFINEMENTS or called_as in (CALLED_AS, _CHECKER_CALLED_AS):
             continue
         try:
             args = _json.loads(args_json or "{}")

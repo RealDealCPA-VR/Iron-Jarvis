@@ -1386,7 +1386,16 @@ class ToolRegistry:
             return ""
         required = [k for k in (schema.get("required") or []) if isinstance(k, str)]
         props = schema.get("properties") or {}
-        missing = [k for k in required if k not in args]
+        # Part 3, Phase 3: a tool may name arguments that stand in for a
+        # required one (``read_file``: ``paths`` for ``path``). Absent on
+        # every other tool, so their check is exactly as before.
+        alternatives = getattr(tool, "required_alternatives", None) or {}
+        if not isinstance(alternatives, dict):
+            alternatives = {}
+        missing = [
+            k for k in required
+            if k not in args and not any(a in args for a in (alternatives.get(k) or ()))
+        ]
         wrong: list[str] = []
         if isinstance(props, dict):
             for key, value in args.items():
@@ -1439,6 +1448,10 @@ class ToolRegistry:
         """
         raw = args.get("path")
         if not isinstance(raw, str) or not raw.strip():
+            return None
+        if args.get("paths") is not None:
+            # Part 3, Phase 3: a read of SEVERAL files (``read_file(paths=…)``)
+            # is never remembered or served — the identity stats one file.
             return None
 
         def _probe() -> tuple[str, int, int]:

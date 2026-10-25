@@ -490,6 +490,68 @@ def _windowed(result: ToolResult, first: int, limit: int, numbered: bool) -> Too
     return ToolResult(ok=True, output=out, data=data)
 
 
+# --------------------------------------------------------------------------- #
+# SEVERAL FILES IN ONE CALL (IJ harness part 3, Phase 3)
+#
+# The Phase 1 measurement (Jarvis on Claude, 126 runs) found 291 of its 384
+# reads made in batches of 2-16 files in ONE reply — each file one tool call.
+# `read_file` takes `paths` now: every file is read EXACTLY as a call naming
+# it alone would read it (the same window arguments, the same extraction), in
+# the order given, each through the workspace confinement AND `fs_policy`'s
+# read gate; the call is bounded by file count and total size, and anything
+# left out is SAID (first, so a later cut can never hide it). A call naming
+# only `path` is the single read, byte for byte as before. The model is shown
+# `paths` only by a harness turn (`multi_read_spec`) and only where read_file
+# is offered under its own name — a vendor-shaped tool (Claude Code's `Read`,
+# Qwen Code's `read_file`) keeps its vendor's single-file shape.
+# --------------------------------------------------------------------------- #
+
+#: The most files one call reads.
+READ_MANY_MAX_FILES = 20
+#: The most characters of the files' text (their ``==>`` lines included) one
+#: call returns — under a harness turn's own cap on one tool result
+#: (``chat_turn.HARNESS_TOOL_MESSAGE_MAX``). A file that would pass it is left
+#: out and named (the note comes FIRST), or — the first file — cut with a
+#: note saying where to read on.
+READ_MANY_MAX_CHARS = 30_000
+
+#: The description and argument a harness turn adds to Jarvis's own read_file.
+READ_MANY_WORDS = (
+    " To read several files at once, pass `paths` (a list of up to "
+    f"{READ_MANY_MAX_FILES}) instead of `path`: each file comes back under a "
+    "`==> path <==` line, read as a call naming it alone would read it (offset, "
+    f"limit and numbered apply to each), at most {READ_MANY_MAX_CHARS:,} characters "
+    "in all — the reply names any file that did not fit."
+)
+READ_MANY_PROPERTY = {
+    "type": "array",
+    "items": {"type": "string"},
+    "description": (
+        f"Several files to read in one call (at most {READ_MANY_MAX_FILES}); use "
+        "instead of path."
+    ),
+}
+
+
+def multi_read_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    """``read_file``'s spec as a harness turn shows it: ``paths`` added and
+    ``path`` no longer required (one of the two is). Any other spec is
+    returned unchanged; the registered spec is never mutated."""
+    if not isinstance(spec, dict) or spec.get("name") != "read_file":
+        return spec
+    schema = spec.get("input_schema")
+    if not isinstance(schema, dict):
+        return spec
+    props = dict(schema.get("properties") or {})
+    props["paths"] = dict(READ_MANY_PROPERTY)
+    required = [k for k in (schema.get("required") or []) if k != "path"]
+    return {
+        **spec,
+        "description": str(spec.get("description") or "") + READ_MANY_WORDS,
+        "input_schema": {**schema, "properties": props, "required": required},
+    }
+
+
 class ReadFileTool(Tool):
     name = "read_file"
     description = (
@@ -521,6 +583,11 @@ class ReadFileTool(Tool):
         },
         "required": ["path"],
     }
+    #: Part 3, Phase 3: a call that names ``paths`` satisfies the required
+    #: ``path`` (``ToolRegistry._argument_shape_error`` reads this). The
+    #: declared schema above is unchanged, so every lane that shows the
+    #: registered spec (plain chat, agents) shows exactly what it did.
+    required_alternatives = {"path": ("paths",)}
 
     def __init__(self, router_resolver: "Any | None" = None) -> None:
         #: () -> the platform's ModelRouter, when the caller wired one. Same
@@ -531,6 +598,8 @@ class ReadFileTool(Tool):
         self._router_resolver = router_resolver
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        if args.get("paths") is not None:
+            return await self._read_many(args, ctx)
         path = safe_path(ctx.workspace, args["path"])
         # Stat + (for a directory) one listing — off the event loop like every
         # other filesystem step here (v1.153.1).
@@ -581,6 +650,102 @@ class ReadFileTool(Tool):
             picked, total, first, numbered, counted_all=counted_all, cut_by_chars=cut
         )
         data["bytes"] = len(out)
+        return ToolResult(ok=True, output=out, data=data)
+
+    async def _read_one_of_many(self, raw: str, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """One file of a ``paths`` call: confined to the workspace AND through
+        ``fs_policy``'s read gate, then read by :meth:`execute` exactly as a
+        call naming it alone. Never raises (a failure is the file's result)."""
+        from ..core.fs_policy import fs_read_ok
+
+        try:
+            target = safe_path(ctx.workspace, raw)
+        except PermissionError as exc:
+            return ToolResult(ok=False, error=str(exc))
+        except (OSError, ValueError) as exc:
+            return ToolResult(ok=False, error=f"'{raw}' could not be inspected: {exc}")
+        allowed, why = await asyncio.to_thread(fs_read_ok, str(target))
+        if not allowed:
+            return ToolResult(ok=False, error=f"'{raw}' cannot be read here: {why}")
+        single = {k: args[k] for k in _WINDOW_KEYS if args.get(k) is not None}
+        single["path"] = raw
+        try:
+            return await self.execute(single, ctx)
+        except Exception as exc:  # noqa: BLE001 — one file's failure is its own result
+            return ToolResult(ok=False, error=f"could not read {raw}: {type(exc).__name__}: {exc}")
+
+    async def _read_many(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """Several files in one call (part 3, Phase 3 — see READ_MANY_*)."""
+        raw = args.get("paths")
+        if isinstance(raw, str):
+            raw = [raw]  # a model that sent one path as a string
+        if not isinstance(raw, list) or not raw or not all(
+            isinstance(p, str) and p.strip() for p in raw
+        ):
+            return ToolResult(
+                ok=False,
+                error=f"`paths` must be a list of file paths (1 to {READ_MANY_MAX_FILES})",
+            )
+        first = args.get("path")
+        names: list[str] = []
+        for p in ([first] if isinstance(first, str) and first.strip() else []) + list(raw):
+            if p not in names:
+                names.append(p)
+        if len(names) > READ_MANY_MAX_FILES:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"`paths` names {len(names)} files; one call reads at most "
+                    f"{READ_MANY_MAX_FILES} — split them over several calls"
+                ),
+            )
+        try:
+            _window_spec(args)  # a bad offset/limit is refused once, for every file
+        except ValueError as exc:
+            return ToolResult(ok=False, error=str(exc))
+        sections: list[str] = []
+        files: list[dict[str, Any]] = []
+        left_out: list[str] = []
+        used = 0
+        for name in names:
+            if used >= READ_MANY_MAX_CHARS:
+                left_out.append(name)
+                continue
+            res = await self._read_one_of_many(name, args, ctx)
+            body = (res.output if res.ok else f"[not read: {res.error or 'it could not be read'}]") or ""
+            head = f"==> {name} <=="
+            room = READ_MANY_MAX_CHARS - used - len(head) - 2
+            cut = False
+            if len(body) > room:
+                if sections:
+                    left_out.append(name)
+                    continue
+                # The FIRST file alone is over the limit: its start, and where
+                # to read on (never a silent cut).
+                body = body[: max(0, room - 120)] + (
+                    f"\n[cut at {READ_MANY_MAX_CHARS:,} characters — read the rest of this "
+                    "file in a call of its own, with offset and limit]"
+                )
+                cut = True
+            sections.append(f"{head}\n{body}")
+            used += len(head) + len(body) + 2
+            files.append({"path": name, "ok": bool(res.ok), "cut": cut,
+                          **({"error": str(res.error or "")} if not res.ok else {})})
+        read_ok = [f for f in files if f["ok"]]
+        lead = ""
+        if left_out:
+            # FIRST, so a later cut of the output can never hide it.
+            lead = (
+                f"[read {len(files)} of {len(names)} files — this call's "
+                f"{READ_MANY_MAX_CHARS:,}-character limit was reached; not read: "
+                + ", ".join(left_out) + " — read them in another call]\n\n"
+            )
+        out = lead + "\n\n".join(sections)
+        data: dict[str, Any] = {
+            "files": files, "not_read": left_out, "bytes": len(out),
+        }
+        if not read_ok:
+            return ToolResult(ok=False, error=out or "no file could be read", data=data)
         return ToolResult(ok=True, output=out, data=data)
 
 
