@@ -439,3 +439,47 @@ def normal_priority():
             me.nice(was)
         except Exception:  # noqa: BLE001
             pass
+
+
+# --------------------------------------------------------------------------- #
+# Readiness 12B review: a test never leaves this machine.
+# --------------------------------------------------------------------------- #
+_ACTIVE_NETWORK_GUARD: list = []
+
+
+@pytest.fixture
+def no_network():
+    """Refuse every connection that is not to this machine, and every DNS
+    lookup of a name that is not local, for the test — and FAIL it at
+    teardown naming each host it tried to reach, even when the code under
+    test swallowed the refusal (``tests/_fakes/no_network.py``).
+
+    Opt-in per module (``pytestmark = pytest.mark.usefixtures("no_network")``)
+    because a session-wide default could only be proven safe by a full-suite
+    run; set ``IJ_TEST_NO_NETWORK=1`` to put it on EVERY test of a run (that
+    run is the proof the default can flip)."""
+    from tests._fakes.no_network import NetworkGuard
+
+    if _ACTIVE_NETWORK_GUARD:  # already on (the session switch): one guard
+        yield _ACTIVE_NETWORK_GUARD[-1]
+        return
+    mp = pytest.MonkeyPatch()
+    guard = NetworkGuard().install(mp)
+    _ACTIVE_NETWORK_GUARD.append(guard)
+    try:
+        yield guard
+    finally:
+        _ACTIVE_NETWORK_GUARD.remove(guard)
+        mp.undo()
+    if guard.attempts:
+        pytest.fail(guard.report(), pytrace=False)
+
+
+@pytest.fixture(autouse=True)
+def _network_guard_when_asked(request):
+    """``IJ_TEST_NO_NETWORK=1``: the ``no_network`` guard on every test."""
+    if os.environ.get("IJ_TEST_NO_NETWORK") != "1" or "no_network" in request.fixturenames:
+        yield
+        return
+    request.getfixturevalue("no_network")
+    yield

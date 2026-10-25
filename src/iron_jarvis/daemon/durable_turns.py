@@ -196,6 +196,14 @@ class TurnLog:
         #: never the card's arguments: :func:`waiting_unwatched` lists these
         #: to every page and to the desktop.
         self._asks: dict[str, tuple[str, str]] = {}
+        #: Readiness 12B (G05): follower queue -> the VIEWER it belongs to (a
+        #: chat page names itself with ``?viewer=``; "" for every other
+        #: follower), and the viewers that said they left (:meth:`mark_away`).
+        #: A chat page the user navigated away from in the SAME window keeps
+        #: following (its fetch is not ended — the reply still lands and is
+        #: saved), but nobody is looking at its card any more.
+        self._viewers: dict[asyncio.Queue, str] = {}
+        self._away: set[str] = set()
 
     # -- writing --------------------------------------------------------------
     def add(self, chunk: str) -> None:
@@ -311,6 +319,28 @@ class TurnLog:
     def watched(self) -> bool:
         return bool(self._followers)
 
+    def looked_at(self) -> bool:
+        """Is a window SHOWING this turn (readiness 12B, G05)? A follower that
+        named no viewer (the Build pane, the sidebar, an older page) counts as
+        looking, exactly as :meth:`watched` did; a chat page that said it left
+        (:meth:`mark_away`) does not. :meth:`watched` keeps its meaning — the
+        orphan guard reads it, and a page still following is no orphan."""
+        # SNAPSHOT first (the v1.367.0 rule above ``TurnLogs.running``): a
+        # reader on a worker thread must never meet the loop's insert.
+        viewers = dict(self._viewers)
+        away = set(self._away)
+        return any(not viewers.get(q) or viewers[q] not in away for q in list(self._followers))
+
+    def mark_away(self, viewer: str) -> bool:
+        """The chat page *viewer* is no longer on screen (the user went to
+        another page of the same window); True when it is following this
+        turn. Kept until that follower ends (a new page is a new viewer)."""
+        v = str(viewer or "").strip()[:80]
+        if not v or v not in self._viewers.values():
+            return False
+        self._away.add(v)
+        return True
+
     def unwatched_for(self) -> float:
         if self._followers:
             return 0.0
@@ -333,7 +363,9 @@ class TurnLog:
         out.append(sse("caught_up", {"id": self.position()}))
         return "".join(out)
 
-    async def follow(self, *, with_ids: bool = False, after: "str | None" = None) -> AsyncIterator[str]:
+    async def follow(
+        self, *, with_ids: bool = False, after: "str | None" = None, viewer: str = "",
+    ) -> AsyncIterator[str]:
         """The turn so far as ONE chunk, then each new chunk, until it ends.
         Snapshot and subscription happen in one step (no await between), so
         nothing is missed or sent twice.
@@ -341,12 +373,19 @@ class TurnLog:
         ``with_ids`` (v1.384.0): every frame tagged with its resume position,
         the stored part between ``resume`` and ``caught_up``, and — with
         ``after`` — only what came after that position (see the module doc).
-        False: byte-for-byte what it always sent."""
+        False: byte-for-byte what it always sent.
+
+        ``viewer`` (readiness 12B, G05): the chat page following, by the id it
+        named itself with — :meth:`mark_away` / :meth:`looked_at`. "" (every
+        other follower): it counts as looking while it follows."""
         q: asyncio.Queue = asyncio.Queue()
         head = self.tagged_head(after) if with_ids else self.snapshot()
         running = self.status == "running"
         if running:
             self._followers.add(q)
+            v = str(viewer or "").strip()[:80]
+            if v:
+                self._viewers[q] = v
         try:
             if head:
                 yield head
@@ -362,6 +401,9 @@ class TurnLog:
                     yield out
         finally:
             self._followers.discard(q)
+            gone = self._viewers.pop(q, "")
+            if gone and gone not in self._viewers.values():
+                self._away.discard(gone)
             self._last_seen = time.monotonic()
 
     def _end_followers(self) -> None:
@@ -447,6 +489,15 @@ class TurnLogs:
             return lg.thread_id
         return self._links.get(turn_id, "")
 
+    def mark_away(self, turn_id: str, viewer: str) -> "bool | None":
+        """Readiness 12B (G05): the chat page *viewer* left the screen while
+        following ``turn_id``. None when no such turn is RUNNING here; else
+        whether that viewer was following it (:meth:`TurnLog.mark_away`)."""
+        lg = self._logs.get(turn_id)
+        if lg is None or lg.status != "running":
+            return None
+        return lg.mark_away(viewer)
+
     def running(self) -> list[TurnLog]:
         # SNAPSHOT first (v1.367.0 review): Build's sync routes read this from
         # FastAPI's threadpool while the loop starts turns; a comprehension
@@ -526,8 +577,10 @@ def waiting_unwatched(
     chat lane's asks — and an hour later the orphan guard stopped the turn.
 
     WHICH turns: a daemon-owned turn still running, that NO window is
-    following (``watched()`` — a chat open in front of the user shows its own
-    card, and a second announcement would double-surface it), and that is
+    SHOWING (``looked_at()`` — a chat open in front of the user shows its own
+    card, and a second announcement would double-surface it; readiness 12B: a
+    chat page the user left for another page of the same window still
+    follows, but said so with ``mark_away``, so it no longer counts), and that is
     parked on the user — an approval card this turn showed that the shared
     registry still holds (``pending_ids``; this also covers a NEW chat's first
     turn, which has no per-chat entry), or its chat reading ``waiting`` in
@@ -545,7 +598,13 @@ def waiting_unwatched(
         states = thread_states or {}
         seen: set[str] = set()
         for lg in logs.running():
-            if lg.watched():
+            # Readiness 12B (G05): a window SHOWING the turn has its card in
+            # front of the user; a chat page the user left for another page of
+            # the same window still follows (its fetch is not ended) but shows
+            # nothing, so it is listed (``TurnLog.looked_at``). A test double
+            # without the reader keeps the old rule.
+            looked = getattr(lg, "looked_at", None)
+            if (looked() if callable(looked) else lg.watched()):
                 continue
             thread = str(lg.thread_id or "").strip()[:80]
             asks = lg.open_asks(pending)

@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections import OrderedDict
 from typing import Any
 
 from sqlalchemy import Engine, text
@@ -436,6 +437,105 @@ def _identities(engine: Engine, channel: str) -> list[CommIdentityRecord]:
         return []
 
 
+def _address(value: Any) -> str:
+    """An address as a comparable string (Telegram ids are ints in config and
+    strings on an identity; e-mail addresses are case-insensitive)."""
+    return " ".join(str(value if value is not None else "").split()).lower()
+
+
+def _default_address(ch: Any) -> str:
+    """Where ``ch.send(message)`` lands with NO ``chat_id`` — the address a
+    schedule's line and a parked workflow's park line go to — or "" when it
+    cannot be told (a Slack webhook posts wherever the webhook points).
+    Mirrors each channel's own ``send``: Telegram's ``chat_id``, e-mail's
+    ``to_addr``, Slack's ``channel`` only on the token path (a configured
+    webhook takes a send that names no reply target)."""
+    cfg = getattr(ch, "config", None)
+    if not isinstance(cfg, dict):
+        return ""
+    for key in ("chat_id", "to_addr"):
+        if cfg.get(key) not in (None, ""):
+            return _address(cfg.get(key))
+    if cfg.get("channel") and cfg.get("token_secret") and not cfg.get("webhook_url"):
+        return _address(cfg.get("channel"))
+    return ""
+
+
+#: Readiness 12B review: run id -> {destination: {address}} where the
+#: ANSWERABLE copy of that run's question was really DELIVERED (written by
+#: :func:`handle_workflow_waiting` after a send that succeeded). Process
+#: memory: the handler runs inside the engine's ``await publish`` (handlers
+#: have run by the time it returns), in the same process as the park line and
+#: the schedule's line that read it. Bounded (oldest runs forgotten first).
+_SENT: "OrderedDict[str, dict[str, set[str]]]" = OrderedDict()
+_SENT_LOCK = threading.Lock()
+_SENT_MAX = 256
+
+
+def note_question_sent(run_id: Any, channel: str, sender: Any) -> None:
+    """The answerable question of ``run_id`` reached ``sender`` on ``channel``."""
+    rid = str(run_id or "").strip()
+    if not rid or not channel:
+        return
+    with _SENT_LOCK:
+        per = _SENT.pop(rid, {})
+        per.setdefault(str(channel), set()).add(_address(sender))
+        _SENT[rid] = per
+        while len(_SENT) > _SENT_MAX:
+            _SENT.popitem(last=False)
+
+
+def sent_question_addresses(run_id: Any) -> dict[str, set[str]]:
+    """``{destination: {address}}`` the question of ``run_id`` was delivered to."""
+    with _SENT_LOCK:
+        return {k: set(v) for k, v in (_SENT.get(str(run_id or "").strip()) or {}).items()}
+
+
+def question_destinations(notifier: Any, run_id: Any) -> set[str]:
+    """The destinations the ANSWERABLE copy of ``run_id``'s question REACHED
+    at the very address their own lines go to (readiness 12B, 0e.4).
+
+    THE DUPLICATE: a scheduled workflow parked on a question sent the same
+    phone chat three lines — the answerable question (``Iron Jarvis:
+    Workflow 'x' is waiting: … reply with /answer …``, from
+    :func:`handle_workflow_waiting`), the engine's park line ("needs you …
+    answer it in chat or on the Workflows page") and the schedule's own
+    "needs you" line. The engine's park line and the schedule's line leave out
+    every destination named here, so the phone gets ONE line and it is the
+    one it can answer.
+
+    WHAT WAS SENT, NEVER WHAT COULD BE (review): a destination counts only
+    when the question of THIS run was delivered there
+    (:func:`note_question_sent` — after the handler's gates, a prompt row
+    that registered and a send that succeeded) and to the address the
+    destination's own lines go to (:func:`_default_address`). A prompt that
+    could not be registered, a send that failed, or a run nobody registered
+    the question for (a workflow parked in a process without the daemon's
+    handler) names nothing — the phone keeps the park line, which says how to
+    answer. A destination whose lines go elsewhere (a group chat, a webhook)
+    keeps them too. Never raises (a fault names none, and every line is sent
+    as before)."""
+    out: set[str] = set()
+    sent = sent_question_addresses(run_id)
+    if not sent:
+        return out
+    try:
+        names = list(notifier.channels())
+    except Exception:  # noqa: BLE001
+        return out
+    for name in names:
+        try:
+            if name not in sent:
+                continue
+            ch = notifier.get(name)
+            own = _default_address(ch) if ch is not None else ""
+            if own and own in sent[name]:
+                out.add(name)
+        except Exception:  # noqa: BLE001 — one destination's fault drops nothing
+            continue
+    return out
+
+
 def _question_from_record(engine: Engine, run_id: str) -> str:
     """Fallback when the event payload lacks the question (it should not —
     the engine's park publish carries it — but a prompt without its question
@@ -683,6 +783,11 @@ def handle_workflow_waiting(
                     sent = _send_chunked_sync(
                         ch, f"{reply_prefix}{line}", chat_id=identity.sender_id
                     )
+                    if sent:
+                        # Readiness 12B review: the park line and the
+                        # schedule's line leave this address out only now that
+                        # the answerable copy really went (question_destinations).
+                        note_question_sent(run_id, name, identity.sender_id)
                     out.append(
                         {
                             "channel": name,

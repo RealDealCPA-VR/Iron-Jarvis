@@ -7203,7 +7203,7 @@ class _Grounding:
         "project", "folder_rules", "folder_rules_used", "lessons", "index",
         "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
         "text_only", "apps", "apps_named", "apps_live", "apps_on", "apps_offer",
-        "harness",
+        "harness", "apps_phone",
     )
 
     def __init__(self) -> None:
@@ -7245,6 +7245,11 @@ class _Grounding:
         #: reply (``doors.with_connect_door``) whatever the model calls.
         #: Never part of the prompt.
         self.apps_offer: list[dict[str, str]] = []
+        #: Readiness 12B (G39): on the PHONE only, the connected apps the
+        #: message named for the user's own data whose tools this
+        #: conversation cannot use (their names) — the POST lane puts
+        #: ``app_names.phone_apps_note`` under the reply. [] everywhere else.
+        self.apps_phone: list[str] = []
 
     def before_attachments(self) -> str:
         # The folder's own instructions ride RIGHT AFTER the project block they
@@ -7506,26 +7511,46 @@ async def _gather_grounding(
         # SAVED WORKFLOWS (v1.170.0): bounded; never raises.
         return _saved_workflows_block(platform)
 
-    def _apps() -> "tuple[str, list[str], list[dict[str, str]]]":
+    # Readiness 12B (G39): the PHONE's conversation (``phone_surface`` — the
+    # inbound poller's chat turn and a desktop reply into a phone thread) arms
+    # no app tool, so its apps section says so. Read here, on the loop.
+    try:
+        from ..providers.failure_words import SURFACE_PHONE, current_surface
+
+        _on_phone = current_surface() == SURFACE_PHONE
+    except Exception:  # noqa: BLE001 — a surface read never breaks a turn
+        _on_phone = False
+
+    def _apps() -> "tuple[str, list[str], list[dict[str, str]], list[str]]":
         # APPS NAMED IN THE MESSAGE (v1.354.0, G39): connected (N tools) or
         # not, and Claude Code / Codex sign-in from the CACHED verdict (no
         # probe). Blocking reads, so off the loop; never raises. v1.358.0:
         # the connected ones ride back too (the web rule's ``apps_on``).
         # v1.359.0 (G41): and the not-connected ones named for the user's
         # own data — their Connect door rides the reply (``apps_offer``).
+        # Readiness 12B (G39): on the phone, the connected ones it cannot
+        # use, named for the user's own data — the reply's note names them.
         try:
             from ..connectors.app_names import (
                 app_states,
                 apps_section,
                 connect_offers,
                 connected_ids,
+                phone_unreachable,
             )
 
             rows = app_states(platform, _apps_named, out.apps_live, _clis_named, _app_choices)
-            return apps_section(rows), connected_ids(rows), connect_offers(_last_text, rows)
+            phone = phone_unreachable(_last_text, rows) if _on_phone else None
+            section = apps_section(
+                rows, phone_own=[p["id"] for p in phone] if phone is not None else None,
+            )
+            return (
+                section, connected_ids(rows), connect_offers(_last_text, rows),
+                [p["name"] for p in phone or []],
+            )
         except Exception:  # noqa: BLE001 — knowing the apps never breaks a turn
             log.debug("the named-apps section failed", exc_info=True)
-            return "", [], []
+            return "", [], [], []
 
     _proj_root = (
         str(getattr(resolved_proj, "root", "") or "").strip()
@@ -7611,7 +7636,7 @@ async def _gather_grounding(
     out.conn_tools, out.connector = got["connector"]
     out.roster = got["roster"]
     out.workflows = got["workflows"]
-    out.apps, out.apps_on, out.apps_offer = got.get("apps", ("", [], []))
+    out.apps, out.apps_on, out.apps_offer, out.apps_phone = got.get("apps", ("", [], [], []))
     return out
 
 
@@ -9494,6 +9519,17 @@ async def run_chat_turn(
             )
         if text_only_pick and (body.tools or []):
             reply += text_only_note(d.platform, provider_choice)
+        # APPS FROM THE PHONE (readiness 12B, G39): the phone's conversation
+        # arms no app tool (this lane cannot show a card, so an armed tool
+        # would run with nobody's OK); a connected app the user named for
+        # their own data gets ONE fixed line saying where it can be used.
+        # Filled only under ``phone_surface`` — every other turn adds nothing.
+        # MIRROR NOTE: the stream lane never answers the phone; if it ever
+        # does, it appends the same helper from the same grounding field.
+        if not escalate:
+            from ..connectors.app_names import phone_apps_note
+
+            reply += phone_apps_note(getattr(_grounding, "apps_phone", None) or [])
     # INLINE MEDIA (v1.346.0, contract 4c): every file a tool MADE this turn
     # that the settled reply does not already show is appended as the markdown
     # image syntax, so the picture/video appears in the chat whatever the

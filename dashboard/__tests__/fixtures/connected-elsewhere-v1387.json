@@ -1,0 +1,119 @@
+{
+  "drive": {
+    "done": {
+      "reply": "Done.",
+      "doors": [
+        {
+          "href": "/settings?section=connections-apps",
+          "label": "Connect Google Drive in Settings"
+        }
+      ],
+      "config_cards": [],
+      "tools_used": []
+    },
+    "before": {
+      "id": "google_drive",
+      "name": "Google Drive",
+      "provider": "google_drive",
+      "connect_via": "oauth",
+      "status": "disconnected",
+      "tools_loaded": 0,
+      "connected": false
+    },
+    "after": {
+      "id": "google_drive",
+      "name": "Google Drive",
+      "provider": "google_drive",
+      "connect_via": "oauth",
+      "status": "connected",
+      "tools_loaded": 0,
+      "connected": true
+    }
+  },
+  "github": {
+    "done": {
+      "reply": "Done.",
+      "doors": [],
+      "config_cards": [
+        {
+          "kind": "change",
+          "restart": false,
+          "title": "App connected",
+          "key": "app.github",
+          "label": "GitHub",
+          "old": null,
+          "new": "waiting for its token",
+          "change_id": "rec_fixed"
+        },
+        {
+          "kind": "secret",
+          "name": "app.github",
+          "label": "GitHub personal access token",
+          "help": "Create a token (repo scope) at https://github.com/settings/tokens.",
+          "why": "to connect GitHub",
+          "request_id": "seq_fixed"
+        }
+      ],
+      "tools_used": [
+        "app_connect"
+      ]
+    },
+    "before": {
+      "id": "github",
+      "name": "GitHub",
+      "provider": "",
+      "connect_via": "mcp",
+      "status": "no_tools",
+      "enabled": true,
+      "tools_loaded": 0,
+      "connected": true
+    },
+    "after": {
+      "id": "github",
+      "name": "GitHub",
+      "provider": "",
+      "connect_via": "mcp",
+      "status": "connected",
+      "enabled": true,
+      "tools_loaded": 1,
+      "connected": true
+    }
+  },
+  "pixio": {
+    "done": {
+      "reply": "Done.",
+      "doors": [],
+      "config_cards": [
+        {
+          "kind": "secret",
+          "name": "connection.pixio",
+          "label": "Pixio API key",
+          "help": "",
+          "why": "to connect Pixio",
+          "request_id": "seq_fixed"
+        }
+      ],
+      "tools_used": [
+        "app_connect"
+      ]
+    },
+    "before": {
+      "id": "pixio",
+      "name": "Pixio",
+      "provider": "pixio",
+      "connect_via": "api_key",
+      "status": "disconnected",
+      "tools_loaded": 0,
+      "connected": false
+    },
+    "after": {
+      "id": "pixio",
+      "name": "Pixio",
+      "provider": "pixio",
+      "connect_via": "api_key",
+      "status": "connected",
+      "tools_loaded": 0,
+      "connected": true
+    }
+  }
+}

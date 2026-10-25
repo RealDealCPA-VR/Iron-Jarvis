@@ -573,6 +573,21 @@ def _turn_logs(d) -> "_durable.TurnLogs":
     return logs
 
 
+#: Readiness 12B (G05): the header a chat page names itself with on its stream
+#: (``dashboard/lib/chatAway.VIEWER_HEADER``) — a header, so the stream's
+#: address is unchanged for every other caller.
+VIEWER_HEADER = "x-ij-viewer"
+
+
+def _viewer_of(request: Any) -> str:
+    """The following chat page's viewer id ("" when it named none). Never
+    raises — a follower without one counts as looking, as before."""
+    try:
+        return str(request.headers.get(VIEWER_HEADER) or "").strip()[:80]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _follow_response(frames) -> "HeartbeatStreamingResponse":
     """A window following a daemon-owned turn (v1.336.0). The heartbeat keeps
     the page's stall watchdog fed; the reply is counted by the turn's own
@@ -1362,12 +1377,12 @@ def register(app: FastAPI, d) -> None:
         is copied key-by-key and args are dropped even when present.
 
         A CHAT NOBODY IS WATCHING (v1.351.0, G05): the chat card is the right
-        surface only while a window is following that turn. A daemon-owned
-        turn parked on the user that NO window follows (the window was
-        closed to the tray, or the user opened another chat — NOTE: moving
-        to another page in the same window, e.g. Build, does not end the
-        chat page's fetch, so that turn still reads as followed until the
-        window closes) is listed as ONE row per
+        surface only while a window is SHOWING that turn. A daemon-owned
+        turn parked on the user that no window shows (the window was closed
+        to the tray, the user opened another chat, or — readiness 12B — the
+        user went to another page of the same window: that chat page keeps
+        following, so the reply still lands, but it tells the daemon it left,
+        ``POST /chat/turns/{id}/away``) is listed as ONE row per
         chat, ``{id: "chat:<thread id>", kind: "chat", thread_id, tool,
         requested_at, mission_id: null, project_id: null}`` — names only, no
         arguments, and no approval id (it is answered in its chat, where the
@@ -2665,8 +2680,12 @@ def register(app: FastAPI, d) -> None:
         if turn_id:
             logs = _turn_logs(d)
             existing = logs.get(turn_id)
+            # Readiness 12B (G05): the ``X-IJ-Viewer`` header names the chat
+            # page following (it says so when it leaves the screen:
+            # /chat/turns/{id}/away). Absent: every other follower, as before.
+            viewer = _viewer_of(request)
             if existing is not None:
-                return _follow_response(existing.follow())
+                return _follow_response(existing.follow(viewer=viewer))
             holder: dict[str, Any] = {}
             gen = await stream_chat_turn(
                 d.platform,
@@ -2677,7 +2696,7 @@ def register(app: FastAPI, d) -> None:
             )
             lg = logs.start(turn_id, str(getattr(body, "thread_id", "") or "").strip()[:80], gen)
             holder["log"] = lg
-            return _follow_response(lg.follow())
+            return _follow_response(lg.follow(viewer=viewer))
         gen = await stream_chat_turn(
             d.platform,
             d._PERSONAS,
@@ -2751,8 +2770,26 @@ def register(app: FastAPI, d) -> None:
             )
         return {"ok": True, "stopped": True}
 
+    @app.post("/chat/turns/{turn_id}/away")
+    async def chat_turn_away(turn_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """The chat page following ``turn_id`` LEFT THE SCREEN (readiness 12B,
+        G05): the user went to another page of the same window. The page's
+        fetch is not ended — the reply still lands and is saved — but its card
+        is no longer in front of anyone, so a turn parked on the user is now
+        listed by ``GET /chat/approvals/pending`` (the bell, where the user
+        is). ``{"viewer": "<the id the page named itself with>"}``. 404 for a
+        turn that is not running here; ``away: false`` when that viewer is not
+        following it. Names only — nothing else is read or stored."""
+        viewer = str((body or {}).get("viewer") or "").strip()[:80]
+        if not viewer:
+            raise HTTPException(status_code=400, detail="viewer is required")
+        found = _turn_logs(d).mark_away(turn_id, viewer)
+        if found is None:
+            raise HTTPException(status_code=404, detail=f"no such running turn: {turn_id}")
+        return {"away": bool(found)}
+
     @app.get("/chat/turns/{turn_id}/stream")
-    async def follow_chat_turn(turn_id: str, after: str = "", ids: int = 0):
+    async def follow_chat_turn(request: Request, turn_id: str, after: str = "", ids: int = 0):
         """REJOIN a daemon-owned turn (v1.336.0): everything it has sent so
         far as one snapshot, then each new frame, then the end — the same
         frames ``POST /chat/stream`` sends, so the page reads both with one
@@ -2771,7 +2808,9 @@ def register(app: FastAPI, d) -> None:
         with_ids = bool(ids) or bool(after)
         lg = _turn_logs(d).get(turn_id)
         if lg is not None:
-            return _follow_response(lg.follow(with_ids=with_ids, after=after or None))
+            return _follow_response(
+                lg.follow(with_ids=with_ids, after=after or None, viewer=_viewer_of(request))
+            )
         found = await asyncio.to_thread(
             _durable.replay_record, d.platform.engine, turn_id, with_ids=with_ids,
         )

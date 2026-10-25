@@ -219,6 +219,11 @@ import {
   withConnectors,
   type AppSecretCard,
 } from "@/lib/appConnect";
+// Readiness 12B (G05): a chat page that leaves the screen says so.
+import { leaveTurn, newViewerId, noteNotShowing, noteShowing } from "@/lib/chatAway";
+// Readiness 12B (G15): an app connected SOMEWHERE ELSE lets the work go on.
+import { connectOffer, nowConnected, type ConnectedNow } from "@/lib/connectedElsewhere";
+import { ConnectedElsewhere } from "@/components/chat/ConnectedElsewhere";
 import { getDeviceId } from "@/lib/device";
 import { NEW_CHAT_EVENT, closeChatSlot, useChatSlot } from "@/lib/sidebarSlot";
 import {
@@ -2880,6 +2885,9 @@ export interface RowHandlers {
   /** v1.351.0 (G15): Continue on an app's card under reply `index` — the app
    *  is on for this chat; send the user's task on. */
   continueConnected: (index: number, cardIndex: number) => void;
+  /** Readiness 12B (G15): Continue under reply `index` after the app it
+   *  offered to connect was connected somewhere else. */
+  continueElsewhere: (index: number) => void;
   /** v1.320.0: the user rated reply `index` — store it on the message, save. */
   rateReply: (index: number, rating: ReplyRatingValue) => void;
   crystallize: (threadId: string) => void;
@@ -2920,6 +2928,7 @@ const MessageRow = memo(function MessageRow({
   panelWaits = false,
   underRow = false,
   rowActivity,
+  connectedNow = null,
   h,
 }: {
   m: ChatMessage;
@@ -2958,6 +2967,9 @@ const MessageRow = memo(function MessageRow({
   /** v1.358.0 (lane 8C): for a settled hand-off row, the paired reply's
    *  step-by-step log (its saved receipt `activity`, by reference). */
   rowActivity?: unknown;
+  /** Readiness 12B (G15): the app this (newest) reply offered to connect,
+   *  now connected somewhere else — null for every other row. */
+  connectedNow?: ConnectedNow | null;
   h: RowHandlers;
 }) {
   // v1.323.0: the hidden "please continue" turn of a Continue press.
@@ -3442,6 +3454,14 @@ const MessageRow = memo(function MessageRow({
           ArtifactsRail owns files). Rides the message, so live and persisted
           turns render alike; a pre-v1.199.0 message has none. */}
       <DoorsStrip doors={m.doors} />
+      {/* Readiness 12B (G15): the app this reply offered to connect was
+          connected somewhere else — the key card's own words and Continue. */}
+      {connectedNow && isLast && (
+        <ConnectedElsewhere
+          connected={connectedNow}
+          onContinue={busy ? undefined : () => h.continueElsewhere(i)}
+        />
+      )}
       {!m.route && m.viaProvider && (
         <div
           className="mt-1 text-[12px] text-tone-warn"
@@ -3759,6 +3779,22 @@ export default function ChatPage() {
   // v1.278.0: the running turn's name (so a steer can reach it) and the notes
   // sent to it so far — shown under the live reply until the turn ends.
   const turnIdRef = useRef("");
+  // Readiness 12B (G05): this mounted page's name on its stream (lib/chatAway).
+  // When the page leaves the screen (another page of the same window) with a
+  // turn still running, it tells the daemon — the fetch keeps reading, so the
+  // reply still lands — and a turn parked on the user's OK is then listed
+  // where the user is: the bell. A new mount is a new viewer.
+  const viewerRef = useRef("");
+  if (!viewerRef.current) viewerRef.current = newViewerId();
+  useEffect(
+    () => () => {
+      // Readiness 12B review: this page no longer has a chat open here.
+      noteNotShowing(viewerRef.current);
+      const live = turnIdRef.current;
+      if (live) void leaveTurn(live, viewerRef.current, (p, b) => post(p, b));
+    },
+    [],
+  );
   const [pendingSteers, setPendingSteers] = useState<string[]>([]);
   // v1.287.0: set when the turn finished before reading a steer note — the
   // note is back in the box and this line says why. Cleared by the next turn.
@@ -4041,6 +4077,11 @@ export default function ChatPage() {
   // Threads sidebar: the saved-conversation list + which one is loaded.
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
+  // Readiness 12B review: the chat this page has open, for this window's bell
+  // (lib/chatAway.shownHere) — a waiting chat whose card is here is not pinged.
+  useEffect(() => {
+    noteShowing(viewerRef.current, threadId ?? "");
+  }, [threadId]);
   // Open MESSAGING thread (owner === "daemon", v1.136.0): the daemon writes it
   // (phone conversation mirrored here live); the composer replies through
   // POST /comm/threads/{id}/send and the page NEVER autosaves it.
@@ -5966,6 +6007,10 @@ export default function ChatPage() {
       return;
     }
     leaveConversation();
+    // Readiness 12B review: claimed AT ONCE (before the read answers), so a
+    // page mounting again on a chat parked on its card (a reload, `/` ⇄
+    // `/chat`) holds this window's bell quiet before the bell's own read lands.
+    noteShowing(viewerRef.current, id);
     // v1.327.0 (W2-1): opening a chat is looking at it — its unread dot goes.
     noteViewed(id, listedThreads.find((t) => t.id === id)?.updated_at);
     // Orphan anything in flight from the previous conversation.
@@ -6204,6 +6249,9 @@ export default function ChatPage() {
         if (offlineNow) setOffline(true);
         return;
       }
+      // Readiness 12B review: the chat did not open (offline keeps the copy
+      // on screen), so this page shows none of it — the bell may list it.
+      if (!offlineNow) noteShowing(viewerRef.current, "");
       // The cached paint was a promise the GET could not keep (the thread is
       // gone or unreadable): take it back to a fresh conversation rather than
       // leave a dead thread on screen with the save box aimed at it. Offline,
@@ -8340,7 +8388,11 @@ export default function ChatPage() {
           body,
           (_delta, full) => feedTTS(full, false),
           resetTTSFeed,
-          opts.rejoin ? { rejoin: opts.rejoin } : undefined,
+          // Readiness 12B (G05): the page's viewer id rides every follow.
+          {
+            ...(opts.rejoin ? { rejoin: opts.rejoin } : {}),
+            viewer: viewerRef.current,
+          },
         );
         turnIdRef.current = "";
         // The notes the turn READ join the conversation as the user's own
@@ -9997,6 +10049,10 @@ export default function ChatPage() {
    * Both doors call this one function so neither can forget a step.
    */
   function leaveConversation() {
+    // Readiness 12B review: the chat being left is no longer shown here (an
+    // open that is still out would otherwise keep its claim after New chat);
+    // openThread claims the next one right after this.
+    noteShowing(viewerRef.current, "");
     // v1.327.0 (W2-1): the chat being left was seen up to now — its own
     // messages moved its `updated_at` while it was open, and that must not
     // read as "new since you last looked" once it is back in the list.
@@ -10868,6 +10924,25 @@ export default function ChatPage() {
       // app is named so "add a task in Todoist" stays the task, not a request.
       send(continueText(connected.name, taskBefore(updated, index, { id: connected.app, name: connected.name })));
     },
+    continueElsewhere: (index) => {
+      // Readiness 12B (G15): the same Continue as the key card's, for an app
+      // connected somewhere else. A send that would not go out now (a file
+      // still uploading, a turn starting) leaves the line, so the task is not
+      // lost. An extension is turned on for this chat, as the card does.
+      const now = connectedNow;
+      if (!now || now.index !== index || busy || uploadingRef.current || sendingRef.current) return;
+      const text = continueText(now.name, taskBefore(messagesRef.current, index, { id: now.app, name: now.name }));
+      setConnectedNow(null);
+      // The switch is state, read when the message is built: an extension
+      // turned on here goes out with THIS message — sent once the switch has
+      // landed (the effect below). Already on, or no room left: send now.
+      if (now.mcp && withConnectors(selectedConnectors, [now.app], MAX_CONNECTORS) !== selectedConnectors) {
+        continueAfterSwitchRef.current = text;
+        turnOnConnectors([now.app]);
+        return;
+      }
+      send(text);
+    },
     promote: (content) => promoteNoteToKnowledge(content),
     openDocument: (path) => openDocPreview(path),
     undoFor: (path) => undoForPath(path),
@@ -10891,6 +10966,55 @@ export default function ChatPage() {
   // row above it that already carries its run's receipt (lib/runReceipt):
   // the row keeps the facts, the reply draws no second copy.
   const runPairs = useMemo(() => pairRunReceipts(messages), [messages]);
+  // Readiness 12B (G15): the app the NEWEST reply offered to connect (its
+  // Connect door, or an app's key card not saved here) — and, once the
+  // Directory's own list reads it "connected" (connected on the Directory,
+  // an OAuth sign-in, a key saved in Settings › Connections), that reply
+  // offers the card's Continue. The list is read when the offer appears and
+  // when this window comes back into view — never on a timer, never while a
+  // turn runs. Nothing is sent by itself: a press continues.
+  const connectOfferNow = useMemo(() => (busy ? null : connectOffer(messages)), [messages, busy]);
+  const connectOfferKey = connectOfferNow?.key ?? "";
+  const [connectedNow, setConnectedNow] = useState<(ConnectedNow & { index: number }) | null>(null);
+  useEffect(() => {
+    setConnectedNow(null);
+    const offer = connectOfferNow;
+    if (!offer) return;
+    let alive = true;
+    const read = () => {
+      get<{ connectors?: unknown }>("/connectors")
+        .then((d) => {
+          if (!alive) return;
+          const hit = nowConnected(offer.apps, d?.connectors);
+          setConnectedNow(hit ? { ...hit, index: offer.index } : null);
+        })
+        .catch(() => {}); // an unread list offers nothing — the door still works
+    };
+    read();
+    const onFocus = () => read();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") read();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive = false;
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // The offer's key holds its index and apps: one read per offer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectOfferKey]);
+  // A Continue that turned an extension on for this chat sends once the
+  // switch has landed, so the message carries it (`continueElsewhere`).
+  const continueAfterSwitchRef = useRef<string | null>(null);
+  useEffect(() => {
+    const text = continueAfterSwitchRef.current;
+    if (!text) return;
+    continueAfterSwitchRef.current = null;
+    send(text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedConnectors]);
   // Calm chat W1-5 (v1.326.0): what the receipt's "answered by …" calls the
   // model. v1.329.0 (G2): the SAME name the composer's model chip uses (the
   // catalog's label, else friendlyModelName: "Opus 4.8", never
@@ -10920,6 +11044,7 @@ export default function ChatPage() {
         rowImplRef.current.settleConfigCard(index, cardIndex, next),
       continueConnected: (index, cardIndex) =>
         rowImplRef.current.continueConnected(index, cardIndex),
+      continueElsewhere: (index) => rowImplRef.current.continueElsewhere(index),
       promote: (content) => rowImplRef.current.promote(content),
       openDocument: (path) => rowImplRef.current.openDocument(path),
       undoFor: (path) => rowImplRef.current.undoFor(path),
@@ -12014,6 +12139,7 @@ export default function ChatPage() {
                           panelWaits={m.panelWho ? panelFacts.waiting[i] : false}
                           underRow={runPairs.underRow[i] === true}
                           rowActivity={m.escalated ? runPairs.activityFor[i] : undefined}
+                          connectedNow={connectedNow?.index === i ? connectedNow : null}
                           h={rowHandlers}
                         />
                         </div>

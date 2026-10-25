@@ -37,6 +37,7 @@ import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { API_BASE, ApiError, flattenDetail, ijToken } from "./api";
 // v1.354.0 (G30): a chat bubble says "Iron Jarvis", never "the daemon".
 import { OFFLINE_WORDS } from "./offlineWords";
+import { VIEWER_HEADER, noteFollowing, noteNotFollowing } from "./chatAway";
 import { turnUsageFrom, type TurnUsage, type WorkflowDraft } from "@/lib/types";
 import { decodeSuggestion, type ChatSuggestion } from "./preferences";
 import { decodeConfigCards, type ConfigCard } from "./configCards";
@@ -975,6 +976,10 @@ export interface StreamWatch {
   /** v1.384.0: a tagged frame's RESUME POSITION, called once the frame has
    *  been handed on and processed (its tap AND its decoded event). */
   onPosition?: (id: string) => void;
+  /** Readiness 12B (G05): the chat page following, by the id it named itself
+   *  with — sent as the `X-IJ-Viewer` header (lib/chatAway), so the request's
+   *  address stays exactly what it was. Absent: no header. */
+  viewer?: string;
 }
 
 /**
@@ -1020,9 +1025,15 @@ export async function* streamSSE(
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
           Accept: "text/event-stream",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(watch.viewer ? { [VIEWER_HEADER]: watch.viewer } : {}),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        cache: "no-store",
+        // Readiness 12B review: no `cache: "no-store"` here (the v1.230.0 rule
+        // lib/api.ts already follows) — it made Chromium skip its CORS
+        // preflight cache, so EVERY turn sent an OPTIONS before its stream
+        // (measured in Edge: two turns, two preflights; now one). Freshness is
+        // the daemon's: every response, a stream's too, says no-store
+        // (daemon/auth.NoStoreMiddleware), so nothing is kept on disk.
         signal: inner.signal,
       });
     } catch (e) {
@@ -1463,6 +1474,11 @@ export interface RunOptions {
   resume?: { after: string; seed: StreamSeed };
   /** v1.384.0: a frame's resume position, once it was processed. */
   onPosition?: (id: string) => void;
+  /** Readiness 12B (G05): the chat page following, by the id it named itself
+   *  with (the `X-IJ-Viewer` header; lib/chatAway). It tells the daemon when
+   *  it leaves the screen, so a turn parked on the user is listed where the
+   *  user is. Absent: the request is byte-for-byte what it was. */
+  viewer?: string;
 }
 
 /**
@@ -1628,6 +1644,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               },
             }
           : {}),
+        // Readiness 12B (G05): who follows — a header, the address unchanged.
+        ...(runOpts.viewer?.trim() ? { viewer: runOpts.viewer.trim() } : {}),
       };
 
       let acc = from?.text ?? "";
@@ -1720,6 +1738,14 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
             ? "?ids=1"
             : ""
         : "";
+      // Readiness 12B (G05): the turn this page follows, under its viewer id
+      // (lib/chatAway) — its name, so the page can say it left the screen.
+      const viewer = (runOpts.viewer ?? "").trim();
+      const followed = viewer
+        ? (runOpts.rejoin ??
+            String(((body ?? {}) as { turn_id?: unknown }).turn_id ?? "").trim())
+        : "";
+      if (followed) noteFollowing(followed, viewer);
       try {
         for await (const ev of streamSSE(
           runOpts.rejoin
@@ -1963,6 +1989,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
           keep();
         }
       } finally {
+        // Readiness 12B (G05): this page no longer follows the turn.
+        if (followed) noteNotFollowing(followed, viewer);
         // A replay that ended before its `caught_up` (a finished turn's
         // whole record) is drawn now, in one pass.
         if (replaying) {
