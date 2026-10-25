@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import os
 import subprocess
 import threading
 import time
@@ -93,6 +94,9 @@ class ManagedProcess:
     #: When the program was first SEEN ended (exited or stopped), so "after
     #: N s" is how long it ran, not how long ago it started.
     ended_at: float | None = None
+    #: The shell that started it (v1.386.0): "bash" (Git for Windows' bash,
+    #: a bash-written command) or "" (the platform's own: cmd.exe / sh).
+    shell: str = ""
 
     @property
     def total(self) -> int:
@@ -427,6 +431,30 @@ class ProcessStartTool(Tool):
             wait_ms = _wait_ms(args, DEFAULT_START_WAIT_MS)
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
+        # v1.386.0: a command the model WROTE IN BASH (the IJ harness's
+        # Claude dialect, `Bash` run_in_background — set on the context by
+        # `HarnessTurn.ctx_for`) starts in Git for Windows' bash on Windows
+        # when one is found; anything cmd.exe starts first meets the `;`
+        # guard (`sandbox/cmd_guard`).
+        bash = None
+        if getattr(ctx, "shell_syntax", "") == "bash" and os.name == "nt":
+            from ..sandbox.git_bash import find
+
+            bash = await asyncio.to_thread(find)
+            if bash is not None:
+                # v1.386.0 review: `start /b x` in bash opens an error window
+                # on the user's screen (`git_bash.switch_refusal`).
+                from ..sandbox.git_bash import switch_refusal
+
+                refused = switch_refusal(command)
+                if refused:
+                    return ToolResult(ok=False, error=refused, data={"shell": "bash", "refused": "bash"})
+        if bash is None and os.name == "nt":
+            from ..sandbox.cmd_guard import semicolon_refusal
+
+            refused = semicolon_refusal(command)
+            if refused:
+                return ToolResult(ok=False, error=refused, data={"shell": "cmd", "refused": "semicolon"})
         session = _session_of(ctx)
         taken = TABLE.reserve(session)
         if taken is not None:
@@ -449,7 +477,7 @@ class ProcessStartTool(Tool):
                 TABLE.release_slot(session)
 
         try:
-            return await self._start(command, wait_ms, session, args, ctx, _release)
+            return await self._start(command, wait_ms, session, args, ctx, _release, bash=bash)
         finally:
             _release()  # a start that failed (or was cancelled) hands its slot back
 
@@ -461,10 +489,15 @@ class ProcessStartTool(Tool):
         args: dict[str, Any],
         ctx: ToolContext,
         release: Any,
+        *,
+        bash: Any = None,
     ) -> ToolResult:
         """The start itself, run while :meth:`ProcessTable.reserve` holds a
         slot; ``release`` hands it back the moment the program is in the
-        table (it is counted as running from then on)."""
+        table (it is counted as running from then on). ``bash`` (v1.386.0): a
+        verified ``sandbox/git_bash.GitBash`` — the command starts in it
+        instead of cmd.exe, with the same environment, folder, Job and
+        table."""
         from ..sandbox.policy import SandboxPolicy
         from .command_env import command_env
 
@@ -493,6 +526,24 @@ class ProcessStartTool(Tool):
         env = command_env(policy.modify_env, ctx.session_id)
 
         def _spawn() -> Any:
+            if bash is not None:
+                from ..sandbox.git_bash import hidden_console, invocation
+
+                argv, bash_env = invocation(bash, command, env)
+                info = hidden_console()
+                return procs.spawn(
+                    argv,
+                    shell=False,
+                    cwd=str(cwd),
+                    env=bash_env,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    # MSYS2 lets a Windows program leave a Job that allows it
+                    # (the stop would miss it): this Job lets nothing leave.
+                    breakaway_ok=False,
+                    **({"startupinfo": info} if info is not None else {}),
+                )
             return procs.spawn(
                 command,
                 shell=True,
@@ -507,8 +558,13 @@ class ProcessStartTool(Tool):
             proc = await asyncio.to_thread(_spawn)
         except OSError as exc:
             return ToolResult(ok=False, error=f"could not start the program: {exc}")
+        except ValueError as exc:
+            if bash is None:
+                raise
+            return ToolResult(ok=False, error=f"could not start the program: {exc}")
         mp = ManagedProcess(
-            handle=TABLE.new_handle(), session_id=session, command=command, cwd=str(cwd), proc=proc
+            handle=TABLE.new_handle(), session_id=session, command=command, cwd=str(cwd), proc=proc,
+            shell="bash" if bash is not None else "",
         )
         mp.reader = threading.Thread(target=_reader, args=(mp,), name=f"ij-proc-{mp.handle}", daemon=True)
         mp.reader.start()
@@ -635,6 +691,16 @@ class ProcessWriteTool(Tool):
             return ToolResult(ok=False, error=str(exc))
         if not text_in and not close:
             return ToolResult(ok=False, error="give `input` to type, or close_stdin: true")
+        if os.name == "nt" and mp.shell != "bash" and text_in:
+            # v1.386.0: typed into an interactive cmd.exe, each line IS a cmd
+            # line — the same `;` guard as a command cmd starts.
+            from ..sandbox.cmd_guard import is_interactive_cmd, semicolon_refusal
+
+            if is_interactive_cmd(mp.command):
+                for line in text_in.splitlines():
+                    refused = semicolon_refusal(line)
+                    if refused:
+                        return ToolResult(ok=False, error=refused, data={"shell": "cmd", "refused": "semicolon"})
         if not mp.running():
             return ToolResult(ok=False, error=f"{mp.handle} is not running ({_status_line(mp)})")
         stdin = getattr(mp.proc, "stdin", None)

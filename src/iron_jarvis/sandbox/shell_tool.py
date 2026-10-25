@@ -19,8 +19,14 @@ from ..core import procs
 from ..core.trust import LOW_TRUST_SHELL_REFUSAL
 from ..tools.base import Tool, ToolContext, ToolResult
 from .base import Sandbox, SandboxResult
+from .cmd_guard import semicolon_refusal
 from .manager import SandboxManager
-from .native import NativeSandbox, build_env_description, scrubbed_env_description
+from .native import (
+    NativeSandbox,
+    bash_env_description,
+    build_env_description,
+    scrubbed_env_description,
+)
 from .policy import SandboxPolicy
 
 logger = logging.getLogger(__name__)
@@ -89,19 +95,82 @@ def runtime_description(os_name: str | None = None, *, build_tools: "tuple[str, 
     )
 
 
-def _posix_guess_hint(command: str, os_name: str | None = None) -> str | None:
+#: v1.386.0: what a BASH-WRITTEN command tool (the IJ harness's Claude
+#: dialect, ``Bash``) adds when no Git for Windows bash was found and cmd.exe
+#: runs its commands: the model was trained on bash, so the differences that
+#: break (or, with ``;``, destroy) are named.
+NOT_BASH_NOTE = (
+    "This is Windows cmd.exe, not bash (no Git for Windows bash was found on this PC): ';' does "
+    "not separate commands (use '&&'), there are no heredocs ('<<'), '/dev/null' is 'nul', $VAR "
+    "and $(...) are not expanded (%VAR% is), single quotes do not quote, and a trailing '&' does "
+    "not start a program in the background (use run_in_background)."
+)
+
+
+def bash_runtime_description(found: Any, *, build_tools: "tuple[str, ...] | None" = None) -> str:
+    """The ``shell`` words for a command written in BASH (v1.386.0) on
+    Windows — what really runs it: Git for Windows' bash when ``found`` (a
+    ``sandbox/git_bash.GitBash``), else cmd.exe with :data:`NOT_BASH_NOTE`.
+    ``build_tools``: a Build session's tools found on the PATH that shell
+    sees (``native.build_env_tools``); None = a run with the scrubbed
+    environment. Never claims bash when cmd runs, nor cmd when bash runs."""
+    if found is None:
+        return runtime_description("nt", build_tools=build_tools) + " " + NOT_BASH_NOTE
+    native = bash_env_description(
+        getattr(found, "version", ""), build_tools or (), build=build_tools is not None,
+    )
+    return (
+        "Run a shell command inside the sandboxed session workspace "
+        "(§16/§17). The runtime is decided per call: when Docker is "
+        "available the command runs in an isolated Linux container; "
+        "otherwise it runs on the native runtime — "
+        + native
+    )
+
+
+#: The banner an interactive cmd.exe prints (``cmd /c`` in bash, where MSYS
+#: turned ``/c`` into ``C:/`` — the line ran nothing).
+_CMD_BANNER = "Microsoft Windows [Version"
+
+#: v1.386.0 review: what cmd.exe does with ';' — said when a FAILED cmd line
+#: held one (`sleep 2; cat x` -> "invalid time interval '2;'").
+SEMICOLON_HINT = (
+    "(This shell is Windows cmd.exe: ';' does not separate commands here, so the words after it "
+    "went to the command before it. Use '&&' between commands.)"
+)
+
+
+def _posix_guess_hint(command: str, os_name: str | None = None, path: str | None = None) -> str | None:
     """One deterministic line when a FAILED native command starts with a POSIX
     tool that does not exist on this platform (v1.205.0). No model calls; never
     fires on success or on non-POSIX failures; never rewrites the real output.
-    """
+
+    v1.386.0 review: only what is TRUE. ``path`` is the PATH the line ran
+    with: a tool found on it (Git's ``cp`` on a Build session's PATH) is not
+    called missing — the old line told a model whose ``cp`` had RUN that it
+    did not exist, and it copied the files a second time. A failed line that
+    held an unquoted ';' is told what cmd.exe does with it instead. BLOCKING
+    (a PATH lookup)."""
     if (os_name or os.name) != "nt":
         return None
     stripped = command.strip()
     if not stripped:
         return None
+    from .cmd_guard import has_unquoted_semicolon
+
+    if has_unquoted_semicolon(stripped):
+        return SEMICOLON_HINT
     token = stripped.split(None, 1)[0].strip("\"'").lower()
     if token not in _POSIX_ONLY_ON_WINDOWS:
         return None
+    if path is not None:
+        import shutil
+
+        try:
+            if shutil.which(token, path=path):
+                return None
+        except Exception:  # noqa: BLE001 — unknown is "found nothing", never a claim
+            pass
     return (
         f"('{token}' is a POSIX command; this shell is Windows cmd — the "
         "built-in rename_file/list_files tools cover most file work)"
@@ -300,14 +369,57 @@ class SandboxedShellTool(Tool):
         from ..harness.command_env import is_build_call
 
         build = is_build_call(ctx.session_id)
+        # v1.386.0: a command the MODEL WROTE IN BASH — the IJ harness's
+        # Claude dialect (`Bash`; `HarnessTurn.ctx_for` sets it on the call's
+        # context, never a model argument) — runs in Git for Windows' bash on
+        # Windows when one is found (`sandbox/git_bash`). Everything else, and
+        # every other OS, keeps the platform's own shell exactly as before.
+        bash_written = getattr(ctx, "shell_syntax", "") == "bash" and os.name == "nt"
+        #: What ran it, for the result (and the POSIX-guess hint below).
+        ran: dict[str, Any] = {"bash": None, "refused": "", "shell": "cmd", "path": None}
 
-        def _native_run(sandbox: Sandbox) -> SandboxResult:
+        def _native_run(sandbox: Sandbox) -> SandboxResult | None:
+            bash = None
+            if bash_written:
+                from .git_bash import find, switch_refusal
+
+                bash = find()
+                # v1.386.0 review: `start /b x` in bash hands `start` the path
+                # B:/ and Windows opens an error window that stays on the
+                # user's screen — refused before anything runs.
+                refused = switch_refusal(args["command"]) if bash is not None else ""
+                if refused:
+                    ran["refused"], ran["shell"] = refused, "bash"
+                    return None
+            if bash is None and os.name == "nt":
+                # cmd.exe runs it: a POSIX file command (or an installer)
+                # before an unquoted ';' would get the rest of the line as its
+                # arguments (`rm -f a; python b` deletes b) — refused before
+                # anything runs (`cmd_guard`).
+                refused = semicolon_refusal(args["command"])
+                if refused:
+                    ran["refused"] = refused
+                    return None
             if type(sandbox).run is NativeSandbox.run:
-                return sandbox.run(  # type: ignore[call-arg]
-                    args["command"], cwd=run_cwd, timeout=timeout,
-                    on_spawn=_published, cancelled=_was_cancelled,
-                    **({"build": True} if build else {}),
-                )
+                ran["bash"] = bash
+                if bash is None and os.name == "nt":
+                    # What the POSIX-guess hint below looks programs up on:
+                    # the PATH this cmd line runs with (v1.386.0 review).
+                    ran["path"] = sandbox.command_path(build=build)
+                try:
+                    return sandbox.run(  # type: ignore[call-arg]
+                        args["command"], cwd=run_cwd, timeout=timeout,
+                        on_spawn=_published, cancelled=_was_cancelled,
+                        **({"build": True} if build else {}),
+                        **({"bash": bash} if bash is not None else {}),
+                    )
+                except ValueError as exc:
+                    if bash is None:
+                        raise
+                    # A command bash cannot be handed (a NUL character, a
+                    # runaway size): a failed result in words, nothing run.
+                    ran["refused"], ran["shell"] = f"Nothing was run: {exc}", "bash"
+                    return None
             return sandbox.run(args["command"], cwd=run_cwd, timeout=timeout)
 
         def _select_and_run() -> tuple[Sandbox, SandboxResult | None]:
@@ -350,6 +462,17 @@ class SandboxedShellTool(Tool):
                 except asyncio.CancelledError:
                     pass
             raise
+        if result is None and ran["refused"]:
+            # The `;` guard (v1.386.0) — or, in bash, a `start /switch` or a
+            # command bash cannot be handed (review): an ordinary failed
+            # result, ledgered like any other; nothing was started.
+            return ToolResult(
+                ok=False,
+                output="",
+                data={"shell": ran["shell"],
+                      "refused": "semicolon" if ran["shell"] == "cmd" else "bash"},
+                error=ran["refused"],
+            )
         if result is None:
             logger.warning("shell refused under low trust: %s", LOW_TRUST_SHELL_REFUSAL)
             return ToolResult(
@@ -379,13 +502,29 @@ class SandboxedShellTool(Tool):
                 else CONFINEMENT_NATIVE
             ),
         }
+        if native_fallback and ran["bash"] is not None:
+            # v1.386.0 (additive, only when bash ran): which shell ran it.
+            data["shell"] = "bash"
         output = result.combined.strip()
         # POSIX-guess hint (v1.205.0): a failed native command whose first
         # token is a POSIX tool absent on this platform gets ONE appended line
         # pointing at the built-in tools. Deterministic, failure-only, and the
-        # real output is never rewritten.
-        if native_fallback and not ok:
-            hint = _posix_guess_hint(args["command"])
+        # real output is never rewritten. Never after bash ran it (v1.386.0):
+        # "this shell is Windows cmd" would be a lie there.
+        if native_fallback and not ok and ran["bash"] is None:
+            hint = await asyncio.to_thread(_posix_guess_hint, args["command"], None, ran["path"])
+            if hint:
+                output = f"{output}\n{hint}" if output else hint
+        if native_fallback and ran["bash"] is not None:
+            # v1.386.0 review: cmd.exe's habits in bash fail in ways that
+            # mislead (`type f.txt`: "not found"; `findstr /i`: "Cannot open";
+            # `cmd /c dir` starts an interactive cmd that runs NOTHING and exits
+            # 0) — one plain line after a failure, or after that cmd.
+            from .git_bash import windows_command_hint
+
+            hint = ""
+            if not ok or _CMD_BANNER in output:
+                hint = windows_command_hint(args["command"], output)
             if hint:
                 output = f"{output}\n{hint}" if output else hint
         # Operator-visible warning whenever isolation was requested but the run

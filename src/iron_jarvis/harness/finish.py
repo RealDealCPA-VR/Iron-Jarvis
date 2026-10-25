@@ -1020,11 +1020,13 @@ def ledger_mark_before(engine: Any, at: Any) -> "int | None":
 _RAN_CONFINEMENTS = frozenset({"sandbox", "native", "native-unconfined"})
 
 
-def ran_commands(engine: Any, session_id: str, after: int, upto: int) -> list[tuple[str, dict[str, Any]]]:
+def ran_commands(engine: Any, session_id: str, after: int, upto: int) -> list[tuple[str, dict[str, Any], str]]:
     """The ``shell`` commands the session RAN between two ledger marks, in
     order — the part of a reply a "carry on" continues (the cut turn's own
-    test command). The check's own runs are not the model's. BLOCKING; [] on
-    any failure."""
+    test command) — as ``(tool, args, called_as)``: the name the model called
+    it by tells a bash-written command (Claude Code's ``Bash``, v1.386.0
+    review). The check's own runs are not the model's. BLOCKING; [] on any
+    failure."""
     import json as _json
 
     try:
@@ -1046,7 +1048,7 @@ def ran_commands(engine: Any, session_id: str, after: int, upto: int) -> list[tu
             ).all()
     except Exception:  # noqa: BLE001
         return []
-    out: list[tuple[str, dict[str, Any]]] = []
+    out: list[tuple[str, dict[str, Any], str]] = []
     for args_json, confinement, called_as in rows:
         if confinement not in _RAN_CONFINEMENTS or called_as == CALLED_AS:
             continue
@@ -1055,7 +1057,7 @@ def ran_commands(engine: Any, session_id: str, after: int, upto: int) -> list[tu
         except ValueError:
             continue
         if isinstance(args, dict) and isinstance(args.get("command"), str):
-            out.append(("shell", args))
+            out.append(("shell", args, str(called_as or "")))
     return out
 
 
@@ -1409,6 +1411,19 @@ class _Run:
     timed_out: bool = False
     output: str = ""
     why: str = ""
+    #: The shell language the command is in (v1.386.0 review): "bash" when it
+    #: is the test part of a command the model wrote in bash (Claude Code's
+    #: ``Bash``) — the re-run then runs in the shell that command ran in
+    #: (Git for Windows' bash on Windows), never cmd.exe. "" = the platform's
+    #: own shell: a folder's own check (the user's words, for every dialect)
+    #: and a command of any other dialect.
+    syntax: str = ""
+
+
+def _posix(syntax: str) -> "bool | None":
+    """How a command's text is read: bash's rules for a bash-written command
+    (a backslash escapes), else the platform's own (:func:`_split`)."""
+    return True if syntax == "bash" else None
 
 
 class FinishCheck:
@@ -1460,8 +1475,9 @@ class FinishCheck:
         self.unmet = 0
         self.after = ""
         #: executed command calls of the model, in order: (tool, args, the
-        #: process handle a ``process_start`` answered — "" for ``shell``)
-        self._commands: list[tuple[str, dict[str, Any], str]] = []
+        #: process handle a ``process_start`` answered — "" for ``shell``,
+        #: the shell language it was written in — "bash" or "")
+        self._commands: list[tuple[str, dict[str, Any], str, str]] = []
         #: process handle -> its exit code, once it ended
         self._ended: dict[str, int] = {}
         #: handles of test runs started after the note, still running
@@ -1493,7 +1509,7 @@ class FinishCheck:
         run = self._by_id.get(str(getattr(call, "id", "") or ""))
         if run is None:
             return False
-        return run.source == "folder" or not builtin_only(run.command)
+        return run.source == "folder" or not builtin_only(run.command, posix=_posix(run.syntax))
 
     def observe(self, call: Any, result: Any, *, refused: bool) -> None:
         """A model call settled. An EXECUTED command call (one the registry
@@ -1528,18 +1544,19 @@ class FinishCheck:
         handle = str(data.get("id") or "") if name == "process_start" else ""
         if handle and not data.get("running") and isinstance(data.get("exit_code"), int):
             self._ended[handle] = data["exit_code"]
+        syntax = self._syntax_of(call)
         if not self.ran:
-            self._commands.append((name, dict(args), handle))
+            self._commands.append((name, dict(args), handle, syntax))
             return
         if not self._note_sent:
             return
         command = str(args.get("command") or "")
-        if not command or not status_is_tests(command, self._named_names()):
+        if not command or not status_is_tests(command, self._named_names(), posix=_posix(syntax)):
             # Review: only a run whose OWN exit status is its tests' decides
             # `after` (`pytest | tail`, `pytest || echo x` exit 0 when the
             # tests fail; the line said "tests failed, then fixed").
             return
-        if not self._covers(command):
+        if not self._covers(command, syntax):
             # Review: and only a run of the SAME tests the check ran (one
             # test of a failing suite passing is not "then fixed").
             return
@@ -1560,17 +1577,29 @@ class FinishCheck:
         _met, unmet = answered_points(text, len(self.points))
         self.unmet = len(unmet)
 
-    def _covers(self, command: str) -> bool:
+    def _covers(self, command: str, syntax: str = "") -> bool:
         """Does a later run cover every test the check's own runs ran (same
         test segments, setup steps and redirections aside)? True when the
         check ran nothing (no tests found / not run): any test run then says
         what it says."""
         named = self._named_names()
         mine = {h for r in self.runs if r.verdict in (TESTS_PASSED, TESTS_FAILED)
-                for h in test_heads(r.command, named)}
+                for h in test_heads(r.command, named, posix=_posix(r.syntax))}
         if not mine:
             return True
-        return mine <= set(test_heads(command, named))
+        return mine <= set(test_heads(command, named, posix=_posix(syntax)))
+
+    def _syntax_of(self, call: Any) -> str:
+        """The shell language a command call was written in ("bash" for
+        Claude Code's ``Bash`` — the harness knows which dialect tool the
+        model called), else "". Never raises."""
+        fn = getattr(self.harness, "shell_syntax_of", None) if self.harness is not None else None
+        if fn is None:
+            return ""
+        try:
+            return str(fn(call) or "")
+        except Exception:  # noqa: BLE001 — a double without it: the platform's shell
+            return ""
 
     def _named_names(self) -> list[str]:
         return [*self._named, *(str(getattr(c, "command", "") or "") for c in self.checks)]
@@ -1599,8 +1628,13 @@ class FinishCheck:
         calls = self._test_calls(low_trust=low_trust)
         if self.harness is not None:
             for call in calls:
+                run = self._by_id.get(call.id)
+                # v1.386.0 review: a re-run of the model's BASH command runs in
+                # the shell that command ran in (its syntax rides the call's
+                # context through `ctx_for`); a folder's check keeps cmd.exe.
+                extra = {"shell_syntax": run.syntax} if run is not None and run.syntax else {}
                 try:
-                    self.harness.mark_called_as(call.id, CALLED_AS)
+                    self.harness.mark_called_as(call.id, CALLED_AS, **extra)
                 except Exception:  # noqa: BLE001 — a double without the method
                     pass
         return calls
@@ -1700,11 +1734,11 @@ class FinishCheck:
                 runs.append(_Run(command=str(c.command), args={}, source="folder",
                                  timeout_s=int(getattr(c, "timeout_s", 0) or 0) or None))
         else:
-            mine = self._last_test_command()
+            mine = self._last_test_run()
             if mine is not None:
-                name, args, part = mine
+                name, args, part, syntax = mine
                 runs.append(_Run(command=part, args=args, source="yours",
-                                 timeout_s=_int_or_none(args.get("timeout_s"))))
+                                 timeout_s=_int_or_none(args.get("timeout_s")), syntax=syntax))
         if low_trust:
             # Before "no tests found": in low trust the model's own commands
             # are refused before they run (no sandbox), so none is ever the
@@ -1734,13 +1768,20 @@ class FinishCheck:
         self.tests, self.why = TESTS_NOT_RUN, why
 
     def _last_test_command(self) -> "tuple[str, dict[str, Any], str] | None":
+        mine = self._last_test_run()
+        return None if mine is None else mine[:3]
+
+    def _last_test_run(self) -> "tuple[str, dict[str, Any], str, str] | None":
+        """``(tool, args, test part, shell language)`` of the last command the
+        model ran that has a test part. A bash-written command is read with
+        bash's rules (a backslash escapes)."""
         named = self._named_names()
-        for name, args, handle in reversed(self._commands):
+        for name, args, handle, syntax in reversed(self._commands):
             if name == "process_start" and handle not in self._ended:
                 continue  # it never ended: no exit status to judge a run by
-            part = test_part(str(args.get("command") or ""), named)
+            part = test_part(str(args.get("command") or ""), named, posix=_posix(syntax))
             if part:
-                return name, args, part
+                return name, args, part, syntax
         return None
 
     def _args_for(self, run: _Run) -> dict[str, Any]:
@@ -2155,7 +2196,7 @@ async def start(
     if not str(folder or "").strip():
         return None
     mark = await asyncio.to_thread(ledger_mark, engine)
-    earlier: list[tuple[str, dict[str, Any]]] = []
+    earlier: list[tuple[str, dict[str, Any], str]] = []
     if since:
         before = await asyncio.to_thread(ledger_mark_before, engine, since)
         if before is not None and before < mark:
@@ -2174,7 +2215,15 @@ async def start(
         checks=getattr(plugins, "checks", ()) or (), gate=gate, carrier=carrier,
         delete_name=delete_name, harness=harness,
     )
-    check._commands.extend((name, args, "") for name, args in earlier)
+    called_syntax = getattr(harness, "shell_syntax_called", None)
+
+    def _syntax(called_as: str) -> str:
+        try:
+            return str(called_syntax(called_as) or "") if called_syntax and called_as else ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    check._commands.extend((name, args, "", _syntax(called)) for name, args, called in earlier)
     return check
 
 

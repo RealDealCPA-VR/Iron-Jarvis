@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.386.1 (2026-10-25).*
+holds itself to. Current as of v1.386.2 (2026-10-25).*
 
 ---
 
@@ -1896,6 +1896,31 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A Build session on Claude runs its commands in bash (v1.386.2)
+
+Claude was trained in Claude Code, whose command tool is called Bash, so in a
+Build session it writes bash commands. On Windows Iron Jarvis ran them in
+cmd.exe, which reads them differently: a `;` does not separate commands
+there. In a benchmark run the line `rm -f server.port; python server.py & …`
+made `rm` delete the project's own `server.py`.
+
+- **Claude's commands now run in Git for Windows' bash**, the way Claude Code
+  runs them on Windows. Iron Jarvis finds it where Claude Code does
+  (`CLAUDE_CODE_GIT_BASH_PATH`, then Git's own folder) and never uses the WSL
+  `bash` in System32. Without Git for Windows the commands still run in cmd,
+  and the agent is told so.
+- **A program started with `&` keeps running** (a dev server, a watcher)
+  until the session ends, and the command returns at once instead of
+  waiting for it.
+- **Each command starts in the session folder.** Use `cd folder && …` in one
+  command when a step needs another folder.
+- **A guard wherever cmd.exe still runs a model's command:** a file command
+  (`rm`, `mv`, `cp`, `del`, a formatter, an installer, …) followed by `;` is
+  refused before it runs, with a sentence telling the model to use `&&`.
+- Plain chat, agent runs and the other model families still use cmd, exactly
+  as before. The finish check re-runs a bash test command in bash; a folder's
+  own checks still run in cmd.
 
 ## A Build reply checks its own work before it ends (v1.386.1)
 

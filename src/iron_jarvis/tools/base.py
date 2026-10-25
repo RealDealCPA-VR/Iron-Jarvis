@@ -53,6 +53,13 @@ class ToolContext:
     #: that ran ``read_file``. The registry records it on the ledger row
     #: (``ToolInvocation.called_as``); "" when the model used the real name.
     called_as: str = ""
+    #: The shell language the MODEL WROTE this call's command in (v1.386.0):
+    #: ``"bash"`` for the IJ harness's Claude dialect's ``Bash`` (set by
+    #: ``HarnessTurn.ctx_for``, never from a model argument) — the shell and
+    #: program tools then run it in Git for Windows' bash on Windows
+    #: (``sandbox/git_bash``). "" = the platform's own shell, as always
+    #: (cmd.exe on Windows, POSIX sh elsewhere).
+    shell_syntax: str = ""
 
 
 @dataclass

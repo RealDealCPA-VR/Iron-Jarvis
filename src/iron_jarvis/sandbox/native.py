@@ -620,8 +620,17 @@ def build_env_tools(env: "dict[str, str] | None" = None) -> tuple[str, ...]:
                 continue
             found.append("posix" if name == "ls" else name)
         out = tuple(found)
-        _TOOLS_CACHE.clear()  # one PATH at a time is enough
-        _TOOLS_CACHE[path] = (now, out)
+        # v1.386.0: a few PATHs at once (the Build PATH and the same PATH as
+        # Git's bash sees it, Git's tool folders first) -- never unbounded.
+        # Two threads may store at once: a lost race only forgets an entry,
+        # never the answer just worked out.
+        try:
+            _TOOLS_CACHE.pop(path, None)
+            for stale in list(_TOOLS_CACHE)[: max(0, len(_TOOLS_CACHE) - 3)]:
+                _TOOLS_CACHE.pop(stale, None)
+            _TOOLS_CACHE[path] = (now, out)
+        except Exception:  # noqa: BLE001
+            pass
         return out
     except Exception:  # noqa: BLE001 — unknown is "found nothing", never a claim
         return ()
@@ -659,6 +668,48 @@ def build_env_description(tools: "tuple[str, ...] | list[str]", os_name: str | N
         f"{found}{who} Secret variables (keys, tokens, passwords) are removed. Prefer the "
         "built-in tools (rename_file, list_files, grep, read_document/write_document) for "
         "file work."
+    )
+
+
+def _bash_version_words(version: str) -> str:
+    """``GNU bash, version 5.2.37(1)-release (x86_64-pc-msys)`` -> ``GNU bash
+    5.2.37``."""
+    m = re.search(r"version\s+([0-9][0-9.]*)", str(version or ""))
+    return f"GNU bash {m.group(1).rstrip('.')}" if m else "GNU bash"
+
+
+def bash_env_description(version: str, tools: "tuple[str, ...] | list[str]", *, build: bool) -> str:
+    """Model-facing truth about a BASH-WRITTEN command on Windows (v1.386.0,
+    the IJ harness's Claude dialect): it runs in Git for Windows' bash
+    (``sandbox/git_bash``), with the Build environment for a Build session
+    (``build``) -- the tools REALLY found on the PATH bash sees (``tools``
+    from :func:`build_env_tools` over that PATH) -- else the scrubbed one plus
+    Git's own tools. Lives beside :func:`build_env_description` for the same
+    reason: the words and the truth must not drift."""
+    names = [t for t in tools if t != "posix"]
+    if build:
+        where = "with the user's own PATH and home folder, as in their own terminal"
+        found = (
+            f" Found on it: {', '.join(names)}." if names
+            else " None of git, node, npm or python was found on it."
+        )
+        who = (" Their git identity, settings and sign-ins apply (a commit is theirs)."
+               if "git" in names else "")
+        secrets = " Secret variables (keys, tokens, passwords) are removed."
+    else:
+        where = "with a minimal scrubbed PATH plus Git's own tools"
+        found = who = secrets = ""
+    return (
+        f"Git for Windows' bash ({_bash_version_words(version)}), not cmd.exe, {where}."
+        f"{found}{who}{secrets} Write bash: ';', '&&', '||', pipes, $(...), heredocs and "
+        "'2>/dev/null' work as in bash, and Git's POSIX tools (ls, cat, grep, sed, rm, cp, "
+        "curl...) resolve. Paths can be written C:/Users/... or /c/Users/...; a Windows program "
+        "gets them converted, and so does a cmd-style switch: '/b' reaches a Windows program as "
+        "'B:/', so write '//b' (or run the line as cmd //c \"...\"). A job started with a trailing "
+        "'&' keeps running after this call returns, until the session ends, and "
+        "what it prints after that is not shown: for a server or a watcher whose output you "
+        "need, use run_in_background. Prefer the built-in tools (rename_file, list_files, grep, "
+        "read_document/write_document) for file work."
     )
 
 
@@ -732,9 +783,22 @@ class NativeSandbox(Sandbox):
         """Native execution is always available."""
         return True
 
+    def command_path(self, *, build: bool = False) -> str:
+        """The PATH a cmd.exe line of :meth:`run` runs with (v1.386.0 review:
+        what the shell tool's POSIX-guess hint looks a program up on, so it
+        never calls a tool on that PATH missing). BLOCKING (it builds the
+        environment :meth:`run` would)."""
+        if self.policy.modify_env == "deny":
+            env = build_env() if build else scrubbed_env()
+        else:
+            env = dict(os.environ)
+        key = next((k for k in env if k.upper() == "PATH"), "PATH")
+        return str(env.get(key, ""))
+
     def run(
         self, command: str, *, cwd: Path, timeout: float | None = None,
         on_spawn: Any = None, cancelled: Any = None, build: bool = False,
+        bash: Any = None,
     ) -> SandboxResult:
         """``on_spawn`` / ``cancelled`` (v1.372.0): ``procs.run``'s seams,
         passed by the shell tool so a STOPPED call kills its command's tree
@@ -742,7 +806,12 @@ class NativeSandbox(Sandbox):
         ``build`` (v1.377.0): the call belongs to a BUILD SESSION
         (``harness/command_env`` decided it, keyed on the session) — under
         ``modify_env = "deny"`` it runs with :func:`build_env` (the user's
-        PATH and home, secrets removed) instead of :func:`scrubbed_env`."""
+        PATH and home, secrets removed) instead of :func:`scrubbed_env`.
+        ``bash`` (v1.386.0): a verified ``sandbox/git_bash.GitBash`` — the
+        command was written in bash (the IJ harness's Claude dialect) and runs
+        in Git for Windows' bash instead of cmd.exe, with the same
+        environment, folder, timeout, tree kill, hidden console and decoding.
+        Omitted: cmd.exe (``shell=True``), exactly as before."""
         limit = timeout if timeout is not None else self.policy.timeout_s
         # NOT child_env (review): a shell line pipes and redirects, and
         # PYTHONIOENCODING=utf-8 would make `type x.csv | python ...` fail on
@@ -752,6 +821,23 @@ class NativeSandbox(Sandbox):
             env = build_env() if build else scrubbed_env()
         else:
             env = None
+        argv: Any = command
+        shell = True
+        extra: dict[str, Any] = {}
+        if bash is not None:
+            from .git_bash import hidden_console, invocation
+
+            argv, env = invocation(bash, command, env)
+            shell = False
+            # shell=True gave cmd.exe a HIDDEN console window; bash gets the
+            # same (``subprocess``'s own STARTUPINFO for a shell child).
+            info = hidden_console()
+            if info is not None:
+                extra["startupinfo"] = info
+            # MSYS2 starts every Windows program with CREATE_BREAKAWAY_FROM_JOB
+            # when the Job allows it, which put `python`/`node` OUTSIDE the
+            # tree kill (measured): bash's Job lets nothing leave.
+            extra["breakaway_ok"] = False
         start = time.monotonic()
         # `procs.run` (v1.333.0; Popen + communicate(timeout) since v1.228.0,
         # RT3): on a timeout the WHOLE tree is killed and the pipes are then
@@ -769,9 +855,18 @@ class NativeSandbox(Sandbox):
         # that ran it ends (`procs.owned_by` in the shell tool,
         # `procs.end_session`). no_window=False: the shell keeps the console
         # it always had.
-        res = procs.run(
-            command,
-            shell=True,
+        # v1.386.0 review: bash's output goes to private temporary FILES and
+        # the call waits for BASH to exit (`procs.run_to_files`, Claude Code's
+        # own way): a job left running with `&` and its output not redirected
+        # (`python server.py &`) held the pipe, so the call waited for the
+        # timeout and the tree kill then ended the server the model meant to
+        # keep (measured). Now it returns when bash does; the job is the
+        # session's (keep_windows: the keeper, `procs.end_session`). cmd.exe
+        # keeps `procs.run` and its pipes exactly as before.
+        runner = procs.run_to_files if bash is not None else procs.run
+        res = runner(
+            argv,
+            **({} if bash is not None else {"shell": shell}),
             cwd=cwd,
             env=env,
             timeout=limit,
@@ -779,6 +874,7 @@ class NativeSandbox(Sandbox):
             keep_windows=True,
             **({"on_spawn": on_spawn} if on_spawn is not None else {}),
             **({"cancelled": cancelled} if cancelled is not None else {}),
+            **extra,
         )
         if res.timed_out:
             return SandboxResult(

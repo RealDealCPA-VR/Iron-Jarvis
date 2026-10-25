@@ -278,7 +278,9 @@ medium; read from the bench's own reports).**
   `server.py`, in 2 of 3 repeats. Heredocs, `;` chains and `/dev/null` failed
   the same way in the shell and background-program tasks (process category:
   4/9 against Claude Code's 9/9). The fix (run `Bash` in Git for Windows'
-  bash, as Claude Code does) is being built as its own release.
+  bash, as Claude Code does) shipped in v1.386.2: 7 of the 11 failed runs
+  came from it, and the four recorded commands replayed through the fix all
+  work (`server.py` survives and that task's hidden check passes).
 
 ## Phase 2 — The finish check (target v1.384.0)
 

@@ -3569,6 +3569,56 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **The claude dialect's `Bash` RUNS IN BASH on Windows; wherever cmd.exe
+  still runs a model's command, a `;` guard refuses the destructive case**
+  (v1.386.2; found by the part 3 Phase 1 benchmark: 7 of Jarvis-on-Claude's 11
+  failed runs, incl. `rm -f server.port; python server.py & …` deleting
+  `server.py` in 2 of 3 repeats — cmd does not split on `;`, so Git's `rm` got
+  the rest of the line as file names; a doer + a reviewer that found 6 more
+  defects). `sandbox/git_bash.py` finds Git for Windows' bash
+  (`CLAUDE_CODE_GIT_BASH_PATH`, else Git's own folder via `git.exe`, else
+  Program Files / x86 / `%LOCALAPPDATA%\Programs\Git` / scoop incl.
+  SCOOP/SCOOP_GLOBAL/ProgramData); NEVER System32 / SysWOW64 / Sysnative /
+  WindowsApps / `wsl.exe` (path and realpath), NEVER a bare PATH `bash`;
+  verified once (`--version` says GNU bash, bounded), cached, a miss rechecked
+  after 60 s, Rescan forgets. The command rides env `IJ_BASH_COMMAND` with the
+  constant line `export -n IJ_BASH_COMMAND; eval "$IJ_BASH_COMMAND"` (MSYS's
+  argv parser mangles `\\` and globs; a 40 M-char command arrived byte-exact;
+  cap 1,000,000; a NUL is refused in words). ONLY `ToolContext.shell_syntax`
+  ("bash", set by `HarnessTurn.ctx_for` for `DialectTool.shell_syntax`, i.e.
+  Claude's `Bash` → shell/process_start) takes the bash path
+  (`NativeSandbox.run(bash=)`, same Build env / cwd / timeout / keep_windows
+  Job / `_as_text` / hidden console); plain chat, agents, schedules, helpers
+  (a decision: their words say cmd), the generic / gpt / qwen dialects and a
+  folder's own `[[checks]]` keep cmd BYTE-FOR-BYTE (pinned). Bash runs with
+  `procs` `breakaway_ok=False` (MSYS2 starts every Windows program with
+  CREATE_BREAKAWAY_FROM_JOB, so a bash command's python escaped the tree
+  kill) and through `procs.run_to_files` (output to private delete-on-close
+  temp files, the call waits for bash, not the pipe — Claude Code captures the
+  same way), so `server &` returns at once and the server is owned by the
+  session until `end_session`; every other caller keeps `procs.run`. The
+  finish check keeps each command's syntax and re-runs a Bash test command in
+  bash (a resumed reply reads it back from `called_as`). `sandbox/cmd_guard.py`
+  judges the FIRST line (cmd /c runs only that), split at `& && | ||`, and
+  refuses an unquoted `;` inside a non-last word of a guarded program (Git's
+  file commands, sed/perl `-i`, del/copy/move/md/rd/ren, xcopy/robocopy, git
+  rm/mv/checkout/restore/clean/reset/stash, installers, formatters and
+  `--fix`/`-w`/`-i` linters, through xargs/sudo/env/start/call/`cmd /c`,
+  npx/uvx/`… run`/`python -m`); a `;` ending a redirect's file name counts too;
+  ordinary cmd lines run (`set PATH=…;…`, quoted `;`, `python -c "a; b"`).
+  The git guard joins `\`/`^` line continuations (`git \⏎push -f` force-pushed
+  uncarded on the old code). Hints tell the truth: the POSIX hint reads the
+  PATH the line ran with (it told a model Git's `cp` did not exist right after
+  it ran, and the model copied twice), cmd habits in bash (`type`, `findstr
+  /i`, `cmd /c`) get one hint, `start /b` in bash is refused (it opened an
+  error window). Bench identity gains `command_shell`. OPEN: after a daemon
+  CRASH a kept `&` job keeps running (the v1.333.0 keep-windows rule); a kept
+  job's later output grows a temp file until it ends; the guard reads text
+  only (`for` bodies, scripts, variables unseen); Codex on Windows uses
+  PowerShell and the gpt dialect still runs cmd (proposal, needs a benchmark);
+  not driven in the packaged app or on a PC without Git (stubbed). Pins:
+  `tests/test_{bash_dialect,bash_dialect_review,cmd_semicolon_guard,git_bash}_v1386.py`;
+  moved on purpose: `test_build_command_shell_ask_v1381` (`cmd //c` in bash).
 - **A Build reply that changed files CHECKS ITS OWN WORK once before it ends,
   through the same gates as any call** (v1.386.0, IJ harness part 3 Phase 2,
   `docs/IJ-HARNESS-PLAN-3.md`, the user's decision 6; a doer + a reviewer that

@@ -66,6 +66,8 @@ _PROG_RX = re.compile(
     r"""(?:^|[\s;&|(`"'])(?:[^\s;&|(`"']*[\\/])?(?P<prog>git|gh)(?:\.exe)?(?=[\s"'])""",
     re.IGNORECASE,
 )
+#: A line continuation (bash's ``\`` / cmd's ``^`` right before a line break).
+_CONTINUATION_RX = re.compile(r"[\\^]\r?\n")
 #: What ends one command of a line.
 _END_RX = re.compile(r"&&|\|\||[;|\n\r)]|(?<![<>0-9])&(?![>&])")
 _TOKEN_RX = re.compile(r'"[^"]*"|\'[^\']*\'|\S+')
@@ -542,6 +544,14 @@ def classify(command: Any, _depth: int = 0) -> list[GitAct]:
     text = str(command or "")
     if not text or ("git" not in text.lower() and "gh" not in text.lower()):
         return []
+    # v1.386.0 review: a LINE CONTINUATION joins two lines into one command —
+    # bash's backslash-newline (the IJ harness's Claude dialect runs in Git
+    # for Windows' bash), cmd's caret-newline. Read as written, `git push \`
+    # + a break + `--force` was a plain push (a card) and `git \` + a break +
+    # `push -f` was nothing at all, while bash ran a force push. Joined
+    # always: where only the first line runs (cmd.exe), reading more only
+    # makes the guard stricter.
+    text = _CONTINUATION_RX.sub(" ", text)
     out: list[GitAct] = []
     for m in _PROG_RX.finditer(text):
         # A quoted path ("C:\Program Files\Git\cmd\git.exe" push) closes its

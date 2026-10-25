@@ -573,7 +573,14 @@ async def test_a_later_turn_asks_for_the_commands_own_line_and_nothing_else(app,
     await finish(app, "cs-later-0", drop, task)
     # The next turn the USER typed: the command's own line (reworded by the
     # model's quoting) asks; any other command follows "Don't ask".
-    wire(app, Script([bash("l1", 'cmd /c "echo IJ-STATUS"'), bash("l2", "echo IJ-OTHER"), "Done."]))
+    # MOVED ON PURPOSE (v1.386.0): Claude's `Bash` runs in Git for Windows'
+    # bash when one is found (`sandbox/git_bash`), and there cmd's `/c` is
+    # written `//c` (MSYS turns a bare `/c` into the path `C:/`, as in
+    # Claude Code's own Bash) — the same rewording, in the shell that runs it.
+    from iron_jarvis.sandbox import git_bash
+
+    reworded = 'cmd //c "echo IJ-STATUS"' if git_bash.find() is not None else 'cmd /c "echo IJ-STATUS"'
+    wire(app, Script([bash("l1", reworded), bash("l2", "echo IJ-OTHER"), "Done."]))
     drop, task = await start(app, sid, "cs-later-1", text="now run its status line")
     card = await nth_card(app, "cs-later-1", 0)
     assert card["tool"] == "shell" and card["once_only"] is True and card["once_reason"] == "command"

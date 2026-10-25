@@ -342,16 +342,26 @@ def runtime_note(registry: Any, name: str, *, shell_description: str = "") -> st
     return " ".join(keep).strip()
 
 
-def model_specs(registry: Any, plan: ToolPlan, *, shell_description: str = "") -> list[dict[str, Any]]:
+def model_specs(
+    registry: Any, plan: ToolPlan, *, shell_description: str = "", bash_description: str = "",
+) -> list[dict[str, Any]]:
     """What the model is shown: the dialect's tools, then the pass-through
     real tools as the registry describes them. ``shell_description``
     (v1.377.0, a Build session): the shell's facts there — the user's own
     PATH and the tools found on it — for every dialect's command tool AND the
-    pass-through ``shell``; "" = the registered words, exactly as before."""
+    pass-through ``shell``; "" = the registered words, exactly as before.
+    ``bash_description`` (v1.386.0): the facts of the shell a BASH-WRITTEN
+    command tool (Claude Code's ``Bash``) really runs in on Windows — Git for
+    Windows' bash, or cmd.exe with what differs from bash
+    (``command_env.bash_shell_description``); "" (another OS, a dialect
+    without one) = ``shell_description`` / the registered words, as before."""
     out = []
     for tool in plan.dialect_tools:
         spec = tool.spec()
-        note = runtime_note(registry, tool.runtime_from, shell_description=shell_description)
+        words = shell_description
+        if bash_description and tool.shell_syntax == "bash":
+            words = bash_description
+        note = runtime_note(registry, tool.runtime_from, shell_description=words)
         if note:
             spec = {**spec, "description": spec["description"] + "\n\nHow commands run here: " + note}
         out.append(spec)
@@ -473,9 +483,17 @@ class HarnessTurn:
         self._called_as: dict[str, str] = {}
         #: call id -> the dialect tool the model called (for its own words)
         self._called_tool: dict[str, _dialects.DialectTool] = {}
+        #: call id -> the shell language of a call the HARNESS makes itself
+        #: that re-runs a bash-written command (v1.386.0 review: the finish
+        #: check's re-run of a ``Bash`` command)
+        self._marked_syntax: dict[str, str] = {}
         #: v1.377.0: a Build session's shell facts (the user's own PATH and
         #: the tools found on it — ``harness/command_env``); "" elsewhere.
         self.shell_description = ""
+        #: v1.386.0: the facts of the shell a bash-written command tool
+        #: (Claude Code's ``Bash``) runs in on Windows (``command_env.
+        #: bash_shell_description``); "" elsewhere.
+        self.bash_description = ""
 
     # -- the prompt --------------------------------------------------------- #
 
@@ -515,7 +533,10 @@ class HarnessTurn:
     # -- tools -------------------------------------------------------------- #
 
     def specs(self, registry: Any) -> list[dict[str, Any]]:
-        return model_specs(registry, self.plan, shell_description=self.shell_description)
+        return model_specs(
+            registry, self.plan, shell_description=self.shell_description,
+            bash_description=self.bash_description,
+        )
 
     def translate_calls(self, calls: list[Any]) -> list[Any]:
         """The model's calls mapped to the real tools (same ids). A name the
@@ -564,24 +585,66 @@ class HarnessTurn:
         translated)."""
         return self._called_as.get(getattr(call, "id", ""), getattr(call, "name", ""))
 
-    def mark_called_as(self, call_id: str, name: str) -> None:
+    def mark_called_as(self, call_id: str, name: str, *, shell_syntax: str = "") -> None:
         """Part 3, Phase 2: a call the HARNESS makes itself (the finish
         check's test run, ``harness/finish``) is ledgered under ``name``
         (``ToolInvocation.called_as``) — through :meth:`ctx_for`, the same
-        path a translated call takes."""
+        path a translated call takes. ``shell_syntax`` (v1.386.0 review): the
+        language the command is in when it re-runs a command the MODEL wrote
+        in bash (Claude Code's ``Bash``) — so it runs in the shell the model's
+        own run did (Git for Windows' bash), never cmd.exe. "" = the
+        platform's own shell (a folder's own check: the user's words)."""
         if call_id and name:
             self._called_as[str(call_id)] = str(name)
+            if shell_syntax:
+                self._marked_syntax[str(call_id)] = str(shell_syntax)
+
+    def shell_syntax_of(self, call: Any) -> str:
+        """The shell language ``call``'s command was written in (v1.386.0):
+        "bash" for a call of a bash-written command tool (Claude Code's
+        ``Bash``) that became ``shell`` / ``process_start`` — what
+        :meth:`ctx_for` puts on its context — else ""."""
+        cid = getattr(call, "id", "")
+        if getattr(call, "name", "") not in _dialects.SHELL_TARGETS:
+            return ""
+        marked = self._marked_syntax.get(cid)
+        if marked:
+            return marked
+        tool = self._called_tool.get(cid)
+        return str(getattr(tool, "shell_syntax", "") or "") if tool is not None else ""
+
+    def shell_syntax_called(self, name: str) -> str:
+        """The shell language of the dialect tool the model calls ``name``
+        (v1.386.0 review: a ledger row's ``called_as`` — a carried-on reply's
+        earlier commands), else ""."""
+        for tool in getattr(self.plan, "dialect_tools", ()) or ():
+            if getattr(tool, "name", "") == name or name in (getattr(tool, "aliases", ()) or ()):
+                return str(getattr(tool, "shell_syntax", "") or "")
+        return ""
 
     def ctx_for(self, ctx: Any, call: Any) -> Any:
         """``ctx`` carrying the model's name for a translated call, so the
-        ledger row records it (``ToolInvocation.called_as``)."""
-        name = self._called_as.get(getattr(call, "id", ""))
+        ledger row records it (``ToolInvocation.called_as``). v1.386.0: and,
+        for a call of a BASH-WRITTEN command tool (Claude Code's ``Bash``)
+        that became ``shell`` / ``process_start``, the language its command
+        is in (``ToolContext.shell_syntax`` = "bash"), so it runs in Git for
+        Windows' bash on Windows — decided by the dialect tool the model
+        called, never by an argument it sent."""
+        cid = getattr(call, "id", "")
+        name = self._called_as.get(cid)
         if not name or name == getattr(call, "name", "") or ctx is None:
             return ctx
         try:
-            return dataclasses.replace(ctx, called_as=name)
+            out = dataclasses.replace(ctx, called_as=name)
         except Exception:  # noqa: BLE001 — a test double that is no dataclass
             return ctx
+        syntax = self.shell_syntax_of(call)
+        if syntax:
+            try:
+                out = dataclasses.replace(out, shell_syntax=syntax)
+            except Exception:  # noqa: BLE001 — an older context: its own shell
+                pass
+        return out
 
     def model_text(self, call: Any, content: str) -> str:
         """The result as the model reads it. A required-argument refusal for a
@@ -737,6 +800,7 @@ def build(
     ask_user: bool = False,
     library: Iterable[str] = (),
     shell_description: str = "",
+    bash_description: str = "",
 ) -> HarnessTurn:
     """Plan the tools, compose the tree and render it. Pure apart from the
     registry / permission reads (no I/O): the project layer is read by the
@@ -776,7 +840,19 @@ def build(
     # v1.377.0: a Build session's commands run with the user's own PATH; the
     # caller worked out the words off the loop (``harness/command_env``).
     turn.shell_description = str(shell_description or "")
+    # v1.386.0: what a bash-written command tool really runs in on Windows.
+    turn.bash_description = str(bash_description or "")
     return turn
+
+
+def speaks_bash(requested: str, provider: str, model: str) -> bool:
+    """Will a turn with this dialect choice and serving pair show a command
+    tool whose model writes bash (v1.386.0: Claude Code's ``Bash``)? Pure."""
+    try:
+        _family, dialect = _dialects.resolve(requested, provider, model)
+    except Exception:  # noqa: BLE001 — an unknown dialect is the build's error
+        return False
+    return _dialects.speaks_bash(dialect)
 
 
 def _shown_name(plan: ToolPlan, real: str) -> str:

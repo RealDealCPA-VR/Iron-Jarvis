@@ -60,7 +60,11 @@ asks to leave its job (``CREATE_BREAKAWAY_FROM_JOB`` — some launchers and
 updaters do) fails to START with "Access is denied" (measured); with it, only
 a process that asks in so many words leaves. Children that merely nest a job
 of their own (Node/libuv puts its children in one with silent breakaway) stay
-inside ours and still die with it (measured).
+inside ours and still die with it (measured). ONE EXCEPTION (v1.386.0): Git
+for Windows' bash (the IJ harness's Claude dialect) asks for every Windows
+program it starts, so its Job is made WITHOUT ``BREAKAWAY_OK``
+(``breakaway_ok=False``) — the MSYS2 runtime then asks nothing and every
+member stays inside (measured).
 """
 
 from __future__ import annotations
@@ -299,7 +303,7 @@ class _Job:
         self.kept = False
 
     @classmethod
-    def create(cls, *, kill_on_close: bool, below_normal: bool) -> "_Job | None":
+    def create(cls, *, kill_on_close: bool, below_normal: bool, breakaway_ok: bool = True) -> "_Job | None":
         k = _kernel()
         if k is None:
             return None
@@ -308,7 +312,7 @@ class _Job:
             if not handle:
                 return None
             info = k.EXTENDED()
-            flags = _JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            flags = _JOB_OBJECT_LIMIT_BREAKAWAY_OK if breakaway_ok else 0
             if kill_on_close:
                 flags |= _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             if below_normal:
@@ -684,6 +688,7 @@ def spawn(
     background: bool | None = None,
     no_window: bool = True,
     keep_windows: bool = False,
+    breakaway_ok: bool = True,
     **popen_kw: Any,
 ) -> subprocess.Popen:
     """Start a child for a caller that streams its pipes itself.
@@ -695,7 +700,15 @@ def spawn(
     its own session, so :func:`kill_tree`'s ``killpg`` reaches the tree. The
     caller owns the handle and ends it with :func:`kill_tree` and
     :func:`release` (an unreleased job is released when the Popen object is
-    collected)."""
+    collected).
+
+    ``breakaway_ok`` (v1.386.0): False makes a Job that lets NO member leave.
+    Git for Windows' bash needs it: the MSYS2 runtime starts every Windows
+    program (``python``, ``node``) with ``CREATE_BREAKAWAY_FROM_JOB`` whenever
+    the job allows it — measured: in a ``BREAKAWAY_OK`` job a bash command's
+    ``python`` was not a member and outlived the tree kill; without it MSYS
+    adds no such flag and every member dies with the job. The cost: a program
+    a bash command starts that ASKS to leave its job fails to start."""
     bg = in_background_lane() if background is None else bool(background)
     windows = sys.platform == "win32"
     if not windows:
@@ -704,7 +717,7 @@ def spawn(
     flags = int(popen_kw.pop("creationflags", 0) or 0) | priority_flags(bg)
     if no_window:
         flags |= CREATE_NO_WINDOW
-    job = _Job.create(kill_on_close=not keep_windows, below_normal=bg)
+    job = _Job.create(kill_on_close=not keep_windows, below_normal=bg, breakaway_ok=breakaway_ok)
     try:
         proc = subprocess.Popen(  # noqa: S603 — callers own argv
             argv, creationflags=flags | (CREATE_SUSPENDED if job else 0), **popen_kw
@@ -838,6 +851,8 @@ def run(
     drain_timeout: float = DRAIN_TIMEOUT_S,
     on_spawn: Callable[[Any], bool] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    startupinfo: Any = None,
+    breakaway_ok: bool = True,
 ) -> Result:
     """Blocking: run a child to completion with a REAL bound, output as bytes.
 
@@ -852,18 +867,22 @@ def run(
     handle and answers whether the caller was already cancelled, the second
     tells a call the await gave up on (its child ended by that kill, not on
     its own) from one that finished, so a keep-windows job is swept rather
-    than kept."""
+    than kept. ``startupinfo`` (v1.386.0): handed to ``Popen`` only when
+    given (Git's bash gets the hidden console ``shell=True`` gives cmd.exe).
+    ``breakaway_ok``: :func:`spawn`'s (False for Git's bash)."""
     proc = spawn(
         argv,
         background=background,
         no_window=no_window,
         keep_windows=keep_windows,
+        **({} if breakaway_ok else {"breakaway_ok": False}),
         shell=shell,
         cwd=None if cwd is None else str(cwd),
         env=env,
         stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        **({"startupinfo": startupinfo} if startupinfo is not None else {}),
     )
     ended_early = True  # a timeout, a cancel or an error: stop what it left
     try:
@@ -885,6 +904,148 @@ def run(
         return Result(proc.returncode, out or b"", err or b"", args=argv, timeout=timeout)
     finally:
         release(proc, stop_windowless=ended_early)
+
+
+def _capture_file(kind: str) -> tuple[int, int]:
+    """``(write fd, read fd)`` of a new PRIVATE temporary file in the system
+    temp folder (never the user's project, never the app's home, which a
+    backup walks). On Windows it is opened delete-on-close
+    (``O_TEMPORARY``): the file is gone the moment the last handle to it
+    closes — ours after the read, a background job's when that job ends — so
+    nothing is ever left behind, whoever closes last. The two fds are
+    separate opens (separate positions): reading never moves where a child
+    still writing writes. Elsewhere the file is unlinked at once (open fds
+    keep it)."""
+    import secrets
+    import tempfile
+
+    name = os.path.join(
+        tempfile.gettempdir(), f"ij-out-{os.getpid()}-{secrets.token_hex(8)}.{kind}"
+    )
+    flags = getattr(os, "O_BINARY", 0) | getattr(os, "O_NOINHERIT", 0) | getattr(os, "O_TEMPORARY", 0)
+    w = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | flags, 0o600)
+    try:
+        r = os.open(name, os.O_RDONLY | flags)
+    except BaseException:
+        os.close(w)
+        raise
+    if not getattr(os, "O_TEMPORARY", 0):
+        try:
+            os.unlink(name)
+        except OSError:
+            pass
+    return w, r
+
+
+def _read_fd(fd: int) -> bytes:
+    """Everything written to the file so far (from the read fd's own start)."""
+    chunks: list[bytes] = []
+    while True:
+        try:
+            data = os.read(fd, 1 << 20)
+        except OSError:
+            break
+        if not data:
+            break
+        chunks.append(data)
+    return b"".join(chunks)
+
+
+def run_to_files(
+    argv: Sequence[str],
+    *,
+    timeout: float | None,
+    cwd: Any = None,
+    env: dict[str, str] | None = None,
+    background: bool | None = None,
+    no_window: bool = True,
+    keep_windows: bool = False,
+    drain_timeout: float = DRAIN_TIMEOUT_S,
+    on_spawn: Callable[[Any], bool] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    startupinfo: Any = None,
+    breakaway_ok: bool = True,
+) -> Result:
+    """:func:`run`, with the child's output written to private temporary
+    FILES and the call waiting for the CHILD to exit — not for its output to
+    close (v1.386.0 review, Git for Windows' bash for the IJ harness's Claude
+    dialect: Claude Code itself runs its Bash tool so).
+
+    Why: a shell command that leaves a job running in the background with
+    its output not redirected (``python server.py &`` — what a model trained
+    on Claude Code writes, where it returns at once) keeps a PIPE open, so
+    :func:`run`'s ``communicate`` waited until the timeout and then the tree
+    kill ended the server the model meant to keep (measured). With files the
+    call returns when the shell exits, the job keeps running — owned by the
+    session like any job a keep-windows call leaves (``keep_windows``:
+    :func:`release` hands it to the keeper, :func:`end_session` /
+    :func:`end_all` stop it) — and whatever it prints later goes to a file
+    nobody reads, deleted when it ends.
+
+    The same contract as :func:`run` otherwise: stdin is DEVNULL, a timeout
+    kills the TREE (the child is then waited for at most ``drain_timeout``)
+    and returns what was written with ``timed_out``, ``on_spawn`` /
+    ``cancelled`` are :func:`run_async`'s seams, output is BYTES. Every other
+    caller keeps :func:`run`."""
+    out_w, out_r = _capture_file("out")
+    try:
+        err_w, err_r = _capture_file("err")
+    except BaseException:
+        os.close(out_w)
+        os.close(out_r)
+        raise
+    try:
+        try:
+            proc = spawn(
+                argv,
+                background=background,
+                no_window=no_window,
+                keep_windows=keep_windows,
+                **({} if breakaway_ok else {"breakaway_ok": False}),
+                cwd=None if cwd is None else str(cwd),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=out_w,
+                stderr=err_w,
+                **({"startupinfo": startupinfo} if startupinfo is not None else {}),
+            )
+        finally:
+            # The child holds its own copies; ours would only keep the files
+            # alive past the last writer.
+            os.close(out_w)
+            os.close(err_w)
+        ended_early = True  # a timeout, a cancel or an error: stop what it left
+        try:
+            if on_spawn is not None and on_spawn(proc):
+                kill_tree(proc)
+                _bounded_wait(proc, drain_timeout)
+                return Result(-1, b"", b"", cancelled=True, args=argv, timeout=timeout)
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                kill_tree(proc)
+                _bounded_wait(proc, drain_timeout)
+                code = proc.returncode if proc.returncode is not None else -1
+                return Result(code, _read_fd(out_r), _read_fd(err_r), timed_out=True, args=argv,
+                              timeout=timeout)
+            except BaseException:
+                kill_tree(proc)
+                raise
+            ended_early = bool(cancelled is not None and cancelled())
+            return Result(proc.returncode, _read_fd(out_r), _read_fd(err_r), args=argv, timeout=timeout)
+        finally:
+            release(proc, stop_windowless=ended_early)
+    finally:
+        os.close(out_r)
+        os.close(err_r)
+
+
+def _bounded_wait(proc: Any, drain_timeout: float) -> None:
+    """Wait for a killed child, never unbounded."""
+    try:
+        proc.wait(timeout=drain_timeout)
+    except Exception:  # noqa: BLE001 — a wedged child still returns
+        pass
 
 
 def _bounded_drain(proc: Any, drain_timeout: float) -> tuple[bytes, bytes]:
