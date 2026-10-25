@@ -147,7 +147,9 @@ const ARMED = {
     { role: "user", content: "read the ledger" },
     { role: "assistant", content: "The ledger is read." },
   ],
-  setup: { tools: ["read_file", "mcp__gmail__search_messages", "excel_query"] },
+  // v1.388.0: the third tool is one the app cannot vouch for (not a
+  // registered built-in — excel_query now reads "Query a workbook").
+  setup: { tools: ["read_file", "mcp__gmail__search_messages", "quote_lookup"] },
 };
 /** A chat whose agent was handed work before v1.349.0's stamp (the line). */
 const HANDED = {
@@ -317,16 +319,16 @@ describe("the tools menu lists tools by what they do", () => {
   it("each turned-on tool reads its words; the exact id is its title; an unknown id shows as itself", async () => {
     const menu = await openMenu();
     const rows = within(menu).getAllByTestId("armed-tool-row");
-    expect(rows.map((r) => r.textContent)).toEqual(["Read files", "gmail: search messages", "excel_query"]);
+    expect(rows.map((r) => r.textContent)).toEqual(["Read files", "gmail: search messages", "quote_lookup"]);
     expect(rows.map((r) => r.getAttribute("title"))).toEqual([
       "read_file",
       "mcp__gmail__search_messages",
-      "excel_query",
+      "quote_lookup",
     ]);
     // A described tool is plain text; only the id the app cannot vouch for
     // keeps the monospace look of an id.
     expect(within(rows[0]).getByText("Read files").className).not.toContain("font-mono");
-    expect(within(rows[2]).getByText("excel_query").className).toContain("font-mono");
+    expect(within(rows[2]).getByText("quote_lookup").className).toContain("font-mono");
     expect(within(menu).queryByText("read_file")).toBeNull();
   });
 
@@ -352,7 +354,10 @@ describe("the words for a turned-on tool (lib/chatControlWords)", () => {
     ["shell", "Run a command"],
     ["browser_click", "Act in a browser tab"],
     ["mcp__github__list_issues", "github: list issues"],
-    ["excel_query", null],
+    // v1.388.0 (readiness 12A): a built-in neither the card table nor a kind
+    // knows reads in the generated words of every registered built-in.
+    ["excel_query", "Query a workbook"],
+    ["quote_lookup", null],
     ["", null],
   ])("%j reads %j", (id, words) => {
     expect(armedToolWords(id)).toBe(words);
@@ -360,7 +365,7 @@ describe("the words for a turned-on tool (lib/chatControlWords)", () => {
 
   it("the Turn off name keeps the exact id beside the words (two tools can share words)", () => {
     expect(turnOffToolLabel("read_document")).toBe("Turn off Read files (read_document)");
-    expect(turnOffToolLabel("excel_query")).toBe("Turn off excel_query");
+    expect(turnOffToolLabel("quote_lookup")).toBe("Turn off quote_lookup");
   });
 });
 

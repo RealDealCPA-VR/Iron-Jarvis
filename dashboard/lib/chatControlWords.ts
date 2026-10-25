@@ -13,7 +13,7 @@
  * lib/workTarget (both plain data), so this file is importable anywhere.
  */
 
-import { appNameWords, appToolNameWords, appToolParts, toolWords } from "@/lib/toolWords";
+import { appNameWords, appToolNameWords, appToolParts, ownToolWords, toolWords } from "@/lib/toolWords";
 import { toolKind, type WorkKind } from "@/lib/workTarget";
 
 /* ------------------------------------------------------------- compaction */
@@ -81,11 +81,17 @@ export function armedToolWords(name: string): string | null {
   // A connected app's tool: "<app>: <its own words>", the work line's shape.
   const app = appToolParts(id);
   if (app) return `${appNameWords(app.app)}: ${appToolNameWords(app.tool)}`;
-  // The approval card's words first: they name what ONE tool does.
-  const said = toolWords(id);
-  if (said) return capFirst(said);
-  const kind = toolKind(id);
-  return KIND_DOES[kind] ?? null;
+  // The approval card's own words first: they name what ONE tool does.
+  const own = ownToolWords(id);
+  if (own) return capFirst(own);
+  // Then the kind's words ("Read files"), as before v1.388.0: a tool turned
+  // on for the chat is said by what it does in general.
+  const byKind = KIND_DOES[toolKind(id)];
+  if (byKind) return byKind;
+  // v1.388.0 (readiness 12A): a built-in neither knows reads in the generated
+  // words of every registered built-in ("Query a workbook"), never its id.
+  const generated = toolWords(id);
+  return generated ? capFirst(generated) : null;
 }
 
 /** The Turn off button's accessible name for one armed tool. */

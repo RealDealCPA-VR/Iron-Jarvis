@@ -252,6 +252,19 @@ export function appNameWords(app: string): string {
 }
 
 /** Plain words for a tool id, or null when this map does not know it. */
+/** The words this file's own table (or the browser rule) gives a tool —
+ *  never the generated fallback. The chat's tools menu reads these first
+ *  and then the KIND of a tool ("Read files"), because a tool turned on for
+ *  the chat is said by what it does in general, while the generated words
+ *  name one call ("read a file"). Null when neither knows the tool. */
+export function ownToolWords(tool: string): string | null {
+  const id = (tool || "").trim();
+  if (!id) return null;
+  if (Object.prototype.hasOwnProperty.call(WORDS, id)) return WORDS[id];
+  if (isBuiltinBrowserTool(id)) return "act in a browser tab";
+  return null;
+}
+
 export function toolWords(tool: string): string | null {
   const id = (tool || "").trim();
   if (!id) return null;
