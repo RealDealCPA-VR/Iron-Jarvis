@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.386.0 (2026-10-25).*
+holds itself to. Current as of v1.386.1 (2026-10-25).*
 
 ---
 
@@ -1897,7 +1897,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## A Build reply checks its own work before it ends (v1.386.0)
+## A Build reply checks its own work before it ends (v1.386.1)
 
 When a Build session's reply changed files, it now takes one short extra
 step before its final answer:

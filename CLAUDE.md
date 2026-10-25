@@ -3627,6 +3627,18 @@ does not need a bump, stop and bump it.
   purpose: `test_build_turns_v1367`, `test_harness_rewind_v1370`,
   `test_harness_bench_v1363`, `test_build_command_shell_review_v1381`,
   `test_build_checks_v1367`, `test_chat_mcp_error_fence_v1342`.
+  v1.386.0 WAS NOT PUBLISHED (Tests and Release both red on
+  `test_finish_lanes_v1386::test_failed_tests_keep_the_reply_working...`,
+  `after` read "failed"): the scripted model wrote `X = 1`, the tests ran,
+  and its fix to `X = 2` landed in the SAME SECOND with the SAME SIZE, so
+  Python reused the stale `.pyc` (it checks only the whole-second mtime and
+  the size) and the re-run still failed. THIS PC SETS
+  `PYTHONDONTWRITEBYTECODE=1` in its environment and CI does not, so a
+  stale-bytecode failure can never show here: reproduce a CI-only Python
+  failure with `env -u PYTHONDONTWRITEBYTECODE`. The test's wrong value is
+  now `X = 11` (a different size); a copy holding one fixed mtime across
+  every run failed on the old shape and passes on the new. v1.386.1 ships
+  it all.
 - **A Build reply works until it is DONE: no fixed step limit, never stopped
   for being unwatched, resumed from where the page was, the plan on the
   right** (v1.385.0; a USER BUG: a reply ran 117 minutes — Opus 5.5 high,

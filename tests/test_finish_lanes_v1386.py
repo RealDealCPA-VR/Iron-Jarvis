@@ -257,11 +257,17 @@ async def test_failed_tests_keep_the_reply_working_and_the_check_never_runs_twic
     def answer(model: Model):
         note = model.calls[-1]["messages"][-1].content
         assert "FAILED (exit code 1)." in note and "Its output:" in note and "AssertionError" in note
-        return ("1. not met: X is 1, the test wants 2.",
-                [ToolCall(id="fix", name="edit_file", arguments={"path": "app.py", "old": "X = 1", "new": "X = 2"})])
+        return ("1. not met: X is 11, the test wants 2.",
+                [ToolCall(id="fix", name="edit_file", arguments={"path": "app.py", "old": "X = 11", "new": "X = 2"})])
 
+    # The wrong value has a DIFFERENT LENGTH from the fix (v1.386.1): Python
+    # reuses a cached .pyc whose recorded source size and whole-second mtime
+    # still match, and a scripted model writes, tests and fixes inside one
+    # second. "X = 1" -> "X = 2" kept the size, so on CI (bytecode on) the
+    # re-run imported the stale X = 1 and failed; this PC sets
+    # PYTHONDONTWRITEBYTECODE, which hid it.
     model = wire([
-        _write("app.py", "X = 1\n"), _shell(TEST_CMD), "Done: X is set.",
+        _write("app.py", "X = 11\n"), _shell(TEST_CMD), "Done: X is set.",
         answer, _shell(TEST_CMD, "s2"), "Fixed: X is 2 now and the tests pass.",
     ])
     done, _frames_ = await _lane(lane, platform, _body(ws), monkeypatch)

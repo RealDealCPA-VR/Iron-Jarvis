@@ -317,7 +317,8 @@ removed".
 - A turn that changed nothing, and every plain chat turn, makes exactly the
   calls it made before (pinned).
 
-**Result (v1.386.0, 2026-10-25).** Built by a doer agent and checked by a
+**Result (v1.386.1, 2026-10-25; v1.386.0 was not published, its gates
+failed on a test).** Built by a doer agent and checked by a
 separate reviewer, who found 17 more defects (each red first, fixed and
 mutation-checked).
 - **What shipped:** the `finish` component as planned (`harness/finish.py`,
