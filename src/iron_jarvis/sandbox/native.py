@@ -841,9 +841,18 @@ class NativeSandbox(Sandbox):
         # that ran it ends (`procs.owned_by` in the shell tool,
         # `procs.end_session`). no_window=False: the shell keeps the console
         # it always had.
-        res = procs.run(
+        # v1.386.0 review: bash's output goes to private temporary FILES and
+        # the call waits for BASH to exit (`procs.run_to_files`, Claude Code's
+        # own way): a job left running with `&` and its output not redirected
+        # (`python server.py &`) held the pipe, so the call waited for the
+        # timeout and the tree kill then ended the server the model meant to
+        # keep (measured). Now it returns when bash does; the job is the
+        # session's (keep_windows: the keeper, `procs.end_session`). cmd.exe
+        # keeps `procs.run` and its pipes exactly as before.
+        runner = procs.run_to_files if bash is not None else procs.run
+        res = runner(
             argv,
-            shell=shell,
+            **({} if bash is not None else {"shell": shell}),
             cwd=cwd,
             env=env,
             timeout=limit,

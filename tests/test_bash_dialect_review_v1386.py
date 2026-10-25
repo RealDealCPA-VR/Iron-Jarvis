@@ -243,3 +243,89 @@ async def test_a_force_push_split_over_lines_is_refused_through_the_real_turn(tm
         B.forget_gh_state()
     finally:
         procs.end_all()
+
+
+# --------------------------------------------------------------------------- #
+# 3. a job left running with `&` (output not redirected) returns at once
+# --------------------------------------------------------------------------- #
+#
+# Claude Code writes its Bash output to a FILE and waits for bash itself, so
+# `python server.py &` returns at once there and the server keeps running —
+# what a model trained on it writes. Through a PIPE the job held the pipe:
+# the call waited until its timeout and the tree kill then ended the server.
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _pid_alive(pid: int) -> bool:
+    import psutil
+
+    try:
+        return psutil.Process(pid).is_running() and psutil.Process(pid).status() != "zombie"
+    except psutil.Error:
+        return False
+
+
+@needs_bash
+async def test_a_background_job_without_a_redirect_returns_at_once_and_keeps_serving(tmp_path):
+    import time
+    import urllib.request
+
+    from iron_jarvis.core import procs
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.harness import sessions as S
+    from tests.test_bash_dialect_v1386 import _rows
+    from tests.test_build_sessions_v1367 import Script, frames_of, new_session, open_turn, wire
+
+    app = create_app(str(tmp_path / "home"))
+    work = tmp_path / "w"
+    work.mkdir()
+    port = _free_port()
+    (work / "srv.py").write_text(
+        "import http.server, os, sys\n"
+        "open('srv.pid', 'w').write(str(os.getpid()))\n"
+        "print('serving', flush=True)\n"
+        f"http.server.ThreadingHTTPServer(('127.0.0.1', {port}), "
+        "http.server.SimpleHTTPRequestHandler).serve_forever()\n",
+        encoding="utf-8",
+    )
+    (work / "hello.txt").write_bytes(b"hello from the server\n")
+    pid = 0
+    try:
+        sid = new_session(app, work, approval_mode="yolo")["id"]
+        # The model's line, as Claude writes it: the server in the background,
+        # its output NOT redirected, a short wait, the rest of the work.
+        wire(app, Script([[ToolCall(id="b1", name="Bash", arguments={
+            "command": "python srv.py & sleep 1; echo started", "timeout": 30_000})], "Done."]))
+        began = time.monotonic()
+        status, raw = await open_turn(app, sid, {"text": "go", "turn_id": "bg-1"}, timeout=90)
+        took = time.monotonic() - began
+        assert status == 200 and dict(frames_of(raw)).get("done")
+        (row,) = [r for r in _rows(app, "shell") if r.session_id == f"build:{sid}"]
+        assert row.ok, row.output
+        assert "started" in (row.output or "")
+        assert took < 15, f"the call waited {took:.1f} s for the background job (its timeout was 30 s)"
+        pid = int((work / "srv.pid").read_text(encoding="utf-8"))
+        assert _pid_alive(pid), "the server the model started in the background was stopped"
+        # It keeps answering — a later call of the same session reaches it.
+        body = urllib.request.urlopen(f"http://127.0.0.1:{port}/hello.txt", timeout=10).read()
+        assert body == b"hello from the server\n"
+        assert procs.kept_jobs(f"build:{sid}") >= 1, "the job is not the session's"
+        # The session's end (archive / delete call this) ends it.
+        S.end_session_programs(sid)
+        deadline = time.monotonic() + 10
+        while _pid_alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert not _pid_alive(pid), "the session ended and its background job kept running"
+    finally:
+        procs.end_all()
+        if pid and _pid_alive(pid):
+            import psutil
+
+            psutil.Process(pid).kill()

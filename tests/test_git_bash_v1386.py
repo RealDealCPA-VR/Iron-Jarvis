@@ -354,7 +354,14 @@ async def test_a_build_turns_words_and_its_interpreter_agree(tmp_path, monkeypat
         seen.append(argv)
         return real_run(argv, **kw)
 
+    real_files = procs.run_to_files
+
+    def run_to_files(argv, **kw):  # v1.386.0 review: bash's own runner
+        seen.append(argv)
+        return real_files(argv, **kw)
+
     monkeypatch.setattr(procs, "run", run)
+    monkeypatch.setattr(procs, "run_to_files", run_to_files)
     for found in ((REAL,) if REAL is not None else ()) + (None,):
         monkeypatch.setattr(GB, "find", lambda f=found: f)
         app = create_app(str(tmp_path / f"home-{found is not None}"))

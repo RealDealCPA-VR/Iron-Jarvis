@@ -151,8 +151,9 @@ async def _bash_turn(app, work: Path, command: str, turn_id: str, *, timeout_ms:
 
 
 def _record_runs(monkeypatch) -> list[dict]:
-    """Every ``procs.run`` / ``procs.spawn`` the code under test makes —
-    argv, shell flag and the extra keywords — passed on to the real one."""
+    """Every ``procs.run`` / ``procs.run_to_files`` / ``procs.spawn`` the code
+    under test makes — argv, shell flag and the extra keywords — passed on to
+    the real one."""
     seen: list[dict] = []
     real_run, real_spawn = procs.run, procs.spawn
 
@@ -166,7 +167,17 @@ def _record_runs(monkeypatch) -> list[dict]:
                      "startupinfo": "startupinfo" in kw, "env": kw.get("env")})
         return real_spawn(argv, **kw)
 
+    # v1.386.0 review: bash's output goes to files (`procs.run_to_files`, the
+    # call waits for bash, not for a background job's pipe) — the same "run".
+    real_files = procs.run_to_files
+
+    def run_to_files(argv, **kw):
+        seen.append({"via": "run", "argv": argv, "shell": False, "files": True,
+                     "startupinfo": "startupinfo" in kw, "env": kw.get("env")})
+        return real_files(argv, **kw)
+
     monkeypatch.setattr(procs, "run", run)
+    monkeypatch.setattr(procs, "run_to_files", run_to_files)
     monkeypatch.setattr(procs, "spawn", spawn)
     return seen
 
