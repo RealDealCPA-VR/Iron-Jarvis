@@ -3569,6 +3569,58 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A Build turn starts with a PROJECT MAP; the project's OWN checkers run
+  after an edit as GATED calls that need a person; a made-up tool name is a
+  refusal, not a dead turn** (v1.387.0, IJ harness part 3 Phase 3; a doer +
+  a reviewer that found 6 more defects). THE COUNT that decided the scope
+  (Phase 2 trajectories, 126 pairs): Jarvis on Claude 5.32 calls/run vs
+  Claude Code 5.02 (+5.8%; 0.23 are the finish check's) — the plan's "within
+  20%" was already met; left: listing 0.57/run, re-reads of a 12,000-cut
+  result. `harness/project_map.py`: tree to 3 levels + top-level names (Python
+  `ast`, JS/TS a bounded line scan that says it can miss names), never runs
+  project code, never follows links/junctions, heavy + hidden folders pruned,
+  3 s walk deadline + entry cap said, 2% of the window at 4 chars/token ≤
+  8,000 chars (~2,560 unknown window), shrinks depth then entries and says
+  so; names read only at levels a nameless tree could fit
+  (`_names_depth`) within `NAMES_DEADLINE_S` 1.5 s (a 4,800-file tree took
+  88 s before the review), an unfinished map never cached; promptguard; built
+  ONCE per user message via to_thread, appended LAST in `HarnessTurn.block()`
+  (before the planner), NOT in the fingerprint; `route.harness.map` receipt.
+  `harness/checkers.py`: ruff / mypy / eslint / tsc ONLY when the project's
+  config AND program exist (`.venv`/`venv`, `node_modules/.bin`, else the
+  FULL PATH `shutil.which` found — a bare name let cmd.exe run a planted
+  `ruff.bat` from the folder; a path with cmd metacharacters is not used),
+  never installs, ≤ 50 changed files, safe names only, 60 s, findings ≤ 20
+  lines / 2,000 chars attached to the edit's tool message; run as a call of
+  the turn's command tool (`shell`, `process_start` under gpt) through the
+  REAL `registry.invoke`, ledgered `called_as "project check"`, ALWAYS in
+  cmd (never Git bash); `ProjectCheckers.needs_a_person` (the v1.386.1 rule)
+  → a card even under yolo unless a grant wider than one call covers the
+  tool; ONE batch card per round under Ask first; Local only once-only;
+  never under low trust / plan mode / plain chat / after a failed edit;
+  `apply_patch` read from `patch` (Codex sessions never got a checker
+  before). `read_file(paths=[…])` ≤ 20 files / 30,000 chars, each through
+  `safe_path` + `fs_read_ok`, left-out line FIRST, never cached, a single
+  `path` byte-identical, shown only for Jarvis's own read_file (generic, gpt;
+  Claude's `Read` is one path); `registry` `required_alternatives` (a null
+  `paths` is "missing required: path"); `detections/ledger.to_events` emits
+  one event per file (a multi-read of `.env` was invisible). Harness tool
+  results keep max(12,000, min(32,000, window×4×0.25)) chars, head 2/3 +
+  tail 1/3 with a note; plain chat keeps [:12000] byte for byte (both lanes).
+  UNKNOWN TOOLS: `claude_native` `assemble` no longer raises; the call goes
+  to the lane (registry name if offered, else the model's own name minus
+  `mcp__ij__`) and the registry refuses it ("unknown tool" / "not armed");
+  `tool_use`/`tool_result` stay paired for the next request; harness turns
+  add "(The tools you can call in this reply: …)"; Codex's answer lists its
+  tools. OPEN: cmd.exe's current-folder lookup also affects the model's own
+  commands and folder checks (`NoDefaultCurrentDirectoryInExePath` is not set
+  by the app — a decision for the user: setting it breaks `script.bat` typed
+  without `.\`); a denied `shell` alone still leaves `process_start`; tsc
+  checks the whole project (≤ 60 s per editing round); worktree sessions do
+  not see the main checkout's `.venv`/`node_modules`; whether models use the
+  map and `paths` is unmeasured. Pins:
+  `tests/test_harness_{unknown_tool,multi_read,project_map,checkers,replay,phase3_review}_v1387.py`
+  (+ `tests/_fakes/harness_lane.py`, `fixtures/harness_replay_v1387.json`).
 - **The claude dialect's `Bash` RUNS IN BASH on Windows; wherever cmd.exe
   still runs a model's command, a `;` guard refuses the destructive case**
   (v1.386.2; found by the part 3 Phase 1 benchmark: 7 of Jarvis-on-Claude's 11

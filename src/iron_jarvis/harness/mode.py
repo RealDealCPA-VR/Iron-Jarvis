@@ -162,6 +162,12 @@ HARNESS_EXIT_LINES = (
 #: The ONE corrective line a turn gets when its reply wrote a tool call as text.
 TEXT_TOOL_CALL_NUDGE = "Your last reply wrote a tool call as text; call the tool itself."
 
+#: The registry's two refusals of a tool the reply does not have (part 3,
+#: Phase 3): ``unknown tool '<name>'`` (no such tool) and ``not armed: …``
+#: (a real tool this reply was not given) — ``tools/registry.invoke``'s own
+#: words, matched on their prefix like ``chat_turn.refusal_label`` does.
+_NO_SUCH_TOOL_RX = re.compile(r"^(?:unknown tool '|not armed:)")
+
 #: Real tools whose successful call changed a file (plugin checks follow them).
 EDIT_TOOLS = frozenset({"write_file", "edit_file", "multi_edit", "apply_patch", "notebook_edit"})
 
@@ -366,9 +372,18 @@ def model_specs(
             spec = {**spec, "description": spec["description"] + "\n\nHow commands run here: " + note}
         out.append(spec)
     if plan.passthrough:
+        from ..tools.builtins import multi_read_spec
+
         for s in registry.specs(list(plan.passthrough)):
             if shell_description and s.get("name") == "shell":
                 s = {**s, "description": shell_description}
+            # Part 3, Phase 3: Jarvis's OWN read_file, wherever a harness turn
+            # shows it under its own name (the generic dialect, and Codex's,
+            # which has no read tool of its own), reads several files in one
+            # call (`paths`). A vendor-shaped reader (Claude Code's `Read`,
+            # Qwen Code's `read_file`) keeps its vendor's one-file shape: none
+            # of those vendors has a multi-file read to map.
+            s = multi_read_spec(s)
             out.append(_strip_store_as(s))
     return out
 
@@ -494,6 +509,18 @@ class HarnessTurn:
         #: (Claude Code's ``Bash``) runs in on Windows (``command_env.
         #: bash_shell_description``); "" elsewhere.
         self.bash_description = ""
+        #: Part 3, Phase 3: the session folder's PROJECT MAP for this turn
+        #: (``harness/project_map.MapResult``; None = no map — not a Build
+        #: session's turn, or no folder). Per turn, like the date: rendered
+        #: by :meth:`block`, never part of the fingerprint.
+        self.project_map: Any = None
+        #: Part 3, Phase 3: the most characters ONE tool result the model
+        #: reads may hold in this turn (``chat_turn.tool_message_text``);
+        #: None = the lanes' old fixed cut.
+        self.tool_message_chars: "int | None" = None
+        #: Part 3, Phase 3: the project's OWN checkers found for this turn
+        #: (``harness/checkers.ProjectCheckers``; None = none run).
+        self.checkers: Any = None
 
     # -- the prompt --------------------------------------------------------- #
 
@@ -519,9 +546,16 @@ class HarnessTurn:
         # folder directly, so its prompt is exactly as before.
         from .branches import prompt_line as branch_line
 
+        # Part 3, Phase 3: the session folder's PROJECT MAP (harness/
+        # project_map) — per turn and per folder, so not in the fingerprint;
+        # LAST, so the stable part of the prompt above it is unchanged.
+        project_map = ""
+        _map_text = str(getattr(self.project_map, "text", "") or "")
+        if _map_text:
+            project_map = "\n\n" + _map_text
         return (
             "\n\n" + self.rendered + date + prompt_line(self.plan.gate) + prompt_section()
-            + summary_section() + branch_line()
+            + summary_section() + branch_line() + project_map
         )
 
     @staticmethod
@@ -649,9 +683,19 @@ class HarnessTurn:
     def model_text(self, call: Any, content: str) -> str:
         """The result as the model reads it. A required-argument refusal for a
         translated call is reworded in the dialect's own names (the registry's
-        words name the REAL tool's arguments, which the model never saw)."""
+        words name the REAL tool's arguments, which the model never saw).
+
+        Part 3, Phase 3: a call of a tool this reply does NOT have (the
+        registry's "unknown tool" / "not armed" refusal — e.g. Claude calling
+        ``python``) is answered with the names it CAN call, as the model was
+        shown them, so its next call is one that runs."""
         tool = self._called_tool.get(getattr(call, "id", ""))
         text = str(content)
+        if _NO_SUCH_TOOL_RX.match(text):
+            names = list(self.plan.offered_names)
+            if names:
+                return f"{text}\n(The tools you can call in this reply: {', '.join(names)}.)"
+            return text
         if tool is None or not text.startswith("missing required"):
             return text
         required = list((tool.input_schema or {}).get("required") or [])
@@ -777,6 +821,13 @@ class HarnessTurn:
         if self.plan_mode:
             # v1.367.0 (additive, only in plan mode): the turn ran read-only.
             out["mode"] = "plan"
+        if self.project_map is not None:
+            # Part 3, Phase 3 (additive, only when a map was built): its size,
+            # the share it was given and whether anything was left out.
+            try:
+                out["map"] = self.project_map.receipt()
+            except Exception:  # noqa: BLE001 — a receipt never breaks a turn
+                pass
         return out
 
 

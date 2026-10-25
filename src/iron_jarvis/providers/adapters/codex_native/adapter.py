@@ -923,10 +923,15 @@ class CodexNativeAdapter(LLMAdapter):
             namespace = p.get("namespace")
             name = s.names.ours(tool) if s.names is not None and namespace in (None, "", "functions") else None
             if p.get("threadId") != s.thread_id or name is None or not isinstance(cid, str) or not cid:
+                # Part 3, Phase 3: the refusal names the tools Codex CAN call
+                # here (the names it was given), so its next call is one that
+                # runs — as the IJ harness answers an invented name.
+                offered = sorted(set((s.names.forward if s.names is not None else {}).values()))
+                have = (" The tools you can call here: " + ", ".join(offered[:60]) + ".") if offered else ""
                 await s.respond(rid, {
                     "contentItems": [{"type": "inputText", "text": (
                         f"Iron Jarvis does not offer a tool named {str(tool)[:80]!r} in this "
-                        "conversation; nothing was run.")}],
+                        "conversation; nothing was run." + have)}],
                     "success": False,
                 })
                 return None
