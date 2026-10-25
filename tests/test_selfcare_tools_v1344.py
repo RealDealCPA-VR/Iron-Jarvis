@@ -242,12 +242,13 @@ async def test_app_health_survives_broken_readers_and_names_each(tmp_path, monke
     assert res.ok is True, res.error
     data = res.data
     broken = {u["section"]: u["error"] for u in data["unreadable"]}
-    assert set(broken) == {"recent errors", "model", "interrupted jobs"}
+    # Readiness 12A (moved on purpose): "task", never the retired "job".
+    assert set(broken) == {"recent errors", "model", "interrupted tasks"}
     for err in broken.values():
         assert err.startswith("RuntimeError: ring exploded")
         assert "abc123planted" not in err  # masked even on the error path
     assert "Could not read: " in res.output
-    for section in ("recent errors", "model", "interrupted jobs"):
+    for section in ("recent errors", "model", "interrupted tasks"):
         assert section in res.output
     # The rest still answered.
     assert "recent_errors" not in data and "model" not in data and "interrupted_sessions" not in data

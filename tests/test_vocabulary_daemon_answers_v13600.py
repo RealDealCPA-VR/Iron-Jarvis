@@ -67,6 +67,17 @@ FULL_READ: tuple[Path, ...] = (
     SRC / "daemon" / "schemas.py",
     SRC / "connectors" / "service.py",
     *sorted((SRC / "assignments").glob("*.py")),
+    # Readiness 12A: the files that now hold person-facing sentences of the
+    # wave — a failed run's plain words (the run page, Schedules, the bell,
+    # the phone), the one Sign in sentence, the card / work-line / run-log
+    # words every built-in reads in, Jarvis's own health answers and a
+    # stopped scheduled workflow's row — read in full, not only at answer
+    # positions, so a retired word in a new sentence fails the day it lands.
+    SRC / "providers" / "failure_words.py",
+    SRC / "providers" / "cli_auth.py",
+    SRC / "agents" / "mission.py",
+    SRC / "tools" / "selfcare.py",
+    SRC / "scheduling" / "run_outcome.py",
 )
 
 #: Keys whose value is something a person reads.
@@ -132,6 +143,14 @@ ALLOW: list[tuple[str, str, str]] = [
     ("src/iron_jarvis/daemon/routes/chat.py", "Connector tools the user toggled on", _MODEL + " (the chat's tools section)"),
     ("src/iron_jarvis/onboarding/doctor.py", "check daemon.log for the boot error", _FILE),
     ("src/iron_jarvis/onboarding/doctor.py", "daemon.log has the error", _FILE),
+    # Readiness 12A: tools/selfcare.py is read in full now; its tools'
+    # descriptions and argument help are what the MODEL reads (the tool names
+    # pack_status / pack_restart are the wire).
+    ("src/iron_jarvis/tools/selfcare.py", "How Iron Jarvis itself is doing, in plain words plus data", _MODEL + " (app_health's description)"),
+    ("src/iron_jarvis/tools/selfcare.py", "The state of one tool pack (an MCP server)", _MODEL + " (pack_status's description)"),
+    ("src/iron_jarvis/tools/selfcare.py", "The pack's name as listed under Settings > Tools.", _MODEL + " (the pack argument's help)"),
+    ("src/iron_jarvis/tools/selfcare.py", "Restart ONE tool pack (an MCP server)", _MODEL + " (pack_restart's description)"),
+    ("src/iron_jarvis/tools/selfcare.py", "Run the app's runtime checks (a model is connected", _MODEL + " (run_doctor's description)"),
 ]
 
 _P = "not lane 10C's file this wave: the integrator rewords it from lane 10C's notes and deletes this entry"

@@ -376,11 +376,13 @@ class AppHealthTool(Tool):
         try:
             data["interrupted_sessions"] = read_interrupted_count(platform)
             n = data["interrupted_sessions"]
+            # Readiness 12A: "task", never the retired "job" (VOCABULARY.md).
             lines.append(
-                f"Interrupted jobs offered Continue: {n}." if n else "No interrupted jobs."
+                f"Tasks a restart cut off, offered Continue: {n}." if n
+                else "No tasks were cut off by a restart."
             )
         except Exception as exc:  # noqa: BLE001
-            broken("interrupted jobs", exc)
+            broken("interrupted tasks", exc)
 
         # --- the doctor's runtime rows that are not ok ---------------------
         try:
