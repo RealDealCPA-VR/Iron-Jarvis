@@ -162,6 +162,11 @@ LINE_KEYS: tuple[str, ...] = (
     # reply that did: {from, fromName, to, toName, group} — "<A> reached its
     # limit; carried on with <B> (same group)".
     "accountMove",
+    # v1.397.0 (try one task on several models, ``harness/attempts``): on the
+    # reply of a "try this with A, B and C" turn, the ATTEMPTS card — each
+    # attempt's model, account, branch, tests, files, time and usage, why it
+    # stopped, and (once the user pressed Keep) which one was kept.
+    "attempts",
 )
 
 
@@ -635,6 +640,93 @@ def cut_transcript(engine: Any, thread_id: str, turn_id: str, keep: int, cut_at:
     except Exception:  # noqa: BLE001 — the route reports it in words
         log.warning("cutting build session %s's transcript failed", thread_id, exc_info=True)
         return {"ok": False, "reason": "the conversation could not be saved"}
+
+
+def amend_reply(engine: Any, thread_id: str, turn_id: str, changes: dict[str, Any], *,
+                expect: Any = None) -> bool:
+    """v1.397.0 (``harness/attempts``): change keys of turn ``turn_id``'s
+    REPLY line (the assistant line carrying that ``turnId``) in ONE write
+    under the conversation lock — whitelisted to :data:`LINE_KEYS` like every
+    line (an explicit ``None`` removes a key). ``expect(line)`` (optional) is
+    asked first, on the line AS STORED NOW: False leaves everything as it was
+    (the line moved since the caller read it — Keep pressed in two windows).
+    ``updated_at`` moves the monotonic way (the screen re-reads). False when
+    there is no such session or line, or ``expect`` said no. BLOCKING; never
+    raises."""
+    try:
+        with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+            row = db.get(ChatThreadRecord, str(thread_id or ""))
+            if row is None or not is_build_thread(row):
+                return False
+            msgs = _messages(row)
+            at = next(
+                (i for i in range(len(msgs) - 1, -1, -1)
+                 if msgs[i].get("role") == "assistant" and msgs[i].get("turnId") == turn_id),
+                None,
+            )
+            if at is None:
+                return False
+            if expect is not None and not expect(dict(msgs[at])):
+                return False
+            line = dict(msgs[at])
+            for key, value in (changes or {}).items():
+                if key not in LINE_KEYS or key in ("role", "turnId"):
+                    continue
+                if value is None:
+                    line.pop(key, None)
+                else:
+                    line[key] = value
+            cleaned = _clean_line(line, str(line.get("at") or utcnow().isoformat()))
+            if cleaned is None:
+                return False
+            msgs[at] = cleaned
+            row.messages_json = json.dumps(msgs)
+            row.updated_at = _next_stamp(row.updated_at)
+            db.add(row)
+            db.commit()
+            return True
+    except Exception:  # noqa: BLE001 — the caller says it could not be saved
+        log.warning("amending build session %s's reply %s failed", thread_id, turn_id, exc_info=True)
+        return False
+
+
+def adopt_branch(engine: Any, thread_id: str, facts: dict[str, Any], folder: str, *,
+                 was_folder: str) -> bool:
+    """v1.397.0 (``harness/attempts`` Keep, for a session that worked in its
+    folder DIRECTLY): the session moves onto the kept attempt's own branch —
+    ``setup.git`` becomes that attempt's facts (whose ``checkout`` is the
+    folder the user picked, so the session keeps its group, its project and
+    its name) and its working folder becomes the attempt's worktree copy of
+    that folder. The user's main checkout is not touched: the work joins the
+    session on a branch of its own, which the Branch pane then offers to merge
+    as it does for any session on a branch. ONE locked write, refused (False)
+    unless the session still has no branch and still works in ``was_folder``.
+    BLOCKING; never raises."""
+    from ..daemon.routes.chat import _clean_setup
+    from .branches import SETUP_KEY, clean_git_record
+
+    record = clean_git_record(facts)
+    if record is None or not str(folder or "").strip():
+        return False
+    try:
+        with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+            row = db.get(ChatThreadRecord, str(thread_id or ""))
+            if row is None or not is_build_thread(row):
+                return False
+            setup = _setup(row)
+            if clean_git_record(setup.get(SETUP_KEY)) is not None:
+                return False
+            if str(setup.get("workspace_dir") or "").strip() != str(was_folder or "").strip():
+                return False
+            setup[SETUP_KEY] = record
+            setup["workspace_dir"] = str(folder)
+            row.setup_json = _clean_setup(setup)
+            db.add(row)
+            db.commit()
+            return True
+    except Exception:  # noqa: BLE001
+        log.warning("moving build session %s onto a kept branch failed", thread_id, exc_info=True)
+        return False
 
 
 class BranchRefused(ValueError):
