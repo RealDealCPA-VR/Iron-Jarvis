@@ -392,8 +392,10 @@ describe("an agent's card on the Agents page", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Save/ }));
     await waitFor(() => expect(hooks.patches).toHaveLength(1));
     expect(hooks.patches[0].body).not.toHaveProperty("roles");
-    // A touched one sends them.
-    fireEvent.click(screen.getByTitle(/Edit the persona of "codex-coder"/));
+    // A touched one sends them. The PATCH is recorded when it is SENT; the
+    // editor closes (and the Edit button comes back) only after it ANSWERS,
+    // so wait for the button itself (v1.398.0's Tests gate clicked first).
+    fireEvent.click(await screen.findByTitle(/Edit the persona of "codex-coder"/, {}, { timeout: 10_000 }));
     const roles = within(screen.getByTestId("team-roles-codex-coder"));
     fireEvent.click(roles.getByTestId("team-role-codex-coder-read"));
     fireEvent.click(screen.getByRole("button", { name: /^Save/ }));

@@ -3766,6 +3766,14 @@ does not need a bump, stop and bump it.
   `tests/test_night_shift{,_run,_waits,_review,_outside,_editable,_window,
   _limits,_attempts}_v1398.py`, `dashboard/__tests__/tonight{,-review}-v1398.test.tsx`, e2e
   `dashboard/e2e/ij-harness-tonight.spec.ts`.
+  v1.398.1 (test-only): v1.398.0's Tests gate went red (Release passed and
+  published) on `model-team-v1394` "says its team roles, and edits them" —
+  the mocked PATCH is recorded when it is SENT, but SetupCard closes the
+  editor (and the Edit button comes back) only after it ANSWERS, and the
+  test pressed Edit straight after the record. It now waits for the button
+  itself (`findByTitle`). Holding the mocked save 300 ms reproduced CI's
+  exact "Unable to find an element with the title" on the old shape; the new
+  shape passes with it held.
 - **TRY ON SEVERAL MODELS: up to three attempts, each its own branch, worktree,
   model and account; opt-in by the user's words or the Try on… chip only; Keep
   lands one** (v1.397.0, Phase 5 Part B of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`
