@@ -3418,6 +3418,14 @@ async def chat_stream(
     # other turn (chat, the sidebar, the benchmark, POST /chat): none of it.
     _coding_session = reply_record is not None
     _step_turn = str(getattr(body, "turn_id", "") or "").strip()
+    # v1.398.0 (night shift N1, decision 1): the NIGHT TASK this turn belongs
+    # to (``harness/night.NightTurn``, armed by ``routes/build.
+    # start_build_turn`` and the attempts' start while the driver task is
+    # made) — its cards wait the night's card wait, then that step is
+    # declined. None for every other turn: nothing below changes for it.
+    from ...harness import night as _night_mod
+
+    _night_turn = _night_mod.current()
     from ...tools.base import ToolResult as _ToolResult
 
     # (The 400 for empty messages is `_eager_checks`, run by
@@ -5420,9 +5428,13 @@ async def chat_stream(
                                     d.platform, _grant_scopes, _trust_state, tc.name
                                 ) and not _local_ask and not _spend_card and not _once_only,
                                 # 0 = no expiry (v1.247.0): the turn waits
-                                # for the person it asked.
+                                # for the person it asked. v1.398.0: a night
+                                # task's card waits the night's card wait,
+                                # then that step is declined (decision 1).
                                 "timeout_s": (
-                                    max(1, int(CHAT_ASK_TIMEOUT_S))
+                                    max(1, int(_night_turn.card_wait_s))
+                                    if _night_turn is not None
+                                    else max(1, int(CHAT_ASK_TIMEOUT_S))
                                     if CHAT_ASK_TIMEOUT_S else 0
                                 ),
                             }
@@ -5490,7 +5502,9 @@ async def chat_stream(
                             _stopped = False
                             _aloop = asyncio.get_running_loop()
                             _deadline = (
-                                _aloop.time() + CHAT_ASK_TIMEOUT_S
+                                _aloop.time() + _night_turn.card_wait_s
+                                if _night_turn is not None
+                                else _aloop.time() + CHAT_ASK_TIMEOUT_S
                                 if CHAT_ASK_TIMEOUT_S else None
                             )
                             _beat = _aloop.time()
@@ -5646,6 +5660,16 @@ async def chat_stream(
                             _plan["card_deny"] = (
                                 "you declined this call when asked"
                             )
+                        elif _night_turn is not None:
+                            # v1.398.0 (night shift N1, decision 1): nobody
+                            # answered a night task's card — this step is
+                            # declined (a safety card the same way, never
+                            # allowed), the model is told in plain words and
+                            # carries on, and the night record keeps it for
+                            # the morning ("needs you").
+                            _nwhat = _night_mod.call_words(tc.name)
+                            _plan["card_deny"] = _night_turn.declined_words(_nwhat)
+                            _night_turn.note("declined", _night_turn.note_words(_nwhat))
                         else:
                             _plan["card_deny"] = (
                                 "the approval request timed out with no"

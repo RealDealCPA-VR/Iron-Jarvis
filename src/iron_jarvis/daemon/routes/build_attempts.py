@@ -93,12 +93,26 @@ def _undo(made: list[dict[str, str]], sha: str) -> None:
                           got.get("branch", ""), sha)
 
 
-async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any) -> Any:
+async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any, *,
+                      started_by: str = "person") -> Any:
     """Start the attempts turn and return its ``TurnLog`` — or None when the
     message asks for no attempts. Raises ``routes/build.SessionBusy`` (a
     turn runs), ``HTTPException`` in words (every refusal, before anything
-    started)."""
+    started).
+
+    v1.398.0 (night shift N1): ``started_by`` — ``"night"`` when a night task
+    asks to try its work on several models: refused while Emergency stop is
+    on, run under the night posture and the night wait (``harness/night``,
+    the attempts' tasks copy it), and listed so Emergency stop stops it."""
     from ...agents import model_team as MT
+    from ...harness import night as _night
+
+    if started_by != _night.BY_PERSON:
+        from ...agents.orchestrator import emergency_stop_on
+        from .build import UNATTENDED_REFUSAL
+
+        if emergency_stop_on(getattr(d.platform, "config", None)):
+            raise HTTPException(status_code=409, detail=UNATTENDED_REFUSAL)
     from ...projects.locate import project_for_path
     from ..schemas import ChatMessageBody
     from .build import (
@@ -136,6 +150,13 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
         if getattr(row, "archived_at", None) is not None:
             raise HTTPException(status_code=409, detail=ARCHIVED_SENTENCE)
         setup = _setup_of(row)
+        night_task = None
+        if started_by != _night.BY_PERSON:
+            night_task = await asyncio.to_thread(_night.running_task_for, platform.engine, thread_id)
+        if night_task is not None:
+            # v1.398.0: the night posture for every attempt (their bodies and
+            # the shared cap read the plan's setup).
+            setup = _night.posture_setup(setup, platform.config)
         local_only = setup.get("local_only") is True
         project = await asyncio.to_thread(project_for_path, platform.engine, S.checkout_of(row))
         session_pair = _turn_pair(platform, SimpleNamespace(
@@ -214,12 +235,32 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
         if not saved.get("ok"):
             raise HTTPException(status_code=404, detail="no such Build session")
         logs = _turn_logs(d)
-        lg = logs.start(turn_id, thread_id, recorded_turn(
-            platform.engine, thread_id, turn_id,
-            A.run_attempts(platform, getattr(d, "_PERSONAS", {}), plan),
-            platform=platform, no_limit=no_limit,
-        ))
+        # v1.398.0: a night task's attempts run under the night wait — armed
+        # while the driver task is created (each attempt's context copies it).
+        night_token = (
+            _night.set_turn(_night.NightTurn(
+                task_id=str(night_task["id"]), card_wait_s=_night.card_wait_seconds(platform.config),
+                engine=platform.engine,
+            ))
+            if night_task is not None else None
+        )
+        try:
+            lg = logs.start(turn_id, thread_id, recorded_turn(
+                platform.engine, thread_id, turn_id,
+                A.run_attempts(platform, getattr(d, "_PERSONAS", {}), plan),
+                platform=platform, no_limit=no_limit,
+            ))
+        finally:
+            if night_token is not None:
+                _night.reset_turn(night_token)
         lg.surface = "build"
+        if started_by != _night.BY_PERSON:
+            _night.note_unattended_turn(turn_id, thread_id, started_by)
+            with contextlib.suppress(Exception):
+                lg.task.add_done_callback(lambda _t, _tid=turn_id: _night.forget_unattended_turn(_tid))
+                from .night import wake_night_loop
+
+                lg.task.add_done_callback(lambda _t: wake_night_loop())
         started = True
         return lg
     finally:

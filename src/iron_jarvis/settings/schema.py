@@ -151,6 +151,13 @@ def _range(lo: float, hi: float | None = None) -> Callable[[Any], None]:
     return check
 
 
+def _night_time(v: Any) -> None:
+    """v1.398.0: a night-window time ("23:00")."""
+    from ..harness.night_window import check_time
+
+    check_time(v)
+
+
 #: v1.393.0: the Group choice's own words (the Iron-Proxy card says them too —
 #: dashboard/lib/ironProxy.ts ``GROUP_HELP``, pinned equal).
 ACCOUNT_GROUPS_HELP = (
@@ -420,6 +427,34 @@ SETTINGS: tuple[SettingDef, ...] = (
       "itself; the card waits for you to press Resume when ready.",
       tier="allow",
       aliases=("resume when ready", "auto resume", "account limit", "carry on after a limit")),
+    # v1.398.0 (night shift N1, harness/night): the queue in Coding sessions ›
+    # Tonight is the opt-in; these say WHEN and HOW MUCH. Allow tier: none of
+    # them lets a task do more than its own branch folder (the safety floors
+    # are not settings), and a shorter window or limit only does less.
+    S("night_window_start", "Night tasks start at", "automation", "string",
+      "Tasks in Coding sessions › Tonight start from this time (24-hour, like 23:00), each on its own "
+      "branch. A task not started before the window ends waits for the next night.",
+      tier="allow", section="Night shift", check=_night_time, placeholder="23:00",
+      aliases=("night window", "night shift start", "tonight starts")),
+    S("night_window_end", "Night tasks stop starting at", "automation", "string",
+      "No new night task starts after this time (24-hour, like 07:00). A task already running "
+      "finishes under its own time limit.",
+      tier="allow", section="Night shift", check=_night_time, placeholder="07:00",
+      aliases=("night window end", "night shift end")),
+    S("night_max_at_once", "Night tasks at once", "automation", "number",
+      "How many night tasks may run at the same time. Never two in the same folder.",
+      tier="allow", section="Night shift", check=_range(1, 8),
+      aliases=("night tasks at once", "night shift at once")),
+    S("night_task_minutes", "Time limit per night task (minutes)", "automation", "number",
+      "A night task stops after this many minutes and says what it got done.",
+      tier="allow", section="Night shift", check=_range(5, 1440),
+      aliases=("night task limit", "night time limit")),
+    S("night_card_wait_minutes", "Wait for an answer at night (minutes)", "automation", "number",
+      "When a night task needs your OK, it waits this long (your phone gets the question, if a phone "
+      "channel is set up). Then that one step is skipped, the task carries on with the rest, and the "
+      "step is listed as needing you.",
+      tier="allow", section="Night shift", check=_range(1, 240),
+      aliases=("night card wait", "night question wait")),
     # v1.350.0: an agent's plan, shown before any step runs. Turning it OFF
     # from chat asks every time (a model must not quietly drop the check).
     S("plan_approval", "Ask me to approve an agent's plan before it starts", "automation", "bool",

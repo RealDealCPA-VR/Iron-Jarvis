@@ -96,6 +96,14 @@ RUNNING_SENTENCE = (
     "This session is still answering. Steer it, queue your message, or stop it first."
 )
 ARCHIVED_SENTENCE = "This session is archived. Bring it back before you continue it."
+#: v1.398.0 (night shift N1): a coding turn Iron Jarvis would start BY ITSELF
+#: (a night task, Resume when ready, a reply carried on after a restart)
+#: while Emergency stop is on.
+UNATTENDED_REFUSAL = (
+    "Emergency stop is on, so coding work that starts on its own (night tasks, Resume when ready, "
+    "a reply carried on after a restart) cannot start. Turn it off on the Autonomy page to let it "
+    "run again."
+)
 #: v1.381.0 review: a project's or a plugin's command whose shell lines could
 #: not be kept on the session is not started — its carry-on (and every later
 #: turn's match) reads ONLY that record, so a turn that ran without it would
@@ -2291,7 +2299,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            continuation: bool = False,
                            resume_of: "dict[str, Any] | None" = None,
                            resume_turn: str = "",
-                           account_move: "dict[str, Any] | None" = None) -> Any:
+                           account_move: "dict[str, Any] | None" = None,
+                           started_by: str = "person",
+                           model_note: str = "") -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
     (follow it with ``lg.follow()``; nobody has to). The question is written
     when the turn starts, the reply when it ends (:func:`recorded_turn`).
@@ -2355,13 +2365,32 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     in the SAME locked write that takes the wait (``take_wait(then=)``), so a
     Cancel, a Choose account or the user's own message that landed meanwhile
     moves nothing and starts nothing. The question line and the reply line
-    keep ``accountMove``."""
+    keep ``accountMove``.
+
+    v1.398.0 (night shift N1): ``started_by`` — who started this turn: a
+    person (``"person"``, every route), or Iron Jarvis by itself (``"night"``
+    a night task, ``"wait"`` Resume when ready / a move within a group,
+    ``"restart"`` a reply carried on after a restart). A turn Iron Jarvis
+    starts by itself is refused while Emergency stop is on
+    (:data:`UNATTENDED_REFUSAL`), and is listed while it runs so Emergency
+    stop stops it (``harness/night.note_unattended_turn``). A turn of a
+    session whose NIGHT TASK is running (and not started by a person) runs
+    under the night posture (``night.posture_setup``) and the night wait
+    (``night.NightTurn``, armed like the pin). ``model_note`` — words the
+    MODEL is sent after the question (the question line shows ``text``
+    alone): a night task's "use your team"."""
     from .chat import _turn_logs
+    from ...harness import night as _night
     from ...harness import reply_record as RR
     from ...iron_proxy.pin import reset_pin, set_pin
 
     platform = d.platform
     logs = _turn_logs(d)
+    if started_by != _night.BY_PERSON:
+        from ...agents.orchestrator import emergency_stop_on
+
+        if emergency_stop_on(getattr(platform, "config", None)):
+            raise HTTPException(status_code=409, detail=UNATTENDED_REFUSAL)
     # v1.373.0 review: a blank entry is no upload (it was counted, saved on
     # the question and silently skipped by the lane).
     attachments = [str(a) for a in (attachments or []) if str(a or "").strip()]
@@ -2514,6 +2543,16 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 )
             playbook = got
         setup = _setup_of(row)
+        # v1.398.0 (night shift N1, decision 4): a turn Iron Jarvis started
+        # by itself in a session whose night task is running runs under the
+        # night posture — "Don't ask" with the command tools granted and the
+        # task's time limit as the reply's cap — for THIS turn only (nothing
+        # is stored: the user's own messages in the morning run as before).
+        night_task = None
+        if started_by != _night.BY_PERSON:
+            night_task = await asyncio.to_thread(_night.running_task_for, platform.engine, thread_id)
+        if night_task is not None:
+            setup = _night.posture_setup(setup, platform.config)
         # v1.391.0: a reply a restart cut off, carried on (the boot's pass).
         resume: "dict[str, Any] | None" = None
         if resume_turn:
@@ -2607,6 +2646,10 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         if resume is not None:
             # The question exactly as the model was sent it (its kept form).
             model_text = str(getattr(resume["question"], "content", "") or "")
+        elif model_note.strip():
+            # v1.398.0: words for the MODEL only (a night task's "use your
+            # team"); the question line keeps what was asked.
+            model_text = (model_text + "\n\n" + model_note.strip()).strip()
         chat_body = ChatBody(
             messages=[*history, ChatMessageBody(role="user", content=model_text)],
             provider=account_provider or str(setup.get("provider") or ""),
@@ -2691,6 +2734,16 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         surface_token = _failure_words.set_build_surface()
         # v1.381.0: the command rule (read above), armed last and reset first.
         command_token = _cmd_shell.set_turn_rule(command_rule)
+        # v1.398.0 (night shift N1, decision 1): a night task's turn — its
+        # questions wait the night's card wait, then that step is declined.
+        # Armed only for one (every other turn: nothing set at all).
+        night_token = (
+            _night.set_turn(_night.NightTurn(
+                task_id=str(night_task["id"]), card_wait_s=_night.card_wait_seconds(platform.config),
+                engine=platform.engine,
+            ))
+            if night_task is not None else None
+        )
         # v1.384.0: the reply's step limit — none by default (the safety
         # stop), else the user's number.
         rounds, no_limit = build_step_limit(platform.config)
@@ -2766,8 +2819,20 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # skips a running session).
             with contextlib.suppress(Exception):
                 lg.task.add_done_callback(lambda _t: wake_wait_loop())
+            # v1.398.0: a turn Iron Jarvis started by itself is listed while
+            # it runs (Emergency stop reaches it), and the night loop looks
+            # again the moment it ends.
+            if started_by != _night.BY_PERSON:
+                _night.note_unattended_turn(turn_id, thread_id, started_by)
+                with contextlib.suppress(Exception):
+                    lg.task.add_done_callback(lambda _t, _tid=turn_id: _night.forget_unattended_turn(_tid))
+                    from .night import wake_night_loop
+
+                    lg.task.add_done_callback(lambda _t: wake_night_loop())
             started = True
         finally:
+            if night_token is not None:
+                _night.reset_turn(night_token)
             _cmd_shell.reset_turn_rule(command_token)
             _failure_words.reset_surface(surface_token)
             _branches.reset_turn_branch(branch_token)
@@ -2880,7 +2945,7 @@ async def _move_within_group(d: Any, thread_id: str, setup: dict[str, Any],
     try:
         lg = await start_build_turn(
             d, thread_id, CONTINUE_TEXT, turn_id, continuation=True, resume_of=wait,
-            account_move={"patch": patch, "line": line},
+            account_move={"patch": patch, "line": line}, started_by="wait",
         )
     except (SessionBusy, WaitEnded):
         return "raced"
@@ -2932,6 +2997,13 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
     svc = _svc_of(platform)
     if svc is None or not getattr(svc, "enabled", False):
         return []
+    from ...agents.orchestrator import emergency_stop_on
+
+    if emergency_stop_on(getattr(platform, "config", None)):
+        # v1.398.0 (night shift N1): nothing carries on by itself while
+        # Emergency stop is on — the waits stay (they survive like any wait)
+        # and are looked at again once it is turned off.
+        return []
     engine = platform.engine
     waits = await asyncio.to_thread(S.waiting_sessions, engine)
     when = now or utcnow()
@@ -2968,7 +3040,7 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
                     # after the continuation began (it would wipe the card
                     # that turn's own limit wrote).
                     lg = await start_build_turn(d, thread_id, CONTINUE_TEXT, turn_id, continuation=True,
-                                                resume_of=wait)
+                                                resume_of=wait, started_by="wait")
                 except (SessionBusy, WaitEnded):
                     continue
                 except HTTPException as exc:
@@ -3155,6 +3227,14 @@ async def resume_after_restart(d: Any) -> list[str]:
     if not found:
         return []
     await _ready_for_resume(platform)
+    from ...agents.orchestrator import emergency_stop_on
+
+    if emergency_stop_on(getattr(platform, "config", None)):
+        # v1.398.0 (night shift N1): Emergency stop is on — nothing carries
+        # on by itself. The kept conversations stay (Retry is still on the
+        # page; the next boot with the stop off may carry them on).
+        log.info("not carrying on %d cut-off coding repl(ies): Emergency stop is on", len(found))
+        return []
     logs = _turn_logs(d)
     resumed: list[str] = []
     for rec in found:
@@ -3169,7 +3249,7 @@ async def resume_after_restart(d: Any) -> list[str]:
         new_turn = "bt_" + secrets.token_hex(8)
         try:
             lg = await start_build_turn(d, thread_id, RR.RESUME_QUESTION, new_turn,
-                                        continuation=True, resume_turn=turn_id)
+                                        continuation=True, resume_turn=turn_id, started_by="restart")
         except ResumeGone:
             # Another resume took it (then this drop finds nothing), or what
             # was kept cannot be used (its question is under a summary now):
@@ -3340,46 +3420,58 @@ async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
 # --------------------------------------------------------------------------- #
 
 
-async def _create_on_branch(d: Any, folder: str, body: Any, setup: dict[str, Any],
-                            engine_of: Any, full_view: Any) -> Any:
-    """A NEW session in ``folder`` on its own branch ``ij/<name>`` in a
-    worktree beside the repository (``harness/branches.start`` — the user's
-    decisions 1 and 2). A folder that is not in a repository (or git not
-    installed) is a session in the folder, exactly as before. ``body.branch``
-    True: a folder that cannot have a branch is refused in words; None: it
-    works in the folder and the answer says why (``branch_note``). Every git
-    call is off the loop."""
+class CreateRefused(Exception):
+    """A new session was refused in words (:func:`create_session_row`):
+    ``status`` (the route's answer) and, from git, its own ``details``."""
+
+    def __init__(self, message: str, status: int = 400, details: str = "") -> None:
+        super().__init__(message)
+        self.status = status
+        self.details = details
+
+
+async def create_session_row(d: Any, folder: str, *, title: str, setup: dict[str, Any],
+                             branch: "bool | None") -> "tuple[Any, str]":
+    """THE ONE CREATE PATH for a session in ``folder`` (v1.398.0, lifted out
+    of the route so the night loop makes its sessions exactly as New session
+    does): on its own branch ``ij/<name>`` in a worktree beside the
+    repository (``harness/branches.start`` — the user's decisions 1 and 2)
+    when ``branch`` allows it. A folder that is not in a repository (or git
+    not installed) is a session in the folder, exactly as before. ``branch``
+    True: a folder that cannot have a branch is refused in words
+    (:class:`CreateRefused`); None: it works in the folder and the second
+    value says why ("" otherwise); False: the folder directly, no git call.
+    Every git call is off the loop. Answers ``(row, branch_note)``."""
     from ...harness import branches as B
 
+    engine = d.platform.engine
+    if branch is False:
+        row = await asyncio.to_thread(S.create, engine, folder, title, setup)
+        return row, ""
     info = await asyncio.to_thread(B.inspect_folder, folder)
     if not info["repo"]:
-        if body.branch is True:
-            raise HTTPException(status_code=400, detail=info["note"] or B.NOT_A_REPO)
-        row = await asyncio.to_thread(S.create, engine_of(), folder, body.title, setup)
-        return await asyncio.to_thread(full_view, row)
+        if branch is True:
+            raise CreateRefused(info["note"] or B.NOT_A_REPO, 400)
+        row = await asyncio.to_thread(S.create, engine, folder, title, setup)
+        return row, ""
     if not info["can_branch"]:
-        if body.branch is True:
-            raise HTTPException(status_code=400, detail=info["note"])
-        row = await asyncio.to_thread(S.create, engine_of(), folder, body.title, setup)
-        view = await asyncio.to_thread(full_view, row)
-        view["branch_note"] = info["note"]
-        return view
+        if branch is True:
+            raise CreateRefused(info["note"], 400)
+        row = await asyncio.to_thread(S.create, engine, folder, title, setup)
+        return row, str(info["note"] or "")
     try:
-        started = await asyncio.to_thread(B.start, folder, title=body.title)
+        started = await asyncio.to_thread(B.start, folder, title=title)
     except B.GitRefused as exc:
-        content: dict[str, Any] = {"detail": str(exc)}
-        if exc.details:
-            content["details"] = exc.details
-        return JSONResponse(status_code=exc.status, content=content)
+        raise CreateRefused(str(exc), exc.status, exc.details or "") from None
     work = started.pop("folder")
     problem = await asyncio.to_thread(S.folder_problem, work)
     if problem:
         with contextlib.suppress(Exception):
             await asyncio.to_thread(B.remove_worktree, d.platform.config.home, started)
-        raise HTTPException(status_code=400, detail=f"The session's worktree cannot be used: {problem}")
+        raise CreateRefused(f"The session's worktree cannot be used: {problem}", 400)
     try:
         row = await asyncio.to_thread(
-            S.create, engine_of(), work, body.title, {**setup, B.SETUP_KEY: started},
+            S.create, engine, work, title, {**setup, B.SETUP_KEY: started},
         )
     except Exception:
         # The session could not be saved: its worktree goes to the trash (the
@@ -3387,7 +3479,29 @@ async def _create_on_branch(d: Any, folder: str, body: Any, setup: dict[str, Any
         with contextlib.suppress(Exception):
             await asyncio.to_thread(B.remove_worktree, d.platform.config.home, started)
         raise
-    return await asyncio.to_thread(full_view, row)
+    return row, ""
+
+
+async def _create_on_branch(d: Any, folder: str, body: Any, setup: dict[str, Any],
+                            engine_of: Any, full_view: Any) -> Any:
+    """``POST /build/sessions``'s branch path (v1.375.0) over
+    :func:`create_session_row`: the same answers as before — a refusal from
+    git keeps its own status and ``details``; any other refusal is a 400;
+    a folder that cannot have a branch (``branch`` None) says why in
+    ``branch_note``."""
+    try:
+        row, note = await create_session_row(d, folder, title=body.title, setup=setup, branch=body.branch)
+    except CreateRefused as exc:
+        if exc.details or exc.status != 400:
+            content: dict[str, Any] = {"detail": str(exc)}
+            if exc.details:
+                content["details"] = exc.details
+            return JSONResponse(status_code=exc.status, content=content)
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    view = await asyncio.to_thread(full_view, row)
+    if note:
+        view["branch_note"] = note
+    return view
 
 
 # --------------------------------------------------------------------------- #

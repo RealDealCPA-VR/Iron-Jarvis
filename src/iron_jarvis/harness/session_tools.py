@@ -54,6 +54,12 @@ NOBODY_TO_ASK = (
 STOPPED_BEFORE_ANSWER = "The turn was stopped before the user answered your question."
 #: ...when the user chose not to answer.
 SKIPPED = "The user skipped the question. Decide yourself and say what you assumed."
+#: v1.398.0 (night shift N1): the answer to a NIGHT task's question nobody
+#: answered in the night's wait.
+UNANSWERED_AT_NIGHT = (
+    "Nobody answered: this task runs at night with nobody watching. Do not ask again. Decide "
+    "yourself, carry on with the rest of the task, and say at the end what you assumed."
+)
 #: What exit_plan_mode's result tells the model after the user's Allow.
 PLAN_APPROVED = (
     "The user approved your plan. This turn stays read-only; from the user's "
@@ -230,6 +236,10 @@ class AskUserTool(Tool):
             )
         if outcome == "skipped":
             return ToolResult(ok=True, output=SKIPPED, data={"skipped": True})
+        if outcome == "unanswered":
+            # v1.398.0 (night shift N1): a night task's question nobody
+            # answered in the night's wait (``harness/night``).
+            return ToolResult(ok=True, output=UNANSWERED_AT_NIGHT, data={"unanswered": True})
         return ToolResult(ok=False, error=STOPPED_BEFORE_ANSWER)
 
 

@@ -285,9 +285,12 @@ def _session_path() -> "str | None":
     """The PATH a Build session's commands run with (``sandbox/native.
     build_env`` — the user's own)."""
     try:
-        from ..sandbox.native import build_env
+        # v1.398.0 (night shift N1, decision 3): in a session on its own
+        # branch, the MAIN folder's .venv / node_modules/.bin come first —
+        # the PATH the session's commands really run with.
+        from ..sandbox.native import build_turn_env
 
-        env = build_env()
+        env = build_turn_env()
         key = next((k for k in env if k.upper() == "PATH"), "PATH")
         return env.get(key)
     except Exception:  # noqa: BLE001

@@ -65,11 +65,13 @@ def command_env(modify_env: str, session_id: Any) -> "dict[str, str] | None":
     """The ``env`` a command of ``session_id`` is spawned with: ``None``
     (inherit the daemon's, unchanged) unless the policy says ``deny``; then
     the Build environment for a Build session, else the scrubbed one."""
-    from ..sandbox.native import build_env, scrubbed_env
+    from ..sandbox.native import build_turn_env, scrubbed_env
 
     if str(modify_env or "deny") != "deny":
         return None
-    return build_env() if is_build_call(session_id) else scrubbed_env()
+    # v1.398.0: a session on its own branch also finds its main folder's
+    # .venv / node_modules (sandbox/native.build_turn_env, harness/main_env).
+    return build_turn_env() if is_build_call(session_id) else scrubbed_env()
 
 
 def build_shell_description(os_name: "str | None" = None) -> str:
