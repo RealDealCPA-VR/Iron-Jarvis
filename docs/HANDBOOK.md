@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.389.0 (2026-10-25).*
+holds itself to. Current as of v1.390.0 (2026-10-25).*
 
 ---
 
@@ -1897,6 +1897,34 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## See where a coding reply's time and money went: the Timeline (v1.390.0)
+
+A coding session has a **Timeline** tab, right after Plan. It draws a reply as
+bars on one time axis.
+
+- **At the top:** how long the reply took, what it cost, the tokens, the model
+  calls, the steps and the failed steps. Money from a Claude or ChatGPT plan
+  says "list price", as on the receipt. A helper's own use is on its own line
+  and is never added to the reply's.
+- **The rows:**
+  - the model you talk to: one bar, with each of its model calls as a piece
+    of it;
+  - every step, in the same words as the steps under the reply ("Read
+    app.py");
+  - Iron Jarvis's own checks (the finish check, a project check), marked as
+    checks, not as the model's work;
+  - each helper, with its model and its steps.
+  Steps that ran at the same time overlap.
+- **Press a bar, or tab to it,** for its card: when it started, how long it
+  took, its tokens and cost. A step's card also shows what went in and what
+  came out; these are kept for the first 60 steps of a reply.
+- **Which reply:** a reply that is running draws live (a **Live** badge). A
+  picker shows earlier replies. A reply from before this version, or one that
+  stopped before any work, says why it has no timeline.
+
+"Worked for" under a coding reply now measures the same length as the
+Timeline. For now a helper's own model calls are drawn as one bar.
 
 ## Coding sessions: seen everywhere, with a way forward when a reply fails (v1.389.0)
 

@@ -3699,6 +3699,43 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **A coding reply's TIMELINE: one precise clock for LENGTHS, the wall clock
+  for WINDOWS** (v1.390.0, Phase 1 of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`;
+  a doer + a reviewer that found 5 more defects). FRAMES (harness turns ONLY;
+  chat, POST, sidebar, bench and the Build pane chat byte-identical, pinned):
+  a `model_call` frame `{ms, provider, model, usage, kind?}` at the three
+  tally sites (tool loop, final-answer nudge, language rewrite), its cost from
+  the receipt's own `UsageTally.step_cost` so the calls add up to the receipt;
+  `tool_call` finished frames gain `ms` (the tool's own run time);
+  `routes/build.recorded_turn` stamps offsets through `harness/timeline.
+  ReplyClock` (perf_counter): `start` on round / tool_call / model_call,
+  start/end on helper; `check: finish | project` (`timeline.check_kind`, from
+  the call id) marks Iron Jarvis's own check runs, never the model's work.
+  REPLY LINE: `calls` (≤ 2,000, plus an in-flight `{state}` call),
+  `steps[].start`, `helper: true` on a step that started a helper, `helpers[]`
+  start/end/provider/model/usage/work (≤ 20). `timing.startedAt /
+  firstTokenAt / endedAt` STAY WALL-CLOCK — `paneTurnWindow` sends them to
+  `POST /chat/changes`, which compares them with wall-stamped journal rows,
+  and putting them on perf_counter dropped a reply's changes after a clock
+  step — while the precise length rides beside them as `timing.ms` (the axis
+  and `WorkLine.workDuration` read it; a chat reply has none). On Python 3.12
+  Windows `time.time`/`monotonic` tick every 15.6 ms: never put a start from
+  one clock with a length from another. DASHBOARD: `lib/buildTimeline.ts`,
+  `components/harness/HarnessTimeline.tsx` (the second tab after Plan; a
+  header with the helpers apart and "list price"; windowed rows; a card on
+  press or focus, never hover; the live read once a second and only while
+  visible; `noTimelineReason` early | cut | before); `lib/turnCache` keeps it;
+  `useModels` returns STABLE lists (a fresh `[]` / `filter` per render redrew
+  every memo on each streamed word). OPEN: a helper's own model calls are one
+  bar; waits for the user show as gaps; the session screen still re-renders
+  per word through `useChatStream`'s `setLastEventAt` (v1.246.0); a reply a
+  crash cut off has no timeline (Phase 2 can rebuild it from the stored
+  frames); whether perf_counter counts system sleep is unverified. Pins:
+  `tests/test_build_timeline{,_review}_v1390.py`, `dashboard/__tests__/
+  harness-timeline{,-live,-return,-review}-v1390.test.tsx`,
+  `use-models-stable-v1390.test.ts`, fixture `build-timeline-v1390.json`
+  (`IJ_REGEN_BUILD_TIMELINE=1`).
+
 - **A coding-session reply is a reply the whole app can see; a failed one
   has a press; the view's name lives in ONE constant** (v1.389.0, the v1.388.0
   re-audit's harness gaps; a doer + a reviewer that found 9 more defects).
