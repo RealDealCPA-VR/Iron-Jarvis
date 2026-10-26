@@ -3699,6 +3699,48 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **An account limit is WAITED OUT by itself; a move to another account
+  happens only WITHIN a group the user made, same vendor** (v1.393.0, Phase 4
+  of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`; a doer + a reviewer that found
+  10 more defects). AUTO WAIT: `routes/build.auto_wait` arms the v1.368.0
+  wait (`wait_record`, `resume_due`, `take_wait`) the moment a coding reply
+  ends on a resumable account-limit card. The setting `build_auto_resume`
+  (automation, allow tier, default on); OFF = NOTHING carries on by itself,
+  a move included — the card waits for the press, and the press is the
+  consent. GROUPS: `Config.account_groups {name: [ids]}`, a schema row in
+  connections, tier **ask-floor** (always carded from chat, no grant lifts
+  it: work ↔ personal is a privacy decision; `redact_args` names the
+  accounts, never Iron-Proxy's ids). Checked on save (names 1–40, one group
+  per account, ≤ 20 × 20; ADDED ids must be Claude Code / Codex accounts in the
+  cached snapshot) and cleaned quietly at load (never refuses boot). MOVE:
+  the wait loop hands the reply to an account of the SAME group and SAME
+  vendor that is on, signed in (`needs_sign_in`), not parked and below
+  `TAKEOVER_MAX_PERCENT` 95 of every window. Known-low accounts first, then
+  accounts with NO numbers in Iron-Proxy's order; numbers only arrive after a
+  call, so unknown is never "0%". It goes through `account_patch` +
+  `start_build_turn(continuation=True)`, with the patch applied INSIDE
+  `take_wait(then=)`. `setup.account_moves` caps moves in a row at
+  `MAX_GROUP_MOVES` 4 and resets when a turn served (a billed call or words)
+  or the user chose an account. `S.amend_wait` writes only if the wait is the
+  one the loop checked and never on an archived session (a Cancel during a
+  slow check was re-armed). The loop clears its wake event BEFORE a pass. Line
+  key `accountMove {from, fromName, to, toName, group}` (also on the
+  crash-rebuilt line); the card's `account_wait.group` is the LIVE group.
+  NOTICES: `build.account_limit` gains `waiting`, and `build.resumed` names
+  both accounts on a move. Both ping the bell uncounted and quiet while the
+  user looks at that session; "This PC", the phone and the tray stay quiet.
+  `notifier.bell_pings` knows both types (one-notice fixture rows
+  `build-limit-waiting`, `build-moved-within-group`). USAGE: the chip and the
+  Timeline header read the cached snapshot ("63% of the 5-hour window, resets
+  3:40 PM" / "usage not known yet"). OPEN: the tray says nothing for a limit
+  waiting for the press (pre-existing since v1.369.0); usage shows one turn
+  late (the snapshot refreshes every 30 s); the Settings JSON row and the
+  card's Group choice are last-writer-wins; arrow keys on the closed Group
+  select save each step. Pins: `tests/test_build_limits{,_review}_v1393.py`,
+  `dashboard/__tests__/{limits-without-a-press,account-groups,
+  account-groups-review,limits-bell-review}-v1393.test.tsx`, the one-notice
+  fixture.
+
 - **A coding reply NEVER STALLS SILENTLY: a stall notice with Stop the step, a
   question to the phone, a summary mid-reply, an optional cap** (v1.392.0,
   Phase 3 of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`; a doer + a reviewer that

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.392.0 (2026-10-25).*
+holds itself to. Current as of v1.393.0 (2026-10-25).*
 
 ---
 
@@ -1897,6 +1897,35 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Account limits without a press (v1.393.0)
+
+- **A reply at an account's limit carries on by itself.** When a coding
+  reply stops because its Claude Code or Codex account reached a limit, it
+  now waits for that account's reset and then carries on. You don't have to
+  press **Resume when ready**.
+  - The card says "Waiting for <account>'s reset at <time>; it carries on by
+    itself".
+  - **Cancel** stops the wait. **Choose account** moves the reply to another
+    account now.
+  - To turn this off: **Settings › Agents & automation › Carry on by itself
+    after an account's limit**. With it off, nothing carries on by itself, and the card
+    waits for your press as before.
+- **Account groups.** On the Iron-Proxy card in Settings › Connections, each
+  Claude Code and Codex account has a **Group** choice.
+  - When an account in a group reaches its limit, another account of the
+    **same group and the same kind** carries the reply on at once. The reply
+    says so: "Work Max reached its limit; carried on with Spare (same group)".
+  - Accounts known to be least used go first. An account Iron Jarvis has no
+    numbers for yet is tried only after them.
+  - An account in no group never moves, and never takes over.
+  - A Claude Code account never takes over from Codex, or the other way round.
+  - Put work and personal accounts in different groups. There are no groups
+    until you make them, and changing groups from chat always asks first.
+- **Usage you can see.** The account chip and the top of the Timeline show
+  the account's current usage, for example "63% of the 5-hour window, resets
+  3:40 PM". An account Iron Jarvis has no numbers for yet says "usage not
+  known yet".
 
 ## A long coding reply never goes quiet without telling you (v1.392.0)
 
