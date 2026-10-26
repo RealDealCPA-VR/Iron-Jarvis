@@ -51,8 +51,10 @@ const FIXTURE = JSON.parse(
 
 const LINE = decodeMessage(FIXTURE.line) as BuildMessage;
 const QUESTION = decodeMessage(FIXTURE.question) as BuildMessage;
-const TIMING = FIXTURE.line.timing as { startedAt: number; endedAt: number };
-const DURATION = TIMING.endedAt - TIMING.startedAt;
+const TIMING = FIXTURE.line.timing as { startedAt: number; endedAt: number; ms: number };
+// v1.390.0 review: the reply's own length is `timing.ms` (the clock every bar
+// is on); startedAt/endedAt are wall-clock stamps for its Changes window.
+const DURATION = TIMING.ms;
 
 function viewOf(messages: BuildMessage[]): BuildSessionView {
   return {

@@ -621,7 +621,6 @@ class _ReplyWatch:
 
         self.clock = ReplyClock(self.started_at)
         self.first_token_at: float | None = None
-        self.first_token_ms: int | None = None
         #: (plan text) of an exit_plan_mode call that ran (the user allowed it).
         self.approved_plans: list[str] = []
         #: The last plan the user approved this turn — kept on the reply line
@@ -665,9 +664,6 @@ class _ReplyWatch:
         if event == "token":
             if self.first_token_at is None:
                 self.first_token_at = time.time()
-                # v1.390.0: on the reply's own (precise) clock — the line's
-                # `timing` is read off it (see :meth:`lines`).
-                self.first_token_ms = self.clock.offset()
             self.text.append(str(data.get("text") or ""))
         elif event == "reset":
             # The lane discarded what was streamed (a nudge, a rewrite).
@@ -693,9 +689,16 @@ class _ReplyWatch:
         elif event == "tool_call":
             cid = str(data.get("id") or "")
             name = str(data.get("name") or "")
+            # v1.390.0 review: a step Iron Jarvis ran itself (the finish
+            # check's test run, a project check) says so — on its frames and
+            # its saved step — so the Timeline never draws it as the model's.
+            from ...harness.timeline import check_kind
+
+            check = check_kind(cid)
+            marked = {"check": check} if check else {}
             if data.get("status") == "started":
                 self._started[cid] = (name, time.time(), data.get("args"))
-                stamped = {**data, "start": self.clock.step_started(cid)}
+                stamped = {**data, "start": self.clock.step_started(cid), **marked}
             elif data.get("status") == "finished":
                 began = self._started.pop(cid, None)
                 ok = data.get("ok")
@@ -703,13 +706,14 @@ class _ReplyWatch:
                 # its length (the lane's own measure of a call that ran
                 # beside others, else the time between its two frames).
                 start, ms = self.clock.step_finished(cid, data.get("ms"))
-                stamped = {**data, "start": start, "ms": ms}
+                stamped = {**data, "start": start, "ms": ms, **marked}
                 if len(self.steps) < MAX_COUNTED_STEPS:
                     step: dict[str, Any] = {
                         "name": name,
                         "ok": bool(ok) if ok is not None else None,
                         "ms": ms if began else None,
                         "start": start,
+                        **marked,
                     }
                     if cid and cid in self.helpers:
                         # v1.390.0: this call STARTED a helper — the helper's
@@ -990,15 +994,20 @@ class _ReplyWatch:
         if self.last_plan:
             # v1.374.0: the turn's task list as it last stood (the reply folds it).
             line["plan"] = saved_plan(self.last_plan)
-        # v1.390.0: read off the reply's own clock (the start's wall-clock
-        # stamp plus the precise offsets), so the reply's measured time and
-        # every bar on its Timeline are one clock's numbers.
+        # `timing` is an EPOCH window on the WALL clock (v1.390.0 review): the
+        # reply's own Changes row asks the journal for the rows between
+        # `startedAt` and `endedAt` (paneTurnWindow → POST /chat/changes), and
+        # those rows are stamped by the wall clock — a window measured on any
+        # other clock loses the changes made after the wall clock stepped
+        # forward mid-reply (a time sync after the PC wakes). The reply's
+        # PRECISE length — the Timeline's axis, the clock every bar's offset
+        # is on — rides beside it as `ms`, and marks a line written since the
+        # Timeline.
         line["timing"] = {
-            "startedAt": self.clock.started_ms,
-            "firstTokenAt": (
-                self.clock.epoch_ms(self.first_token_ms) if self.first_token_ms is not None else None
-            ),
-            "endedAt": self.clock.epoch_ms(),
+            "startedAt": int(self.started_at * 1000),
+            "firstTokenAt": int(self.first_token_at * 1000) if self.first_token_at else None,
+            "endedAt": int(time.time() * 1000),
+            "ms": self.clock.offset(),
         }
         out.append(line)
         return out

@@ -6,7 +6,8 @@ measured the start and dropped it) and the turn's usage as ONE total, so the
 user's "where did the 117 minutes and $18 go" had no answer. Now:
 
 * every step on the line carries ``start`` (ms from the reply's start, the
-  origin of the line's ``timing.startedAt``) and its ``ms``;
+  origin of the line's ``timing.startedAt``; review: the reply's own length
+  is ``timing.ms``) and its ``ms``;
 * ``calls`` keeps every BILLED model call — start, length, provider, model,
   usage in the receipt's shape (tokens in/out, cache when known, cost,
   list-price flag) — and the call in flight when the reply was stopped;
@@ -231,9 +232,10 @@ async def test_the_calls_add_up_to_the_receipt_and_every_bar_lies_inside_the_rep
     # Tokens too.
     assert sum(c["usage"]["input_tokens"] for c in line["calls"]) == receipt["input_tokens"]
     assert sum(c["usage"]["output_tokens"] for c in line["calls"]) == receipt["output_tokens"]
-    # TIME: every bar lies inside the reply's start..end (the receipt's own
-    # measured time: timing.endedAt - timing.startedAt).
-    duration = line["timing"]["endedAt"] - line["timing"]["startedAt"]
+    # TIME: every bar lies inside the reply's own measured length (review:
+    # `timing.ms`, on the clock every offset is on; the wall-clock stamps
+    # beside it tick every 15.6 ms on Windows).
+    duration = line["timing"]["ms"]
     assert duration > 0
     for bar in [*line["calls"], *line["steps"]]:
         assert 0 <= bar["start"] and bar["start"] + bar["ms"] <= duration, (bar, duration)
@@ -333,7 +335,7 @@ async def test_a_stopped_reply_keeps_the_call_that_was_in_flight(app, work):
     # It started where its `round` frame said (the page drew it working from there).
     rounds = [json.loads(d)["start"] for e, d in lg.frames if e == "round"]
     assert calls[-1]["start"] == rounds[-1]
-    duration = line[-1]["timing"]["endedAt"] - line[-1]["timing"]["startedAt"]
+    duration = line[-1]["timing"]["ms"]
     assert calls[-1]["start"] + calls[-1]["ms"] <= duration
 
 
@@ -368,7 +370,7 @@ async def test_a_helper_row_says_its_model_its_own_usage_and_its_steps_times(app
     # Its step: start and length on the reply's clock, inside its own bar.
     [work_step] = h["work"]
     h_start, h_end = h["start"], h["end"]
-    duration = line["timing"]["endedAt"] - line["timing"]["startedAt"]
+    duration = line["timing"]["ms"]
     assert 0 <= h_start < h_end <= duration
     assert work_step["ms"] >= int(READ_S * 1000) - 20
     assert h_start <= work_step["start"] and work_step["start"] + work_step["ms"] <= h_end
@@ -534,7 +536,7 @@ async def test_two_helpers_and_twenty_steps_add_up_to_the_reply(app, work, monke
     ))
     await _turn(app, sid, "twenty steps and two helpers", "tl-20")
     line = _reply(app, sid)
-    duration = line["timing"]["endedAt"] - line["timing"]["startedAt"]
+    duration = line["timing"]["ms"]
     steps = [s for s in line["steps"] if not s.get("helper")]
     assert len(line["steps"]) >= 20 and len(line["helpers"]) == 2
     bars = (

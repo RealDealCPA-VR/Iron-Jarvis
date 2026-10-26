@@ -34,8 +34,17 @@ offset — ms from the reply's start, the same origin as the reply line's
 / ``ms`` on the helper's own step. The page draws the running reply from
 those, and the saved line keeps the same numbers — so a reload, a rejoin and
 the live view draw the same picture. ONE precise clock (``perf_counter``)
-measures every offset and every length, and the line's ``timing.endedAt`` is
-read off it too, so every bar lies inside the reply.
+measures every offset and every length, and the reply's own length on it is
+the line's ``timing.ms`` (the Timeline's axis), so every bar lies inside the
+reply. The line's ``startedAt`` / ``firstTokenAt`` / ``endedAt`` stay WALL-clock
+epoch stamps (review): the reply's Changes row asks the journal for the rows
+between them, and those rows are stamped by the wall clock.
+
+THE CHECKS (review): a step Iron Jarvis ran itself — the finish check's test
+run (``harness/finish.CALL_ID_PREFIX``) or a project check
+(``harness/checkers.CALL_ID_PREFIX``) — carries ``check`` ("finish" /
+"project", :func:`check_kind`) on its frames and its saved step, so the
+Timeline tells it apart from the model's own work.
 
 The words a person reads are the run log's ("Read app.py", the model's name,
 helpers); never the engine room's.
@@ -98,6 +107,25 @@ def model_call_frame(provider: str, model: str, usage: Any, ms: float, kind: str
     return out
 
 
+#: What ``check`` says on a step Iron Jarvis ran itself (absent on the model's).
+CHECK_KINDS = ("finish", "project")
+
+
+def check_kind(call_id: Any) -> str:
+    """"finish" for the finish check's own test run, "project" for a project
+    check, "" for a step the model chose. Read off the call id the check
+    gave its synthetic call (the one fact both carry). Never raises."""
+    from .checkers import CALL_ID_PREFIX as _PROJECT
+    from .finish import CALL_ID_PREFIX as _FINISH
+
+    cid = str(call_id or "")
+    if cid.startswith(_FINISH):
+        return "finish"
+    if cid.startswith(_PROJECT):
+        return "project"
+    return ""
+
+
 def _int(v: Any) -> "int | None":
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
@@ -115,7 +143,6 @@ class ReplyClock:
 
     def __init__(self, started_at: float, now: Any = None) -> None:
         self.started_at = float(started_at)
-        self.started_ms = int(self.started_at * 1000)
         # ONE PRECISE CLOCK for every offset: on Windows (Python 3.12)
         # `time.time()` and `time.monotonic()` tick every 15.6 ms, so a start
         # measured on one and a length on the other put a model call 11 ms
@@ -140,11 +167,6 @@ class ReplyClock:
     def offset(self) -> int:
         """ms from the reply's start, now (never negative)."""
         return max(0, int((self._now() - self._t0) * 1000))
-
-    def epoch_ms(self, offset: "int | None" = None) -> int:
-        """An offset (now, by default) as ms since the epoch: the reply's
-        start plus the offset — the line's ``timing`` on the same clock."""
-        return self.started_ms + (self.offset() if offset is None else int(offset))
 
     # -- steps -------------------------------------------------------------- #
 
@@ -249,6 +271,6 @@ class ReplyClock:
 
 
 __all__ = [
-    "CALL_KINDS", "COST_DIGITS", "MAX_CALLS", "MODEL_CALL_EVENT", "OPEN_STATES", "ReplyClock",
-    "call_usage", "model_call_frame",
+    "CALL_KINDS", "CHECK_KINDS", "COST_DIGITS", "MAX_CALLS", "MODEL_CALL_EVENT", "OPEN_STATES", "ReplyClock",
+    "call_usage", "check_kind", "model_call_frame",
 ]

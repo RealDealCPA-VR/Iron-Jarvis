@@ -60,8 +60,17 @@ export interface TimelineStep {
   detail: StepDetail | null;
   /** This call STARTED a helper: the helper's own row stands in for it. */
   helper: boolean;
+  /** v1.390.0 review: a step Iron Jarvis ran ITSELF, not the model — the
+   *  finish check's test run ("finish") or a project check ("project")
+   *  (the daemon's `check`, harness/timeline check_kind); null for the
+   *  model's own step. */
+  check: StepCheck | null;
   state: BarState;
 }
+
+export type StepCheck = "finish" | "project";
+
+const checkOf = (v: unknown): StepCheck | null => (v === "finish" || v === "project" ? v : null);
 
 export interface TimelineHelper {
   id: string;
@@ -136,6 +145,7 @@ function decodeStep(raw: unknown, index: number, prefix: string): TimelineStep |
     target: str(r.target, 120) || null,
     detail: cleanStepDetail(r.detail),
     helper: r.helper === true,
+    check: checkOf(r.check),
     state: ok === false ? "failed" : "done",
   };
 }
@@ -180,9 +190,27 @@ function routeOf(raw: unknown): TimelineReply["route"] {
 }
 
 /**
+ * The reply's own length on the clock every bar is on (`timing.ms`, v1.390.0
+ * review), or null for a line written before the Timeline. `timing`'s
+ * startedAt / endedAt are WALL-clock stamps (the reply's Changes window reads
+ * the journal by them) and may differ from it when the wall clock stepped.
+ */
+function replyLength(m: Record<string, unknown>): number | null {
+  return ms(rec(m.timing)?.ms);
+}
+
+/** Why a saved reply has no timeline: "early" — written since the Timeline,
+ *  it ended before any work started (an error or a Stop before the model
+ *  was first asked); "before" — a reply made before the Timeline. */
+export function noTimelineReason(line: BuildMessage | null | undefined): "early" | "before" {
+  if (!line) return "before";
+  return replyLength(line as unknown as Record<string, unknown>) !== null ? "early" : "before";
+}
+
+/**
  * A SAVED reply's timeline, or null when the reply kept no times (a reply
- * from before the Timeline, or one that stopped before it did anything) —
- * the pane then says so in one line.
+ * from before the Timeline, or one that ended before it did anything —
+ * `noTimelineReason` says which) — the pane then says so in one line.
  */
 export function replyTimeline(line: BuildMessage | null | undefined): TimelineReply | null {
   if (!line || line.role !== "assistant") return null;
@@ -190,6 +218,7 @@ export function replyTimeline(line: BuildMessage | null | undefined): TimelineRe
   const timing = rec(m.timing);
   const started = ms(timing?.startedAt);
   const ended = ms(timing?.endedAt);
+  const length = replyLength(m);
   const calls: TimelineCall[] = [];
   for (const c of Array.isArray(m.calls) ? m.calls.slice(0, MAX_CALLS + 1) : []) {
     const d = decodeCall(c, calls.length);
@@ -206,7 +235,7 @@ export function replyTimeline(line: BuildMessage | null | undefined): TimelineRe
     if (d) helpers.push(d);
   }
   const timed = calls.length > 0 || steps.some((s) => s.start !== null) || helpers.some((h) => h.start !== null);
-  if (!timed || started === null || ended === null) return null;
+  if (!timed || (length === null && (started === null || ended === null))) return null;
   const state: BarState = m.interrupted ? "stopped" : m.error ? "failed" : "done";
   const usage = turnUsageFrom(m.usage);
   const route = routeOf(m.route);
@@ -214,7 +243,7 @@ export function replyTimeline(line: BuildMessage | null | undefined): TimelineRe
     key: str(m.turnId, 120),
     running: false,
     state,
-    durationMs: Math.max(0, ended - started),
+    durationMs: length ?? Math.max(0, (ended ?? 0) - (started ?? 0)),
     calls,
     steps,
     helpers,
@@ -357,7 +386,7 @@ function foldHelper(s: LiveState, data: Record<string, unknown>): void {
     };
     if (at !== undefined && h.steps[at]) Object.assign(h.steps[at], patch);
     else if (h.steps.length < HELPER_STEPS)
-      h.steps.push({ key: `h:${id}:${h.steps.length}`, index: h.steps.length, name: sname, target: null, helper: false, ...patch });
+      h.steps.push({ key: `h:${id}:${h.steps.length}`, index: h.steps.length, name: sname, target: null, helper: false, check: null, ...patch });
   } else if (h.steps.length < HELPER_STEPS) {
     open[sid] = h.steps.length;
     h.steps.push({
@@ -370,6 +399,7 @@ function foldHelper(s: LiveState, data: Record<string, unknown>): void {
       target: stepTarget(sname, rec(step.args)),
       detail: null,
       helper: false,
+      check: null,
       state: "working",
     });
   }
@@ -436,6 +466,7 @@ export function createLiveTimeline(initial?: unknown): LiveTimeline {
         // The line keeps the first DETAIL_STEPS steps' detail.
         detail: index < DETAIL_STEPS ? cleanStepDetail(data.detail) : null,
         helper: s.helpers.some((h) => h.id === id),
+        check: checkOf(data.check) ?? (at !== undefined ? (s.steps[at]?.check ?? null) : null),
         state: ok === false ? "failed" : "done",
       };
       delete s.targets[id];
@@ -457,6 +488,7 @@ export function createLiveTimeline(initial?: unknown): LiveTimeline {
       target,
       detail: null,
       helper: false,
+      check: checkOf(data.check),
       state: "working",
     });
   }
@@ -670,7 +702,10 @@ export interface TimelineTotals {
   durationMs: number;
   usage?: TurnUsage;
   calls: number;
+  /** The model's OWN steps (a check Iron Jarvis ran is counted apart). */
   steps: number;
+  /** The checks Iron Jarvis ran itself (finish check, project checks). */
+  checks: number;
   failed: number;
   helpers: number;
   helperSteps: number;
@@ -681,7 +716,7 @@ export interface TimelineTotals {
  *  (its receipt); the helpers' are added up APART — the receipt never counts
  *  them, so neither does the line above them. */
 export function timelineTotals(reply: TimelineReply): TimelineTotals {
-  const own = reply.steps;
+  const own = reply.steps.filter((s) => !s.check);
   const helperUsage = addUsage(
     reply.helpers.filter((h) => h.usage).map((h, i) => ({ index: i, start: 0, ms: 0, provider: h.provider, model: h.model, usage: h.usage, state: "done" as BarState })),
   );
@@ -690,7 +725,8 @@ export function timelineTotals(reply: TimelineReply): TimelineTotals {
     ...(reply.usage ? { usage: reply.usage } : {}),
     calls: reply.calls.filter((c) => c.state !== "working").length,
     steps: own.length,
-    failed: own.filter((s) => s.ok === false).length + reply.helpers.reduce((n, h) => n + h.steps.filter((s) => s.ok === false).length, 0),
+    checks: reply.steps.length - own.length,
+    failed: reply.steps.filter((s) => s.ok === false).length + reply.helpers.reduce((n, h) => n + h.steps.filter((s) => s.ok === false).length, 0),
     helpers: reply.helpers.length,
     helperSteps: reply.helpers.reduce((n, h) => n + h.stepCount, 0),
     ...(helperUsage ? { helperUsage } : {}),

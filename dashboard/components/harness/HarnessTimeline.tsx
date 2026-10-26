@@ -34,6 +34,7 @@ import {
   LIVE_CHOICE,
   axisTicks,
   callSegments,
+  noTimelineReason,
   replyChoices,
   replyTimeline,
   tickLabel,
@@ -42,6 +43,7 @@ import {
   type BarState,
   type LiveTimeline,
   type Segment,
+  type StepCheck,
   type TimelineCall,
   type TimelineHelper,
   type TimelineReply,
@@ -77,6 +79,16 @@ const FALLBACK_ROWS = 40;
 
 export const NO_TIMELINE = "No timeline for this reply.";
 export const NO_TIMELINE_WHY = "It was made before Iron Jarvis kept the time of each step.";
+/** v1.390.0 review: a reply written since the Timeline that ended before the
+ *  model was first asked (an error or a Stop) — never "made before". */
+export const NO_TIMELINE_EARLY = "It ended before any work started.";
+/** v1.390.0 review: a step Iron Jarvis ran ITSELF to check the reply (the
+ *  finish check's test run, a project check) — never drawn as the model's. */
+export const CHECK_WORDS: Readonly<Record<StepCheck, string>> = {
+  finish: "Finish check",
+  project: "Project check",
+};
+export const CHECK_NOTE = "Iron Jarvis ran this itself, to check the reply's work. The model did not ask for it.";
 export const NO_REPLIES = "No replies yet. While the session works, each step shows here on one time axis.";
 export const NOT_KEPT = "Not kept for this step.";
 export const HELPERS_APART = "not in the cost above";
@@ -138,8 +150,14 @@ function modelName(provider: string, model: string, models: readonly CatalogRow[
   return answeredModelName({ provider, model }, models) || providerDisplay(provider) || model;
 }
 
-/** A step in the run log's words: "Read app.py", "Reading app.py". */
-export function stepLabel(step: Pick<TimelineStep, "name" | "target" | "state">): string {
+/** A step in the run log's words: "Read app.py", "Reading app.py"; a check
+ *  Iron Jarvis ran itself says so first ("Finish check · Ran python"). */
+export function stepLabel(step: Pick<TimelineStep, "name" | "target" | "state"> & { check?: StepCheck | null }): string {
+  const own = ownStepLabel(step);
+  return step.check ? `${CHECK_WORDS[step.check]} · ${own}` : own;
+}
+
+function ownStepLabel(step: Pick<TimelineStep, "name" | "target" | "state">): string {
   if (step.state === "working") {
     const kind = toolKind(step.name);
     const subject = rowSubject(kind, step.name, step.target);
@@ -222,6 +240,7 @@ function Card({
           ["Getting ready", reply.calls.length ? durationWords(reply.calls[0].start) : null],
           ["Model calls", totals.calls.toLocaleString("en-US")],
           ["Steps", totals.steps.toLocaleString("en-US")],
+          ["Checks", totals.checks ? totals.checks.toLocaleString("en-US") : null],
           ["Tokens", tokenWords(reply.usage)],
           ["Cost", costWords(reply.usage)],
         ]}
@@ -281,6 +300,11 @@ function Card({
             ["Took", st.ms !== null ? durationWords(st.ms) : null],
           ]}
         />
+        {st.check ? (
+          <p data-testid="timeline-check-note" className="text-[12px] text-zinc-500">
+            {CHECK_NOTE}
+          </p>
+        ) : null}
         {st.detail ? (
           <StepDetailPanel id={`timeline-detail-${st.key}`} name={st.name} detail={st.detail} />
         ) : st.state !== "working" ? (
@@ -515,6 +539,9 @@ export const HarnessTimeline = memo(function HarnessTimeline({
   const totals = useMemo(() => (reply ? timelineTotals(reply) : null), [reply]);
   const ticks = useMemo(() => axisTicks(reply?.durationMs ?? 0), [reply?.durationMs]);
 
+  // The rows' box exists only while a reply is drawn: measured again when it
+  // appears (or goes).
+  const drawn = reply !== null;
   useEffect(() => {
     const el = boxRef.current;
     if (!el) return;
@@ -523,7 +550,7 @@ export const HarnessTimeline = memo(function HarnessTimeline({
     const ro = new ResizeObserver(() => setBoxH(el.clientHeight));
     ro.observe(el);
     return () => ro.disconnect();
-  }, [reply === null]);
+  }, [drawn]);
 
   const onToggle = useCallback((key: string) => {
     setCollapsed((prev) => {
@@ -615,7 +642,11 @@ export const HarnessTimeline = memo(function HarnessTimeline({
       {!reply || !totals ? (
         <div data-testid="timeline-none" className="space-y-1">
           <p className="text-[13px] text-zinc-300">{NO_TIMELINE}</p>
-          <p className="text-[12px] text-zinc-500">{NO_TIMELINE_WHY}</p>
+          <p className="text-[12px] text-zinc-500">
+            {effective !== null && effective !== "live" && noTimelineReason(view.messages[Number(effective)]) === "early"
+              ? NO_TIMELINE_EARLY
+              : NO_TIMELINE_WHY}
+          </p>
         </div>
       ) : (
         <>
@@ -632,6 +663,7 @@ export const HarnessTimeline = memo(function HarnessTimeline({
               {[
                 plural(totals.calls, "model call"),
                 plural(totals.steps, "step"),
+                totals.checks ? plural(totals.checks, "check") : null,
                 totals.failed ? `${totals.failed.toLocaleString("en-US")} failed` : null,
               ]
                 .filter(Boolean)
