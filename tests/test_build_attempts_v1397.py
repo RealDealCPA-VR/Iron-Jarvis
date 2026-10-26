@@ -39,7 +39,7 @@ from iron_jarvis.iron_proxy import pin as P
 from iron_jarvis.providers.adapters.base import LLMAdapter, LLMResponse, ProviderError, ToolCall
 from iron_jarvis.providers.hold import current_hold
 from tests.test_build_accounts_v1368 import enable, isolate, make_fake
-from tests.test_build_git_v1375 import git, no_real_gh, snapshot
+from tests.test_build_git_v1375 import git, git_ok, no_real_gh, snapshot
 from tests.test_build_sessions_v1367 import (
     asgi,
     frames_of,
@@ -855,3 +855,50 @@ def test_a_crash_rebuild_keeps_the_card_cut_off():
     by_id = {i["id"]: i for i in card["items"]}
     assert by_id["try1"]["state"] == "stopped" and by_id["try1"]["why"] == "cut_off"
     assert by_id["try2"]["state"] == "done" and by_id["try2"]["tests"] == "passed"
+
+
+def test_an_attempts_card_parks_the_reply_on_the_user_like_a_helpers():
+    """The reply's record and its stall watch read whether the reply waits on
+    the user (``routes/build._asks_after``): an attempt's own card does, until
+    it is answered or the attempt is over."""
+    from iron_jarvis.daemon.routes.build import _asks_after, _parks_or_answers
+
+    asks: set[str] = set()
+    frame = [("attempt", json.dumps({"id": "try1", "state": "waiting", "ask": {"id": "apr_1", "tool": "shell"}}))]
+    assert _parks_or_answers(frame)
+    assert _asks_after(asks, frame) is True
+    assert _asks_after(asks, [("attempt", json.dumps({"id": "try1", "state": "running", "ask": None}))]) is False
+    _asks_after(asks, frame)
+    assert _asks_after(asks, [("attempt", json.dumps({"id": "try1", "state": "stopped", "ask": None}))]) is False
+
+
+async def test_the_worktrees_are_all_or_nothing(app, fake, repo, tmp_path, monkeypatch):
+    """A worktree that cannot be made undoes the ones made before it (they
+    hold nothing of the user's yet): nothing is left behind, and nothing
+    starts."""
+    await enable(app)
+    world = wire_models(app, monkeypatch, World({}))
+    view = await new_session(app, repo)
+    from iron_jarvis.harness import branches as Bm
+
+    made: list[dict] = []
+    original = Bm.start
+
+    def flaky(folder, **kw):
+        if made:
+            raise Bm.GitRefused("Git could not make the session's branch and worktree, so nothing was made.", 409)
+        got = original(folder, **kw)
+        made.append(got)
+        return got
+
+    monkeypatch.setattr(Bm, "start", flaky)
+    status, raw = await open_turn(app, view["id"], {
+        "text": "Try this with Codex and the local model: fix add.", "turn_id": "aon-1",
+    })
+    assert status == 409, raw
+    assert "Nothing started" in json.loads(raw)["detail"]
+    assert made, "the first worktree was made"
+    assert not Path(made[0]["worktree"]).exists(), "…and undone"
+    assert not git_ok("rev-parse", "--verify", f"refs/heads/{made[0]['branch']}", cwd=repo)
+    assert world.calls == []
+    assert not any(m.get("role") == "user" for m in messages_of(app, view["id"]))
