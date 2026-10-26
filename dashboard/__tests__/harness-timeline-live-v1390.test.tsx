@@ -217,6 +217,10 @@ describe("the running reply: calm and cheap", () => {
     await act(async () => {
       for (let i = 0; i < 400; i += 1) s.push("token", { text: "word " });
     });
+    // (v1.390.0 review: inside ONE `act` React draws once at its end, so
+    // this window cannot tell a 40 ms read from a 1 s one — the read's own
+    // pace is pinned with fake timers in harness-timeline-review-v1390, and
+    // a word never re-running the tab, one word per `act`, there too.)
     await act(async () => {
       await new Promise((r) => setTimeout(r, 50));
     });

@@ -85,6 +85,7 @@ vi.mock("@/components/terminal/FilesPanel", () => ({ FilesPanel: () => <div data
 
 import { HarnessSession } from "@/components/harness/HarnessSession";
 import { HarnessTimeline } from "@/components/harness/HarnessTimeline";
+import { workDuration } from "@/components/chat/WorkLine";
 import { createLiveTimeline, replyTimeline, timelineRows, timelineTotals } from "@/lib/buildTimeline";
 import { decodeMessage, type BuildMessage, type BuildSessionView } from "@/lib/buildSessions";
 
@@ -136,6 +137,16 @@ describe("the axis is the reply's own length", () => {
     expect(timelineTotals(tl).durationMs).toBe(1_500);
     const rows = timelineRows(tl, new Set());
     expect(rows[0].end).toBe(1_500);
+  });
+
+  it("the work line under the reply says the same length the Timeline's top does", () => {
+    // One reply, one measured time: "Worked for" reads `timing.ms` when the
+    // line has it (the wall stamps tick every 15.6 ms on Windows, and can
+    // step), so the two never disagree.
+    const timing = { startedAt: 1_000, firstTokenAt: 8_000, endedAt: 8_500, ms: 1_500 };
+    expect(workDuration(timing)).toBe("1.5 s");
+    // A chat reply's timing (no `ms`) reads exactly as before.
+    expect(workDuration({ startedAt: 1_000, firstTokenAt: null, endedAt: 3_500 })).toBe("2.5 s");
   });
 });
 
@@ -232,13 +243,49 @@ describe("a check Iron Jarvis ran is told apart from the model's own work", () =
     store.fold("tool_call", { id: "ij-check-1", name: "shell", status: "started", start: 10, check: "project", args: { command: "ruff check made.py" } });
     store.fold("tool_call", { id: "ij-check-1", name: "shell", status: "finished", ok: true, start: 10, ms: 50, check: "project" });
     store.fold("tool_call", { id: "c2", name: "shell", status: "started", start: 70, args: { command: "ruff check made.py" } });
+    // A check still running says so too (its row is labelled while it works).
+    store.fold("tool_call", { id: "ij-check-2", name: "shell", status: "started", start: 90, check: "project", args: { command: "ruff check made.py" } });
     const snap = store.snapshot(200);
-    expect(snap.steps.map((s) => (s as unknown as { check: unknown }).check)).toEqual(["project", null]);
+    expect(snap.steps.map((s) => (s as unknown as { check: unknown }).check)).toEqual(["project", null, "project"]);
     expect((timelineTotals(snap) as unknown as Record<string, number>).steps).toBe(1);
   });
 });
 
 /* ------------------------------------------------------------ 4. calm */
+
+describe("the running reply is read once a second — no more, no less", () => {
+  it("over three seconds the tab reads the store about three times, and draws what was folded meanwhile", () => {
+    vi.useFakeTimers();
+    try {
+      const store = createLiveTimeline();
+      store.reset("t-tick");
+      let reads = 0;
+      const counted = {
+        ...store,
+        snapshot: (n: number) => {
+          reads += 1;
+          return store.snapshot(n);
+        },
+      };
+      const live = { store: counted, running: true, startedAt: Date.now(), turnId: "t-tick" };
+      render(<HarnessTimeline view={viewOf([])} live={live} />);
+      const first = reads;
+      for (const [e, d] of FIXTURE.frames.filter(([ev]) => ev !== "done")) store.fold(e, d);
+      // Each 100 ms step its own `act`, so every read React makes is
+      // counted (one act draws once at its end, whatever the pace).
+      for (let i = 0; i < 30; i += 1) {
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+      }
+      expect(reads - first).toBeGreaterThanOrEqual(2);
+      expect(reads - first).toBeLessThanOrEqual(4);
+      expect(screen.getAllByTestId("timeline-row").length).toBeGreaterThanOrEqual(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("a burst of words never re-renders the Timeline tab", () => {
   it("word frames, one at a time, hand the tab its props at most the once-a-second read allows", async () => {
