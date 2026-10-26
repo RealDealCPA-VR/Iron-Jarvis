@@ -25,9 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import shutil
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +34,6 @@ import pytest
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.daemon.routes import build_attempts as BAR
 from iron_jarvis.harness import attempts as A
-from iron_jarvis.harness import branches as B
 from iron_jarvis.iron_proxy import accounts
 from iron_jarvis.iron_proxy import pin as P
 from iron_jarvis.providers.adapters.base import LLMAdapter, LLMResponse, ProviderError, ToolCall
@@ -624,9 +621,20 @@ async def test_keep_is_refused_while_any_attempt_still_runs(app, fake, repo, mon
     status, body = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
                               {"turn_id": "kr-1", "attempt": row["id"]})
     assert status == 409 and body["detail"] == A.KEEP_RUNNING
+    # Nothing steers the attempts while they work (each is its model's own
+    # try at the same words): a note is refused, and the page keeps it.
+    status, _ = await asgi(app, "POST", "/chat/turns/kr-1/steer", {"text": "also add a docstring"})
+    assert status == 404
     release.set()
     status, raw = await task
     assert status == 200 and frames_of(raw)[-1][0] == "done"
+    # A session BRANCHED from this reply carries the card; its Keep refuses
+    # in words (the attempts started from another branch).
+    status, branched = await asgi(app, "POST", f"/build/sessions/{sid}/branch", {"turn_id": "kr-1", "at": "reply"})
+    assert status == 201, branched
+    status, other = await asgi(app, "POST", f"/build/sessions/{branched['id']}/attempts/keep",
+                               {"turn_id": "kr-1", "attempt": row["id"]})
+    assert status == 409 and "cannot be kept here" in other["detail"], other
     status, kept = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
                               {"turn_id": "kr-1", "attempt": row["id"]})
     assert status == 200, kept

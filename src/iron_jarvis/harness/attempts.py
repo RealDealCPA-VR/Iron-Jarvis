@@ -163,6 +163,10 @@ KEEP_SESSION_GONE = (
     "This session's own branch is gone (discarded or removed), so there is nothing to merge the "
     "attempt into."
 )
+KEEP_OTHER_BRANCH = (
+    "These attempts started from the branch {base}, and this session works on {branch} now, so "
+    "they cannot be kept here. Merge the attempt's branch yourself if you want it."
+)
 KEEP_MOVED = (
     "This session moved onto a branch since the attempts started, so the attempt was not kept. "
     "Merge its branch with git, or try again."
@@ -1333,6 +1337,11 @@ async def run_attempts(platform: Any, personas: dict, plan: Plan) -> AsyncIterat
     from ..core.turns import TURNS
 
     handle = TURNS.register(plan.turn_id)
+    # An attempts turn takes no notes while it works: each attempt is its
+    # model's own try at the SAME words, and a note one of them read would
+    # make the side-by-side unfair. Closed at once, so the steer route says
+    # 404 and the page keeps the words in the box.
+    handle.close_steers()
     _note_live(plan.thread_id, plan.turn_id, True)
     queue: asyncio.Queue = asyncio.Queue()
     tasks: dict[str, asyncio.Task] = {}
@@ -1580,9 +1589,13 @@ def keep(platform: Any, thread_id: str, turn_id: str, attempt_id: str) -> dict[s
     session_facts = S.git_of(row)
     if adopt and session_facts is not None:
         raise AttemptsRefused(KEEP_MOVED, 409)
-    if not adopt and (session_facts is None or session_facts.get("removed_at")
-                      or session_facts.get("branch") != facts.get("base")):
+    if not adopt and (session_facts is None or session_facts.get("removed_at")):
         raise AttemptsRefused(KEEP_SESSION_GONE, 409)
+    if not adopt and session_facts is not None and session_facts.get("branch") != facts.get("base"):
+        # A session BRANCHED from this one carries the card in its transcript.
+        raise AttemptsRefused(KEEP_OTHER_BRANCH.format(
+            base=facts.get("base") or "another branch", branch=session_facts.get("branch") or "its own branch",
+        ), 409)
     out: dict[str, Any] = {"kept": attempt_id}
     before = B._ref_sha(wt, "HEAD")  # noqa: SLF001
     made = ""
