@@ -50,6 +50,7 @@ import {
   createdId,
   decodeGroups,
   groupAccounts,
+  type AccountGroups,
   groupOf,
   withAccountInGroup,
   isSnapshot,
@@ -300,8 +301,15 @@ function IronProxyBody({
   const groups = groupAccounts(accounts);
   const toAdopt = adoptable(snap.discovered ?? [], accounts);
   const usedBy = { ...DEFAULT_USED_BY, ...(snap.providers_used_by_jarvis ?? {}) };
+  // v1.393.0 review: the groups this card SAVED, held until a newer answer
+  // arrives (`over` = the answer they were saved over). A second pick made
+  // before the re-read landed was computed from the old answer and saved
+  // over the first one (and the first select snapped back meanwhile).
+  const [savedGroups, setSavedGroups] = useState<{ groups: AccountGroups; over: unknown } | null>(null);
   // v1.393.0: the user's account groups (null = an older daemon: no choice).
-  const accountGroups = snap.account_groups === undefined ? null : decodeGroups(snap.account_groups);
+  const answerGroups = snap.account_groups === undefined ? null : decodeGroups(snap.account_groups);
+  const accountGroups =
+    answerGroups && savedGroups && savedGroups.over === snap.account_groups ? savedGroups.groups : answerGroups;
   const groupNames = accountGroups ? Object.keys(accountGroups) : [];
   const groupable = (a: IronProxyAccount) => a.lane === "cli" && GROUP_PROVIDERS.has(a.provider);
 
@@ -403,9 +411,13 @@ function IronProxyBody({
     if (!accountGroups) return;
     const next = withAccountInGroup(accountGroups, a.id, name);
     const into = groupOf(next, a.id);
+    const over = snap.account_groups;
     await act(
       `${a.id}:group`,
-      () => put("/settings/values", { values: { account_groups: next } }),
+      async () => {
+        await put("/settings/values", { values: { account_groups: next } });
+        setSavedGroups({ groups: next, over });
+      },
       into ? `${a.title} is in the “${into}” group.` : `${a.title} is in no group.`,
     );
   }
@@ -884,6 +896,22 @@ function GroupChoice({
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
   const typed = name.replace(/\s+/g, " ").trim();
+  // v1.393.0 review: closing the name box (Save, Cancel, Escape) gives the
+  // keyboard back to the Group choice — the form unmounting dropped focus
+  // to the page, and a keyboard user started again from the top. A saving
+  // choice is disabled, so it is focused once the save is over.
+  const selectRef = useRef<HTMLSelectElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (naming || busy || !refocus.current || !selectRef.current) return;
+    refocus.current = false;
+    selectRef.current.focus();
+  }, [naming, busy]);
+  const close = () => {
+    refocus.current = true;
+    setNaming(false);
+    setName("");
+  };
   if (naming) {
     return (
       <form
@@ -891,8 +919,7 @@ function GroupChoice({
         onSubmit={(e) => {
           e.preventDefault();
           if (!typed) return;
-          setNaming(false);
-          setName("");
+          close();
           onPick(typed);
         }}
       >
@@ -903,20 +930,20 @@ function GroupChoice({
           maxLength={GROUP_NAME_MAX}
           autoFocus
           onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              close();
+            }
+          }}
           placeholder="Group name, e.g. Work"
           className="field w-40 text-xs"
         />
         <button type="submit" disabled={busy || !typed} className={CALM_ACTION}>
           Save
         </button>
-        <button
-          type="button"
-          onClick={() => {
-            setNaming(false);
-            setName("");
-          }}
-          className={CALM_ACTION}
-        >
+        <button type="button" onClick={close} className={CALM_ACTION}>
           Cancel
         </button>
       </form>
@@ -926,6 +953,7 @@ function GroupChoice({
     <label className="mt-1.5 flex items-center gap-1.5 text-[11px] text-zinc-500" title={GROUP_HELP}>
       <span>Group</span>
       <select
+        ref={selectRef}
         data-testid={`iron-proxy-group-${id}`}
         aria-label={`Group for ${title}`}
         value={group}
