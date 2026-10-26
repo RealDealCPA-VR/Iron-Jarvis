@@ -18,6 +18,7 @@ about itself, and the user can act on it from Settings → Maintenance.
 
 from __future__ import annotations
 
+import gc
 import inspect
 import logging
 import os
@@ -102,22 +103,33 @@ def test_ring_handler_never_raises_into_the_caller():
 def test_ring_buffer_is_bounded_and_served_by_the_route(tmp_path):
     app = create_app(str(tmp_path))
     with TestClient(app) as c:
-        _RECENT_ERRORS.clear()
-        for i in range(RECENT_ERRORS_CAPACITY + 10):
-            logging.getLogger("ironjarvis.test").warning("W%03d", i)
-        r = c.get("/diagnostics/errors")
-        assert r.status_code == 200
-        body = r.json()
-        assert body["capacity"] == RECENT_ERRORS_CAPACITY == 50
-        msgs = [e["message"] for e in body["errors"]]
-        assert len(msgs) == 50
-        assert msgs[0] == "W010" and msgs[-1] == "W059"  # oldest first, oldest 10 evicted
-        assert [e["message"] for e in c.get("/diagnostics/errors?limit=3").json()["errors"]] == [
-            "W057",
-            "W058",
-            "W059",
-        ]
-        assert len(c.get("/diagnostics/errors?limit=500").json()["errors"]) == 50
+        # v1.394.1: the app's own garbage-collection pause watch (v1.333.0)
+        # logs a WARNING into this same ring when a full collection runs long,
+        # and on a loaded runner one landed between the loop and the read
+        # (Tests gate: "W011 == W010"). No automatic collection while the
+        # ring is filled and read; the watch itself is not what this tests.
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            _RECENT_ERRORS.clear()
+            for i in range(RECENT_ERRORS_CAPACITY + 10):
+                logging.getLogger("ironjarvis.test").warning("W%03d", i)
+            r = c.get("/diagnostics/errors")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["capacity"] == RECENT_ERRORS_CAPACITY == 50
+            msgs = [e["message"] for e in body["errors"]]
+            assert len(msgs) == 50
+            assert msgs[0] == "W010" and msgs[-1] == "W059"  # oldest first, oldest 10 evicted
+            assert [e["message"] for e in c.get("/diagnostics/errors?limit=3").json()["errors"]] == [
+                "W057",
+                "W058",
+                "W059",
+            ]
+            assert len(c.get("/diagnostics/errors?limit=500").json()["errors"]) == 50
+        finally:
+            if was_enabled:
+                gc.enable()
 
 
 def test_ring_handler_is_installed_by_configure_logging_on_both_trees_and_root():

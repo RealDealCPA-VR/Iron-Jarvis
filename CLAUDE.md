@@ -3763,6 +3763,17 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/model-team{,-timeline,-review}-v1394.test.tsx`
   (+ fixture `model-team-timeline-v1394.json`), e2e
   `dashboard/e2e/model-team-fit.spec.ts` (390 px, keyboard).
+  v1.394.1 (test-only): v1.394.0's Tests gate went red on
+  `test_diagnostics_maintenance_v1229::test_ring_buffer_is_bounded_and_served_
+  by_the_route` ("W011 == W010"): the app's own v1.333.0 GC pause watch logs
+  a WARNING into the SAME recent-errors ring when a full collection runs
+  long, and on the loaded runner one ran inside the window between the
+  test's 60 warnings and its reads. The test now runs with automatic
+  collection off (`gc.disable()`, restored in a `finally`) for the whole
+  fill-and-read. Reproduced first: lots of long-lived containers allocated
+  inside the window with the watch logging every full collection failed the
+  old shape (first entry W017) and passed the new one. A test that asserts
+  the ring's EXACT contents must keep every other writer out of the window.
 - **An account limit is WAITED OUT by itself; a move to another account
   happens only WITHIN a group the user made, same vendor** (v1.393.0, Phase 4
   of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`; a doer + a reviewer that found
