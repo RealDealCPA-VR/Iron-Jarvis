@@ -237,6 +237,9 @@ async def test_stop_the_step_ends_exactly_that_calls_process_and_nothing_else_th
         clock.advance(601)
         got = await until(lambda: _stalls(app, "bt-two"), 30)
         assert got and got[0]["step"]["id"] == "c1"
+        # A step id that is not running stops nothing: 404, the step goes on.
+        status, _ = await asgi(app, "POST", f"/build/sessions/{sid}/stop-step", {"step_id": "b1"})
+        assert status == 404 and _alive(hung)
         status, _ = await asgi(app, "POST", f"/build/sessions/{sid}/stop-step", {"step_id": "c1"})
         assert status == 200
         assert await until(lambda: not _alive(hung), 30)
@@ -417,6 +420,26 @@ def test_the_watch_opens_one_episode_and_progress_ends_it(clock):
     assert w.check() is None
     parked["v"] = False
     assert w.check() is not None and w.episodes == 2
+
+
+def test_a_frame_is_progress_and_starts_the_ten_minutes_again(clock):
+    """Any frame of the turn (a token, a step, an app's progress) moves the
+    clock: a reply that keeps answering is never a stall, and after an
+    episode ends on a frame the next notice is another ten minutes away."""
+    w = stall.StallWatch()
+    frame = "event: token\ndata: " + json.dumps({"text": "still going"}) + "\n\n"
+    clock.advance(601)
+    assert w.saw(frame) is True
+    assert w.check() is None
+    clock.advance(601)
+    assert w.check() is not None  # the episode opens
+    w.saw(frame)
+    assert w.ended() == {"over": True}
+    assert w.check() is None, "a frame did not start the ten minutes again"
+    clock.advance(599)
+    assert w.check() is None
+    # A comment (a keep-alive) is no frame, and no progress.
+    assert w.saw(": keepalive\n\n") is False
 
 
 def test_progress_after_the_clock_moved_keeps_the_reply_out_of_a_stall(clock):

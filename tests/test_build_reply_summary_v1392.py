@@ -57,7 +57,8 @@ class LongReply:
     (a tool-less ``complete`` with the compaction prompt) names every path it
     is shown — and one more, :data:`GHOST`, which no record supports."""
 
-    def __init__(self, app, rounds: int = ROUNDS, *, who=CLAUDE, summary: str | None = None) -> None:
+    def __init__(self, app, rounds: int = ROUNDS, *, who=CLAUDE, summary: str | None = None,
+                 summary_by: tuple[str, str] | None = None) -> None:
         self.app = app
         self.provider, self.model = who
         self.rounds = rounds
@@ -65,6 +66,9 @@ class LongReply:
         self.calls: list[dict] = []
         self.summaries: list[dict] = []
         self.summary = summary
+        #: Who the router says answered the summarizer (default: the reply's
+        #: own model) — ("mock", "mock") is the demo model standing in.
+        self.summary_by = summary_by
         self._pinned = False
 
     def _pin(self, system: str) -> None:
@@ -108,9 +112,10 @@ class LongReply:
             else:
                 text = "GOAL: write the modules.\nDONE:\n" + "\n".join(f"- Wrote {p}" for p in seen)
                 text += f"\n- Wrote {GHOST}"
-            self.summaries.append({"paths": seen, "text": text, "prior": "EARLIER SUMMARY" in user})
-            return RouteResult(LLMResponse(text=text, usage={"input_tokens": 50, "output_tokens": 20}),
-                               self.provider, self.model)
+            self.summaries.append({"paths": seen, "text": text, "prior": "EARLIER SUMMARY" in user,
+                                   "at_call": len(self.calls)})
+            by = self.summary_by or (self.provider, self.model)
+            return RouteResult(LLMResponse(text=text, usage={"input_tokens": 50, "output_tokens": 20}), *by)
         return RouteResult(LLMResponse(text="Done.", usage={"input_tokens": 3, "output_tokens": 1}),
                            self.provider, self.model)
 
@@ -168,8 +173,14 @@ async def test_a_300_round_reply_keeps_every_path_it_touched_and_cuts_one_no_rec
     summary_calls = [c for c in line["calls"] if c.get("kind") == "summary"]
     assert len(summary_calls) == len(script.summaries)
     assert summary_calls[-1]["summarized"] == said[-1]["steps"]
-    # The summary's own use is on the reply's receipt.
-    assert done["usage"]["input_tokens"] >= 50 * len(script.summaries)
+    # The summary's own use is on the reply's receipt — exactly: every call
+    # of the reply (3 tokens in, 1 out) and every summary (50 in, 20 out).
+    assert done["usage"]["input_tokens"] == 3 * len(script.calls) + 50 * len(script.summaries)
+    assert done["usage"]["output_tokens"] == len(script.calls) + 20 * len(script.summaries)
+    # ...and its cost: the Timeline's calls (the summaries' among them) add up
+    # to the receipt's cost.
+    assert done["usage"]["cost_usd"] > 0
+    assert sum(c["usage"]["cost_usd"] for c in line["calls"]) == pytest.approx(done["usage"]["cost_usd"], abs=2e-6)
     # Nothing it summarized was lost from the reply's own record: the line's
     # steps are every round's.
     assert len([s for s in line["steps"] if s["name"] == "write_file"]) == ROUNDS
@@ -235,11 +246,21 @@ async def test_an_empty_summary_keeps_todays_trimming_and_waits_before_trying_ag
     assert dict(frames)["done"]["reply"] == "All written."
     assert [e for e, _ in frames if e == RS.SUMMARY_FRAME] == []
     assert "# Earlier in this conversation (compacted" not in script.calls[-1]["system"]
-    # A failed try is not repeated round after round (each is a model call).
-    tries = len(script.summaries)
-    assert tries >= 1
-    over = sum(
-        1 for c in script.calls
-        if estimate_tokens(c["system"]) > 0
-    )
-    assert tries <= max(1, over // RS.RETRY_ROUNDS + 1)
+    # A failed try is not repeated round after round (each is a model call
+    # on the user's plan): the next waits RETRY_ROUNDS rounds.
+    tries = [s["at_call"] for s in script.summaries]
+    assert len(tries) >= 2, f"the reply never tried again: {tries}"
+    gaps = [b - a for a, b in zip(tries, tries[1:])]
+    assert min(gaps) >= RS.RETRY_ROUNDS, gaps
+
+
+async def test_a_summary_the_demo_model_answered_is_never_kept(app, work):
+    """The reply runs on a real model, but the router served the summarizer
+    with the demo model: its text is not a summary (the honest-mock rule,
+    after the call)."""
+    script = _wire(app, LongReply(app, rounds=120, summary_by=("mock", "mock")))
+    sid = new_session(app, work, approval_mode="yolo")["id"]
+    frames = await _run(app, sid, "bt-demo-route")
+    assert script.summaries, "the summarizer was never asked"
+    assert [e for e, _ in frames if e == RS.SUMMARY_FRAME] == []
+    assert "# Earlier in this conversation (compacted" not in script.calls[-1]["system"]
