@@ -14,14 +14,16 @@ the durable part and the rules every night task runs under:
   session and turn, and NOTES — what the morning needs to know (a step left
   for the user, low trust, the time limit, the environment its tests used).
 * THE POSTURE (decision 4, :func:`posture_setup`): a night turn edits files
-  and runs commands inside its own branch folder WITHOUT ASKING — the
-  session's "Don't ask" (``yolo``) plus a grant for the command tools, so the
-  folder's own checks and the project's checkers run too — and its reply is
-  capped at the task's time limit (the existing ``setup.cap`` minutes). It is
-  applied PER TURN, never stored on the session: the morning's own messages
-  in that session run under the user's own posture again. The safety floors
-  are not postures and still ask: a commit or push by the agent, a project's
-  own command lines, a risky page click, spending, Local only.
+  and runs commands inside its own branch folder WITHOUT ASKING — "Approve
+  for me" plus a grant for the command tools, so the folder's own checks and
+  the project's checkers run too — and its reply is capped at the task's time
+  limit (the existing ``setup.cap`` minutes). EVERYTHING ELSE ASKS
+  (:data:`RUNS_UNASKED`, review: the first cut ran "Don't ask", which granted
+  the web, the agent's browser and a folder rule's "ask" too). It is applied
+  PER TURN, never stored on the session: the morning's own messages in that
+  session run under the user's own posture again. The safety floors are not
+  postures and still ask: a commit or push by the agent, a project's own
+  command lines, a risky page click, spending, Local only.
 * THE WAIT (decision 1, :class:`NightTurn`): a question in a night turn waits
   ``night_card_wait_minutes`` (the phone gets it meanwhile when a phone
   channel is set up, v1.392.0's rules), then THAT step is declined — a safety
@@ -95,8 +97,38 @@ NOTE_KINDS = ("declined", "unanswered", "low_trust", "limit", "env", "error", "s
 #: own commands AND the folder's checks and the project's checkers (each of
 #: which needs a grant wider than one call, ``finish.needs_a_person``).
 COMMAND_TOOLS = ("shell", "process_start", "process_write")
-#: The night turn's posture: "Don't ask" (the safety floors still ask).
-POSTURE = "yolo"
+#: The night turn's posture: "Approve for me" (decision 4's own words) — NOT
+#: "Don't ask" (review): ``yolo`` granted EVERY ask the turn could meet,
+#: including a folder rule's "ask" and every tool outside the coding set. The
+#: posture is the base; :data:`RUNS_UNASKED` is the night's own allow-list on
+#: top of it, and the safety floors still ask.
+POSTURE = "approve_for_me"
+#: THE NIGHT ALLOW-LIST (review of v1.398.0): the ONLY tools a night turn
+#: runs WITHOUT ASKING — reading and editing files in its own branch folder,
+#: its commands, its step list, reading a skill, and the helpers on its team
+#: (a helper works with this turn's tools under these same rules,
+#: ``chat_turn.helper_parent_now``). Every OTHER tool the turn holds asks —
+#: the web (``web_fetch``, ``web_search``: the main way a page's words reach
+#: the model, and a request out of the PC), the agent's browser (``page_*``),
+#: a connected app's resources, anything an app adds — whatever its own tier
+#: or the session's posture says, past every grant (tab, standing,
+#: conversation), so nobody watching means it is declined after the card wait
+#: and lands under "needs you". ``ask_user`` asks the user in its own way (its
+#: own night wait, ``daemon/mcp_turn``).
+RUNS_UNASKED = frozenset({
+    "read_file", "glob", "grep", "list_files", "view_image",
+    "write_file", "edit_file", "multi_edit", "apply_patch", "notebook_edit",
+    *COMMAND_TOOLS, "process_read", "process_stop",
+    "plan_update", "skill_search", "skill_load",
+    "delegate", "spawn_agent", "list_agents",
+    "ask_user",
+})
+
+
+def asks_at_night(tool: str) -> bool:
+    """Does a call of ``tool`` (a REAL tool name) ask in a night turn,
+    whatever the posture and the grants say? Pure."""
+    return str(tool or "") not in RUNS_UNASKED
 
 
 class NightTaskRecord(SQLModel, table=True):
@@ -583,9 +615,10 @@ def max_at_once(config: Any) -> int:
 
 def posture_setup(setup: dict[str, Any], config: Any) -> dict[str, Any]:
     """The session's setup AS A NIGHT TURN RUNS IT (a copy; nothing stored):
-    "Don't ask" plus the command tools granted (decision 4), and the reply
-    capped at the task's minutes (a cap the session already has that is
-    SHORTER is kept)."""
+    "Approve for me" plus the command tools granted (decision 4) — the
+    night's allow-list (:data:`RUNS_UNASKED`) is the stream lane's own rule
+    on top — and the reply capped at the task's minutes (a cap the session
+    already has that is SHORTER is kept)."""
     from .reply_cap import SETUP_KEY as CAP_KEY
     from .reply_cap import clean as clean_cap
 
@@ -830,7 +863,7 @@ def last_reply_line(messages: list[dict[str, Any]], turn_ids: "set[str] | None" 
 __all__ = [
     "BY_NIGHT", "BY_PERSON", "BY_RESTART", "BY_WAIT", "COMMAND_TOOLS", "DONE", "ENDED", "FAILED",
     "NEEDS_YOU", "NIGHT_TURN", "NightRefused", "NightTaskRecord", "NightTurn", "POSTURE", "QUEUED",
-    "RUNNING", "STATES", "STOPPED", "add_note", "add_task", "ask_timeout", "call_words", "cancel_queued",
+    "RUNNING", "RUNS_UNASKED", "STATES", "asks_at_night", "STOPPED", "add_note", "add_task", "ask_timeout", "call_words", "cancel_queued",
     "card_wait_seconds", "current", "edit_task", "finish_task", "flush_notes", "get_task",
     "last_reply_line", "list_tasks", "mark_running", "max_at_once", "move_task", "note_unattended_turn",
     "outcome_of", "posture_setup", "remove_task", "reset_turn", "running_task_for", "set_session",

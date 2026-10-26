@@ -198,10 +198,14 @@ async def test_the_model_choices_are_checked_in_words(app, repo, monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def test_the_night_posture_is_dont_ask_with_the_command_tools_and_the_tasks_minutes(tmp_path):
+def test_the_night_posture_is_approve_for_me_with_the_command_tools_and_the_tasks_minutes(tmp_path):
     cfg = Config(home=tmp_path, project_root=tmp_path, night_task_minutes=45)
     out = N.posture_setup({"approval_mode": "always_ask", "granted_tools": ["web_fetch"]}, cfg)
-    assert out["approval_mode"] == "yolo"
+    # Review (moved on purpose): "Approve for me" — decision 4's own words —
+    # never "Don't ask"; the night's allow-list (``N.RUNS_UNASKED``) rides on
+    # top in the stream lane, so a granted web_fetch still asks at night
+    # (tests/test_night_shift_review_v1398.py).
+    assert out["approval_mode"] == "approve_for_me"
     assert out["granted_tools"] == ["web_fetch", "shell", "process_start", "process_write"]
     assert out["cap"] == {"minutes": 45}
     # A shorter cap the session has is kept; a dollar cap rides along.

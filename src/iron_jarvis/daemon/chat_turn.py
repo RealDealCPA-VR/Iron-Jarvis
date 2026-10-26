@@ -5499,13 +5499,29 @@ def helper_parent_now(
             for key in {name, tool.perm_key() if tool is not None else name}:
                 if rules.get(key) != "deny" and _base_mode(key) != "deny":
                     rules[key] = "ask"
+    # v1.398.0 review (night shift N1, decision 4): a NIGHT task's helper
+    # works under the night's allow-list too — every tool of the turn outside
+    # it (the web, the agent's browser, an app) asks in the helper, as in the
+    # turn, and is declined after the night's card wait (the runtime's own
+    # night clock); no grant handed down covers one.
+    from ..harness import night as _night
+
+    night_on = _night.current() is not None
+    if night_on and registry is not None:
+        for name in turn_tools:
+            if not _night.asks_at_night(name):
+                continue
+            tool = registry.get(name)
+            for key in {name, tool.perm_key() if tool is not None else name}:
+                if rules.get(key) != "deny" and _base_mode(key) != "deny":
+                    rules[key] = "ask"
     allow = []
     for name in sorted({str(g) for g in (grants or ()) if str(g).strip()}):
         if overrides.get(name) == "deny":
             continue
         if registry is not None and registry.get(name) is None:
             continue
-        if name in away:
+        if name in away or (night_on and _night.asks_at_night(name)):
             continue
         allow.append(name)
     low = bool(trust_state.get("low") or trust_state.get("tainted"))
