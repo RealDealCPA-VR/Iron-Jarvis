@@ -386,6 +386,17 @@ real_engine = pytest.mark.skipif(
 )
 
 
+def _patient_engine(monkeypatch) -> None:
+    """v1.397.2: a generous deadline for the REAL engine. A page has 20 s
+    (PAGE_DEADLINE_S, bound as the keyword-only DEFAULT of local_ocr_bytes and
+    recognize_png, so it lives in __kwdefaults__), and on v1.397.1's loaded
+    Tests runner one read ran past it and came back None. These tests prove
+    the engine reads the page, not how fast a runner is."""
+    monkeypatch.setattr(local_ocr, "PAGE_DEADLINE_S", 120.0)
+    for fn in (local_ocr.local_ocr_bytes, local_ocr.recognize_png):
+        monkeypatch.setattr(fn, "__kwdefaults__", {**(fn.__kwdefaults__ or {}), "deadline_s": 120.0})
+
+
 def _w2_png(path: Path) -> None:
     from PIL import Image, ImageDraw, ImageFont
 
@@ -405,6 +416,7 @@ def _w2_png(path: Path) -> None:
 @real_engine
 def test_the_real_engine_reads_a_fictional_w2(tmp_path, monkeypatch):
     monkeypatch.setattr(local_ocr, "_FORCED_OFF", False)
+    _patient_engine(monkeypatch)
     png = tmp_path / "w2.png"
     _w2_png(png)
 
@@ -420,6 +432,7 @@ def test_the_real_engine_reads_a_fictional_w2(tmp_path, monkeypatch):
 async def test_the_real_engine_reads_a_scan_with_only_the_mock_connected(tmp_path, monkeypatch):
     """The whole point: no vision model, no cloud, and the scan is still read."""
     monkeypatch.setattr(local_ocr, "_FORCED_OFF", False)
+    _patient_engine(monkeypatch)
     from PIL import Image
     from fpdf import FPDF
 

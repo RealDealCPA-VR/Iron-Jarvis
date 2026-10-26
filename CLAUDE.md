@@ -3776,6 +3776,22 @@ does not need a bump, stop and bump it.
   status. Reproduced with a plugin that makes every health answer take 2.5 s
   (the old shape fails, the new passes). A wait bound as a DEFAULT argument
   is patched through `__defaults__`.
+  v1.397.2 (test-only): v1.397.1 was NOT published — three OTHER load races
+  on its gates, each reproduced by holding back the one async step it
+  depends on (scratch plugin), old shape red with CI's exact words, new
+  green: (1) `test_voice_offloop_v1333` closed the socket the moment the
+  final text arrived, but the route builds the NEXT recognizer after that
+  send, so a loaded runner shut the app down first (`1 == 2`) — it now waits
+  for the second build with the socket open; (2) the real Windows OCR tests
+  ran a page past its 20 s `PAGE_DEADLINE_S` (`None is not None`) — they set
+  120 s, and the deadline is a KEYWORD-ONLY default, so it is patched through
+  `__kwdefaults__` (not `__defaults__`); (3) `test_phone_apps_agent_v1387`
+  sent "approve" once a text naming the tool reached the fake phone, but the
+  general alert can arrive before the answerable question is recorded, so
+  "approve" read as a new chat (`['chat_escalated'] == ['approval_answered']`)
+  — it now waits until `poller._fresh_open_prompt` sees the question. Wait
+  for the state the next step needs, never for a message that only
+  usually comes after it.
 - **The bench MEASURES a team: one command runs the team, then the planner
   alone, and refuses the night before it starts** (v1.396.0, Phase 7 of
   `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`; a doer + a reviewer that found 10

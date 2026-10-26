@@ -153,6 +153,12 @@ async def test_the_agent_the_phone_handed_it_to_asks_the_phone_before_each_use(
         assert [r.get("status") for r in res] == ["chat_escalated"], res
         # The agent paused on GitHub's tool and ASKED THE PHONE — nothing ran yet.
         assert await _until(lambda: any("approve" in t.lower() and GH_TOOL in t for t in fake.texts())), fake.texts()
+        # v1.397.2: wait for the QUESTION the answer goes to, not only for a
+        # text that names the tool. The general alert can reach the phone
+        # before the answerable question is recorded, and on v1.397.1's loaded
+        # Release runner "approve" arrived first and was read as a new chat
+        # message (["chat_escalated"] instead of ["approval_answered"]).
+        assert await _until(lambda: poller._fresh_open_prompt("tg", SENDER) is not None), fake.texts()
         assert _gh_calls(p) == []
         fake.updates.append(_update(2, answer))
         res = await poller.poll_once()

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 
 from fastapi.testclient import TestClient
 
@@ -48,6 +49,14 @@ def test_the_model_and_each_recognizer_are_built_off_the_loop(tmp_path, monkeypa
         with client.websocket_connect("/voice/stream") as ws:
             ws.send_text('{"eof": true}')
             assert ws.receive_json() == {"text": "hello", "final": True}
+            # v1.397.2: the route sends the final text FIRST and then builds
+            # the next recognizer on a worker. Closing the socket at once let a
+            # loaded runner shut the app down before that build started
+            # (v1.397.1's Release gate: 1 recognizer, not 2). Keep the socket
+            # open until the build has happened.
+            deadline = time.monotonic() + 15
+            while len(threads["recognizer"]) < 2 and time.monotonic() < deadline:
+                time.sleep(0.02)
     assert len(threads["model"]) == 1
     assert len(threads["recognizer"]) == 2  # the first, and the one after eof
     assert loop_thread not in threads["model"] + threads["recognizer"]
