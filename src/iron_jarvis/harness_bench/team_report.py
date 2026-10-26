@@ -295,6 +295,10 @@ def measured_words(measured: Mapping[str, list[Mapping[str, Any]]], vendor: str,
             words = f"{U.NOT_KNOWN}: no reading came"
         else:
             words = "; ".join(f"{w['words']} window {result_words(w['result'])}" for w in a["windows"])
+            if a.get("runs_without_reading"):
+                # Said, never hidden: those runs' use is only in the span when
+                # a later reading came.
+                words += f" ({a['runs_without_reading']} run(s) on this account carried no reading)"
         texts.append((f"{a['name']}: " if len(rows) > 1 else "") + words)
     return " · ".join(texts)
 
@@ -321,8 +325,8 @@ def find_alone(team_config: Mapping[str, Any], team_records: list[Mapping[str, A
                configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any]]]]
                ) -> tuple[Mapping[str, Any], list[Mapping[str, Any]]] | None:
     """The single-model setup to answer against: Iron Jarvis on the team's
-    PLANNER (same provider and model) alone — the one sharing the most runs
-    with the team, the newest on a tie."""
+    PLANNER (same provider and model) alone — with the same effort first,
+    then the one sharing the most runs with the team, the newest on a tie."""
     team_keys = {_key(r) for r in _live(team_records)}
     best = None
     for config, records in configs:
@@ -331,7 +335,10 @@ def find_alone(team_config: Mapping[str, Any], team_records: list[Mapping[str, A
         if (config.get("provider"), config.get("model")) != (team_config.get("provider"), team_config.get("model")):
             continue
         shared = len(team_keys & {_key(r) for r in _live(records)})
-        rank = (shared, str(config.get("created_at") or ""))
+        # The same effort as the team's planner first (another effort is
+        # another setup), then the most runs in common, then the newest.
+        same_effort = str(config.get("effort") or "") == str(team_config.get("effort") or "")
+        rank = (same_effort, shared, str(config.get("created_at") or ""))
         if best is None or rank > best[0]:
             best = (rank, config, records)
     return (best[1], best[2]) if best else None

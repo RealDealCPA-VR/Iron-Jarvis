@@ -271,6 +271,9 @@ class JarvisTeamRunner(JarvisRunner):
             "team": self.team.identity(),
             "router": router_identity(),
             "member_prompt_sha256": _sha(MEMBER_PROMPT),
+            # A member's run stops at the home's step limit (it names none of
+            # its own): another limit is another setup.
+            "member_steps": int(getattr(self.platform.config, "max_agent_steps", 0) or 0),
         }
 
     def dry_run_lines(self) -> list[str]:

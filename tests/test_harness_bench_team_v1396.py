@@ -249,6 +249,14 @@ async def test_a_changed_team_is_a_new_folder_never_a_reused_record(world, tmp_p
     reread = await run_bench(runner=same, home=world.home, tasks=TASKS, names=[W.TASK_A], dry_run=True)
     assert reread.config_dir == team.config_dir
     assert any("would reuse the stored result" in line for line in reread.plan_lines)
+    # The members' step limit (the home's) is part of the team's setup too.
+    steps = world.platform.config.max_agent_steps
+    world.platform.config.max_agent_steps = steps + 8
+    try:
+        longer = await run_bench(runner=same, home=world.home, tasks=TASKS, names=[W.TASK_A], dry_run=True)
+    finally:
+        world.platform.config.max_agent_steps = steps
+    assert longer.config_dir not in (team.config_dir, dry.config_dir, other.config_dir)
 
 
 async def test_a_dry_run_lists_the_team_and_the_tasks_and_calls_nothing(world, tmp_path):
@@ -453,6 +461,32 @@ def test_a_span_is_measured_only_inside_one_window_period():
     assert U.measured_span([])["state"] == "not_known"
 
 
+def test_claude_alone_is_the_planners_own_setup_with_the_same_effort():
+    team_cfg = {"runner": "jarvis-team", "provider": "claude-cli", "model": "m", "effort": "medium"}
+    rec = {"task_id": "a", "passed": True}
+    high = ({"runner": "jarvis", "provider": "claude-cli", "model": "m", "effort": "high", "created_at": "2"},
+            [rec, {**rec, "repeat": 2}])
+    medium = ({"runner": "jarvis", "provider": "claude-cli", "model": "m", "effort": "medium", "created_at": "1"},
+              [rec])
+    other = ({"runner": "jarvis", "provider": "codex-cli", "model": "m", "effort": "medium"}, [rec])
+    cli = ({"runner": "claude", "provider": "claude", "model": "m", "effort": "medium"}, [rec])
+    got = TRP.find_alone(team_cfg, [rec, {**rec, "repeat": 2}], [high, medium, other, cli])
+    assert got == medium  # the same effort wins over more runs in common
+    assert TRP.find_alone(team_cfg, [rec], [other, cli]) is None
+
+
+def test_a_run_whose_account_carried_no_reading_is_said_beside_the_span():
+    w = {"window": "5h", "window_mins": 300, "readings": 2, "one_period": True,
+         "first": {"at": U.iso(1e9), "t": 1e9, "percent": 10.0, "resets_at": "2030-01-01T05:00:00Z"},
+         "last": {"at": U.iso(1e9 + 5), "t": 1e9 + 5, "percent": 12.0, "resets_at": "2030-01-01T05:00:00Z"}}
+    acct = {"vendor": "claude", "account": U.THIS_PC, "name": U.THIS_PC_WORDS, "calls": 2}
+    records = [{"task_id": "a", "started_at": "1", "accounts": {"k": {**acct, "windows": {}}}},
+               {"task_id": "b", "started_at": "2", "accounts": {"k": {**acct, "windows": {"5h": w}}}}]
+    words = TRP.measured_words(TRP.measured_usage(records), "claude", {"claude": {}})
+    assert words == ("5-hour window +2 points (10.0% to 12.0%, 2 readings) "
+                     "(1 run(s) on this account carried no reading)")
+
+
 def test_the_answer_says_not_enough_runs_when_the_numbers_cannot_answer():
     team_cfg = {"runner": "jarvis-team", "provider": "claude-cli", "model": "m"}
     alone_cfg = {"runner": "jarvis", "provider": "claude-cli", "model": "m"}
@@ -570,7 +604,8 @@ def test_the_jarvis_runners_identity_is_unchanged_and_the_team_only_adds_to_it(w
     team = T.JarvisTeamRunner(world.platform, team=_spec(tmp_path))
     ident = team.identity()
     assert set(ident) - set(JarvisRunner(world.platform, provider=W.PLANNER[0], model=W.PLANNER[1]).identity()) == {
-        "team", "router", "member_prompt_sha256"}
+        "team", "router", "member_prompt_sha256", "member_steps"}
+    assert ident["member_steps"] == world.platform.config.max_agent_steps
     assert ident["team"] == {
         "planner": {"provider": "claude-cli", "model": "claude-opus-4-8"},
         "members": [
@@ -618,3 +653,45 @@ async def test_an_older_record_is_reused_and_reads_as_not_known(world, tmp_path)
     assert again.records[0]["reused"] is True and len(world.calls) == calls
     report = (again.config_dir / "report.md").read_text(encoding="utf-8")
     assert "## Usage" not in report  # nothing to say about an older run's windows
+
+
+def test_one_command_makes_the_team_row_the_planner_alone_row_and_the_answer(tmp_path, monkeypatch):
+    """The live run is ONE command: ``--with-alone`` runs the planner alone
+    after the team, on the same home and settings, and the report answers."""
+    from typer.testing import CliRunner
+
+    from iron_jarvis.core.config import resolve_home
+    from iron_jarvis.harness_bench import bench as bench_mod
+    from iron_jarvis.harness_bench.cli import bench_app
+
+    monkeypatch.setenv("IRON_PROXY_DATA_DIR", str(tmp_path / "ipd"))
+    real = bench_mod.make_runner
+    wired: list = []
+
+    def make_runner(*a, **kw):
+        runner = real(*a, **kw)
+        wired.append(W.wire(runner.platform, monkeypatch))
+        return runner
+
+    monkeypatch.setattr(bench_mod, "make_runner", make_runner)
+    team = tmp_path / "team.toml"
+    team.write_text(W.team_toml(), encoding="utf-8")
+    root = tmp_path / "bench-root"
+    base = ["run", "--runner", "jarvis-team", "--team", str(team), "--root", str(root), "--tier", "frontier",
+            "--tasks", W.TASK_B, "--seed", "0", "--with-alone"]
+    dry = CliRunner().invoke(bench_app, [*base, "--dry-run"])
+    assert dry.exit_code == 0, dry.output
+    assert "jarvis-team-claude-cli-claude-opus-4-8-" in dry.output
+    assert "jarvis-claude-cli-claude-opus-4-8-" in dry.output
+    assert dry.output.count(f"  {W.TASK_B} [frontier, trap]: would run") == 2
+    assert wired[-1].calls == []
+    out = CliRunner().invoke(bench_app, base)
+    assert out.exit_code == 0, out.output
+    # The team's row first (its members made, then gone), the planner alone after.
+    assert out.output.index("jarvis-team-claude-cli") < out.output.index("jarvis-claude-cli-claude-opus-4-8-")
+    report = (resolve_home(root) / "harness-bench" / "report.md").read_text(encoding="utf-8")
+    assert "**The answer:** passed 0 of 1 vs Claude alone 1 of 1, using " in report
+    assert "% less Claude list-price" in report
+    plain = ["run", "--runner", "jarvis", "--provider", "claude-cli", "--model", "m", "--root", str(root)]
+    refused = CliRunner().invoke(bench_app, [*plain, "--with-alone", "--dry-run"])
+    assert refused.exit_code == 2 and "--with-alone applies to --runner jarvis-team only." in refused.output

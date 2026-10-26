@@ -33,8 +33,9 @@ def run_command(
         "", "--provider", help="Jarvis only, and required for it: the provider to answer with."),
     model: str = typer.Option(
         "", "--model",
-        help="Required: the model to answer with, passed to the runner explicitly so the record says "
-        "which one ran (a run without it is refused; --dry-run may list without it)."),
+        help="Required (except for jarvis-team, whose team file names its models): the model to answer "
+        "with, passed to the runner explicitly so the record says which one ran (a run without it is "
+        "refused; --dry-run may list without it)."),
     effort: str = typer.Option(
         "medium", "--effort",
         help="low, medium or high (default medium), passed to every runner explicitly (Claude Code "
@@ -61,6 +62,13 @@ def run_command(
         help="jarvis-team only, and required for it: a TOML file naming the planner ([planner] "
         "provider + model) and the members ([[members]] name, provider, model, roles, optional "
         "account). The team is part of the setup: another team is another results folder."),
+    with_alone: bool = typer.Option(
+        False, "--with-alone",
+        help="jarvis-team only: after the team, run its PLANNER alone (the jarvis runner on the planner's "
+        "provider and model, with the same tasks, repeats, seed, effort, rounds and dialect) in the same "
+        "home, so one command makes both rows and the report answers whether the team passes as many "
+        "tasks while using less of the planner's subscription. They run one after the other, never at "
+        "once: both draw on the same account's usage windows."),
     refine: bool = typer.Option(
         False, "--refine",
         help="Jarvis only: improve the harness (Propose-Probe-Compose). A model proposes harness "
@@ -107,6 +115,9 @@ def run_command(
     if team and runner != "jarvis-team":
         typer.echo("--team applies to --runner jarvis-team only.")
         raise typer.Exit(code=2)
+    if with_alone and runner != "jarvis-team":
+        typer.echo("--with-alone applies to --runner jarvis-team only.")
+        raise typer.Exit(code=2)
     try:
         # v1.383.0: refused BEFORE any task starts (and before the Jarvis
         # runner builds its platform), in one plain sentence each.
@@ -136,20 +147,47 @@ def run_command(
             rounds=rounds if rounds is not None else DEFAULT_ROUNDS, binary=binary or None,
             dialect=dialect, effort=effort, team=team,
         )
-        result = asyncio.run(run_bench(
-            runner=bench_runner, home=home, names=_split(tasks), seed=seed,
-            max_tasks=max_tasks, dry_run=dry_run, echo=typer.echo, tier=tier, repeats=repeats,
-        ))
     except (BenchRefused, ValueError) as exc:
         typer.echo(str(exc))
         raise typer.Exit(code=2) from exc
-    except BudgetMismatch as exc:
-        typer.echo(f"The results were written, but {exc}")
-        raise typer.Exit(code=1) from exc
+    setups = [bench_runner]
+    if with_alone:
+        # v1.396.0: the planner ALONE, on the team runner's own platform and
+        # settings — the row the plan's question compares the team with. It
+        # runs AFTER the team (the team's members are gone by then).
+        from .runners import JarvisRunner
+
+        setups.append(JarvisRunner(
+            bench_runner.platform, provider=bench_runner.provider, model=bench_runner.model,
+            round_budget=bench_runner.round_budget, dialect=bench_runner.dialect, effort=bench_runner.effort,
+        ))
+    unbalanced = False
+    for setup in setups:
+        try:
+            result = asyncio.run(run_bench(
+                runner=setup, home=home, names=_split(tasks), seed=seed,
+                max_tasks=max_tasks, dry_run=dry_run, echo=typer.echo, tier=tier, repeats=repeats,
+            ))
+        except (BenchRefused, ValueError) as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(code=2) from exc
+        except BudgetMismatch as exc:
+            # The results were written; the next setup still runs.
+            typer.echo(f"The results were written, but {exc}")
+            unbalanced = True
+            continue
+        _say(result, dry_run=dry_run, repeats=repeats)
+    if dry_run:
+        typer.echo("Nothing was run (dry run).")
+    if unbalanced:
+        raise typer.Exit(code=1)
+
+
+def _say(result, *, dry_run: bool, repeats: int) -> None:
+    """One setup's lines: its plan (a dry run) or its pass count."""
     if dry_run:
         for line in result.plan_lines:
             typer.echo(line)
-        typer.echo("Nothing was run (dry run).")
         return
     passed = sum(1 for r in result.records if r.get("passed") is True)
     scored = sum(1 for r in result.records if r.get("passed") is not None)
