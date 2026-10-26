@@ -99,7 +99,6 @@ async def test_an_event_handler_never_carries_the_turns_progress_mark():
 
 
 async def test_a_single_dispatched_handler_never_carries_it_either():
-    bus = EventBus()
     seen: list[object] = []
 
     def handler(event):

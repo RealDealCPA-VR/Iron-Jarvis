@@ -18,17 +18,18 @@ import asyncio
 
 import pytest
 
+from iron_jarvis.comm.channels import DesktopChannel
+from iron_jarvis.daemon.app import create_app
+from iron_jarvis.daemon.routes import chat as chat_routes
 from iron_jarvis.harness import stall
 from iron_jarvis.providers.adapters.base import ToolCall
-from tests.test_build_phone_ask_v1392 import (  # noqa: F401 — fixtures
+from tests.test_build_phone_ask_v1392 import (
+    CHAT_CFG,
+    ChatMockChannel,
+    FakeClock,
     _card,
     _looks,
     _msg,
-    app,
-    clock,
-    phone,
-    ticks,
-    work,
 )
 from tests.test_build_sessions_v1367 import (
     Script,
@@ -40,6 +41,54 @@ from tests.test_build_sessions_v1367 import (
     until,
     wire,
 )
+
+
+@pytest.fixture()
+def app(tmp_path):
+    return create_app(str(tmp_path / "home"))
+
+
+@pytest.fixture()
+def work(tmp_path):
+    folder = tmp_path / "work"
+    folder.mkdir()
+    return folder
+
+
+@pytest.fixture()
+def clock(monkeypatch):
+    c = FakeClock()
+    monkeypatch.setattr(stall, "CLOCK", c)
+    monkeypatch.setattr(chat_routes, "_ASK_POLL_S", 0.02)
+    return c
+
+
+@pytest.fixture()
+def phone(app):
+    """The base file's phone: a chat-enabled channel with a conversation,
+    and a "This PC" destination that must stay quiet."""
+    platform = app.state.platform
+    ch = ChatMockChannel(dict(CHAT_CFG))
+    platform.notifier.add_channel("tg", ch)
+    desk = DesktopChannel({})
+    desk_sent: list[str] = []
+    desk.send = lambda message: desk_sent.append(message) or {"ok": True}  # type: ignore[method-assign]
+    platform.notifier.add_channel("this-pc", desk)
+    app.state.inbound_poller.thread_store.resolve("tg", "777", "Val")
+    return ch, desk_sent
+
+
+@pytest.fixture()
+def ticks(monkeypatch):
+    seen = {"n": 0}
+    real = stall.PhoneAsk.tick
+
+    def counted(self):
+        seen["n"] += 1
+        return real(self)
+
+    monkeypatch.setattr(stall.PhoneAsk, "tick", counted)
+    return seen
 
 
 def _cards(app, turn: str) -> list[dict]:
