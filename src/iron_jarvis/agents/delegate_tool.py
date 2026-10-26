@@ -675,10 +675,13 @@ class DelegateTool(Tool):
                 # too") — never the vendor's raw words, and never a hint that
                 # handing the same task out again could help.
                 refused = refusal_reason(exc)
+                # v1.394.0 review: named as the planner named it (a team
+                # member's own name, never its base type — "builder crashed"
+                # sent the planner looking at the wrong teammate).
                 error = (
-                    f"delegated agent '{child_session.agent_type.value}' could not finish: {refused}"
+                    f"delegated agent '{target_name}' could not finish: {refused}"
                     if refused
-                    else f"delegated agent '{child_session.agent_type.value}' crashed: "
+                    else f"delegated agent '{target_name}' crashed: "
                     f"{type(exc).__name__}: {exc}"
                 )
                 await orch._finalize_failed(child_session, exc)

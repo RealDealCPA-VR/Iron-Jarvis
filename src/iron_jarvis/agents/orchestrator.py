@@ -1169,7 +1169,18 @@ class Orchestrator:
             # readers resolve exactly as they did before this column existed.
             agent_name=" ".join(str(agent_name or "").split()),
             provider=provider or self.p.config.default_provider,
-            model=model or self.p.config.default_model,
+            # v1.394.0 review: the configured default MODEL belongs to the
+            # configured default PROVIDER only (the local-only check above
+            # says the same). A run on another provider with no model named
+            # gets "" — that provider's own default — never another
+            # provider's model id (an agent pinned to a provider only, from
+            # a delegate, a spawn, an assignment or a schedule).
+            model=model or (
+                self.p.config.default_model
+                if (provider or self.p.config.default_provider)
+                in (self.p.config.default_provider, "auto")
+                else ""
+            ),
             status=SessionStatus.ACTIVE,
             # A project only applies INSIDE the Projects module: a session carries
             # a project ONLY when one is passed explicitly (project tasks, and
