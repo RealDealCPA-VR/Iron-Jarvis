@@ -305,6 +305,26 @@ async def test_a_task_the_bench_itself_crashes_on_never_stops_the_rest(world, tm
     assert f"{W.TASK_B} [frontier, trap]: would reuse the stored result" in text
 
 
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows's limit on a program's folder")
+async def test_a_root_too_deep_for_a_check_to_start_in_is_refused_before_any_task(world, tmp_path):
+    """Found by this review running the bench's own tests under a deep TEMP:
+    a run's grading folder past Windows's limit for a program's working folder
+    made every hidden check "could not start" ([WinError 267]) — a whole night
+    unscored. A root that deep is refused before the first task, in words;
+    nothing is made (the folder need not even exist)."""
+    from iron_jarvis.harness_bench.bench import MAX_RUN_DIR_CHARS
+
+    deep = tmp_path / ("d" * max(1, 230 - len(str(tmp_path))))
+    with pytest.raises(BenchRefused, match="past the 248 Windows allows"):
+        await run_bench(runner=_runner(world, tmp_path), home=deep, tasks=TASKS, names=[W.TASK_A], seed=0,
+                        repeats=3, dry_run=True)
+    assert not deep.exists() and world.calls == []
+    assert MAX_RUN_DIR_CHARS == 248
+    # The world's own home (a normal depth) is fine.
+    ok = await _run(world, _runner(world, tmp_path), names=[W.TASK_A], dry_run=True)
+    assert ok.plan_lines
+
+
 # --------------------------------------------------------------------------- #
 # the refine ledger still refuses a real mismatch
 # --------------------------------------------------------------------------- #

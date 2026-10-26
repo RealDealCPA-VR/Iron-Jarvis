@@ -91,7 +91,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .. import __version__
 from .catalog import TASKS_DIR, Task, TaskError, load_tasks, materialize, select_tasks, tree_hash
@@ -679,6 +679,38 @@ async def _run_in_agent_folder(
     return record
 
 
+#: v1.396.0 review: the longest a folder a program is STARTED in may be.
+#: Windows refuses a working folder of MAX_PATH (260) or more even with long
+#: paths turned on (``[WinError 267] The directory name is invalid``); the
+#: margin leaves room for the drive's own rules.
+MAX_RUN_DIR_CHARS = 248
+
+
+def run_folder_too_deep(cfg_dir: Path, keys: Iterable[str]) -> str:
+    """One sentence when a planned run's folders would be too long to start a
+    program in — a run's grading folder (where its hidden check is started)
+    or the agent's own work folder under the system temp — else "". Reads no
+    disk."""
+    if os.name != "nt":
+        return ""
+    keys = list(keys)
+    if not keys:
+        return ""
+    try:
+        base = Path(cfg_dir).resolve()
+        grade = max((str(base / "runs" / k / "grade") for k in keys), key=len)
+        work = str(agent_runs_root() / ("0" * 16) / "run" / "work")
+    except (OSError, ValueError):
+        return ""
+    for folder, words in ((grade, "a run's grading folder"), (work, "the agent's work folder")):
+        if len(folder) > MAX_RUN_DIR_CHARS:
+            return (f"{words[0].upper() + words[1:]} would be {len(folder)} characters long ({folder}), past the "
+                    f"{MAX_RUN_DIR_CHARS} Windows allows for a folder a program starts in, so every check would "
+                    "fail to start. Use a shorter --root (for example C:\\ijbench)"
+                    + (" and a shorter TEMP folder." if words.startswith("the agent") else "."))
+    return ""
+
+
 async def _crashed_run(
     task: Task, runner: Any, config: Configuration, cfg_dir: Path, ledger: BudgetLedger, *,
     repeat: int, label: str, exc: BaseException, echo: Callable[[str], None],
@@ -881,6 +913,13 @@ async def run_bench(
     plan = [(t, k) for k in range(1, repeats + 1) for t in selected]
     result = BenchResult(config_dir=cfg_dir, config=config, planned=[run_key(t.id, k) for t, k in plan],
                          dry_run=dry_run)
+    # v1.396.0 review: a --root so deep that a run's grading folder (the
+    # check's working folder) passes Windows's limit for a program's folder
+    # made EVERY check "could not start" — a whole night unscored. Refused
+    # here, before any task, in words.
+    deep = run_folder_too_deep(cfg_dir, result.planned)
+    if deep:
+        raise BenchRefused(deep)
     # v1.396.0: a runner refuses in words, before any task, a home it cannot
     # measure in (a single-model row beside someone else's model team).
     ready = getattr(runner, "check_ready", None)
