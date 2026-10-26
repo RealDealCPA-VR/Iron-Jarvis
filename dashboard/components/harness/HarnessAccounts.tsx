@@ -17,6 +17,12 @@
  *    reset time, Resume when ready — Cancel while it waits — and Choose
  *    account); sign-in, a removed account and a turned-off one in their own
  *    words, with no reset time and no Resume unless the daemon says so.
+ *    v1.393.0 (the long-jobs plan's Phase 4): the daemon usually arms the
+ *    wait BY ITSELF, so the card mostly reads "Waiting for <account>'s reset
+ *    at <time>; it carries on by itself", with Cancel and Choose account.
+ *  - v1.393.0: the chip also says the account's current usage window from
+ *    the cached snapshot ("63% of the 5-hour window, resets 3:40 PM"; "usage
+ *    not known yet" before the vendor sent a number — never 0%).
  *
  * An Iron Jarvis without the account list (a 404) gets no chip at all — the
  * older-daemon rule; nothing here guesses an account.
@@ -33,12 +39,15 @@ import {
   RESUME_WHEN_READY,
   accountBlockedReason,
   accountStatusLine,
+  accountUsageLine,
+  accountUsageWords,
   limitCardLine,
   limitCardWords,
-  resetWords,
+  limitWaitingWords,
   vendorPlanLine,
   type AccountLimit,
   type AccountVendor,
+  type AccountWait,
   type AccountsView,
   type BuildAccount,
 } from "@/lib/buildAccounts";
@@ -261,6 +270,7 @@ export function AccountChip({
   }, [open]);
   const line = account ? accountStatusLine(account) : null;
   const warn = !!line && warns(line.kind);
+  const usage = account ? accountUsageWords(account) : "";
   return (
     <div ref={boxRef} className="relative flex min-w-0 items-center gap-1.5">
       <button
@@ -272,7 +282,7 @@ export function AccountChip({
         onClick={() => setOpen(!open)}
         title={
           account
-            ? [account.name, vendorPlanLine(account), line?.text].filter(Boolean).join(" · ")
+            ? [accountUsageLine(account), vendorPlanLine(account)].filter(Boolean).join(" · ")
             : "Choose an account"
         }
         className={`inline-flex h-7 max-w-[14rem] items-center gap-1.5 rounded-lg px-2 text-[12px] transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 ${
@@ -300,6 +310,19 @@ export function AccountChip({
               the tooltip and on the limit card, and a long line here
               squeezed the session's title to a few letters. */}
           {line.text.split(" · ")[0]}
+        </span>
+      ) : null}
+      {/* v1.393.0: the account's current usage window, from the cached
+          snapshot (never a new call). Wide screens only: on a narrow header
+          it would squeeze the session's title (the chip's tooltip says it on
+          every width). */}
+      {account && !warn && usage ? (
+        <span
+          data-testid="account-chip-usage"
+          title={usage}
+          className="hidden min-w-0 max-w-[18rem] truncate whitespace-nowrap text-[12px] text-zinc-500 lg:inline"
+        >
+          {usage}
         </span>
       ) : null}
       {open ? (
@@ -333,7 +356,7 @@ export function AccountChip({
 export function AccountLimitCard({
   limit,
   waiting,
-  waitingResetsAt,
+  wait,
   busy,
   error,
   onResume,
@@ -342,10 +365,12 @@ export function AccountLimitCard({
   chooser,
 }: {
   limit: AccountLimit;
-  /** "Resume when ready" is armed (the daemon waits for the reset). */
+  /** "Resume when ready" is armed (the daemon waits for the reset) — by the
+   *  press, or (v1.393.0) by itself when the reply met the limit. */
   waiting: boolean;
-  /** The armed wait's own reset time, when the daemon sent one. */
-  waitingResetsAt?: string | null;
+  /** The armed wait (its own reset time — the daemon's re-check can move it
+   *  — and the account's group), when the daemon sent one. */
+  wait?: AccountWait | null;
   busy?: boolean;
   error?: string | null;
   onResume: () => void;
@@ -355,12 +380,12 @@ export function AccountLimitCard({
   chooser?: ReactNode;
 }) {
   const words = limitCardWords(limit);
-  // THE RESET TIME IS SAID ONCE (v1.369.0 review): on the account's line.
-  // While "Resume when ready" waits, that line carries the WAIT's own reset
-  // time (the daemon's re-check can move it) and the waiting sentence says
-  // only what happens; with no time known, the sentence says so instead.
-  const when = waiting ? resetWords(waitingResetsAt ?? limit.resetsAt) : "";
-  const line = waiting ? (when ? `${limit.accountName} · ${when}` : limit.accountName) : limitCardLine(limit);
+  // THE RESET TIME IS SAID ONCE (v1.369.0 review). v1.393.0: while the reply
+  // waits it is said in the waiting sentence ("Waiting for Work's reset at
+  // 4:12 PM; it carries on by itself" — the WAIT's own reset time, which the
+  // daemon's re-check can move), and the account's line steps aside;
+  // otherwise on the account's line, as before.
+  const line = limitCardLine(limit);
   return (
     <div
       role="status"
@@ -371,24 +396,38 @@ export function AccountLimitCard({
       <p className="text-[13px] leading-relaxed text-zinc-100">
         <span className="font-medium">{words.title}</span> {words.body}
       </p>
-      <p data-testid="account-limit-line" className="text-[12px] italic text-zinc-400">
-        {line}
-      </p>
+      {waiting ? null : (
+        <p data-testid="account-limit-line" className="text-[12px] italic text-zinc-400">
+          {line}
+        </p>
+      )}
       {waiting ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <span data-testid="account-limit-waiting" className="inline-flex items-center gap-1.5 text-[12px] text-zinc-300">
-            <Loader2 size={12} className="animate-spin" aria-hidden />
-            {when ? "Waiting for the reset, then it continues." : "Waiting for it to be ready, then it continues."}
-          </span>
-          <button
-            type="button"
-            data-testid="account-limit-cancel"
-            onClick={onCancelWait}
-            disabled={busy}
-            className="rounded-md px-2 py-1 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:opacity-40"
-          >
-            Cancel
-          </button>
+        <div className="space-y-2">
+          <p data-testid="account-limit-waiting" className="flex items-start gap-1.5 text-[12px] text-zinc-300">
+            <Loader2 size={12} className="mt-0.5 shrink-0 animate-spin" aria-hidden />
+            <span>{limitWaitingWords(limit, wait ?? null)}</span>
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              data-testid="account-limit-cancel"
+              onClick={onCancelWait}
+              disabled={busy}
+              className="rounded-md px-2 py-1 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            {/* v1.393.0: another account now, as on the card before it waited. */}
+            <button
+              type="button"
+              data-testid="account-limit-choose"
+              onClick={onChoose}
+              disabled={busy}
+              className="btn-ghost text-xs"
+            >
+              {CHOOSE_ACCOUNT}
+            </button>
+          </div>
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">

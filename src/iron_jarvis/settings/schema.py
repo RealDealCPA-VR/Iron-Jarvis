@@ -151,6 +151,52 @@ def _range(lo: float, hi: float | None = None) -> Callable[[Any], None]:
     return check
 
 
+#: v1.393.0: the Group choice's own words (the Iron-Proxy card says them too —
+#: dashboard/lib/ironProxy.ts ``GROUP_HELP``, pinned equal).
+ACCOUNT_GROUPS_HELP = (
+    "Accounts in the same group can take over from each other when one reaches its limit. "
+    "Work and personal accounts should be in different groups."
+)
+#: The most groups, and accounts in one group, a save may hold.
+ACCOUNT_GROUPS_MAX = 20
+ACCOUNT_GROUP_SIZE_MAX = 20
+
+
+def _account_groups_shape(v: Any) -> None:
+    """THE shape of ``account_groups`` (v1.393.0), refused in words before
+    anything is saved: ``{name: [account ids]}``, a name of 1–40 characters,
+    each account in ONE group. Whether each id is an Iron-Proxy account is
+    the writer's check (it reads the cached snapshot)."""
+    from ..core.config import ACCOUNT_GROUP_NAME_MAX
+
+    if not isinstance(v, dict):
+        raise ValueError("must be a set of group names, each with its accounts")
+    if len(v) > ACCOUNT_GROUPS_MAX:
+        raise ValueError(f"must hold at most {ACCOUNT_GROUPS_MAX} groups")
+    seen: dict[str, str] = {}
+    names: set[str] = set()
+    for raw_name, ids in v.items():
+        name = " ".join(str(raw_name).split()) if isinstance(raw_name, str) else ""
+        if not name:
+            raise ValueError("must give every group a name")
+        if len(name) > ACCOUNT_GROUP_NAME_MAX:
+            raise ValueError(f"must have names of at most {ACCOUNT_GROUP_NAME_MAX} characters")
+        if name.casefold() in names:
+            raise ValueError(f"must have different names (two are called “{name}”)")
+        names.add(name.casefold())
+        if not isinstance(ids, list) or not all(isinstance(i, str) and i.strip() for i in ids):
+            raise ValueError(f"must list the accounts of “{name}”")
+        if len(ids) > ACCOUNT_GROUP_SIZE_MAX:
+            raise ValueError(f"must hold at most {ACCOUNT_GROUP_SIZE_MAX} accounts in one group")
+        for raw in ids:
+            pid = raw.strip()
+            if pid in seen and seen[pid] != name:
+                raise ValueError(
+                    f"must put each account in one group only (one is in “{seen[pid]}” and “{name}”)"
+                )
+            seen[pid] = name
+
+
 S = SettingDef
 
 SETTINGS: tuple[SettingDef, ...] = (
@@ -256,6 +302,17 @@ SETTINGS: tuple[SettingDef, ...] = (
       "Pick which of your signed-in Claude, Codex or Grok accounts each request uses. "
       "Add the accounts under Connections, Several accounts (Iron-Proxy).",
       tier="ask", put=False, aliases=("iron proxy", "iron-proxy", "shared accounts", "accounts switcher")),
+    # v1.393.0 (the long-jobs plan's Phase 4, decision 4): account groups.
+    # Made on the Iron-Proxy card's Group choice (the same writer); which
+    # account ids exist is the writer's check at save time. "ask-floor" in
+    # chat (v1.393.0 review; the doer had "ask", which a yolo chat runs with
+    # no card and a standing grant may lift): which accounts may take over
+    # each other's conversations is the user's privacy decision (work and
+    # personal never mix), so every change from chat is carded, every time.
+    S("account_groups", "Account groups", "connections", "dict",
+      ACCOUNT_GROUPS_HELP,
+      tier="ask-floor", section="Several accounts", advanced=True, check=_account_groups_shape,
+      aliases=("account group", "account groups", "work accounts", "take over at a limit")),
     S("browser_access", "Your browser", "connections", "enum",
       "What Jarvis may do in your own browser through the add-on.",
       options=(("off", "Off"), ("read_only", "Read pages only"), ("interactive", "Read and act (each action asks)")),
@@ -339,6 +396,17 @@ SETTINGS: tuple[SettingDef, ...] = (
       "in the session; nothing is handed to an agent.",
       tier="allow", check=_range(0, 1000),
       aliases=("build round budget", "build steps", "build step limit")),
+    # v1.393.0 (the long-jobs plan's Phase 4, decision 4): a coding reply cut
+    # off by its account's limit waits for the reset and carries on by itself
+    # (today's "Resume when ready", with no press). Read live.
+    S("build_auto_resume", "Carry on by itself after an account's limit", "automation", "bool",
+      "When a coding session's Claude Code or Codex account reaches its limit, the reply waits "
+      "for the reset and then carries on by itself, the way Resume when ready does; if the "
+      "account is in an account group, another account of that group may carry it on first. "
+      "Cancel or Choose account on the limit card still work. Off: nothing carries on by "
+      "itself; the card waits for you to press Resume when ready.",
+      tier="allow",
+      aliases=("resume when ready", "auto resume", "account limit", "carry on after a limit")),
     # v1.350.0: an agent's plan, shown before any step runs. Turning it OFF
     # from chat asks every time (a model must not quietly drop the check).
     S("plan_approval", "Ask me to approve an agent's plan before it starts", "automation", "bool",

@@ -29,6 +29,11 @@
  *        kind = usage | rate | busy | other | signin | missing | disabled
  *   a reply line's `accountLimit` (the same card), a continuation question's
  *        `continuation: true` (hidden); done.route.account {id, name, note?}
+ *   v1.393.0 (the long-jobs plan's Phase 4, limits without a press):
+ *        `account_wait` gains `auto` (armed by itself, no press) and `group`
+ *        (another account of that group may take over first); a reply line
+ *        (and its hidden question) carried on with another account of the
+ *        group keeps `accountMove {from, fromName, to, toName, group}`.
  *
  * THE OLDER-DAEMON RULE: a 404 on GET /build/accounts hides the chip and the
  * list (`fetchAccounts` answers null); nothing is guessed. A PERCENT IS THE
@@ -125,6 +130,11 @@ export interface AccountWait {
   account: string;
   accountName: string;
   resetsAt: string | null;
+  /** v1.393.0: armed BY ITSELF when the reply met the limit (no press). */
+  auto: boolean;
+  /** v1.393.0: the account's group when it was armed ("" = none): another
+   *  account of that group may take over before the reset. */
+  group: string;
 }
 
 function rec(v: unknown): Record<string, unknown> | null {
@@ -302,6 +312,8 @@ export function decodeAccountWait(raw: unknown): AccountWait | null {
     account: str(r.account, 120),
     accountName: str(r.account_name, 80),
     resetsAt: isoOrNull(r.resets_at),
+    auto: r.auto === true,
+    group: str(r.group, 80),
   };
 }
 
@@ -480,4 +492,87 @@ export function limitCardWords(limit: AccountLimit): {
 export function limitCardLine(limit: AccountLimit, now: Date = new Date()): string {
   const when = limitCardWords(limit).showsReset ? resetWords(limit.resetsAt, now) : "";
   return when ? `${limit.accountName} · ${when}` : limit.accountName;
+}
+
+// ------------------------------------------- limits without a press (v1.393.0)
+
+/** The end of every waiting sentence: nothing is asked of the user. */
+export const CARRIES_ON = "it carries on by itself.";
+
+/** What the card says while the reply WAITS (the long-jobs plan's Phase 4,
+ *  decision 4): "Waiting for Work's reset at 4:12 PM; it carries on by
+ *  itself." — the reset time said ONCE, here (the account line steps aside).
+ *  A wait armed by itself and one armed by the press read the same: both
+ *  carry on with no further press. With a group, another account of it may
+ *  take over first; with no time known, it waits for the account to be ready. */
+export function limitWaitingWords(
+  limit: AccountLimit,
+  wait: AccountWait | null,
+  now: Date = new Date(),
+): string {
+  const name = wait?.accountName || limit.accountName;
+  const iso = wait?.resetsAt ?? limit.resetsAt;
+  const time = iso && limitCardWords(limit).showsReset ? localTime(iso, now) : "";
+  const group = wait?.group ? ` or for another account in the “${wait.group}” group` : "";
+  if (limit.kind === "signin") return `Waiting for ${name} to be signed in again${group}; ${CARRIES_ON}`;
+  if (!time) return `Waiting for ${name} to be ready${group}; ${CARRIES_ON}`;
+  return `Waiting for ${name}'s reset at ${time}${group}; ${CARRIES_ON}`;
+}
+
+/** A reply carried on with ANOTHER account of the same group (the reply
+ *  line's `accountMove`, the daemon's v1.393.0 record). */
+export interface AccountMove {
+  from: string;
+  fromName: string;
+  to: string;
+  toName: string;
+  group: string;
+}
+
+/** A line's `accountMove`, or null for junk (an older line has none). */
+export function decodeAccountMove(raw: unknown): AccountMove | null {
+  const r = rec(raw);
+  if (!r) return null;
+  const fromName = str(r.fromName, 80) || str(r.from, 120);
+  const toName = str(r.toName, 80) || str(r.to, 120);
+  if (!fromName || !toName) return null;
+  return { from: str(r.from, 120), fromName, to: str(r.to, 120), toName, group: str(r.group, 80) };
+}
+
+/** The ONE line a moved reply says: "<A> reached its limit; carried on with
+ *  <B> (same group)." */
+export function accountMoveLine(move: AccountMove): string {
+  return `${move.fromName} reached its limit; carried on with ${move.toName} (same group).`;
+}
+
+/** Said for an account whose usage the vendor has not reported yet — never
+ *  "0%" (the numbers arrive only after a call). */
+export const USAGE_NOT_KNOWN = "usage not known yet";
+
+/** "5 hours" → "5-hour", "7 days" → "7-day" (a window as an adjective); the
+ *  words as they are when they are not a number and a unit. */
+export function windowAdjective(window: string): string {
+  const m = /^(\d+)\s+(minute|hour|day)s?$/i.exec(window.trim());
+  return m ? `${m[1]}-${m[2].toLowerCase()}` : window.trim();
+}
+
+/** An account's CURRENT usage window in words, from the cached snapshot (no
+ *  new call): "63% of the 5-hour window, resets 3:40 PM"; "usage not known
+ *  yet" for an account the vendor has sent no number for; a limit or a
+ *  sign-in in the status line's own words; "" when nothing can be said. */
+export function accountUsageWords(a: BuildAccount, now: Date = new Date()): string {
+  if (a.usage) {
+    const pct = `${Math.round(a.usage.percent)}%`;
+    const window = a.usage.window ? `${pct} of the ${windowAdjective(a.usage.window)} window` : `${pct} used`;
+    return a.usage.resetsAt ? `${window}, ${resetWords(a.usage.resetsAt, now)}` : window;
+  }
+  if (a.status === "ready" || a.status === "usage") return USAGE_NOT_KNOWN;
+  return accountStatusLine(a, now).text;
+}
+
+/** "TSI · 63% of the 5-hour window, resets 3:40 PM" — the account and its
+ *  usage on one line (the Timeline's header, the chip's tooltip). */
+export function accountUsageLine(a: BuildAccount, now: Date = new Date()): string {
+  const words = accountUsageWords(a, now);
+  return words ? `${a.name} · ${words}` : a.name;
 }

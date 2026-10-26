@@ -127,6 +127,40 @@ def _coerce(d: schema.SettingDef, value: Any) -> Any:
     return value
 
 
+def _shown_value(platform: Any, key: str, value: Any) -> Any:
+    """The value as the approval card (and the ledger row) shows it.
+    v1.393.0 review: ``account_groups`` is one line naming each account
+    ("Work: Work Max (Claude Code), Spare (Claude Code); Home: …") instead of
+    Iron-Proxy's opaque ids in a nested value the card folds away — which
+    accounts end up in one group is the user's whole privacy decision on
+    that card. Read from the CACHED snapshot (never a call); an id Iron-Proxy
+    does not list stays as it is. Every other setting is shown exactly as
+    sent. Never raises."""
+    if key != "account_groups":
+        return value
+    try:
+        from ..harness import build_accounts as BA
+
+        groups = _coerce(schema.get(key), value)
+        if not isinstance(groups, dict):
+            return value
+        if not groups:
+            return "no groups"
+        svc = getattr(platform, "iron_proxy", None)
+        parts: list[str] = []
+        for name, ids in groups.items():
+            if not isinstance(ids, list):
+                return value
+            shown: list[str] = []
+            for raw in ids:
+                row = BA.find(svc, str(raw)) if isinstance(raw, str) else None
+                shown.append(f"{row['name']} ({row['vendor_label']})" if row else str(raw))
+            parts.append(f"{name}: {', '.join(shown)}")
+        return "; ".join(parts)
+    except Exception:  # noqa: BLE001 — the words never break a card
+        return value
+
+
 def _show(value: Any) -> str:
     if value is None or value == "":
         return "(not set)"
@@ -240,7 +274,8 @@ class _ConfigChangeBase(Tool):
         return d, key, _coerce(d, args.get("value"))
 
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
-        return {"key": str(args.get("key") or ""), "value": args.get("value")}
+        key = str(args.get("key") or "")
+        return {"key": key, "value": _shown_value(self.platform, key, args.get("value"))}
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         try:

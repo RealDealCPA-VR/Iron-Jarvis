@@ -264,6 +264,10 @@ export type BuildMessage = PaneMessage & {
   /** v1.392.0: the session's cap the reply met (raw; decodeCapMet) — the
    *  screen says so and offers "Keep going". */
   capMet?: unknown;
+  /** v1.393.0: the reply carried on with ANOTHER account of the same group
+   *  (raw; lib/buildAccounts decodeAccountMove) — on the hidden question and
+   *  on the reply. */
+  accountMove?: unknown;
 };
 
 /** Part 3, Phase 2: a reply line's `finish`, whitelisted — the known keys
@@ -388,6 +392,9 @@ const LINE_KEYS = [
   // lib/buildLongJobs.
   "summarized",
   "capMet",
+  // v1.393.0 (long jobs, Phase 4): the reply carried on with another account
+  // of the same group ({from, fromName, to, toName, group}).
+  "accountMove",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {

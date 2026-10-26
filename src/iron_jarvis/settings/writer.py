@@ -179,6 +179,20 @@ class ConfigWriter:
                 problem = read_root_problem(folder, must_exist=not restoring)
                 if problem:
                     raise SettingError(f"{_label('readable_folders')}: {problem}.")
+        if clean.get("account_groups") and not restoring:
+            # v1.393.0 (the long-jobs plan's Phase 4): every account a group
+            # ADDS is one Iron-Proxy lists now (its CACHED snapshot — never a
+            # call), checked at save time only, never at load. An Undo puts
+            # back what was saved, so it is not re-checked (an account removed
+            # since must not block the restore; it can never take over).
+            from ..harness.build_accounts import group_problem
+
+            problem = group_problem(
+                getattr(self.platform, "iron_proxy", None), clean["account_groups"],
+                kept=getattr(cfg, "account_groups", None),
+            )
+            if problem:
+                raise SettingError(f"{_label('account_groups')}: {problem}.")
         for cli_key, cli in (("profile_share_claude_code", "claude-code"), ("profile_share_codex", "codex")):
             if clean.get(cli_key) is True:
                 share = getattr(self.platform, "profile_share", None)

@@ -537,7 +537,12 @@ def bell_pings(event: Any) -> bool:
     * ``build.turn_finished`` (v1.374.0): a Build turn that ran longer than a
       minute and ended — the bell's "Your Build session finished" row (it
       rings unless the user is LOOKING at that session in a window, a rule
-      only the window can apply).
+      only the window can apply);
+    * ``build.account_limit`` and ``build.resumed`` (v1.369.0; v1.393.0
+      review pinned them in the one-notice fixture): a coding session's
+      account at its limit, the reply carried on (by itself, or by another
+      account of its group) — every such event has a row. Neither is a
+      default alert, so "This PC" never repeats them.
 
     A run with no session id has no bell row. Never raises."""
     try:
@@ -547,6 +552,8 @@ def bell_pings(event: Any) -> bool:
             return False
         if etype == EventType.WORKFLOW_COMPLETED:
             return _text(payload.get("status")) == "failed"
+        if etype in (EventType.BUILD_ACCOUNT_LIMIT, EventType.BUILD_RESUMED):
+            return True
         if etype in (EventType.BUILD_TURN_FINISHED, EventType.BUILD_TURN_STALLED):
             # v1.392.0: a Build reply that made no progress for ten minutes
             # rings exactly like a long one that ended (one per episode).
@@ -574,12 +581,24 @@ def bell_attention(event: Any) -> bool:
     """The bell's ATTENTION rows among the ones it pings (counted on its
     badge): every unattended shortfall and a failed workflow — never a
     mission's row. Exactly what desktop/main.js says while the app sits in
-    the tray."""
+    the tray.
+
+    v1.393.0 review: a coding reply that carried on (``build.resumed``, a
+    move within a group included) and one that WAITS for its account's reset
+    by itself (``build.account_limit`` with ``waiting``) are news, never
+    counted. A limit that waits for the user's press is the bell's attention
+    row; the tray does not say that one yet (the open item since v1.369.0 —
+    no fixture case claims it)."""
     if not bell_pings(event):
         return False
     payload = _event_field(event, "payload", {}) or {}
+    etype = _event_field(event, "type")
+    if etype == EventType.BUILD_RESUMED:
+        return False
+    if etype == EventType.BUILD_ACCOUNT_LIMIT:
+        return payload.get("waiting") is not True
     return not (
-        _event_field(event, "type") == EventType.SESSION_COMPLETED
+        etype == EventType.SESSION_COMPLETED
         and _text(payload.get("origin")) == _MISSION_ORIGIN
     )
 

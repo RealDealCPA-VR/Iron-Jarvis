@@ -1171,7 +1171,16 @@ def _clean_branched_from(raw: Any) -> "dict[str, Any] | None":
 #: The keys of a Build session's limit record / resume wait (v1.368.0).
 _ACCOUNT_LIMIT_KEYS = ("account", "account_name", "provider", "vendor", "kind",
                        "resets_at", "at", "turn_id")
-_ACCOUNT_WAIT_KEYS = ("account", "account_name", "resets_at", "armed_at", "next_check_at")
+_ACCOUNT_WAIT_KEYS = ("account", "account_name", "resets_at", "armed_at", "next_check_at",
+                      # v1.393.0 (the long-jobs plan's Phase 4): the group the
+                      # account was in when the wait was armed (for words —
+                      # the move itself reads the live groups).
+                      "group")
+#: v1.393.0: the wait's flags — ``auto`` (armed by itself, no press) and
+#: ``told`` (the wait loop said the limit on the bell itself).
+_ACCOUNT_WAIT_FLAGS = ("auto", "told")
+#: v1.393.0: moves within a group since the last turn an account served.
+_ACCOUNT_MOVES_MAX = 99
 
 
 def _clean_account_setup(raw: dict[str, Any]) -> dict[str, Any]:
@@ -1194,7 +1203,14 @@ def _clean_account_setup(raw: dict[str, Any]) -> dict[str, Any]:
                 kept[k] = v.strip()[:200]
         if key == "account_limit" and isinstance(value.get("resumable"), bool):
             kept["resumable"] = value["resumable"]
+        if key == "account_wait":
+            for k in _ACCOUNT_WAIT_FLAGS:
+                if value.get(k) is True:
+                    kept[k] = True
         out[key] = kept
+    moves = raw.get("account_moves")
+    if isinstance(moves, int) and not isinstance(moves, bool) and 0 < moves <= _ACCOUNT_MOVES_MAX:
+        out["account_moves"] = moves
     return out
 
 

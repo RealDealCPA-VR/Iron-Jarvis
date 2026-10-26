@@ -371,6 +371,170 @@ def session_account(svc: Any, account_id: str, account_name: str = "") -> dict[s
 
 
 # --------------------------------------------------------------------------- #
+# account GROUPS (v1.393.0, the long-jobs plan's Phase 4, decision 4)
+# --------------------------------------------------------------------------- #
+
+#: An account at or above this percent of ANY of its usage windows is not
+#: usable for a takeover (decision 8: no new work starts on an account at
+#: 95%). Read from the cached snapshot's windows — never a new vendor call.
+TAKEOVER_MAX_PERCENT = 95.0
+
+#: The limit kinds a group takeover answers: an account that REACHED A LIMIT
+#: (its usage, its request rate, or a park Iron-Proxy did not explain). An
+#: account that must sign in again, is turned off, is removed or is merely
+#: busy is not "at its limit": its card asks the user (or waits), no move.
+MOVE_KINDS = frozenset({"usage", "rate", "other", "unknown"})
+
+GROUP_NOT_READ = "Iron-Proxy has not listed its accounts yet; try again in a moment"
+GROUP_OFF = "Iron-Proxy is off; turn it on in Connections first"
+
+
+def group_of(groups: Any, account_id: str) -> tuple[str, list[str]] | None:
+    """``(name, ids)`` of the group holding ``account_id`` in the user's
+    ``Config.account_groups``, or None (no group — such an account never
+    moves and never receives a move). Never raises."""
+    if not account_id or not isinstance(groups, Mapping):
+        return None
+    for name, ids in groups.items():
+        if isinstance(ids, (list, tuple)) and account_id in [str(i) for i in ids]:
+            return str(name), [str(i) for i in ids]
+    return None
+
+
+def peak_percent(state: Mapping[str, Any] | None, now: datetime | None = None) -> float | None:
+    """The highest percent used across the account's usage windows that are
+    still running (a window whose reset passed is over), or None when the
+    vendor sent no number (never read as 0% — "usage not known yet")."""
+    if not isinstance(state, Mapping):
+        return None
+    now = now or datetime.now(timezone.utc)
+    best: float | None = None
+    for w in state.get("windows") or []:
+        if not isinstance(w, Mapping):
+            continue
+        used = w.get("usedPercent")
+        if isinstance(used, bool) or not isinstance(used, (int, float)):
+            continue
+        resets = _parse(w.get("resetsAt"))
+        if resets is not None and resets <= now:
+            continue
+        best = float(used) if best is None else max(best, float(used))
+    return best
+
+
+def _state_of(snap: tuple[list[dict[str, Any]], dict[str, Any]], pid: str) -> Mapping[str, Any]:
+    st = snap[1].get(pid)
+    return st if isinstance(st, Mapping) else {}
+
+
+def usable_now(row: Mapping[str, Any] | None, state: Mapping[str, Any] | None,
+               now: datetime | None = None) -> bool:
+    """THE one rule for "this account can take over now", read from the
+    cached snapshot: turned on, signed in (``accounts.needs_sign_in`` — the
+    v1.382.0 rule, inside :func:`row_of`), not parked, and below
+    :data:`TAKEOVER_MAX_PERCENT` of every usage window."""
+    if not row or row.get("status") not in (READY, USAGE):
+        return False
+    peak = peak_percent(state, now)
+    return peak is None or peak < TAKEOVER_MAX_PERCENT
+
+
+def takeover(svc: Any, groups: Any, account_id: str) -> dict[str, Any] | None:
+    """The account that takes over from ``account_id`` at its limit: another
+    account of the SAME group and the SAME vendor that is usable now
+    (:func:`usable_now`). Its row with ``group`` (the group's name) and
+    ``percent`` (its peak, or None). None when the account is in no group, or
+    nothing in its group can serve — then the reply waits for the reset
+    instead. Cached reads only; never a call; never raises.
+
+    ORDER (v1.393.0 review): every account whose usage numbers are KNOWN
+    (below :data:`TAKEOVER_MAX_PERCENT`) first, the lowest first; then the
+    accounts the vendor has sent no numbers for — such an account may be the
+    one AT its limit (numbers arrive only after a call), so it is never read
+    as 0% used. It is still tried before the session's own reset: it is in
+    the group the user made, a wrong guess costs one refused call, and the
+    move cap (``routes/build.MAX_GROUP_MOVES``) bounds the chain.
+    Iron-Proxy's order breaks a tie."""
+    try:
+        snap = snapshot(svc)
+        found = group_of(groups, account_id)
+        if snap is None or found is None:
+            return None
+        name, ids = found
+        own = find(svc, account_id)
+        if own is None:
+            return None
+        vendor = own["vendor"]
+        now = datetime.now(timezone.utc)
+        order = {r["id"]: i for i, r in enumerate(vendor_rows(snap, vendor, include_off=True))}
+        best: tuple[tuple[bool, float, int], dict[str, Any]] | None = None
+        for pid in ids:
+            if pid == account_id or pid not in order:
+                continue
+            row = find(svc, pid)
+            if row is None or row.get("vendor") != vendor:
+                continue  # a Codex account never takes over a Claude session
+            state = _state_of(snap, pid)
+            if not usable_now(row, state, now):
+                continue
+            peak = peak_percent(state, now)
+            key = (peak is None, peak if peak is not None else 0.0, order[pid])
+            if best is None or key < best[0]:
+                best = (key, {**row, "group": name, "percent": peak})
+        return best[1] if best is not None else None
+    except Exception:  # noqa: BLE001 — no takeover is the safe answer (the wait)
+        log.debug("account group takeover lookup failed", exc_info=True)
+        return None
+
+
+def group_partners(svc: Any, groups: Any, account_id: str) -> str:
+    """The group's name when ``account_id`` shares it with at least one other
+    account of its own vendor (whatever their state now), else "". A
+    session on such an account may move at its limit, now or later."""
+    try:
+        found = group_of(groups, account_id)
+        own = find(svc, account_id) if found is not None else None
+        if found is None or own is None:
+            return ""
+        for pid in found[1]:
+            if pid == account_id:
+                continue
+            row = find(svc, pid)
+            if row is not None and row.get("vendor") == own["vendor"]:
+                return found[0]
+    except Exception:  # noqa: BLE001 — no partner is the safe answer
+        log.debug("account group partner lookup failed", exc_info=True)
+    return ""
+
+
+def group_problem(svc: Any, groups: Any, kept: Any = None) -> str | None:
+    """Why ``groups`` cannot be saved, in words, or None: every account id it
+    ADDS must be a Claude Code or Codex account Iron-Proxy lists now (the
+    cached snapshot). An id already saved (``kept``) may stay even after its
+    account was removed — a stale id never blocks a later save, and it can
+    never take over (it is in no snapshot). BLOCKING-safe (cached reads)."""
+    old: set[str] = set()
+    if isinstance(kept, Mapping):
+        for ids in kept.values():
+            if isinstance(ids, (list, tuple)):
+                old.update(str(i) for i in ids)
+    new = [
+        str(i) for ids in (groups.values() if isinstance(groups, Mapping) else [])
+        if isinstance(ids, (list, tuple)) for i in ids if str(i) not in old
+    ]
+    if not new:
+        return None
+    if svc is None or not getattr(svc, "enabled", False):
+        return GROUP_OFF
+    if snapshot(svc) is None:
+        return GROUP_NOT_READ
+    for pid in new:
+        if find(svc, pid) is None:
+            return f"there is no Claude Code or Codex account “{pid}” in Iron-Proxy"
+    return None
+
+
+# --------------------------------------------------------------------------- #
 # plans Iron-Proxy does not know yet
 # --------------------------------------------------------------------------- #
 
@@ -408,18 +572,26 @@ def kick_plan_reads(svc: Any, rows: list[dict[str, Any]]) -> list[str]:
 __all__ = [
     "DEFAULT_MODEL",
     "LIMIT",
+    "MOVE_KINDS",
     "NEEDS_SIGN_IN",
     "READY",
+    "TAKEOVER_MAX_PERCENT",
     "USAGE",
     "VENDORS",
     "accounts_view",
     "default_for",
     "find",
+    "group_of",
+    "group_partners",
+    "group_problem",
     "kick_plan_reads",
+    "peak_percent",
     "plan_label",
     "row_of",
     "session_account",
     "snapshot",
+    "takeover",
+    "usable_now",
     "vendor_of",
     "vendor_rows",
     "window_words",

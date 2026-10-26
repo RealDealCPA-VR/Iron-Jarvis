@@ -1,5 +1,5 @@
 {
-  "_about": "v1.360.0 lane 10A: ONE notice per run outcome. Each case is a persisted event (the audit's shape: id, type, session_id, ts, payload). `pings` = the dashboard bell raises a desktop ping for it while a window is open (so the daemon keeps 'This PC' quiet: comm/notifier.bell_pings); `attention` = it counts on the bell's badge, and the desktop app says it while it sits in the tray (comm/notifier.bell_attention, desktop/main.js runOutcomeNotice); `title` / `body` / `href` = the bell row's words, which the tray notice repeats. Read by tests/test_one_notice_v13600.py (Python + main.js under node) and dashboard/__tests__/one-notice-v13600.test.tsx (the real bell). v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ran longer than a minute and ended (`build.turn_finished`) is a ringing row too, said from the tray once; `phone` (default true) = the default notifier also sends it to a phone destination; a Build turn's notice is desktop only (not a default alert). v1.392.0 (the long-jobs plan's Phase 3): a Build reply that made no progress for ten minutes (`build.turn_stalled`, once per stall episode) rings the same way and is said from the tray once; desktop only (not a default alert).",
+  "_about": "v1.360.0 lane 10A: ONE notice per run outcome. Each case is a persisted event (the audit's shape: id, type, session_id, ts, payload). `pings` = the dashboard bell raises a desktop ping for it while a window is open (so the daemon keeps 'This PC' quiet: comm/notifier.bell_pings); `attention` = it counts on the bell's badge, and the desktop app says it while it sits in the tray (comm/notifier.bell_attention, desktop/main.js runOutcomeNotice); `title` / `body` / `href` = the bell row's words, which the tray notice repeats. Read by tests/test_one_notice_v13600.py (Python + main.js under node) and dashboard/__tests__/one-notice-v13600.test.tsx (the real bell). v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ran longer than a minute and ended (`build.turn_finished`) is a ringing row too, said from the tray once; `phone` (default true) = the default notifier also sends it to a phone destination; a Build turn's notice is desktop only (not a default alert). v1.392.0 (the long-jobs plan's Phase 3): a Build reply that made no progress for ten minutes (`build.turn_stalled`, once per stall episode) rings the same way and is said from the tray once; desktop only (not a default alert). v1.393.0 review (the long-jobs plan's Phase 4): a coding reply that WAITS for its account's reset by itself (`build.account_limit` with `waiting: true` — armed with no press, or a group with nothing usable) and a reply carried on by ANOTHER account of its group (`build.resumed` with `moved_from_name`) are news, not questions: the bell pings them uncounted (no badge), so the tray says nothing; desktop only (not a default alert, never the phone).",
   "cases": [
     {
       "case": "schedule-failed",
@@ -327,6 +327,55 @@
       "title": "Your coding session has stopped making progress",
       "body": "Port the parser · No progress for 10 minutes — waiting on this step: running a command (pytest)",
       "href": "/terminals?session=bs_stuck"
+    },
+    {
+      "case": "build-limit-waiting",
+      "event": {
+        "id": "evt_build_limit_wait",
+        "type": "build.account_limit",
+        "session_id": "build:bs_lim",
+        "ts": "2026-10-26T03:15:00",
+        "payload": {
+          "thread_id": "bs_lim",
+          "title": "Port the parser",
+          "account_name": "Work Max",
+          "vendor": "claude",
+          "kind": "usage",
+          "resets_at": null,
+          "waiting": true
+        }
+      },
+      "pings": true,
+      "attention": false,
+      "phone": false,
+      "title": "The Work Max account reached its limit",
+      "body": "Port the parser · it carries on by itself",
+      "href": "/terminals?session=bs_lim"
+    },
+    {
+      "case": "build-moved-within-group",
+      "event": {
+        "id": "evt_build_moved",
+        "type": "build.resumed",
+        "session_id": "build:bs_lim",
+        "ts": "2026-10-26T03:16:00",
+        "payload": {
+          "thread_id": "bs_lim",
+          "title": "Port the parser",
+          "account": "c-spare",
+          "account_name": "Spare",
+          "turn_id": "bt_moved1",
+          "moved_from": "c-work",
+          "moved_from_name": "Work Max",
+          "group": "Work"
+        }
+      },
+      "pings": true,
+      "attention": false,
+      "phone": false,
+      "title": "Work Max reached its limit; carried on with Spare (same group)",
+      "body": "Port the parser",
+      "href": "/terminals?session=bs_lim"
     }
   ]
 }
