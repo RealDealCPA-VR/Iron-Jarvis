@@ -331,6 +331,14 @@ def test_routing_never_starts_a_sign_in_probe(w, monkeypatch):
     refreshed from routing (``cli_auth.never_probe``)."""
     from iron_jarvis.providers import cli_auth
 
+    # v1.396.1: DEFAULT_PROBE is one object for the whole test process. An
+    # earlier test on the same worker can leave a fresh "claude" verdict in its
+    # cache, or "claude" in its in-flight set (a patched `_start` never runs the
+    # refresh that clears it), and then the last line's real refresh is never
+    # due — CI's shard 2 read `[] == ['claude']` once v1.396.0's new test files
+    # moved this test. Start from an empty probe.
+    monkeypatch.setattr(cli_auth.DEFAULT_PROBE, "_cache", {})
+    monkeypatch.setattr(cli_auth.DEFAULT_PROBE, "_inflight", set())
     started: list[str] = []
     monkeypatch.setattr(cli_auth.DEFAULT_PROBE, "_start", lambda b: started.append(b))
     monkeypatch.setattr(w.p.providers, "available", lambda name: cli_auth.DEFAULT_PROBE.verdict("claude") is not False)

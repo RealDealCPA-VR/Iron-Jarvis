@@ -3750,6 +3750,16 @@ does not need a bump, stop and bump it.
   would layer into the scratch home. Pins:
   `tests/test_harness_bench_{team,helpers_ledger,team_review}_v1396.py` (+
   `tests/_fakes/bench_{team,tonight}_v1396.py`).
+  v1.396.0 WAS NOT PUBLISHED (Tests and Release both red on
+  `test_team_router_v1395::test_routing_never_starts_a_sign_in_probe`,
+  `[] == ['claude']`): `cli_auth.DEFAULT_PROBE` is ONE object per test
+  process, and once v1.396.0's new test files moved that test to another CI
+  shard, an earlier test on its worker had left a fresh "claude" verdict or
+  "claude" in `_inflight` (a patched `_start` never runs the refresh that
+  clears it), so the real refresh was never due. Both probe tests now start
+  from an empty `_cache` and `_inflight` (monkeypatched, restored after);
+  each leftover reproduced CI's exact error on the old shape. A test that
+  asserts the shared probe DOES start a check must start from an empty one.
 - **The planner asks for a ROLE; the team router picks the member, local
   first, never past an account's limit, never across an account group**
   (v1.395.0, Phase 6 of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`, decisions 7

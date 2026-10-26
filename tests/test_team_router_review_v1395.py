@@ -325,6 +325,10 @@ def test_routing_with_the_real_availability_never_spawns_or_calls_out(tmp_path, 
     resolved: list[str] = []
     monkeypatch.setattr(p.providers, "_opencode_resolver", lambda: resolved.append("opencode models") or ["x"])
     started: list = []
+    # v1.396.1: an empty probe, so "nothing started" is routing's doing and
+    # not a cached verdict or in-flight mark an earlier test left behind.
+    monkeypatch.setattr(cli_auth.DEFAULT_PROBE, "_cache", {})
+    monkeypatch.setattr(cli_auth.DEFAULT_PROBE, "_inflight", set())
     monkeypatch.setattr(cli_auth.DEFAULT_PROBE, "_start", lambda b: started.append(("probe", b)))
 
     def boom(name):
