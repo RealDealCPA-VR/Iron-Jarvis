@@ -299,6 +299,7 @@ def _pid_alive(pid: int) -> bool:
 
 @needs_bash
 async def test_a_background_job_without_a_redirect_returns_at_once_and_keeps_serving(tmp_path):
+    import asyncio
     import time
     import urllib.request
 
@@ -337,7 +338,15 @@ async def test_a_background_job_without_a_redirect_returns_at_once_and_keeps_ser
         assert row.ok, row.output
         assert "started" in (row.output or "")
         assert took < 15, f"the call waited {took:.1f} s for the background job (its timeout was 30 s)"
-        pid = int((work / "srv.pid").read_text(encoding="utf-8"))
+        # The server writes its pid when Python has started; the model's own
+        # "sleep 1" is no promise of that on a loaded PC (v1.392.0: the full
+        # suite read the file before it existed). Wait for the file itself.
+        pid_file = work / "srv.pid"
+        deadline = time.monotonic() + 30
+        while not (pid_file.exists() and pid_file.read_text(encoding="utf-8").strip()):
+            assert time.monotonic() < deadline, "the background server never started"
+            await asyncio.sleep(0.1)
+        pid = int(pid_file.read_text(encoding="utf-8"))
         assert _pid_alive(pid), "the server the model started in the background was stopped"
         # It keeps answering — a later call of the same session reaches it.
         body = urllib.request.urlopen(f"http://127.0.0.1:{port}/hello.txt", timeout=10).read()
