@@ -55,6 +55,11 @@ const TEAM = {
       usage: null,
       available: true,
       paused: false,
+      // v1.395.0 review: its RECORD per role, in the daemon's longest words.
+      records: {
+        read: { runs: 20, passed: 12, streak: 2, status: "not_good", words: "failed the last 2 in a row (12 of 20 passed)" },
+        code: { runs: 20, passed: 17, streak: 0, status: "good", words: "good (17 of 20 passed)" },
+      },
     },
     {
       name: "codex-coder",
@@ -71,6 +76,10 @@ const TEAM = {
       usage: { account: "x-long", account_name: LONG_ACCOUNT, status: "usage", percent: 61, window_mins: 300 },
       available: true,
       paused: false,
+      records: {
+        code: { runs: 2, passed: 1, streak: 0, status: "unknown", words: "too few to judge yet (1 of 2 passed)" },
+        test: { runs: 0, passed: 0, streak: 0, status: "unknown", words: "no record yet" },
+      },
     },
   ],
 };
@@ -154,6 +163,11 @@ for (const { width, height } of SIZES) {
       "team-member-quarterly-close-reconciliation-reader",
     ]);
     inside(members.boxes);
+    // v1.395.0 review: each member's record line is drawn, inside its row.
+    await expect(page.getByTestId("team-record-quarterly-close-reconciliation-reader")).toContainText(
+      "reading: failed the last 2 in a row (12 of 20 passed)",
+    );
+    await expect(page.getByTestId("team-record-codex-coder")).toContainText("testing: no record yet");
 
     await page.getByTestId("team-starter-open").click();
     await expect(page.getByTestId("team-starter")).toBeVisible({ timeout: 20_000 });

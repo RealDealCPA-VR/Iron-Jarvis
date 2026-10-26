@@ -601,6 +601,51 @@ async def test_a_queued_member_at_the_floor_is_held_never_struck_and_starts_when
     assert calls and all(c["pin"] is not None and c["pin"].profile_id == "c-spare" for c in calls)
 
 
+def test_a_scheduled_members_fire_at_the_floor_is_refused_in_the_rows_words(tmp_path, monkeypatch):
+    """A schedule fire is new work: on an account at the floor it is refused
+    in words before any session, and the row reads it the v1.351.0 way."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.app import create_app
+    from tests._fakes.team_world_v1395 import wire_platform
+
+    client = TestClient(create_app(str(tmp_path)))
+    world = wire_platform(client.app.state.platform, monkeypatch)
+    member(world.p, "claude-code", "claude-cli", "subscription", roles=("code",))
+    world.svc.set_percent("c-work", 97, resets_in=5400)
+    world.svc.set_percent("c-spare", 99, resets_in=900)
+    r = client.post("/schedules", json={"name": "nightly", "cron": "0 9 * * *", "kind": "task",
+                                        "payload": {"task": "Nightly sweep.", "agent_type": "claude-code"}})
+    assert r.status_code in (200, 201), r.text
+    ran = client.post("/schedules/nightly/run").json()
+    assert ran["last_status"] == "error", ran
+    assert ran["last_detail"].startswith("The run failed: 'claude-code' would run on Claude Code (Work Max), "
+                                         "which is at 97%")
+    assert ran["last_session_id"] == "" and not world.log
+
+
+async def test_the_mission_screen_says_why_a_member_took_its_piece(w, tmp_path):
+    from iron_jarvis.agents.mission import mission_view
+
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import AgentRun, AgentType
+
+    member(w.p, "glm", LOCAL[0], LOCAL[1], roles=("read",))
+    member(w.p, "named", LOCAL[0], LOCAL[1], roles=("code",))
+    sid = await _parent(w.p)
+    with session_scope(w.p.engine) as db:  # the coordinator's own run (the members hang off it)
+        db.add(AgentRun(id="parent-run", session_id=sid, agent_type=AgentType.SUPERVISOR))
+        db.commit()
+    routed = await w.p.registry.get("delegate").execute({"role": "read", "task": "Read app.py."},
+                                                        _ctx(w.p, sid, tmp_path))
+    named = await w.p.registry.get("delegate").execute({"agent_type": "custom:named", "task": "Write it."},
+                                                       _ctx(w.p, sid, tmp_path))
+    assert routed.ok and named.ok
+    view = mission_view(w.p, sid)
+    why = {m["agent"]: m["reason"] for m in view["members"]}
+    assert why == {"custom:glm": "local: no record yet for reading", "custom:named": ""}
+
+
 async def test_a_routed_burst_through_the_door_spreads_over_the_accounts(w, tmp_path):
     member(w.p, "claude-code", "claude-cli", "subscription", roles=("code",))
     w.svc.set_percent("c-work", 72)

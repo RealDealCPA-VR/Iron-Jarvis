@@ -58,6 +58,10 @@ export interface MissionMember {
    *  the daemon did not say — an older daemon, or the default route). */
   provider: string;
   model: string;
+  /** v1.395.0 review: why the team router gave this teammate its piece
+   *  ("local: good record for reading"); "" when the planner named it, or an
+   *  older daemon. */
+  reason?: string;
 }
 
 export type ActivityTone = "ok" | "warn" | "info" | "ask";
@@ -180,6 +184,7 @@ function decodeMember(v: unknown): MissionMember | null {
     finished_at: strOrNull(o.finished_at),
     provider: str(o.provider),
     model: str(o.model),
+    reason: str(o.reason).slice(0, 300),
   };
 }
 

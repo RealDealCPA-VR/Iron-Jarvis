@@ -268,6 +268,13 @@ function AgentCard({
               )}
             </div>
           )}
+          {/* v1.395.0 review: why the team router gave it this piece — the
+              coding session's helper row and Timeline say the same. */}
+          {m.reason && (
+            <div data-testid={`mission-card-why-${m.agent}`} className="break-words text-zinc-500">
+              Why: {m.reason}
+            </div>
+          )}
           {m.task && (
             <div>
               <div className="text-[11px] text-zinc-500">Handed</div>
