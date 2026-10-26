@@ -245,6 +245,13 @@ def test_a_queued_task_keeps_the_pc_awake_from_the_evening_not_only_once_the_win
     assert N.awake_needed(engine, cfg, _local(22, 30)) is False
 
 
+def test_a_reply_that_ended_on_its_accounts_limit_is_never_done():
+    state, notes = N.outcome_of({"notes": []}, {
+        "role": "assistant", "content": "Part of it.", "accountLimit": {"account": "a1"},
+    })
+    assert state == N.NEEDS_YOU and ("account", "Its account reached a limit.") in notes
+
+
 def test_a_carry_on_turn_is_capped_at_what_is_left_of_the_tasks_minutes(tmp_path):
     cfg = Config(home=tmp_path, project_root=tmp_path, night_task_minutes=90)
     assert N.posture_setup({}, cfg, {"ran_s": 60 * 60})["cap"] == {"minutes": 30}

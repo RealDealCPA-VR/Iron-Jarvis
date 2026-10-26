@@ -984,6 +984,11 @@ def outcome_of(task: dict[str, Any], line: "dict[str, Any] | None") -> tuple[str
             notes.append(("low_trust", low_trust_note_words(why)))
     if line is not None and isinstance(line.get("accountLimit"), dict):
         notes.append(("account", "Its account reached a limit."))
+        if state == DONE:
+            # v1.398.0 review: a reply that ended on its account's limit did
+            # not finish its work — never "done" (Resume when ready may be
+            # off, or the night ended first).
+            state = NEEDS_YOU
     # v1.398.0 review: a task that ran at LOW TRUST (it read something
     # flagged; its commands were taken away from then on) never reads "done" —
     # its work stopped short in a way the morning must look at.
