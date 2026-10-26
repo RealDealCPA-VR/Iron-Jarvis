@@ -85,6 +85,15 @@ describe("Tonight (review)", () => {
     expect(within(screen.getByTestId("tonight-task-t2")).queryByTestId("tonight-main-changed-t2")).toBeNull();
   });
 
+  it("says what a night task may do without asking, with the card wait", async () => {
+    render(<TonightList folders={[]} onOpenSession={() => {}} />);
+    const line = await screen.findByTestId("tonight-rules");
+    expect(line.textContent).toBe(
+      "It edits files and runs commands in its branch folder without asking. Anything else, like the web or a " +
+        "commit, waits 15 minutes for your OK (on your phone too, if set up), then is skipped and listed for you.",
+    );
+  });
+
   it("decodes main_changed strictly and words it from the outside note", () => {
     expect(decodeTask(task("a", { main_changed: "yes" }))?.mainChanged).toBe(false);
     const t = decodeTask(task("b", { main_changed: true, notes: [{ kind: "outside", text: OUTSIDE, at: null }] }));

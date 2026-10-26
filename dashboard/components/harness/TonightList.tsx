@@ -35,6 +35,7 @@ import {
   mainChangedWords,
   moveNight,
   nightLimitsLine,
+  nightRulesLine,
   nightStateWords,
   removeNight,
   taskTitle,
@@ -427,6 +428,9 @@ export function TonightList({
               {list.window.words}
             </p>
             <p className="text-[12px] text-zinc-500">{nightLimitsLine(list)}</p>
+            <p data-testid="tonight-rules" className="text-[12px] text-zinc-500">
+              {nightRulesLine(list)}
+            </p>
           </>
         ) : null}
         {list?.emergencyStop ? (

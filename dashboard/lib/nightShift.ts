@@ -198,6 +198,19 @@ export function nightLimitsLine(list: NightList): string {
   return `${atOnce}, never two in one folder, ${each} each. Each runs on its own branch.`;
 }
 
+/** v1.398.0 review: what a night task may do without asking, said where the
+ *  task is queued (harness/night.RUNS_UNASKED): its files and its commands
+ *  in its own branch folder; anything else waits for the user's OK — on the
+ *  phone too, when one is set up — and is skipped after the wait. Its
+ *  commands are not confined to that folder, which the record checks. */
+export function nightRulesLine(list: Pick<NightList, "cardWaitMinutes">): string {
+  const wait = list.cardWaitMinutes === 1 ? "1 minute" : `${list.cardWaitMinutes} minutes`;
+  return (
+    "It edits files and runs commands in its branch folder without asking. Anything else, like the web or a " +
+    `commit, waits ${wait} for your OK (on your phone too, if set up), then is skipped and listed for you.`
+  );
+}
+
 /** What Emergency stop means for the list, said once above it. */
 export const EMERGENCY_LINE =
   "Emergency stop is on, so nothing here starts. Turn it off on the Autonomy page to let tonight's tasks run.";
