@@ -26,6 +26,10 @@ _log = logging.getLogger("iron_jarvis.config")
 #: can't lose each other's keys or collide on the temp file (a 500 on Windows).
 _CONFIG_WRITE_LOCK = threading.Lock()
 
+#: v1.393.0: an account group's name is at most this many characters
+#: (``Config.account_groups``; the settings schema refuses a longer one).
+ACCOUNT_GROUP_NAME_MAX = 40
+
 
 def default_permissions() -> dict[str, str]:
     """Default per-tool permission modes (§20 examples + §17 intent)."""
@@ -795,6 +799,22 @@ class Config(BaseModel):
     # _SETTINGS_KEYS: a settings-page write would flip the flag without
     # starting or stopping anything.
     iron_proxy_enabled: bool = False
+    #: v1.393.0 (the long-jobs plan's Phase 4, decision 4): when a coding
+    #: session's account reaches its limit, the reply WAITS for the reset and
+    #: carries on by itself — "Resume when ready" armed with no press (the
+    #: same durable wait, the same loop). Off: the limit card waits for the
+    #: user's press, as before. Read live by ``routes/build``.
+    build_auto_resume: bool = True
+    #: v1.393.0 (decision 4): ACCOUNT GROUPS — ``{group name: [Iron-Proxy
+    #: account ids]}``, made by the user on the Iron-Proxy card. A coding
+    #: session whose account reaches its limit moves BY ITSELF only to another
+    #: account in the SAME group and of the SAME vendor (Claude to Claude,
+    #: Codex to Codex); an account in no group never moves and never receives
+    #: a move, so work and personal accounts never mix. Empty (the default) =
+    #: no move ever. Kept HERE (Iron Jarvis's config, through the one settings
+    #: writer), never in Iron-Proxy. Which ids exist is checked when it is
+    #: SAVED (``harness/build_accounts.group_problem``), never at load.
+    account_groups: dict[str, list[str]] = Field(default_factory=dict)
     # SHARE MY PROFILE WITH BUILD (v1.306.0) — one switch per vendor CLI, OFF
     # by default: when on, Iron Jarvis keeps a generated block (the profile +
     # confirmed preferences) in that CLI's user-level instruction file
@@ -844,6 +864,30 @@ class Config(BaseModel):
             out.append(s)
         if len(out) > MAX_READABLE_FOLDERS:
             raise ValueError(f"at most {MAX_READABLE_FOLDERS} folders")
+        return out
+
+    @field_validator("account_groups")
+    @classmethod
+    def _clean_account_groups(cls, v: dict[str, list[str]]) -> dict[str, list[str]]:
+        # v1.393.0: TOLERANT — a hand-edited config.toml never stops a boot.
+        # Names trimmed (a blank or over-long one dropped), ids trimmed and
+        # kept once, an id already in an earlier group dropped (one group per
+        # account), an empty group dropped. The writer refuses those shapes
+        # in words before they are saved (``settings.schema``'s check).
+        out: dict[str, list[str]] = {}
+        seen: set[str] = set()
+        for raw_name, raw_ids in v.items():
+            name = " ".join(str(raw_name).split())
+            if not name or len(name) > ACCOUNT_GROUP_NAME_MAX:
+                continue
+            ids: list[str] = []
+            for raw in raw_ids:
+                pid = str(raw).strip()
+                if pid and pid not in seen:
+                    seen.add(pid)
+                    ids.append(pid)
+            if ids:
+                out[name] = ids
         return out
 
     @field_validator("browser_access")

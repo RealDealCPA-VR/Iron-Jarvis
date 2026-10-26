@@ -209,10 +209,12 @@ import {
   type SlashRow,
 } from "@/lib/buildComposer";
 import {
+  accountMoveLine,
   armResumeWhenReady,
   cancelResumeWhenReady,
   chooseAccountAndContinue,
   decodeAccountLimit,
+  decodeAccountMove,
   decodeAccountWait,
   fetchAccounts,
   limitCardWords,
@@ -364,6 +366,10 @@ export function placeWords(provider: string, model: string, models: readonly Mod
 /** How often the account list is read again while the chip's list is open
  *  (the daemon answers from its cached snapshot). */
 export const ACCOUNTS_POLL_MS = 5000;
+/** v1.393.0: how often the account list is read again while a reply WORKS —
+ *  the usage numbers the chip and the Timeline show move with every model
+ *  call (the daemon answers from its cached snapshot: never a vendor call). */
+export const USAGE_POLL_MS = 60_000;
 
 export function HarnessSession({
   threadId,
@@ -831,7 +837,9 @@ export function HarnessSession({
       }
       // A turn that ended on a limit changed what the account list says:
       // read it again, so the chip says so without opening the list.
-      if (limitSeenRef.current) void refreshAccounts();
+      // v1.393.0: every turn — its model calls moved the account's usage,
+      // which the chip and the Timeline show (the cached snapshot).
+      void refreshAccounts();
       // The user may have sent the NEXT message while this read was out (the
       // composer is free the moment the turn ends): its question bubble,
       // notes and questions belong to that turn and stay (v1.369.0 review).
@@ -1547,6 +1555,8 @@ export function HarnessSession({
   // same accounts with their states. An Iron Jarvis with no list (a 404:
   // `accounts` null) is not asked again.
   useVisibleInterval(() => void refreshAccounts(), ACCOUNTS_POLL_MS, accountsOpen || (modelMenuOpen && accounts !== null));
+  // v1.393.0: while a reply works, its usage moves (the chip, the Timeline).
+  useVisibleInterval(() => void refreshAccounts(), USAGE_POLL_MS, busy && !!accounts && !!currentAccount);
   useEffect(() => {
     if (modelMenuOpen && accounts !== null) void refreshAccounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2421,6 +2431,17 @@ export function HarnessSession({
                     {RESUMED_LINE}
                   </p>
                 ) : null}
+                {/* v1.393.0: this reply carried on with another account of
+                    the same group ("<A> reached its limit; carried on with
+                    <B> (same group)."). */}
+                {(() => {
+                  const move = decodeAccountMove(m.accountMove);
+                  return move ? (
+                    <p data-testid="harness-account-move" className="mb-1 text-[12px] text-zinc-400">
+                      {accountMoveLine(move)}
+                    </p>
+                  ) : null;
+                })()}
                 <WorkLine
                   {...paneWorkInput(m)}
                   cutOff={m.truncated ? "truncated" : m.interrupted ? "interrupted" : null}
@@ -2622,7 +2643,7 @@ export function HarnessSession({
             <AccountLimitCard
               limit={limit}
               waiting={waiting}
-              waitingResetsAt={decodeAccountWait(view.accountWait)?.resetsAt ?? null}
+              wait={decodeAccountWait(view.accountWait)}
               busy={accountBusy}
               error={limitError}
               onResume={() => void resumeWhenReady()}
@@ -2967,6 +2988,7 @@ export function HarnessSession({
           pageSteps={finishedPageSteps(stream.tools)}
           timeline={timelineLive}
           models={catalog.models}
+          account={currentAccount}
           undoFor={undoFor}
           onUndo={onUndo}
           onSessionChanged={() => void load()}

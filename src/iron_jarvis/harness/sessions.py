@@ -157,6 +157,11 @@ LINE_KEYS: tuple[str, ...] = (
     # "Summarized N earlier steps to fit the model"), and the session's cap it
     # met ({kind: "time" | "cost", limit} — the screen offers "Keep going").
     "summarized", "capMet",
+    # v1.393.0 (the long-jobs plan's Phase 4): on the hidden question that
+    # carried a reply on with ANOTHER account of the same group, and on the
+    # reply that did: {from, fromName, to, toName, group} — "<A> reached its
+    # limit; carried on with <B> (same group)".
+    "accountMove",
 )
 
 
@@ -958,7 +963,8 @@ def waiting_sessions(engine: Any) -> list[tuple[str, dict[str, Any]]]:
     return out
 
 
-def take_wait(engine: Any, thread_id: str, armed_at: str, account: str) -> bool:
+def take_wait(engine: Any, thread_id: str, armed_at: str, account: str, *,
+              then: "dict[str, Any] | None" = None) -> bool:
     """END a "Resume when ready" wait for the continuation that is about to
     start (v1.368.0 review): in ONE locked write, True when the wait armed at
     ``armed_at`` for ``account`` is still the session's (it is removed, and
@@ -967,7 +973,12 @@ def take_wait(engine: Any, thread_id: str, armed_at: str, account: str) -> bool:
     or carried on themselves while the account was being re-checked, or
     another pass took it. The same lock as :func:`update`, so a Cancel lands
     either before (nothing starts) or after (the continuation already began).
-    BLOCKING."""
+
+    v1.393.0 (the long-jobs plan's Phase 4): ``then`` — the setup changes of
+    a MOVE within the account's group (``routes/build.account_patch``'s own
+    patch: the new account, its provider; ``None`` removes a key), applied in
+    the SAME locked write: the session moves to the other account only when
+    the wait it answers is still its own. BLOCKING."""
     from ..daemon.routes.chat import _clean_setup
 
     if not armed_at or not account:
@@ -987,6 +998,50 @@ def take_wait(engine: Any, thread_id: str, armed_at: str, account: str) -> bool:
             return False
         setup.pop("account_wait", None)
         setup.pop("account_limit", None)
+        for key, value in (then or {}).items():
+            if key == "workspace_dir":
+                continue  # a session's folder is fixed at creation
+            if value is None:
+                setup.pop(key, None)
+            else:
+                setup[key] = value
+        row.setup_json = _clean_setup(setup)
+        db.add(row)
+        db.commit()
+        return True
+
+
+def amend_wait(engine: Any, thread_id: str, armed_at: str, account: str,
+               changes: "dict[str, Any] | None") -> bool:
+    """CHANGE (``changes``: keys merged into the wait) or, with ``None``, END
+    the "Resume when ready" wait armed at ``armed_at`` for ``account`` — only
+    while it is still the session's own (v1.393.0, the long-jobs plan's
+    Phase 4). The wait loop's writes after a check that took a while: a
+    Cancel, a Choose account or the user's own turn that landed meanwhile is
+    never undone by a write of the old wait (the loop used to re-arm a wait
+    the user had just cancelled). The same lock as :func:`update`. Answers
+    whether it wrote. BLOCKING."""
+    from ..daemon.routes.chat import _clean_setup
+
+    if not armed_at or not account:
+        return False
+    with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+        row = db.get(ChatThreadRecord, str(thread_id or ""))
+        if row is None or not is_build_thread(row):
+            return False
+        setup = _setup(row)
+        wait = setup.get("account_wait")
+        if (
+            not isinstance(wait, dict)
+            or wait.get("armed_at") != armed_at
+            or wait.get("account") != account
+            or setup.get("account") != account
+        ):
+            return False
+        if changes is None:
+            setup.pop("account_wait", None)
+        else:
+            setup["account_wait"] = {**wait, **changes}
         row.setup_json = _clean_setup(setup)
         db.add(row)
         db.commit()
@@ -1069,6 +1124,11 @@ def reconcile_interrupted_turns(engine: Any) -> int:
             carried = question.get("resumedFrom")
             if isinstance(carried, str) and carried.strip():
                 lines[-1]["resumedFrom"] = carried
+            # v1.393.0: a reply that carried on with another account of the
+            # group keeps naming both accounts when a crash cuts it off.
+            moved = question.get("accountMove")
+            if isinstance(moved, dict) and moved:
+                lines[-1]["accountMove"] = moved
             if append_lines(engine, thread_id, lines, title_from_first=False).get("ok"):
                 written += 1
     except Exception:  # noqa: BLE001 — a boot step never blocks the boot
@@ -1184,6 +1244,7 @@ __all__ = [
     "MODE_PLAN",
     "NEW_SESSION_TITLE",
     "SESSION_PREFIX",
+    "amend_wait",
     "append_lines",
     "create",
     "end_session_programs",

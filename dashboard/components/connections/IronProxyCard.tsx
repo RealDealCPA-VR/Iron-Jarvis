@@ -12,6 +12,13 @@
  *
  * Renders NOTHING when the daemon answers 404 (an older daemon without the
  * routes) or is offline (the page's OfflineHint owns that).
+ *
+ * v1.393.0 (the long-jobs plan's Phase 4): each Claude Code / Codex account
+ * row has a GROUP choice. Accounts in one group can take over a coding
+ * session from each other when one reaches its limit (same vendor only);
+ * work and personal accounts belong in different groups. The groups are Iron
+ * Jarvis's own setting (`account_groups`, saved through the one settings
+ * writer — `PUT /settings/values`), never Iron-Proxy's. No groups by default.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -29,16 +36,22 @@ import {
   TriangleAlert,
   Users,
 } from "lucide-react";
-import { post, patch, del } from "@/lib/api";
+import { post, patch, del, put } from "@/lib/api";
 import { useApi, type ApiState } from "@/lib/useApi";
 import { useDocumentVisible } from "@/lib/useDocumentVisible";
 import { Badge, Card, ConfirmButton, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
 import {
   ADDABLE_PROVIDERS,
   DEFAULT_USED_BY,
+  GROUP_HELP,
+  GROUP_NAME_MAX,
+  GROUP_PROVIDERS,
   adoptable,
   createdId,
+  decodeGroups,
   groupAccounts,
+  groupOf,
+  withAccountInGroup,
   isSnapshot,
   movedIds,
   providerLabel,
@@ -287,6 +300,10 @@ function IronProxyBody({
   const groups = groupAccounts(accounts);
   const toAdopt = adoptable(snap.discovered ?? [], accounts);
   const usedBy = { ...DEFAULT_USED_BY, ...(snap.providers_used_by_jarvis ?? {}) };
+  // v1.393.0: the user's account groups (null = an older daemon: no choice).
+  const accountGroups = snap.account_groups === undefined ? null : decodeGroups(snap.account_groups);
+  const groupNames = accountGroups ? Object.keys(accountGroups) : [];
+  const groupable = (a: IronProxyAccount) => a.lane === "cli" && GROUP_PROVIDERS.has(a.provider);
 
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -377,6 +394,20 @@ function IronProxyBody({
     });
     if (ok && done) setNote(done);
     if (ok) reload();
+  }
+
+  /** v1.393.0: put an account in a group (null = in no group) — one save of
+   *  the whole setting through the one writer; the daemon's sentence on a
+   *  refusal. */
+  async function setGroup(a: IronProxyAccount, name: string | null) {
+    if (!accountGroups) return;
+    const next = withAccountInGroup(accountGroups, a.id, name);
+    const into = groupOf(next, a.id);
+    await act(
+      `${a.id}:group`,
+      () => put("/settings/values", { values: { account_groups: next } }),
+      into ? `${a.title} is in the “${into}” group.` : `${a.title} is in no group.`,
+    );
   }
 
   async function addAccount() {
@@ -561,12 +592,21 @@ function IronProxyBody({
                             `Removed “${a.title}”.`,
                           )
                         }
+                        group={accountGroups && groupable(a) ? groupOf(accountGroups, a.id) : null}
+                        groupNames={groupNames}
+                        onGroup={(name) => void setGroup(a, name)}
                       />
                     ))}
                   </div>
                 </div>
               );
             })}
+
+            {accountGroups && accounts.some(groupable) ? (
+              <p data-testid="iron-proxy-group-help" className="text-[11px] leading-relaxed text-zinc-500">
+                {GROUP_HELP}
+              </p>
+            ) : null}
 
             {toAdopt.length > 0 && (
               <div className="space-y-1.5">
@@ -675,6 +715,9 @@ function AccountRow({
   onMove,
   onEnable,
   onRemove,
+  group = null,
+  groupNames = [],
+  onGroup,
 }: {
   a: IronProxyAccount;
   first: boolean;
@@ -687,6 +730,11 @@ function AccountRow({
   onMove: (dir: -1 | 1) => void;
   onEnable: () => void;
   onRemove: () => Promise<void>;
+  /** v1.393.0: the account's group ("" = none); null = no Group choice (an
+   *  account a coding session never runs on, or an older Iron Jarvis). */
+  group?: string | null;
+  groupNames?: readonly string[];
+  onGroup?: (name: string | null) => void;
 }) {
   const chip = stateChip(a);
   const usage = usageLine(a.usage);
@@ -729,6 +777,9 @@ function AccountRow({
             {usage}
           </div>
         )}
+        {group !== null && onGroup ? (
+          <GroupChoice title={a.title} id={a.id} group={group} names={groupNames} busy={busy} onPick={onGroup} />
+        ) : null}
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         {isCli && (
@@ -806,5 +857,97 @@ function AccountRow({
         />
       </div>
     </div>
+  );
+}
+
+/** v1.393.0: the value of the Group choice that opens the new group's name. */
+const NEW_GROUP = "__new__";
+
+/** One account's Group choice: No group, each group, or a new group (its
+ *  name typed in place). The words of what a group is are said once under
+ *  the accounts (`GROUP_HELP`); the choice's tooltip says them too. */
+function GroupChoice({
+  title,
+  id,
+  group,
+  names,
+  busy,
+  onPick,
+}: {
+  title: string;
+  id: string;
+  group: string;
+  names: readonly string[];
+  busy: boolean;
+  onPick: (name: string | null) => void;
+}) {
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState("");
+  const typed = name.replace(/\s+/g, " ").trim();
+  if (naming) {
+    return (
+      <form
+        className="mt-1.5 flex flex-wrap items-center gap-1.5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!typed) return;
+          setNaming(false);
+          setName("");
+          onPick(typed);
+        }}
+      >
+        <input
+          data-testid={`iron-proxy-group-name-${id}`}
+          aria-label={`New group for ${title}`}
+          value={name}
+          maxLength={GROUP_NAME_MAX}
+          autoFocus
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Group name, e.g. Work"
+          className="field w-40 text-xs"
+        />
+        <button type="submit" disabled={busy || !typed} className={CALM_ACTION}>
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setNaming(false);
+            setName("");
+          }}
+          className={CALM_ACTION}
+        >
+          Cancel
+        </button>
+      </form>
+    );
+  }
+  return (
+    <label className="mt-1.5 flex items-center gap-1.5 text-[11px] text-zinc-500" title={GROUP_HELP}>
+      <span>Group</span>
+      <select
+        data-testid={`iron-proxy-group-${id}`}
+        aria-label={`Group for ${title}`}
+        value={group}
+        disabled={busy}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === NEW_GROUP) {
+            setNaming(true);
+            return;
+          }
+          onPick(v || null);
+        }}
+        className="field w-auto py-0.5 text-xs"
+      >
+        <option value="">No group</option>
+        {names.map((n) => (
+          <option key={n} value={n}>
+            {n}
+          </option>
+        ))}
+        <option value={NEW_GROUP}>New group…</option>
+      </select>
+    </label>
   );
 }

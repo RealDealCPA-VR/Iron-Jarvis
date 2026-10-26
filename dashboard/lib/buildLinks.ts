@@ -130,6 +130,34 @@ export function buildLimitHeadline(kind: unknown, accountName: unknown): string 
   return `${who} reached its limit`;
 }
 
+/** v1.393.0 (long jobs, Phase 4): the bell's headline when a coding reply
+ *  carried on with ANOTHER account of its group — the reply line's own words
+ *  (lib/buildAccounts accountMoveLine). */
+export function buildMovedHeadline(fromName: string, toName: string): string {
+  return `${fromName} reached its limit; carried on with ${toName} (same group)`;
+}
+
+/** v1.393.0: the body of a limit row whose reply waits by itself — the
+ *  session's title and when it carries on ("" parts dropped). */
+export function buildLimitWaitingBody(title: unknown, resetsAt: unknown): string {
+  const t = typeof title === "string" ? title.trim() : "";
+  const clipped = t.length > 100 ? `${t.slice(0, 99)}…` : t;
+  const at = typeof resetsAt === "string" ? new Date(resetsAt) : null;
+  const when =
+    at && !Number.isNaN(at.getTime())
+      ? `it carries on by itself after the reset at ${shortTime(at)}`
+      : "it carries on by itself";
+  return [clipped, when].filter((b) => b).join(" · ");
+}
+
+/** "4:12 PM", with the day when it is not today (lib/ironProxy localTime's
+ *  words, kept here so this file stays import-free). */
+function shortTime(d: Date, now: Date = new Date()): string {
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return time;
+  return `${d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}, ${time}`;
+}
+
 /** How long a Build turn took, in words ("took 3 min 12 s"), or "" — the
  *  twin of desktop/main.js `runOutcomeBuildTook` and comm/notifier
  *  `build_took_words` (one fixture: one-notice-v13600). */

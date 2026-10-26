@@ -7,7 +7,8 @@ from Iron-Proxy's own message/hint, never from request headers).
 
 Shapes:
 
-* ``GET /iron-proxy`` → ``{status, accounts, discovered, providers_used_by_jarvis}``
+* ``GET /iron-proxy`` → ``{status, accounts, discovered, providers_used_by_jarvis,
+  account_groups}`` (v1.393.0: the user's account groups, from Iron Jarvis's config)
   (``status`` = ``service.status()``; accounts/discovered ``[]`` and the reason
   in ``status.error`` when Iron-Proxy is off or not running). ``discover_error``
   is added only when the login scan itself failed. ``?discover=0`` (v1.302.0,
@@ -353,12 +354,22 @@ def register(app: FastAPI, d) -> None:
         reads, so a just-added (or removed) account counts at once."""
         await asyncio.to_thread(svc.refresh_accounts)
 
+    def _groups() -> dict[str, list[str]]:
+        # v1.393.0 (the long-jobs plan's Phase 4): the user's account groups
+        # (Iron Jarvis's own config — never Iron-Proxy's), so the card's
+        # Group choice shows them; it saves through PUT /settings/values.
+        raw = getattr(getattr(d.platform, "config", None), "account_groups", None)
+        if not isinstance(raw, dict):
+            return {}
+        return {str(k): [str(i) for i in v] for k, v in raw.items() if isinstance(v, list)}
+
     async def _view(svc, discover: bool = True) -> dict[str, Any]:
         body: dict[str, Any] = {
             "status": svc.status(),
             "accounts": [],
             "discovered": [],
             "providers_used_by_jarvis": dict(PROVIDERS_USED_BY_JARVIS),
+            "account_groups": _groups(),
         }
         if not svc.enabled:
             return body

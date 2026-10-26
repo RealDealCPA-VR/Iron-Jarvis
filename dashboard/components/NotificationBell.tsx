@@ -44,6 +44,8 @@ import {
   buildFinishedHeadline,
   buildStalledBody,
   buildLimitHeadline,
+  buildLimitWaitingBody,
+  buildMovedHeadline,
   buildSessionHref,
   buildThreadOf,
   sessionLinkFor,
@@ -891,6 +893,13 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     // v1.391.0 (long jobs, Phase 2): a reply a restart cut off while it
     // worked, carried on by itself at the next start (`reason: "restart"`).
     const restartRow = !limitRow && p.reason === "restart";
+    // v1.393.0 (long jobs, Phase 4): the reply WAITS for the reset and
+    // carries on by itself (a wait armed with no press) — news, not a
+    // question: nothing to press, so it is not counted on the badge.
+    const waitingRow = limitRow && p.waiting === true;
+    // v1.393.0: …or it carried on with ANOTHER account of the same group.
+    const from = typeof p.moved_from_name === "string" ? p.moved_from_name.trim() : "";
+    const clipped = title.length > 140 ? `${title.slice(0, 139)}…` : title;
     return {
       id: e.id,
       ts: e.ts,
@@ -900,9 +909,11 @@ export function toActivity(e: IJEvent): ActivityItem | null {
         ? buildLimitHeadline(p.kind, name)
         : restartRow
           ? `A ${CODING_SESSION} carried on after Iron Jarvis restarted`
-          : `A Build session resumed${name ? ` on the ${name} account` : ""}`,
-      body: title.length > 140 ? `${title.slice(0, 139)}…` : title,
-      ...(limitRow ? { attention: true } : {}),
+          : from
+            ? buildMovedHeadline(from, name)
+            : `A Build session resumed${name ? ` on the ${name} account` : ""}`,
+      body: waitingRow ? buildLimitWaitingBody(title, p.resets_at) : clipped,
+      ...(limitRow && !waitingRow ? { attention: true } : {}),
     };
   }
   if (e.type === "build.turn_finished") {
