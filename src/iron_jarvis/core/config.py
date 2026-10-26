@@ -819,8 +819,10 @@ class Config(BaseModel):
     #: in US dollars, on what the model team's PAY-PER-USE members may spend
     #: (metered spend only — a subscription's list-price equivalent never
     #: counts). 0 (the default) = the team router never gives work to a
-    #: pay-per-use member. Read live by ``agents/model_team.route_role``; a
-    #: member NAMED by the planner is not routed and keeps its own allowance.
+    #: pay-per-use member. Read live by ``agents/model_team.route_role`` and
+    #: (v1.395.0 review) ``model_team.pay_refusal`` — a member a MODEL names
+    #: directly (``delegate`` / ``spawn_agent``, a task an agent queued) is
+    #: held to it too; work the USER starts is not, but its spend counts.
     team_paid_cap_usd: float = Field(default=0.0, ge=0.0)
     # SHARE MY PROFILE WITH BUILD (v1.306.0) — one switch per vendor CLI, OFF
     # by default: when on, Iron Jarvis keeps a generated block (the profile +

@@ -519,6 +519,88 @@ async def test_the_verdict_ask_reaches_only_a_reviewer_member(w, tmp_path):
     assert asked and not any(TR.VERDICT_ASK in t for t in asked)
 
 
+def test_a_review_judges_only_the_pieces_of_its_own_reply(w):
+    """A coding session's scope lasts for days: the first review of the day
+    used to judge EVERY unreviewed piece the session ever handed out."""
+    old = TR.note_run(w.p.engine, member="glm", role="code", session_id="a", scope="build:s",
+                      finished=True, turn="reply-1")
+    mine = TR.note_run(w.p.engine, member="glm", role="code", session_id="b", scope="build:s",
+                       finished=True, turn="reply-2")
+    review = TR.note_run(w.p.engine, member="claude-code", role="review", session_id="r", scope="build:s",
+                         finished=True, turn="reply-2")
+    assert old and mine
+    assert TR.credit_review(w.p.engine, scope="build:s", review_row=review, verdict=TR.REVIEW_BAD) == 1
+    got = {r.session_id: r.review for r in _runs(w.p) if r.role == "code"}
+    assert got == {"a": "", "b": TR.REVIEW_BAD}
+
+
+# --------------------------------------------------------------------------- #
+# 9. pay per use: a member a MODEL names is under the limit too
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("door", ["delegate", "spawn_agent"])
+async def test_a_model_naming_a_pay_per_use_member_at_the_default_limit_is_refused(w, tmp_path, door):
+    member(w.p, "gpt", "openai", "gpt-5", roles=("code",))
+    assert w.p.config.team_paid_cap_usd == 0.0
+    sid = await _parent(w.p)
+    res = await w.p.registry.get(door).execute(_args(door, "gpt", "Write util.py."), _ctx(w.p, sid, tmp_path))
+    assert not res.ok
+    assert res.error.startswith("'gpt' is a pay-per-use member, and your model team's pay-per-use limit is $0")
+    assert "Settings › Models › Model team" in res.error
+    assert _children(w.p, sid) == [] and not [c for c in w.log if c["provider"] == "openai"]
+    # Under a limit the user set, it runs.
+    w.p.config.team_paid_cap_usd = 5.0
+    res = await w.p.registry.get(door).execute(_args(door, "gpt", "Write util.py."), _ctx(w.p, sid, tmp_path))
+    assert res.ok, res.error
+
+
+async def test_a_task_the_user_queued_for_a_pay_member_runs_and_one_an_agent_queued_is_held(w):
+    from iron_jarvis.agents.orchestrator import Orchestrator
+    from iron_jarvis.assignments.dispatcher import AssignmentDispatcher
+    from iron_jarvis.core.models import AgentType
+
+    orch = Orchestrator(w.p)
+    w.p.orchestrator = orch
+    member(w.p, "gpt", "openai", "gpt-5", roles=("code",))
+    parent = await orch.create_session("parent", AgentType.BUILDER, provider="google", model="gemini-3.8-flash")
+    d = AssignmentDispatcher(w.p, interval_s=0.05)
+    by_agent, _ = w.p.assignments.create("custom:gpt", "Write a.py.", source=f"agent:{parent.id}")
+    out = await d.tick()
+    assert out["held"] == 1 and not out["started"]
+    assert "pay-per-use limit is $0" in w.p.assignments.get(by_agent.id).held_reason
+    w.p.assignments.cancel(by_agent.id)
+    by_user, _ = w.p.assignments.create("custom:gpt", "Write b.py.")
+    out = await d.tick()
+    await d.drain()
+    assert out["started"], (out, w.p.assignments.get(by_user.id).held_reason)
+    # (The harness serves a keyless "openai" through its Codex double; the
+    # member's own model is what the run is held to.)
+    assert [c for c in w.log if c["hold"] == ("openai", "gpt-5") and "Write b.py" in c["task"]], w.log
+
+
+async def test_a_queued_member_at_the_floor_is_held_never_struck_and_starts_when_it_drops(w):
+    from iron_jarvis.agents.orchestrator import Orchestrator
+    from iron_jarvis.assignments.dispatcher import AssignmentDispatcher
+
+    w.p.orchestrator = Orchestrator(w.p)
+    member(w.p, "claude-code", "claude-cli", "subscription", roles=("code",))
+    w.svc.set_percent("c-work", 97, resets_in=5400)
+    w.svc.set_percent("c-spare", 98, resets_in=900)
+    d = AssignmentDispatcher(w.p, interval_s=0.05)
+    rec, _ = w.p.assignments.create("custom:claude-code", "Write it.")
+    out = await d.tick()
+    assert out["held"] == 1 and not out["started"]
+    row = w.p.assignments.get(rec.id)
+    assert "nothing new starts on an account at 95% or more" in row.held_reason
+    assert row.status == "queued" and int(row.failure_count or 0) == 0
+    w.svc.set_percent("c-spare", 40)
+    await d.tick()
+    await d.drain()
+    calls = [c for c in w.log if c["task"].startswith("Write it")]
+    assert calls and all(c["pin"] is not None and c["pin"].profile_id == "c-spare" for c in calls)
+
+
 async def test_a_routed_burst_through_the_door_spreads_over_the_accounts(w, tmp_path):
     member(w.p, "claude-code", "claude-cli", "subscription", roles=("code",))
     w.svc.set_percent("c-work", 72)

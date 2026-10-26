@@ -293,9 +293,11 @@ SETTINGS: tuple[SettingDef, ...] = (
     # time (no grant lifts it). Read live by the team router.
     S("team_paid_cap_usd", "Pay-per-use limit for your model team ($ a month)", "models", "number",
       "The most your model team's pay-per-use members may spend in a calendar month, in "
-      "dollars. When Iron Jarvis picks a team member for a piece of work, it uses a "
-      "pay-per-use member only while this month's spend is under this limit. 0 means never. "
-      "Members on your own hardware and on your Claude Code or Codex plan are not counted.",
+      "dollars. Iron Jarvis and its agents hand work to a pay-per-use member only while "
+      "this month's spend is under this limit. 0 means never. Work you start yourself (on "
+      "the Agents page, a schedule, a task you queue) is not stopped by it, but what it "
+      "spends counts. Members on your own hardware and on your Claude Code or Codex plan "
+      "are not counted.",
       tier="ask-floor", section="Model team", check=_range(0, 100000),
       aliases=("team pay cap", "pay per use limit", "pay per use cap", "model team budget")),
     S("voice_transcribe_base_url", "Voice: speech-to-text endpoint", "models", "string",
