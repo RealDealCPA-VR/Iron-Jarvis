@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.390.1 (2026-10-25).*
+holds itself to. Current as of v1.391.0 (2026-10-25).*
 
 ---
 
@@ -1897,6 +1897,33 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Long coding replies survive sleep and restarts (v1.391.0)
+
+- **The PC stays awake while work runs.** That covers a chat or coding reply,
+  an agent run or mission, a workflow, and a terminal whose AI is working.
+  - Work that is only waiting for your answer does not keep it awake.
+  - The screen can still turn off.
+  - While the PC is held awake, the tray menu's first line says "Keeping this
+    PC awake while work runs".
+  - To turn this off: **Settings › System › Power › Keep this PC awake while
+    work runs**.
+- **A coding reply carries on after a restart.** If a reply was working when
+  Iron Jarvis stopped (an update, a restart or a crash), it carries on by
+  itself at the next start, from its last finished step.
+  - The reply above says Iron Jarvis stopped there, the next one says it
+    carried on, and the bell says so too.
+  - A step that was cut off midway is not run again blindly: the model is told
+    it was cut off and checks before going on.
+  - A reply that was waiting for your answer when Iron Jarvis stopped stays
+    waiting, with **Retry**, as before.
+  - When a very long reply's record is too big to keep whole, its newest steps
+    are kept.
+- **A reply a crash cut off keeps its Timeline.**
+- **A helper is not offered Continue after a restart.** A helper that was cut
+  off with its reply is no longer listed with **Continue** among the jobs a
+  restart interrupted. The reply carries on and decides what still needs
+  doing.
 
 ## See where a coding reply's time and money went: the Timeline (v1.390.0)
 

@@ -3699,6 +3699,53 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **A coding reply SURVIVES sleep and restarts: awake while WORKING, its own
+  record kept per round, carried on by itself exactly once** (v1.391.0, Phase 2
+  of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`; a doer + a reviewer that found
+  10 more defects). KEEP AWAKE: `desktop/main.js` holds ONE `powerSaveBlocker`
+  "prevent-app-suspension" while `GET /system/activity`'s `working` is true —
+  NOT `busy`, which also counts work parked on the user and is what the update
+  warning reads. `working` = replies not waiting, sessions except an attended
+  one on a pending ask, workflow runs not waiting, and terminals whose state is
+  `working`. Released after 3 missed checks and on quit; the tray menu is
+  rebuilt only on a change; setting `keep_awake` (allow tier, default on) is
+  read live from `/system/activity`. SAVING: `harness/reply_record.ReplyRecord`
+  → `RunTranscript` (`run_id "build-turn:<turn>"`, `session_id
+  "build:<thread>"`, a nullable `waiting` column the reconciler adds), awaited
+  at every round top and before tools run (one writer thread, ≤ 10 s),
+  deleted at a clean end. A list past 4M chars keeps the question plus the
+  newest WHOLE rounds (`_fit`, `LEFT_OUT_NOTE`; a round is never split);
+  `KEEP_DAYS` 7. Only `start_build_turn` passes the stream lane's
+  `reply_record=` keyword (pinned). `recorded_turn` sets `waiting` from ask /
+  answer frames AND from a helper frame's ask. RESUME: the lifespan task
+  `bg_tasks["build_resume"]` runs `resume_after_restart`. `claim(turn,
+  to_turn)` MOVES the row to the new turn's key in one UPDATE guarded by
+  `waiting` (a delete lost a reply cut again before the carry-on's first save).
+  It refuses waiting / archived / gone / account-wait / a newer user message,
+  re-checked at the start. `_resume_root` follows `resumedFrom` back to the
+  ORIGINAL question (its files, skill and history end; a second cut sent the
+  question twice). `load_for_resume(ledger_run_id=, since=)` closes cut-off
+  calls by their REAL tool. The finish check treats a resumed turn as a
+  carry-on of the original question (`resumed=`) and notes once
+  (`FinishCheck.checked_before`). Line key `resumedFrom`; bell
+  `build.resumed` reason "restart". `TurnLog._flush_later` writes the last
+  interval's frames, for every turn. `replayed_reply_line` rebuilds a
+  crash-cut reply's Timeline from its stored frames. `/sessions/interrupted`
+  never lists a coding session's helper (`HELPER_ORIGIN`). The update
+  rehearsal drives a coding reply through `/shutdown` and a hard kill and
+  checks it carries on once without re-running a step. OPEN: a call that had
+  finished inside a cut round is told "cut off"; a resumed turn's meter leaves
+  out the carried tail; a resume that fails at once (an account parked) loses
+  its kept rounds; a cloud model picked while the app was down receives the cut
+  part's tool outputs; two full rewrites of the kept list per round (≤ 4 MB
+  each); not driven in the packaged app. Pins:
+  `tests/test_build_resume{,_review}_v1391.py`,
+  `test_build_cutoff_timeline_v1391.py`, `test_keep_awake_v1391.py`,
+  `test_interrupted_helpers_v1391.py`, `test_update_rehearsal_v1338.py`
+  (+ `fixtures/fake_coding_model_v1391.py`), `dashboard/__tests__/
+  build-resume-v1391.test.tsx`, fixture `build-cutoff-timeline-v1391.json`
+  (`IJ_REGEN_CUTOFF_TIMELINE=1`).
+
 - **A coding reply's TIMELINE: one precise clock for LENGTHS, the wall clock
   for WINDOWS** (v1.390.0, Phase 1 of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`;
   a doer + a reviewer that found 5 more defects). FRAMES (harness turns ONLY;
