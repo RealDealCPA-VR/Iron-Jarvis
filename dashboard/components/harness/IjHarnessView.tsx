@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageSquarePlus } from "lucide-react";
 import { HarnessSidebar, type StartExtra } from "@/components/harness/HarnessSidebar";
 import { HarnessSession } from "@/components/harness/HarnessSession";
+import { TonightList } from "@/components/harness/TonightList";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import type { RailPane } from "@/components/terminal/PaneRail";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
@@ -102,6 +103,9 @@ export function IjHarnessView({
   // instead of the one it had open (v1.369.0 review). v1.384.0: a session
   // this window already knows is the pick at once.
   const pickedRef = useRef(initial.pick !== null);
+  // v1.398.0 (night shift N1): Tonight in the middle instead of a session
+  // (this window's memory only; picking a session leaves it).
+  const [tonight, setTonight] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -235,8 +239,13 @@ export function IjHarnessView({
         <HarnessSidebar
           folders={folders}
           listError={listError}
-          selectedId={selected}
-          onSelect={setSelected}
+          selectedId={tonight ? null : selected}
+          onSelect={(id) => {
+            setTonight(false);
+            setSelected(id);
+          }}
+          tonightOpen={tonight}
+          onTonight={() => setTonight(true)}
           onStart={start}
           onRename={rename}
           defaultFolder={sessionFolder ?? defaultFolder}
@@ -249,7 +258,19 @@ export function IjHarnessView({
         />
       </aside>
       <div className="min-w-0 flex-1 xl:min-h-0">
-        {selected ? (
+        {tonight ? (
+          <div className="h-full overflow-y-auto">
+            <TonightList
+              folders={(folders ?? []).filter((f) => !f.noFolder && f.path).map((f) => f.path)}
+              onOpenSession={(id) => {
+                pickedRef.current = true;
+                setTonight(false);
+                setSelected(id);
+                void refresh();
+              }}
+            />
+          </div>
+        ) : selected ? (
           <HarnessSession
             key={selected}
             threadId={selected}

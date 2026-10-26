@@ -621,6 +621,10 @@ class NightTurn:
     def minutes(self) -> int:
         return max(1, int(round(self.card_wait_s / 60.0)))
 
+    def wait_words(self) -> str:
+        n = self.minutes()
+        return f"{n} minute" if n == 1 else f"{n} minutes"
+
     def note(self, kind: str, text: str) -> None:
         """Keep a note on the task — off the caller's loop when there is one
         (a thread of its own), never raising."""
@@ -644,14 +648,14 @@ class NightTurn:
         """What the MODEL is told about a step nobody answered (the call's
         refusal)."""
         return (
-            f"left for the user: {what} — nobody answered in {self.minutes()} minutes (this task runs "
+            f"left for the user: {what} — nobody answered in {self.wait_words()} (this task runs "
             "at night with nobody watching), so this step was not done. Do not ask again; carry on "
             "with the rest of the task and say at the end what was left for the user."
         )
 
     def note_words(self, what: str) -> str:
         """What the night record keeps about it (the morning reads it)."""
-        return f"Needs your OK: {what} (nobody answered in {self.minutes()} minutes, so it was skipped)."
+        return f"Needs your OK: {what} (nobody answered in {self.wait_words()}, so it was skipped)."
 
 
 _NOTE_THREADS: set[threading.Thread] = set()

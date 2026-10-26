@@ -198,6 +198,9 @@ async def settle_running(d: Any) -> list[str]:
     running = await asyncio.to_thread(N.rows_in, engine, N.RUNNING)
     if not running:
         return []
+    # A turn's notes are written off its loop (``NightTurn.note``): the ones
+    # still being written land before any task is judged from its notes.
+    await asyncio.to_thread(N.flush_notes, 5.0)
     emergency = _emergency(d)
     kept = await asyncio.to_thread(_kept_threads, engine)
     now = _naive(utcnow())
