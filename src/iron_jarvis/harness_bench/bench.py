@@ -877,6 +877,10 @@ async def run_bench(
     ledger = ledger if ledger is not None else BudgetLedger()
     echo(f"{config.folder_name}: {len(selected)} task(s), seed {use_seed}"
          + (f", {repeats} repeats" if repeats > 1 else ""))
+    # v1.396.0 review: what the checks before the first task could only say
+    # (a CLI's sign-in not known yet, Iron-Proxy off, a role nobody holds).
+    for note in getattr(runner, "ready_notes", None) or ():
+        echo(f"  note: {note}")
     # v1.396.0: what the runner needs before its first task (a team's
     # members), undone however the invocation ends.
     prepare, close = getattr(runner, "prepare", None), getattr(runner, "close", None)

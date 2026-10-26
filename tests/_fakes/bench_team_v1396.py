@@ -46,6 +46,22 @@ TASK_B = "frontier-release-ready"
 _TASK_WORDS = {TASK_A: "monthly event starting on January 31", TASK_B: "category totals are wrong"}
 
 
+_LOCAL_SERVER: Any = None
+
+
+def local_endpoint() -> str:
+    """v1.396.0 review: the local member's address — a keyless loopback model
+    server (one per test process, started on first use) that lists the
+    member's models, so the checks before a team's first task find the
+    member's model where the run will call it. The doubles never call it."""
+    global _LOCAL_SERVER
+    if _LOCAL_SERVER is None:
+        from tests._fakes.bench_tonight_v1396 import Gateway
+
+        _LOCAL_SERVER = Gateway(key="", models=(LOCAL[1], "glm-5.3-air"))
+    return f"http://127.0.0.1:{_LOCAL_SERVER.port}"
+
+
 def solution(task_id: str, rel: str) -> str:
     return (SOLUTIONS / task_id / (rel + ".sol")).read_text(encoding="utf-8")
 
@@ -156,7 +172,9 @@ class Double(LLMAdapter):
         if provider == LOCAL[0]:
             # On the user's own network (egress reads the endpoint); the
             # router's liveness probe needs a ``_client``, which a double lacks.
-            self._endpoint = LOCAL_ENDPOINT
+            # v1.396.0 review: a REAL loopback server lists its models there
+            # (the checks before a team's first task ask it once).
+            self._endpoint = local_endpoint()
 
     def capabilities(self):
         return {"tool_use": True, "vision": True}

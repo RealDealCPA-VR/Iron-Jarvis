@@ -249,14 +249,22 @@ async def test_a_changed_team_is_a_new_folder_never_a_reused_record(world, tmp_p
     reread = await run_bench(runner=same, home=world.home, tasks=TASKS, names=[W.TASK_A], dry_run=True)
     assert reread.config_dir == team.config_dir
     assert any("would reuse the stored result" in line for line in reread.plan_lines)
-    # The members' step limit (the home's) is part of the team's setup too.
+    # The members' step limit is part of the team's setup too (v1.396.0
+    # review: a member's own — the planner's round budget unless the file
+    # names one — never the home's ``max_agent_steps``).
+    path = tmp_path / "steps.toml"
+    path.write_text(W.team_toml().replace('roles = ["read", "code"]\n', 'roles = ["read", "code"]\nmax_steps = 30\n'),
+                    encoding="utf-8")
+    capped = T.JarvisTeamRunner(world.platform, team=T.load_team_file(path), round_budget=12)
+    longer = await run_bench(runner=capped, home=world.home, tasks=TASKS, names=[W.TASK_A], dry_run=True)
+    assert longer.config_dir not in (team.config_dir, dry.config_dir, other.config_dir)
     steps = world.platform.config.max_agent_steps
     world.platform.config.max_agent_steps = steps + 8
     try:
-        longer = await run_bench(runner=same, home=world.home, tasks=TASKS, names=[W.TASK_A], dry_run=True)
+        home_steps = await run_bench(runner=same, home=world.home, tasks=TASKS, names=[W.TASK_A], dry_run=True)
     finally:
         world.platform.config.max_agent_steps = steps
-    assert longer.config_dir not in (team.config_dir, dry.config_dir, other.config_dir)
+    assert home_steps.config_dir == team.config_dir
 
 
 async def test_a_dry_run_lists_the_team_and_the_tasks_and_calls_nothing(world, tmp_path):
@@ -358,9 +366,20 @@ def test_a_record_of_several_receipts_may_sit_one_rounding_per_receipt_away():
 def test_the_command_line_runs_a_team_from_its_file(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
+    from iron_jarvis.harness_bench import bench as bench_mod
     from iron_jarvis.harness_bench.cli import bench_app
 
     monkeypatch.setenv("IRON_PROXY_DATA_DIR", str(tmp_path / "ipd"))
+    # v1.396.0 review: the planner and members are checked before anything
+    # is listed — the scripted world's models stand in for the real ones.
+    real = bench_mod.make_runner
+
+    def make_runner(*a, **kw):
+        runner = real(*a, **kw)
+        W.wire(runner.platform, monkeypatch)
+        return runner
+
+    monkeypatch.setattr(bench_mod, "make_runner", make_runner)
     team = tmp_path / "team.toml"
     team.write_text(W.team_toml(), encoding="utf-8")
     root = tmp_path / "bench-root"
@@ -623,8 +642,11 @@ def test_the_jarvis_runners_identity_is_unchanged_and_the_team_only_adds_to_it(w
     team = T.JarvisTeamRunner(world.platform, team=_spec(tmp_path))
     ident = team.identity()
     assert set(ident) - set(JarvisRunner(world.platform, provider=W.PLANNER[0], model=W.PLANNER[1]).identity()) == {
-        "team", "router", "member_prompt_sha256", "member_steps"}
-    assert ident["member_steps"] == world.platform.config.max_agent_steps
+        "team", "router", "member_prompt_sha256", "member_steps", "member_effort"}
+    # v1.396.0 review: each member's own step limit (the planner's round
+    # budget) and the level its calls send (no effort asked here).
+    assert ident["member_steps"] == {"glm": team.round_budget, "codex": team.round_budget}
+    assert ident["member_effort"] == {"glm": None, "codex": None}
     assert ident["team"] == {
         "planner": {"provider": "claude-cli", "model": "claude-opus-4-8"},
         "members": [

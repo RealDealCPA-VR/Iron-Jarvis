@@ -23,6 +23,20 @@ THE TEAM FILE (TOML)::
     roles = ["read", "code"]   # model_team.ROLES: read, code, review, test
     # description = "..."      # optional: what the planner's list says
     # account = "..."          # optional: an Iron-Proxy account id
+    # effort = "medium"        # optional: low / medium / high (default: --effort)
+    # max_steps = 60           # optional: steps a piece (default: --rounds)
+
+A member's EFFORT reaches its model calls only where its model takes a level
+(``providers.reasoning``; "not offered" otherwise), and its STEP LIMIT is its
+record's ``max_steps`` (v1.396.0 review: by default the run's ``--effort`` and
+the planner's round budget — see :data:`MAX_MEMBER_STEPS` for why). Both are
+recorded on every part and are part of the setup.
+
+BEFORE THE FIRST TASK (v1.396.0 review, :mod:`.preflight`): the planner and
+every member are checked — the provider exists, is connected (a CLI's sign-in
+by its CACHED answer only), a model server answers its one bounded model-list
+request with the home's saved key and lists the model — and anything wrong is
+refused in one sentence, in a dry run and a real run alike.
 
 Every part of the file is in the configuration's IDENTITY (and so its key,
 folder and every run's fingerprint): a changed team — another member, another
@@ -57,7 +71,9 @@ from typing import Any
 from .runners import (
     DEFAULT_DIALECT,
     DEFAULT_ROUNDS,
+    EFFORTS,
     MEMBER_PROMPT,
+    NOT_OFFERED,
     JarvisRunner,
     _bench_made,
     _members,
@@ -72,7 +88,17 @@ MAX_MEMBERS = 10
 #: A member's name: what the planner calls it and the registry keys it by.
 _NAME_RX = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
 _PLANNER_KEYS = frozenset({"provider", "model"})
-_MEMBER_KEYS = frozenset({"name", "provider", "model", "roles", "description", "account"})
+_MEMBER_KEYS = frozenset({"name", "provider", "model", "roles", "description", "account", "effort", "max_steps"})
+#: v1.396.0 review: a member's step limit when the file names none is the
+#: planner's own round budget (``--rounds``, 60 by default). A member handed a
+#: coding piece used to get the HOME's ``max_agent_steps`` (12 — what every
+#: helper on the turn's own model got in the earlier single-model rows, where
+#: no helper was ever started), so a piece the single-model rows' model
+#: finishes in its 60 rounds could be cut off and read as the team being
+#: worse. Now a member gets as many steps a piece as the model it is compared
+#: with gets for the whole task; the task's time limit still bounds the run.
+#: The file may name 1 to :data:`MAX_MEMBER_STEPS`.
+MAX_MEMBER_STEPS = 200
 _TOP_KEYS = frozenset({"planner", "members"})
 
 
@@ -90,6 +116,12 @@ class Member:
     roles: tuple[str, ...]
     description: str = ""
     account: str = ""
+    #: v1.396.0 review: the member's reasoning level as the FILE names it
+    #: ("" = the run's ``--effort``) and its step limit a piece (0 = the
+    #: planner's round budget). The runner resolves both
+    #: (:meth:`JarvisTeamRunner.member_effort` / :meth:`~JarvisTeamRunner.member_steps`).
+    effort: str = ""
+    max_steps: int = 0
 
     def identity(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -98,6 +130,10 @@ class Member:
         }
         if self.account:
             out["account"] = self.account
+        if self.effort:
+            out["effort"] = self.effort
+        if self.max_steps:
+            out["max_steps"] = self.max_steps
         return out
 
     def words(self) -> str:
@@ -199,8 +235,17 @@ def parse_team(data: Any, *, source: str = "") -> TeamSpec:
                            + ", ".join(bad) + " (the roles are " + ", ".join(MT.ROLE_IDS) + ").")
         description = _text(row.get("description"), where, "description", required=False)
         account = _text(row.get("account"), where, "account", required=False)
+        effort = _text(row.get("effort"), where, "effort", required=False).lower()
+        if effort and effort not in EFFORTS:
+            raise _refused(f"The team file's {where}: effort is one of {', '.join(EFFORTS)}.")
+        steps = row.get("max_steps", 0)
+        if isinstance(steps, bool) or not isinstance(steps, int) or (
+                "max_steps" in row and not 1 <= steps <= MAX_MEMBER_STEPS):
+            raise _refused(f"The team file's {where}: max_steps is a whole number from 1 to "
+                           f"{MAX_MEMBER_STEPS}.")
         members.append(Member(name=name, provider=m_provider, model=m_model,
-                              roles=tuple(MT.clean_roles(roles)), description=description, account=account))
+                              roles=tuple(MT.clean_roles(roles)), description=description, account=account,
+                              effort=effort, max_steps=int(steps or 0)))
     return TeamSpec(planner_provider=p_provider, planner_model=p_model, members=tuple(members), source=source)
 
 
@@ -260,6 +305,9 @@ class JarvisTeamRunner(JarvisRunner):
                          round_budget=round_budget, dialect=dialect, effort=effort)
         self.team = team
         self._reads = 0
+        #: v1.396.0 review: what the checks before the first task could only
+        #: SAY (``check_ready``): a dry run lists them, a real run echoes them.
+        self.ready_notes: list[str] = []
 
     # -- identity ---------------------------------------------------------- #
 
@@ -271,15 +319,25 @@ class JarvisTeamRunner(JarvisRunner):
             "team": self.team.identity(),
             "router": router_identity(),
             "member_prompt_sha256": _sha(MEMBER_PROMPT),
-            # A member's run stops at the home's step limit (it names none of
-            # its own): another limit is another setup.
-            "member_steps": int(getattr(self.platform.config, "max_agent_steps", 0) or 0),
+            # v1.396.0 review: each member's step limit a piece and the level
+            # its calls SEND, as resolved: another limit or level is another
+            # setup.
+            "member_steps": {m.name: self.member_steps(m) for m in self.team.members},
+            "member_effort": {m.name: self.member_effort(m) for m in self.team.members},
         }
 
     def dry_run_lines(self) -> list[str]:
         lines = [f"Team: planner {self.team.planner_provider} / {self.team.planner_model}; "
                  f"{len(self.team.members)} member(s):"]
-        lines += [f"  {m.words()}" for m in sorted(self.team.members, key=lambda m: m.name)]
+        for m in sorted(self.team.members, key=lambda m: m.name):
+            effort = self.member_effort(m)
+            lines.append(f"  {m.words()}")
+            lines.append(f"    {m.name}: effort {effort or 'none asked'}"
+                         + (f" ({m.provider} / {m.model} takes no level)" if effort == NOT_OFFERED else "")
+                         + f"; at most {self.member_steps(m)} steps a piece")
+        if self.ready_notes:
+            lines.append("Checked before the first task:")
+            lines += [f"  {note}" for note in self.ready_notes]
         return lines
 
     # -- the members ------------------------------------------------------- #
@@ -287,10 +345,55 @@ class JarvisTeamRunner(JarvisRunner):
     def member_specs(self) -> dict[str, tuple[str, str]]:
         return {m.name: (m.provider, m.model) for m in self.team.members}
 
+    def member_steps(self, member: Member) -> int:
+        """The steps a member's piece may take: its file's, else the planner's
+        round budget (:data:`MAX_MEMBER_STEPS` explains why)."""
+        return int(member.max_steps or self.round_budget)
+
+    def member_effort(self, member: Member) -> str | None:
+        """The level a member's calls SEND: its file's effort, else the run's
+        ``--effort``, when its model takes it; ``"not offered"`` when it does
+        not; None when no effort was asked at all."""
+        from ..providers.reasoning import supports
+
+        level = member.effort or self.effort
+        if not level:
+            return None
+        return level if supports(member.provider, member.model, level) else NOT_OFFERED
+
+    def call_reasoning(self, who: str) -> str:
+        """The level a call by ``who`` (a member's name) is sent with ("" =
+        none: the planner's own calls carry the turn's level already)."""
+        member = next((m for m in self.team.members if m.name == who), None)
+        level = self.member_effort(member) if member is not None else None
+        return level if level and level != NOT_OFFERED else ""
+
+    def member_facts(self) -> dict[str, dict[str, Any]]:
+        return {m.name: {"effort_passed": self.member_effort(m), "max_steps": self.member_steps(m)}
+                for m in self.team.members}
+
     def check_ready(self) -> None:
         """Refuse a team run whose home holds a member the benchmark did not
-        make (it would join the team), or whose file names an account that
-        Iron-Proxy in this home does not hold. BLOCKING (cached reads)."""
+        make (it would join the team), whose file names an account that
+        Iron-Proxy in this home does not hold, or whose planner or members
+        cannot run (:mod:`.preflight`: an unknown provider, a CLI signed out
+        by its cached answer, a model server that does not answer, wants a key
+        the home lacks, or does not list the model). What cannot be known
+        without starting a CLI is kept in :attr:`ready_notes`. BLOCKING
+        (cached reads; at most one bounded request per model server)."""
+        from . import preflight as PF
+
+        ready = PF.check_models(self.platform, [
+            ("planner", self.team.planner_provider, self.team.planner_model),
+            *((m.name, m.provider, m.model) for m in sorted(self.team.members, key=lambda m: m.name)),
+        ])
+        if ready.problems:
+            raise _refused("This team cannot run yet:\n  " + "\n  ".join(ready.problems))
+        notes = list(ready.notes)
+        for line in (PF.roles_note(self.team.members), PF.iron_proxy_note(self.platform)):
+            if line:
+                notes.append(line)
+        self.ready_notes = notes
         mine = {m.name for m in self.team.members}
         foreign = sorted(r.name for r in _members(self.platform) if not _bench_made(r))
         if foreign:
@@ -332,6 +435,8 @@ class JarvisTeamRunner(JarvisRunner):
                 m.name, MEMBER_PROMPT.format(name=m.name), [],
                 description=m.description or f"{m.name}: {', '.join(m.roles)} on {m.model}",
                 provider=m.provider, model=m.model, roles=list(m.roles), account=m.account,
+                # v1.396.0 review: its own step limit (never the home's 12).
+                max_steps=self.member_steps(m),
             )
 
     def close(self) -> None:
