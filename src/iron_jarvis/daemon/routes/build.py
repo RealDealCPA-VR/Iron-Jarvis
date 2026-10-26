@@ -3266,6 +3266,10 @@ async def resume_after_restart(d: Any) -> list[str]:
         except HTTPException as exc:
             log.info("carrying on the cut-off reply %s of session %s did not start: %s",
                      turn_id, thread_id, exc.detail)
+            if exc.detail == UNATTENDED_REFUSAL:
+                # v1.398.0: Emergency stop turned on during the pass — the
+                # kept conversation stays (as when it was on before the pass).
+                continue
             await asyncio.to_thread(RR.drop, engine, turn_id)
             continue
         except Exception:  # noqa: BLE001 — one session never stops the pass
