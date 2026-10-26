@@ -320,10 +320,22 @@ def _as_older_schema(home: Path) -> None:
     con = sqlite3.connect(home / "ironjarvis.db", timeout=10)
     try:
         con.execute('ALTER TABLE "session" DROP COLUMN "failure_detail"')
+        # v1.391.0: and no `runtranscript.waiting` (a coding reply's kept
+        # conversation says whether it was parked on the user).
+        con.execute('ALTER TABLE "runtranscript" DROP COLUMN "waiting"')
         con.commit()
     finally:
         con.close()
     assert "failure_detail" not in _session_columns(home), "anti-vacuity: the older shape"
+    assert "waiting" not in _table_columns(home, "runtranscript"), "anti-vacuity: the older shape"
+
+
+def _table_columns(home: Path, table: str) -> dict[str, int]:
+    con = sqlite3.connect(f"file:{home / 'ironjarvis.db'}?mode=ro", uri=True, timeout=10)
+    try:
+        return {r[1]: r[3] for r in con.execute(f'PRAGMA table_info("{table}")')}
+    finally:
+        con.close()
 
 
 def _session_columns(home: Path) -> dict[str, int]:
@@ -401,6 +413,7 @@ def test_an_update_restart_brings_everything_back(tmp_path):
 
         # The older database gained the new column (nullable) and its rows read.
         assert _session_columns(home)["failure_detail"] == 0, "added, and nullable"
+        assert _table_columns(home, "runtranscript")["waiting"] == 0, "added, and nullable"
         row = second.get(f"/sessions/{planted['session']}")
         assert row.status_code == 200, row.text
         assert row.json()["session"]["failure_detail"] == ""
