@@ -147,6 +147,45 @@ async def test_a_task_that_leaves_the_main_folder_alone_is_done_and_says_what_wa
     assert ended["state"] == N.NEEDS_YOU
 
 
+SLEEPER = (
+    'python -c "import os, pathlib, time; pathlib.Path(\'pid.txt\').write_text(str(os.getpid())); '
+    'time.sleep(300)"'
+)
+
+
+async def test_a_program_a_night_task_left_running_ends_with_the_task(tmp_path, monkeypatch, night):
+    """A dev server or a watcher a night task started in the background ran
+    on all night and into the morning (Emergency stop stopped the turn, not
+    it). It ends when the task ends, and the record says so."""
+    from tests.test_build_attempts_v1397 import _alive
+    from tests.test_build_sessions_v1367 import until
+
+    repo = make_repo(tmp_path / "proj")
+    app = create_app(str(tmp_path / "home"))
+    wire(app, NightScript({
+        "TASK-BG": [
+            [ToolCall(id="b1", name="Bash", arguments={"command": SLEEPER, "run_in_background": True})],
+            "Started the server; done TASK-BG.",
+        ],
+    }))
+    task = await _queue(app, repo, "TASK-BG: start the server")
+    await night_routes.night_pass(app.state.d)
+    started = N.get_task(app.state.platform.engine, task["id"])
+    worktree = Path(_git_of(app, started)["worktree"])
+
+    def _pid() -> int:
+        try:
+            return int((worktree / "pid.txt").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return 0
+
+    pid = await until(_pid, 60)
+    assert pid and _alive(pid)
+    ended = await _ended(app, task["id"])
+    assert await until(lambda: not _alive(pid), 30), "the night task's program outlived it"
+    assert any("running in the background" in n["text"] for n in ended["notes"]), ended["notes"]
+
+
 def test_the_main_folder_snapshot_sees_each_kind_of_change_and_never_the_nights_own_branches(tmp_path):
     repo = _repo_with_venv(tmp_path / "proj")
     venv = str(repo / ".venv")

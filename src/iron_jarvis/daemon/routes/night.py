@@ -416,6 +416,15 @@ async def settle_running(d: Any) -> list[str]:
             elif moved is None:
                 notes.append(("info", G.UNCHECKED))
             notes.append(("info", G.NOT_CONFINED))
+        # v1.398.0 review: a night task that ENDED leaves nothing running —
+        # a dev server or a watcher its commands started in the background
+        # ran on all night and into the morning (and Emergency stop stopped
+        # the turn, not them). Its session's programs end with it; a window
+        # the user has open is spared (``procs.end_session``).
+        ended_pids = await asyncio.to_thread(S.end_session_programs, thread)
+        if ended_pids:
+            notes.append(("info", f"It left {len(ended_pids)} program(s) running in the background; "
+                          "they were stopped when it ended."))
         for kind, text in notes:
             await asyncio.to_thread(N.add_note, engine, tid, kind, text)
         await asyncio.to_thread(N.finish_task, engine, tid, state)
