@@ -1344,8 +1344,23 @@ class AgentRuntime:
         futile: bool,
         window,
         sink,
+        complete=None,
+        ledger=None,
+        report: "dict | None" = None,
     ):
         """Compact this run's older steps when the window is nearly full.
+
+        v1.392.0 (the long-jobs plan's Phase 3): a CODING SESSION's reply
+        summarizes its own older rounds through THIS machinery — the same
+        threshold, coverage, model-written summary, ledger check and futility
+        guard (``harness/reply_summary``). Three keyword arguments let it, each
+        omitted by the agent run (byte-identical there): ``complete`` — the
+        summarizer to call (the reply's own model, pinned and billed) instead
+        of the platform's factory; ``ledger`` — a no-argument callable giving
+        ``(paths, tool names)`` the record supports (a coding session has no
+        Session row for ``ledger_facts`` to read; its calls are ledgered under
+        ``build:<id>``), run off the loop; ``report`` — a dict filled with what
+        a written summary covered and what the check removed.
 
         Returns the (possibly unchanged) ``(summary, covers)``. Auto-only and
         never asks: there is no human attached to a running agent, and the
@@ -1390,11 +1405,15 @@ class AgentRuntime:
             if not pairs or new_covers <= covers:
                 return summary, covers, futile
 
-            complete = self.p_compaction_complete()
+            if complete is None:
+                complete = self.p_compaction_complete()
             if complete is None:
                 return summary, covers, futile
 
-            paths, tools = _C.ledger_facts(self.p.engine, session.id)
+            if ledger is not None:
+                paths, tools = await asyncio.to_thread(ledger)
+            else:
+                paths, tools = _C.ledger_facts(self.p.engine, session.id)
             out = await _C.compact_messages(
                 pairs,
                 complete=complete,
@@ -1423,6 +1442,11 @@ class AgentRuntime:
                 for m in after_messages
             )
             futile = _C.pressure(after_raw, int(window or 0)) >= auto_at
+            if report is not None:
+                report.update({
+                    "covers": new_covers, "previous": covers, "stripped": out.stripped,
+                    "provider": out.provider, "model": out.model,
+                })
 
             if sink:
                 sink.phase(

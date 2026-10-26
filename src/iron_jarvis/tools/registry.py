@@ -952,11 +952,21 @@ class ToolRegistry:
                 if ctx.session_id == "chat"
                 else "the run was cancelled"
             )
+            note = f"{who} while the tool was running — its effect may have landed"
+            # v1.392.0 (never stalls silently): a coding session's step the
+            # USER stopped with "Stop the step" says so, in those words — it
+            # was not the run that was cancelled, and the reply carries on.
+            try:
+                from ..harness.stall import STOPPED_LEDGER_NOTE, stopped_by_user
+
+                if stopped_by_user():
+                    note = STOPPED_LEDGER_NOTE
+            except Exception:  # noqa: BLE001 — wording only; never masks the cancel
+                pass
             job = asyncio.ensure_future(
                 self._ledger_interrupted(
                     ctx, name, args, decision.mode, rev_value,
-                    f"{who} while the tool was running"
-                    " — its effect may have landed",
+                    note,
                     risk=risk,
                     inv_id=inv_id,
                 )
