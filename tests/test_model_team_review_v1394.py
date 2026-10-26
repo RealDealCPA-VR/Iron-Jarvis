@@ -587,3 +587,117 @@ def test_a_long_member_name_is_never_cut_when_its_facts_are_long():
     line = _block_line(entry, None)
     assert line.startswith(name + " ") or line.startswith(name + " —"), line
     assert line.endswith("(87% over 23 runs)")
+
+
+def test_a_members_own_account_in_another_group_is_refused_never_mixed():
+    """Decision 4: work and personal accounts never mix. A member set to an
+    account of ANOTHER group than the session's ('personal' vs 'work') would
+    take a work session's piece to the personal account — refused in words.
+    One group statement missing (either account ungrouped) is no statement:
+    the member's own account is used."""
+    groups = {"work": ["c-work", "x-plus"], "personal": ["c-spare", "x-team"]}
+    p = _Platform(groups)
+    work = P.AccountPin(profile_id="c-work", ij_provider="claude-cli", title="Work Max")
+    pin, why = T.member_account(p, _rec("codex-cli", account="x-team"), work, coding=True)
+    assert pin is None and "'personal'" in why and "'work'" in why, why
+    # Its own account in the SAME group: used.
+    pin, why = T.member_account(p, _rec("codex-cli", account="x-plus"), work, coding=True)
+    assert pin.profile_id == "x-plus" and why == ""
+    # The member's account in no group: used (the user made no statement).
+    p2 = _Platform({"work": ["c-work"]})
+    pin, why = T.member_account(p2, _rec("codex-cli", account="x-team"), work, coding=True)
+    assert pin.profile_id == "x-team" and why == ""
+    # No caller pin (an objective): its own account, as set.
+    pin, why = T.member_account(p, _rec("codex-cli", account="x-team"), None, coding=False)
+    assert pin.profile_id == "x-team" and why == ""
+
+
+def test_a_second_press_for_a_model_that_already_has_a_member_makes_no_second_one():
+    """The doer's 'exists' check survived its mutation (the name check behind
+    it caught the same row by luck): a pick for a model a member already runs
+    on, under a NEW name, is skipped — never a second member on that model."""
+    from types import SimpleNamespace
+
+    made: list[str] = []
+
+    class _Reg:
+        def __init__(self):
+            self.rows = [SimpleNamespace(name="qwen3-8b", provider="ollama", model="qwen3:8b",
+                                         roles_json='["read"]')]
+
+        def list(self):
+            return list(self.rows)
+
+        def get(self, name):
+            return next((r for r in self.rows if r.name == name), None)
+
+        def register(self, name, *a, **kw):
+            made.append(name)
+
+    p = _Platform()
+    p.agents_registry = _Reg()
+    preview = T.starter_preview(p, _local_rows("qwen3:8b"))
+    (row,) = preview["rows"]
+    assert row["exists"] == "qwen3-8b" and row["ticked"] is False
+    with pytest.raises(T.StarterRefused) as refused:
+        T.create_starter(p, preview, [{"key": row["key"], "name": "another-qwen"}])
+    assert made == [] and "already runs on that model" in str(refused.value)
+
+
+# --------------------------------------------------------------------------- #
+# 10. a provider pin whose default model cannot be read: never the caller's id
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("door", ["delegate", "spawn_agent"])
+async def test_a_provider_pin_with_no_readable_default_never_borrows_the_callers_model(
+        doors, tmp_path, monkeypatch, door):
+    """The doer's mutation of this rule survived (pinned_model hid it): when
+    the pinned provider's default cannot be read, the child runs with NO model
+    (the adapter's own default) — never the caller's model id, which belongs
+    to another provider."""
+    from iron_jarvis.providers import egress
+    from tests.test_model_team_doors_v1394 import _child_rows, _ctx, _parent
+
+    p, log = doors
+    monkeypatch.setattr(egress, "default_model_of", lambda provider, manager=None: "")
+    p.agents_registry.register("cx", "You code.", [], provider="codex-cli", model="")
+    sid = await _parent(p)
+    args = {"agent_type": "custom:cx", "task": "t"} if door == "delegate" else {"agent": "cx", "task": "t"}
+    res = await p.registry.get(door).execute(args, _ctx(p, sid, tmp_path))
+    assert res.ok, res.error
+    (kid,) = _child_rows(p, sid)
+    assert kid.provider == "codex-cli" and kid.model != "gemini-3.8-flash", (kid.provider, kid.model)
+    assert log and all(c["model"] != "gemini-3.8-flash" for c in log), log
+
+
+async def test_consult_of_a_provider_pin_with_no_readable_default_never_borrows_the_callers_model(
+        doors, tmp_path, monkeypatch):
+    from iron_jarvis.providers import egress
+    from tests.test_model_team_doors_v1394 import _ctx, _parent
+
+    p, log = doors
+    monkeypatch.setattr(egress, "default_model_of", lambda provider, manager=None: "")
+    p.agents_registry.register("cx", "You code.", [], provider="codex-cli", model="")
+    sid = await _parent(p)
+    res = await p.registry.get("consult").execute(
+        {"agent": "custom:cx", "question": "Is this right?"}, _ctx(p, sid, tmp_path))
+    assert res.ok, res.error
+    assert [c["provider"] for c in log] == ["codex-cli"]
+    assert all(c["model"] != "gemini-3.8-flash" for c in log), log
+
+
+async def test_a_failed_member_is_named_to_the_planner_not_its_base_type(failing, tmp_path):
+    """A member whose run fails is named in the error the planner reads —
+    "delegated agent 'builder' crashed" (its base type) sent the planner
+    looking at the wrong teammate."""
+    from tests.test_model_team_doors_v1394 import _ctx, _parent
+
+    p, log, fail = failing
+    p.agents_registry.register("cx", "You code.", [], provider="codex-cli", roles=["code"])
+    fail.add("codex-cli")
+    sid = await _parent(p)
+    res = await p.registry.get("delegate").execute(
+        {"agent_type": "custom:cx", "task": "t"}, _ctx(p, sid, tmp_path))
+    assert not res.ok
+    assert "'custom:cx'" in res.error and "'builder'" not in res.error, res.error

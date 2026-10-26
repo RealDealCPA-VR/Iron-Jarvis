@@ -417,12 +417,44 @@ def _group_words(name: str) -> str:
     return f"'{name}'"
 
 
+def _other_group(platform: Any, record: Any, own: Any, caller: Any) -> str:
+    """v1.394.0 review (decision 4: work and personal accounts never mix):
+    the sentence when a member's OWN account sits in ANOTHER account group
+    than the account the calling work runs on; "" otherwise — including when
+    either account is in no group (the user made no statement about it).
+    Never raises."""
+    if caller is None or own is None:
+        return ""
+    try:
+        from ..harness import build_accounts as BA
+
+        groups = getattr(_config(platform), "account_groups", None) or {}
+        mine = BA.group_of(groups, str(getattr(own, "profile_id", "") or ""))
+        theirs = BA.group_of(groups, str(getattr(caller, "profile_id", "") or ""))
+        if mine is None or theirs is None or mine[0] == theirs[0]:
+            return ""
+        who = str(getattr(record, "name", "") or "This member")
+        title = str(getattr(own, "title", "") or "")
+        acct = f"“{title}”" if title else "an account of its own"
+        return (
+            f"'{who}' runs on {acct}, which is in your {_group_words(mine[0])} account group, "
+            f"and this work runs on an account of your {_group_words(theirs[0])} group — work never "
+            "moves between groups. Set its account to “No account of its own” in Settings › "
+            f"Model team (it then takes an account of the {_group_words(theirs[0])} group), or "
+            "change your groups in Settings › Connections."
+        )
+    except Exception:  # noqa: BLE001 — unsure: no refusal (its own account, as set)
+        return ""
+
+
 def member_account(platform: Any, record: Any, caller: Any = None, *,
                    coding: bool = False) -> "tuple[Any, str]":
     """``(AccountPin | None, refusal)`` — the account a member's run leases
     (v1.394.0 review; decision 4 + decision 5 + v1.393.0's groups):
 
-    1. its OWN ``account`` when it names one (:func:`member_pin`);
+    1. its OWN ``account`` when it names one (:func:`member_pin`) — refused
+       in words when that account sits in ANOTHER account group than
+       ``caller``'s (both grouped: work and personal never mix);
     2. not a subscription model (a local model, an API key): no account;
     3. ``caller`` (the session's / the calling run's pin) is of the SAME
        vendor: THAT pin object — the session's own account (a helper's limit
@@ -440,7 +472,8 @@ def member_account(platform: Any, record: Any, caller: Any = None, *,
     Cached reads only; never a call; never raises (no pin on an error)."""
     own = member_pin(platform, record)
     if own is not None:
-        return own, ""
+        why = _other_group(platform, record, own, caller)
+        return (None, why) if why else (own, "")
     try:
         from ..harness import build_accounts as BA
         from ..iron_proxy.pin import AccountPin
