@@ -605,6 +605,43 @@ async def test_emergency_stop_ends_a_night_tasks_running_command_at_once(tmp_pat
     assert await until(lambda: not _alive(pid), 30), "the command outlived Emergency stop"
 
 
+async def test_the_overrun_backstop_ends_a_hung_command_not_only_the_turn(tmp_path, monkeypatch, night):
+    """The backstop's own purpose ("a step that never returns is stopped
+    here") failed for a hung COMMAND: it stopped the turn, and the turn
+    waited for the step."""
+    from datetime import timedelta
+
+    from tests.test_build_attempts_v1397 import _alive
+    from tests.test_build_sessions_v1367 import until
+
+    repo = make_repo(tmp_path / "proj")
+    app = create_app(str(tmp_path / "home"))
+    hung = ('python -c "import os, pathlib, time; pathlib.Path(\'pid.txt\').write_text(str(os.getpid())); '
+            'time.sleep(120)"')
+    wire(app, NightScript({"TASK-OVER": [
+        [ToolCall(id="h1", name="Bash", arguments={"command": hung, "timeout": 600000})],
+        "Never said.",
+    ]}))
+    task = await _queue(app, repo, "TASK-OVER: run the long thing")
+    await night_routes.night_pass(app.state.d)
+    started = _task(app, task["id"])
+    worktree = Path(_git_of(app, started)["worktree"])
+
+    def _pid() -> int:
+        try:
+            return int((worktree / "pid.txt").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return 0
+
+    pid = await until(_pid, 60)
+    assert pid and _alive(pid)
+    lg = app.state.platform.turn_logs.get(started["turn_id"])
+    lg.started_at = lg.started_at - timedelta(minutes=90) - timedelta(seconds=night_routes.OVERRUN_GRACE_S + 60)
+    await night_routes.settle_running(app.state.d)
+    assert await until(lambda: lg.status != "running", 45), "the turn waited for its hung command"
+    assert await until(lambda: not _alive(pid), 30), "the hung command outlived the backstop"
+
+
 @pytest.mark.parametrize("by", ["night", "wait", "restart"])
 async def test_emergency_stop_stops_every_kind_iron_jarvis_starts_by_itself(tmp_path, by):
     """Every daemon-started kind (a night task's turn, Resume when ready and a

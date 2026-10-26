@@ -319,7 +319,14 @@ async def settle_running(d: Any) -> list[str]:
             if (turn and started is not None and now is not None
                     and (now - started).total_seconds() > limit_s + OVERRUN_GRACE_S):
                 # The backstop: the reply cap ends a reply at a step
-                # boundary; a step that never returns is stopped here.
+                # boundary; a step that never returns is stopped here —
+                # v1.398.0 review: the STEP itself too (a turn's Stop waits
+                # for the step in flight, so a hung command ran on for its
+                # whole deadline).
+                from ...harness.stall import running_steps, stop_step
+
+                for call_id in running_steps(turn):
+                    stop_step(turn, call_id)
                 if TURNS.stop(turn):
                     await asyncio.to_thread(
                         N.add_note, engine, tid, "limit",
