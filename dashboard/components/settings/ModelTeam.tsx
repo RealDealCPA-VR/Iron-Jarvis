@@ -19,7 +19,7 @@
  * makes nothing. An older daemon (no /team) renders one quiet line.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Users } from "lucide-react";
 import { ApiError, get, patch, post } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
@@ -90,16 +90,34 @@ function MemberRow({
   const [error, setError] = useState<string | null>(null);
   const vendor = vendorOf(m);
   const choices = vendor ? accounts[vendor] ?? [] : [];
+  // v1.394.0 review (the v1.393.0 lost-update lesson): the row draws what it
+  // LAST SENT, not the last GET /team. A save answers before the reload
+  // lands, so a second tick computed from the old answer sent the old roles
+  // and dropped the first tick. What the daemon says is taken again once no
+  // save of this row is out (the reload, or another window's change).
+  const [roles, setRoles] = useState<string[]>(m.roles);
+  const [account, setAccount] = useState(m.account);
+  const pending = useRef(0);
+  const serverRoles = m.roles.join(",");
+  useEffect(() => {
+    if (pending.current === 0) setRoles(serverRoles ? serverRoles.split(",") : []);
+  }, [serverRoles]);
+  useEffect(() => {
+    if (pending.current === 0) setAccount(m.account);
+  }, [m.account]);
 
-  async function save(body: Record<string, unknown>) {
+  async function save(body: Record<string, unknown>, undo: () => void) {
+    pending.current += 1;
     setBusy(true);
     setError(null);
     try {
       await patch(`/agents/${encodeURIComponent(m.name)}`, body);
       onChanged();
     } catch (err) {
+      undo();
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
+      pending.current -= 1;
       setBusy(false);
     }
   }
@@ -133,9 +151,13 @@ function MemberRow({
       </p>
       <RoleChecks
         scope={m.name}
-        value={m.roles}
+        value={roles}
         disabled={busy}
-        onChange={(roles) => void save({ roles })}
+        onChange={(next) => {
+          const before = roles;
+          setRoles(next);
+          void save({ roles: next }, () => setRoles(before));
+        }}
       />
       {vendor ? (
         <label className="flex flex-wrap items-center gap-2 text-[12px] text-zinc-400">
@@ -144,13 +166,23 @@ function MemberRow({
             data-testid={`team-account-${m.name}`}
             aria-label={`Account for ${m.name}`}
             className="field max-w-xs text-xs"
-            value={m.account}
+            value={account}
             disabled={busy}
-            onChange={(e) => void save({ account: e.target.value })}
+            onChange={(e) => {
+              const before = account;
+              const next = e.target.value;
+              setAccount(next);
+              void save({ account: next }, () => setAccount(before));
+            }}
           >
-            <option value="">Iron-Proxy&apos;s pick</option>
-            {m.account && !choices.some((c) => c.id === m.account) ? (
-              <option value={m.account}>{m.accountName || "The account it was set to"}</option>
+            <option
+              value=""
+              title="In a coding session it runs on the session's account (or one of the session's account group); for other work Iron-Proxy picks one."
+            >
+              No account of its own
+            </option>
+            {account && !choices.some((c) => c.id === account) ? (
+              <option value={account}>{m.accountName || "The account it was set to"}</option>
             ) : null}
             {choices.map((c) => (
               <option key={c.id} value={c.id}>

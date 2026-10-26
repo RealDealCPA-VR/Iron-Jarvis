@@ -255,8 +255,8 @@ describe("Settings › Model team", () => {
     await waitFor(() => expect(hooks.patches).toHaveLength(1));
     expect(hooks.patches[0]).toEqual({ path: "/agents/codex-coder", body: { roles: ["code", "review", "test"] } });
     const select = screen.getByTestId("team-account-codex-coder") as HTMLSelectElement;
-    // Only that vendor's accounts, and Iron-Proxy's pick first.
-    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(["Iron-Proxy's pick", "Codex Plus", "Codex Team"]);
+    // Only that vendor's accounts, and "none of its own" first (v1.394.0 review: the words).
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(["No account of its own", "Codex Plus", "Codex Team"]);
     fireEvent.change(select, { target: { value: "x-plus" } });
     await waitFor(() => expect(hooks.patches).toHaveLength(2));
     expect(hooks.patches[1]).toEqual({ path: "/agents/codex-coder", body: { account: "x-plus" } });
