@@ -1995,7 +1995,37 @@ def _resume_inputs(platform: Any, row: Any, turn_id: str) -> "dict[str, Any] | N
         # question — when it was asked, and what its cut-off part(s) cost.
         "origin_at": question.get("at"),
         "spent_usd": spent_since(messages, idx),
+        # v1.392.0 review: and how long those part(s) RAN — the time cap
+        # counts the reply's own running time, never the hours Iron Jarvis
+        # was off between the cut-off and this boot.
+        "ran_s": ran_since(messages, idx),
     }
+
+
+def ran_since(messages: "list[dict[str, Any]]", idx: int) -> float:
+    """How long the replies after the question at ``idx`` RAN, in seconds —
+    the cut-off part(s) of a reply carried on after a restart (v1.392.0
+    review): each line's own running length (``timing.ms``, the Timeline's —
+    a crash's line is rebuilt with it at boot), else its ``endedAt -
+    startedAt``; a line with neither counts nothing. Never raises."""
+    total = 0.0
+
+    def _num(v: Any) -> "float | None":
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else None
+
+    for m in messages[idx + 1:]:
+        if not isinstance(m, dict) or m.get("role") != "assistant":
+            continue
+        timing = m.get("timing")
+        if not isinstance(timing, dict):
+            continue
+        ms = _num(timing.get("ms"))
+        if ms is None:
+            a, b = _num(timing.get("startedAt")), _num(timing.get("endedAt"))
+            ms = (b - a) if a is not None and b is not None and b >= a else None
+        if ms is not None:
+            total += ms / 1000.0
+    return max(0.0, total)
 
 
 def spent_since(messages: "list[dict[str, Any]]", idx: int) -> float:
@@ -2384,11 +2414,13 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
 
         origin = _naive_utc(resume.get("origin_at")) if resume is not None else None
         record.origin_at = origin
+        # v1.392.0 review: the cap's clock counts the time the reply RAN —
+        # its cut-off part(s), then this one from now — never the time Iron
+        # Jarvis was off in between (a reply cut off ten minutes in by a crash
+        # the night before used to be capped the moment it carried on).
         reply_cap = RC.from_setup(
             setup,
-            started_at=(
-                origin.replace(tzinfo=timezone.utc).timestamp() if origin is not None else RC.WALL()
-            ),
+            started_at=RC.WALL() - (float(resume.get("ran_s") or 0.0) if resume is not None else 0.0),
             spent_usd=float(resume.get("spent_usd") or 0.0) if resume is not None else 0.0,
         )
         token = set_pin(pin) if pin is not None else None
@@ -3250,12 +3282,15 @@ def register(app: FastAPI, d: Any) -> None:
             # v1.392.0 (decision 8): set, change or remove the session's cap.
             # It applies from the NEXT reply (a running one keeps its own).
             from ...harness.reply_cap import SETUP_KEY as _CAP_KEY
-            from ...harness.reply_cap import clean as _clean_cap
+            from ...harness.reply_cap import strict as _strict_cap
 
             if body.cap is None:
                 setup[_CAP_KEY] = None
             else:
-                cleaned = _clean_cap(body.cap)
+                # v1.392.0 review: kept EXACTLY as sent or refused — never
+                # half-kept (a wrong dollar figure beside good minutes used to
+                # be dropped in silence, 200).
+                cleaned = _strict_cap(body.cap)
                 if cleaned is None:
                     raise HTTPException(status_code=400, detail=CAP_REFUSED)
                 setup[_CAP_KEY] = cleaned

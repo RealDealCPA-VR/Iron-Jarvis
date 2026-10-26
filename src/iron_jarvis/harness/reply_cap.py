@@ -59,6 +59,28 @@ def clean(raw: Any) -> "dict[str, Any] | None":
     return out or None
 
 
+def strict(raw: Any) -> "dict[str, Any] | None":
+    """The cap a PATCH may SAVE (v1.392.0 review): :func:`clean`'s reading,
+    but only when it keeps EVERYTHING the user sent exactly — no unknown key,
+    no value out of range or of the wrong type, a whole number of minutes.
+    None otherwise (the route's 400), so a cap is never half-kept in silence
+    (``{"minutes": 30, "usd": 0}`` used to save the minutes and drop the
+    dollars the user typed). The stored setup keeps :func:`clean`'s lenient
+    reading — this is the door, not the whitelist."""
+    if not isinstance(raw, dict) or not raw or set(raw) - {"minutes", "usd"}:
+        return None
+    minutes = raw.get("minutes")
+    if "minutes" in raw and not (
+        isinstance(minutes, (int, float)) and not isinstance(minutes, bool)
+        and math.isfinite(minutes) and float(minutes).is_integer()
+    ):
+        return None
+    out = clean(raw)
+    if out is None or set(out) != set(raw):
+        return None
+    return out
+
+
 def usd_words(usd: float) -> str:
     return f"${float(usd):,.2f}"
 
@@ -140,5 +162,5 @@ def receipt(met: "dict[str, Any] | None") -> "dict[str, Any] | None":
 
 __all__ = [
     "KINDS", "MAX_MINUTES", "MAX_USD", "MIN_USD", "ReplyCap", "SETUP_KEY", "WALL", "clean", "from_setup",
-    "instruction", "limit_words", "receipt",
+    "instruction", "limit_words", "receipt", "strict",
 ]

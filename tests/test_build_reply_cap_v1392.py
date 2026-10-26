@@ -217,6 +217,10 @@ async def test_keep_going_after_a_cap_is_a_new_reply_with_its_own_clock(app, wor
 
 @pytest.mark.parametrize("past_cap", [True, False])
 async def test_a_resumed_reply_counts_from_its_original_question(tmp_path, work, monkeypatch, past_cap):
+    """v1.392.0 review (moved on purpose): the reply carried on counts the
+    time its cut-off part RAN (its line's ``timing.ms``) — 31 minutes (or 5)
+    — never the wall-clock time since its question, which would count the
+    hours Iron Jarvis was off (tests/test_build_reply_cap_review_v1392.py)."""
     home = str(tmp_path / "home2")
     first = create_app(home)
     sid = new_session(first, work)["id"]
@@ -226,9 +230,13 @@ async def test_a_resumed_reply_counts_from_its_original_question(tmp_path, work,
     at = datetime.fromisoformat(asked["at"].replace("Z", "+00:00"))
     if at.tzinfo is None:
         at = at.replace(tzinfo=timezone.utc)
-    # The restart comes 31 minutes after the ORIGINAL question (or 5).
-    monkeypatch.setattr(RC, "WALL", lambda: at.timestamp() + (31 if past_cap else 5) * 60)
+    # The restart comes a whole day after the question; what counts is that
+    # the cut-off part RAN 31 minutes (or 5).
+    monkeypatch.setattr(RC, "WALL", lambda: at.timestamp() + 24 * 3600)
     second = _reboot(home)
+    from tests.test_build_reply_cap_review_v1392 import _set_ran_ms
+
+    _set_ran_ms(second, sid, "bt-1", (31 if past_cap else 5) * 60 * 1000)
     wire(second, Script([_write("c3", "three.txt", "3"), "All three are there."]))
     carried = await build_routes.resume_after_restart(second.state.d)
     assert carried == [sid]
