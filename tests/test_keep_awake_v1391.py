@@ -165,7 +165,9 @@ def test_quit_lets_go_and_the_display_is_never_held():
     start = src.index('app.on("will-quit"')
     will_quit = src[start:src.index("\n  });\n", start)]
     assert "releaseKeepAwake()" in will_quit
-    assert "installKeepAwake();" in src[src.index("installAskWatcher();"):][:400], "armed at start-up"
+    boot = src.index("bootComplete = true;")
+    assert "installKeepAwake();" in src[boot:src.index("\n}\n", boot)], "armed at start-up, once"
+    assert src.count("installKeepAwake();") == 1
     # Read through the daemon's activity answer, with the install token.
     tick = _fn("keepAwakeTick")
     assert "probeDaemonActivity(" in tick and "powerSaveBlocker" in tick

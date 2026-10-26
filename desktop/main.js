@@ -4600,11 +4600,11 @@ async function startup() {
   showWindowWhenReady = false;
   installDaemonWatchdog(); // v1.226.0: a daemon that is up but not answering gets restarted
   installAskWatcher(); // v1.249.0 (R-03): waiting jobs reach a closed window
-  installKeepAwake(); // v1.391.0: no sleep while work runs (Settings › System)
   maybeOfferStartWithWindows(); // v1.249.0 (R-04); v1.310.0: a day after the first launch
   checkForUpdates();
   // Long-lived tray apps must keep looking for updates, not just at boot.
   setInterval(checkForUpdates, UPDATE_RECHECK_MS);
+  installKeepAwake(); // v1.391.0: no sleep while work runs (Settings › System)
 }
 
 // The last lines a child wrote, for the failure classifier (v1.249.0, R-06).
@@ -5621,12 +5621,12 @@ if (!gotLock) {
   });
 
   app.on("will-quit", () => {
-    releaseKeepAwake();
     globalShortcut.unregisterAll();
     if (_dwTimer) clearInterval(_dwTimer);
     _dwTimer = null;
     if (_hotkeyRetryTimer) clearInterval(_hotkeyRetryTimer);
     _hotkeyRetryTimer = null;
+    releaseKeepAwake(); // v1.391.0: also on a quit that skipped before-quit's teardown
     if (tray) {
       try {
         tray.destroy();
