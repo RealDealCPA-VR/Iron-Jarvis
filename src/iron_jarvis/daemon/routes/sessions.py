@@ -342,7 +342,8 @@ def _session_row(d, session) -> dict[str, Any]:
 def interrupted_rows(db) -> list:
     """The jobs a restart cut off that are still offered Continue (v1.249.0,
     R-02; mission roots only since v1.309.0): newest first, the last 3 days,
-    at most 20. Shared by ``GET /sessions/interrupted`` and the home's status
+    at most 20; never a mission's teammate or a coding session's helper
+    (v1.391.0). Shared by ``GET /sessions/interrupted`` and the home's status
     line (``GET /ui/status-line``, calm UI redesign S8)."""
     from datetime import timedelta
 
@@ -351,6 +352,7 @@ def interrupted_rows(db) -> list:
 
     from ...agents.team import MISSION_MEMBER_ORIGIN as MEMBER_ORIGIN
     from ...core.ids import utcnow
+    from ...harness.helpers import HELPER_ORIGIN
     from ...core.models import AgentRun, Session, SessionStatus
 
     cutoff = utcnow() - timedelta(days=3)
@@ -365,7 +367,13 @@ def interrupted_rows(db) -> list:
                 Session.interrupted_at.is_not(None),  # type: ignore[union-attr]
                 Session.interrupted_at >= cutoff,  # type: ignore[operator]
                 Session.status == SessionStatus.FAILED,
-                or_(Session.origin.is_(None), Session.origin != MEMBER_ORIGIN),  # type: ignore[union-attr]
+                # v1.391.0: nor a coding session's HELPER — its reply carries
+                # on by itself after the restart and may hand the same work
+                # out again; a Continue here would run it twice.
+                or_(
+                    Session.origin.is_(None),  # type: ignore[union-attr]
+                    Session.origin.notin_([MEMBER_ORIGIN, HELPER_ORIGIN]),  # type: ignore[union-attr]
+                ),
                 ~delegated,
             )
             .order_by(Session.interrupted_at.desc())  # type: ignore[union-attr]
