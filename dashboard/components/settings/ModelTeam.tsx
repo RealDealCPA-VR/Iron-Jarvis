@@ -384,7 +384,8 @@ export function ModelTeam() {
         {error ? <ErrorNote>{error}</ErrorNote> : null}
         {preview ? (
           <StarterPanel
-            key={`${preview.paid}`}
+            // No key on the switch: turning pay per use on keeps what was
+            // already ticked, named and given roles (new rows start as offered).
             preview={preview}
             models={models}
             busy={creating || loadingPreview}

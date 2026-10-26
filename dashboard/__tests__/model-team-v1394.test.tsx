@@ -314,10 +314,14 @@ describe("Settings › Model team", () => {
     fireEvent.click(screen.getByTestId("team-starter-open"));
     await screen.findByTestId("team-starter", {}, { timeout: 10_000 });
     expect(screen.queryByTestId("team-starter-row-openai|gpt-4o")).toBeNull();
+    // A pick made before the switch is kept across it.
+    fireEvent.click(screen.getByTestId("team-starter-tick-codex-cli|subscription"));
     fireEvent.click(screen.getByTestId("team-starter-paid"));
     await waitFor(() => expect(hooks.gets).toContain("/team/starter?paid=1"), { timeout: 10_000 });
     const paid = (await screen.findByTestId("team-starter-tick-openai|gpt-4o", {}, { timeout: 10_000 })) as HTMLInputElement;
     expect(paid.checked).toBe(false);
+    expect((screen.getByTestId("team-starter-tick-codex-cli|subscription") as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByTestId("team-starter-create").textContent).toBe("Create (2)");
   });
 
   it("with no model connected it says so and offers no Create", async () => {
