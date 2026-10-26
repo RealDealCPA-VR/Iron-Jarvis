@@ -1121,6 +1121,14 @@ class _ReplyWatch:
             card = card_from_frames(self.attempts, cut_off=status == "interrupted")
             if card is not None:
                 line["attempts"] = card
+        if self.attempts and status == "interrupted" and line.get("error"):
+            # v1.397.0 review: an attempts turn a restart or a crash cut off
+            # says so in its own words — never "press Retry" (nothing
+            # restarts on its own; a finished attempt can still be kept).
+            from ...harness.attempts import CUT_OFF_LINE
+
+            line["error"] = CUT_OFF_LINE
+            line.pop("errorTitle", None)
         if self.last_plan:
             # v1.374.0: the turn's task list as it last stood (the reply folds it).
             line["plan"] = saved_plan(self.last_plan)
@@ -3316,7 +3324,8 @@ async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
                 }, session_id=S.session_id_for(thread_id))
         return {
             "rewound": True, **plan.view(), **committed,
-            "note": R.commands_note(plan.commands),
+            # v1.397.0 review: a kept attempt stays in the session (said).
+            "note": " ".join(p for p in (R.commands_note(plan.commands), plan.attempts_note) if p),
             "messages": cut.get("count", 0),
             "mode": cut.get("mode", S.MODE_ACT),
             "library_dropped": dropped,
@@ -3728,6 +3737,17 @@ def register(app: FastAPI, d: Any) -> None:
 
         facts = B.facts_of(_setup_of(row))
         moved: dict[str, Any] | None = None
+        # v1.397.0 review: the folders of attempts on several models this
+        # session started go to the trash with it (their branches stay), never
+        # left beside the repository with no session that knows them. One
+        # that cannot move refuses the delete in words, nothing deleted.
+        from ...harness.attempts import discard_for_delete
+        from .build_git import _locked as _git_locked
+
+        S.end_session_programs(thread_id)
+        left = _git_locked(thread_id, lambda: discard_for_delete(d.platform, row))
+        if left:
+            return JSONResponse(status_code=409, content={"detail": f"{left} The session was not deleted."})
         if facts and not facts.get("removed_at"):
             from .build_git import _locked
 
@@ -3793,7 +3813,8 @@ def register(app: FastAPI, d: Any) -> None:
                     await asyncio.to_thread(rewind_commit_facts, row, plan.cut_at)
                     if row is not None else {}
                 )
-                return {**plan.view(), **committed, "note": R.commands_note(plan.commands),
+                note = " ".join(p for p in (R.commands_note(plan.commands), plan.attempts_note) if p)
+                return {**plan.view(), **committed, "note": note,
                         "detail": R.problems_sentence(plan.problems) if plan.problems else ""}
             points = await asyncio.to_thread(R.checkpoints, platform.engine, thread_id)
         except R.RewindError as exc:
@@ -3896,6 +3917,12 @@ def register(app: FastAPI, d: Any) -> None:
             lines, question = S.branch_lines(messages, turn_id, at)
         except S.BranchRefused as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+        # v1.397.0 review: an attempts card in the copied conversation belongs
+        # to THIS session's folders — the copy names where it came from and
+        # can never keep, discard or delete them.
+        from ...harness.attempts import copied_lines
+
+        lines = copied_lines(lines, thread_id)
         title = S.BRANCH_TITLE.format(title=(row.title or S.NEW_SESSION_TITLE))
         new_setup: dict[str, Any] = {
             k: setup[k] for k in (

@@ -9,17 +9,21 @@ model menu a fixed list. Nothing here reaches a real model or service.
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.harness import attempts as A
+from iron_jarvis.providers.adapters.base import LLMResponse
 from tests.test_build_accounts_v1368 import enable, isolate, make_fake
 from tests.test_build_attempts_v1397 import (
     BUGGY,
     MENU,
+    ScriptedModel,
     World,
     attempts_turn,
     card_of,
@@ -271,3 +275,338 @@ def test_the_work_keeps_its_line_breaks_and_pasted_code():
     last = A.parse_request("The parser drops a field.\nSee parse.py.\nTry it on two models.")
     assert last is not None and last.count == 2
     assert last.task == "The parser drops a field.\nSee parse.py."
+
+
+# --------------------------------------------------------------------------- #
+# 4. The pay-per-use limit counts what attempts spent
+# --------------------------------------------------------------------------- #
+
+GEMINI = ("google", "gemini-3.8-flash")
+
+
+class _Priced(ScriptedModel):
+    """A pay-per-use model double whose every call costs $0.75 (its own
+    figure, the way a metered adapter reports it)."""
+
+    async def stream(self, *, system, messages, tools, **kw):
+        self.world.calls.append({"provider": self.provider, "model": self.model, "tools": []})
+        usage = {"input_tokens": 1000, "output_tokens": 50, "cost_usd": 0.75}
+        yield {"type": "text", "text": "Done."}
+        yield {"type": "final", "response": LLMResponse(text="Done.", usage=usage)}
+
+
+def _wire_gemini(app, monkeypatch, world: World) -> None:
+    mgr = app.state.platform.providers
+    mgr.register("google", lambda model=None: _Priced("google", model, world))
+    real = mgr.available
+    monkeypatch.setattr(mgr, "available", lambda name: True if name == "google" else real(name))
+
+
+async def test_an_attempts_metered_spend_counts_toward_the_pay_limit_and_refuses_later_work(
+    app, fake, repo, monkeypatch,
+):
+    """An attempt on a pay-per-use model spends the user's money: it counts
+    toward the model team's monthly limit (work the user starts counts), so
+    once the limit is reached a later attempt AND a team piece on a
+    pay-per-use member are refused. It was never counted: the attempts'
+    usage rows are the chat lane's, which the month's reading never saw."""
+    from iron_jarvis.agents import model_team as MT
+
+    await enable(app)
+    menu = [*MENU, {"provider": GEMINI[0], "model": GEMINI[1], "available": True, "on_this_network": False}]
+    world = wire_models(app, monkeypatch, World({"ollama": ["Done."]}), menu=menu)
+    _wire_gemini(app, monkeypatch, world)
+    platform = app.state.platform
+    platform.config.team_paid_cap_usd = 1.0
+    assert MT.paid_spend_this_month(platform) == 0.0
+    view = await new_session(app, repo)
+    sid = view["id"]
+    frames = await attempts_turn(app, sid, "Try this with Gemini and the local model: fix add.", "pay-1")
+    gem = item_for(card_of(frames), "google")
+    assert gem["cost"] == "pay" and gem["usage"]["cost_usd"] >= 0.75
+    # The attempt's metered dollars count toward the month.
+    spent = MT.paid_spend_this_month(platform)
+    assert spent == pytest.approx(gem["usage"]["cost_usd"]) and spent >= 0.75
+    # A second spend crosses the $1.00 limit…
+    await attempts_turn(app, sid, "Try this with Gemini and the local model: add a docstring.", "pay-2")
+    assert MT.paid_spend_this_month(platform) >= 1.0
+    # …and then a later attempt on a pay-per-use model is refused in words…
+    status, raw = await open_turn(app, sid, {"text": "Try this with Gemini and the local model: add a test.",
+                                             "turn_id": "pay-3"})
+    assert status == 400, raw
+    assert "has reached your $1.00 limit" in json.loads(raw)["detail"]
+    # …and so is a team piece on a pay-per-use member.
+    member = SimpleNamespace(name="gem-coder", provider=GEMINI[0], model=GEMINI[1], account="",
+                             roles_json='["code"]', tools_json="[]", base_type="builder")
+    assert "has reached your $1.00 limit" in MT.pay_refusal(platform, member)
+
+
+# --------------------------------------------------------------------------- #
+# 5/6. The attempts' folders: Branch from here, Discard all, delete, rewind
+# --------------------------------------------------------------------------- #
+
+TRY2 = "Try this with Codex and the local model: fix add in calc.py."
+
+
+def _line(app, sid: str, turn: str) -> dict:
+    return next(m for m in messages_of(app, sid) if m.get("role") == "assistant" and m.get("turnId") == turn)
+
+
+async def test_a_branched_session_never_keeps_the_origins_attempts(app, fake, repo, monkeypatch):
+    """Branch from here copies the conversation — and the attempts card in it
+    pointed at the ORIGIN's folders. A session with no branch of its own,
+    branched from one that tried on several models, pressed Keep and ADOPTED
+    the origin's attempt branch (two sessions in one worktree) and sent the
+    origin's other attempts to the trash. The copy now names where it came
+    from and can do nothing to those folders; the origin still can."""
+    await enable(app)
+    wire_models(app, monkeypatch, World({"codex-cli": passing_script(), "ollama": failing_script()}))
+    view = await new_session(app, repo, branch=False)
+    sid = view["id"]
+    card = card_of(await attempts_turn(app, sid, TRY2, "br-1"))
+    codex, local = item_for(card, "codex-cli"), item_for(card, "ollama")
+    status, branched = await asgi(app, "POST", f"/build/sessions/{sid}/branch", {"turn_id": "br-1", "at": "reply"})
+    assert status == 201, branched
+    bid = branched["id"]
+    copied = _line(app, bid, "br-1")[A.LINE_KEY]
+    assert copied["from_session"] == sid
+    assert all("git" not in it for it in copied["items"])
+    for path in ("keep", "discard"):
+        status, body = await asgi(app, "POST", f"/build/sessions/{bid}/attempts/{path}",
+                                  {"turn_id": "br-1", "attempt": codex["id"]})
+        assert status == 409 and body["detail"] == A.KEEP_COPIED, (path, body)
+    assert "git" not in setup_of(app, bid)
+    assert Path(codex["git"]["worktree"]).exists() and Path(local["git"]["worktree"]).exists()
+    # Deleting the copy leaves the origin's folders alone.
+    status, _ = await asgi(app, "DELETE", f"/build/sessions/{bid}")
+    assert status == 200
+    assert Path(codex["git"]["worktree"]).exists() and Path(local["git"]["worktree"]).exists()
+    # The origin keeps its own.
+    status, kept = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "br-1", "attempt": codex["id"]})
+    assert status == 200, kept
+    assert setup_of(app, sid)["git"]["branch"] == codex["branch"]
+
+
+async def test_discard_all_sends_every_attempts_folder_to_the_trash_and_keeps_the_branches(
+    app, fake, repo, monkeypatch,
+):
+    await enable(app)
+    wire_models(app, monkeypatch, World({"codex-cli": passing_script(), "ollama": failing_script()}))
+    view = await new_session(app, repo)
+    sid = view["id"]
+    before = snapshot(repo)
+    card = card_of(await attempts_turn(app, sid, TRY2, "dc-1"))
+    folders = [Path(it["git"]["worktree"]) for it in card["items"]]
+    assert all(f.exists() for f in folders)
+    status, out = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/discard", {"turn_id": "dc-1"})
+    assert status == 200, out
+    assert sorted(out["discarded"]) == sorted(it["id"] for it in card["items"])
+    assert not any(f.exists() for f in folders)
+    for it in card["items"]:
+        assert git("rev-parse", "--verify", f"refs/heads/{it['branch']}", cwd=repo)
+    saved = _line(app, sid, "dc-1")[A.LINE_KEY]
+    assert all(it.get("trashed") for it in saved["items"]) and saved.get("discarded_at")
+    trash = Path(app.state.platform.config.home) / "trash"
+    assert len(list(trash.rglob("worktree-try-*"))) >= len(folders)
+    # Nothing left to discard, and Keep says the folder is gone.
+    status, again = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/discard", {"turn_id": "dc-1"})
+    assert status == 409 and again["detail"] == A.DISCARD_NONE
+    status, kept = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "dc-1", "attempt": card["items"][0]["id"]})
+    assert status == 409 and kept["detail"] == A.KEEP_GONE
+    assert snapshot(repo) == before
+
+
+async def test_deleting_a_session_takes_its_attempts_folders_to_the_trash(app, fake, repo, monkeypatch):
+    """Attempts the user never kept used to stay beside the repository
+    forever once their session was deleted (nothing knew them any more)."""
+    await enable(app)
+    wire_models(app, monkeypatch, World({"codex-cli": passing_script(), "ollama": failing_script()}))
+    view = await new_session(app, repo)
+    sid = view["id"]
+    card = card_of(await attempts_turn(app, sid, TRY2, "del-1"))
+    folders = [Path(it["git"]["worktree"]) for it in card["items"]]
+    status, out = await asgi(app, "DELETE", f"/build/sessions/{sid}")
+    assert status == 200, out
+    assert not any(f.exists() for f in folders)
+    for it in card["items"]:
+        assert git("rev-parse", "--verify", f"refs/heads/{it['branch']}", cwd=repo)
+
+
+async def test_rewinding_past_a_try_turn_with_its_folders_still_there_is_refused(app, fake, repo, monkeypatch):
+    """A rewind cuts the card away — the only place Keep and Discard all
+    live — and left the attempts' folders on disk with nothing that knows
+    them. It is refused in words (nothing touched) until one is kept or all
+    are discarded; after Keep it goes through and SAYS the kept attempt
+    stays in the session."""
+    await enable(app)
+    wire_models(app, monkeypatch, World({"codex-cli": passing_script(), "ollama": failing_script()}))
+    view = await new_session(app, repo)
+    sid = view["id"]
+    card = card_of(await attempts_turn(app, sid, TRY2, "rw-1"))
+    status, preview = await asgi(app, "GET", f"/build/sessions/{sid}/rewind?to=rw-1")
+    assert status == 200, preview
+    assert preview["can_rewind"] is False and "Discard all" in preview["detail"]
+    status, out = await asgi(app, "POST", f"/build/sessions/{sid}/rewind", {"to": "rw-1"})
+    assert status == 409, out
+    assert any(m.get("turnId") == "rw-1" for m in messages_of(app, sid))
+    codex = item_for(card, "codex-cli")
+    status, kept = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "rw-1", "attempt": codex["id"]})
+    assert status == 200, kept
+    status, preview = await asgi(app, "GET", f"/build/sessions/{sid}/rewind?to=rw-1")
+    assert preview["can_rewind"] is True, preview
+    assert "stays in this session" in preview["note"]
+    status, out = await asgi(app, "POST", f"/build/sessions/{sid}/rewind", {"to": "rw-1"})
+    assert status == 200 and out["rewound"] is True, out
+    assert "stays in this session" in out["note"]
+
+
+async def test_a_cut_off_card_in_a_session_without_a_branch_can_still_be_kept(app, fake, repo, monkeypatch):
+    """A card rebuilt from the frames (a Stop before the card, a shutdown, a
+    crash) had none of the card's own facts: it read as "merge into the
+    session's branch", and a session working in its folder directly was told
+    "This session's own branch is gone". Its finished attempt keeps the
+    right way now."""
+    from tests.test_build_attempts_v1397 import SLEEPER, shell
+    from tests.test_build_sessions_v1367 import turn_frames, until
+
+    await enable(app)
+    wire_models(app, monkeypatch, World({
+        "codex-cli": passing_script(),
+        "ollama": [shell("s1", SLEEPER.format(n="local"))],
+    }))
+    view = await new_session(app, repo, branch=False)
+    sid = view["id"]
+    import asyncio
+
+    task = asyncio.create_task(open_turn(app, sid, {"text": TRY2, "turn_id": "co-1"}, timeout=120.0))
+    assert await until(lambda: any(e == A.EVENT and d.get("provider") == "codex-cli" and d.get("state") == "done"
+                                   for e, d in turn_frames(app, "co-1")), 60.0)
+    await app.state.platform.turn_logs.shutdown()
+    await asyncio.wait_for(task, 30.0)
+    card = _line(app, sid, "co-1")[A.LINE_KEY]
+    assert card["adopt"] is True and card["base"] == "main"
+    codex = item_for(card, "codex-cli")
+    status, kept = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "co-1", "attempt": codex["id"]})
+    assert status == 200, kept
+    assert setup_of(app, sid)["git"]["branch"] == codex["branch"]
+
+
+# --------------------------------------------------------------------------- #
+# 3. A restart: the card says "cut off", nothing restarts on its own
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_restart_cut_off_never_starts_attempts_again_and_never_says_press_retry(
+    app, fake, repo, monkeypatch,
+):
+    """A try turn a restart cut off: the boot's carry-on pass (v1.391.0)
+    starts NOTHING (no new attempts, no new branches, no plain turn of the
+    request), and the line says so in its own words — the old line said
+    "press Retry", and a Retry starts every attempt again (or, for the "Try
+    on…" control's message, a plain turn on the session's own model)."""
+    import asyncio
+
+    from iron_jarvis.daemon.routes import build as build_routes
+    from tests.test_build_attempts_v1397 import SLEEPER, shell
+    from tests.test_build_sessions_v1367 import turn_frames, until
+
+    await enable(app)
+    world = wire_models(app, monkeypatch, World({
+        "codex-cli": passing_script(),
+        "ollama": [shell("s1", SLEEPER.format(n="local"))],
+    }))
+    view = await new_session(app, repo)
+    sid = view["id"]
+    task = asyncio.create_task(open_turn(app, sid, {"text": TRY2, "turn_id": "rs-1"}, timeout=120.0))
+    assert await until(lambda: any(e == A.EVENT and d.get("provider") == "codex-cli" and d.get("state") == "done"
+                                   for e, d in turn_frames(app, "rs-1")), 60.0)
+    await app.state.platform.turn_logs.shutdown()
+    await asyncio.wait_for(task, 30.0)
+    line = _line(app, sid, "rs-1")
+    assert line["error"] == A.CUT_OFF_LINE and "Retry" not in line["error"]
+    worktrees = sorted(p.name for p in (repo.parent / "proj.ij-worktrees").iterdir())
+    calls = len(world.calls)
+    count = len(messages_of(app, sid))
+    # The boot's carry-on pass.
+    resumed = await build_routes.resume_after_restart(app.state.d)
+    assert resumed == []
+    assert len(messages_of(app, sid)) == count
+    assert len(world.calls) == calls
+    assert sorted(p.name for p in (repo.parent / "proj.ij-worktrees").iterdir()) == worktrees
+
+
+def test_a_crash_rebuilt_attempts_line_never_says_press_retry():
+    from iron_jarvis.daemon.routes.build import replayed_reply_line
+
+    frames = [
+        ["attempt", json.dumps({"id": "try1", "label": "Codex", "provider": "codex-cli", "model": "gpt-5.5",
+                                "state": "running", "steps": 2, "since": 1, "ask": None,
+                                "card": {"base": "ij/s", "base_commit": "a" * 40, "adopt": False}})],
+        ["error", json.dumps({"detail": "cut off", "title": "Iron Jarvis stopped"})],
+    ]
+    lines = replayed_reply_line("cr-2", frames, started_at=1_700_000_000.0)
+    assert lines is not None
+    line = lines[-1]
+    assert line["error"] == A.CUT_OFF_LINE
+    assert line[A.LINE_KEY]["base"] == "ij/s" and line[A.LINE_KEY]["items"][0]["why"] == "cut_off"
+
+
+# --------------------------------------------------------------------------- #
+# The session's own cap bounds the attempts, together
+# --------------------------------------------------------------------------- #
+
+
+class _Costly(ScriptedModel):
+    """A scripted model whose every call reports its own cost."""
+
+    COST = {"codex-cli": 0.01, "ollama": 2.0}
+
+    async def stream(self, *, system, messages, tools, **kw):
+        async for frame in super().stream(system=system, messages=messages, tools=tools, **kw):
+            if frame["type"] == "final":
+                frame["response"].usage = {**(frame["response"].usage or {}),
+                                           "cost_usd": self.COST.get(self.provider, 0.0)}
+            yield frame
+
+
+async def test_the_sessions_cost_cap_bounds_the_attempts_together(app, fake, repo, monkeypatch):
+    """The optional per-session cap (decision 8) bounds a reply — and an
+    attempts turn is one reply. The attempts ran with NO cap at all. Now the
+    attempts share it: once the others' spend plus this one's reaches it, the
+    attempt ends the step-limit way and its column says so."""
+    from tests.test_build_attempts_v1397 import shell
+    from tests.test_build_sessions_v1367 import turn_frames, until
+
+    await enable(app)
+
+    async def after_local_spent(_world):
+        assert await until(lambda: any(
+            e == A.EVENT and d.get("provider") == "ollama" and d.get("state") == "done"
+            for e, d in turn_frames(app, "cap-1")), 30.0)
+        return shell("s1", "echo one")
+
+    world = World({
+        "codex-cli": [after_local_spent, shell("s2", "echo two"), shell("s3", "echo three"),
+                      "Did all three."],
+        "ollama": ["Done in one go."],
+    })
+    wire_models(app, monkeypatch, world)
+    mgr = app.state.platform.providers
+    for prov in ("codex-cli", "ollama"):
+        mgr.register(prov, lambda model=None, _p=prov: _Costly(_p, model, world))
+    view = await new_session(app, repo)
+    sid = view["id"]
+    status, _ = await asgi(app, "PATCH", f"/build/sessions/{sid}", {"cap": {"usd": 1.0}})
+    assert status == 200
+    card = card_of(await attempts_turn(app, sid, TRY2, "cap-1"))
+    codex = item_for(card, "codex-cli")
+    assert codex["why"] == "stopped" and "cost limit" in codex["words"], codex
+    # It stopped at the first round after the local attempt's $2.00 landed:
+    # its second and third commands never ran.
+    commands = [c for c in world.calls if c["provider"] == "codex-cli"]
+    assert len(commands) <= 2, commands
+    assert "Did all three." not in json.dumps(card)

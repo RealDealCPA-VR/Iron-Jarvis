@@ -168,6 +168,22 @@ KEEP_MOVED = (
     "Merge its branch with git, or try again."
 )
 KEEP_SAVE_FAILED = "The attempt was kept, but the card could not be updated. Reload the session."
+#: Review (v1.397.0): a card a session got when it was BRANCHED from another
+#: one belongs to that other session — its folders are that session's.
+KEEP_COPIED = (
+    "These attempts belong to the session this one was branched from, so they are kept or "
+    "discarded there."
+)
+#: Review (v1.397.0): the line of an attempts turn a Stop-less end cut off (a
+#: restart or a crash) — never "press Retry": a retry would start every
+#: attempt again (new branches, new spend) while a finished one can still be
+#: kept, and a retry of the "Try on…" control's message was a plain turn.
+CUT_OFF_LINE = (
+    "Iron Jarvis stopped while the attempts worked (a restart or a crash), and nothing restarts on "
+    "its own. The card shows what each attempt did; a finished one can still be kept."
+)
+DISCARD_NONE = "There is nothing to discard: every attempt's folder is already in the trash."
+DISCARD_KEPT = "You kept one of these attempts; the others' folders are already in the trash."
 
 
 class AttemptsRefused(Exception):
@@ -1128,6 +1144,20 @@ class Attempt:
     cancelled: bool = False
     last_said: float = 0.0
     quiet_since_said: bool = False
+    #: Review: its metered spend was written for the pay-per-use limit.
+    spend_kept: bool = False
+    #: Review: the session's cap ended it ({kind, limit}).
+    cap_met: "dict[str, Any] | None" = None
+
+    def metered_usd(self) -> float:
+        """The METERED dollars this attempt spent (a subscription's list-price
+        equivalent and a local model's nothing are 0)."""
+        if self.usage.get("list_price_equivalent") is True:
+            return 0.0
+        try:
+            return max(0.0, float(self.usage.get("cost_usd") or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
 
     def account_fields(self) -> dict[str, Any]:
         if self.pin is None:
@@ -1229,6 +1259,8 @@ class Attempt:
         if event == "done":
             self.done = True
             self.reply = _short(data.get("reply"), REPLY_CHARS)
+            if isinstance(data.get("cap"), dict):
+                self.cap_met = dict(data["cap"])
             from .finish import saved_record
 
             self.finish = saved_record(data.get("finish"))
@@ -1276,6 +1308,12 @@ class Attempt:
         limit = getattr(self.pin, "limit", None) if self.pin is not None else None
         if self.cancelled and not self.done:
             self.state, self.why, self.words = "stopped", "stopped", WHY_WORDS["stopped"]
+        elif self.done and self.cap_met:
+            from .reply_cap import limit_words
+
+            self.state, self.why = "stopped", "stopped"
+            kind = "cost" if self.cap_met.get("kind") == "cost" else "time"
+            self.words = f"Stopped at this session's {kind} limit ({limit_words(self.cap_met)})"
         elif self.done:
             self.state, self.why, self.words = "done", "finished", WHY_WORDS["finished"]
         elif isinstance(limit, dict) and limit:
@@ -1334,6 +1372,9 @@ class Plan:
     ceiling: "frozenset[str] | None" = None
     rounds: "int | None" = None
     local_only: bool = False
+    #: When the attempts turn began (epoch seconds) — the session's time cap
+    #: counts from here.
+    started_at: float = field(default_factory=time.time)
 
     def by_id(self, aid: str) -> "Attempt | None":
         return next((a for a in self.attempts if a.id == aid), None)
@@ -1480,6 +1521,44 @@ def _body(plan: Plan, a: Attempt) -> Any:
     )
 
 
+class SharedCap:
+    """THE SESSION'S CAP for one attempt (review, v1.397.0): the optional
+    per-session cap (``harness/reply_cap``, decision 8 — off unless the user
+    set one) bounds the attempts TOGETHER, as one reply: its time since the
+    attempts turn began, and its list-price cost — this attempt's own so far
+    plus what the OTHER attempts have spent (their ``model_call`` frames).
+    The attempts ignored the cap entirely before: three attempts of a capped
+    session ran unbounded."""
+
+    def __init__(self, plan: "Plan", me: "Attempt", minutes: "int | None", usd: "float | None") -> None:
+        self.plan = plan
+        self.me = me
+        self.minutes = minutes
+        self.usd = usd
+
+    def met(self, cost_so_far: float) -> "dict[str, Any] | None":
+        from .reply_cap import ReplyCap
+
+        others = 0.0
+        for a in self.plan.attempts:
+            if a is self.me:
+                continue
+            with contextlib.suppress(TypeError, ValueError):
+                others += max(0.0, float(a.usage.get("cost_usd") or 0.0))
+        cap = ReplyCap(minutes=self.minutes, usd=self.usd, started_at=self.plan.started_at, spent_usd=others)
+        return cap.met(cost_so_far)
+
+
+def attempt_cap(plan: "Plan", a: "Attempt") -> "SharedCap | None":
+    """The session's cap for one attempt (None = the session has none)."""
+    from .reply_cap import SETUP_KEY, clean
+
+    rec = clean(plan.setup.get(SETUP_KEY)) if isinstance(plan.setup, dict) else None
+    if rec is None:
+        return None
+    return SharedCap(plan, a, rec.get("minutes"), rec.get("usd"))
+
+
 async def _end_programs(sid: str) -> None:
     """An attempt is over: its programs end (``procs.end_session`` — its
     process tools' end hook too) and its agent browser closes. Off the loop;
@@ -1514,6 +1593,7 @@ async def _run_one(platform: Any, personas: dict, plan: Plan, a: Attempt, queue:
                 stay_in_chat=True,
                 session_id=a.sid,
                 tool_ceiling=plan.ceiling,
+                **({"reply_cap": cap} if (cap := attempt_cap(plan, a)) is not None else {}),
             )
         except Exception as exc:  # noqa: BLE001 — the lane's eager refusal is this attempt's failure
             queue.put_nowait(("frame", a.id, "error", json.dumps({"detail": str(getattr(exc, "detail", "") or exc)})))
@@ -1532,6 +1612,28 @@ async def _run_one(platform: Any, personas: dict, plan: Plan, a: Attempt, queue:
         with contextlib.suppress(BaseException):
             await asyncio.shield(_end_programs(a.sid))
         queue.put_nowait(("end", a.id, "", ""))
+
+
+async def _keep_spend(platform: Any, plan: Plan) -> None:
+    """Write each ended attempt's METERED spend once (``harness/attempt_spend``)
+    — the model team's pay-per-use limit counts it. Off the loop; never
+    raises."""
+    from . import attempt_spend
+
+    engine = getattr(platform, "engine", None)
+    for a in plan.attempts:
+        if a.spend_kept:
+            continue
+        a.spend_kept = True
+        cost = a.metered_usd()
+        if cost <= 0:
+            continue
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(
+                attempt_spend.record, engine, thread_id=plan.thread_id, turn_id=plan.turn_id, attempt=a.id,
+                provider=a.served_provider or a.target.provider, model=a.served_model or a.target.model,
+                cost_usd=cost,
+            )
 
 
 def summary_words(card: dict[str, Any]) -> str:
@@ -1556,19 +1658,29 @@ def summary_words(card: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def card_of(plan: Plan) -> dict[str, Any]:
-    """The card as the done frame and the reply line carry it."""
-    out = {
+def card_head(plan: Plan) -> dict[str, Any]:
+    """The card's OWN facts (not one attempt's): the work, where the attempts
+    started, whether Keep moves the session (``adopt``) or lands the result
+    in its folder (``carried``). Review (v1.397.0): the first ``attempt``
+    frame of each attempt carries them too (``card``), so a card rebuilt from
+    the frames after a Stop or a crash can still be kept the right way — it
+    had none, read as "merge into the session's branch", and a session with
+    no branch of its own was told its branch was gone."""
+    out: dict[str, Any] = {
         "task": _short(plan.task, TASK_CHARS),
         "base": plan.start.base,
         "base_commit": plan.start.sha[:40],
         "adopt": plan.start.adopt,
-        "items": [_saved_item(a.frame()) for a in plan.attempts],
     }
     if plan.start.carried:
         # Review: they started from the session's work not committed yet.
         out["carried"] = True
     return out
+
+
+def card_of(plan: Plan) -> dict[str, Any]:
+    """The card as the done frame and the reply line carry it."""
+    return {**card_head(plan), "items": [_saved_item(a.frame()) for a in plan.attempts]}
 
 
 async def run_attempts(platform: Any, personas: dict, plan: Plan) -> AsyncIterator[str]:
@@ -1611,9 +1723,10 @@ async def run_attempts(platform: Any, personas: dict, plan: Plan) -> AsyncIterat
                 await asyncio.shield(_end_programs(a.sid))
 
     try:
+        head = card_head(plan)
         for a in plan.attempts:
             a.last_said = time.monotonic()
-            yield _sse(EVENT, a.frame())
+            yield _sse(EVENT, {**a.frame(), "card": head})
         for a in plan.attempts:
             tasks[a.id] = loop.create_task(
                 _run_one(platform, personas, plan, a, queue, stopped), context=_arm(plan, a),
@@ -1665,6 +1778,8 @@ async def run_attempts(platform: Any, personas: dict, plan: Plan) -> AsyncIterat
         for a in plan.attempts:
             if not a.files:
                 a.files = await asyncio.to_thread(changed_files, a.git, plan.start.sha)
+        # Review: what each attempt spent counts toward the pay-per-use limit.
+        await _keep_spend(platform, plan)
         card = card_of(plan)
         yield _sse("done", {"reply": summary_words(card), LINE_KEY: card})
     finally:
@@ -1673,6 +1788,16 @@ async def run_attempts(platform: Any, personas: dict, plan: Plan) -> AsyncIterat
         if any(not t.done() for t in tasks.values()):
             with contextlib.suppress(BaseException):
                 await asyncio.shield(stop_all())
+        # Review: money spent before a cut-off still counts — the calls the
+        # driver had not read yet are folded first.
+        with contextlib.suppress(Exception):
+            while not queue.empty():
+                kind, aid, event, data = queue.get_nowait()
+                left = plan.by_id(aid)
+                if left is not None and kind == "frame":
+                    left.fold(event, data)
+        with contextlib.suppress(BaseException):
+            await asyncio.shield(_keep_spend(platform, plan))
         TURNS.release(plan.turn_id, handle)
         _note_live(plan.thread_id, plan.turn_id, False)
 
@@ -1760,16 +1885,22 @@ def saved_card(raw: Any, *, cut_off: bool = False) -> "dict[str, Any] | None":
     for key in ("carried", "landed"):
         if raw.get(key) is True:
             out[key] = True
+    for key, cap in (("from_session", 80), ("discarded_at", 40)):
+        v = raw.get(key)
+        if isinstance(v, str) and v:
+            out[key] = v[:cap]
     return out
 
 
 def card_from_frames(frames: dict[str, dict[str, Any]], *, cut_off: bool) -> "dict[str, Any] | None":
     """The card from the ``attempt`` frames a turn sent (it never reached its
-    ``done``: Stop before the card, or a crash) — what each row last said."""
+    ``done``: Stop before the card, or a crash) — what each row last said,
+    and the card's own facts its first frames carried (``card``)."""
     items = list(frames.values())
     if not items:
         return None
-    return saved_card({"items": items}, cut_off=cut_off)
+    head = next((i["card"] for i in items if isinstance(i.get("card"), dict)), {})
+    return saved_card({**head, "items": items}, cut_off=cut_off)
 
 
 # --------------------------------------------------------------------------- #
@@ -1821,6 +1952,8 @@ def keep(platform: Any, thread_id: str, turn_id: str, attempt_id: str) -> dict[s
     item = next((i for i in card["items"] if i.get("id") == attempt_id), None)
     if item is None:
         raise AttemptsRefused(KEEP_UNKNOWN, 404)
+    if card.get("from_session"):
+        raise AttemptsRefused(KEEP_COPIED, 409)
     if card.get("kept"):
         kept = next((i for i in card["items"] if i.get("id") == card["kept"]), {})
         raise AttemptsRefused(f"You already kept the attempt on {kept.get('label') or card['kept']}.", 409)
@@ -1957,6 +2090,207 @@ def keep(platform: Any, thread_id: str, turn_id: str, attempt_id: str) -> dict[s
     if not saved:
         out["note"] = (out.get("note", "") + " " + KEEP_SAVE_FAILED).strip()
     return out
+
+
+# --------------------------------------------------------------------------- #
+# the attempts' folders: a branched copy, Discard all, a deleted session, a
+# rewind (review, v1.397.0)
+# --------------------------------------------------------------------------- #
+
+
+def copied_lines(lines: list[dict[str, Any]], origin: str) -> list[dict[str, Any]]:
+    """A session BRANCHED from ``origin`` gets its conversation — and the
+    attempts cards in it point at ``origin``'s folders. Each copied card
+    names where it came from (``from_session``) and keeps no attempt's git
+    facts, so the copy can never Keep, discard or delete them (a branched
+    session that works in its folder directly ADOPTED the origin's attempt
+    branch: two sessions in one worktree). Pure."""
+    out: list[dict[str, Any]] = []
+    for m in lines or []:
+        card = m.get(LINE_KEY) if isinstance(m, dict) else None
+        if not isinstance(card, dict):
+            out.append(m)
+            continue
+        copy = saved_card(card)
+        if copy is None:
+            out.append({k: v for k, v in m.items() if k != LINE_KEY})
+            continue
+        copy["from_session"] = copy.get("from_session") or str(origin or "")[:80]
+        for it in copy["items"]:
+            it.pop("git", None)
+            it.pop("folder", None)
+        out.append({**m, LINE_KEY: copy})
+    return out
+
+
+def _session_worktree(row: Any) -> str:
+    from . import sessions as S
+
+    facts = S.git_of(row)
+    return str((facts or {}).get("worktree") or "")
+
+
+def live_items(card: dict[str, Any], row: Any) -> list[dict[str, Any]]:
+    """The items of ``card`` whose folder is still beside the repository —
+    not in the trash, not the folder the session itself works in now (a
+    session that ADOPTED a kept attempt), never a copied card's. BLOCKING
+    (a stat per folder)."""
+    from . import branches as B
+
+    if card.get("from_session"):
+        return []
+    own = _norm_path(_session_worktree(row))
+    out = []
+    for it in card.get("items") or []:
+        facts = B.clean_git_record(it.get("git"))
+        if facts is None or it.get("trashed"):
+            continue
+        wt = Path(facts["worktree"])
+        if own and _norm_path(str(wt)) == own:
+            continue
+        if wt.exists():
+            out.append(it)
+    return out
+
+
+def _norm_path(path: str) -> str:
+    import os
+
+    try:
+        return os.path.normcase(os.path.normpath(path)) if path else ""
+    except (TypeError, ValueError):
+        return str(path or "")
+
+
+def _trash_items(home: Any, items: list[dict[str, Any]]) -> list[str]:
+    """Move each item's folder to the trash (``branches.remove_worktree``:
+    the branch stays); mark the moved ones; return a sentence per folder
+    that stayed. BLOCKING."""
+    from . import branches as B
+
+    notes: list[str] = []
+    for it in items:
+        f = B.clean_git_record(it.get("git"))
+        if f is None:
+            continue
+        try:
+            moved = B.remove_worktree(home, f)
+            it["trashed"] = True
+            if moved.get("trash"):
+                it["trash"] = str(moved["trash"])
+        except B.GitRefused as exc:
+            notes.append(f"The folder of the attempt on {it.get('label')} stayed at {f['worktree']}: {exc}")
+    return notes
+
+
+def discard(platform: Any, thread_id: str, turn_id: str) -> dict[str, Any]:
+    """DISCARD ALL (a person's press): every attempt's folder of that message
+    goes to the trash; every BRANCH stays (its commits kept until the user
+    deletes it). The card says so. Refused for a copied card, and when
+    nothing is left to discard. BLOCKING (git); the route runs it off the
+    loop under the session's git lock, refused while the session runs."""
+    from . import sessions as S
+
+    row = S.get_row(platform.engine, thread_id)
+    if row is None:
+        raise AttemptsRefused("no such Build session", 404)
+    line = next(
+        (m for m in reversed(S._messages(row))  # noqa: SLF001
+         if m.get("role") == "assistant" and m.get("turnId") == turn_id),
+        None,
+    )
+    card = saved_card(line.get(LINE_KEY)) if isinstance(line, dict) else None
+    if card is None:
+        raise AttemptsRefused(KEEP_NONE, 404)
+    if card.get("from_session"):
+        raise AttemptsRefused(KEEP_COPIED, 409)
+    items = live_items(card, row)
+    if not items:
+        raise AttemptsRefused(DISCARD_KEPT if card.get("kept") else DISCARD_NONE, 409)
+    home = getattr(getattr(platform, "config", None), "home", None)
+    notes = _trash_items(home, items)
+    from ..core.ids import utcnow
+
+    moved = [it for it in items if it.get("trashed")]
+    if moved:
+        card["discarded_at"] = utcnow().isoformat()
+    if notes:
+        card["keep_note"] = " ".join(notes)[:600]
+    names = _names(str(it.get("label") or it.get("id")) for it in moved)
+    said = (f"Discarded the attempts on {names}: their folders are in the trash, and their branches stay."
+            if moved else "")
+    content = str(line.get("content") or "").rstrip()
+    saved = S.amend_reply(
+        platform.engine, thread_id, turn_id,
+        {LINE_KEY: card, **({"content": (content + "\n\n" + said).strip()} if said else {})},
+    )
+    out: dict[str, Any] = {"discarded": [it.get("id") for it in moved], "attempts": card, "words": said}
+    if notes:
+        out["note"] = " ".join(notes)
+    if not saved:
+        out["note"] = (out.get("note", "") + " The card could not be updated. Reload the session.").strip()
+    return out
+
+
+def discard_for_delete(platform: Any, row: Any) -> str:
+    """DELETING a session takes its attempts' folders with it to the trash
+    (their branches stay — the session's own worktree's rule, v1.375.0). ""
+    when every one moved (or there were none); else the sentence naming the
+    folder that stayed (the delete is then refused, nothing deleted; what
+    moved is said on its card). BLOCKING (git)."""
+    from . import sessions as S
+
+    home = getattr(getattr(platform, "config", None), "home", None)
+    notes: list[str] = []
+    for m in S._messages(row):  # noqa: SLF001
+        if m.get("role") != "assistant" or not isinstance(m.get(LINE_KEY), dict):
+            continue
+        card = saved_card(m.get(LINE_KEY))
+        if card is None:
+            continue
+        items = live_items(card, row)
+        if not items:
+            continue
+        left = _trash_items(home, items)
+        notes.extend(left)
+        if any(it.get("trashed") for it in items):
+            S.amend_reply(platform.engine, row.id, str(m.get("turnId") or ""), {LINE_KEY: card})
+    return " ".join(notes)
+
+
+def rewind_facts(messages: list[dict[str, Any]], turns: list[str], row: Any) -> "tuple[list[dict[str, Any]], str]":
+    """What a rewind over ``turns`` means for their attempts: a PROBLEM (the
+    rewind is refused, nothing touched) for attempts whose folders are still
+    beside the repository — the card that holds Keep and Discard all would be
+    cut away and the folders left with nothing that knows them — and a NOTE
+    for a kept attempt (its work stays in the session: a rewind does not take
+    back what Keep brought in). BLOCKING (a stat per folder); never raises."""
+    problems: list[dict[str, Any]] = []
+    notes: list[str] = []
+    try:
+        cut = set(turns or [])
+        for m in messages or []:
+            if m.get("role") != "assistant" or m.get("turnId") not in cut:
+                continue
+            card = saved_card(m.get(LINE_KEY))
+            if card is None or card.get("from_session"):
+                continue
+            live = live_items(card, row)
+            if live:
+                names = _names(str(it.get("label") or it.get("id")) for it in live)
+                problems.append({"reason": (
+                    f"the attempts on {names} are still in their folders: keep one or press Discard all on "
+                    "their card first"
+                )})
+            if card.get("kept"):
+                kept = next((i for i in card["items"] if i.get("id") == card["kept"]), {})
+                notes.append(
+                    f"The attempt you kept on {kept.get('label') or card['kept']} stays in this session: a "
+                    "rewind does not take back what Keep brought in."
+                )
+    except Exception:  # noqa: BLE001 — the rewind's own checks still run
+        log.debug("reading a rewind's attempts failed", exc_info=True)
+    return problems, " ".join(notes)
 
 
 __all__ = [

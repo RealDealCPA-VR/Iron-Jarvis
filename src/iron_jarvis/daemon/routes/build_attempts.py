@@ -47,6 +47,10 @@ class KeepBody(BaseModel):
     attempt: str = Field(min_length=1, max_length=20)
 
 
+class DiscardBody(BaseModel):
+    turn_id: str = Field(min_length=1, max_length=80)
+
+
 def menu_rows(d: Any) -> list[dict[str, Any]]:
     """The model menu's rows (``GET /models``'s own catalog). BLOCKING."""
     from .connections import selectable_models
@@ -263,5 +267,37 @@ def register(app: FastAPI, d: Any) -> None:
             _GIT_ACTING.discard(thread_id)
             _STARTING.discard(thread_id)
 
+    @app.post("/build/sessions/{thread_id}/attempts/discard")
+    async def discard_attempts(thread_id: str, body: DiscardBody) -> Any:
+        """DISCARD ALL (review, v1.397.0): every attempt's folder of that
+        message goes to the trash, every branch stays (``harness/attempts.
+        discard``). Refused in words while the session runs, for a card a
+        branched session copied, and when nothing is left to discard."""
+        if thread_id in _GIT_ACTING:
+            return JSONResponse(status_code=409, content={"detail": GIT_BUSY})
+        if thread_id in _COMPACTING:
+            return JSONResponse(status_code=409, content={"detail": COMPACTING_SENTENCE})
+        running = _running_turn(d, thread_id)
+        if thread_id in _STARTING or running:
+            words = A.KEEP_RUNNING if running and running in A.running_for(thread_id) else GIT_RUNNING
+            return JSONResponse(status_code=409, content={"detail": words})
+        _STARTING.add(thread_id)
+        _GIT_ACTING.add(thread_id)
+        platform = d.platform
+        try:
+            return await asyncio.to_thread(
+                _locked, thread_id, lambda: A.discard(platform, thread_id, body.turn_id),
+            )
+        except A.AttemptsRefused as exc:
+            return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
+        except Exception as exc:  # noqa: BLE001 — GitRefused from the lock wait
+            status = getattr(exc, "status", None)
+            if isinstance(status, int):
+                return JSONResponse(status_code=status, content={"detail": str(exc)})
+            raise
+        finally:
+            _GIT_ACTING.discard(thread_id)
+            _STARTING.discard(thread_id)
 
-__all__ = ["KeepBody", "WORDS_ONLY", "maybe_start", "menu_rows", "register", "request_of"]
+
+__all__ = ["DiscardBody", "KeepBody", "WORDS_ONLY", "maybe_start", "menu_rows", "register", "request_of"]

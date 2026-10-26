@@ -632,12 +632,13 @@ async def test_keep_is_refused_while_any_attempt_still_runs(app, fake, repo, mon
     status, raw = await task
     assert status == 200 and frames_of(raw)[-1][0] == "done"
     # A session BRANCHED from this reply carries the card; its Keep refuses
-    # in words (the attempts started from another branch).
+    # in words (review, v1.397.0: the copy names the session the attempts
+    # belong to, and holds none of their git facts).
     status, branched = await asgi(app, "POST", f"/build/sessions/{sid}/branch", {"turn_id": "kr-1", "at": "reply"})
     assert status == 201, branched
     status, other = await asgi(app, "POST", f"/build/sessions/{branched['id']}/attempts/keep",
                                {"turn_id": "kr-1", "attempt": row["id"]})
-    assert status == 409 and "cannot be kept here" in other["detail"], other
+    assert status == 409 and other["detail"] == A.KEEP_COPIED, other
     status, kept = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
                               {"turn_id": "kr-1", "attempt": row["id"]})
     assert status == 200, kept
