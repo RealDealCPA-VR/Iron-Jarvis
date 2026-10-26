@@ -1420,13 +1420,20 @@ async def _record_turn_end(engine: Any, thread_id: str, turn_id: str, watch: "_R
 #: the app stops is never resumed by itself.
 _ASK_EVENTS = ("approval", "ask_user", "mcp_elicitation", "mcp_sampling")
 _ANSWER_EVENTS = ("approval_resolved", "mcp_resolved")
+#: v1.391.0 review: a HELPER's own question is drawn on its row of the reply
+#: (``harness/helpers.HelperCall``: a ``helper`` frame whose ``ask`` names the
+#: card, ``ask: null`` once it is answered, ``ended`` when the helper is
+#: over). The reply waits on the user through it exactly as through its own
+#: card, so it parks the reply too.
+_HELPER_EVENT = "helper"
+_HELPER_OVER = ("done", "failed", "stopped")
 
 
 def _asks_after(open_asks: set[str], parsed: "list[tuple[str, str]]") -> bool:
     """Fold a chunk's ask / answer frames into ``open_asks`` (ids) and say
     whether the reply is parked on the user now. Pure apart from the set."""
     for event, data in parsed:
-        if event not in _ASK_EVENTS and event not in _ANSWER_EVENTS:
+        if event not in _ASK_EVENTS and event not in _ANSWER_EVENTS and event != _HELPER_EVENT:
             continue
         try:
             frame = json.loads(data or "{}")
@@ -1435,11 +1442,27 @@ def _asks_after(open_asks: set[str], parsed: "list[tuple[str, str]]") -> bool:
         aid = str(frame.get("id") or "") if isinstance(frame, dict) else ""
         if not aid:
             continue
-        if event in _ASK_EVENTS:
+        if event == _HELPER_EVENT:
+            key = f"helper:{aid}"
+            if "ask" in frame:
+                ask = frame.get("ask")
+                if isinstance(ask, dict) and ask.get("id"):
+                    open_asks.add(key)
+                else:
+                    open_asks.discard(key)
+            if frame.get("ended") or frame.get("state") in _HELPER_OVER:
+                open_asks.discard(key)
+        elif event in _ASK_EVENTS:
             open_asks.add(aid)
         else:
             open_asks.discard(aid)
     return bool(open_asks)
+
+
+def _parks_or_answers(parsed: "list[tuple[str, str]]") -> bool:
+    """Does this chunk hold a frame that can park the reply on the user or
+    end such a wait (:func:`_asks_after` reads only these)?"""
+    return any(ev in _ASK_EVENTS or ev in _ANSWER_EVENTS or ev == _HELPER_EVENT for ev, _ in parsed)
 
 
 async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, *,
@@ -1516,9 +1539,7 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                         stamped_frames.append(_durable.sse(event, stamped if stamped is not None else data))
                 if stamped_frames is not None:
                     chunk = "".join(stamped_frames)
-                if record is not None and any(
-                    ev in _ASK_EVENTS or ev in _ANSWER_EVENTS for ev, _ in parsed
-                ):
+                if record is not None and _parks_or_answers(parsed):
                     # v1.391.0: parked on the user (or answered) — on the
                     # record BEFORE the card reaches anyone, so a crash while
                     # it waits never resumes the reply by itself.
@@ -1737,6 +1758,42 @@ def _listed(value: Any) -> list[Any]:
     return list(value) if isinstance(value, list) else []
 
 
+def _question_index(messages: "list[dict[str, Any]]", turn_id: str) -> "int | None":
+    """Where turn ``turn_id``'s question line is (never a steer note)."""
+    return next((
+        i for i, m in enumerate(messages)
+        if m.get("role") == "user" and m.get("turnId") == turn_id and not m.get("steer")
+    ), None)
+
+
+def _newer_message(messages: "list[dict[str, Any]]", idx: int) -> bool:
+    """Did the user send a message after the question at ``idx`` (one of
+    theirs: never a steer note, never the daemon's own carry-on)?"""
+    return any(
+        m.get("role") == "user" and not m.get("steer") and not m.get("continuation")
+        for m in messages[idx + 1:]
+    )
+
+
+def _resume_root(messages: "list[dict[str, Any]]", idx: int) -> int:
+    """The ORIGINAL question of a chain of restart carry-ons (v1.391.0
+    review): from the question line at ``idx``, follow ``resumedFrom`` back
+    to the first reply's own question — each line is looked for only ABOVE
+    the one that names it, so a chain always ends. ``idx`` when the line is
+    not a carry-on."""
+    seen: set[str] = set()
+    while 0 <= idx < len(messages):
+        prev = str(messages[idx].get("resumedFrom") or "")
+        if not prev or prev in seen:
+            break
+        seen.add(prev)
+        j = _question_index(messages[:idx], prev)
+        if j is None:
+            break
+        idx = j
+    return idx
+
+
 def _resume_inputs(platform: Any, row: Any, turn_id: str) -> "dict[str, Any] | None":
     """What carrying on turn ``turn_id`` needs (v1.391.0), or None when it
     cannot be: the session's history BEFORE that turn's question (the
@@ -1752,12 +1809,21 @@ def _resume_inputs(platform: Any, row: Any, turn_id: str) -> "dict[str, Any] | N
     from ..chat_turn import _MAX_ATTACHMENTS
 
     messages = S._messages(row)
-    idx = next((
-        i for i, m in enumerate(messages)
-        if m.get("role") == "user" and m.get("turnId") == turn_id and not m.get("steer")
-    ), None)
-    if idx is None:
+    idx = _question_index(messages, turn_id)
+    if idx is None or _newer_message(messages, idx):
+        # v1.391.0 review: the boot pass checked for a newer message
+        # (:func:`resume_refusal`) a moment ago, in another step; the user's
+        # own message can land in between — read it again HERE, on the row
+        # this turn is built from.
         return None
+    # v1.391.0 review: a reply cut off AGAIN while it carried on — its question
+    # line is the boot's hidden "carry on" (``resumedFrom``), and its kept
+    # conversation already starts with the ORIGINAL question and that reply's
+    # rounds. The history ends before the original question (else the model
+    # read the question twice, with the first cut reply's words between as a
+    # reply of their own), and the files and the skill that rode it come from
+    # the original question's line (the carry-on line has none).
+    idx = _resume_root(messages, idx)
     standing = _compact.standing(S._setup(row))
     start = _compact.boundary(messages, standing) if standing is not None else 0
     if start > idx:
@@ -2221,8 +2287,10 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                     raise WaitEnded(thread_id)
             if resume is not None:
                 # v1.391.0: TAKE the cut-off turn's kept conversation — one
-                # statement, so a second resume of it starts nothing.
-                if not await asyncio.to_thread(RR.claim, platform.engine, resume_turn):
+                # statement, so a second resume of it starts nothing. Review:
+                # MOVED to this turn's key, so a stop before this turn's own
+                # first save still leaves the reply resumable.
+                if not await asyncio.to_thread(RR.claim, platform.engine, resume_turn, turn_id):
                     with contextlib.suppress(Exception):
                         await gen.aclose()
                     raise ResumeGone(thread_id)
@@ -2472,15 +2540,11 @@ def resume_refusal(engine: Any, thread_id: str, turn_id: str, waiting: bool) -> 
     if setup.get("account_wait") or setup.get("account_limit"):
         return "it waits on its account"
     messages = S._messages(row)
-    idx = next((
-        i for i, m in enumerate(messages)
-        if m.get("role") == "user" and m.get("turnId") == turn_id and not m.get("steer")
-    ), None)
+    idx = _question_index(messages, turn_id)
     if idx is None:
         return "its question is no longer in the session"
-    for m in messages[idx + 1:]:
-        if m.get("role") == "user" and not m.get("steer") and not m.get("continuation"):
-            return "a newer message was sent"
+    if _newer_message(messages, idx):
+        return "a newer message was sent"
     return ""
 
 

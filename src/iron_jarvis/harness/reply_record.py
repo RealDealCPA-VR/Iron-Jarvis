@@ -378,20 +378,37 @@ def load(engine: Any, turn_id: str, registry: Any = None, *, since: Any = None) 
     return out
 
 
-def claim(engine: Any, turn_id: str) -> bool:
-    """TAKE a kept list for the ONE resume that carries it on: removed in one
+def claim(engine: Any, turn_id: str, to_turn: str = "") -> bool:
+    """TAKE a kept list for the ONE resume that carries it on, in one
     statement, so of two resumes of the same turn (a boot that runs twice, a
     retry racing the first) exactly one sees it. A list marked ``waiting`` is
-    never taken. BLOCKING."""
-    from sqlalchemy import delete, or_
+    never taken. BLOCKING.
 
+    v1.391.0 review: ``to_turn`` — the turn that carries it on. The list is
+    MOVED to that turn's key (not deleted): until the carrying-on turn's own
+    first save — after its grounding, a summary, its folder snapshot, which
+    can take seconds or a model call — the list it was given is still kept
+    under ITS name, so a stop in that window leaves the reply resumable by
+    the next boot instead of lost. "" removes it (the old take)."""
+    from sqlalchemy import delete, or_, update
+
+    not_waiting = or_(RunTranscript.waiting.is_(None), RunTranscript.waiting == False)  # noqa: E712
     try:
         with session_scope(engine) as db:
-            res = db.exec(
-                delete(RunTranscript)  # type: ignore[call-overload]
-                .where(RunTranscript.run_id == run_id_for(turn_id))
-                .where(or_(RunTranscript.waiting.is_(None), RunTranscript.waiting == False))  # noqa: E712
-            )
+            if to_turn:
+                stmt = (
+                    update(RunTranscript)
+                    .where(RunTranscript.run_id == run_id_for(turn_id))
+                    .where(not_waiting)
+                    .values(run_id=run_id_for(to_turn), updated_at=utcnow(), waiting=None)
+                )
+            else:
+                stmt = (
+                    delete(RunTranscript)
+                    .where(RunTranscript.run_id == run_id_for(turn_id))
+                    .where(not_waiting)
+                )
+            res = db.exec(stmt)  # type: ignore[call-overload]
             db.commit()
             return int(getattr(res, "rowcount", 0) or 0) == 1
     except Exception:  # noqa: BLE001

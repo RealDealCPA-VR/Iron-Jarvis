@@ -1013,7 +1013,11 @@ def reconcile_interrupted_turns(engine: Any) -> int:
             row = get_row(engine, thread_id or "")
             if row is None or has_turn_reply(row, turn_id):
                 continue
-            if not any(m.get("role") == "user" and m.get("turnId") == turn_id for m in _messages(row)):
+            question = next((
+                m for m in _messages(row)
+                if m.get("role") == "user" and m.get("turnId") == turn_id and not m.get("steer")
+            ), None)
+            if question is None:
                 continue
             try:
                 frames = json.loads(frames_json or "[]")
@@ -1051,6 +1055,13 @@ def reconcile_interrupted_turns(engine: Any) -> int:
                 rebuilt = replayed_reply_line(turn_id, frames, started_at=when.timestamp())
                 if rebuilt and rebuilt[-1].get("role") == "assistant":
                     lines = rebuilt
+            # v1.391.0 review: a reply that CARRIED ON one a restart cut off
+            # (its question is the boot's hidden carry-on) keeps saying so
+            # when a crash cuts it off in turn — the live writer's line says
+            # it (`resumedFrom`); this line, written for it, must too.
+            carried = question.get("resumedFrom")
+            if isinstance(carried, str) and carried.strip():
+                lines[-1]["resumedFrom"] = carried
             if append_lines(engine, thread_id, lines, title_from_first=False).get("ok"):
                 written += 1
     except Exception:  # noqa: BLE001 — a boot step never blocks the boot

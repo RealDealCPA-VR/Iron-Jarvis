@@ -156,6 +156,26 @@ APPEARED_KEEP = (
     "(a scratch script or test file left in the folder can break the project's own test run)."
 )
 GONE_HEAD = "## Files that were here when this reply began and are gone now"
+#: The note's first words (:meth:`FinishCheck.note`). v1.391.0 review: a reply
+#: a restart cut off carries its own conversation into the turn that carries
+#: it on (``harness/reply_record``); a note already in it means the cut part
+#: was checked, and the note promises it "comes once per reply"
+#: (:func:`noted_in`).
+NOTE_OPENING = "FINISH CHECK."
+
+
+def noted_in(messages: Iterable[Any]) -> bool:
+    """Does this conversation already hold the finish note (a user message
+    opening with :data:`NOTE_OPENING`)? Pure; never raises."""
+    try:
+        for m in messages or ():
+            if getattr(m, "role", "") == "user" and str(getattr(m, "content", "") or "").startswith(NOTE_OPENING):
+                return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
 GONE_ASK = (
     "No file tool removed them: a command run in this reply did, a program running here, or "
     "someone working in this folder. If a command you ran removed one the task did not ask to "
@@ -1762,6 +1782,11 @@ class FinishCheck:
         self.harness = harness
         #: True once the check decided to run this reply (never twice).
         self.ran = False
+        #: v1.391.0 review: the part of this reply a restart cut off was
+        #: already checked (its note is in the conversation the resumed turn
+        #: carries on) — the note comes once per reply, so it does not run
+        #: again. Unlike :attr:`ran`, nothing of THIS turn is reported.
+        self.checked_before = False
         self.draft = ""
         self.tests = ""
         self.why = ""
@@ -1960,7 +1985,8 @@ class FinishCheck:
         # fixes could not run there (a round with tool calls at the limit is
         # the step-limit report), so a reply that had ENDED would end on the
         # step-limit report instead.
-        if self.ran or not self.config.enabled or truncated or round_index >= rounds - 2:
+        if (self.ran or self.checked_before or not self.config.enabled or truncated
+                or round_index >= rounds - 2):
             return None
         files = await asyncio.to_thread(read_turn_files, self.engine, self.session_id, self.mark)
         # The journal's witness, then the folder's (`harness/folder_changes`):
@@ -2353,7 +2379,7 @@ class FinishCheck:
         self._settle_tests()
         self._note_sent = True
         parts = [
-            "FINISH CHECK. Before you end this reply, check your work once. Iron Jarvis "
+            f"{NOTE_OPENING} Before you end this reply, check your work once. Iron Jarvis "
             "wrote this note; it comes once per reply."
         ]
         if self.config.tests:
@@ -2773,6 +2799,7 @@ __all__ = [
     "FINISH_FILE",
     "FinishCheck",
     "FinishConfig",
+    "NOTE_OPENING",
     "TESTS_FAILED",
     "TESTS_NONE",
     "TESTS_NOT_RUN",
@@ -2783,6 +2810,7 @@ __all__ = [
     "ignored",
     "ledger_mark",
     "module_docstring",
+    "noted_in",
     "parse_config",
     "read_turn_files",
     "request_points",

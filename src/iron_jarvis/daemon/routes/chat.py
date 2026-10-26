@@ -4430,6 +4430,11 @@ async def chat_stream(
     _finish = (
         await _chat_turn.finish_for_turn(
             d, body, _harness, tool_session=_tool_session, tool_ws=tool_ws,
+            # v1.391.0 review: a reply a restart cut off, carried on — the
+            # check covers the WHOLE reply, and runs once (see the helper).
+            # Passed only when the turn carries one (every other turn is
+            # byte-identical; the POST lane never has one).
+            **({"resumed": reply_record} if reply_record is not None else {}),
         )
         if ctx is not None and _harness is not None else None
     )
