@@ -402,6 +402,52 @@ async def test_a_night_task_that_reads_something_flagged_stays_low_and_ends_need
     assert len(lows) == 1 and "low trust" in lows[0]["text"], ended["notes"]
 
 
+async def test_a_projects_recorded_command_line_still_asks_at_night_and_is_declined(
+    tmp_path, monkeypatch, night,
+):
+    """v1.381.0: a project's or a plugin's command line asks in EVERY posture,
+    past every grant — the night grants the command tools for the turn, and
+    that grant must not cover it. (A night session is new, so the recorded
+    line is planted on it the moment it is made.)"""
+    from iron_jarvis.daemon.routes import build as build_routes
+    from iron_jarvis.harness import sessions as S
+
+    real_create = build_routes.create_session_row
+
+    async def _with_a_recorded_command(d, folder, **kw):
+        row, note = await real_create(d, folder, **kw)
+        S.update(d.platform.engine, row.id, setup={"command_shell": [{
+            "name": "deploy", "source": "project", "plugin": "", "turn_id": "bt-earlier",
+            "lines": ["npm run deploy"],
+        }]})
+        return S.get_row(d.platform.engine, row.id), note
+
+    monkeypatch.setattr(build_routes, "create_session_row", _with_a_recorded_command)
+    repo = make_repo(tmp_path / "proj")
+    app = create_app(str(tmp_path / "home"))
+    ran: list[str] = []
+
+    async def _shell(args, ctx):  # noqa: ANN001
+        ran.append(str((args or {}).get("command") or ""))
+        return ToolResult(ok=True, output="ran")
+
+    app.state.platform.registry.get("shell").execute = _shell
+    wire(app, NightScript({
+        "TASK-CMD": [
+            [ToolCall(id="c1", name="Bash", arguments={"command": "npm run deploy"})],
+            [ToolCall(id="c2", name="Bash", arguments={"command": "echo safe"})],
+            "Done TASK-CMD.",
+        ],
+    }))
+    task = await _queue(app, repo, "TASK-CMD: ship it")
+    await night_routes.night_pass(app.state.d)
+    ended = await _ended(app, task["id"])
+    cards = [f for e, f in _frames(app, ended["turn_id"]) if e == "approval"]
+    assert len(cards) == 1 and cards[0]["once_only"] is True and cards[0].get("once_reason") == "command", cards
+    assert ran == ["echo safe"], ran
+    assert ended["state"] == N.NEEDS_YOU
+
+
 async def test_an_open_card_on_the_phone_is_taken_and_an_expired_one_never_is(platform):
     """The 5-minute fix reads the REAL registry: a card it still holds open is
     answered from the phone at any age; one whose wait ended (the agent run's

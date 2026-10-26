@@ -305,6 +305,14 @@ async def settle_running(d: Any) -> list[str]:
             words = "Its tests passed." if fin["tests"] == "passed" else "Its tests failed."
             if git and borrowed and tests_line(borrowed):
                 words += " They ran with your main folder's environment."
+                if borrowed.untrusted:
+                    # v1.398.0 review: an editable install of the main
+                    # folder's code that could not be pointed at the branch.
+                    from ...harness.main_env import untrusted_words
+
+                    words += " " + untrusted_words(borrowed)
+                    if fin["tests"] == "passed" and state == N.DONE:
+                        state = N.NEEDS_YOU  # a pass nobody can rely on
             notes.append(("tests", words))
         if git:
             # v1.398.0 review: the user's MAIN folder, compared with what it

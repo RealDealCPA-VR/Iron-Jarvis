@@ -31,6 +31,7 @@ other run, is untouched.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,6 +48,16 @@ class MainEnv:
     venv_bin: str = ""
     #: The main folder's ``node_modules/.bin`` ("" = none borrowed).
     node_bin: str = ""
+    #: v1.398.0 review: the BRANCH's copies of the folders an EDITABLE install
+    #: in the borrowed ``.venv`` points at in the MAIN folder (a ``.pth`` line,
+    #: setuptools' editable finder) — put first on ``PYTHONPATH`` so the
+    #: branch's tests import the BRANCH's code, never the main folder's.
+    pythonpath: tuple[str, ...] = ()
+    #: v1.398.0 review: an editable install of the main folder's code that
+    #: could NOT be pointed at the branch (no copy of its folder in the
+    #: branch, a finder that cannot be read) — the reason, in words; "" when
+    #: there is none. A test result is then not to be trusted.
+    untrusted: str = ""
 
     def __bool__(self) -> bool:
         return bool(self.venv_bin or self.node_bin)
@@ -74,6 +85,13 @@ class MainEnv:
             for name in [k for k in out if k.upper() in ("VIRTUAL_ENV", "PYTHONHOME")]:
                 out.pop(name, None)
             out["VIRTUAL_ENV"] = self.venv
+        if self.pythonpath:
+            # PYTHONPATH comes BEFORE site-packages on sys.path (and an
+            # editable finder sits after the path finder), so the branch's
+            # copy is imported in place of the main folder's.
+            pkey = next((k for k in out if k.upper() == "PYTHONPATH"), "PYTHONPATH")
+            prior = out.get(pkey, "")
+            out[pkey] = os.pathsep.join([*self.pythonpath, prior] if prior else list(self.pythonpath))
         return out
 
 
@@ -122,6 +140,152 @@ def _has_own(folder: Path, kind: str) -> bool:
     return (folder / "node_modules" / ".bin").is_dir()
 
 
+#: How much of one ``.pth`` / editable finder file is read (they are a few
+#: lines; a bigger one is not an editable install's).
+_EDITABLE_READ_MAX = 256 * 1024
+#: ``.pth`` files that are a venv's own plumbing, never an editable install.
+_PLUMBING_PTH = ("_virtualenv.pth", "distutils-precedence.pth")
+
+
+def _site_packages_of(venv: Path) -> list[Path]:
+    if os.name == "nt":
+        cand = [venv / "Lib" / "site-packages"]
+    else:
+        cand = sorted((venv / "lib").glob("python*/site-packages"))
+    return [p for p in cand if p.is_dir()]
+
+
+def _inside(path: Path, top: Path) -> bool:
+    try:
+        a, b = os.path.normcase(str(path)), os.path.normcase(str(top))
+        return os.path.commonpath([a, b]) == b
+    except ValueError:  # another drive
+        return False
+
+
+def _read_small(path: Path) -> str:
+    try:
+        if path.stat().st_size > _EDITABLE_READ_MAX:
+            return ""
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _string_paths(source: str) -> list[str]:
+    """Every absolute path written as a string literal in a small module (an
+    editable finder's ``MAPPING`` / an ``editables`` redirect). Never runs it."""
+    import ast
+
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return []
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            v = node.value.strip()
+            if v and len(v) < 1000 and os.path.isabs(v):
+                out.append(v)
+    return out
+
+
+def editable_redirects(venv: str, main_top: str, work_top: str) -> "tuple[tuple[str, ...], str]":
+    """v1.398.0 review: an EDITABLE install in the main folder's ``.venv``
+    (``pip install -e .``, ``uv pip install -e``, ``uv sync`` of the project
+    itself) imports the MAIN folder's code, so a branch's tests that borrow
+    the venv test the wrong code and pass. Returns ``(branch_paths, reason)``:
+    the branch's copies of the import roots the install points at inside the
+    main repository (to put first on ``PYTHONPATH``), and — when one cannot
+    be pointed at the branch — the reason in words ("" when none). Reads
+    ``.pth`` lines, the modules a ``.pth`` imports (setuptools' editable
+    finder, an ``editables`` redirect: their string paths, never run), and
+    ``direct_url.json`` (``dir_info.editable``) as the marker. BLOCKING
+    (small reads); never raises."""
+    try:
+        main = Path(main_top).resolve()
+        work = Path(work_top).resolve()
+        venv_dir = Path(venv).resolve() if venv else None
+    except (OSError, ValueError):
+        return (), ""
+    if venv_dir is None:
+        return (), ""
+    roots: list[Path] = []
+    missing: list[str] = []
+    marked: list[str] = []
+
+    def _take(raw: str, base: Path, *, package: bool) -> None:
+        try:
+            p = Path(raw)
+            p = (p if p.is_absolute() else base / p).resolve()
+        except (OSError, ValueError):
+            return
+        if not _inside(p, main) or _inside(p, venv_dir):
+            return
+        # A package folder or a module file: its PARENT is the import root.
+        root = p.parent if (package or p.suffix == ".py") else p
+        try:
+            rel = root.relative_to(main)
+        except ValueError:
+            return
+        copy = work / rel
+        if copy.is_dir():
+            if copy not in roots:
+                roots.append(copy)
+        elif str(rel) not in missing:
+            missing.append(str(rel) or ".")
+
+    for sp in _site_packages_of(venv_dir):
+        try:
+            names = sorted(os.listdir(sp))
+        except OSError:
+            continue
+        for name in names:
+            path = sp / name
+            low = name.lower()
+            if low.endswith(".pth") and low not in _PLUMBING_PTH:
+                for line in _read_small(path).splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if line.startswith(("import ", "import\t")):
+                        for mod in re.findall(r"\bimport\s+([A-Za-z_][A-Za-z0-9_]*)", line):
+                            for raw in _string_paths(_read_small(sp / f"{mod}.py")):
+                                _take(raw, sp, package=True)
+                        continue
+                    _take(line, sp, package=False)
+            elif low.endswith(".dist-info"):
+                direct = _read_small(path / "direct_url.json")
+                if '"editable"' in direct:
+                    try:
+                        import json
+                        from urllib.parse import unquote, urlparse
+
+                        info = json.loads(direct)
+                        url = urlparse(str(info.get("url") or ""))
+                        target = unquote(url.path or "")
+                        if os.name == "nt" and re.match(r"^/[A-Za-z]:", target):
+                            target = target[1:]
+                        if (info.get("dir_info") or {}).get("editable") and target and _inside(Path(target).resolve(), main):
+                            marked.append(name.split("-")[0])
+                    except (ValueError, TypeError, AttributeError, OSError):
+                        continue
+    reason = ""
+    if missing:
+        reason = (
+            "an editable install in your main folder's .venv points at "
+            + ", ".join(missing[:3])
+            + " in your main folder, which this branch does not have, so its tests may have run "
+            "your main folder's code"
+        )
+    elif marked and not roots:
+        reason = (
+            "an editable install of your main folder's code (" + ", ".join(sorted(set(marked))[:3])
+            + ") could not be pointed at this branch, so its tests may have run your main folder's code"
+        )
+    return tuple(str(r) for r in roots), reason
+
+
 def find(checkout: str, folder: str, repo: str = "", worktree: str = "") -> "MainEnv | None":
     """The main folder's environment for a branch session whose user-picked
     folder is ``checkout`` (the main side) and whose working folder is
@@ -154,7 +318,11 @@ def find(checkout: str, folder: str, repo: str = "", worktree: str = "") -> "Mai
                 cand = place / "node_modules" / ".bin"
                 if _real_dir(place / "node_modules") and cand.is_dir():
                     node_bin = str(cand)
-        found = MainEnv(venv=venv, venv_bin=venv_bin, node_bin=node_bin)
+        paths: tuple[str, ...] = ()
+        untrusted = ""
+        if venv:
+            paths, untrusted = editable_redirects(venv, str(top), str(wtop))
+        found = MainEnv(venv=venv, venv_bin=venv_bin, node_bin=node_bin, pythonpath=paths, untrusted=untrusted)
         return found if found else None
     except (OSError, ValueError):
         return None
@@ -187,10 +355,29 @@ def tests_line(found: "MainEnv | None") -> str:
     ran with the main folder's environment; "" otherwise."""
     if not found:
         return ""
-    return (
+    line = (
         f"These ran in this branch folder with {found.words()}: nothing was installed in the branch "
         "folder, so a change to the project's dependencies is not in the environment they ran with."
     )
+    if found.untrusted:
+        line += " " + untrusted_words(found)
+    elif found.pythonpath:
+        line += (
+            " An editable install in that .venv points at your main folder's code; this branch's copy "
+            "was put first on the import path, so they tested this branch's code."
+        )
+    return line
 
 
-__all__ = ["MainEnv", "VENV_NAMES", "apply_for_turn", "find", "for_current_turn", "tests_line"]
+def untrusted_words(found: "MainEnv | None") -> str:
+    """"NOT TRUSTED: …" when an editable install of the main folder's code
+    could not be pointed at the branch; "" otherwise."""
+    if not found or not found.untrusted:
+        return ""
+    return f"NOT TRUSTED: {found.untrusted}."
+
+
+__all__ = [
+    "MainEnv", "VENV_NAMES", "apply_for_turn", "editable_redirects", "find", "for_current_turn",
+    "tests_line", "untrusted_words",
+]
