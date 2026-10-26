@@ -349,8 +349,11 @@ class AssignmentDispatcher:
                     local_only=await self._local_only_of(row),
                     # v1.395.0 review: a task an AGENT queued (assign_work)
                     # is a model handing out work — under the pay-per-use
-                    # limit; one the user queued is theirs to spend on.
+                    # limit; one the user queued is theirs to spend on. And
+                    # it is a piece of THAT agent's work: its account stays in
+                    # that work's account group.
                     by_model=str(getattr(row, "source", "") or "").startswith("agent:"),
+                    scope=_agent_scope(row),
                 )
                 if why:
                     return why
@@ -499,7 +502,8 @@ class AssignmentDispatcher:
             # whole run — entered INSIDE the run's own task, so a run the
             # governor parks and promotes later keeps it.
             run = _mt.run_as_member(
-                self.p, _member, lambda: orch.run_session(session.id, definition=definition)
+                self.p, _member, lambda: orch.run_session(session.id, definition=definition),
+                scope=_agent_scope(row),
             )
         else:
             run = orch.run_session(session.id, definition=definition)
@@ -535,6 +539,14 @@ class AssignmentDispatcher:
                 await result
         except Exception:  # noqa: BLE001 — an event is never worth a pass
             log.debug("assignment publish failed", exc_info=True)
+
+
+def _agent_scope(row: Any) -> str:
+    """v1.395.0 review: the WORK a task an agent queued belongs to — the
+    queuing agent's own session (``source == "agent:<session>"``); "" for a
+    task the user (or anything else) queued: its own piece of work."""
+    src = str(getattr(row, "source", "") or "")
+    return src[len("agent:"):] if src.startswith("agent:") else ""
 
 
 def _first_line(text: str, limit: int = 200) -> str:

@@ -616,6 +616,36 @@ async def test_a_question_keeps_to_the_group_its_work_started_in(w, tmp_path):
     assert calls and all(c["pin"] is not None and c["pin"].profile_id == "x-work" for c in calls)
 
 
+async def test_a_task_an_agent_queued_keeps_to_the_group_of_its_work(w):
+    """assign_work hands a piece of the queuing agent's work to a member: its
+    account stays in that work's group, whenever the task starts."""
+    from iron_jarvis.agents.orchestrator import Orchestrator
+    from iron_jarvis.assignments.dispatcher import AssignmentDispatcher
+    from iron_jarvis.core.models import AgentType
+
+    groups(w)
+    orch = Orchestrator(w.p)
+    w.p.orchestrator = orch
+    member(w.p, "claude-code", "claude-cli", "subscription", roles=("code",))
+    member(w.p, "codex", "codex-cli", "subscription", roles=("test",))
+    parent = await orch.create_session("parent", AgentType.BUILDER, provider="google", model="gemini-3.8-flash")
+    T.route_role(w.p, "code", scope=parent.id, piece="a")  # the work starts in 'work'
+    d = AssignmentDispatcher(w.p, interval_s=0.05)
+    w.p.assignments.create("custom:codex", "Run the tests.", source=f"agent:{parent.id}")
+    out = await d.tick()
+    await d.drain()
+    assert out["started"], out
+    calls = [c for c in w.log if c["provider"] == "codex-cli" and "Run the tests" in c["task"]]
+    assert calls and all(c["pin"] is not None and c["pin"].profile_id == "x-work" for c in calls)
+    # A task the USER queued is its own work: Iron-Proxy's first usable one.
+    w.log.clear()
+    w.p.assignments.create("custom:codex", "Run them again.")
+    await d.tick()
+    await d.drain()
+    calls = [c for c in w.log if c["provider"] == "codex-cli" and "Run them again" in c["task"]]
+    assert calls and all(c["pin"] is not None and c["pin"].profile_id == "x-plus" for c in calls)
+
+
 async def test_a_task_the_user_queued_for_a_pay_member_runs_and_one_an_agent_queued_is_held(w):
     from iron_jarvis.agents.orchestrator import Orchestrator
     from iron_jarvis.assignments.dispatcher import AssignmentDispatcher

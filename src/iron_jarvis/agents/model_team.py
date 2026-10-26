@@ -700,7 +700,7 @@ class member_scope:  # noqa: N801 — a context manager read like a function
             reset_pin(self._pin)
 
 
-async def run_as_member(platform: Any, record: Any, make: Any) -> Any:
+async def run_as_member(platform: Any, record: Any, make: Any, *, scope: str = "") -> Any:
     """Await a member's run INSIDE :class:`member_scope`, entered in the
     run's own task (v1.395.0, the Phase 5 review's open item): an ASSIGNMENT
     and a SCHEDULE FIRE start a run that may be parked by the session
@@ -711,13 +711,37 @@ async def run_as_member(platform: Any, record: Any, make: Any) -> Any:
 
     ``make`` builds the run's coroutine INSIDE the scope (a zero-argument
     callable), so a run the governor refuses before it starts leaves no
-    never-awaited coroutine behind."""
+    never-awaited coroutine behind.
+
+    v1.395.0 review: ``scope`` — the work a task an AGENT queued belongs to
+    (its session): the account is worked out in that work's account group
+    (:func:`work_group`), as at the doors; never across groups."""
+    if scope and runs_elsewhere(record):
+        import asyncio
+
+        pin = await asyncio.to_thread(_queued_pin, platform, record, scope)
+        with member_scope(platform, record, pin=pin):
+            return await make()
     with member_scope(platform, record):
         return await make()
 
 
+def _queued_pin(platform: Any, record: Any, scope: str) -> Any:
+    """The account a queued member's run takes in ``scope``'s account group
+    (None: no account, or one the group cannot give — the lease then says
+    why). BLOCKING; never raises."""
+    try:
+        from ..iron_proxy.pin import current
+
+        caller = current()
+        group = work_group(platform, caller, scope)
+        return member_account(platform, record, caller, group=group, recent=_placements(platform).recent)[0]
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def queued_refusal(platform: Any, record: Any, *, provider: str = "", model: str = "",
-                   local_only: bool = False, by_model: bool = False) -> str:
+                   local_only: bool = False, by_model: bool = False, scope: str = "") -> str:
     """The sentence a QUEUED or SCHEDULED piece of work for a member is held
     or refused with BEFORE any session row exists (v1.395.0 — the doors'
     rules, at the doors that start work by themselves): its account must be
@@ -732,7 +756,9 @@ def queued_refusal(platform: Any, record: Any, *, provider: str = "", model: str
     limit, is said (the dispatcher HOLDS the task and starts it once the
     numbers drop; a schedule's fire is refused in words); and a task a MODEL
     queued (``by_model`` — ``assign_work``) for a pay-per-use member is under
-    the pay-per-use limit (:func:`pay_refusal`). BLOCKING."""
+    the pay-per-use limit (:func:`pay_refusal`). ``scope`` — the work an
+    agent's task belongs to (its session): the account stays in that work's
+    account group (:func:`work_group`). BLOCKING."""
     if not runs_elsewhere(record):
         return ""
     name = str(getattr(record, "name", "") or "")
@@ -762,7 +788,11 @@ def queued_refusal(platform: Any, record: Any, *, provider: str = "", model: str
     try:
         from ..iron_proxy.pin import current
 
-        pin = member_account(platform, record, current(), recent=_placements(platform).recent)[0]
+        caller = current()
+        group = work_group(platform, caller, scope) if scope else _UNSET
+        pin, why = member_account(platform, record, caller, group=group, recent=_placements(platform).recent)
+        if why:
+            return why
         return floor_refusal(platform, record, pin)
     except Exception:  # noqa: BLE001 — unsure: the lease decides
         return ""
