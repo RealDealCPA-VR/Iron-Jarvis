@@ -106,6 +106,23 @@ import {
   HARNESS_USER_BUBBLE,
 } from "@/components/harness/harnessLook";
 import { LibraryCards } from "@/components/harness/LibraryCards";
+// v1.392.0 (long jobs, Phase 3): a reply that made no progress says so (Stop
+// the step / Stop), a reply that summarized itself says so, and the
+// session's optional cap (set in ⋯, met with Keep going).
+import { CapForm, CapMetLine, StallLine, SummarizedLine } from "@/components/harness/HarnessLongJobs";
+import {
+  STALL_FRAME,
+  STEP_STOPPED_NOTE,
+  SUMMARY_FRAME,
+  decodeCapMet,
+  decodeSessionCap,
+  decodeStall,
+  decodeSummarized,
+  stopStep,
+  type SessionCap,
+  type StallNotice,
+  type Summarized,
+} from "@/lib/buildLongJobs";
 import { LiveHelperRows, SavedHelperRows } from "@/components/harness/HarnessHelpers";
 // v1.374.0 (part 2, Phase 3): the task list under the reply, how full the
 // conversation is (and Compact), and "the user is looking at this session".
@@ -539,6 +556,16 @@ export function HarnessSession({
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
+  // v1.392.0 (long jobs, Phase 3): the running reply's stall notice (the
+  // daemon's `stall` frame; cleared by its `over` and by the turn's end), a
+  // Stop the step under way and what it said, the summary the running reply
+  // wrote of its own older rounds, and the ⋯ menu's cap form.
+  const [stall, setStall] = useState<StallNotice | null>(null);
+  const [stallStopping, setStallStopping] = useState(false);
+  const [stallNote, setStallNote] = useState<string | null>(null);
+  const [liveSummarized, setLiveSummarized] = useState<Summarized | null>(null);
+  const [capOpen, setCapOpen] = useState(false);
+  const [capBusy, setCapBusy] = useState(false);
   // Accounts (Phase 5): undefined = not read yet, null = this Iron Jarvis has
   // none (the chip is hidden).
   const [accounts, setAccounts] = useState<AccountsView | null | undefined>(undefined);
@@ -764,6 +791,21 @@ export function HarnessSession({
       return;
     } else if (event === "helper") {
       pageRef.current = { ...page, helpers: applyHelperFrame(page.helpers, data) };
+    } else if (event === STALL_FRAME) {
+      // v1.392.0: no progress for ten minutes (once per episode), or the
+      // progress that ended it.
+      const s = decodeStall(data);
+      if (s === "over") setStall(null);
+      else if (s) {
+        setStall(s);
+        setStallNote(null);
+      }
+      return;
+    } else if (event === SUMMARY_FRAME) {
+      // v1.392.0: the reply summarized its own older rounds to fit the model.
+      const s = decodeSummarized(data);
+      if (s) setLiveSummarized(s);
+      return;
     } else {
       return;
     }
@@ -807,6 +849,13 @@ export function HarnessSession({
         sent.filter((s) => s.turnId !== finished),
       );
       if (back.length) setInput((cur) => withSteersRestored(cur, back));
+      // v1.392.0: the reply ended — its stall notice (and the live summary
+      // line: the saved reply says it now) go with it.
+      if (turnRef.current === null) {
+        setStall(null);
+        setStallNote(null);
+        setLiveSummarized(null);
+      }
       setTurnsEnded((n) => n + 1);
       onChanged();
       // v1.377.0: Next step — asked once a reply ended cleanly and nothing
@@ -902,6 +951,12 @@ export function HarnessSession({
       // A new (or rejoined: its frames replay) turn draws its own helpers —
       // v1.384.0: one carried on from where the user was keeps its own.
       if (!resume) setPageHelpers([]);
+      // v1.392.0: and its own stall notice and summary line.
+      if (!resume) {
+        setStall(null);
+        setLiveSummarized(null);
+      }
+      setStallNote(null);
       // v1.390.0: and its own Timeline (a rejoin's replay folds it again).
       if (!resume) timeline.reset(id);
       replayingRef.current = false;
@@ -1374,6 +1429,53 @@ export function HarnessSession({
     } catch {
       // Gone already (it finished): stop following it here.
       stream.abort();
+    }
+  }
+
+  /** v1.392.0 (long jobs, Phase 3): the stall line's two presses. "Stop the
+   *  step" cancels exactly the tool call the reply waits on (the reply
+   *  carries on, told the user stopped it); "Stop" while a step hangs stops
+   *  the reply AND that step, so the reply ends at once — with no step (the
+   *  model is what it waits on) it is the ordinary Stop. */
+  async function stopStalled(alsoReply: boolean) {
+    const step = stall?.step;
+    if (!step) {
+      if (alsoReply) await stop();
+      return;
+    }
+    setStallStopping(true);
+    try {
+      await stopStep(threadId, turnRef.current ?? "", step.id, alsoReply);
+      if (!alsoReply) setStallNote(STEP_STOPPED_NOTE);
+    } catch (e) {
+      // The step finished meanwhile (404): there was nothing left to stop.
+      setStallNote(
+        e instanceof ApiError && e.status === 404
+          ? "That step had already finished."
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+      if (alsoReply) await stop();
+    } finally {
+      setStallStopping(false);
+    }
+  }
+
+  /** v1.392.0 (decision 8): the session's optional cap on a reply — saved on
+   *  the session (`setup.cap`); null removes it. Answers an error sentence,
+   *  or null when it was saved. */
+  async function saveCap(cap: SessionCap | null): Promise<string | null> {
+    setCapBusy(true);
+    try {
+      const v = await patchSession(threadId, { cap });
+      if (v) setView(v);
+      onChanged();
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    } finally {
+      setCapBusy(false);
     }
   }
 
@@ -2196,6 +2298,17 @@ export function HarnessSession({
                 ) : null}
                 <button
                   type="button"
+                  data-testid="harness-cap-open"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setCapOpen(true);
+                  }}
+                  className="w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06]"
+                >
+                  {decodeSessionCap(view.setup.cap) ? "Change the reply limit" : "Limit each reply"}
+                </button>
+                <button
+                  type="button"
                   data-testid="harness-archive"
                   onClick={() => void archive(view.running)}
                   className="w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06]"
@@ -2229,6 +2342,17 @@ export function HarnessSession({
             </p>
           ) : null}
         </header>
+        {capOpen ? (
+          // v1.392.0 (decision 8): the session's optional cap on a reply.
+          <div className={`px-1 pt-2 ${HARNESS_COLUMN}`}>
+            <CapForm
+              current={decodeSessionCap(view.setup.cap)}
+              busy={capBusy}
+              onSave={saveCap}
+              onClose={() => setCapOpen(false)}
+            />
+          </div>
+        ) : null}
 
         <div
           ref={transcriptRef}
@@ -2303,6 +2427,8 @@ export function HarnessSession({
                   // Part 3, Phase 2: the reply's finish check, in one sentence.
                   finish={decodeFinish(m.finish)}
                 />
+                {/* v1.392.0: the reply summarized its own older rounds. */}
+                <SummarizedLine summarized={decodeSummarized(m.summarized)} />
                 {/* v1.372.0: the helper agents this reply's turn started. */}
                 <SavedHelperRows raw={m.helpers} />
                 {m.content ? (
@@ -2339,6 +2465,15 @@ export function HarnessSession({
                     </div>
                   );
                 })()}
+                {/* v1.392.0 (decision 8): the session's cap ended the reply —
+                    the step-limit way: said plainly, and the newest offers
+                    ONE press to carry on (a new reply, its own limit). */}
+                <CapMetLine
+                  cap={decodeCapMet(m.capMet)}
+                  offer={m === lastReply && !busy && !view.archived}
+                  keepGoingText={KEEP_GOING_TEXT}
+                  onKeepGoing={() => void send({ text: KEEP_GOING_TEXT })}
+                />
                 {(() => {
                   // Phase 5: the limit card this reply ended on, as one quiet
                   // line in the transcript (the live card is below).
@@ -2452,6 +2587,23 @@ export function HarnessSession({
                 return cards.length ? <LiveToolRows cards={cards} since={stream.startedAt ?? null} /> : null;
               })()}
               <LiveText stream={stream} />
+              {/* v1.392.0: the reply summarized its own older rounds. */}
+              <SummarizedLine summarized={liveSummarized} />
+              {/* v1.392.0: ten minutes with no progress — said once per
+                  episode, with Stop the step (only that call) and Stop. */}
+              {stall ? (
+                <StallLine
+                  notice={stall}
+                  stopping={stallStopping}
+                  note={stallNote}
+                  onStopStep={() => void stopStalled(false)}
+                  onStop={() => void stopStalled(true)}
+                />
+              ) : stallNote ? (
+                <p data-testid="harness-stall-note" role="status" className="text-[12px] text-zinc-400">
+                  {stallNote}
+                </p>
+              ) : null}
               {/* v1.374.0: the task list under the live reply, ticking off as
                   the turn's plan_update calls mark its steps. */}
               <LivePlan plan={livePlan} />

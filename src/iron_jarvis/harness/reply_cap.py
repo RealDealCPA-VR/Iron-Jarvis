@@ -138,15 +138,7 @@ def receipt(met: "dict[str, Any] | None") -> "dict[str, Any] | None":
     return {"kind": "cost", "limit": round(float(limit or 0), 2)}
 
 
-def met_words(met: dict[str, Any]) -> str:
-    """The reply line's sentence: "Stopped at this session's 30-minute
-    limit" / "…$5.00 cost limit"."""
-    if met.get("kind") == "cost":
-        return f"Stopped at this session's {usd_words(float(met.get('limit') or 0))} cost limit"
-    return f"Stopped at this session's {minutes_words(float(met.get('limit') or 0))} time limit"
-
-
 __all__ = [
     "KINDS", "MAX_MINUTES", "MAX_USD", "MIN_USD", "ReplyCap", "SETUP_KEY", "WALL", "clean", "from_setup",
-    "instruction", "limit_words", "met_words", "receipt",
+    "instruction", "limit_words", "receipt",
 ]

@@ -39,8 +39,10 @@ import { agentsPath, missionPath } from "@/lib/mission";
 import { MISSION_ORIGIN, sessionHref } from "@/lib/missionLinks";
 import {
   announceBuildSessionLink,
+  BUILD_STALLED_HEADLINE,
   buildFinishedBody,
   buildFinishedHeadline,
+  buildStalledBody,
   buildLimitHeadline,
   buildSessionHref,
   buildThreadOf,
@@ -241,6 +243,9 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ran longer than
   // a minute ended — said unless the user watched it end.
   "build.turn_finished",
+  // v1.392.0 (long jobs, Phase 3): a Build reply made no progress for ten
+  // minutes — once per episode, said unless the user is looking at it.
+  "build.turn_stalled",
 ];
 
 /** Every /events type the bell reads (v1.311.0, wave 3,
@@ -920,6 +925,30 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: p.outcome === "failed" ? AlertTriangle : CheckCircle2,
       title: buildFinishedHeadline(p.outcome),
       body: buildFinishedBody(p.title, p.seconds),
+      attention: true,
+      build: thread,
+    };
+  }
+  if (e.type === "build.turn_stalled") {
+    // v1.392.0 (long jobs, Phase 3): a Build reply made NO PROGRESS for ten
+    // minutes (no frame, no tool output) while not waiting on the user —
+    // ONE per stall episode. Payload: {thread_id, turn_id, title, words,
+    // minutes, step?}; session_id "build:<id>". It rings and counts like a
+    // finished long turn — unless the user is looking at that session (its
+    // live line says it there, with Stop the step); the desktop app says it
+    // from the tray in these same words (main.js runOutcomeNotice).
+    const thread =
+      (typeof p.thread_id === "string" && p.thread_id.trim()) ||
+      buildThreadOf(typeof e.session_id === "string" ? e.session_id : "") ||
+      "";
+    if (!thread) return null;
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: buildSessionHref(thread),
+      icon: AlertTriangle,
+      title: BUILD_STALLED_HEADLINE,
+      body: buildStalledBody(p.title, p.words),
       attention: true,
       build: thread,
     };

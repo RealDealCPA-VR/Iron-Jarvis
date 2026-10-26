@@ -151,6 +151,9 @@ export interface BuildSetup {
   /** Phase 5: the account the session runs on ("" = none), and its name. */
   account: string;
   accountName: string;
+  /** v1.392.0 (decision 8): the session's optional cap on a reply (raw;
+   *  lib/buildLongJobs decodeSessionCap) — null = none, the default. */
+  cap: unknown;
 }
 
 /** A waiting message (Ctrl+Enter): its words and, since v1.373.0, its own
@@ -255,6 +258,12 @@ export type BuildMessage = PaneMessage & {
   /** v1.391.0: the turn id of the reply a restart cut off, on the hidden
    *  question that carried it on and on the reply that did (lib/buildResume). */
   resumedFrom?: string;
+  /** v1.392.0: the summary the reply wrote of its own older rounds to fit
+   *  the model (raw; lib/buildLongJobs decodeSummarized). */
+  summarized?: unknown;
+  /** v1.392.0: the session's cap the reply met (raw; decodeCapMet) — the
+   *  screen says so and offers "Keep going". */
+  capMet?: unknown;
 };
 
 /** Part 3, Phase 2: a reply line's `finish`, whitelisted — the known keys
@@ -374,6 +383,11 @@ const LINE_KEYS = [
   // restart's resume writes, and on the reply that carried on — the turn id
   // of the reply the restart cut off (lib/buildResume).
   "resumedFrom",
+  // v1.392.0 (long jobs, Phase 3): the summary a reply wrote of its own older
+  // rounds ({steps, times}), and the session's cap it met ({kind, limit}) —
+  // lib/buildLongJobs.
+  "summarized",
+  "capMet",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {
@@ -420,6 +434,7 @@ function decodeSetup(raw: unknown): BuildSetup {
       : [],
     account: str(r.account, 120),
     accountName: str(r.account_name, 80),
+    cap: r.cap ?? null,
   };
 }
 
