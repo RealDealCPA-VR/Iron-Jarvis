@@ -363,12 +363,20 @@ def session_ended_on_escape(session_id: str):
 
 
 @contextlib.contextmanager
-def counting_router(platform: Any, rollout: Rollout, observed: dict[str, Any]):
+def counting_router(platform: Any, rollout: Rollout, observed: dict[str, Any],
+                    reasoning_for: Any = None):
     """Enter every model call the platform's router makes into ``rollout``
     while the block runs — ``stream()`` and ``complete()``, whatever the
     router object currently has there (a test's scripted model included).
     A call that never reached its final answer is entered as incomplete with
-    nothing reported. Restored however the block ends."""
+    nothing reported. Restored however the block ends.
+
+    v1.396.0 review: ``reasoning_for(who)`` names the level a call by a
+    model-team MEMBER is sent with (the run's ``--effort`` or the team file's,
+    "" for none): a member's run is an agent run, which sends no level of its
+    own, so without this the members answered at their own defaults while the
+    planner and every single-model row ran at the asked effort. Only a call
+    by a member, and only when the call names no level itself."""
     router = platform.router
     manager = getattr(platform, "providers", None)
     had_stream = "stream" in vars(router)
@@ -389,11 +397,17 @@ def counting_router(platform: Any, rollout: Rollout, observed: dict[str, Any]):
             first = getattr(messages[0], "content", "") if messages else ""
             observed["first_user_sha256"] = _sha(str(first or ""))
 
-    async def _counted(frames: AsyncIterator[dict[str, Any]], kwargs: dict[str, Any]):
+    def _with_level(who: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+        if reasoning_for is None or who == PLANNER or kwargs.get("reasoning"):
+            return kwargs
+        try:
+            level = str(reasoning_for(who) or "")
+        except Exception:  # noqa: BLE001 — a level never breaks a call
+            level = ""
+        return {**kwargs, "reasoning": level} if level else kwargs
+
+    async def _counted(frames: AsyncIterator[dict[str, Any]], kwargs: dict[str, Any], who: str):
         _observe(kwargs)
-        # v1.396.0: who is calling, read in the context of the coroutine that
-        # iterates this stream (a member's run iterates its own calls).
-        who = call_who()
         entry: CallEntry | None = None
         try:
             async with contextlib.aclosing(frames) as inner:
@@ -415,11 +429,16 @@ def counting_router(platform: Any, rollout: Rollout, observed: dict[str, Any]):
             ))
 
     def stream(*args: Any, **kwargs: Any):
-        return _counted(real_stream(*args, **kwargs), kwargs)
+        # v1.396.0: who is calling, read in the caller's context (a member's
+        # run makes its own calls under its own hold).
+        who = call_who()
+        kwargs = _with_level(who, kwargs)
+        return _counted(real_stream(*args, **kwargs), kwargs, who)
 
     async def complete(*args: Any, **kwargs: Any):
         _observe(kwargs)
         who = call_who()
+        kwargs = _with_level(who, kwargs)
         entry: CallEntry | None = None
         try:
             result = await real_complete(*args, **kwargs)
@@ -630,6 +649,16 @@ class JarvisRunner:
         team runner names its file's)."""
         return {}
 
+    def call_reasoning(self, who: str) -> str:
+        """v1.396.0 review: the level a call by model-team member ``who`` is
+        sent with — none for a single-model run (the team runner's)."""
+        return ""
+
+    def member_facts(self) -> dict[str, dict[str, Any]]:
+        """v1.396.0 review: what each member's part records besides its
+        numbers (the level its calls sent, its step limit) — none here."""
+        return {}
+
     def check_ready(self) -> None:
         """Refuse (``bench.BenchRefused``, in words) a single-model run in a
         benchmark home that holds a model team made by someone else: its
@@ -695,8 +724,9 @@ class JarvisRunner:
 
     def _seed_parts(self, provider: str, model: str) -> dict[str, dict[str, Any]]:
         parts = {PLANNER: self._new_part(provider, model)}
+        facts = self.member_facts()
         for name, (m_provider, m_model) in self.member_specs().items():
-            parts[name] = self._new_part(m_provider, m_model)
+            parts[name] = {**self._new_part(m_provider, m_model), **facts.get(name, {})}
         return parts
 
     def _count_pieces(self, parts: dict[str, dict[str, Any]], rows: list[dict[str, Any]]) -> None:
@@ -925,7 +955,8 @@ class JarvisRunner:
         # it armed.)
         # v1.383.0 review: the turn's Build session reads os.environ for its
         # commands' environment — without the bench root in it.
-        with session_ended_on_escape(session), counting_router(self.platform, rollout, observed), \
+        with session_ended_on_escape(session), \
+                counting_router(self.platform, rollout, observed, reasoning_for=self.call_reasoning), \
                 layer_source(self.layer_dir), hidden_environ():
             hold_token = set_hold(*_harness_model(self.platform, self.provider, self.model))
             try:
@@ -1027,6 +1058,15 @@ class JarvisRunner:
         out.helpers = helper_rows(helpers)
         out.accounts = _usage.account_summary(rollout.calls)
         out.team_records = await self.team_records_after()
+        # v1.396.0 review: a helper (a team member) that could not do its
+        # piece for an infrastructure reason — its account's limit, a sign-in,
+        # an unreachable server — means the run never had its fair go: "did
+        # not run", never the team's (or the model's) failure.
+        from .failures import helper_infra
+
+        blocked = helper_infra(out.helpers)
+        if blocked:
+            out.facts["member_infra"] = blocked
         if done is None:
             out.error = error or (
                 f"stopped at the {timeout_s:g} s time limit" if timed_out

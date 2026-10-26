@@ -160,3 +160,103 @@ async def test_a_role_nobody_holds_is_said(world, tmp_path):
                              tuple(m for m in runner.team.members if m.name == "codex"))
     res = await _run(world, runner, names=[W.TASK_A], dry_run=True)
     assert "No member holds the role(s) read, test" in "\n".join(res.plan_lines)
+
+
+# --------------------------------------------------------------------------- #
+# a member's effort and step limit
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_members_calls_carry_the_runs_effort_where_its_model_takes_one(world, tmp_path):
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import Session
+
+    res = await _run(world, _runner(world, tmp_path), names=[W.TASK_A])
+    rec = res.records[0]
+    assert rec["ok_run"] is True and rec["ledger_ok"] is True, rec["error"]
+    sent: dict = {}
+    for k in world.kwargs:
+        sent.setdefault(k["provider"], set()).add(k.get("reasoning", ""))
+    # Codex takes a level: the run's --effort reaches every member call.
+    assert sent["codex-cli"] == {"medium"}, sent
+    # glm-5.3-flash on the custom endpoint takes none: nothing is sent.
+    assert sent["custom"] == {""}, sent
+    parts = rec["parts"]
+    assert parts["codex"]["effort_passed"] == "medium" and parts["glm"]["effort_passed"] == "not offered"
+    assert parts["codex"]["max_steps"] == 60 and parts["glm"]["max_steps"] == 60
+    # The step limit reached the members' own runs (never the home's 12).
+    sessions = [h["session"] for h in rec["helpers"] if h.get("session")]
+    assert sessions
+    with session_scope(world.platform.engine) as db:
+        steps = {db.get(Session, sid).max_steps for sid in sessions}
+    assert steps == {60}, steps
+
+
+async def test_a_team_file_names_a_members_effort_and_steps(world, tmp_path):
+    runner = _runner(world, tmp_path, extra_codex='effort = "high"\nmax_steps = 25\n')
+    codex = next(m for m in runner.team.members if m.name == "codex")
+    assert (runner.member_effort(codex), runner.member_steps(codex)) == ("high", 25)
+    assert runner.identity()["member_steps"] == {"glm": 60, "codex": 25}
+    assert runner.identity()["member_effort"] == {"glm": "not offered", "codex": "high"}
+    for bad, words in (('effort = "max"\n', "effort is one of"), ("max_steps = 0\n", "max_steps is a whole"),
+                       ("max_steps = 500\n", "max_steps is a whole"), ('max_steps = "9"\n', "max_steps is a whole")):
+        with pytest.raises(BenchRefused, match=words):
+            T.load_team_file(N.write_team(tmp_path, extra_codex=bad))
+
+
+# --------------------------------------------------------------------------- #
+# a member that could not do its piece for an infrastructure reason
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_member_at_its_accounts_limit_makes_the_run_did_not_run(world, tmp_path):
+    from iron_jarvis.providers.adapters.base import ProviderError
+
+    world.raise_for["codex-cli"] = ProviderError(
+        "codex-cli: this ChatGPT account hit its Codex usage limit — try again after it resets. "
+        "Codex said: You've hit your usage limit.", status_code=429, transient=False)
+    res = await _run(world, _runner(world, tmp_path), names=[W.TASK_A])
+    rec = res.records[0]
+    # The planner carried on and glm's fix passes the hidden check — but the
+    # team never had its reviewer: not a team result.
+    assert rec["check_verdict"] is True
+    assert rec["passed"] is None and rec["unscored_by"] == "infrastructure", rec
+    assert "codex" in rec["failure_reason"] and "usage limit" in rec["failure_reason"]
+    # No completion marker: the run is tried again next time.
+    again = await _run(world, _runner(world, tmp_path), names=[W.TASK_A], dry_run=True)
+    assert any("would run" in line for line in again.plan_lines)
+
+
+def test_a_member_that_fails_at_its_work_is_graded():
+    """Only an infrastructure reason unscores a run: a member that ran and
+    did not finish its piece is the team's own result."""
+    from iron_jarvis.harness_bench.failures import helper_infra
+
+    rows = [{"member": "codex", "state": "failed", "result": "Stopped at its step limit (60 steps)."},
+            {"member": "glm", "state": "done", "result": "the network module is fine"}]
+    assert helper_infra(rows) == ""
+    rows.append({"member": "glm", "state": "failed",
+                 "result": "delegated agent 'glm' crashed: ProviderError: connection refused"})
+    assert helper_infra(rows) == "glm could not do its piece (the model server could not be reached)"
+    # The run's own plain summary (a member run that ENDED failed rather
+    # than raised) is read too.
+    busy = [{"member": "codex", "state": "failed",
+             "result": "The run failed: Codex is busy. Run it again shortly, or choose another model in Settings."}]
+    assert "usage or rate limit" in helper_infra(busy)
+    out = [{"member": "codex", "state": "failed",
+            "result": "The run failed: Codex isn't signed in. Press Sign in beside Codex in Settings."}]
+    assert "not signed in" in helper_infra(out)
+
+
+@pytest.mark.parametrize("error", [
+    # The real words each adapter raises at an account's limit
+    # (claude_native.transport.upstream_failure, codex_native.protocol.turn_failure).
+    "claude-cli: Anthropic is rate-limiting this account right now — try again shortly. Anthropic said: x",
+    "codex-cli: this ChatGPT account hit its Codex usage limit — try again after it resets. Codex said: x",
+    "Claude Code: You've hit your session limit · resets 3:45am",
+])
+def test_the_planners_own_limit_at_3am_is_did_not_run(error):
+    from iron_jarvis.harness_bench.failures import INFRASTRUCTURE, classify_failure
+
+    got = classify_failure("jarvis-team", False, {"acted": True}, error)
+    assert got.kind == INFRASTRUCTURE and "limit" in got.reason
