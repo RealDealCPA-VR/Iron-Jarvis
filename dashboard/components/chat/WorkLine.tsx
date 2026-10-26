@@ -225,6 +225,10 @@ export function workCounts(steps: ReceiptStep[]): string[] {
 /** How long the turn took, from its own timing; null when not known. */
 export function workDuration(timing: ReceiptTiming | null | undefined): string | null {
   if (!timing || typeof timing !== "object") return null;
+  // v1.390.0 review: a coding reply's own measured length, when its line
+  // keeps one — the same number its Timeline's top says (the wall stamps
+  // tick every 15.6 ms on Windows and can step).
+  if (typeof timing.ms === "number" && Number.isFinite(timing.ms) && timing.ms >= 0) return secondsText(timing.ms);
   const { startedAt, endedAt } = timing;
   if (typeof startedAt !== "number" || typeof endedAt !== "number") return null;
   if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || endedAt < startedAt) return null;
