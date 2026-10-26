@@ -453,7 +453,7 @@ def add_ran(engine: Any, task_id: str, seconds: float) -> None:
     except (TypeError, ValueError):
         return
     try:
-        with session_scope(engine) as db:
+        with _RECORD_LOCK, session_scope(engine) as db:
             row = db.get(NightTaskRecord, str(task_id or ""))
             if row is None:
                 return
@@ -478,7 +478,11 @@ def add_note(engine: Any, task_id: str, kind: str, text: str) -> bool:
         return False
     kind = kind if kind in NOTE_KINDS else "info"
     try:
-        with session_scope(engine) as db:
+        # v1.398.0 review: ONE writer at a time — each note is written from a
+        # thread of its own (``NightTurn.note``), and two that read the list
+        # before either wrote it lost one (two helpers' asks declined at the
+        # same moment kept one "needs you" line of two: 20 at once kept 8).
+        with _RECORD_LOCK, session_scope(engine) as db:
             row = db.get(NightTaskRecord, str(task_id or ""))
             if row is None:
                 return False
@@ -494,6 +498,10 @@ def add_note(engine: Any, task_id: str, kind: str, text: str) -> bool:
     except Exception:  # noqa: BLE001 — a note never breaks the task
         log.warning("a night task note could not be kept", exc_info=True)
         return False
+
+
+#: Serializes the read-modify-write of a task's notes and running time.
+_RECORD_LOCK = threading.Lock()
 
 
 def finish_task(engine: Any, task_id: str, state: str) -> bool:

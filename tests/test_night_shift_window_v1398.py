@@ -117,6 +117,38 @@ async def test_a_cut_off_night_reply_is_carried_on_once_inside_the_window(tmp_pa
     assert "This task runs at night with nobody watching." in system
 
 
+async def test_a_night_reply_cut_off_while_it_waited_on_a_card_is_not_carried_on(tmp_path, clock, monkeypatch):
+    """Decision (item 6): the card it waited on is gone with the restart, so
+    the reply is never carried on by itself — even inside the window — and
+    the task settles "stopped", its record saying a restart cut it off."""
+    from iron_jarvis.daemon.routes import chat as chat_routes
+    from iron_jarvis.providers.adapters.base import ToolCall
+
+    monkeypatch.setattr(N, "card_wait_seconds", lambda config: 600.0)
+    monkeypatch.setattr(chat_routes, "_ASK_POLL_S", 0.05)
+    repo = make_repo(tmp_path / "proj")
+    home = str(tmp_path / "home")
+    first = create_app(home)
+    wire(first, NightScript({"TASK-CARD": [
+        [ToolCall(id="w1", name="WebFetch", arguments={"url": "https://example.com/a"})],
+    ]}))
+    task = await _queue(first, repo, "TASK-CARD: read the page")
+    await night_routes.night_pass(first.state.d)
+    turn = _task(first, task["id"])["turn_id"]
+    from tests.test_build_sessions_v1367 import turn_frames, until
+
+    assert await until(lambda: [f for e, f in turn_frames(first, turn) if e == "approval"], 30)
+    await first.state.platform.turn_logs.shutdown()
+    second = _reboot(home)
+    script = wire(second, NightScript({"TASK-CARD": ["Never."]}))
+    clock["at"] = _local(2, 0)  # inside the window
+    assert await build_routes.resume_after_restart(second.state.d) == []
+    ended = await _ended(second, task["id"], 60)
+    assert ended["state"] == N.STOPPED, ended
+    assert any(n["kind"] == "restart" for n in ended["notes"]), ended["notes"]
+    assert script.calls == []
+
+
 async def test_a_reply_the_boots_pass_did_not_carry_on_never_holds_its_task(tmp_path, clock, monkeypatch):
     """A carry-on that failed for any reason left the task "running" (its
     slot, the PC kept awake) for good, and a later boot could carry it on a

@@ -242,6 +242,35 @@ async def test_a_folder_rule_that_asks_still_asks_at_night(tmp_path, monkeypatch
     assert ended["state"] == N.NEEDS_YOU, ended
 
 
+def test_notes_written_at_the_same_moment_are_all_kept(tmp_path):
+    """Each note is written from a thread of its own; two helpers' asks
+    declined at the same moment used to keep one "needs you" line of two
+    (20 at once kept 8)."""
+    import threading
+
+    app = create_app(str(tmp_path / "home"))
+    engine = app.state.platform.engine
+    task = N.add_task(engine, folder=str(tmp_path), words="w")
+    gate = threading.Barrier(20)
+
+    def _one(i: int) -> None:
+        gate.wait(10)
+        N.add_note(engine, task["id"], "declined", f"Needs your OK: step {i}")
+
+    threads = [threading.Thread(target=_one, args=(i,)) for i in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert len(N.get_task(engine, task["id"])["notes"]) == 20
+    runs = [threading.Thread(target=N.add_ran, args=(engine, task["id"], 1.0)) for _ in range(20)]
+    for t in runs:
+        t.start()
+    for t in runs:
+        t.join(30)
+    assert N.get_task(engine, task["id"])["ran_s"] == 20.0
+
+
 def test_a_night_tasks_helper_asks_for_the_web_and_keeps_its_commands(tmp_path):
     """A helper works with the turn's tools under the night's allow-list: the
     web asks in the helper too (an "ask" rule its runtime cards, declined
@@ -320,6 +349,42 @@ async def test_a_night_card_goes_to_the_phone_at_once_and_a_phone_approve_runs_t
     assert [r[0] for r in rec.ran] == ["web_fetch"], rec.ran
     assert ended["state"] == N.DONE, ended
     assert not [n for n in ended["notes"] if n["kind"] == "declined"]
+
+
+async def test_a_night_safety_card_never_goes_to_the_phone(tmp_path, monkeypatch, night):
+    """Decision 1: safety cards are declined like any other at night, and
+    (v1.392.0) they never go to the phone — the whole card is read where it
+    is answered. An ordinary night card beside it does go (at once)."""
+    from iron_jarvis.harness import stall
+    from tests.test_build_phone_ask_v1392 import CHAT_CFG, ChatMockChannel
+
+    monkeypatch.setattr(stall, "CLOCK", lambda: 5000.0)
+    repo = make_repo(tmp_path / "proj")
+    app = create_app(str(tmp_path / "home"))
+    platform = app.state.platform
+    ch = ChatMockChannel(dict(CHAT_CFG))
+    platform.notifier.add_channel("tg", ch)
+    app.state.inbound_poller.thread_store.resolve("tg", "777", "Val")
+    rec = _Recorder()
+    rec.wrap(platform.registry.get("web_fetch"))
+    wire(app, NightScript({
+        "TASK-SAFE": [
+            [ToolCall(id="w1", name="WebFetch", arguments={"url": "https://example.com/a"})],
+            [ToolCall(id="g1", name="Bash", arguments={"command": "git commit -am wip"})],
+            "Done TASK-SAFE.",
+        ],
+    }))
+    task = await _queue(app, repo, "TASK-SAFE: commit it")
+    await night_routes.night_pass(app.state.d)
+    ended = await _ended(app, task["id"])
+    cards = [f for e, f in _frames(app, ended["turn_id"]) if e == "approval"]
+    assert [c["tool"] for c in cards] == ["web_fetch", "shell"] and cards[1]["once_only"] is True, cards
+    await asyncio.sleep(0.2)  # a phone line is published from a task of its own
+    phoned = [e.payload.get("tool") for e in platform.event_bus.history
+              if e.type == "approval.requested" and (e.payload or {}).get("surface") == "build"]
+    assert phoned == ["web_fetch"], phoned  # the web card went; the commit card never did
+    assert len(ch.sent) == 1, ch.sent
+    assert rec.ran == []
 
 
 async def test_the_night_model_is_told_the_nights_rule_never_auto_approve(tmp_path, monkeypatch, night):
