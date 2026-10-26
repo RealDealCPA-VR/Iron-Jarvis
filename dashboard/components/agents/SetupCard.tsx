@@ -52,6 +52,8 @@ import type { RemoteAgentInfo } from "./identity";
 import { AnotherJarvisCard } from "./AnotherJarvisCard";
 import { TASK_DOOR_PATH } from "@/lib/anotherJarvis";
 import { modelPickTitle, modelPickWords } from "@/lib/onboarding";
+import { cleanRoles, roleWords } from "@/lib/teamRoles";
+import { TeamRoleChecks } from "./TeamRoleChecks";
 
 /** v1.357.0 (G61): is this base URL another computer's Iron Jarvis task door?
  *  (The daemon's `task_door.is_task_door_url`: the path is exactly the door.) */
@@ -968,6 +970,10 @@ function DynamicRow({
   const [denyDirty, setDenyDirty] = useState(false);
   const [skills, setSkills] = useState<string[]>([]);
   const [skillsDirty, setSkillsDirty] = useState(false);
+  // v1.394.0 (the model team): the agent's team ROLES — sent only when the
+  // user touched them, like the deny list and the skills.
+  const [roles, setRoles] = useState<string[]>([]);
+  const [rolesDirty, setRolesDirty] = useState(false);
   // The day off: Pause opens a one-line reason box; Resume needs no words.
   const [pausing, setPausing] = useState(false);
   const [pauseReason, setPauseReason] = useState("");
@@ -1088,6 +1094,8 @@ function DynamicRow({
     setDenyDirty(false);
     setSkills([...(agent.skills ?? [])]);
     setSkillsDirty(false);
+    setRoles([...(agent.roles ?? [])]);
+    setRolesDirty(false);
     setEditing(true);
     if (storedTools.length > 0) void loadCatalog();
   }
@@ -1159,6 +1167,7 @@ function DynamicRow({
       }
       if (denyDirty) body.deny_tools = [...deny];
       if (skillsDirty) body.skills = [...skills];
+      if (rolesDirty) body.roles = [...roles];
       await patch(`/agents/${encodeURIComponent(agent.name)}`, body);
       setEditing(false);
       onChanged();
@@ -1252,8 +1261,13 @@ function DynamicRow({
       {/* THE EMPLOYEE FACTS (v1.295.0), always visible: on a day off (and
           why), who it reports to, and how much of the month is spent. Each
           renders ONLY when the daemon said so — an older daemon shows none. */}
-      {(agent.paused || agent.reports_to) && (
+      {(agent.paused || agent.reports_to || (agent.roles?.length ?? 0) > 0) && (
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 pl-7">
+          {(agent.roles?.length ?? 0) > 0 && (
+            <span data-testid={`agent-roles-${agent.name}`} className="text-[10px] text-zinc-400">
+              Model team · {roleWords(cleanRoles(agent.roles))}
+            </span>
+          )}
           {agent.paused && (
             <span
               data-testid={`agent-paused-${agent.name}`}
@@ -1451,6 +1465,23 @@ function DynamicRow({
                 setDenyDirty(true);
               }}
             />
+            {/* v1.394.0: the model team. A role or more makes this agent a
+                member a coding session or an objective can hand work to, on
+                its own model (Settings › Model team lists them). */}
+            <div data-testid={`team-roles-${agent.name}`} className="space-y-1">
+              <span className="block text-[12px] font-medium text-zinc-500">
+                Team roles (none = not on the model team)
+              </span>
+              <TeamRoleChecks
+                scope={agent.name}
+                value={roles}
+                disabled={busy}
+                onChange={(next) => {
+                  setRoles(next);
+                  setRolesDirty(true);
+                }}
+              />
+            </div>
           </div>
 
           {/* THE TOOLS PICKER. Two states, one decision: inherit the base

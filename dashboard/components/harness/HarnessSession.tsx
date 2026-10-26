@@ -2451,7 +2451,7 @@ export function HarnessSession({
                 {/* v1.392.0: the reply summarized its own older rounds. */}
                 <SummarizedLine summarized={decodeSummarized(m.summarized)} />
                 {/* v1.372.0: the helper agents this reply's turn started. */}
-                <SavedHelperRows raw={m.helpers} />
+                <SavedHelperRows raw={m.helpers} models={catalog.models} />
                 {m.content ? (
                   <div className={HARNESS_REPLY_PROSE}>
                     <MemoMarkdown content={m.content} />
@@ -2601,7 +2601,7 @@ export function HarnessSession({
             <div data-testid="harness-live" className="min-w-0 space-y-2">
               {/* v1.372.0: each helper is ONE row (its own tool card is not
                   drawn a second time). */}
-              <LiveHelperRows helpers={helpers} />
+              <LiveHelperRows helpers={helpers} models={catalog.models} />
               {(() => {
                 const ids = helperCallIds(helpers);
                 const cards = ids.size ? stream.tools.filter((t) => !ids.has(t.id)) : stream.tools;

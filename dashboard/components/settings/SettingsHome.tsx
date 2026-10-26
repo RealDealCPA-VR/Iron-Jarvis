@@ -75,6 +75,15 @@ const SUB_DEFS: Record<string, SubDef[]> = {
       blurb: "Each local model's measured skills, and which tasks it is trusted with.",
       Comp: named(() => import("@/components/settings/pages/LegacySettingsForm"), "LocalCapabilitiesCard"),
     },
+    {
+      // v1.394.0 (the long-jobs plan's Phase 5): the user's model team —
+      // the agents a coding session or an objective can hand work to, each
+      // on its own model; "Make a starter team" lives here.
+      id: "models-team",
+      label: "Model team",
+      blurb: "The agents that take pieces of work, each on its own model, and how much of each plan they have used.",
+      Comp: named(() => import("@/components/settings/ModelTeam"), "ModelTeam"),
+    },
   ],
   connections: [
     {

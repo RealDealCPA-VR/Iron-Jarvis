@@ -25,6 +25,11 @@
  * decomposed lane) shows that plan as the chat's checklist (PlanChecklist,
  * through AgentRunLive's `plan` and the settled row's stamp), ticking off as
  * the run moves on — the daemon sends its own copy on the row's frames.
+ *
+ * v1.394.0 (the model team): each row also says the MODEL the helper ran on
+ * ("On qwen3:8b"), in the Timeline's words (lib/buildHelpers
+ * `workerModelName`) — a team member runs on its own model, not the
+ * session's, so the row names both the member and its model.
  */
 
 import { Bot, X } from "lucide-react";
@@ -37,9 +42,23 @@ import {
   helperName,
   helperStamp,
   settledFromLive,
+  workerModelName,
   type HelperView,
   type SavedHelper,
 } from "@/lib/buildHelpers";
+import type { CatalogRow } from "@/lib/answeredModel";
+
+/** v1.394.0: the model the helper ran on, one quiet line ("" = not known). */
+function HelperModel({ provider, model, models }: { provider?: string; model?: string; models: readonly CatalogRow[] }) {
+  const words = workerModelName(provider ?? "", model ?? "", models);
+  return words ? (
+    <p data-testid="helper-model" className="text-[12px] leading-5 text-zinc-500" title={[provider, model].filter(Boolean).join(" · ")}>
+      On {words}
+    </p>
+  ) : null;
+}
+
+const NO_MODELS: readonly CatalogRow[] = [];
 
 /** The words that say what a helper was asked, in the row's own grey. */
 function Asked({ task }: { task: string }) {
@@ -54,7 +73,7 @@ function Asked({ task }: { task: string }) {
 /** A finished helper: the chat's settled run row; opened, what it was asked,
  *  its report and its steps. A helper refused before it had a session (no
  *  "Open run" to offer) is one failed work row with the reason. */
-export function SettledHelperRow({ helper }: { helper: SavedHelper }) {
+export function SettledHelperRow({ helper, models = NO_MODELS }: { helper: SavedHelper; models?: readonly CatalogRow[] }) {
   const name = helperName(helper.agent);
   if (!helper.session) {
     // Never started: refused (a remote agent, a pinned model), or stopped
@@ -90,14 +109,19 @@ export function SettledHelperRow({ helper }: { helper: SavedHelper }) {
           />
         ) : null}
       </AgentRunSettled>
+      {/* v1.394.0: the model it ran on, always in sight (a team member's is
+          its own, not the session's) — outside the folded body. */}
+      <div className="pl-[22px]">
+        <HelperModel provider={helper.provider} model={helper.model} models={models} />
+      </div>
     </div>
   );
 }
 
 /** A helper while the turn runs. */
-export function LiveHelperRow({ helper }: { helper: HelperView }) {
+export function LiveHelperRow({ helper, models = NO_MODELS }: { helper: HelperView; models?: readonly CatalogRow[] }) {
   const settled = settledFromLive(helper);
-  if (settled) return <SettledHelperRow helper={settled} />;
+  if (settled) return <SettledHelperRow helper={settled} models={models} />;
   const name = helperName(helper.agent);
   if (helper.state === "queued" || (helper.state === "starting" && !helper.session)) {
     const waiting = helper.state === "queued";
@@ -128,6 +152,7 @@ export function LiveHelperRow({ helper }: { helper: HelperView }) {
         plan={helper.plan ?? null}
       >
         <Asked task={helper.task} />
+        <HelperModel provider={helper.provider} model={helper.model} models={models} />
         {asking && helper.ask ? (
           <div data-testid="helper-ask">
             <ApprovalCard
@@ -175,25 +200,25 @@ function phaseWords(phase: string): string {
 }
 
 /** The turn's helpers while it runs (call order). */
-export function LiveHelperRows({ helpers }: { helpers: readonly HelperView[] }) {
+export function LiveHelperRows({ helpers, models = NO_MODELS }: { helpers: readonly HelperView[]; models?: readonly CatalogRow[] }) {
   if (!helpers.length) return null;
   return (
     <div data-testid="harness-helpers" className="grid gap-2">
       {helpers.map((h) => (
-        <LiveHelperRow key={h.id} helper={h} />
+        <LiveHelperRow key={h.id} helper={h} models={models} />
       ))}
     </div>
   );
 }
 
 /** A reply's saved helpers (the line's `helpers`). */
-export function SavedHelperRows({ raw }: { raw: unknown }) {
+export function SavedHelperRows({ raw, models = NO_MODELS }: { raw: unknown; models?: readonly CatalogRow[] }) {
   const helpers = decodeSavedHelpers(raw);
   if (!helpers.length) return null;
   return (
     <div data-testid="harness-helpers" className="mb-2 grid gap-2">
       {helpers.map((h) => (
-        <SettledHelperRow key={h.id} helper={h} />
+        <SettledHelperRow key={h.id} helper={h} models={models} />
       ))}
     </div>
   );
