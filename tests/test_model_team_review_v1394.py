@@ -414,6 +414,28 @@ async def test_a_members_run_can_hand_work_to_a_teammate_on_another_model(doors,
     assert all(c["hold"] is None for c in log)
 
 
+def test_an_event_handler_does_not_run_as_the_members_run():
+    """A handler of an event published inside a member's run (a session's
+    end) runs in a copy of that context; like the hold and the pin, the
+    member-run mark is dropped there (``core/events._drop_build_turn_scope``)."""
+    import contextvars
+
+    from iron_jarvis.core import events
+
+    member = _rec("codex-cli")
+    member.name = "cx"
+    with T.member_scope(_Platform(), member):
+        assert T.MEMBER_RUN.get() is True
+
+        def handler() -> bool:
+            events._drop_build_turn_scope()
+            return T.MEMBER_RUN.get()
+
+        assert contextvars.copy_context().run(handler) is False
+        assert T.MEMBER_RUN.get() is True
+    assert T.MEMBER_RUN.get() is False
+
+
 async def test_a_coding_sessions_hold_is_never_lifted_for_a_teammate(doors, tmp_path):
     """The control: a coding session's own hold (not a member's) stays — a
     consult naming another provider there is still refused."""
