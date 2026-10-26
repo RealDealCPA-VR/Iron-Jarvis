@@ -248,6 +248,7 @@ _LATE_MODEL_MODULES = (
     "..core.grants",          # StandingGrantRecord — approvals remembered by arguments (v1.299.0)
     "..media.models",         # MediaJobRecord — a generation finishing in the background (v1.346.0)
     "..harness.library_models",  # HarnessLibraryRecord — a folder's lessons + harness edits (v1.370.0)
+    "..agents.team_record",   # TeamRoleRun — the model team's record per (member, role) (v1.395.0)
 )
 
 

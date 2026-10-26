@@ -23,6 +23,7 @@
  */
 
 import { normalizeIso } from "@/lib/format";
+import { ROLE_NOUNS } from "@/lib/modelTeam";
 import { rowName } from "@/lib/runWords";
 import { readSavedPlan, toSavedPlan, type PlanView, type SavedPlan } from "@/lib/planChecklist";
 
@@ -509,6 +510,13 @@ export function runEndWords(run: Pick<AgentRunStamp, "status" | "outcome" | "ste
  *  "custom:researcher" -> "your researcher agent", "remote:hermes" -> "the
  *  hermes remote agent", "builder" -> "the builder". */
 export function agentPhrase(name: string): string {
+  // v1.395.0 (the long-jobs plan's Phase 6): a helper the planner asked for
+  // by ROLE ("role:code") is named by its role until the team router picks a
+  // member — "a team member for coding", never "the role:code".
+  if (name.startsWith("role:")) {
+    const noun = ROLE_NOUNS[name.slice(5).trim().toLowerCase()];
+    return noun ? `a team member for ${noun}` : "a team member";
+  }
   const custom = name.startsWith("custom:");
   const remote = name.startsWith("remote:");
   const bare = (custom || remote ? name.slice(name.indexOf(":") + 1) : name).trim();

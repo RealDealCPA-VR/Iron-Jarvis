@@ -877,6 +877,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # the node's own saved key, so a proxy behind a master key is read too.
         route_reader=_route_reader_for(platform),
     )
+    # v1.395.0 (the long-jobs plan's Phase 6): the model team's router reads
+    # a local box's LOAD (requests waiting) off the sampler's last pass — a
+    # cached read (``agents/model_team.local_box``); it never starts a probe.
+    try:
+        platform.fleet_sampler = fleet_sampler
+    except Exception:  # noqa: BLE001 — no load reading: every box reads "ok"
+        pass
 
     # LIVE re-arm bridge: lifespan drops its event loop + the autonomy/sentinel
     # arm functions in here so put_settings (which runs in a threadpool) can

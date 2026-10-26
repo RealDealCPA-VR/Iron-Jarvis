@@ -30,6 +30,7 @@ import {
   decodeStarter,
   decodeTeam,
   placeWords,
+  recordWords,
   usageWords,
   type StarterPreview,
   type StarterRow,
@@ -149,6 +150,17 @@ function MemberRow({
       <p data-testid={`team-usage-${m.name}`} className="text-[12px] text-zinc-400">
         Usage: {usageWords(m)}
       </p>
+      {/* v1.395.0: how its pieces went, per role — the record the team
+          router reads (a local member goes first only on a good one). */}
+      {recordWords(m) ? (
+        <p
+          data-testid={`team-record-${m.name}`}
+          className="text-[12px] text-zinc-400"
+          title="Passed = finished, and the reply's checks and any reviewer did not say no"
+        >
+          Record: {recordWords(m)}
+        </p>
+      ) : null}
       <RoleChecks
         scope={m.name}
         value={roles}

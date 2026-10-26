@@ -987,7 +987,9 @@ _CLAUDE_TOOLS: tuple[DialectTool, ...] = (
         "code in parallel. Give each a complete prompt: it cannot see this conversation. "
         "subagent_type: general-purpose (can change files, default), Explore (reads and "
         "searches), or a name from list_agents — a member of the user's model team (listed "
-        "under 'Your model team') works on its OWN model instead. model and effort are not "
+        "under 'Your model team') works on its OWN model instead. To let Iron Jarvis pick the "
+        "team member, give subagent_type role:read, role:code, role:review or role:test (a "
+        "local member first when its record for that role is good). model and effort are not "
         "used here.",
         _obj({
             "description": _d("A short (3-5 word) description of the task", _S),
@@ -1147,7 +1149,8 @@ _GPT_TOOLS: tuple[DialectTool, ...] = (
         "sub-agent cannot see this conversation: put everything it needs in message. "
         "agent_type: default or worker (can change files), explorer (reads and searches), or a "
         "name from list_agents — a member of the user's model team (listed under 'Your model "
-        "team') works on its OWN model instead.",
+        "team') works on its OWN model instead. To let Iron Jarvis pick the team member, give "
+        "agent_type role:read, role:code, role:review or role:test.",
         # Codex 0.157.0's multi_agent_v1.spawn_agent arguments that mean
         # something here (v2's task_name is still accepted by the translation).
         _obj({

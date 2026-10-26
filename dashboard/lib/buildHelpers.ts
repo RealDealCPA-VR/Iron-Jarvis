@@ -85,6 +85,12 @@ export interface HelperView {
    *  ("" until its run says) — a team member runs on its OWN model. */
   provider?: string;
   model?: string;
+  /** v1.395.0 (the long-jobs plan's Phase 6): the ROLE the planner asked for
+   *  ("read", "code", …) when it asked for one instead of a member, and the
+   *  team router's one sentence of why this member took it ("local: good
+   *  record for reading") — or why nothing started ("waited: …"). */
+  role?: string;
+  reason?: string;
 }
 
 /** One helper as the reply keeps it. */
@@ -105,7 +111,14 @@ export interface SavedHelper {
   /** v1.394.0: the model it ran on (the saved line keeps it, v1.390.0). */
   provider?: string;
   model?: string;
+  /** v1.395.0: the role asked for and why this member took it. */
+  role?: string;
+  reason?: string;
 }
+
+/** v1.395.0: how much of the router's reason a row shows (the daemon cuts at
+ *  300 too — harness/helpers REASON_CHARS). */
+export const REASON_CHARS = 300;
 
 const rec = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -188,6 +201,11 @@ export function applyHelperFrame(prev: readonly HelperView[], data: Record<strin
   if (provider) h.provider = provider;
   const model = str(data.model, 200);
   if (model) h.model = model;
+  // v1.395.0: the role asked for, and the team router's reason.
+  const role = str(data.role, 20);
+  if (role) h.role = role;
+  const reason = str(data.reason, REASON_CHARS);
+  if (reason) h.reason = reason;
   if (typeof data.phase === "string" && data.phase) {
     h.phase = str(data.phase, 60);
     h.phaseDetail = str(data.detail, 200);
@@ -271,6 +289,9 @@ export function decodeSavedHelpers(raw: unknown): SavedHelper[] {
       // v1.394.0: the model it ran on, when the line kept one.
       ...(str(r.provider, 120) ? { provider: str(r.provider, 120) } : {}),
       ...(str(r.model, 200) ? { model: str(r.model, 200) } : {}),
+      // v1.395.0: the role asked for and why this member took it.
+      ...(str(r.role, 20) ? { role: str(r.role, 20) } : {}),
+      ...(str(r.reason, REASON_CHARS) ? { reason: str(r.reason, REASON_CHARS) } : {}),
       // v1.374.0: read as untrusted as the rest; a malformed plan is none.
       ...(() => {
         const plan = toSavedPlan(readSavedPlan(r.plan));
@@ -321,6 +342,8 @@ export function settledFromLive(h: HelperView): SavedHelper | null {
     result: h.result,
     ...(h.provider ? { provider: h.provider } : {}),
     ...(h.model ? { model: h.model } : {}),
+    ...(h.role ? { role: h.role } : {}),
+    ...(h.reason ? { reason: h.reason } : {}),
     work: h.tools
       .filter((t) => t.status === "done")
       .map((t) => ({

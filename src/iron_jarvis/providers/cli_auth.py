@@ -260,6 +260,25 @@ def cached_verdicts() -> Iterator[None]:
         _CACHED_ONLY.reset(token)
 
 
+#: v1.395.0 (the long-jobs plan's Phase 6): set while the MODEL TEAM's router
+#: reads whether a member's provider is there (``agents/model_team.
+#: route_role``). Routing picks among CACHED answers only — it never starts a
+#: ``claude auth status`` (or any CLI) of its own, not even in the background:
+#: an unknown verdict stays unknown (the run then decides, as it always has).
+_NO_PROBE: ContextVar[bool] = ContextVar("ij_cli_auth_no_probe", default=False)
+
+
+@contextlib.contextmanager
+def never_probe() -> Iterator[None]:
+    """Inside this block :meth:`CliAuthProbe.verdict` answers from the cache
+    and NEVER starts a refresh (``None`` when nothing is cached)."""
+    token = _NO_PROBE.set(True)
+    try:
+        yield
+    finally:
+        _NO_PROBE.reset(token)
+
+
 class CliAuthProbe:
     """Cached, off-loop sign-in verdicts for the subscription CLIs.
 
@@ -328,6 +347,9 @@ class CliAuthProbe:
         signed-in verdict and re-checks any other after ``UNSIGNED_RECHECK_S``."""
         with self._lock:
             st = self._cache.get(binary)
+            if _NO_PROBE.get():
+                # v1.395.0: the team router — the cache, and nothing started.
+                return None if st is None else st.signed_in
             ttl = self.ttl_s
             if _CACHED_ONLY.get():
                 if st is not None and st.signed_in is True:

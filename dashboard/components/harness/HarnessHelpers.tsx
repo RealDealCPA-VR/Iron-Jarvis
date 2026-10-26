@@ -58,6 +58,21 @@ function HelperModel({ provider, model, models }: { provider?: string; model?: s
   ) : null;
 }
 
+/** v1.395.0 (the long-jobs plan's Phase 6): why the team router gave this
+ *  member the piece — "local: good record for reading", "Codex: the local box
+ *  is busy" — or why nothing started ("waited: …"), one quiet line. */
+function HelperReason({ reason }: { reason?: string }) {
+  return reason ? (
+    <p
+      data-testid="helper-reason"
+      className="text-[12px] leading-5 text-zinc-500"
+      title="Why Iron Jarvis gave this piece to this team member"
+    >
+      Why: {reason}
+    </p>
+  ) : null;
+}
+
 const NO_MODELS: readonly CatalogRow[] = [];
 
 /** The words that say what a helper was asked, in the row's own grey. */
@@ -87,6 +102,10 @@ export function SettledHelperRow({ helper, models = NO_MODELS }: { helper: Saved
           title={stopped ? `${name} was stopped before it started` : `${name} could not start`}
           detail={stopped ? null : helper.result || null}
         />
+        {/* v1.395.0: a role nobody could take says it WAITED, and why. */}
+        <div className="pl-[22px]">
+          <HelperReason reason={helper.reason} />
+        </div>
       </div>
     );
   }
@@ -113,6 +132,7 @@ export function SettledHelperRow({ helper, models = NO_MODELS }: { helper: Saved
           its own, not the session's) — outside the folded body. */}
       <div className="pl-[22px]">
         <HelperModel provider={helper.provider} model={helper.model} models={models} />
+        <HelperReason reason={helper.reason} />
       </div>
     </div>
   );
@@ -133,6 +153,9 @@ export function LiveHelperRow({ helper, models = NO_MODELS }: { helper: HelperVi
           title={waiting ? `${name} is waiting to start` : `${name} is starting`}
           detail={waiting ? helper.note || null : askedLine(helper.task) || null}
         />
+        <div className="pl-[22px]">
+          <HelperReason reason={helper.reason} />
+        </div>
       </div>
     );
   }
@@ -153,6 +176,7 @@ export function LiveHelperRow({ helper, models = NO_MODELS }: { helper: HelperVi
       >
         <Asked task={helper.task} />
         <HelperModel provider={helper.provider} model={helper.model} models={models} />
+        <HelperReason reason={helper.reason} />
         {asking && helper.ask ? (
           <div data-testid="helper-ask">
             <ApprovalCard
