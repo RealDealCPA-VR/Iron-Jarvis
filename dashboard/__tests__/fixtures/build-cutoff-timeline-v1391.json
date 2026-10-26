@@ -1,0 +1,69 @@
+{
+  "line": {
+    "at": "2026-10-26T01:35:07.527796+00:00",
+    "calls": [
+      {
+        "model": "claude-sonnet-4-5",
+        "ms": 0,
+        "provider": "anthropic",
+        "start": 180,
+        "usage": {
+          "cost_usd": 2.4e-05,
+          "input_tokens": 3,
+          "output_tokens": 1
+        }
+      },
+      {
+        "model": "claude-sonnet-4-5",
+        "ms": 0,
+        "provider": "anthropic",
+        "start": 191,
+        "usage": {
+          "cost_usd": 2.4e-05,
+          "input_tokens": 3,
+          "output_tokens": 1
+        }
+      },
+      {
+        "ms": 0,
+        "start": 197,
+        "state": "stopped"
+      }
+    ],
+    "content": "",
+    "error": "Iron Jarvis stopped while answering (a restart or a crash). What it had written so far is kept; press Retry to ask again.",
+    "interrupted": true,
+    "role": "assistant",
+    "steps": [
+      {
+        "detail": {
+          "input": "{\"content\": \"1\", \"path\": \"one.txt\"}",
+          "output": "wrote 1 bytes to one.txt"
+        },
+        "ms": 6,
+        "name": "write_file",
+        "ok": true,
+        "start": 181,
+        "target": "one.txt"
+      },
+      {
+        "detail": {
+          "input": "{\"content\": \"2\", \"path\": \"two.txt\"}",
+          "output": "wrote 1 bytes to two.txt"
+        },
+        "ms": 4,
+        "name": "write_file",
+        "ok": true,
+        "start": 192,
+        "target": "two.txt"
+      }
+    ],
+    "timing": {
+      "endedAt": 1792978506915,
+      "firstTokenAt": null,
+      "ms": 197,
+      "startedAt": 1792978506718
+    },
+    "turnId": "bt-1"
+  }
+}

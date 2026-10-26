@@ -147,6 +147,11 @@ LINE_KEYS: tuple[str, ...] = (
     # (``harness/timeline.ReplyClock``). Steps keep their ``start`` inside
     # ``steps``; helpers their model and usage inside ``helpers``.
     "calls",
+    # v1.391.0 (the long-jobs plan's Phase 2): on the hidden question a boot
+    # writes to carry a cut-off reply on, and on the reply that carried it
+    # on: the turn id of the reply a restart cut off (the screen's one plain
+    # line says the reply carried on by itself after Iron Jarvis restarted).
+    "resumedFrom",
 )
 
 
@@ -999,15 +1004,20 @@ def reconcile_interrupted_turns(engine: Any) -> int:
     try:
         with session_scope(engine) as db:
             rows = list(db.exec(
-                select(ChatTurnRecord.id, ChatTurnRecord.thread_id, ChatTurnRecord.frames_json)
+                select(ChatTurnRecord.id, ChatTurnRecord.thread_id, ChatTurnRecord.frames_json,
+                       ChatTurnRecord.started_at)
                 .where(ChatTurnRecord.status == "interrupted")
                 .where(ChatTurnRecord.thread_id != "")
             ))
-        for turn_id, thread_id, frames_json in rows:
+        for turn_id, thread_id, frames_json, started in rows:
             row = get_row(engine, thread_id or "")
             if row is None or has_turn_reply(row, turn_id):
                 continue
-            if not any(m.get("role") == "user" and m.get("turnId") == turn_id for m in _messages(row)):
+            question = next((
+                m for m in _messages(row)
+                if m.get("role") == "user" and m.get("turnId") == turn_id and not m.get("steer")
+            ), None)
+            if question is None:
                 continue
             try:
                 frames = json.loads(frames_json or "[]")
@@ -1029,7 +1039,30 @@ def reconcile_interrupted_turns(engine: Any) -> int:
                 "role": "assistant", "content": "".join(text), "turnId": turn_id,
                 "interrupted": True, "error": INTERRUPTED_DETAIL,
             }
-            if append_lines(engine, thread_id, [line], title_from_first=False).get("ok"):
+            # v1.391.0 (the Timeline's open item): a reply stored since the
+            # Timeline carries every offset its frames were stamped with —
+            # rebuilt from them by the live writer's own fold
+            # (`routes/build.replayed_reply_line`), the line keeps its steps,
+            # model calls, helpers, steer notes and `timing`, so the Timeline
+            # draws what ran. A reply stored before it keeps the line above.
+            lines: list[dict[str, Any]] = [line]
+            if started is not None:
+                from datetime import timezone
+
+                from ..daemon.routes.build import replayed_reply_line
+
+                when = started if started.tzinfo is not None else started.replace(tzinfo=timezone.utc)
+                rebuilt = replayed_reply_line(turn_id, frames, started_at=when.timestamp())
+                if rebuilt and rebuilt[-1].get("role") == "assistant":
+                    lines = rebuilt
+            # v1.391.0 review: a reply that CARRIED ON one a restart cut off
+            # (its question is the boot's hidden carry-on) keeps saying so
+            # when a crash cuts it off in turn — the live writer's line says
+            # it (`resumedFrom`); this line, written for it, must too.
+            carried = question.get("resumedFrom")
+            if isinstance(carried, str) and carried.strip():
+                lines[-1]["resumedFrom"] = carried
+            if append_lines(engine, thread_id, lines, title_from_first=False).get("ok"):
                 written += 1
     except Exception:  # noqa: BLE001 — a boot step never blocks the boot
         log.warning("reconciling interrupted build turns failed", exc_info=True)

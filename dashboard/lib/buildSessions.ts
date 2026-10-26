@@ -252,6 +252,9 @@ export type BuildMessage = PaneMessage & {
    *  length, provider, model, usage (raw; lib/buildTimeline). Absent on
    *  every line written before the Timeline. */
   calls?: unknown;
+  /** v1.391.0: the turn id of the reply a restart cut off, on the hidden
+   *  question that carried it on and on the reply that did (lib/buildResume). */
+  resumedFrom?: string;
 };
 
 /** Part 3, Phase 2: a reply line's `finish`, whitelisted — the known keys
@@ -367,6 +370,10 @@ const LINE_KEYS = [
   // v1.390.0 (the Timeline): each billed model call of the reply (raw;
   // lib/buildTimeline replyTimeline).
   "calls",
+  // v1.391.0 (long jobs, Phase 2): on the hidden "carry on" question a
+  // restart's resume writes, and on the reply that carried on — the turn id
+  // of the reply the restart cut off (lib/buildResume).
+  "resumedFrom",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {

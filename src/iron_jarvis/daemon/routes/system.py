@@ -146,15 +146,14 @@ def activity_snapshot(d) -> dict[str, Any]:
     from ...workflows.models import WorkflowRunRecord
 
     with session_scope(d.platform.engine) as db:
-        sessions = len(
-            list(
-                db.exec(
-                    select(Session.id).where(
-                        Session.status.in_([SessionStatus.ACTIVE, SessionStatus.QUEUED])  # type: ignore[attr-defined]
-                    )
+        live_sessions = list(
+            db.exec(
+                select(Session.id, Session.origin).where(
+                    Session.status.in_([SessionStatus.ACTIVE, SessionStatus.QUEUED])  # type: ignore[attr-defined]
                 )
             )
         )
+        sessions = len(live_sessions)
         run_states = list(
             db.exec(
                 select(WorkflowRunRecord.status).where(
@@ -175,6 +174,7 @@ def activity_snapshot(d) -> dict[str, Any]:
 
     chat_replies = CHAT_INFLIGHT.count()
     busy_panes = 0
+    working_panes = 0
     busy_pane_clis: list[str] = []
     try:
         for info in d.platform.terminals.list():
@@ -182,6 +182,8 @@ def activity_snapshot(d) -> dict[str, Any]:
                 continue
             if info.get("state") in ("working", "blocked"):
                 busy_panes += 1
+                if info.get("state") == "working":
+                    working_panes += 1
                 cli = info.get("agent_cli")
                 if cli:
                     busy_pane_clis.append(str(cli))
@@ -195,7 +197,67 @@ def activity_snapshot(d) -> dict[str, Any]:
         "busy_panes": busy_panes,
         "busy_pane_clis": busy_pane_clis,
         "busy": bool(sessions or run_states or chat_replies or busy_panes),
+        # v1.391.0 (long jobs, Phase 2, decision 1): the "Keep this PC awake
+        # while work runs" setting, read LIVE by the desktop app beside
+        # `working` (it holds off sleep only while both are true).
+        "keep_awake": bool(getattr(d.platform.config, "keep_awake", True)),
+        # v1.391.0 review: is anything WORKING right now — the part of `busy`
+        # that runs by itself (:func:`_working`). `busy` keeps counting work
+        # parked on the user (the update's warning names it: an update still
+        # cuts it off); the desktop's sleep blocker reads `working` — decision
+        # 1 holds sleep off "only while ... is working", and the plan's own
+        # words tell working from "waiting on you" (decision 2).
+        "working": _working(d, live_sessions, writing, chat_replies, working_panes),
     }
+
+
+def _working(d, live_sessions: "list[Any]", writing: int, chat_replies: int, working_panes: int) -> bool:
+    """WORK THAT RUNS BY ITSELF (v1.391.0 review, the long-jobs plan's
+    decision 1: keep the PC awake "only while a coding reply, a mission or an
+    agent run is working"). The doer's blocker read ``busy``, which also
+    counts work PARKED ON THE USER with no clock — a coding reply on an
+    approval card, a Build terminal whose coding tool shows a question
+    (``blocked``), a workflow run waiting for an answer, an attended agent run
+    on its card — so a laptop left with one card open overnight never slept.
+    Such work goes on only when the person answers, and a sleeping PC wakes
+    with the card still open.
+
+    Working: a reply not waiting on the user (the durable registry's own
+    ``waiting``, which counts its cards, its own question, an app's question
+    and a helper's question), a reply outside that registry (a short chat
+    turn), an agent run or a queued one not parked on an ask with NO clock (an
+    UNATTENDED run's ask expires by itself, and its run goes on — it still
+    counts), a workflow run that is not waiting, a Build terminal whose coding
+    tool is working (never one that is ``blocked`` on its question). Never
+    raises (a part it cannot read counts as working: the old answer)."""
+    try:
+        from ...core.turns import TURNS
+        from ..durable_turns import running_replies
+
+        approvals = getattr(d.platform, "approvals", None)
+        pending = approvals.pending_ids() if approvals is not None else []
+        rows = running_replies(getattr(d.platform, "turn_logs", None), TURNS.thread_states(), pending)
+        replies_working = sum(1 for r in rows if not r.get("waiting"))
+        # A reply outside the durable registry (CHAT_INFLIGHT counts both).
+        replies_working += max(0, int(chat_replies) - len(rows))
+    except Exception:  # noqa: BLE001
+        replies_working = int(chat_replies)
+    try:
+        from ...agents.runtime import _ask_timeout_for
+
+        approvals = getattr(d.platform, "approvals", None)
+        sessions_working = 0
+        for sid, origin in live_sessions:
+            parked = (
+                approvals is not None
+                and _ask_timeout_for(str(origin or "")) is None
+                and bool(approvals.pending_for(str(sid)))
+            )
+            if not parked:
+                sessions_working += 1
+    except Exception:  # noqa: BLE001
+        sessions_working = len(live_sessions)
+    return bool(replies_working or sessions_working or writing or working_panes)
 
 
 def register(app: FastAPI, d) -> None:

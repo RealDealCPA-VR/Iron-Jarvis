@@ -1668,6 +1668,28 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 _build_wait_loop(_app.state.d, lambda ok, exc: _tick("build_accounts", ok, exc))
             )
 
+        # v1.391.0 (the long-jobs plan's Phase 2, decision 2): a coding
+        # session's reply that a restart or a crash cut off WHILE IT WORKED
+        # carries on by itself from its last finished step. ONE pass, after
+        # the reconciles above, as its own task — it waits (bounded) for the
+        # packs and Iron-Proxy, and boot never waits on it. Its outcome is a
+        # row (loop_health["build_resume"]).
+        async def _resume_cut_off_replies() -> None:
+            from .routes.build import resume_after_restart
+
+            try:
+                carried = await resume_after_restart(_app.state.d)
+                if carried:
+                    log.info("carried on %d coding-session repl(ies) a restart cut off", len(carried))
+                _tick("build_resume", True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — a boot pass never breaks the daemon
+                log.warning("carrying on cut-off coding-session replies failed", exc_info=True)
+                _tick("build_resume", False, exc)
+
+        bg_tasks["build_resume"] = asyncio.create_task(_resume_cut_off_replies())
+
         # SHARE MY PROFILE WITH BUILD (v1.306.0): when a switch is on, bring
         # its block up to date — on a timer THREAD (poke returns at once), so
         # boot never waits on a file write.
@@ -1892,6 +1914,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # came due during shutdown would otherwise start a continuation
             # AFTER the turns below were cut off (its wait consumed, its turn
             # destroyed with the loop, nothing saved).
+            # v1.391.0: so does the resume pass (a reply it carried on after
+            # this point would be cut off again at once).
+            _build_resume = bg_tasks.pop("build_resume", None)
+            if _build_resume is not None:
+                _build_resume.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(_build_resume, return_exceptions=True), timeout=5.0
+                    )
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    pass
             _build_waits = bg_tasks.pop("build_accounts", None)
             if _build_waits is not None:
                 _build_waits.cancel()

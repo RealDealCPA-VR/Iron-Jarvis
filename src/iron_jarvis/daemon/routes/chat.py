@@ -2950,6 +2950,7 @@ async def stream_chat_turn(
     harness: "bool | str | None" = None,
     session_id: "str | None" = None,
     plan_mode: bool = False,
+    reply_record=None,
 ):
     """Streaming twin of :func:`chat_complete` (FX-01) — the turn itself.
 
@@ -3098,6 +3099,18 @@ async def stream_chat_turn(
     Checked EAGERLY; keyword only; omitted, byte-identical. MIRROR NOTE
     (lock-step): ``chat_turn.run_chat_turn`` takes ``session_id`` and
     ``plan_mode`` (it never arms the two asking tools).
+
+    ``reply_record`` (v1.391.0, the long-jobs plan's Phase 2) — a CODING
+    SESSION's turn only (``routes/build.start_build_turn`` hands it a
+    ``harness.reply_record.ReplyRecord``): the turn keeps its own model-facing
+    conversation, saved at the top of every round and right after the model
+    asks for tools (before they run), so a restart can carry the reply on
+    from its last finished step; a resumed turn's record also brings the
+    cut-off turn's rounds, put right after the question. Keyword only; no
+    ``ChatBody`` field carries it. Omitted (chat, the browser sidebar, the
+    benchmark), every byte is what it was. STREAM LANE ONLY, on purpose: a
+    coding session's turn never runs through the POST lane
+    (``chat_turn.run_chat_turn`` has no coding session to keep — pinned).
     """
     _eager_checks(platform, body)
     round_budget = _chat_turn.turn_round_budget(round_budget)
@@ -3144,6 +3157,7 @@ async def stream_chat_turn(
         suggest_preferences=suggest_preferences, thread_turn=thread_turn,
         prep=_prep, round_budget=round_budget, stay_in_chat=stay_in_chat,
         harness=harness, session_id=session_id, plan_mode=plan_mode,
+        reply_record=reply_record,
     ), _prep), _lo_scope))
     if thread_turn is not None:
         # v1.328.0: the named turn's handle rides with the per-chat entry so
@@ -3305,6 +3319,7 @@ async def chat_stream(
     harness: "str | None" = None,
     session_id: "str | None" = None,
     plan_mode: bool = False,
+    reply_record=None,
 ):
     """THE STREAMING CHAT LANE — the lifted route body itself.
 
@@ -3854,6 +3869,16 @@ async def chat_stream(
             if m.role == "user":
                 m.images = images
                 break
+    # v1.391.0 (a coding session's reply resumed after a restart): the cut-off
+    # turn's own rounds — every tool call with its results, each call that
+    # was running answered — and the resume note go right after the question
+    # (the planned history ends with it). They are the GROWING part of the
+    # turn (`_head` below stays right after the question), so the in-turn
+    # budget fits them like any round. None for every other turn: nothing.
+    _resume_head: "int | None" = None
+    if reply_record is not None and getattr(reply_record, "resume_tail", None):
+        _resume_head = len(msgs)
+        msgs.extend(reply_record.resume_tail)
 
     # An EXPLICITLY picked text-only model (`text_only_pick`, decided above by
     # `_chat_turn.is_text_only_pick` before the roster joined the prompt) is
@@ -4405,6 +4430,11 @@ async def chat_stream(
     _finish = (
         await _chat_turn.finish_for_turn(
             d, body, _harness, tool_session=_tool_session, tool_ws=tool_ws,
+            # v1.391.0 review: a reply a restart cut off, carried on — the
+            # check covers the WHOLE reply, and runs once (see the helper).
+            # Passed only when the turn carries one (every other turn is
+            # byte-identical; the POST lane never has one).
+            **({"resumed": reply_record} if reply_record is not None else {}),
         )
         if ctx is not None and _harness is not None else None
     )
@@ -4552,6 +4582,10 @@ async def chat_stream(
         # history; each completion sends `msgs` FITTED to the window (the
         # rounds grow it). MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
         _head = len(msgs)
+        if _resume_head is not None:
+            # v1.391.0: a resumed coding reply — the cut-off rounds are the
+            # turn's own growing part, never fixed history.
+            _head = _resume_head
         try:
             for _round in range(_rounds):
                 if await _stop():
@@ -4573,6 +4607,12 @@ async def chat_stream(
                 _note = await _steer()
                 if _note:
                     msgs.append(LLMMessage(role="user", content=_note))
+                if reply_record is not None:
+                    # v1.391.0: a coding session's reply keeps its own
+                    # conversation — here, with the last round's results
+                    # (and any note above) in, before the model is asked
+                    # again. Off the loop; never fails the turn.
+                    await reply_record.save(msgs, _head)
                 # v1.278.0: the note rides the round frame it joined, so a
                 # caller with no socket of its own (the chat page) learns it
                 # landed — consumption is still the only signal; an unread
@@ -4876,6 +4916,13 @@ async def chat_stream(
                                            # verbatim by the adapter that wrote them
                                            # (Anthropic thinking + tools). [] otherwise.
                                            raw_blocks=list(getattr(final_resp, "raw_blocks", None) or [])))
+                    if reply_record is not None:
+                        # v1.391.0: the round's calls are kept BEFORE they
+                        # run — a restart in the middle of one leaves the list
+                        # ending on this turn, and a resume tells the model
+                        # each call was cut off (never runs it again blindly).
+                        reply_record.note_calls(_model_calls, calls)
+                        await reply_record.save(msgs, _head)
                 # ONE CARD FOR THE BATCH (v1.247.0) — the stream half of the
                 # runtime's grouping. Read this round's calls AHEAD with the
                 # same predicate the per-call card uses below, grouped by

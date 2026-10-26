@@ -615,7 +615,11 @@ class _ReplyWatch:
         self._started: dict[str, tuple[str, float, Any]] = {}
         self.done: dict[str, Any] | None = None
         self.error: dict[str, Any] | None = None
-        self.started_at = time.time()
+        #: v1.391.0: the WALL clock this watch reads (``time.time``) — a
+        #: replay of a stored turn (:func:`replayed_reply_line`) points it at
+        #: the turn's own times instead of the boot's.
+        self.wall = time.time
+        self.started_at = self.wall()
         #: v1.390.0: the reply's clock (offsets from ``started_at``).
         from ...harness.timeline import ReplyClock
 
@@ -648,6 +652,10 @@ class _ReplyWatch:
         #: v1.384.0: the turn ran with NO step limit (the default), so a
         #: ``step_limit`` it met is the SAFETY stop (the reply line says so).
         self.no_limit = False
+        #: v1.391.0: the turn this one CARRIES ON after a restart cut it off
+        #: ("" for every other turn) — kept on the reply line as
+        #: ``resumedFrom``, the one plain line the screen says it by.
+        self.resumed_from = ""
 
     def see(self, event: str, raw: str) -> "dict[str, Any] | None":
         """Fold one frame. Answers the frame's data with its Timeline offsets
@@ -663,7 +671,7 @@ class _ReplyWatch:
         stamped: "dict[str, Any] | None" = None
         if event == "token":
             if self.first_token_at is None:
-                self.first_token_at = time.time()
+                self.first_token_at = self.wall()
             self.text.append(str(data.get("text") or ""))
         elif event == "reset":
             # The lane discarded what was streamed (a nudge, a rewrite).
@@ -697,7 +705,7 @@ class _ReplyWatch:
             check = check_kind(cid)
             marked = {"check": check} if check else {}
             if data.get("status") == "started":
-                self._started[cid] = (name, time.time(), data.get("args"))
+                self._started[cid] = (name, self.wall(), data.get("args"))
                 stamped = {**data, "start": self.clock.step_started(cid), **marked}
             elif data.get("status") == "finished":
                 began = self._started.pop(cid, None)
@@ -856,15 +864,19 @@ class _ReplyWatch:
             row = {k: v for k, v in h.items() if v not in (None, "")}
             if row.get("state") not in ("done", "failed", "stopped"):
                 row["state"] = "stopped"
-                row.setdefault("endedAt", int(time.time() * 1000))
+                row.setdefault("endedAt", int(self.wall() * 1000))
                 # v1.390.0: its bar ends where the reply did.
                 if "start" in row:
                     row.setdefault("end", self.clock.offset())
             out.append(row)
         return out
 
-    def lines(self, turn_id: str, status: str) -> list[dict[str, Any]]:
-        """The steer notes (as the user's) and the reply line."""
+    def lines(self, turn_id: str, status: str, *, keep_empty: bool = False) -> list[dict[str, Any]]:
+        """The steer notes (as the user's) and the reply line.
+
+        ``keep_empty`` (v1.391.0): a reply that a crash cut off is written
+        even with no words yet (the boot's rebuild, :func:`replayed_reply_
+        line`) — its line says it was cut off and keeps what ran."""
         out: list[dict[str, Any]] = [
             {"role": "user", "content": note, "steer": True, "turnId": turn_id} for note in self.steers
         ]
@@ -966,13 +978,16 @@ class _ReplyWatch:
             if technical and technical != words:
                 line["errorDetail"] = technical
         else:
-            if not partial.strip() and not self.helpers:
+            if not partial.strip() and not self.helpers and not keep_empty:
                 return out  # stopped before a word: nothing to keep
             # (v1.372.0: a turn stopped while its helpers worked keeps a line
             # for them — what they did is part of the session.)
             line.update({"content": partial, "interrupted": True})
             if status == "interrupted":
                 line["error"] = _durable.INTERRUPTED_DETAIL
+        if self.resumed_from:
+            # v1.391.0: this reply carried on a reply a restart cut off.
+            line["resumedFrom"] = self.resumed_from
         if self.thinking:
             line["thinking"] = "".join(self.thinking)
         if self.account_limit:
@@ -1006,11 +1021,93 @@ class _ReplyWatch:
         line["timing"] = {
             "startedAt": int(self.started_at * 1000),
             "firstTokenAt": int(self.first_token_at * 1000) if self.first_token_at else None,
-            "endedAt": int(time.time() * 1000),
+            "endedAt": int(self.wall() * 1000),
             "ms": self.clock.offset(),
         }
         out.append(line)
         return out
+
+
+def _offset(value: Any) -> "int | None":
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def frame_offset(event: str, data: Any) -> "int | None":
+    """When a STORED frame passed, in ms from its reply's start — the offsets
+    :class:`~iron_jarvis.harness.timeline.ReplyClock` stamped on it while the
+    reply ran (v1.390.0). None for a frame that carries none (words, meta) or
+    one stored before the Timeline. Pure."""
+    if not isinstance(data, dict):
+        return None
+    if event == "round":
+        return _offset(data.get("start"))
+    if event == "tool_call":
+        start = _offset(data.get("start"))
+        if start is None:
+            return None
+        return start + (_offset(data.get("ms")) or 0) if data.get("status") == "finished" else start
+    if event == "model_call":
+        start = _offset(data.get("start"))
+        return None if start is None else start + (_offset(data.get("ms")) or 0)
+    if event == "helper":
+        end = _offset(data.get("end"))
+        if end is not None:
+            return end
+        step = data.get("step")
+        if isinstance(step, dict):
+            start = _offset(step.get("start"))
+            if start is not None:
+                return start + (_offset(step.get("ms")) or 0) if step.get("status") == "finished" else start
+        return _offset(data.get("start"))
+    return None
+
+
+def replayed_reply_line(turn_id: str, frames: Any, *, started_at: float) -> "list[dict[str, Any]] | None":
+    """The lines a reply a CRASH cut off is given at boot (v1.391.0, the
+    Timeline's open item): its STORED frames (``ChatTurnRecord.frames_json``)
+    folded by the same :class:`_ReplyWatch` the live reply writer uses, on a
+    clock that reads each frame's own stamped offset — so the line keeps the
+    steps (with their starts and lengths), the model calls, the helpers, the
+    plan, the steer notes and ``timing`` exactly as the running reply drew
+    them, and the Timeline draws what ran instead of "times were not kept".
+
+    ``started_at`` — the turn's start (epoch seconds, the record's). The
+    line is interrupted (``error`` = ``durable_turns.INTERRUPTED_DETAIL``);
+    the call that was in flight is kept as stopped. None when the frames
+    carry no offsets at all (a reply stored before the Timeline): the caller
+    then writes the line it always wrote. Never raises (None)."""
+    from ...harness.timeline import ReplyClock
+
+    try:
+        now_ms = [0]
+        watch = _ReplyWatch()
+        watch.started_at = float(started_at)
+        watch.wall = lambda: watch.started_at + now_ms[0] / 1000.0
+        watch.clock = ReplyClock(watch.started_at, now=lambda: now_ms[0] / 1000.0)
+        timed = False
+        for frame in frames if isinstance(frames, list) else []:
+            if not (isinstance(frame, list) and len(frame) == 2):
+                continue
+            event, raw = str(frame[0] or ""), frame[1]
+            if event in _TERMINAL_EVENTS:
+                # The cut-off turn's own end (the boot reconcile's, or the
+                # shutdown's): it is said by the line's `error`, never folded.
+                continue
+            try:
+                data = json.loads(raw) if isinstance(raw, str) else raw
+            except ValueError:
+                continue
+            off = frame_offset(event, data)
+            if off is not None:
+                now_ms[0] = max(now_ms[0], off)
+                timed = True
+            watch.see(event, raw if isinstance(raw, str) else json.dumps(raw))
+        if not timed:
+            return None
+        return watch.lines(turn_id, "interrupted", keep_empty=True)
+    except Exception:  # noqa: BLE001 — the boot's rebuild never fails the boot
+        log.warning("rebuilding the cut-off reply %s failed", turn_id, exc_info=True)
+        return None
 
 
 #: The plan tool's statuses as the checklist's states (lib/planChecklist).
@@ -1317,8 +1414,60 @@ async def _record_turn_end(engine: Any, thread_id: str, turn_id: str, watch: "_R
         await _keep_account_limit(engine, thread_id, turn_id, watch.account_limit, done=served)
 
 
+#: v1.391.0: the frames that PARK a reply on the user (an approval card — a
+#: plan approval is one —, its own question, an app's question or model
+#: request), and the frames that answer them. A reply parked on the user when
+#: the app stops is never resumed by itself.
+_ASK_EVENTS = ("approval", "ask_user", "mcp_elicitation", "mcp_sampling")
+_ANSWER_EVENTS = ("approval_resolved", "mcp_resolved")
+#: v1.391.0 review: a HELPER's own question is drawn on its row of the reply
+#: (``harness/helpers.HelperCall``: a ``helper`` frame whose ``ask`` names the
+#: card, ``ask: null`` once it is answered, ``ended`` when the helper is
+#: over). The reply waits on the user through it exactly as through its own
+#: card, so it parks the reply too.
+_HELPER_EVENT = "helper"
+_HELPER_OVER = ("done", "failed", "stopped")
+
+
+def _asks_after(open_asks: set[str], parsed: "list[tuple[str, str]]") -> bool:
+    """Fold a chunk's ask / answer frames into ``open_asks`` (ids) and say
+    whether the reply is parked on the user now. Pure apart from the set."""
+    for event, data in parsed:
+        if event not in _ASK_EVENTS and event not in _ANSWER_EVENTS and event != _HELPER_EVENT:
+            continue
+        try:
+            frame = json.loads(data or "{}")
+        except ValueError:
+            continue
+        aid = str(frame.get("id") or "") if isinstance(frame, dict) else ""
+        if not aid:
+            continue
+        if event == _HELPER_EVENT:
+            key = f"helper:{aid}"
+            if "ask" in frame:
+                ask = frame.get("ask")
+                if isinstance(ask, dict) and ask.get("id"):
+                    open_asks.add(key)
+                else:
+                    open_asks.discard(key)
+            if frame.get("ended") or frame.get("state") in _HELPER_OVER:
+                open_asks.discard(key)
+        elif event in _ASK_EVENTS:
+            open_asks.add(aid)
+        else:
+            open_asks.discard(aid)
+    return bool(open_asks)
+
+
+def _parks_or_answers(parsed: "list[tuple[str, str]]") -> bool:
+    """Does this chunk hold a frame that can park the reply on the user or
+    end such a wait (:func:`_asks_after` reads only these)?"""
+    return any(ev in _ASK_EVENTS or ev in _ANSWER_EVENTS or ev == _HELPER_EVENT for ev, _ in parsed)
+
+
 async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, *,
-                        pin: Any = None, platform: Any = None, no_limit: bool = False):
+                        pin: Any = None, platform: Any = None, no_limit: bool = False,
+                        record: Any = None):
     """``frames`` (the lane's SSE iterator), passed through unchanged, with
     the session kept up to date: an approved plan and a conversation grant
     land as they happen, and the reply line (plus any steer notes) is written
@@ -1330,9 +1479,18 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
     session; the ``done`` frame's ``route.account`` names the account.
 
     v1.384.0: ``no_limit`` — the turn ran with no step limit, so a step limit
-    it meets is the safety stop (kept on the reply line's ``stepLimit``)."""
+    it meets is the safety stop (kept on the reply line's ``stepLimit``).
+
+    v1.391.0: ``record`` — the turn's kept conversation
+    (``harness.reply_record.ReplyRecord``, the lane saves it): marked
+    ``waiting`` while a card or a question parks the reply on the user, and
+    DELETED when the turn ends — done, failed or stopped. A turn cut off by a
+    shutdown keeps it, for the next boot to carry the reply on; a resumed
+    turn's line says so (``resumedFrom``)."""
     watch = _ReplyWatch()
     watch.no_limit = bool(no_limit)
+    watch.resumed_from = str(getattr(record, "resumed_from", "") or "")
+    open_asks: set[str] = set()
     status = "stopped"
     limit_sent = False
     # THE END IS WRITTEN BEFORE IT IS SAID (v1.369.0 review). The reply line
@@ -1381,6 +1539,11 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                         stamped_frames.append(_durable.sse(event, stamped if stamped is not None else data))
                 if stamped_frames is not None:
                     chunk = "".join(stamped_frames)
+                if record is not None and _parks_or_answers(parsed):
+                    # v1.391.0: parked on the user (or answered) — on the
+                    # record BEFORE the card reaches anyone, so a crash while
+                    # it waits never resumes the reply by itself.
+                    await record.set_waiting(_asks_after(open_asks, parsed))
                 if watch.approved_plans or watch.granted:
                     await _apply_session_changes(engine, thread_id, watch)
                 if terminal and (watch.done is not None or watch.error is not None):
@@ -1408,6 +1571,11 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
         # ("interrupted") keeps the wait (v1.368.0 review, `_turn_served`).
         with contextlib.suppress(BaseException):
             await asyncio.shield(end(status))
+        # v1.391.0: a turn that ENDED (done, failed, stopped) is never resumed:
+        # its kept conversation goes. A turn a shutdown cut off keeps it.
+        if record is not None and status != "interrupted":
+            with contextlib.suppress(BaseException):
+                await asyncio.shield(record.forget())
         # v1.376.0 (part 2, Phase 5) DECISION: a Stop CLOSES the session's
         # agent browser (harness/page_browser) — a Stop never leaves an action
         # running or a browser process behind, also when it lands while the
@@ -1579,6 +1747,128 @@ class WaitEnded(Exception):
     pass took it. Nothing was started."""
 
 
+class ResumeGone(Exception):
+    """v1.391.0: a reply a restart cut off could not be carried on — its kept
+    conversation is gone (another resume took it, it was never kept, it went
+    over its cap) or its question is no longer in the transcript. Nothing was
+    started; the reply keeps its Retry."""
+
+
+def _listed(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _question_index(messages: "list[dict[str, Any]]", turn_id: str) -> "int | None":
+    """Where turn ``turn_id``'s question line is (never a steer note)."""
+    return next((
+        i for i, m in enumerate(messages)
+        if m.get("role") == "user" and m.get("turnId") == turn_id and not m.get("steer")
+    ), None)
+
+
+def _newer_message(messages: "list[dict[str, Any]]", idx: int) -> bool:
+    """Did the user send a message after the question at ``idx`` (one of
+    theirs: never a steer note, never the daemon's own carry-on)?"""
+    return any(
+        m.get("role") == "user" and not m.get("steer") and not m.get("continuation")
+        for m in messages[idx + 1:]
+    )
+
+
+def _resume_root(messages: "list[dict[str, Any]]", idx: int) -> int:
+    """The ORIGINAL question of a chain of restart carry-ons (v1.391.0
+    review): from the question line at ``idx``, follow ``resumedFrom`` back
+    to the first reply's own question — each line is looked for only ABOVE
+    the one that names it, so a chain always ends. ``idx`` when the line is
+    not a carry-on."""
+    seen: set[str] = set()
+    while 0 <= idx < len(messages):
+        prev = str(messages[idx].get("resumedFrom") or "")
+        if not prev or prev in seen:
+            break
+        seen.add(prev)
+        j = _question_index(messages[:idx], prev)
+        if j is None:
+            break
+        idx = j
+    return idx
+
+
+def _resume_inputs(platform: Any, row: Any, turn_id: str) -> "dict[str, Any] | None":
+    """What carrying on turn ``turn_id`` needs (v1.391.0), or None when it
+    cannot be: the session's history BEFORE that turn's question (the
+    standing summary's rule — a summary that covers the question leaves
+    nothing to rebuild), the turn's own kept conversation (its question
+    first; every call with no result answered — ``harness.reply_record.
+    load``), and what rode the question (files that still exist, the skill
+    when it is still there). BLOCKING (transcript + ledger reads)."""
+    import os
+
+    from ...harness import compact as _compact
+    from ...harness import reply_record as RR
+    from ..chat_turn import _MAX_ATTACHMENTS
+
+    messages = S._messages(row)
+    idx = _question_index(messages, turn_id)
+    if idx is None or _newer_message(messages, idx):
+        # v1.391.0 review: the boot pass checked for a newer message
+        # (:func:`resume_refusal`) a moment ago, in another step; the user's
+        # own message can land in between — read it again HERE, on the row
+        # this turn is built from.
+        return None
+    # v1.391.0 review: a reply cut off AGAIN while it carried on — its question
+    # line is the boot's hidden "carry on" (``resumedFrom``), and its kept
+    # conversation already starts with the ORIGINAL question and that reply's
+    # rounds. The history ends before the original question (else the model
+    # read the question twice, with the first cut reply's words between as a
+    # reply of their own), and the files and the skill that rode it come from
+    # the original question's line (the carry-on line has none).
+    idx = _resume_root(messages, idx)
+    standing = _compact.standing(S._setup(row))
+    start = _compact.boundary(messages, standing) if standing is not None else 0
+    if start > idx:
+        return None
+    loaded = RR.load(platform.engine, turn_id, getattr(platform, "registry", None),
+                     since=RR.started_at(platform.engine, turn_id))
+    if not loaded:
+        return None
+    question = messages[idx]
+    files = [
+        p for p in _listed(question.get("attachmentPaths")) + _listed(question.get("filePaths"))
+        if isinstance(p, str) and p.strip() and os.path.isfile(p)
+    ]
+    skill = str(question.get("skill") or "").strip()
+    source = str(question.get("skillSource") or "")
+    skills = getattr(platform, "skills", None)
+    yours = skill if (skill and source != "folder" and skills is not None
+                      and skills.get(skill) is not None) else ""
+    playbook = ""
+    folder_skill = skill if skill and source == "folder" else ""
+    if folder_skill:
+        from ...harness.picked_skill import read_playbook
+
+        try:
+            known = set(platform.registry.names())
+        except Exception:  # noqa: BLE001
+            known = None
+        try:
+            playbook = read_playbook(S.layer_folder_of(row), folder_skill, known_tools=known) or ""
+        except Exception:  # noqa: BLE001 — a skill that went is left out, never a refusal
+            playbook = ""
+        if not playbook.strip():
+            folder_skill, playbook = "", ""
+    return {
+        "history": S.history_of(messages[start:idx]),
+        "summary": _compact.render(standing["summary"]) if standing is not None else "",
+        "question": loaded[0],
+        "tail": loaded[1:],
+        "attachments": files[:_MAX_ATTACHMENTS],
+        "skill": yours,
+        "folder_skill": folder_skill,
+        "playbook": playbook,
+    }
+
+
 def _command_rule(row: Any, setup: "dict[str, Any]", started: Any, continuation: bool) -> Any:
     """v1.381.0: this turn's :class:`~iron_jarvis.harness.command_shell.
     TurnRule` (None = nothing to ask about). BLOCKING (parses the transcript
@@ -1604,7 +1894,8 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            folder_skill: str = "",
                            command: str = "",
                            continuation: bool = False,
-                           resume_of: "dict[str, Any] | None" = None) -> Any:
+                           resume_of: "dict[str, Any] | None" = None,
+                           resume_turn: str = "") -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
     (follow it with ``lg.follow()``; nobody has to). The question is written
     when the turn starts, the reply when it ends (:func:`recorded_turn`).
@@ -1646,8 +1937,21 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     skill alone is a message too (its words: ``sessions.SKILL_ALONE``). A
     session with no folder makes its own folder now, at its first turn
     (:func:`make_work_folder`); a turn that then does not start leaves no
-    empty folder behind."""
+    empty folder behind.
+
+    v1.391.0: ``resume_turn`` (the boot's resume pass only) — carry on the
+    reply of turn ``resume_turn`` that a restart cut off, from its kept
+    conversation (:func:`_resume_inputs`): the history before its question
+    is planned like any turn's, its question and its own rounds (each call
+    that was running answered) follow, then ONE note saying it was resumed.
+    Everything a turn of this session gets — the account pin, the model
+    hold, the branch's folder, Local only, the command rule (a continuation)
+    — it gets HERE, never on a second path. The kept conversation is TAKEN
+    (``reply_record.claim``) right before the question line is written: of
+    two resumes of one turn exactly one starts (:class:`ResumeGone`). The
+    question line is a hidden continuation with ``resumedFrom``."""
     from .chat import _turn_logs
+    from ...harness import reply_record as RR
     from ...iron_proxy.pin import reset_pin, set_pin
 
     platform = d.platform
@@ -1804,6 +2108,14 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 )
             playbook = got
         setup = _setup_of(row)
+        # v1.391.0: a reply a restart cut off, carried on (the boot's pass).
+        resume: "dict[str, Any] | None" = None
+        if resume_turn:
+            resume = await asyncio.to_thread(_resume_inputs, platform, row, resume_turn)
+            if resume is None:
+                raise ResumeGone(thread_id)
+            if resume["folder_skill"]:
+                folder_skill, playbook = resume["folder_skill"], resume["playbook"]
         # v1.377.0 (part 2, Phase 6): the Browser pane's address is KEPT on the
         # session with every message the screen sends (a local page only, or
         # nothing), so a CONTINUATION the daemon starts itself — "Resume when
@@ -1836,7 +2148,12 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         # summary rides the harness block (armed below with the turn).
         from ...harness import compact as _compact
 
-        _history, _summary = await asyncio.to_thread(_compact.history_for_turn, row)
+        if resume is not None:
+            # v1.391.0: the history BEFORE the cut-off question (the turn's own
+            # question and rounds come from its kept conversation).
+            _history, _summary = resume["history"], resume["summary"]
+        else:
+            _history, _summary = await asyncio.to_thread(_compact.history_for_turn, row)
         history = [ChatMessageBody(**m) for m in _history]
         # v1.381.0: what this turn's command-running calls must ask about
         # (harness/command_shell) — every command when a project's or a
@@ -1868,6 +2185,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 raise HTTPException(
                     status_code=503, detail=COMMAND_RECORD_SENTENCE.format(name=command_entry.name),
                 ) from None
+        if resume is not None:
+            # The question exactly as the model was sent it (its kept form).
+            model_text = str(getattr(resume["question"], "content", "") or "")
         chat_body = ChatBody(
             messages=[*history, ChatMessageBody(role="user", content=model_text)],
             provider=account_provider or str(setup.get("provider") or ""),
@@ -1882,10 +2202,23 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # The Build screen draws the question cards: an app's question
             # and the model's own (ask_user).
             mcp_cards=True,
-            attachments=[*attachments, *picked],
+            attachments=list(resume["attachments"]) if resume is not None else [*attachments, *picked],
             local_only=setup.get("local_only") is True,
-            skill=str(skill or "").strip(),
+            skill=resume["skill"] if resume is not None else str(skill or "").strip(),
         )
+        # v1.391.0: every coding-session turn keeps its own conversation (the
+        # lane saves it; `recorded_turn` drops it when the turn ends), so a
+        # restart can carry it on. A resumed turn brings the cut-off rounds.
+        if resume is not None:
+            from ...providers.adapters.base import LLMMessage
+
+            record = RR.ReplyRecord(
+                platform.engine, thread_id, turn_id,
+                resume_tail=[*resume["tail"], LLMMessage(role="user", content=RR.RESUME_NOTE)],
+                resumed_from=resume_turn,
+            )
+        else:
+            record = RR.ReplyRecord(platform.engine, thread_id, turn_id)
         token = set_pin(pin) if pin is not None else None
         # v1.371.0: the Browser pane's address for this turn — armed while the
         # lane is built and the driver task created (the task copies the
@@ -1939,6 +2272,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                     stay_in_chat=True,
                     session_id=S.session_id_for(thread_id),
                     plan_mode=S.mode_of(row) == S.MODE_PLAN,
+                    reply_record=record,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -1951,12 +2285,23 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                     with contextlib.suppress(Exception):
                         await gen.aclose()
                     raise WaitEnded(thread_id)
+            if resume is not None:
+                # v1.391.0: TAKE the cut-off turn's kept conversation — one
+                # statement, so a second resume of it starts nothing. Review:
+                # MOVED to this turn's key, so a stop before this turn's own
+                # first save still leaves the reply resumable.
+                if not await asyncio.to_thread(RR.claim, platform.engine, resume_turn, turn_id):
+                    with contextlib.suppress(Exception):
+                        await gen.aclose()
+                    raise ResumeGone(thread_id)
             question: dict[str, Any] = {"role": "user", "content": content, "turnId": turn_id, **line_extra}
             if attachments:
                 question["attachmentPaths"] = list(attachments)
             if picked:
                 question["filePaths"] = list(picked)
-            if chat_body.skill or folder_skill:
+            if resume is not None:
+                question["resumedFrom"] = resume_turn
+            elif chat_body.skill or folder_skill:
                 question["skill"] = chat_body.skill or folder_skill
                 # v1.377.0 review: WHERE it came from, so a rewind or a
                 # branch can put the chip back in the box exactly.
@@ -1970,7 +2315,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 raise HTTPException(status_code=404, detail="no such Build session")
             lg = logs.start(turn_id, thread_id, recorded_turn(
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
-                no_limit=no_limit,
+                no_limit=no_limit, record=record,
             ))
             started = True
         finally:
@@ -2151,6 +2496,151 @@ async def account_wait_loop(d: Any, on_tick: Any) -> None:
     finally:
         if _WAKE.get("event") is event:
             _WAKE.clear()
+
+
+# --------------------------------------------------------------------------- #
+# a reply a restart cut off, carried on by itself (v1.391.0, long-jobs Phase 2)
+# --------------------------------------------------------------------------- #
+
+#: How long the boot's resume pass waits for the app's packs to load (the
+#: tools a resumed reply had). It runs as its own task: boot never waits.
+RESUME_PACKS_WAIT_S = 120.0
+#: ...and, when Iron-Proxy is on, for it to answer — or to say why it cannot
+#: (a resumed reply on an account then fails in those words, never silently).
+RESUME_ACCOUNTS_WAIT_S = 60.0
+
+
+def resume_refusal(engine: Any, thread_id: str, turn_id: str, waiting: bool) -> str:
+    """Why the cut-off reply of ``turn_id`` is NOT carried on by itself, in
+    plain words, or "" when it is (v1.391.0, decision 2). BLOCKING.
+
+    Carried on only when it was WORKING when the app stopped: never when it
+    was parked on the user (a card, its own question, a plan approval — the
+    record says ``waiting``), never beside an account's limit card or a
+    "Resume when ready" wait (that wait carries it on), never once the
+    session is archived or gone, never after the user sent a newer message
+    (a newer question that is not a continuation), and only for a turn whose
+    record the boot marked cut off ("interrupted")."""
+    from ...core.db import session_scope
+    from ...core.models import ChatTurnRecord
+
+    if waiting:
+        return "it was waiting on you when Iron Jarvis stopped"
+    with session_scope(engine) as db:
+        rec = db.get(ChatTurnRecord, turn_id)
+        status = str(rec.status) if rec is not None else ""
+    if status != "interrupted":
+        return "it was not cut off by the stop"
+    row = S.get_row(engine, thread_id)
+    if row is None:
+        return "its session is gone"
+    if getattr(row, "archived_at", None) is not None:
+        return "its session is archived"
+    setup = _setup_of(row)
+    if setup.get("account_wait") or setup.get("account_limit"):
+        return "it waits on its account"
+    messages = S._messages(row)
+    idx = _question_index(messages, turn_id)
+    if idx is None:
+        return "its question is no longer in the session"
+    if _newer_message(messages, idx):
+        return "a newer message was sent"
+    return ""
+
+
+async def _ready_for_resume(platform: Any) -> None:
+    """Wait (bounded) until a resumed reply would find what it had: the app's
+    packs loaded, and Iron-Proxy answering or saying why not. Never raises."""
+    ev = getattr(platform, "mcp_ready", None)
+    if ev is not None and hasattr(ev, "is_set") and not ev.is_set():
+        with contextlib.suppress(asyncio.TimeoutError, Exception):
+            await asyncio.wait_for(ev.wait(), timeout=RESUME_PACKS_WAIT_S)
+    svc = _svc_of(platform)
+    if svc is None or not getattr(svc, "enabled", False):
+        return
+    loop = asyncio.get_running_loop()
+    end = loop.time() + RESUME_ACCOUNTS_WAIT_S
+    while loop.time() < end:
+        try:
+            st = svc.status()  # cheap: no network, no disk
+        except Exception:  # noqa: BLE001
+            return
+        if st.get("running") or st.get("error"):
+            return
+        await asyncio.sleep(1.0)
+
+
+async def resume_after_restart(d: Any) -> list[str]:
+    """THE BOOT'S ONE PASS (v1.391.0): every coding-session reply a restart
+    or a crash cut off WHILE IT WORKED is carried on by itself, from its last
+    finished step — a new named turn of the same session
+    (:func:`start_build_turn` with ``resume_turn``: the same account pin,
+    model hold, folder or branch, Local only), and the bell says so
+    (``build.resumed`` with ``reason: "restart"``). A reply that cannot be
+    (:func:`resume_refusal`, or no kept conversation) keeps v1.389.0's Retry,
+    and its kept conversation is dropped. Waits for :func:`_ready_for_resume`
+    first; runs after the boot reconciles, as its own task. Returns the
+    thread ids carried on."""
+    from ...core.events import EventType
+    from ...harness import reply_record as RR
+    from .chat import _turn_logs
+
+    platform = d.platform
+    engine = platform.engine
+    await asyncio.to_thread(RR.prune, engine)
+    found = await asyncio.to_thread(RR.kept, engine)
+    if not found:
+        return []
+    await _ready_for_resume(platform)
+    logs = _turn_logs(d)
+    resumed: list[str] = []
+    for rec in found:
+        turn_id, thread_id = rec["turn_id"], rec["thread_id"]
+        if not thread_id or logs.get(turn_id) is not None:
+            continue  # not a session's, or this process runs it
+        why = await asyncio.to_thread(resume_refusal, engine, thread_id, turn_id, rec["waiting"])
+        if why:
+            log.info("not carrying on the cut-off reply %s of session %s: %s", turn_id, thread_id, why)
+            await asyncio.to_thread(RR.drop, engine, turn_id)
+            continue
+        new_turn = "bt_" + secrets.token_hex(8)
+        try:
+            lg = await start_build_turn(d, thread_id, RR.RESUME_QUESTION, new_turn,
+                                        continuation=True, resume_turn=turn_id)
+        except ResumeGone:
+            # Another resume took it (then this drop finds nothing), or what
+            # was kept cannot be used (its question is under a summary now):
+            # not resumable — Retry stays.
+            await asyncio.to_thread(RR.drop, engine, turn_id)
+            continue
+        except SessionBusy:
+            # A turn of the session is starting or running: the user's own
+            # message (their newer question refuses this resume at the next
+            # boot, which drops the list), or another pass carrying this very
+            # reply on (which takes it). Never dropped HERE: a drop racing
+            # that other pass's take would leave the reply carried on by nobody.
+            continue
+        except HTTPException as exc:
+            log.info("carrying on the cut-off reply %s of session %s did not start: %s",
+                     turn_id, thread_id, exc.detail)
+            await asyncio.to_thread(RR.drop, engine, turn_id)
+            continue
+        except Exception:  # noqa: BLE001 — one session never stops the pass
+            log.warning("carrying on the cut-off reply %s failed", turn_id, exc_info=True)
+            continue
+        bus = getattr(platform, "event_bus", None)
+        if bus is not None:
+            with contextlib.suppress(Exception):
+                row = await asyncio.to_thread(S.get_row, engine, thread_id)
+                await bus.publish(EventType.BUILD_RESUMED, {
+                    "thread_id": thread_id,
+                    "title": getattr(row, "title", "") or "",
+                    "turn_id": lg.turn_id,
+                    "resumed_from": turn_id,
+                    "reason": "restart",
+                }, session_id=S.session_id_for(thread_id))
+        resumed.append(thread_id)
+    return resumed
 
 
 # --------------------------------------------------------------------------- #

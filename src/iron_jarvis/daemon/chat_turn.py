@@ -5669,11 +5669,22 @@ def harness_check_runner(d, ctx, overrides: dict[str, str], grants, gate, trust_
 # --------------------------------------------------------------------------- #
 
 
-async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws) -> Any:
+async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws,
+                          resumed: Any = None) -> Any:
     """The reply's finish check (``harness/finish.FinishCheck``), or None:
     only a harness turn of a Build session's own (``build:<id>``) in act mode,
     in a folder that did not turn it off. The ledger mark it measures "this
-    reply" from is read off the loop, before any tool of the reply runs."""
+    reply" from is read off the loop, before any tool of the reply runs.
+
+    v1.391.0 review: ``resumed`` — a coding reply a RESTART cut off, carried
+    on by the boot (the stream lane's ``reply_record`` when it brings the cut
+    part's rounds; ``harness/reply_record``). It is a carry-on like the
+    account ones below: the check covers the WHOLE reply from the question it
+    continues — the files the cut part made too, never only the resumed part's
+    — and when the cut part's own conversation already holds the finish note
+    (it was checked before the stop), the check does not run a second time
+    (the note "comes once per reply"). Omitted (every other caller, the POST
+    lane): exactly as before."""
     if harness_turn is None:
         return None
     from ..harness import finish as _finish
@@ -5682,17 +5693,21 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws) 
         from .routes.build import CONTINUE_TEXT as _carry_on
     except Exception:  # noqa: BLE001 — the route module is optional here
         _carry_on = ""
+    resumed_tail = list(getattr(resumed, "resume_tail", None) or []) if resumed is not None else []
+    is_resume = bool(resumed_tail and str(getattr(resumed, "resumed_from", "") or ""))
     # Review: a daemon "carry on" (Resume when ready / Continue on another
     # account) continues a reply an account limit cut off — the check covers
     # that WHOLE reply, from the question it continues (its `at`), and
     # compares the folder with the snapshot taken when THAT reply began (its
     # turn id; harness/folder_changes).
-    since, continues = await asyncio.to_thread(_continued_question, d, body, _carry_on)
+    since, continues = await asyncio.to_thread(
+        _continued_question, d, body, _carry_on, resumed=is_resume,
+    )
     try:
         custom = frozenset(d.platform.registry.custom_names())
     except Exception:  # noqa: BLE001 — no registry here: nothing is known as custom
         custom = frozenset()
-    return await _finish.start(
+    check = await _finish.start(
         engine=getattr(d.platform, "engine", None),
         home=getattr(getattr(d.platform, "config", None), "home", None),
         event_bus=getattr(d.platform, "event_bus", None),
@@ -5706,17 +5721,25 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws) 
         turn_id=str(getattr(body, "turn_id", "") or ""),
         continues=continues,
     )
+    if check is not None and is_resume and _finish.noted_in(resumed_tail):
+        check.checked_before = True
+    return check
 
 
-def _continued_question(d, body, carry_on: str) -> tuple[str, str]:
+def _continued_question(d, body, carry_on: str, *, resumed: bool = False) -> tuple[str, str]:
     """BLOCKING. ``(at, turn id)`` of the question a daemon "carry on"
     continues — ``("", "")`` unless this turn's own message IS the carry-on
     text and the Build session's transcript names the question
     (``command_shell.continued_turn`` — never a continuation, never a steer
-    note)."""
+    note). v1.391.0 review: ``resumed`` — the boot's carry-on of a reply a
+    restart cut off (its own message is that reply's question, sent again
+    with the cut part's rounds after it): it continues that question too."""
     try:
         users = [m for m in (getattr(body, "messages", None) or []) if getattr(m, "role", "") == "user"]
-        if not carry_on or not users or str(getattr(users[-1], "content", "") or "").strip() != carry_on.strip():
+        if not resumed and (
+            not carry_on or not users
+            or str(getattr(users[-1], "content", "") or "").strip() != carry_on.strip()
+        ):
             return "", ""
         thread_id = str(getattr(body, "thread_id", "") or "")
         if not thread_id:

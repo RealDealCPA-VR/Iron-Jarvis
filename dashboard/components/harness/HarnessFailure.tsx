@@ -36,6 +36,7 @@ import {
   failureAction,
 } from "@/lib/failureActions";
 import { RETRY_WORDS } from "@/lib/buildRetry";
+import { CUT_CARRIED_ON } from "@/lib/buildResume";
 import type { BuildMessage } from "@/lib/buildSessions";
 import type { Health } from "@/lib/types";
 
@@ -89,6 +90,7 @@ export function HarnessFailureLine({
   onRetry,
   canRewind,
   onRewind,
+  carriedOn = false,
 }: {
   /** The failed (or cut-off) reply. */
   m: BuildMessage;
@@ -104,9 +106,34 @@ export function HarnessFailureLine({
   /** A message of the session can be rewound to (the refusal's press). */
   canRewind: boolean;
   onRewind: () => void;
+  /** v1.391.0: a restart cut this reply off and the app carried it on by
+   *  itself (lib/buildResume) — the line says so instead of "press Retry". */
+  carriedOn?: boolean;
 }) {
   const failed = typeof m.error === "string" && m.error.trim() !== "";
   if (!failed && m.interrupted !== true) return null;
+  if (carriedOn) {
+    // v1.391.0: the reply goes on below — not a failure to act on.
+    return (
+      <div data-testid="harness-reply-failure" className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-0.5">
+        <p data-testid="harness-reply-carried" className="flex basis-full items-start gap-1.5 text-[12px] text-zinc-400">
+          <CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden /> {CUT_CARRIED_ON}
+        </p>
+        {retry ? (
+          <button
+            type="button"
+            data-testid="harness-retry"
+            onClick={onRetry}
+            title="Send this reply's question again"
+            className={PRESS}
+          >
+            <RotateCcw size={12} aria-hidden />
+            {RETRY_WORDS}
+          </button>
+        ) : null}
+      </div>
+    );
+  }
   const action = failed
     ? failureAction({ fixKind: m.errorKind, fixProvider: m.errorProvider }, health, turnProvider)
     : null;
