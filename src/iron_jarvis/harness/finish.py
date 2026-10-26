@@ -1250,6 +1250,40 @@ def _helper_sessions(db: Any, session_id: str, mark: int) -> list[str]:
     return [str(r[0]) for r in rows if r and r[0]]
 
 
+def helpers_that_changed(engine: Any, session_id: str, mark: int) -> list[str]:
+    """v1.395.0 (the model team's record): the reply's HELPER sessions
+    (:func:`_helper_sessions` — the check's own gathering) that CHANGED files
+    in it: a successful, not-undone undo-journal row of a file kind above
+    ``mark``. The finish check's verdict is credited to these (``agents/
+    team_record.credit_check``). A helper that changed files only through a
+    command (no journal row) is not among them. BLOCKING; never raises."""
+    try:
+        from sqlalchemy import literal_column
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..core.models import ToolInvocation, UndoJournal
+
+        rowid = literal_column("toolinvocation.rowid")
+        with session_scope(engine) as db:
+            helpers = _helper_sessions(db, session_id, mark)
+            if not helpers:
+                return []
+            rows = db.exec(
+                select(ToolInvocation.session_id, ToolInvocation.ok, ToolInvocation.undone_at, UndoJournal.kind)
+                .join(UndoJournal, UndoJournal.action_id == ToolInvocation.id)  # type: ignore[arg-type]
+                .where(ToolInvocation.session_id.in_(helpers))  # type: ignore[attr-defined]
+                .where(rowid > int(mark))
+                .limit(MAX_LEDGER_ROWS)
+            ).all()
+        return sorted({
+            str(sid) for sid, ok, undone, kind in rows
+            if ok and undone is None and kind in _FILE_KINDS
+        })
+    except Exception:  # noqa: BLE001 — no credit beats a broken check
+        return []
+
+
 def ledger_mark_before(engine: Any, at: Any) -> "int | None":
     """The ledger's newest row number BEFORE ``at`` (an ISO stamp, a reply
     line's ``at``): where a reply that began then starts. None when it cannot
@@ -2537,6 +2571,17 @@ class FinishCheck:
             return head
         return head + SEPARATOR + tail
 
+    def _credit_team(self, verdict: str) -> int:
+        """The check's verdict on the team record of this reply's helpers
+        that changed files (v1.395.0). BLOCKING; never raises."""
+        try:
+            from ..agents.team_record import credit_check
+
+            ids = helpers_that_changed(self.engine, self.session_id, self.mark)
+            return credit_check(self.engine, ids, verdict) if ids else 0
+        except Exception:  # noqa: BLE001 — a record never breaks a reply
+            return 0
+
     async def record(self) -> dict[str, Any]:
         """``finish`` for the done frame / POST answer / reply line. The new
         files are looked at on disk now: gone = removed, there = kept."""
@@ -2556,6 +2601,11 @@ class FinishCheck:
             return removed, kept
 
         removed, kept = await asyncio.to_thread(_count)
+        # v1.395.0: the verdict goes on the record of every team member whose
+        # helper changed files in this reply (``agents/team_record``): a
+        # passed check is good, a failed one bad, none is "finished only".
+        if self.tests in (TESTS_PASSED, TESTS_FAILED):
+            await asyncio.to_thread(self._credit_team, self.tests)
         command = "; ".join(r.command for r in self.runs)
         out: dict[str, Any] = {
             "tests": self.tests or TESTS_NONE,

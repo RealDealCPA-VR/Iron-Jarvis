@@ -815,6 +815,15 @@ class Config(BaseModel):
     #: writer), never in Iron-Proxy. Which ids exist is checked when it is
     #: SAVED (``harness/build_accounts.group_problem``), never at load.
     account_groups: dict[str, list[str]] = Field(default_factory=dict)
+    #: v1.395.0 (the long-jobs plan's Phase 6, decision 8): the MONTHLY cap,
+    #: in US dollars, on what the model team's PAY-PER-USE members may spend
+    #: (metered spend only — a subscription's list-price equivalent never
+    #: counts). 0 (the default) = the team router never gives work to a
+    #: pay-per-use member. Read live by ``agents/model_team.route_role`` and
+    #: (v1.395.0 review) ``model_team.pay_refusal`` — a member a MODEL names
+    #: directly (``delegate`` / ``spawn_agent``, a task an agent queued) is
+    #: held to it too; work the USER starts is not, but its spend counts.
+    team_paid_cap_usd: float = Field(default=0.0, ge=0.0)
     # SHARE MY PROFILE WITH BUILD (v1.306.0) — one switch per vendor CLI, OFF
     # by default: when on, Iron Jarvis keeps a generated block (the profile +
     # confirmed preferences) in that CLI's user-level instruction file

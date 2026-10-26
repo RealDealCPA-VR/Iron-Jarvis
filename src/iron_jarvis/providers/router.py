@@ -893,7 +893,9 @@ class ModelRouter:
             return hold.provider, (hold.model or None)
         if provider == hold.provider or self._same_provider(provider, hold.provider):
             return provider, model
-        raise HeldProviderRefused(hold.provider, provider)
+        # v1.395.0: worded for WHERE it happened (a member's own model, or
+        # a Build session's) — ``hold.who``.
+        raise HeldProviderRefused(hold.provider, provider, getattr(hold, "who", "") or "")
 
     def _same_provider(self, a: str, b: str) -> bool:
         """Do two provider names reach the same adapter (an alias such as a

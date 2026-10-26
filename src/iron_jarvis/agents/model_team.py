@@ -37,10 +37,18 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
+import time
+from collections import OrderedDict
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 log = logging.getLogger(__name__)
+
+#: A keyword default that is not None (None is a real value: "no account",
+#: "no group").
+_UNSET: Any = object()
 
 # --------------------------------------------------------------------------- #
 # the role vocabulary (ONE place; dashboard twin: lib/teamRoles.ts)
@@ -417,20 +425,39 @@ def _group_words(name: str) -> str:
     return f"'{name}'"
 
 
-def _other_group(platform: Any, record: Any, own: Any, caller: Any) -> str:
+def _caller_group(platform: Any, caller: Any, group: Any) -> "tuple[str, list[str]] | None":
+    """The account GROUP the calling work is in: ``group`` when the caller
+    passed one (v1.395.0 review: :func:`work_group` — the caller's account's
+    group, else the group the work's earlier pieces ran in), else the group of
+    the caller's pin. Never raises."""
+    if group is not _UNSET:
+        return group
+    if caller is None:
+        return None
+    try:
+        from ..harness import build_accounts as BA
+
+        groups = getattr(_config(platform), "account_groups", None) or {}
+        return BA.group_of(groups, str(getattr(caller, "profile_id", "") or ""))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _other_group(platform: Any, record: Any, own: Any, caller: Any, group: Any = _UNSET) -> str:
     """v1.394.0 review (decision 4: work and personal accounts never mix):
     the sentence when a member's OWN account sits in ANOTHER account group
     than the account the calling work runs on; "" otherwise — including when
     either account is in no group (the user made no statement about it).
-    Never raises."""
-    if caller is None or own is None:
+    ``group`` (v1.395.0 review): the work's group when the caller worked it
+    out (:func:`work_group`); else the caller's pin's. Never raises."""
+    if own is None:
         return ""
     try:
         from ..harness import build_accounts as BA
 
         groups = getattr(_config(platform), "account_groups", None) or {}
         mine = BA.group_of(groups, str(getattr(own, "profile_id", "") or ""))
-        theirs = BA.group_of(groups, str(getattr(caller, "profile_id", "") or ""))
+        theirs = _caller_group(platform, caller, group)
         if mine is None or theirs is None or mine[0] == theirs[0]:
             return ""
         who = str(getattr(record, "name", "") or "This member")
@@ -448,7 +475,8 @@ def _other_group(platform: Any, record: Any, own: Any, caller: Any) -> str:
 
 
 def member_account(platform: Any, record: Any, caller: Any = None, *,
-                   coding: bool = False) -> "tuple[Any, str]":
+                   coding: bool = False, group: Any = _UNSET,
+                   recent: Any = None) -> "tuple[Any, str]":
     """``(AccountPin | None, refusal)`` — the account a member's run leases
     (v1.394.0 review; decision 4 + decision 5 + v1.393.0's groups):
 
@@ -463,16 +491,33 @@ def member_account(platform: Any, record: Any, caller: Any = None, *,
        member's vendor IN THAT GROUP (usable now first, else the first one on,
        Iron-Proxy's order) — none in the group = ``refusal`` in words: work
        never moves to an account outside a group the user made;
-    5. a coding session (``coding``) or any pinned caller: the vendor's first
-       usable account, else its Default — PINNED (a coding session never runs
-       "first free, rotating": ``routes/build.turn_account``);
-    6. otherwise (an objective, an agent run, nothing pinned): None — its
-       provider's normal pick, as every unpinned agent run.
+    5. otherwise: the vendor's first usable account (below
+       ``build_accounts.TAKEOVER_MAX_PERCENT`` of every window), else its
+       Default — PINNED (a coding session never runs "first free, rotating":
+       ``routes/build.turn_account``).
+
+    v1.395.0 review: step 5 holds for an UNPINNED caller too (an objective,
+    an agent run, a queued task, a schedule fire). Before, such a run took
+    Iron-Proxy's normal pick — the FIRST ready account in its order, whatever
+    its usage (Iron-Proxy parks an account only at its limit) — so a member
+    could start new work on an account at 99%, against decision 8's floor,
+    and an unpinned run rotated between accounts. The account the doors check
+    the floor against (:func:`named_account`) is now the account it runs on.
+
+    ``coding`` no longer changes the answer (kept for its callers).
+    ``recent`` (v1.395.0 review: ``_Placements.recent``) counts the pieces
+    just placed on an account toward its usage when step 5 asks which account
+    is usable now — a burst never piles onto the first one.
+
+    ``group`` (v1.395.0 review): the account group the WORK is in
+    (:func:`work_group` — the caller's account's, else the group the work's
+    earlier pieces ran in); not given = the caller's pin's group. Steps 1 and
+    4 read it: work never moves between groups.
 
     Cached reads only; never a call; never raises (no pin on an error)."""
     own = member_pin(platform, record)
     if own is not None:
-        why = _other_group(platform, record, own, caller)
+        why = _other_group(platform, record, own, caller, group)
         return (None, why) if why else (own, "")
     try:
         from ..harness import build_accounts as BA
@@ -484,16 +529,13 @@ def member_account(platform: Any, record: Any, caller: Any = None, *,
         provider = BA.VENDORS[vendor]["provider"]
         if caller is not None and str(getattr(caller, "ij_provider", "") or "") == provider:
             return caller, ""
-        if caller is None and not coding:
-            return None, ""
         svc = _svc(platform)
         snap = BA.snapshot(svc)
         if snap is None:
             return None, ""
         every = BA.vendor_rows(snap, vendor, include_off=True)
         states = snap[1]
-        groups = getattr(_config(platform), "account_groups", None) or {}
-        found = BA.group_of(groups, str(getattr(caller, "profile_id", "") or "")) if caller else None
+        found = _caller_group(platform, caller, group)
         if found is not None:
             gname, ids = found
             every = [r for r in every if r["id"] in ids]
@@ -501,7 +543,7 @@ def member_account(platform: Any, record: Any, caller: Any = None, *,
                 who = str(getattr(record, "name", "") or "This member")
                 label = BA.VENDORS[vendor]["label"]
                 return None, (
-                    f"'{who}' runs on {label}, and the account this work runs on is in your "
+                    f"'{who}' runs on {label}, and this work is in your "
                     f"{_group_words(gname)} account group, which has no {label} account — add one "
                     "to the group in Settings › Connections, or set the member's own account in "
                     "Settings › Model team."
@@ -509,7 +551,17 @@ def member_account(platform: Any, record: Any, caller: Any = None, *,
         if not every:
             return None, ""
         on = [r for r in every if r.get("status") != BA.OFF]
-        row = next((r for r in on if BA.usable_now(r, states.get(r["id"]))), None)
+
+        def usable(r: dict) -> bool:
+            st = states.get(r["id"])
+            if not BA.usable_now(r, st):
+                return False
+            peak = BA.peak_percent(st)
+            if recent is None or peak is None:
+                return True
+            return float(peak) + PIECE_PERCENT * int(recent(r["id"]) or 0) < BA.TAKEOVER_MAX_PERCENT
+
+        row = next((r for r in on if usable(r)), None)
         if row is None:
             # Nothing usable now: the Default (or the first one on) — its
             # lease then says why in words (a limit, a sign-in), never moves.
@@ -557,6 +609,7 @@ def team_members(platform: Any) -> list[Any]:
 # --------------------------------------------------------------------------- #
 
 
+
 #: v1.394.0 review: True inside a MEMBER's run that :class:`member_scope`
 #: held (outside a coding session). That hold is the member's OWN — a teammate
 #: the member consults or hands work to steps out of it (it runs as it would
@@ -580,17 +633,21 @@ class member_scope:  # noqa: N801 — a context manager read like a function
     * otherwise nothing. Inside a coding session ``harness.helpers.pinned``
       does this with the session's other rules."""
 
-    def __init__(self, platform: Any, record: Any, provider: str = "") -> None:
+    def __init__(self, platform: Any, record: Any, provider: str = "", *, pin: Any = _UNSET) -> None:
         self.on = runs_elsewhere(record)
         self.provider = str(getattr(record, "provider", "") or "").strip()
         self.model = pinned_model(platform, record) if self.on else ""
+        #: v1.395.0: the hold's refusal names the MEMBER, not a Build session.
+        self.who = f"member:{getattr(record, 'name', '')}" if self.on else ""
         from ..iron_proxy.pin import current
 
         self.pin = None
         self.lift = False
         self.drop_pin = False
         if self.on:
-            self.pin = member_account(platform, record, current(), coding=False)[0]
+            # v1.395.0: the account the TEAM ROUTER chose for a role's piece
+            # (``RolePick.pin``) when it chose one; else ``member_account``'s.
+            self.pin = pin if pin is not _UNSET else member_account(platform, record, current(), coding=False)[0]
         elif MEMBER_RUN.get():
             self.lift = True
             pin = current()
@@ -615,7 +672,7 @@ class member_scope:  # noqa: N801 — a context manager read like a function
 
         if self.on:
             self._pin = set_pin(self.pin)
-            self._hold = set_hold(self.provider, self.model)
+            self._hold = set_hold(self.provider, self.model, self.who)
             self._flag = MEMBER_RUN.set(True)
         else:
             if self.drop_pin:
@@ -643,6 +700,104 @@ class member_scope:  # noqa: N801 — a context manager read like a function
             reset_pin(self._pin)
 
 
+async def run_as_member(platform: Any, record: Any, make: Any, *, scope: str = "") -> Any:
+    """Await a member's run INSIDE :class:`member_scope`, entered in the
+    run's own task (v1.395.0, the Phase 5 review's open item): an ASSIGNMENT
+    and a SCHEDULE FIRE start a run that may be parked by the session
+    governor and promoted later in a fresh context — a scope entered around
+    the task's creation would be gone by then. Entered here, the member's
+    model is held (no fallback, no failover) and its account pinned for the
+    whole run, whenever it starts. A non-member's run is awaited as it is.
+
+    ``make`` builds the run's coroutine INSIDE the scope (a zero-argument
+    callable), so a run the governor refuses before it starts leaves no
+    never-awaited coroutine behind.
+
+    v1.395.0 review: ``scope`` — the work a task an AGENT queued belongs to
+    (its session): the account is worked out in that work's account group
+    (:func:`work_group`), as at the doors; never across groups."""
+    if scope and runs_elsewhere(record):
+        import asyncio
+
+        pin = await asyncio.to_thread(_queued_pin, platform, record, scope)
+        with member_scope(platform, record, pin=pin):
+            return await make()
+    with member_scope(platform, record):
+        return await make()
+
+
+def _queued_pin(platform: Any, record: Any, scope: str) -> Any:
+    """The account a queued member's run takes in ``scope``'s account group
+    (None: no account, or one the group cannot give — the lease then says
+    why). BLOCKING; never raises."""
+    try:
+        from ..iron_proxy.pin import current
+
+        caller = current()
+        group = work_group(platform, caller, scope)
+        return member_account(platform, record, caller, group=group, recent=_placements(platform).recent)[0]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def queued_refusal(platform: Any, record: Any, *, provider: str = "", model: str = "",
+                   local_only: bool = False, by_model: bool = False, scope: str = "") -> str:
+    """The sentence a QUEUED or SCHEDULED piece of work for a member is held
+    or refused with BEFORE any session row exists (v1.395.0 — the doors'
+    rules, at the doors that start work by themselves): its account must be
+    one the user's groups allow (:func:`account_refusal`); Local only work
+    never starts a member whose model leaves the network; and a task that
+    names ANOTHER provider or model than the member runs on is said, never
+    silently swapped (a member runs on its own model). "" when it may run.
+    Never raises.
+
+    v1.395.0 review: and decision 8's floor — the account it would run on
+    (:func:`member_account`, pinned) at or past 95% of a window, or at its
+    limit, is said (the dispatcher HOLDS the task and starts it once the
+    numbers drop; a schedule's fire is refused in words); and a task a MODEL
+    queued (``by_model`` — ``assign_work``) for a pay-per-use member is under
+    the pay-per-use limit (:func:`pay_refusal`). ``scope`` — the work an
+    agent's task belongs to (its session): the account stays in that work's
+    account group (:func:`work_group`). BLOCKING."""
+    if not runs_elsewhere(record):
+        return ""
+    name = str(getattr(record, "name", "") or "")
+    if local_only:
+        lo = local_only_refusal(platform, record, name)
+        if lo:
+            return lo
+    own_provider = str(getattr(record, "provider", "") or "").strip()
+    asked_provider = str(provider or "").strip()
+    asked_model = str(model or "").strip()
+    own_model = pinned_model(platform, record)
+    if (asked_provider and asked_provider != own_provider) or (
+            asked_model and own_model and asked_model != own_model):
+        asked = "/".join(p for p in (asked_provider, asked_model) if p)
+        return (
+            f"'{name}' is on your model team and runs on its own model "
+            f"({model_words(platform, own_provider, own_model)}), but this task names {asked}. "
+            "Remove the task's model, or change the member's model in Settings › Model team."
+        )
+    if by_model:
+        pay = pay_refusal(platform, record)
+        if pay:
+            return pay
+    why = account_refusal(platform, record)
+    if why:
+        return why
+    try:
+        from ..iron_proxy.pin import current
+
+        caller = current()
+        group = work_group(platform, caller, scope) if scope else _UNSET
+        pin, why = member_account(platform, record, caller, group=group, recent=_placements(platform).recent)
+        if why:
+            return why
+        return floor_refusal(platform, record, pin)
+    except Exception:  # noqa: BLE001 — unsure: the lease decides
+        return ""
+
+
 # --------------------------------------------------------------------------- #
 # the planner's team list in a coding session
 # --------------------------------------------------------------------------- #
@@ -653,7 +808,10 @@ TEAM_LEAD = (
     "not this session's — so hand a piece to the member whose roles fit it "
     "(read = reading and summarizing, code = writing code, review = reviewing a change, "
     "test = running and fixing tests). Free and local members cost nothing; "
-    "a member near its usage limit should get less."
+    "a member near its usage limit should get less. Or ask for a ROLE instead of a "
+    "name — role:read, role:code, role:review or role:test as the helper's type — and "
+    "Iron Jarvis picks the member: a local one first when its record for that role is "
+    "good, and no cloud account near its usage limit gets new work."
 )
 
 
@@ -978,3 +1136,1090 @@ def pinned_model(platform: Any, record: Any) -> str:
         return default_model_of(provider, _manager(platform)) or ""
     except Exception:  # noqa: BLE001
         return ""
+
+
+# --------------------------------------------------------------------------- #
+# v1.395.0 (the long-jobs plan's Phase 6, decisions 7 and 8): THE TEAM ROUTER
+# --------------------------------------------------------------------------- #
+#
+# The planner may name a ROLE instead of a member ("read these files", "write
+# this module", "review this change") and Iron Jarvis picks the member —
+# :func:`route_role`, the ONE function that decides (the doors only call it).
+#
+# THE FILTERS, in order: Local only (a member whose model leaves the network
+# is not even considered); a paused or allowance-exhausted member is out; a
+# coordinator (it hands work out itself) is out; the member's provider must be
+# THERE (cached answers only — ``cli_auth.never_probe``: routing never starts
+# a ``claude auth status`` or any probe); the usage thresholds from the CACHED
+# Iron-Proxy snapshot (no NEW work on an account at
+# ``build_accounts.NEW_WORK_MAX_PERCENT`` 80% of any window, which also keeps
+# everything under the ``TAKEOVER_MAX_PERCENT`` 95% floor; an account with no
+# numbers is "not known" and tried after the known-low ones — the v1.393.0
+# rule; work already running is never stopped); a pay-per-use member only
+# under the monthly cap (``Config.team_paid_cap_usd``, default 0 = never).
+#
+# THE ORDER: LOCAL members whose record for the role is good or not yet known
+# (and whose box is not busy) first — good before unknown; then subscription
+# members, lowest current usage first, unknown after; then pay-per-use; then,
+# as a last resort, a local member that is busy or whose record is not good
+# (the work goes local before it waits). The record is ``agents/team_record``
+# (the finish check and the reviewer, not just "it finished"); the
+# completion-only local oracle (``platform._local_oracle``) is NOT read here,
+# and chat's Auto is untouched.
+#
+# A PIECE that failed twice on one member goes to the next member up — at most
+# one step per piece (only the FIRST member it failed twice on is passed over),
+# and never across Local only (the order holds local members only there).
+#
+# Every pick carries ONE plain sentence of why ("local: good record for
+# reading", "Codex: the local box is busy", "skipped Claude Code (TSI): 83% of
+# its 5-hour window"); a pick that finds no one answers in plain words naming
+# what was skipped and the earliest reset — nothing starts on an account past
+# the threshold, and the helper's row says it waited.
+
+#: ``role:<id>`` in an agent name asks for a role (the dialects' own helper
+#: tools carry no ``role`` argument — Claude Code's ``Agent`` and Codex's
+#: ``spawn_agent`` take ``subagent_type: "role:code"``).
+ROLE_PREFIX = "role:"
+
+#: The role as a noun, in the reasons ("good record for reading").
+ROLE_NOUNS: dict[str, str] = {"read": "reading", "code": "coding", "review": "reviewing", "test": "testing"}
+
+_ROLE_WORDS: dict[str, str] = {
+    **{rid: rid for rid in ROLE_IDS},
+    **{label.lower(): rid for rid, label in ROLES},
+    **{noun: rid for rid, noun in ROLE_NOUNS.items()},
+    "reader": "read", "summarize": "read", "summarizing": "read", "summary": "read",
+    "coder": "code", "write": "code", "write code": "code", "writing code": "code",
+    "reviewer": "review", "tests": "test", "tester": "test", "run tests": "test",
+}
+
+
+def role_id(raw: Any) -> str:
+    """The role id ``raw`` asks for ("read", "reading", "role:read",
+    "Reading and summarizing" → ``read``), or "" when it names no role."""
+    text = " ".join(str(raw or "").split()).lower()
+    if text.startswith(ROLE_PREFIX):
+        text = text[len(ROLE_PREFIX):].strip()
+    return _ROLE_WORDS.get(text, "")
+
+
+def role_named(name: Any) -> "str | None":
+    """The role text after ``role:`` in an agent name, else None (a member or
+    a helper type is named)."""
+    text = " ".join(str(name or "").split())
+    if text.lower().startswith(ROLE_PREFIX):
+        return text[len(ROLE_PREFIX):].strip()
+    return None
+
+
+def unknown_role_refusal(raw: Any) -> str:
+    """ONE sentence for a role the team does not have."""
+    shown = " ".join(str(raw or "").split())[:60] or "that"
+    return (
+        f"'{shown}' is not a team role — ask for read, code, review or test, or name the "
+        "member you want."
+    )
+
+
+def piece_key(piece: Any, task: Any) -> str:
+    """The key a PIECE of work is known by across its tries: the planner's
+    ``piece`` name when it gave one, else its task — lower-cased, spaces
+    folded, at most 200 characters."""
+    text = str(piece or "").strip() or str(task or "")
+    return " ".join(text.lower().split())[:200]
+
+
+@dataclass
+class RolePick:
+    """What :func:`route_role` decided for one piece."""
+
+    role: str
+    #: The member (a ``DynamicAgentRecord``), or None — then ``refusal``.
+    record: Any = None
+    #: ONE plain sentence of why (for the helper row and its Timeline row).
+    reason: str = ""
+    #: When no member can take it: the plain words the planner reads.
+    refusal: str = ""
+    #: The account the router chose for a subscription member (an
+    #: ``AccountPin``) — used instead of ``member_account``'s when ``pin_set``.
+    pin: Any = None
+    pin_set: bool = False
+    #: True when nothing started because every cloud account in reach is
+    #: near its limit (the row says it WAITED).
+    waited: bool = False
+
+
+@dataclass
+class _Acct:
+    """One subscription member's account, as the thresholds read it."""
+
+    usable: bool = True
+    peak: "float | None" = None
+    pin: Any = None
+    pin_set: bool = False
+    name: str = ""
+    #: What was skipped, in words — ``(words, at a usage limit)`` — and when
+    #: those accounts reset (ISO instants).
+    skips: list = field(default_factory=list)
+    resets: list = field(default_factory=list)
+    limited: bool = False
+
+
+@dataclass
+class _Cand:
+    record: Any
+    tier: int
+    key: tuple
+    label: str
+    local: bool
+    reason: str = ""
+    #: A local last resort: why it is not first; a pay member: its spend.
+    note: str = ""
+    acct: "_Acct | None" = None
+
+
+# --------------------------------------------------------------------------- #
+# v1.395.0 review: what the router PLACED, and where (in this process)
+# --------------------------------------------------------------------------- #
+#
+# Iron-Proxy's numbers come from a CACHED snapshot (re-read every 30 s), and a
+# vendor reports an account's usage only AFTER a call — so the pieces of one
+# burst all read the same old number, and the doer's router sent every one of
+# them to the same account (8 of 8 onto an account at 70%). The router now
+# COUNTS what it just placed: each piece placed on an account in the last
+# :data:`PLACED_RECENT_S` counts :data:`PIECE_PERCENT` toward that account's
+# usage (an estimate — Phase 7 tunes it from the benchmark), so a burst
+# spreads and stops at the threshold before the numbers arrive; an account
+# with no numbers at all takes at most :data:`UNKNOWN_BURST_MAX` new pieces in
+# that window. The same ledger remembers which accounts a piece of WORK (a
+# ``scope``: the coding session, the mission's coordinator run) ran on, so
+# its later pieces stay in the same account GROUP (decision 4,
+# :func:`work_group`); the record keeps the account too, for after a restart.
+
+#: How long a placed piece counts toward its account's usage: long enough for
+#: its first call to report and Iron-Proxy's snapshot to be re-read.
+PLACED_RECENT_S = 120.0
+#: What one piece placed in that window counts as, in percent of a window.
+PIECE_PERCENT = 5.0
+#: New pieces an account with NO usage numbers yet takes in that window.
+UNKNOWN_BURST_MAX = 3
+#: Pieces of work whose accounts are remembered in memory (oldest dropped —
+#: the record keeps the rest).
+_SCOPES_KEPT = 500
+
+#: The ledger's clock (a test moves it).
+CLOCK = time.monotonic
+
+
+class _Placements:
+    """One platform's placements (see the section comment). Thread-safe:
+    the doors route from worker threads, several at once in one round."""
+
+    def __init__(self) -> None:
+        #: Held for a whole pick (:func:`route_role`, :func:`named_account`),
+        #: so two pieces routed at once are counted one after the other.
+        self.lock = threading.RLock()
+        self._times: dict[str, list[float]] = {}
+        self._scopes: "OrderedDict[str, list[str]]" = OrderedDict()
+
+    def recent(self, account: str) -> int:
+        """Pieces placed on ``account`` in the last :data:`PLACED_RECENT_S`."""
+        if not account:
+            return 0
+        cut = CLOCK() - PLACED_RECENT_S
+        with self.lock:
+            times = [t for t in self._times.get(account, ()) if t > cut]
+            if times:
+                self._times[account] = times
+            else:
+                self._times.pop(account, None)
+            return len(times)
+
+    def scope_accounts(self, scope: str) -> list[str]:
+        with self.lock:
+            return list(self._scopes.get(scope, ()))
+
+    def note(self, scope: str, account: str) -> None:
+        """A piece of ``scope`` was placed on ``account``."""
+        if not account:
+            return
+        with self.lock:
+            self._times.setdefault(account, []).append(CLOCK())
+            if scope:
+                seen = self._scopes.setdefault(scope, [])
+                self._scopes.move_to_end(scope)
+                if account not in seen:
+                    seen.append(account)
+                while len(self._scopes) > _SCOPES_KEPT:
+                    self._scopes.popitem(last=False)
+
+    def forget(self) -> None:
+        """Everything (a restart, in a test)."""
+        with self.lock:
+            self._times.clear()
+            self._scopes.clear()
+
+
+_LEDGERS_LOCK = threading.Lock()
+
+
+def _placements(platform: Any) -> _Placements:
+    """The platform's ledger (made on first use; per platform, so two apps in
+    one process — the test suite — never share one)."""
+    led = getattr(platform, "_team_placements", None)
+    if isinstance(led, _Placements):
+        return led
+    with _LEDGERS_LOCK:
+        led = getattr(platform, "_team_placements", None)
+        if not isinstance(led, _Placements):
+            led = _Placements()
+            try:
+                setattr(platform, "_team_placements", led)
+            except Exception:  # noqa: BLE001 — a platform that takes no attribute: one ledger a call
+                pass
+        return led
+
+
+def _estimate(platform: Any, account: str, peak: "float | None") -> "float | None":
+    """``peak`` plus what the pieces just placed there count for (None stays
+    None: an account with no numbers is never read as a percent)."""
+    if peak is None:
+        return None
+    return float(peak) + PIECE_PERCENT * _placements(platform).recent(account)
+
+
+def work_group(platform: Any, caller: Any = None, scope: str = "") -> "tuple[str, list[str]] | None":
+    """THE ACCOUNT GROUP A PIECE OF WORK IS IN (v1.395.0 review, decision 4:
+    "work and personal accounts never mix"): the group of the account the
+    caller runs on; else (an unpinned objective, or a caller whose own account
+    is in no group) the group of the first account an earlier piece of the
+    SAME work (``scope``) ran on that sits in a group — the record's rows
+    first (they outlive a restart), then the pieces placed in this process;
+    else None (the work has made no statement yet: any account may take its
+    first grouped piece). Cached reads + one indexed query; never raises."""
+    try:
+        from ..harness import build_accounts as BA
+
+        groups = getattr(_config(platform), "account_groups", None) or {}
+        if not groups:
+            return None
+        if caller is not None:
+            found = BA.group_of(groups, str(getattr(caller, "profile_id", "") or ""))
+            if found is not None:
+                return found
+        if not scope:
+            return None
+        from . import team_record as TR
+
+        accounts = TR.scope_accounts(getattr(platform, "engine", None), scope)
+        accounts += [a for a in _placements(platform).scope_accounts(scope) if a not in accounts]
+        for acct in accounts:
+            found = BA.group_of(groups, acct)
+            if found is not None:
+                return found
+    except Exception:  # noqa: BLE001 — unsure: no group (the caller's own rules still hold)
+        log.debug("model team work group read failed", exc_info=True)
+    return None
+
+
+def _floor_words() -> str:
+    """The floor's percent, as its sentence says it ("95%")."""
+    from ..harness.build_accounts import TAKEOVER_MAX_PERCENT
+
+    return f"{int(TAKEOVER_MAX_PERCENT)}%"
+
+
+#: How a refusal ends for a PIECE of work, and for a QUESTION (``consult``).
+PIECE_TAIL = " Hand this piece to another member, or do it yourself."
+QUESTION_TAIL = " Ask another member, or answer it yourself."
+
+
+def floor_refusal(platform: Any, record: Any, pin: Any, now: Any = None, *,
+                  tail: str = PIECE_TAIL) -> str:
+    """DECISION 8'S FLOOR for a piece a member is about to start (v1.395.0
+    review): "never start new work on an account at 95%" — for a member the
+    planner NAMED as much as for one the router picked (the router's 80% is
+    its preference, and naming a member directly may pass it; the floor is
+    not a preference). The sentence when the account ``pin`` names is at its
+    usage limit, or at or past ``build_accounts.TAKEOVER_MAX_PERCENT`` of a
+    window counting the pieces just placed there; "" otherwise — including
+    when the account or its numbers are not known (the lease then decides).
+    Cached reads only; never raises."""
+    if pin is None:
+        return ""
+    try:
+        from ..harness import build_accounts as BA
+
+        svc = _svc(platform)
+        snap = BA.snapshot(svc)
+        aid = str(getattr(pin, "profile_id", "") or "")
+        row = BA.find(svc, aid) if snap is not None and aid else None
+        if row is None:
+            return ""
+        who = str(getattr(record, "name", "") or "This member")
+        label = BA.VENDORS.get(str(row.get("vendor") or ""), {}).get("label") or "its account"
+        name = f"{label} ({row.get('name')})" if row.get("name") else label
+        if row.get("status") == BA.LIMIT:
+            when = _reset_words(row.get("resets_at"))
+            return (f"'{who}' would run on {name}, which is at its usage limit"
+                    + (f" until {when}" if when else "") + " — nothing new starts there." + tail)
+        state = snap[1].get(aid)
+        peak = BA.peak_percent(state, now)
+        est = _estimate(platform, aid, peak)
+        if est is None or est < BA.TAKEOVER_MAX_PERCENT:
+            return ""
+        usage = BA.peak_usage(state, now) or {}
+        adj = _window_adjective(usage.get("window_mins"))
+        where = f"of its {adj} window" if adj else "of a usage window"
+        recent = _placements(platform).recent(aid)
+        burst = ""
+        if peak is not None and peak < BA.TAKEOVER_MAX_PERCENT and recent:
+            burst = f", and {recent} {'piece' if recent == 1 else 'pieces'} just started there"
+        when = _reset_words(usage.get("resets_at"))
+        return (f"'{who}' would run on {name}, which is at {int(round(peak or 0))}% {where}{burst} — "
+                f"nothing new starts on an account at {_floor_words()} or more."
+                + (f" It resets at {when}." if when else "") + tail)
+    except Exception:  # noqa: BLE001 — unsure: the lease decides
+        log.debug("model team floor read failed", exc_info=True)
+        return ""
+
+
+def pay_refusal(platform: Any, record: Any, now: Any = None, *, tail: str = PIECE_TAIL) -> str:
+    """DECISION 8's pay-per-use rule for a member a MODEL hands work to by
+    name (v1.395.0 review): "Pay-per-use only with a monthly cap you set
+    (default $0)" — and the plan's promise that nothing spends pay-per-use
+    money above it. The router already applies it to a role's pick; a planner
+    NAMING a pay-per-use member used to pass it. The sentence when the
+    member's model is pay per use and this month's team spend has reached
+    ``Config.team_paid_cap_usd`` (0 = never); "" otherwise. Work the USER
+    starts (the Agents page, a schedule, a task they queued) is not refused
+    here — their spend still counts. BLOCKING (the month's spend);
+    never raises."""
+    if not runs_elsewhere(record):
+        return ""
+    try:
+        provider = str(getattr(record, "provider", "") or "").strip()
+        if cost_type(platform, provider, pinned_model(platform, record)) != COST_PAY:
+            return ""
+        try:
+            cap = max(0.0, float(getattr(_config(platform), "team_paid_cap_usd", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            cap = 0.0
+        who = str(getattr(record, "name", "") or "This member")
+        if cap <= 0:
+            return (f"'{who}' is a pay-per-use member, and your model team's pay-per-use limit is $0 a "
+                    f"month ({PAY_PLACE}), so no pay-per-use work is handed out." + tail)
+        spend = paid_spend_this_month(platform, now)
+        if spend >= cap:
+            return (f"'{who}' is a pay-per-use member, and this month's pay-per-use spend (${spend:.2f}) "
+                    f"has reached your ${cap:.2f} limit ({PAY_PLACE})." + tail)
+    except Exception:  # noqa: BLE001 — unsure: refused (the honest side for money)
+        log.debug("model team pay check failed", exc_info=True)
+        return "This member's cost could not be checked, so it takes no pay-per-use work now." + tail
+    return ""
+
+
+#: Where the pay-per-use limit is set, as a sentence says it.
+PAY_PLACE = "Settings › Models › Model team"
+
+
+@dataclass
+class AccountPick:
+    """The account a member's piece runs on (:func:`named_account`)."""
+
+    #: The ``AccountPin`` (None: no account — a local or pay-per-use model,
+    #: Iron-Proxy off, or ``refusal``).
+    pin: Any = None
+    refusal: str = ""
+
+
+def named_account(platform: Any, record: Any, caller: Any = None, *, scope: str = "",
+                  coding: bool = False, by_model: bool = True, now: Any = None) -> AccountPick:
+    """The account a member NAMED by the planner runs its piece on (v1.395.0
+    review), or the plain sentence it is refused with BEFORE any session
+    exists: Phase 5's rules (:func:`member_account` — its own account, the
+    caller's of the same vendor, the caller's group, else the vendor's first
+    usable account, pinned), with the WORK's account group
+    (:func:`work_group`), decision 8's floor (:func:`floor_refusal`) and — a
+    member a model hands work to (``by_model``) — the pay-per-use limit
+    (:func:`pay_refusal`). The account is counted in the ledger. BLOCKING;
+    never raises."""
+    if not runs_elsewhere(record):
+        return AccountPick()
+    led = _placements(platform)
+    try:
+        with led.lock:
+            if by_model:
+                pay = pay_refusal(platform, record, now)
+                if pay:
+                    return AccountPick(refusal=pay)
+            group = work_group(platform, caller, scope)
+            pin, why = member_account(platform, record, caller, coding=coding, group=group,
+                                      recent=led.recent)
+            if why:
+                return AccountPick(refusal=why)
+            floor = floor_refusal(platform, record, pin, now)
+            if floor:
+                return AccountPick(refusal=floor)
+            if pin is not None:
+                led.note(scope, str(getattr(pin, "profile_id", "") or ""))
+            return AccountPick(pin=pin)
+    except Exception:  # noqa: BLE001 — Phase 5's answer
+        log.debug("model team named account failed", exc_info=True)
+        return AccountPick(pin=member_account(platform, record, caller, coding=coding)[0])
+
+
+def _reset_words(iso: Any) -> str:
+    """"3:40 PM" (another day: "Tue 9:00 AM") for an ISO instant, else ""."""
+    if not iso:
+        return ""
+    try:
+        from ..iron_proxy.accounts import _local_time
+
+        return _local_time(str(iso))[0]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def provider_ready(platform: Any, provider: str) -> "bool | None":
+    """Is ``provider`` there right now — from CACHED answers only (a CLI's
+    sign-in verdict is read, never refreshed: ``cli_auth.never_probe``)?
+    None when it cannot be told. Never raises."""
+    manager = _manager(platform)
+    if manager is None or not provider:
+        return None
+    if provider.strip().lower() == "opencode-cli" and getattr(manager, "_opencode_cache", None) is None:
+        # v1.395.0 review: OpenCode's availability is its LOCAL model list,
+        # which a cold manager reads by running ``opencode models`` — a
+        # process routing must never start. Not known yet: the run decides.
+        return None
+    try:
+        from ..providers.cli_auth import cached_verdicts, never_probe
+
+        with cached_verdicts(), never_probe():
+            return bool(manager.available(provider))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def local_box(platform: Any, provider: str) -> str:
+    """``busy`` when the fleet's latest snapshot of the box this LOCAL
+    provider runs on shows requests WAITING, else ``ok`` (an unreachable box
+    is told by :func:`provider_ready`, which reads the fleet's reachability
+    for a fleet node). A cached read of the sampler's last pass; never a
+    request, never raises."""
+    try:
+        from ..fleet.registry import FleetRegistry
+
+        node = FleetRegistry._node_id_for(provider)
+        sampler = getattr(platform, "fleet_sampler", None)
+        if not node or sampler is None:
+            return "ok"
+        snap = sampler.latest(node)
+        metrics = getattr(snap, "metrics", None) if snap is not None else None
+        waiting = getattr(metrics, "requests_waiting", None) if metrics is not None else None
+        if isinstance(waiting, (int, float)) and not isinstance(waiting, bool) and waiting > 0:
+            return "busy"
+    except Exception:  # noqa: BLE001
+        log.debug("model team local box read failed", exc_info=True)
+    return "ok"
+
+
+def paid_spend_this_month(platform: Any, now: Any = None) -> float:
+    """What the PAY-PER-USE members of the team spent this calendar month, in
+    METERED dollars only (the allowance's reading, ``agents/allowance``: each
+    run's own recorded cost — a subscription's list-price equivalent never
+    counts). BLOCKING; 0.0 when it cannot be read."""
+    engine = getattr(platform, "engine", None)
+    names = []
+    for r in team_members(platform):
+        provider = str(getattr(r, "provider", "") or "").strip()
+        if provider and cost_type(platform, provider, pinned_model(platform, r)) == COST_PAY:
+            names.append(f"custom:{r.name}")
+    if engine is None or not names:
+        return 0.0
+    try:
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..core.models import Session
+        from ..eval.pricing import is_list_price_equivalent, recorded_cost
+        from .allowance import _month_bounds, _naive
+
+        start, end = _month_bounds(now)
+        total = 0.0
+        with session_scope(engine) as db:
+            for row in db.exec(select(Session).where(Session.agent_name.in_(names))):  # type: ignore[attr-defined]
+                created = _naive(getattr(row, "created_at", None))
+                if created is None or not (start <= created < end):
+                    continue
+                provider = str(getattr(row, "provider", "") or "")
+                model = str(getattr(row, "model", "") or "")
+                if is_list_price_equivalent(provider, model):
+                    continue
+                total += float(recorded_cost(
+                    provider, model, int(row.input_tokens or 0), int(row.output_tokens or 0),
+                    getattr(row, "cost_usd", 0.0),
+                ) or 0.0)
+        return total
+    except Exception:  # noqa: BLE001
+        log.debug("model team paid spend read failed", exc_info=True)
+        return 0.0
+
+
+def _coordinator(platform: Any, record: Any) -> bool:
+    """Does this member hand work out itself (it would be refused as a
+    target — the anti-fork-bomb rule)? Never raises (False when unsure)."""
+    if str(getattr(record, "base_type", "") or "").strip().casefold() == "supervisor":
+        return True
+    registry = getattr(platform, "agents_registry", None)
+    try:
+        definition = registry.definition(record.name) if registry is not None else None
+    except Exception:  # noqa: BLE001
+        definition = None
+    tools = list(getattr(definition, "tools", None) or []) if definition is not None else []
+    return "delegate" in tools or "spawn_agent" in tools
+
+
+def _account_check(label: str, row: dict, state: Any, now: Any,
+                   recent: int = 0) -> "tuple[bool, float | None, str, str | None, bool]":
+    """``(usable for new work, peak, why-words, resets_at, at a limit)`` of
+    one account, from the cached snapshot. ``peak`` is the ESTIMATE the router
+    orders by: the vendor's number plus :data:`PIECE_PERCENT` for each of the
+    ``recent`` pieces just placed there (v1.395.0 review — a burst is counted
+    before the numbers arrive); None when the vendor sent no number."""
+    from ..harness import build_accounts as BA
+
+    name = f"{label} ({row.get('name')})" if row.get("name") else label
+    status = row.get("status")
+    if status == BA.OFF:
+        return False, None, f"skipped {name}: it is turned off", None, False
+    if status == BA.NEEDS_SIGN_IN:
+        return False, None, f"skipped {name}: it needs to sign in again", None, False
+    if status == BA.LIMIT:
+        when = _reset_words(row.get("resets_at"))
+        return (False, None, f"skipped {name}: at its limit" + (f" until {when}" if when else ""),
+                row.get("resets_at"), True)
+    peak = BA.peak_percent(state, now)
+    just = f"{recent} {'piece' if recent == 1 else 'pieces'} just started there"
+    if peak is None:
+        if recent >= UNKNOWN_BURST_MAX:
+            # No numbers yet, and a burst already went there: it may be the
+            # account AT its limit (numbers arrive only after a call).
+            return False, None, f"skipped {name}: no usage numbers yet and {just}", None, True
+        return True, None, "", None, False
+    threshold = min(BA.NEW_WORK_MAX_PERCENT, BA.TAKEOVER_MAX_PERCENT)
+    est = float(peak) + PIECE_PERCENT * recent
+    if est >= threshold:
+        usage = BA.peak_usage(state, now) or {}
+        adj = _window_adjective(usage.get("window_mins"))
+        where = f"of its {adj} window" if adj else "of a usage window"
+        extra = f" and {just}" if (recent and peak < threshold) else ""
+        return (False, est, f"skipped {name}: {int(round(peak))}% {where}{extra}", usage.get("resets_at"),
+                True)
+    return True, est, "", None, False
+
+
+def _plan_account(platform: Any, record: Any, provider: str, caller: Any, now: Any,
+                  group: Any = _UNSET) -> _Acct:
+    """The account a SUBSCRIPTION member's piece would run on, by
+    :func:`member_account`'s rules (its own account; the caller's when of its
+    vendor; the caller's account GROUP; else the vendor's accounts) — and,
+    where there is a choice, the one with the LOWEST known usage below
+    ``NEW_WORK_MAX_PERCENT`` (an account with no numbers after the known-low
+    ones, Iron-Proxy's order breaking a tie), PINNED. Cached reads only;
+    never raises ("not known" when unsure — the lease then decides).
+
+    v1.395.0 review: ``group`` is the WORK's account group
+    (:func:`work_group`): only that group's accounts are asked — a piece of
+    work whose earlier pieces ran in "work" never lands on a "personal"
+    account, even when the caller itself is pinned to no group. The usage
+    read counts the pieces just placed (:class:`_Placements`)."""
+    from ..harness import build_accounts as BA
+    from ..iron_proxy.pin import AccountPin
+
+    try:
+        svc = _svc(platform)
+        vendor = BA.vendor_of(platform, provider)
+        if not vendor:
+            return _Acct()
+        label = BA.VENDORS[vendor]["label"]
+        snap = BA.snapshot(svc)
+        own = member_pin(platform, record)
+        rows: list[tuple[dict, Any]] = []
+        if own is not None:
+            if _other_group(platform, record, own, caller, group):
+                return _Acct(usable=False, skips=[
+                    (f"skipped {record.name}: its own account is in another account group than this work's",
+                     False)])
+            row = BA.find(svc, own.profile_id) if snap is not None else None
+            if row is None:
+                return _Acct(pin=own, pin_set=True, name=str(getattr(own, "title", "") or ""))
+            rows = [(row, own)]
+        elif caller is not None and str(getattr(caller, "ij_provider", "") or "") == BA.VENDORS[vendor]["provider"]:
+            row = BA.find(svc, str(getattr(caller, "profile_id", "") or "")) if snap is not None else None
+            if row is None:
+                return _Acct(pin=caller, pin_set=True, name=str(getattr(caller, "title", "") or ""))
+            rows = [(row, caller)]
+        else:
+            if snap is None:
+                return _Acct()  # no numbers at all: "not known" — member_account decides
+            every = BA.vendor_rows(snap, vendor)
+            found = _caller_group(platform, caller, group)
+            if found is not None:
+                gname, ids = found
+                every = [r for r in every if r["id"] in ids]
+                if not every:
+                    return _Acct(usable=False, skips=[
+                        (f"skipped {record.name}: your '{gname}' account group has no {label} account", False)])
+            rows = [(r, AccountPin(profile_id=r["id"], ij_provider=r["provider"], title=r["name"]))
+                    for r in every]
+            if not rows:
+                return _Acct(usable=False, skips=[(f"skipped {record.name}: Iron-Proxy lists no {label} account",
+                                                   False)])
+        out = _Acct(usable=False)
+        best: "tuple[tuple, dict, Any, float | None] | None" = None
+        led = _placements(platform)
+        for order, (row, pin) in enumerate(rows):
+            state = snap[1].get(row["id"]) if snap is not None else None
+            recent = led.recent(str(row["id"]))
+            usable, peak, why, resets, limited = _account_check(label, row, state, now, recent)
+            if not usable:
+                if why and (why, limited) not in out.skips:
+                    out.skips.append((why, limited))
+                if resets:
+                    out.resets.append(resets)
+                out.limited = out.limited or limited
+                continue
+            # Unknown numbers after known ones; among unknowns, the fewer
+            # pieces just placed first (a burst spreads there too).
+            key = (peak is None, peak if peak is not None else float(recent), order)
+            if best is None or key < best[0]:
+                best = (key, row, pin, peak)
+        if best is None:
+            return out
+        _key, row, pin, peak = best
+        # The accounts passed over stay on the answer: the reason names them
+        # ("skipped Claude Code (TSI): 83% of its 5-hour window").
+        return _Acct(usable=True, peak=peak, pin=pin, pin_set=True, name=str(row.get("name") or ""),
+                     skips=out.skips)
+    except Exception:  # noqa: BLE001 — unsure: "not known" (the lease decides, never moves)
+        log.debug("model team account read failed", exc_info=True)
+        return _Acct()
+
+
+def _piece_passed_over(engine: Any, scope: str, role: str, piece: str) -> str:
+    """The member a piece is passed over on: the FIRST (in the order its
+    members took it) that it failed ``team_record.PIECE_FAILS`` times on —
+    at most one per piece, so it moves up one step and no further. ""
+    otherwise."""
+    from . import team_record as TR
+
+    for member, fails in TR.piece_failures(engine, scope, role, piece):
+        if fails >= TR.PIECE_FAILS:
+            return member
+    return ""
+
+
+def route_role(platform: Any, role: str, *, local_only: bool = False, caller_pin: Any = None,
+               caller_provider: str = "", caller_model: str = "", scope: str = "",
+               piece: str = "", now: Any = None, team: "list[str] | None" = None) -> RolePick:
+    """THE TEAM ROUTER: the member that takes a piece of ``role`` now, and
+    why (see the section comment above). ``team`` — a PROJECT mission's team
+    (roster names, ``agents/team.mission_team``): only its members are asked
+    (the doors refuse anyone else). BLOCKING (SQLite reads: the record, the
+    allowance, the month's spend) — the doors call it off the loop. Never
+    raises (an internal fault is a refusal in words).
+
+    v1.395.0 review: ONE pick at a time per platform (the ledger's lock) — two
+    pieces routed at once in one round are counted one after the other, never
+    both onto the account that looked lowest."""
+    noun = ROLE_NOUNS.get(role, role)
+    try:
+        with _placements(platform).lock:
+            return _route(platform, role, noun, local_only=local_only, caller_pin=caller_pin,
+                          caller_provider=caller_provider, caller_model=caller_model, scope=scope,
+                          piece=piece, now=now, team=list(team or []))
+    except Exception:  # noqa: BLE001
+        log.warning("model team routing failed", exc_info=True)
+        return RolePick(role, refusal=(
+            f"Iron Jarvis could not pick a team member for {noun} just now — name the member "
+            "you want, or do this piece yourself."), reason=f"not started: no member picked for {noun}")
+
+
+def _route(platform: Any, role: str, noun: str, *, local_only: bool, caller_pin: Any,
+           caller_provider: str, caller_model: str, scope: str, piece: str, now: Any,
+           team: "list[str] | None" = None) -> RolePick:
+    from datetime import datetime, timezone
+
+    from . import allowance
+    from . import team_record as TR
+
+    now = now or datetime.now(timezone.utc)
+    engine = getattr(platform, "engine", None)
+    config = _config(platform)
+    default_provider = str(getattr(config, "default_provider", "") or "")
+    members = [r for r in team_members(platform) if role in roles_of(r)]
+    if team:
+        # A PROJECT mission: only the project's team (the user picked it).
+        from . import team as _team
+
+        members = [r for r in members if _team.on_team(team, f"custom:{r.name}")]
+        if not members:
+            return RolePick(role, reason=f"not started: no one on this project's team holds {noun}",
+                            refusal=(f"No one on this project's team holds {noun} — hand this piece to a "
+                                     f"team member by name ({', '.join(team)}), or give a member of the "
+                                     "team that role in Settings › Model team."))
+    hidden = 0
+    if local_only:
+        kept = [r for r in members if not leaves_network(platform, r)]
+        hidden = len(members) - len(kept)
+        members = kept
+    if not members:
+        if hidden:
+            return RolePick(role, reason=f"not started: no member on this network holds {noun}", refusal=(
+                f"No team member on this PC or your network holds {noun}, and this work is Local only "
+                "— nothing leaves your network. Do this piece yourself, or give a local member that "
+                "role in Settings › Model team."))
+        return RolePick(role, reason=f"not started: no team member holds {noun}", refusal=(
+            f"No one on your model team holds {noun} yet. Give a member that role in Settings › "
+            "Model team, or hand the piece to a helper by name."))
+    # v1.395.0 review: a member's record is ITS MODEL's (decision 7: "that
+    # model's record") — a member moved to another model starts again.
+    models = {r.name: (str(r.provider).strip(), pinned_model(platform, r))
+              for r in members if str(getattr(r, "provider", "") or "").strip()}
+    records = TR.records_for(engine, [r.name for r in members], role, models)
+    passed_over = _piece_passed_over(engine, scope, role, piece) if piece else ""
+    # v1.395.0 review: the account group this WORK is in (decision 4).
+    group = work_group(platform, caller_pin, scope)
+    paid_off = False
+    cands: list[_Cand] = []
+    skipped: list[str] = []
+    #: the accounts passed over for their USAGE (at or over the threshold, or
+    #: at their limit) — named in a cloud pick's reason
+    limit_skips: list[str] = []
+    local_notes: list[str] = []
+    resets: list[str] = []
+    limited = False
+    spend: "float | None" = None
+    try:
+        cap = max(0.0, float(getattr(config, "team_paid_cap_usd", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        cap = 0.0
+    for idx, r in enumerate(members):
+        own_provider = str(getattr(r, "provider", "") or "").strip()
+        provider = own_provider or caller_provider or default_provider
+        model = pinned_model(platform, r) if own_provider else str(caller_model or "")
+        cost = cost_type(platform, provider, model)
+        local = cost == COST_FREE
+        label = model_words(platform, provider, model)
+        if provider.strip().lower() == "mock":
+            # v1.395.0 review: the DEMO model answers with scripted words — it
+            # counts as "on this PC" (Local only), so it read as a free local
+            # member and was tried FIRST. Never routed to.
+            skipped.append(f"skipped {r.name} (it would answer with the demo model)")
+            continue
+        if _coordinator(platform, r):
+            skipped.append(f"skipped {r.name} (it hands work out itself)")
+            continue
+        if allowance.refusal_for(r, engine):
+            paused = bool(allowance.paused_sentence(r))
+            skipped.append(f"skipped {r.name} ({'it is paused' if paused else 'it used its monthly allowance'})")
+            if local:
+                local_notes.append("the local member is paused" if paused
+                                   else "the local member used its monthly allowance")
+            continue
+        if provider_ready(platform, provider) is False:
+            if local:
+                skipped.append(f"skipped {r.name} (its box is not answering)")
+                local_notes.append("the local box is not answering")
+            else:
+                skipped.append(f"skipped {r.name} ({label} is not connected)")
+            continue
+        rr = records.get(r.name, {}).get(role) or TR.RoleRecord()
+        if local:
+            box = local_box(platform, provider)
+            ok_record = rr.status in (TR.GOOD, TR.UNKNOWN)
+            if box == "ok" and ok_record:
+                good = rr.status == TR.GOOD
+                if good:
+                    reason = f"local: good record for {noun}"
+                elif rr.runs == 0:
+                    reason = f"local: no record yet for {noun}"
+                else:
+                    reason = f"local: only {rr.runs} {'piece' if rr.runs == 1 else 'pieces'} of {noun} so far"
+                cands.append(_Cand(r, 0, (0, 0 if good else 1, -rr.rate, idx), label, True, reason))
+                continue
+            if box != "ok":
+                note = "the local box is busy"
+            elif rr.streak >= TR.FAIL_STREAK:
+                note = f"the local member failed {noun} {rr.streak} times in a row"
+            else:
+                note = f"the local member's record for {noun} is not good ({rr.passed} of {rr.runs} passed)"
+            local_notes.append(note)
+            fall = "its box is busy" if box != "ok" else f"its record is {rr.words()}"
+            cands.append(_Cand(r, 3, (3, 0 if ok_record else 1, 1 if box != "ok" else 0, idx), label,
+                               True, note=fall))
+        elif cost == COST_PLAN:
+            acct = _plan_account(platform, r, provider, caller_pin, now, group)
+            for s, at_limit in acct.skips:
+                if s not in skipped:
+                    skipped.append(s)
+                if at_limit and s not in limit_skips:
+                    limit_skips.append(s)
+            if not acct.usable:
+                resets.extend(acct.resets)
+                limited = limited or acct.limited
+                continue
+            shown = f"{label} ({acct.name})" if acct.name else label
+            cands.append(_Cand(r, 1, (1, acct.peak is None, acct.peak or 0.0, idx), shown, False, acct=acct))
+        else:
+            if cap <= 0:
+                skipped.append(f"skipped {r.name} (pay per use is off: your monthly cap is $0)")
+                paid_off = True
+                continue
+            if spend is None:
+                spend = paid_spend_this_month(platform, now)
+            if spend >= cap:
+                skipped.append(f"skipped {r.name} (this month's pay-per-use spend, ${spend:.2f}, "
+                               f"reached your ${cap:.2f} cap)")
+                paid_off = True
+                continue
+            cands.append(_Cand(r, 2, (2, 0, 0.0, idx), label, False,
+                               note=f"pay per use: ${spend:.2f} of your ${cap:.2f} monthly cap used"))
+    cands.sort(key=lambda c: c.key)
+    moved_from = ""
+    if passed_over and any(c.record.name == passed_over for c in cands):
+        rest = [c for c in cands if c.record.name != passed_over]
+        if rest:
+            moved_from = passed_over
+            cands = rest
+        else:
+            only = cands[0]
+            stay = (f"this work is Local only and no other member on this PC or your network holds {noun}"
+                    if local_only else f"nothing else can take {noun} now")
+            head = "local" if only.local else only.label
+            _note_placed(platform, scope, only)
+            return _picked(role, only, f"{head}: this piece failed its check twice here, but {stay}")
+    if not cands:
+        when = _reset_words(_earliest(resets))
+        listed = "; ".join(skipped[:6]) or "nothing on the team can take it"
+        lo = " (this work is Local only, so only members on this PC or your network were asked)" if local_only else ""
+        # v1.395.0 review: the words say what really stopped it — "near its
+        # limit" only when an account was; the pay-per-use limit names its
+        # setting (a later retry cannot help a $0 limit).
+        refusal = (f"No team member can take {noun} now{lo}: {listed}."
+                   + (f" The earliest reset is {when}." if when else "")
+                   + (" Nothing was started on an account near its limit." if limited else "")
+                   + (f" Pay-per-use members only take work under the monthly limit in {PAY_PLACE}."
+                      if paid_off else "")
+                   + (" Do this piece yourself, or hand it out again later." if limited
+                      else " Do this piece yourself."))
+        if limited:
+            reason = (f"waited: every cloud account that can take {noun} is near its limit"
+                      + (f"; the earliest reset is {when}" if when else ""))
+        else:
+            reason = f"not started: no team member can take {noun} now"
+        return RolePick(role, reason=reason, refusal=refusal, waited=limited)
+    top = cands[0]
+    _note_placed(platform, scope, top)
+    if moved_from:
+        why_not = f"this piece failed its check twice on {moved_from}, so it moved up one"
+    elif local_notes:
+        why_not = local_notes[0]
+    else:
+        why_not = f"no local member holds {noun}"
+    if top.tier == 0:
+        reason = f"local: {why_not}" if moved_from else top.reason
+    elif top.tier in (1, 2):
+        parts = [why_not]
+        if top.tier == 2 and top.note:
+            parts.append(top.note)
+        parts.extend(limit_skips[:2])
+        reason = f"{top.label}: " + "; ".join(parts)
+    else:
+        if moved_from:
+            head = why_not
+        elif limited:
+            head = f"every cloud account that can take {noun} is near its limit"
+        else:
+            head = f"nothing else can take {noun} now"
+        reason = f"local: {head}; {top.note}" if top.note else f"local: {head}"
+    return _picked(role, top, reason)
+
+
+def _note_placed(platform: Any, scope: str, cand: _Cand) -> None:
+    """The ledger counts the account a pick pins (v1.395.0 review)."""
+    acct = cand.acct
+    pin = acct.pin if acct is not None else None
+    if pin is not None:
+        _placements(platform).note(scope, str(getattr(pin, "profile_id", "") or ""))
+
+
+def _earliest(resets: list) -> str:
+    """The EARLIEST of some ISO instants (parsed — never compared as text),
+    as it was given; "" when none parses."""
+    from ..harness.build_accounts import _parse
+
+    best: "tuple[Any, str] | None" = None
+    for iso in resets:
+        when = _parse(iso)
+        if when is not None and (best is None or when < best[0]):
+            best = (when, str(iso))
+    return best[1] if best is not None else ""
+
+
+def _picked(role: str, cand: _Cand, reason: str) -> RolePick:
+    acct = cand.acct
+    return RolePick(role, record=cand.record, reason=reason,
+                    pin=acct.pin if acct is not None else None,
+                    pin_set=bool(acct is not None and acct.pin_set))
+
+
+def route_for_call(platform: Any, *, role: str, piece: str, session_id: str,
+                   helper_parent: Any = None, team: "list[str] | None" = None) -> RolePick:
+    """:func:`route_role` for one ``delegate`` / ``spawn_agent`` call: the
+    caller's account pin, model and Local only read from where the call runs
+    — a coding session's turn (``helper_parent``) or the calling run's own
+    row. BLOCKING (the doors call it via ``asyncio.to_thread``, which carries
+    the context: the pin and the Local only scope)."""
+    from ..iron_proxy.pin import current
+
+    caller_provider = caller_model = ""
+    if helper_parent is not None:
+        pin = getattr(helper_parent, "pin", None)
+        caller_provider = str(getattr(helper_parent, "provider", "") or "")
+        caller_model = str(getattr(helper_parent, "model", "") or "")
+        local_only = bool(getattr(helper_parent, "local_only", False))
+    else:
+        pin = current()
+        try:
+            from ..providers.egress import current_scope
+
+            local_only = bool(current_scope().on)
+        except Exception:  # noqa: BLE001
+            local_only = False
+        try:
+            from ..core.db import session_scope
+            from ..core.models import Session
+
+            with session_scope(platform.engine) as db:
+                row = db.get(Session, session_id)
+                if row is not None:
+                    caller_provider = str(row.provider or "")
+                    caller_model = str(row.model or "")
+        except Exception:  # noqa: BLE001
+            pass
+    return route_role(platform, role, local_only=local_only, caller_pin=pin,
+                      caller_provider=caller_provider, caller_model=caller_model,
+                      scope=str(session_id or ""), piece=piece, team=team)
+
+
+def _user_decided(report: Any) -> bool:
+    """A run that ended because the USER declined its plan, or did not answer
+    it in time (``runtime.PLAN_DECLINED_RESULT`` / ``PLAN_UNANSWERED_RESULT``)
+    — not the member failing at its role."""
+    try:
+        from .runtime import PLAN_DECLINED_RESULT, PLAN_UNANSWERED_RESULT
+
+        text = str(report or "").lstrip()
+        return text.startswith(PLAN_DECLINED_RESULT) or text.startswith(PLAN_UNANSWERED_RESULT)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _runtime_wrote(report: Any) -> bool:
+    """A result the RUNTIME wrote because the model ended silently — its last
+    line is a tool's output (``runtime.RUNTIME_WROTE_RESULT``)."""
+    try:
+        from .runtime import RUNTIME_WROTE_RESULT
+
+        return str(report or "").lstrip().startswith(RUNTIME_WROTE_RESULT)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _low_trust(engine: Any, session_id: str) -> bool:
+    """Was the piece's run at LOW trust when it settled — from the door, or
+    lowered mid-run by a flagged tool result (v1.298.0)? Read off its row
+    (the runtime writes a lowering there). BLOCKING; True when unsure."""
+    try:
+        from ..core.db import session_scope
+        from ..core.models import Session
+        from ..core.trust import TRUST_LOW
+
+        with session_scope(engine) as db:
+            row = db.get(Session, session_id)
+            return row is None or str(getattr(row, "trust", "") or "").strip().lower() == TRUST_LOW
+    except Exception:  # noqa: BLE001
+        return True
+
+
+async def note_piece(platform: Any, *, record: Any, role: str, session_id: str, scope: str,
+                     piece: str, finished: bool, report: Any = "", provider: str = "",
+                     model: str = "", account: str = "", turn: str = "") -> None:
+    """The door's record of one settled piece (``agents/team_record``), off
+    the loop: its row; and, for a ``review`` piece, the reviewer's verdict on
+    the work it reviewed. Only for a member that HOLDS ``role``. Never
+    raises.
+
+    v1.395.0 review:
+
+    * the doors call it only for a run that SETTLED (finished, or ended
+      failed by itself) — a run that RAISED failed at the provider, the
+      account, the network or a policy, never at its role, and writes no row
+      (the doors' ``except`` paths);
+    * a run that ended because the USER declined (or did not answer) its plan
+      writes no row;
+    * the row keeps the ``provider`` / ``model`` it ran on (the record is
+      that model's), the ``account`` it was pinned to (the work's account
+      group after a restart) and the coding session's REPLY (``turn``: a
+      reviewer's verdict judges only its own reply's pieces);
+    * a reviewer's verdict is read only from a report the reviewer WROTE (not
+      the runtime's no-summary result, whose last line is a tool's output),
+      only from its last line (``team_record.verdict_of``), and only when its
+      run was not at LOW trust — an injected instruction may have written
+      that line, and it must not judge anyone's work, good or bad."""
+    import asyncio
+
+    from . import team_record as TR
+
+    if record is None or not role or role not in roles_of(record):
+        return
+    if not finished and _user_decided(report):
+        return
+    try:
+        row = await asyncio.to_thread(
+            TR.note_run, platform.engine, member=record.name, role=role, session_id=session_id,
+            scope=scope, piece=piece, finished=finished, provider=provider, model=model,
+            account=account, turn=turn,
+        )
+        if role == "review" and finished and row and not _runtime_wrote(report):
+            verdict = TR.verdict_of(report)
+            if verdict and not await asyncio.to_thread(_low_trust, platform.engine, session_id):
+                await asyncio.to_thread(TR.credit_review, platform.engine, scope=scope,
+                                        review_row=row, verdict=verdict)
+    except Exception:  # noqa: BLE001 — a record never breaks a delegation
+        log.debug("model team piece record failed", exc_info=True)
+
+
+def review_task(role: str, task: str) -> str:
+    """A ``review`` piece's task with the verdict line asked for
+    (``team_record.VERDICT_ASK``); any other piece's unchanged."""
+    if role != "review":
+        return task
+    from .team_record import VERDICT_ASK
+
+    return f"{str(task or '').rstrip()}\n\n{VERDICT_ASK}"
+
+
+__all__ += [
+    "ROLE_NOUNS", "ROLE_PREFIX", "RolePick", "local_box", "note_piece", "paid_spend_this_month",
+    "piece_key", "provider_ready", "queued_refusal", "review_task", "role_id", "role_named",
+    "route_for_call", "route_role", "run_as_member", "unknown_role_refusal",
+    # v1.395.0 review
+    "AccountPick", "PAY_PLACE", "PIECE_PERCENT", "PIECE_TAIL", "PLACED_RECENT_S", "QUESTION_TAIL",
+    "UNKNOWN_BURST_MAX",
+    "floor_refusal", "named_account", "pay_refusal", "work_group",
+]

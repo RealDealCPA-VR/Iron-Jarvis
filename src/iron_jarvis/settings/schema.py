@@ -287,6 +287,19 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("fleet_savings_baseline", "Savings baseline model", "models", "string",
       "The cloud model local runs are compared against on Usage.", tier="allow",
       section="Fleet", advanced=True),
+    # v1.395.0 (the long-jobs plan's Phase 6, decision 8): the model team's
+    # pay-per-use members only under a monthly cap the user sets — 0 (the
+    # default) = never. Raising it spends money, so from chat it asks every
+    # time (no grant lifts it). Read live by the team router.
+    S("team_paid_cap_usd", "Pay-per-use limit for your model team ($ a month)", "models", "number",
+      "The most your model team's pay-per-use members may spend in a calendar month, in "
+      "dollars. Iron Jarvis and its agents hand work to a pay-per-use member, or ask it a "
+      "question, only while this month's spend is under this limit. 0 means never. Work you "
+      "start yourself (on the Agents page, a schedule, a task you queue) is not stopped by "
+      "it, but what it spends counts. Members on your own hardware and on your Claude Code "
+      "or Codex plan are not counted.",
+      tier="ask-floor", section="Model team", check=_range(0, 100000),
+      aliases=("team pay cap", "pay per use limit", "pay per use cap", "model team budget")),
     S("voice_transcribe_base_url", "Voice: speech-to-text endpoint", "models", "string",
       "Optional dedicated whisper server for dictation. Its key is set under Connections.",
       tier="ask", section="Voice", advanced=True),

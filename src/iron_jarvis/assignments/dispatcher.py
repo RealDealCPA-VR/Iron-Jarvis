@@ -330,6 +330,33 @@ class AssignmentDispatcher:
             refusal = await asyncio.to_thread(allowance.refusal_for, record, self.p.engine)
             if refusal:
                 return refusal
+            # A MODEL TEAM MEMBER (v1.395.0, the Phase 5 review's open item):
+            # the doors' rules, here too — its account must be one the user's
+            # groups allow, Local only work never starts a member whose model
+            # leaves the network, and a job naming ANOTHER model than the
+            # member runs on is said, never swapped. HELD with the sentence
+            # (never claimed: a refused start would count a strike).
+            from ..agents import model_team as _mt
+
+            if _mt.runs_elsewhere(record):
+                payload = decode_payload(row.payload_json)
+                why = await asyncio.to_thread(
+                    _mt.queued_refusal,
+                    self.p,
+                    record,
+                    provider=str(payload.get("provider") or ""),
+                    model=str(payload.get("model") or ""),
+                    local_only=await self._local_only_of(row),
+                    # v1.395.0 review: a task an AGENT queued (assign_work)
+                    # is a model handing out work — under the pay-per-use
+                    # limit; one the user queued is theirs to spend on. And
+                    # it is a piece of THAT agent's work: its account stays in
+                    # that work's account group.
+                    by_model=str(getattr(row, "source", "") or "").startswith("agent:"),
+                    scope=_agent_scope(row),
+                )
+                if why:
+                    return why
         live = await asyncio.to_thread(store.live_for, name)
         if live:
             return HELD_BUSY.format(name=name)
@@ -341,6 +368,21 @@ class AssignmentDispatcher:
         if limit > 0 and len(getattr(orch, "_governed", ()) or ()) >= limit:
             return HELD_SLOTS
         return ""
+
+    async def _local_only_of(self, row: AssignmentRecord) -> bool:
+        """Was this job queued by a Local only run (``source ==
+        "agent:<session>"`` and that run is Local only)? Off the loop; False
+        when unknown."""
+        src = str(getattr(row, "source", "") or "")
+        if not src.startswith("agent:"):
+            return False
+        try:
+            from ..agents.orchestrator import inherited_local_only
+
+            parent = await asyncio.to_thread(self.orchestrator.get_session, src[len("agent:"):])
+            return bool(inherited_local_only(parent))
+        except Exception:  # noqa: BLE001
+            return False
 
     async def _start(self, assignee: str) -> str | None:
         """Claim the agent's top job and run it. Returns the assignment id
@@ -391,6 +433,16 @@ class AssignmentDispatcher:
             model = str(payload.get("model") or "").strip() or (
                 getattr(record, "model", "") or None
             )
+            # v1.395.0: a MODEL TEAM MEMBER runs on ITS OWN model — that
+            # provider's default when it names none (``model_team.
+            # pinned_model``, the doors' rule; a job naming another model was
+            # held by ``_hold_reason``), and its run is HELD there below.
+            from ..agents import model_team as _mt
+
+            _member = record if _mt.runs_elsewhere(record) else None
+            if _member is not None:
+                provider = str(_member.provider or "").strip() or None
+                model = _mt.pinned_model(self.p, _member) or None
             allow_tools = payload.get("allow_tools")
             if not isinstance(allow_tools, list):
                 allow_tools = None
@@ -445,9 +497,17 @@ class AssignmentDispatcher:
             },
             session_id=session.id,
         )
-        task_obj = orch.spawn_managed(
-            session.id, orch.run_session(session.id, definition=definition)
-        )
+        if _member is not None:
+            # v1.395.0: the member's model HELD and its account pinned for the
+            # whole run — entered INSIDE the run's own task, so a run the
+            # governor parks and promotes later keeps it.
+            run = _mt.run_as_member(
+                self.p, _member, lambda: orch.run_session(session.id, definition=definition),
+                scope=_agent_scope(row),
+            )
+        else:
+            run = orch.run_session(session.id, definition=definition)
+        task_obj = orch.spawn_managed(session.id, run)
         if task_obj is not None:
             self._inflight.add(task_obj)
             task_obj.add_done_callback(self._inflight.discard)
@@ -479,6 +539,14 @@ class AssignmentDispatcher:
                 await result
         except Exception:  # noqa: BLE001 — an event is never worth a pass
             log.debug("assignment publish failed", exc_info=True)
+
+
+def _agent_scope(row: Any) -> str:
+    """v1.395.0 review: the WORK a task an agent queued belongs to — the
+    queuing agent's own session (``source == "agent:<session>"``); "" for a
+    task the user (or anything else) queued: its own piece of work."""
+    src = str(getattr(row, "source", "") or "")
+    return src[len("agent:"):] if src.startswith("agent:") else ""
 
 
 def _first_line(text: str, limit: int = 200) -> str:

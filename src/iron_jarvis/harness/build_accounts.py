@@ -379,6 +379,14 @@ def session_account(svc: Any, account_id: str, account_name: str = "") -> dict[s
 #: 95%). Read from the cached snapshot's windows — never a new vendor call.
 TAKEOVER_MAX_PERCENT = 95.0
 
+#: v1.395.0 (the long-jobs plan's Phase 6, decision 8): the model team's
+#: router gives NO NEW work to a subscription account at or above this
+#: percent of ANY of its usage windows (work already running on it finishes —
+#: nothing here stops a call that has its lease). Read from the same cached
+#: snapshot as :data:`TAKEOVER_MAX_PERCENT`, which stays the floor nothing
+#: starts above. Phase 7 tunes it from the benchmark.
+NEW_WORK_MAX_PERCENT = 80.0
+
 #: The limit kinds a group takeover answers: an account that REACHED A LIMIT
 #: (its usage, its request rate, or a park Iron-Proxy did not explain). An
 #: account that must sign in again, is turned off, is removed or is merely
@@ -420,6 +428,25 @@ def peak_percent(state: Mapping[str, Any] | None, now: datetime | None = None) -
             continue
         best = float(used) if best is None else max(best, float(used))
     return best
+
+
+def peak_usage(state: Mapping[str, Any] | None, now: datetime | None = None) -> dict[str, Any] | None:
+    """The window NEAREST its limit, as :func:`row_of` words it (``{percent,
+    window, window_mins, resets_at}``), or None when the vendor sent no
+    number (v1.395.0: the team router's reason names this window)."""
+    if not isinstance(state, Mapping):
+        return None
+    return _usage_of(state, now or datetime.now(timezone.utc))
+
+
+def state_of(svc: Any, account_id: str) -> Mapping[str, Any]:
+    """One account's cached Iron-Proxy state (``{}`` when unknown). Cached
+    reads only; never raises."""
+    try:
+        snap = snapshot(svc)
+        return _state_of(snap, account_id) if snap is not None and account_id else {}
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _state_of(snap: tuple[list[dict[str, Any]], dict[str, Any]], pid: str) -> Mapping[str, Any]:
@@ -574,6 +601,7 @@ __all__ = [
     "LIMIT",
     "MOVE_KINDS",
     "NEEDS_SIGN_IN",
+    "NEW_WORK_MAX_PERCENT",
     "READY",
     "TAKEOVER_MAX_PERCENT",
     "USAGE",
@@ -586,10 +614,12 @@ __all__ = [
     "group_problem",
     "kick_plan_reads",
     "peak_percent",
+    "peak_usage",
     "plan_label",
     "row_of",
     "session_account",
     "snapshot",
+    "state_of",
     "takeover",
     "usable_now",
     "vendor_of",

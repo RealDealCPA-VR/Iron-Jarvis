@@ -5421,7 +5421,16 @@ def helper_base(
         # helper's run too (harness/command_shell) — read in the turn's own
         # context, carried explicitly like the pin.
         command_rule=_command_rule_current(),
+        # v1.395.0 review: this reply's id on the model team's record (a
+        # reviewer's verdict judges only the pieces of the same reply).
+        turn=_new_turn_key(),
     )
+
+
+def _new_turn_key() -> str:
+    from ..core.ids import new_id
+
+    return new_id("reply")
 
 
 def helper_parent_now(

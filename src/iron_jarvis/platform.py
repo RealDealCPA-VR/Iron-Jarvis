@@ -302,6 +302,10 @@ class Platform:
     #: LOCAL FLEET registry (the user's own inference machines). Seeded from the
     #: two config endpoint slots, so it is populated with zero setup.
     fleet: "object | None" = None
+    #: v1.395.0: the daemon's fleet SAMPLER (made in ``create_app``; None in a
+    #: bare platform) — the model team's router reads a local box's load off
+    #: its last pass (``agents/model_team.local_box``), never a request.
+    fleet_sampler: "object | None" = None
     #: The memory steward (v1.143.0) — ONE shared instance, so the weekly review
     #: schedule (``_dispatch_scheduled``) and the Memory page's review card window
     #: the same history and write the same run ledger instead of each building a
@@ -2143,6 +2147,9 @@ def build_platform(
             model = payload.get("model") or None
             fire_max_steps = None
             fire_approval = None
+            # v1.395.0: a MODEL TEAM MEMBER's fire runs HELD to its own model
+            # (``model_team.run_as_member``), like every door that starts it.
+            fire_member = None
             if agent_name:
                 registry = getattr(platform, "agents_registry", None)
                 definition = (
@@ -2173,10 +2180,30 @@ def build_platform(
                     _reason = _allowance.refusal_for(rec, platform.engine)
                     if _reason:
                         raise _ScheduleRefused(_reason)
+                    # A MODEL TEAM MEMBER (v1.395.0, the Phase 5 review's open
+                    # item): refused in words BEFORE any session row when its
+                    # account is not one the user's groups allow, or the
+                    # schedule names ANOTHER model than the member runs on
+                    # (never silently swapped); else it runs on ITS OWN model —
+                    # that provider's default when it names none — held there.
+                    from .agents import model_team as _mt
+
+                    _why = _mt.queued_refusal(
+                        platform,
+                        rec,
+                        provider=str(payload.get("provider") or ""),
+                        model=str(payload.get("model") or ""),
+                    )
+                    if _why:
+                        raise _ScheduleRefused(_why)
                     provider = provider or (
                         rec.provider if (rec and rec.provider) else None
                     )
                     model = model or (rec.model if (rec and rec.model) else None)
+                    if _mt.runs_elsewhere(rec):
+                        fire_member = rec
+                        provider = str(rec.provider or "").strip() or None
+                        model = _mt.pinned_model(platform, rec) or None
                     # The job card's posture and step budget (v1.295.0).
                     fire_max_steps = (rec.max_steps or None) if rec else None
                     fire_approval = (rec.approval_mode or None) if rec else None
@@ -2281,7 +2308,17 @@ def build_platform(
                 # resolved one: the absent-agent path stays call-signature
                 # byte-identical to pre-v1.171 (callers/stubs that accept
                 # only session_id keep working).
-                if definition is not None:
+                if fire_member is not None:
+                    from .agents import model_team as _mt
+
+                    done = await _mt.run_as_member(
+                        platform,
+                        fire_member,
+                        lambda: platform.orchestrator.run_session(
+                            session.id, definition=definition
+                        ),
+                    )
+                elif definition is not None:
                     done = await platform.orchestrator.run_session(
                         session.id, definition=definition
                     )

@@ -1470,6 +1470,9 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
     # event carries one; otherwise a completion settles the OLDEST open
     # handoff to that agent (the events are read oldest first).
     handed: dict[str, str] = {}
+    # v1.395.0 review: why the team router gave a member its piece (the
+    # delegation event carries it when the planner asked for a ROLE).
+    why: dict[str, str] = {}
     remote_members: list[dict[str, Any]] = []
     open_remote: dict[str, list[dict[str, Any]]] = {}
     for ev in events:
@@ -1480,6 +1483,8 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
         agent = str(data.get("agent") or "")
         if ev.type == EventType.DELEGATION_STARTED and child:
             handed.setdefault(child, str(data.get("task") or ""))
+            if data.get("reason"):
+                why.setdefault(child, _short(data.get("reason") or "", 300))
         if not (agent.lower().startswith("remote:") and not child):
             continue
         key = _handoff_key(data)
@@ -1590,6 +1595,9 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
             "model": m.model,
             "started_at": _iso(m.created_at),
             "finished_at": _iso(m.finished_at),
+            # v1.395.0 review: the team router's one sentence of why this
+            # member took the piece ("" when the planner named it).
+            "reason": why.get(m.id, ""),
         })
     for rec in remote_members:
         st = rec["status"]

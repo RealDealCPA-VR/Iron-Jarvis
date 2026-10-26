@@ -1898,6 +1898,63 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Local first, limits watched (v1.395.0)
+
+- **The planner asks for a role, and Iron Jarvis picks the member.** When a
+  coding session or an objective hands out a piece of work, the planner can
+  ask for "a team member for coding" (or reading, reviewing, testing)
+  instead of naming one. The order:
+  1. Your local models first, when their record for that role is good or
+     not known yet, and their machine isn't busy.
+  2. Then your Claude Code and Codex plans, least used first.
+  3. Then pay-per-use models.
+  4. As a last resort, a busy local machine or a local model with a poor
+     record. Work goes to a local model before it waits.
+  - A member you name directly still runs, with the rules below.
+- **Usage limits.**
+  - No new work goes to an account at 80% of any of its usage windows.
+  - Nothing new starts on an account at 95%, even for a member you named.
+    The refusal says when the account resets.
+  - Work already running on an account is never stopped.
+  - When every account that could take a piece is near its limit and no
+    local model can, the piece waits, and the reply says which account
+    resets first.
+  - Several pieces started at once are spread across your accounts instead
+    of all landing on one.
+- **Every pick says why**, on the helper's row, its Timeline row and the
+  objective's member card. For example: "local: good record for reading" or
+  "Claude Code (Spare): the local box is busy; skipped Claude Code (Work
+  Max): 83% of its 5-hour window".
+- **Account groups hold.** All the pieces of one piece of work stay in one
+  account group: once a piece runs on a work account, the rest never move to
+  a personal one.
+- **Each member keeps a record per role**, shown in Settings › Models ›
+  Model team, for example "Record: reading: good (4 of 5 passed) · coding:
+  no record yet".
+  - A piece passes when the reply's finish check passed, or a reviewer
+    member approved it. A failed check or "changes needed" counts against
+    it.
+  - A record needs at least 3 pieces, 70% of them passed, to count as good.
+    Two failures in a row stop a member getting that role first until it
+    passes again.
+  - A failure that wasn't the model's fault (its machine down, an account
+    limit, a sign-in) is not counted.
+  - The record belongs to the member's model: change the model and the
+    record starts again.
+- **A piece that fails twice on one member** goes one step up, and the row
+  says why. It never leaves Local only, and never goes to someone outside
+  the objective's team.
+- **Pay-per-use limit.** **Settings › Models › Model team › Pay-per-use limit
+  for your model team** is the most your team's pay-per-use members may spend
+  in a month. It starts at $0, which means never.
+  - Work you start yourself is not stopped by it, but what it spends counts.
+  - Members on your own machines and on your Claude Code or Codex plan are
+    not counted.
+- **Queued and scheduled work for a member** now stays on that member's own
+  model and account. A queued task that can't start yet (an account at its
+  limit, or Local only for a cloud member) waits with the reason; a
+  scheduled one is refused with the reason.
+
 ## Your model team (v1.394.0)
 
 - **A team of the models you already have.** Give an agent one or more roles

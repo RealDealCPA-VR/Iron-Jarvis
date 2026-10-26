@@ -3699,6 +3699,74 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **The planner asks for a ROLE; the team router picks the member, local
+  first, never past an account's limit, never across an account group**
+  (v1.395.0, Phase 6 of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`, decisions 7
+  and 8; a doer + a reviewer that found 11 more defects, each red first).
+  DOORS: `delegate` / `spawn_agent` take `role` (`model_team.ROLES`) + an
+  optional `piece`; the dialect tools (no extra properties — the parity
+  rule) take `subagent_type`/`agent_type` = `role:<id>`. A named member keeps
+  Phase 5 behaviour EXCEPT the 95% floor, the account groups and the pay
+  limit (`named_account`, `floor_refusal`, `pay_refusal` at both doors and
+  `consult`, before any session row). ROUTER (`model_team.route_role` /
+  `route_for_call`, ONE function, an RLock per platform): filters Local only
+  → demo model never → paused/allowance → coordinator → provider available
+  from CACHED answers (`cli_auth.never_probe`; a cold OpenCode list reads
+  "not known" — routing spawned `opencode models` before the review; pinned
+  with Popen/procs/httpx/socket spies) → `build_accounts.
+  NEW_WORK_MAX_PERCENT` 80 / `TAKEOVER_MAX_PERCENT` 95 → pay per use under
+  `team_paid_cap_usd` → a mission's team. Order: good/unknown local not busy
+  (busy = the last `platform.fleet_sampler` pass shows waiting requests) →
+  subscription lowest usage → pay per use → busy or poor local as a last
+  resort; nothing usable → a sentence naming every skip and the earliest
+  reset. A routed or named subscription member is PINNED to an account below
+  the floor even on an unpinned run (Iron-Proxy's `pickProfile` takes the
+  first READY account whatever its usage). GROUPS: `work_group` = the
+  caller's pin's group, else the group of the first account an earlier
+  piece of the SAME scope ran on (the record's `account` column, so it
+  survives a restart, then the in-memory ledger), else none. BURSTS:
+  `_Placements` counts each placed piece as `PIECE_PERCENT` 5 for
+  `PLACED_RECENT_S` 120 s and an account with no numbers takes at most
+  `UNKNOWN_BURST_MAX` 3 in that window (usage reaches the snapshot only on
+  the 30 s refresh). WHY: one sentence (`REASON_CHARS` 300) on the helper
+  frame, the saved reply line (`role`, `reason`), `delegation.started`,
+  `mission_view` members (`reason`, "Why:" on an opened AgentCard), the
+  helper row and the Timeline row + card. RECORD: `agents/team_record.
+  TeamRoleRun` (late model, in `_LATE_MODEL_MODULES`; member, role,
+  provider, model, account, scope, turn, piece, finished, check_result,
+  review), one row per piece when its run SETTLES, off the loop; a run that
+  RAISED (box down, account limit, hold refusal), a stopped run and a
+  declined/unanswered plan write NO row. The finish check credits every
+  helper whose changes are in the journal (`finish.helpers_that_changed`);
+  a reviewer MEMBER is asked (`VERDICT_ASK`) to end with `VERDICT: approved
+  | changes needed`, read ONLY from its report's last non-empty line, never
+  from a report the runtime wrote (`runtime.NO_SUMMARY_LEAD`), never from a
+  low-trust run, and applied only to the same reply's pieces
+  (`HelperParent.turn` from `chat_turn.helper_base`). `records_for(models=)`
+  reads only rows on the member's CURRENT model (decision 7: "that model's
+  record"). Good = ≥ `MIN_RUNS` 3 and ≥ `GOOD_RATE` 0.7 over the newest
+  `RECORD_WINDOW` 20; `FAIL_STREAK` 2 demotes; `PIECE_FAILS` 2 on one member
+  moves a piece ONE step up, never across Local only or a mission's team.
+  `GET /team` rows carry `records {role: {runs, passed, streak, status,
+  words}}`. CAP: `team_paid_cap_usd` (schema row, Models › Model team,
+  ask-floor, default 0 = never) counts METERED spend the allowance's way
+  (never list-price equivalents), UTC month; work the user starts is not
+  stopped by it but counts. LEFTOVERS: assignments and schedule fires run a
+  member through `run_as_member` (the scope is entered INSIDE the run's own
+  task, so a run the governor parks keeps it); `queued_refusal` HOLDS an
+  assignment with its sentence (never a strike) and refuses a schedule fire
+  ("The run failed: …"); `HeldProviderRefused` names the member
+  (`ProviderHold.who`, excluded from equality); `create_agent`'s upsert keeps
+  unnamed fields. Chat's Auto and `platform._local_oracle` are untouched
+  (pinned). OPEN: workflow agent steps, the phone escalation and the Agents
+  page's spawn start a member without `member_scope` (older than Phase 6);
+  the burst constants and the record thresholds are Phase 7's to tune; a
+  review in a later reply judges nothing; a cloud member is not reordered by
+  its record; a reworded retry is a new piece; not driven in the packaged
+  app. Pins: `tests/test_team_{router,doors,leftovers,live,words,
+  router_review}_v1395.py` (+ `tests/_fakes/team_world_v1395.py`),
+  `dashboard/__tests__/team-router{,-review}-v1395.test.tsx` (+ fixture
+  `team-router-timeline-v1395.json`, `IJ_REGEN_TEAM_ROUTER=1`).
 - **A MODEL TEAM member is a custom agent with ROLES; it runs on ITS OWN
   model, held, on an account the user's groups allow** (v1.394.0, Phase 5
   Part A of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`, decisions 5 and 6; a doer

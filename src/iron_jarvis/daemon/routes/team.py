@@ -2,7 +2,8 @@
 
 * ``GET  /team`` → ``{roles: [{id, label}], members: [...]}`` — every custom
   agent with one or more roles, with its model, where it runs, its cost type
-  and its usage from Iron-Proxy's CACHED snapshot (never a vendor call);
+  and its usage from Iron-Proxy's CACHED snapshot (never a vendor call), and
+  (v1.395.0) its RECORD per role in plain words (``records``);
 * ``GET  /team/starter?paid=0|1`` → the **Make a starter team** preview
   (``agents/model_team.starter_preview``) — NOTHING is created;
 * ``POST /team/starter {rows: [{key, name?, roles?}], paid}`` → creates the
@@ -38,8 +39,13 @@ class StarterBody(BaseModel):
     paid: bool = False
 
 
-def member_row(platform: Any, record: Any) -> dict[str, Any]:
-    """One member as Settings › Model team shows it. Never raises."""
+def member_row(platform: Any, record: Any, records: "dict[str, Any] | None" = None) -> dict[str, Any]:
+    """One member as Settings › Model team shows it. Never raises.
+
+    v1.395.0: ``records`` — the member's RECORD per role it holds
+    (``agents/team_record``; read for every member in one query by
+    :func:`team_view`): ``{role: {runs, passed, streak, status, words}}``,
+    the words plain ("good (4 of 5 passed)", "no record yet")."""
     facts = T.member_facts(platform, record) or {}
     provider = str(facts.get("provider") or "")
     available: bool | None = None
@@ -83,7 +89,16 @@ def member_row(platform: Any, record: Any) -> dict[str, Any]:
         "usage": usage if isinstance(usage, dict) else None,
         "available": available,
         "paused": bool(str(getattr(record, "paused_reason", "") or "")),
+        "records": _records_view(facts.get("roles") or [], (records or {}).get(record.name) or {}),
     }
+
+
+def _records_view(roles: list[str], mine: dict[str, Any]) -> dict[str, Any]:
+    """Each role the member holds, with its record ("no record yet" when it
+    has none)."""
+    from ...agents.team_record import RoleRecord
+
+    return {role: (mine.get(role) or RoleRecord()).view() for role in roles}
 
 
 def team_view(platform: Any) -> dict[str, Any]:
@@ -92,10 +107,18 @@ def team_view(platform: Any) -> dict[str, Any]:
     # (v1.394.0 review).
     from ...providers.cli_auth import cached_verdicts
 
+    from ...agents.team_record import records_for
+
+    members = T.team_members(platform)
+    # v1.395.0 review: each member's record on the model it runs on NOW (the
+    # router's own reading — a member moved to another model starts again).
+    models = {r.name: (str(r.provider).strip(), T.pinned_model(platform, r))
+              for r in members if str(getattr(r, "provider", "") or "").strip()}
+    records = records_for(getattr(platform, "engine", None), [r.name for r in members], "", models)
     with cached_verdicts():
         return {
             "roles": [{"id": rid, "label": label} for rid, label in T.ROLES],
-            "members": [member_row(platform, r) for r in T.team_members(platform)],
+            "members": [member_row(platform, r, records) for r in members],
         }
 
 

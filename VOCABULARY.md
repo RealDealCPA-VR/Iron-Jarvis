@@ -25,6 +25,7 @@ PR that ships it.
 | Build's other view, where Jarvis writes, runs and checks code in a folder, one conversation per session | **Coding sessions**; one of them is a **coding session** | IJ harness, harness |
 | A coding session's reply drawn on one time axis, the tab beside Plan (v1.390.0): the model you talk to, each step it took, each helper with its model | **Timeline**; its pieces are **steps**, **model calls** and **helpers** (the run log's words) | trace, span, waterfall, orchestrator, LLM call, round (never shown) |
 | The agents that take pieces of a coding session's or an objective's work, each on its OWN model (Settings › Model team, v1.394.0) | **model team**; one of them is a **team member** (a custom agent with one or more **roles**: read, code, review, test); the button that builds one from what is connected is **Make a starter team** | — |
+| How a team member's pieces of work for one role went, and the one sentence that says why it was given a piece (v1.395.0) | its **record** for that role ("good (4 of 5 passed)", "no record yet"); the sentence is the **why** line ("Why: local: good record for reading") | routing decision, dispatch reason |
 | Where a model runs, and what it costs (a team member's facts, the planner's list, Settings › Model team) | **this PC** / **your network** / **cloud**; **free** / **your plan** / **pay per use** | — |
 | Anything Iron Jarvis knows how to do | **skill** | — |
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |

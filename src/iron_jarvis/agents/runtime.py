@@ -181,6 +181,18 @@ def _user_facing_tool_output(name: str, content: str) -> str:
     return text
 
 
+#: The openings of :func:`_no_final_text_result` — a run's result the RUNTIME
+#: wrote because the model ended silently (v1.395.0 review: its last line is a
+#: tool's output, so a team reviewer's verdict is never read from it —
+#: ``agents/model_team.note_piece``).
+EMPTY_ANSWER_RESULT = (
+    "The model returned an empty answer — no tool ran and nothing was "
+    "written. Run it again, or pick a different model."
+)
+NO_SUMMARY_LEAD = "The model finished without writing a summary."
+RUNTIME_WROTE_RESULT = (EMPTY_ANSWER_RESULT, NO_SUMMARY_LEAD)
+
+
 def _no_final_text_result(run_messages: list[LLMMessage]) -> str:
     """The result of a flat run whose model ended with an EMPTY message
     (v1.288.0, agents-07). Built from THIS run's own tool ledger — the tool
@@ -191,16 +203,13 @@ def _no_final_text_result(run_messages: list[LLMMessage]) -> str:
     result). Kept here, not imported: agents never import the daemon."""
     tool_msgs = [m for m in run_messages if m.role == "tool"]
     if not tool_msgs:
-        return (
-            "The model returned an empty answer — no tool ran and nothing was "
-            "written. Run it again, or pick a different model."
-        )
+        return EMPTY_ANSWER_RESULT
     counts: dict[str, int] = {}
     for m in tool_msgs:
         name = m.name or "(unknown)"
         counts[name] = counts.get(name, 0) + 1
     ran = ", ".join(f"{n} x{c}" for n, c in counts.items())
-    text = f"The model finished without writing a summary. It ran: {ran}."
+    text = f"{NO_SUMMARY_LEAD} It ran: {ran}."
     last = tool_msgs[-1]
     # The loop's own notes to the MODEL (the repeat note, the breaker's
     # refusal, the untrusted fence) are not what the tool returned.

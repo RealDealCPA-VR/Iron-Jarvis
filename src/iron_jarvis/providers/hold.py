@@ -29,7 +29,7 @@ Nothing here blocks; only the router raises :class:`HeldProviderRefused`.
 from __future__ import annotations
 
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .adapters.base import ProviderError
 
@@ -40,6 +40,14 @@ class ProviderHold:
 
     provider: str = ""
     model: str = ""
+    #: v1.395.0: WHOSE hold it is, for the refusal's words — "" (a Build
+    #: session's turn or one of its helpers on the session's model) or
+    #: ``member:<name>`` (a MODEL TEAM member's own model, held by
+    #: ``agents/model_team.member_scope`` or, in a coding session, by
+    #: ``harness/helpers.pinned``). Last, with a default: every caller that
+    #: does not say keeps the Build session's words. Not part of equality: a
+    #: hold IS its provider and model; ``who`` only words its refusal.
+    who: str = field(default="", compare=False)
 
 
 PROVIDER_HOLD: ContextVar["ProviderHold | None"] = ContextVar(
@@ -54,21 +62,39 @@ class HeldProviderRefused(ProviderError):
 
     no_failover = True
 
-    def __init__(self, held: str, asked: str) -> None:
-        super().__init__(
-            f"This Build session runs on {held}, so its work is never sent to "
-            f"{asked}. Choose another model for the session if you want that.",
-            transient=False,
-        )
+    def __init__(self, held: str, asked: str, who: str = "") -> None:
+        super().__init__(refusal_words(held, asked, who), transient=False)
         self.held = held
         self.asked = asked
+        self.who = who
 
 
-def set_hold(provider: str = "", model: str = "") -> Token:
+def refusal_words(held: str, asked: str, who: str = "") -> str:
+    """The sentence a held call that named ANOTHER provider is refused with,
+    in the words of WHERE it happened (v1.395.0, the Phase 5 review's open
+    item): a Build session's own turn or helper says the session; a model
+    team member's run (an objective's teammate, a plain agent run, a
+    member's helper) says the member — "This Build session" there was a
+    sentence about something the user never opened."""
+    name = str(who or "")
+    if name.startswith("member:") and name[len("member:"):].strip():
+        member = name[len("member:"):].strip()
+        return (
+            f"'{member}' runs on {held}, its own model on your team, so its work is never "
+            f"sent to {asked}. Change its model in Settings › Model team if you want that."
+        )
+    return (
+        f"This Build session runs on {held}, so its work is never sent to "
+        f"{asked}. Choose another model for the session if you want that."
+    )
+
+
+def set_hold(provider: str = "", model: str = "", who: str = "") -> Token:
     """Arm a hold for the current context; returns the token for
-    :func:`reset_hold`."""
+    :func:`reset_hold`. ``who`` (v1.395.0) words a refusal: ``member:<name>``
+    for a model team member's own model."""
     return PROVIDER_HOLD.set(
-        ProviderHold(str(provider or "").strip(), str(model or "").strip())
+        ProviderHold(str(provider or "").strip(), str(model or "").strip(), str(who or "").strip())
     )
 
 
@@ -109,5 +135,5 @@ def held_model_cannot_see(manager: object) -> bool:
 
 __all__ = [
     "PROVIDER_HOLD", "HeldProviderRefused", "ProviderHold", "current_hold",
-    "held_model_cannot_see", "reset_hold", "set_hold",
+    "held_model_cannot_see", "refusal_words", "reset_hold", "set_hold",
 ]
