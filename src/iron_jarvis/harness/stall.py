@@ -506,13 +506,17 @@ def stop_step(turn_id: str, call_id: str) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def phone_may_ask(*, once_only: bool, local_ask: bool, priced: bool) -> bool:
+def phone_may_ask(
+    *, once_only: bool, local_ask: bool, priced: bool, local_only: bool = False
+) -> bool:
     """May a coding session's card go to the phone? Never a SAFETY card: a
     once-only card (the plan door, a project's or plugin's command line, a
     commit / push on the session's branch, a page click that pays or sends),
     a Local only "send to the cloud" card, or a priced spend card — the whole
-    card must be read where it is answered."""
-    return not (once_only or local_ask or priced)
+    card must be read where it is answered. And never ANY card of a Local only
+    turn (v1.392.0): a phone channel is a cloud service, and its line carries
+    the session's title and what the card asks."""
+    return not (once_only or local_ask or priced or local_only)
 
 
 _KEEP: set["asyncio.Task[Any]"] = set()

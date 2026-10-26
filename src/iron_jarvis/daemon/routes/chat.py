@@ -5495,6 +5495,9 @@ async def chat_stream(
                                 if _coding_session and _stall.phone_may_ask(
                                     once_only=bool(_once_only), local_ask=bool(_local_ask),
                                     priced=bool(_spend_card),
+                                    # v1.392.0: a Local only turn keeps every
+                                    # card in the app (a phone is a cloud).
+                                    local_only=bool(_egress.current_scope().on),
                                 )
                                 else None
                             )
