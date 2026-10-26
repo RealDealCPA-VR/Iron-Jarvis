@@ -1584,10 +1584,13 @@ def keep(platform: Any, thread_id: str, turn_id: str, attempt_id: str) -> dict[s
                       or session_facts.get("branch") != facts.get("base")):
         raise AttemptsRefused(KEEP_SESSION_GONE, 409)
     out: dict[str, Any] = {"kept": attempt_id}
+    before = B._ref_sha(wt, "HEAD")  # noqa: SLF001
+    made = ""
     try:
         if B._porcelain(wt):  # noqa: SLF001
             got = B.commit(facts, _keep_message(card, item))
-            out["commit"] = got.get("sha", "")
+            made = B._ref_sha(wt, "HEAD")  # noqa: SLF001
+            out["commit"] = str(got.get("sha", ""))
         if adopt:
             was = S.folder_of(row)
             if not S.adopt_branch(platform.engine, thread_id, facts, str(item.get("folder") or facts["worktree"]),
@@ -1605,7 +1608,16 @@ def keep(platform: Any, thread_id: str, turn_id: str, attempt_id: str) -> dict[s
                 raise
             out["merged_into"] = merged.get("into", "")
             out["merge_commit"] = merged.get("commit", "")
-    except B.GitRefused as exc:
+    except (B.GitRefused, AttemptsRefused) as exc:
+        # NOTHING MOVES on a refusal: the commit Iron Jarvis made a moment ago
+        # on the attempt's OWN branch is taken back (its work is uncommitted
+        # in its folder again, exactly as before the press) — only while the
+        # branch still points at that commit.
+        if made and before and B._ref_sha(wt, "HEAD") == made:  # noqa: SLF001
+            with contextlib.suppress(Exception):
+                B._g(["reset", "-q", "--mixed", before], wt)  # noqa: SLF001
+        if isinstance(exc, AttemptsRefused):
+            raise
         raise AttemptsRefused(str(exc), exc.status) from None
     # The folders to the trash — the kept one's too once its work is merged
     # (a session that MOVED onto the kept branch works in that folder now).

@@ -388,7 +388,8 @@ SLEEPER = (
 )
 
 
-async def test_stop_ends_every_attempt_and_every_process_it_started(app, fake, repo, monkeypatch):
+@pytest.mark.parametrize("how", ["stop", "archive"])
+async def test_stop_ends_every_attempt_and_every_process_it_started(app, fake, repo, monkeypatch, how):
     await enable(app)
     # Three attempts, each running a program that would outlive it: Claude's
     # and the local model's through the shell tool (in flight when Stop
@@ -426,9 +427,14 @@ async def test_stop_ends_every_attempt_and_every_process_it_started(app, fake, r
     started = await until(pids, 60.0)
     assert len(started) == 3, "every attempt's program started"
     assert all(_alive(p) for p in started.values())
-    # THE STOP: the attempts turn's own Stop (the screen's Stop button).
-    status, _ = await asgi(app, "POST", "/chat/turns/att-stop/stop", {})
-    assert status == 200
+    if how == "stop":
+        # THE STOP: the attempts turn's own Stop (the screen's Stop button).
+        status, _ = await asgi(app, "POST", "/chat/turns/att-stop/stop", {})
+        assert status == 200
+    else:
+        # Archiving the session ("stop and archive") stops them too.
+        status, out = await asgi(app, "POST", f"/build/sessions/{sid}/archive", {"stop": True})
+        assert status == 200, out
     status, raw = await task
     frames = frames_of(raw)
     assert frames[-1][0] == "done", frames[-3:]
@@ -561,3 +567,283 @@ def test_a_model_cannot_start_attempts():
         assert "harness.attempts" not in text and "import attempts" not in text, f
     assert {"delegate", "spawn_agent", "ask_user", "exit_plan_mode", "escalate_to_agent"} <= A.EXCLUDED_TOOLS
     assert A.parse_request("Let me try it with Codex later") is None, "only a sentence that STARTS with try"
+
+
+@pytest.mark.parametrize("text, names, count, task", [
+    ("Try this with Claude, Codex and the local model: fix the failing test.",
+     ["Claude", "Codex", "the local model"], 0, "fix the failing test."),
+    ("Fix the failing test. Try it on two models.", [], 2, "Fix the failing test."),
+    ("Please try this using Codex and Claude - make add() add", ["Codex", "Claude"], 0, "make add() add"),
+    ("Can you try it across three different models? The parser drops a field.",
+     [], 3, "The parser drops a field."),
+    ("try it with `glm-local`", ["glm-local"], 0, ""),
+])
+def test_the_words_that_ask_for_attempts(text, names, count, task):
+    req = A.parse_request(text)
+    assert req is not None
+    assert req.names == names and req.count == count and req.task == task
+
+
+@pytest.mark.parametrize("text", [
+    "", "Fix the failing test.", "I'll try this with the new API later.", "We should try harder.",
+    "Try to make it faster.", "Did you try it?",
+])
+def test_ordinary_sentences_ask_for_nothing(text):
+    assert A.parse_request(text) is None
+
+
+# --------------------------------------------------------------------------- #
+# Keep: refused while running; a conflict moves nothing
+# --------------------------------------------------------------------------- #
+
+
+async def test_keep_is_refused_while_any_attempt_still_runs(app, fake, repo, monkeypatch):
+    await enable(app)
+    release = asyncio.Event()
+
+    async def held(_world):
+        await release.wait()
+        return "Done waiting."
+
+    wire_models(app, monkeypatch, World({
+        "codex-cli": passing_script(),
+        "ollama": [held],
+    }))
+    view = await new_session(app, repo)
+    sid = view["id"]
+    task = asyncio.create_task(open_turn(app, sid, {
+        "text": "Try this with Codex and the local model: fix add in calc.py.", "turn_id": "kr-1",
+    }, timeout=120.0))
+
+    def codex_done():
+        return next((d for e, d in turn_frames(app, "kr-1")
+                     if e == A.EVENT and d.get("provider") == "codex-cli" and d.get("state") == "done"), None)
+
+    row = await until(codex_done, 60.0)
+    assert row is not None
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "kr-1", "attempt": row["id"]})
+    assert status == 409 and body["detail"] == A.KEEP_RUNNING
+    release.set()
+    status, raw = await task
+    assert status == 200 and frames_of(raw)[-1][0] == "done"
+    status, kept = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "kr-1", "attempt": row["id"]})
+    assert status == 200, kept
+
+
+async def test_a_merge_conflict_is_said_in_words_and_nothing_moves(app, fake, repo, monkeypatch):
+    await enable(app)
+    wire_models(app, monkeypatch, World({"codex-cli": passing_script(), "ollama": failing_script()}))
+    view = await new_session(app, repo)
+    sid, wt = view["id"], Path(view["git"]["worktree"])
+    before = snapshot(repo)
+    frames = await attempts_turn(app, sid, "Try this with Codex and the local model: fix add in calc.py.", "mc-1")
+    card = card_of(frames)
+    codex = item_for(card, "codex-cli")
+    # Meanwhile the session's own branch changed the same line another way.
+    (wt / "calc.py").write_bytes(b"def add(a, b):\n    return b + a  # mine\n")
+    git("commit", "-q", "-am", "mine", cwd=wt)
+    session_head = git("rev-parse", "HEAD", cwd=wt)
+    attempt_wt = Path(codex["git"]["worktree"])
+    attempt_head = git("rev-parse", "HEAD", cwd=attempt_wt)
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "mc-1", "attempt": codex["id"]})
+    assert status == 409, body
+    assert "would conflict in calc.py" in body["detail"] and "Nothing was changed" in body["detail"]
+    # Nothing moved: the session's branch, every attempt's folder, the
+    # attempt's own branch (Iron Jarvis's commit taken back: its work is in
+    # its folder, not committed, exactly as before the press), the card.
+    assert git("rev-parse", "HEAD", cwd=wt) == session_head
+    assert git("rev-parse", "HEAD", cwd=attempt_wt) == attempt_head
+    assert "calc.py" in git("status", "--porcelain", cwd=attempt_wt)
+    for it in card["items"]:
+        assert Path(it["git"]["worktree"]).exists()
+    line = next(m for m in messages_of(app, sid) if m.get("role") == "assistant" and m.get("turnId") == "mc-1")
+    assert "kept" not in line[A.LINE_KEY]
+    assert snapshot(repo) == before
+
+
+async def test_a_session_working_in_its_folder_directly_moves_onto_the_kept_branch(
+    app, fake, repo, tmp_path, monkeypatch,
+):
+    """No branch of its own: the attempts start from the folder's last commit
+    (its base), and Keep MOVES the session onto the kept attempt's branch —
+    the user's main checkout is never touched."""
+    await enable(app)
+    wire_models(app, monkeypatch, World({"codex-cli": passing_script(), "ollama": failing_script()}))
+    view = await new_session(app, repo, branch=False)
+    sid = view["id"]
+    assert "git" not in view and view["folder"] == str(repo)
+    before = snapshot(repo)
+    frames = await attempts_turn(app, sid, "Try this with Codex and the local model: fix add in calc.py.", "nb-1")
+    card = card_of(frames)
+    assert card["adopt"] is True and card["base"] == "main"
+    codex, local = item_for(card, "codex-cli"), item_for(card, "ollama")
+    status, kept = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "nb-1", "attempt": codex["id"]})
+    assert status == 200, kept
+    setup = setup_of(app, sid)
+    assert setup["git"]["branch"] == codex["branch"] and setup["git"]["checkout"] == str(repo)
+    assert setup["workspace_dir"] == codex["folder"]
+    # Its work is committed on the branch the session now works on.
+    assert (Path(codex["folder"]) / "calc.py").read_text(encoding="utf-8").replace("\r\n", "\n") == FIXED
+    assert git("status", "--porcelain", cwd=Path(codex["folder"])) == ""
+    # The kept folder stays (the session works there); the other one is in
+    # the trash with its branch kept.
+    assert Path(codex["git"]["worktree"]).exists() and not Path(local["git"]["worktree"]).exists()
+    assert git("rev-parse", "--verify", f"refs/heads/{local['branch']}", cwd=repo)
+    # The main checkout: files, index, HEAD, status, current branch and main.
+    assert snapshot(repo) == before
+
+
+async def test_the_try_on_control_runs_exactly_the_picked_models(app, fake, repo, monkeypatch):
+    await enable(app)
+    world = wire_models(app, monkeypatch, World({"codex-cli": passing_script(), "ollama": failing_script()}))
+    view = await new_session(app, repo)
+    frames = await attempts_turn(app, view["id"], "fix add in calc.py", "to-1",
+                                 try_on=[{"provider": CODEX[0], "model": CODEX[1]},
+                                         {"provider": LOCAL[0], "model": LOCAL[1]}])
+    card = card_of(frames)
+    assert [(i["provider"], i["model"]) for i in card["items"]] == [CODEX, LOCAL]
+    assert {c["provider"] for c in world.calls} == {"codex-cli", "ollama"}
+    # More than three is refused in words, not a 422.
+    status, raw = await open_turn(app, view["id"], {
+        "text": "fix it", "turn_id": "to-2", "try_on": [{"provider": p, "model": m} for p, m in (*MENU_PAIRS, CODEX)],
+    })
+    assert status == 400 and json.loads(raw)["detail"] == A.TOO_MANY
+
+
+MENU_PAIRS = [(r["provider"], r["model"]) for r in MENU]
+
+
+# --------------------------------------------------------------------------- #
+# the account rules: the 95% floor, the pay-per-use limit
+# --------------------------------------------------------------------------- #
+
+
+async def test_an_account_past_the_floor_is_refused_before_anything_starts(app, fake, repo, tmp_path, monkeypatch):
+    fake.states["x-plus"]["windows"][0]["usedPercent"] = 97
+    fake.states["x-team"]["status"] = "unauthenticated"
+    await enable(app)
+    world = wire_models(app, monkeypatch, World({}))
+    view = await new_session(app, repo)
+    status, raw = await open_turn(app, view["id"], {
+        "text": "Try this with Codex and the local model: fix add.", "turn_id": "fl-1",
+    })
+    assert status == 400, raw
+    detail = json.loads(raw)["detail"]
+    assert "97%" in detail and "Name another model to try it on" in detail
+    assert world.calls == []
+    _no_attempt_made(app, view["id"], tmp_path)
+
+
+async def test_a_pay_per_use_model_past_the_limit_is_refused(app, fake, repo, tmp_path, monkeypatch):
+    await enable(app)
+    menu = [*MENU, {"provider": "google", "model": "gemini-3.8-flash", "available": True, "on_this_network": False}]
+    world = wire_models(app, monkeypatch, World({}), menu=menu)
+    mgr = app.state.platform.providers
+    real = mgr.available
+    monkeypatch.setattr(mgr, "available", lambda name: True if name == "google" else real(name))
+    assert app.state.platform.config.team_paid_cap_usd == 0
+    view = await new_session(app, repo)
+    status, raw = await open_turn(app, view["id"], {
+        "text": "Try this with Gemini and the local model: fix add.", "turn_id": "pay-1",
+    })
+    assert status == 400, raw
+    detail = json.loads(raw)["detail"]
+    assert "pay per use" in detail and "$0 a month" in detail
+    assert world.calls == []
+    _no_attempt_made(app, view["id"], tmp_path)
+
+
+# --------------------------------------------------------------------------- #
+# an attempt's own card waits on its row; a restart keeps the card
+# --------------------------------------------------------------------------- #
+
+
+async def test_an_attempts_approval_card_is_drawn_on_its_row_and_answered_there(app, fake, repo, monkeypatch):
+    await enable(app)
+    world = wire_models(app, monkeypatch, World({
+        "ollama": [shell("s1", "echo hello"), "Ran it."],
+    }))
+    view = await new_session(app, repo, approval_mode="always_ask")
+    sid = view["id"]
+    task = asyncio.create_task(open_turn(app, sid, {
+        "text": "Try this with the local model: say hello.", "turn_id": "ap-1",
+    }, timeout=120.0))
+
+    def asking():
+        return next((d for e, d in turn_frames(app, "ap-1")
+                     if e == A.EVENT and isinstance(d.get("ask"), dict) and d["ask"].get("id")), None)
+
+    row = await until(asking, 60.0)
+    assert row is not None and row["state"] == "waiting" and row["ask"]["tool"] == "shell"
+    status, _ = await asgi(app, "POST", f"/chat/approvals/{row['ask']['id']}", {"decision": "once"})
+    assert status == 200
+    status, raw = await task
+    frames = frames_of(raw)
+    last = [d for e, d in frames if e == A.EVENT][-1]
+    assert last["ask"] is None and last["state"] == "done"
+    assert [c["provider"] for c in world.calls].count("ollama") >= 2
+
+
+async def test_a_shutdown_mid_run_keeps_the_card_cut_off_and_ends_every_program(app, fake, repo, monkeypatch):
+    await enable(app)
+    wire_models(app, monkeypatch, World({
+        "codex-cli": passing_script(),
+        "ollama": [shell("s1", SLEEPER.format(n="local"))],
+    }))
+    view = await new_session(app, repo)
+    sid = view["id"]
+    task = asyncio.create_task(open_turn(app, sid, {
+        "text": "Try this with Codex and the local model: fix add in calc.py.", "turn_id": "sd-1",
+    }, timeout=120.0))
+
+    def local_wt():
+        return next((Path(d["git"]["worktree"]) for e, d in turn_frames(app, "sd-1")
+                     if e == A.EVENT and d.get("provider") == "ollama" and isinstance(d.get("git"), dict)), None)
+
+    wt = await until(local_wt, 30.0)
+    pidfile = wt / "pid-local.txt"
+    assert await until(lambda: pidfile.exists() and pidfile.read_text(encoding="utf-8").strip(), 60.0)
+    pid = int(pidfile.read_text(encoding="utf-8").strip())
+    await until(lambda: any(e == A.EVENT and d.get("provider") == "codex-cli" and d.get("state") == "done"
+                            for e, d in turn_frames(app, "sd-1")), 60.0)
+    # The app stops (the lifespan cuts every running turn off).
+    await app.state.platform.turn_logs.shutdown()
+    # The page following it sees the turn end (its log says it was cut off).
+    status, raw = await asyncio.wait_for(task, 30.0)
+    assert frames_of(raw)[-1][0] == "error"
+    assert await until(lambda: not _alive(pid), 20.0)
+    line = next(m for m in messages_of(app, sid) if m.get("role") == "assistant" and m.get("turnId") == "sd-1")
+    card = line[A.LINE_KEY]
+    states = {i["provider"]: (i["state"], i["why"]) for i in card["items"]}
+    assert states["codex-cli"] == ("done", "finished")
+    assert states["ollama"] == ("stopped", "cut_off")
+    # The card a restart shows is the line's — and the finished attempt can
+    # still be kept.
+    status, kept = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "sd-1", "attempt": item_for(card, "codex-cli")["id"]})
+    assert status == 200, kept
+
+
+def test_a_crash_rebuild_keeps_the_card_cut_off():
+    """A crash leaves only the stored frames: the boot's rebuild
+    (``routes/build.replayed_reply_line``, the live writer's own fold) keeps
+    the card, every attempt the frames left unfinished read as cut off."""
+    from iron_jarvis.daemon.routes.build import replayed_reply_line
+
+    frames = [
+        ["attempt", json.dumps({"id": "try1", "label": "Codex", "provider": "codex-cli", "model": "gpt-5.5",
+                                "state": "running", "steps": 2, "since": 1, "ask": None})],
+        ["attempt", json.dumps({"id": "try2", "label": "glm-local", "provider": "ollama", "model": "glm-local",
+                                "state": "done", "why": "finished", "words": "Finished", "since": 1,
+                                "finish": {"tests": "passed", "command": TEST_CMD}})],
+    ]
+    lines = replayed_reply_line("cr-1", frames, started_at=1_700_000_000.0)
+    assert lines is not None
+    card = lines[-1][A.LINE_KEY]
+    by_id = {i["id"]: i for i in card["items"]}
+    assert by_id["try1"]["state"] == "stopped" and by_id["try1"]["why"] == "cut_off"
+    assert by_id["try2"]["state"] == "done" and by_id["try2"]["tests"] == "passed"

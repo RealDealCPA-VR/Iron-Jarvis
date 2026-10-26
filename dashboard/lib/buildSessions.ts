@@ -268,6 +268,9 @@ export type BuildMessage = PaneMessage & {
    *  (raw; lib/buildAccounts decodeAccountMove) — on the hidden question and
    *  on the reply. */
   accountMove?: unknown;
+  /** v1.397.0: the ATTEMPTS card of a "try this on several models" reply
+   *  (raw; lib/buildAttempts decodeAttemptsCard). */
+  attempts?: unknown;
 };
 
 /** Part 3, Phase 2: a reply line's `finish`, whitelisted — the known keys
@@ -395,6 +398,9 @@ const LINE_KEYS = [
   // v1.393.0 (long jobs, Phase 4): the reply carried on with another account
   // of the same group ({from, fromName, to, toName, group}).
   "accountMove",
+  // v1.397.0: the attempts card of a "try this on several models" reply
+  // (lib/buildAttempts).
+  "attempts",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {
