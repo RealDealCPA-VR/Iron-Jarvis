@@ -1322,8 +1322,9 @@ export function HarnessSession({
       typedLine = raw;
     }
     // v1.379.0: a skill or a command alone is a message too.
-    // v1.397.0: the "Try on…" picks ride the next message from the box.
-    const trying: TryOnPick[] = fromBox ? tryOnRef.current : [];
+    // v1.397.0: the "Try on…" picks ride the next message from the box —
+    // review: and a waiting message keeps its own.
+    const trying: TryOnPick[] = fromBox ? tryOnRef.current : (item.tryOn ?? []);
     if (!text && files.length === 0 && picks.length === 0 && !picked && !command && !trying.length) return;
     if (busy) {
       // A note while it works is words only; the files and the skill wait
@@ -1443,7 +1444,8 @@ export function HarnessSession({
     const text = input.trim();
     const files = att.filesRef.current;
     const picks = atFilesRef.current;
-    if (!text && files.length === 0 && picks.length === 0) return;
+    const trying = tryOnRef.current;
+    if (!text && files.length === 0 && picks.length === 0 && trying.length === 0) return;
     if (att.busyRef.current) {
       setError("A file is still being attached. Queue the message when it is done.");
       return;
@@ -1457,6 +1459,8 @@ export function HarnessSession({
       ...(skillRef.current ? { skill: skillRef.current } : {}),
       ...(picks.length ? { files: picks } : {}),
       ...(files.length ? { attachments: files } : {}),
+      // Review (v1.397.0): the "Try on…" picks wait with THIS message.
+      ...(trying.length ? { tryOn: trying } : {}),
     };
     const next = [...queued, item];
     setQueued(next);
@@ -1466,6 +1470,7 @@ export function HarnessSession({
     att.clear();
     setAtFiles([]);
     setSkill(null);
+    setTryOn([]);
   }
 
   async function stop() {

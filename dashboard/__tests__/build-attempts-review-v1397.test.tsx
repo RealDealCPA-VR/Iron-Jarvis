@@ -225,3 +225,71 @@ describe("a card copied by Branch from here", () => {
     expect(screen.getByTestId("attempts-lead")).toHaveTextContent("belong to the session this one was branched from");
   });
 });
+
+describe("a message queued while a reply works keeps its Try on picks", () => {
+  function controlledStream() {
+    let ctl!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        ctl = c;
+      },
+    });
+    const enc = new TextEncoder();
+    return {
+      response: new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+      push: (event: string, data: unknown) => ctl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)),
+      end: () => ctl.close(),
+    };
+  }
+
+  it("Ctrl+Enter queues the picks WITH the words, and the queued message tries them when it goes", async () => {
+    const running = controlledStream();
+    const next = controlledStream();
+    const fetchMock = vi.fn().mockResolvedValueOnce(running.response).mockResolvedValueOnce(next.response);
+    vi.stubGlobal("fetch", fetchMock);
+    api.gets["/build/sessions/s1"] = view({
+      running: true,
+      turn_id: "t0",
+      messages: [{ role: "user", content: "write the parser", turnId: "t0" }],
+    });
+    render(<HarnessSession threadId="s1" terminal={terminal} listRunning={false} onChanged={() => {}} onGone={() => {}} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByTestId("harness-try-on"));
+    const rows = screen.getAllByTestId("harness-try-on-row");
+    fireEvent.click(rows.find((r) => r.getAttribute("data-model") === "gpt-5.5")!);
+    fireEvent.click(rows.find((r) => r.getAttribute("data-model") === "glm-local")!);
+    fireEvent.click(screen.getByTestId("harness-try-on-done"));
+    const box = screen.getByTestId("harness-input") as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "fix add in calc.py" } });
+    fireEvent.keyDown(box, { key: "Enter", ctrlKey: true });
+    await waitFor(() => {
+      const put = api.calls.find((c) => c.method === "PUT" && c.path === "/chat/threads/s1/queue");
+      expect(put).toBeDefined();
+      const items = (put!.body as { items: Record<string, unknown>[] }).items;
+      expect(items[0].text).toBe("fix add in calc.py");
+      expect(items[0].try_on).toEqual([
+        { provider: "codex-cli", model: "gpt-5.5", label: "GPT-5.5 (Codex)" },
+        { provider: "ollama", model: "glm-local", label: "glm-local" },
+      ]);
+    });
+    // The picks went with that message; the chip asks again.
+    expect(screen.getByTestId("harness-try-on")).toHaveTextContent("Try on…");
+    // The reply ends: the waiting message goes — WITH its picks.
+    api.gets["/build/sessions/s1"] = view({
+      messages: [
+        { role: "user", content: "write the parser", turnId: "t0" },
+        { role: "assistant", content: "Done.", turnId: "t0" },
+      ],
+    });
+    running.push("done", { reply: "Done." });
+    running.end();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const body = JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body));
+    expect(body.text).toBe("fix add in calc.py");
+    expect(body.try_on).toEqual([
+      { provider: "codex-cli", model: "gpt-5.5" },
+      { provider: "ollama", model: "glm-local" },
+    ]);
+    next.end();
+  });
+});
