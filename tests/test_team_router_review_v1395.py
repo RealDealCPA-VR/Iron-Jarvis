@@ -34,6 +34,14 @@ from iron_jarvis.iron_proxy.pin import AccountPin
 from tests._fakes.team_world_v1395 import LOCAL, make_world, member
 
 
+@pytest.fixture(autouse=True)
+def _still_clock(monkeypatch):
+    """The ledger's clock stands still unless a test moves it: a placement
+    never expires in the middle of a pin on a slow runner (the CLAUDE.md
+    rule — a clock the test controls)."""
+    monkeypatch.setattr(T, "CLOCK", lambda: 10_000.0)
+
+
 @pytest.fixture
 def w(tmp_path, monkeypatch):
     return make_world(tmp_path, monkeypatch)
