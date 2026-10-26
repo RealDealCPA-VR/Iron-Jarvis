@@ -34,10 +34,15 @@ command is never run again blindly). Every write is off the loop, on ONE
 writer thread (so two writes of a turn never land out of order), awaited for
 at most :data:`SAVE_WAIT_S`.
 
-BOUNDED. A list over ``agents.transcript.MAX_TRANSCRIPT_CHARS`` (4 M chars) is
-not kept at all — the stale shorter copy is DELETED, never resumed (resuming
-it would run finished steps again). A write that fails or times out does the
-same. Either way the reply keeps v1.389.0's Retry.
+BOUNDED. A list over ``agents.transcript.MAX_TRANSCRIPT_CHARS`` (4 M chars)
+keeps its question and its NEWEST whole rounds, with one note saying how many
+of its earliest tool calls are left out (review: :func:`_fit` — the long
+replies this exists for reach the cap, and the model only ever sees the
+newest rounds that fit its window anyway). Only when even the question and
+the newest round do not fit is nothing kept — the stale shorter copy is
+DELETED, never resumed (resuming it would run finished steps again). A write
+that fails or times out does the same. Either way the reply keeps v1.389.0's
+Retry.
 
 HOW LONG. Only while it can be resumed: a reply that ends — done, failed or
 stopped by the user — deletes its list (``routes/build.recorded_turn``); a
@@ -136,7 +141,17 @@ class _Snap:
         self.images = bool(getattr(m, "images", None))
 
 
-def _encode_text(snaps: list[_Snap], real: dict[str, str]) -> str:
+#: v1.391.0 review: what stands right after the question when a kept list
+#: had to leave its EARLIEST steps out to stay under the cap (see
+#: :func:`_fit`). The model reads it on a resume.
+LEFT_OUT_NOTE = (
+    "[Iron Jarvis kept this reply's record small by leaving out its earliest {n} tool calls "
+    "(above this note they are not shown). What they did is already in the folder: check the "
+    "files before doing any of that work again.]"
+)
+
+
+def _encode_rows(snaps: list[_Snap], real: dict[str, str]) -> list[dict[str, Any]]:
     from ..agents.transcript import _encode
 
     rows = _encode(snaps)
@@ -145,22 +160,74 @@ def _encode_text(snaps: list[_Snap], real: dict[str, str]) -> str:
             name = real.get(str(c.get("id") or ""), "")
             if name and name != c.get("name"):
                 c["tool"] = name
-    return json.dumps(rows)
+    return rows
+
+
+def _encode_text(snaps: list[_Snap], real: dict[str, str]) -> str:
+    return json.dumps(_encode_rows(snaps, real))
+
+
+def _fit(rows: list[dict[str, Any]], cap: int) -> "str | None":
+    """The kept list as JSON, at most ``cap`` chars, or None when even the
+    question and the newest round do not fit (v1.391.0 review).
+
+    The doer kept NOTHING once a reply's list passed the cap — and the cap
+    (``agents.transcript.MAX_TRANSCRIPT_CHARS``, 4 M chars) is what the long
+    replies this feature exists for reach (120 reads of up to 32,000 chars
+    each), so exactly those replies lost the carry-on and fell back to Retry
+    from the beginning. The model never sees that much anyway: each round
+    sends the list fitted to its window (``chat_turn._fit_turn_transcript``
+    drops the oldest rounds first). So the list keeps its question and its
+    NEWEST rounds, each round whole (an assistant turn with its tool results
+    is ONE unit — never split), and the earliest ones are left out, with
+    :data:`LEFT_OUT_NOTE` saying how many tool calls are not shown."""
+    parts = [json.dumps(r) for r in rows]
+
+    def size(ps: list[str]) -> int:
+        return 2 + sum(len(p) for p in ps) + 2 * max(0, len(ps) - 1)
+
+    if size(parts) <= cap:
+        return "[" + ", ".join(parts) + "]"
+    if len(rows) < 2:
+        return None
+    # The units after the question: an assistant turn with the tool results
+    # that follow it, or any other row alone.
+    units: list[tuple[int, int]] = []
+    i = 1
+    while i < len(rows):
+        j = i + 1
+        if rows[i].get("role") == "assistant":
+            while j < len(rows) and rows[j].get("role") == "tool":
+                j += 1
+        units.append((i, j))
+        i = j
+    left_out = 0
+    for k, (a, b) in enumerate(units):
+        if k == len(units) - 1:
+            return None  # even the newest round alone does not fit
+        left_out += sum(len(r.get("tool_calls") or []) for r in rows[a:b])
+        keep = parts[units[k + 1][0]:]
+        note = json.dumps({"role": "user", "content": LEFT_OUT_NOTE.format(n=left_out)})
+        kept = [parts[0], note, *keep]
+        if size(kept) <= cap:
+            return "[" + ", ".join(kept) + "]"
+    return None
 
 
 def _write(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
            real: dict[str, str]) -> str:
-    """"ok", "over" (over the cap: the row is removed), or "failed" (the row
-    is removed when it can be). On the writer thread."""
-    from ..agents.transcript import MAX_TRANSCRIPT_CHARS
+    """"ok", "over" (over the cap even after leaving the earliest rounds out:
+    the row is removed), or "failed" (the row is removed when it can be). On
+    the writer thread."""
+    from ..agents import transcript as _transcript
 
     try:
-        text = _encode_text(snaps, real)
+        text = _fit(_encode_rows(snaps, real), _transcript.MAX_TRANSCRIPT_CHARS)
     except Exception:  # noqa: BLE001
         log.warning("could not encode the conversation of %s", run_id, exc_info=True)
         _delete(engine, run_id)
         return "failed"
-    if len(text) > MAX_TRANSCRIPT_CHARS:
+    if text is None:
         _delete(engine, run_id)
         return "over"
     try:

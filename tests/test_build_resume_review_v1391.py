@@ -373,6 +373,80 @@ async def test_the_start_itself_refuses_a_resume_once_the_user_sent_a_newer_mess
 
 
 # --------------------------------------------------------------------------- #
+# 5. a LONG reply (the kind this exists for) keeps its newest rounds
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_reply_past_the_cap_keeps_its_newest_rounds_and_still_carries_on(home, unchecked, monkeypatch):
+    """The doer's list was dropped WHOLE once it passed the cap — and the cap
+    is what a two-hour reply reaches (120 reads of up to 32,000 chars), so
+    exactly the replies this feature exists for fell back to Retry from the
+    beginning. Now the list keeps its question and its newest whole rounds,
+    with a note saying how many tool calls are left out; the reply carries
+    on, and no finished step runs again."""
+    from iron_jarvis.agents import transcript
+
+    first = create_app(home)
+    sid = new_session(first, unchecked)["id"]
+    monkeypatch.setattr(transcript, "MAX_TRANSCRIPT_CHARS", 3_500)
+    big = "x" * 2_000
+    await _run_until_held(first, sid, [_write("c1", "a.txt", big), _write("c2", "b.txt", big),
+                                       _write("c3", "c.txt", big), _Hold()], "bt-1", "make three big files")
+    kept = json.loads(next(r for r in _records(first) if r.run_id == "build-turn:bt-1").messages_json)
+    assert len(json.dumps(kept)) <= 3_500
+    assert kept[0]["content"] == "make three big files"
+    assert kept[1]["role"] == "user" and "earliest 2 tool calls" in kept[1]["content"]
+    assert [(r["role"], [c["id"] for c in r.get("tool_calls", [])], r.get("tool_call_id")) for r in kept[2:]] == [
+        ("assistant", ["c3"], None), ("tool", [], "c3"),
+    ]
+
+    second = _reboot(home)
+    script = wire(second, Script(["All three are there."]))
+    assert await build_routes.resume_after_restart(second.state.d) == [sid]
+    new = await _resumed(second, sid)
+    assert new.status == "done", new.frames[-3:]
+    sent = script.calls[0]["messages"]
+    assert [m.tool_call_id for m in sent if m.role == "tool"] == ["c3"]
+    assert any("earliest 2 tool calls" in (m.content or "") for m in sent if m.role == "user")
+    from iron_jarvis.core.models import ToolInvocation
+
+    with session_scope(second.state.platform.engine) as db:
+        writes = [r for r in db.exec(select(ToolInvocation)).all() if r.tool == "write_file"]
+    assert len(writes) == 3, "no finished step ran again"
+
+
+def test_a_kept_list_cut_to_the_cap_never_splits_a_round():
+    """Units, never messages: an assistant turn and EVERY tool result it
+    asked for stay together, and the newest round is kept whole or nothing
+    is."""
+    rows = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "a", "name": "Read", "arguments": {}},
+                                                             {"id": "b", "name": "Read", "arguments": {}}]},
+        {"role": "tool", "tool_call_id": "a", "content": "A" * 300},
+        {"role": "tool", "tool_call_id": "b", "content": "B" * 300},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c", "name": "Read", "arguments": {}},
+                                                             {"id": "d", "name": "Read", "arguments": {}}]},
+        {"role": "tool", "tool_call_id": "c", "content": "C" * 300},
+        {"role": "tool", "tool_call_id": "d", "content": "D" * 300},
+    ]
+    whole = json.dumps(rows)
+    assert RR._fit(rows, len(whole)) == whole
+    for cap in range(200, len(whole)):
+        text = RR._fit(rows, cap)
+        if text is None:
+            continue
+        kept = json.loads(text)
+        assert len(text) <= cap and kept[0]["content"] == "q"
+        asked = {c["id"] for r in kept for c in r.get("tool_calls", [])}
+        answered = {r["tool_call_id"] for r in kept if r["role"] == "tool"}
+        assert asked == answered, (cap, asked, answered)
+    newest_alone = json.dumps([rows[0], {"role": "user", "content": RR.LEFT_OUT_NOTE.format(n=2)}, *rows[4:]])
+    assert RR._fit(rows, len(newest_alone)) == newest_alone
+    assert RR._fit(rows, len(newest_alone) - 1) is None, "the newest round alone does not fit: nothing"
+
+
+# --------------------------------------------------------------------------- #
 # 4. the sleep blocker holds for work that RUNS, never for work parked on you
 # --------------------------------------------------------------------------- #
 

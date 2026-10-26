@@ -569,6 +569,29 @@ def _written(home: Path, sid: str) -> list[str]:
     return sorted(Path(json.loads(a or "{}").get("path", "")).name for (a,) in rows)
 
 
+def _stored_steps(home: Path, turn_id: str) -> int:
+    """How many FINISHED steps turn ``turn_id``'s record on disk holds."""
+    con = _ro(home)
+    try:
+        row = con.execute("select frames_json from chatturnrecord where id = ?", (turn_id,)).fetchone()
+    except sqlite3.Error:
+        return 0
+    finally:
+        con.close()
+    try:
+        frames = json.loads((row[0] if row else "") or "[]")
+    except ValueError:
+        return 0
+    n = 0
+    for frame in frames if isinstance(frames, list) else []:
+        if isinstance(frame, list) and len(frame) == 2 and frame[0] == "tool_call":
+            try:
+                n += json.loads(frame[1]).get("status") == "finished"
+            except (ValueError, AttributeError):
+                continue
+    return n
+
+
 def _files(folder: Path) -> dict[str, str]:
     return {p.name: p.read_text(encoding="utf-8") for p in folder.iterdir() if p.is_file()}
 
@@ -696,7 +719,12 @@ def test_a_crash_carries_a_coding_reply_on_and_keeps_its_timeline(tmp_path):
             _until(lambda: _reply_done(home, c, "c-1"), 60, "the reply that never stopped")
             _ask(first, a, "[A] make three files", "a-1")
             assert hold.reached.wait(60), "A never asked for its third step"
-            time.sleep(1.5)  # the turn's log is written to disk about once a second
+            # The turn's log reaches the disk about once a second (v1.391.0:
+            # also when the reply then goes quiet). Review: WAIT FOR THAT
+            # WRITE, never a fixed sleep — on a loaded runner a 1.5 s sleep
+            # can end before it lands, and the crash then leaves a record
+            # without the steps this test checks were rebuilt.
+            _until(lambda: _stored_steps(home, "a-1") >= 2, 60, "A's two steps on disk")
             leftovers = first.crash()
         finally:
             hold.release.set()
