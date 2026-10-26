@@ -53,6 +53,7 @@ import {
 import { helperName } from "@/lib/buildHelpers";
 import { carriedOnTurns, timelineResumeNote } from "@/lib/buildResume";
 import type { BuildSessionView } from "@/lib/buildSessions";
+import { accountUsageLine, type BuildAccount } from "@/lib/buildAccounts";
 import { providerDisplay } from "@/lib/onboarding";
 import { kindWords, rowSubject, stepPhrase, stepPhraseText } from "@/lib/stepWords";
 import { summarizedWords } from "@/lib/buildLongJobs";
@@ -501,10 +502,15 @@ export const HarnessTimeline = memo(function HarnessTimeline({
   view,
   live,
   models = [],
+  account = null,
 }: {
   view: BuildSessionView;
   live: LiveTimelineHandle | null;
   models?: readonly CatalogRow[];
+  /** v1.393.0: the session's account — its current usage window is said at
+   *  the top ("TSI · 63% of the 5-hour window, resets 3:40 PM"), from the
+   *  cached snapshot (never a new call). */
+  account?: BuildAccount | null;
 }) {
   const running = !!live?.running;
   const [choice, setChoice] = useState<string | null>(null);
@@ -585,11 +591,23 @@ export const HarnessTimeline = memo(function HarnessTimeline({
     return null;
   }, [picked, reply, rows, segments]);
 
+  // v1.393.0: the account the reply runs on, and how much of its usage
+  // window is used ("usage not known yet" before the vendor sent a number).
+  const usage = account ? accountUsageLine(account) : "";
+  const usageLine = usage ? (
+    <p data-testid="timeline-account-usage" title={usage} className="shrink-0 truncate text-[12px] text-zinc-500">
+      {usage}
+    </p>
+  ) : null;
+
   if (!choices.length && !liveShown) {
     return (
-      <p data-testid="timeline-empty" className="text-[13px] text-zinc-400">
-        {NO_REPLIES}
-      </p>
+      <div className="space-y-2">
+        {usageLine}
+        <p data-testid="timeline-empty" className="text-[13px] text-zinc-400">
+          {NO_REPLIES}
+        </p>
+      </div>
     );
   }
 
@@ -615,6 +633,7 @@ export const HarnessTimeline = memo(function HarnessTimeline({
 
   return (
     <div data-testid="pane-timeline" className="flex h-full min-h-0 flex-col gap-2" onKeyDown={onKey}>
+      {usageLine}
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         <label className="flex min-w-0 flex-1 items-center gap-1.5 text-[12px] text-zinc-500">
           <span className="shrink-0">Reply</span>

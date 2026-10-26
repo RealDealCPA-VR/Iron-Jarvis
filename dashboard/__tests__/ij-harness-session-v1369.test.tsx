@@ -76,6 +76,7 @@ vi.mock("@/components/terminal/FilesPanel", () => ({
 import { HarnessSession } from "@/components/harness/HarnessSession";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { resetWords } from "@/lib/buildAccounts";
+import { localTime } from "@/lib/ironProxy";
 
 /* ------------------------------------------------------------- fixtures */
 
@@ -552,24 +553,32 @@ describe("an account limit", () => {
 
   // ---- v1.369.0 review ---------------------------------------------------
 
-  it("while it waits the reset time is said ONCE: on the account's line, not again in the sentence", async () => {
+  // v1.393.0 (the long-jobs plan's Phase 4) MOVED these three on purpose:
+  // the waiting sentence is the brief's own ("Waiting for <account>'s reset
+  // at <time>; it carries on by itself") and it now says the time — so the
+  // account's line steps aside while the reply waits (still said ONCE).
+  it("while it waits the reset time is said ONCE: in the waiting sentence, the account's line steps aside", async () => {
     api.gets["/build/sessions/s1"] = view({ account_limit: LIMIT, account_wait: WAIT });
     renderSession();
     const card = await screen.findByTestId("account-limit-card");
-    const line = screen.getByTestId("account-limit-line").textContent ?? "";
-    expect(line).toMatch(/^Work · resets /);
-    expect(screen.getByTestId("account-limit-waiting").textContent).toBe("Waiting for the reset, then it continues.");
-    expect((card.textContent ?? "").match(/resets /g)).toHaveLength(1);
+    expect(screen.queryByTestId("account-limit-line")).toBeNull();
+    const at = localTime("2030-01-01T16:12:00Z");
+    expect(screen.getByTestId("account-limit-waiting").textContent).toBe(
+      `Waiting for Work's reset at ${at}; it carries on by itself.`,
+    );
+    expect((card.textContent ?? "").split(at)).toHaveLength(2);
   });
 
-  it("the wait's own reset time wins on the line (the daemon's re-check moved it)", async () => {
+  it("the wait's own reset time wins in the sentence (the daemon's re-check moved it)", async () => {
     api.gets["/build/sessions/s1"] = view({
       account_limit: LIMIT,
       account_wait: { ...WAIT, resets_at: "2030-01-02T09:30:00Z" },
     });
     renderSession();
     await screen.findByTestId("account-limit-card");
-    expect(screen.getByTestId("account-limit-line").textContent).toBe(`Work · ${resetWords("2030-01-02T09:30:00Z")}`);
+    expect(screen.getByTestId("account-limit-waiting").textContent).toBe(
+      `Waiting for Work's reset at ${localTime("2030-01-02T09:30:00Z")}; it carries on by itself.`,
+    );
     expect(resetWords("2030-01-02T09:30:00Z")).not.toBe(resetWords("2030-01-01T16:12:00Z"));
   });
 
@@ -580,8 +589,10 @@ describe("an account limit", () => {
     });
     renderSession();
     await screen.findByTestId("account-limit-card");
-    expect(screen.getByTestId("account-limit-line").textContent).toBe("Work");
-    expect(screen.getByTestId("account-limit-waiting").textContent).toBe("Waiting for it to be ready, then it continues.");
+    expect(screen.queryByTestId("account-limit-line")).toBeNull();
+    expect(screen.getByTestId("account-limit-waiting").textContent).toBe(
+      "Waiting for Work to be ready; it carries on by itself.",
+    );
   });
 
   it("after the turn the SESSION VIEW is the truth for the card: the daemon wrote it before its last frame", async () => {

@@ -72,6 +72,62 @@ export interface IronProxySnapshot {
   accounts: IronProxyAccount[];
   discovered: IronProxyDiscovered[];
   providers_used_by_jarvis?: Record<string, string>;
+  /** v1.393.0: the user's account groups (Iron Jarvis's own setting
+   *  `account_groups`, never Iron-Proxy's): `{group name: [account ids]}`. */
+  account_groups?: Record<string, string[]>;
+}
+
+// ------------------------------------------------ account groups (v1.393.0)
+
+/** What a group IS, in the words the Group choice says (the daemon's
+ *  settings/schema ACCOUNT_GROUPS_HELP — pinned equal). */
+export const GROUP_HELP =
+  "Accounts in the same group can take over from each other when one reaches its limit. " +
+  "Work and personal accounts should be in different groups.";
+
+/** The providers whose subscription accounts can be grouped: the two a
+ *  coding session runs on (Claude Code, Codex). */
+export const GROUP_PROVIDERS: ReadonlySet<string> = new Set(["anthropic", "openai"]);
+
+/** A group name is at most this long (the daemon refuses a longer one). */
+export const GROUP_NAME_MAX = 40;
+
+export type AccountGroups = Record<string, string[]>;
+
+/** The snapshot's groups, whitelisted (names → lists of ids). */
+export function decodeGroups(raw: unknown): AccountGroups {
+  const out: AccountGroups = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [name, ids] of Object.entries(raw as Record<string, unknown>)) {
+    if (!name.trim() || !Array.isArray(ids)) continue;
+    const kept = ids.filter((i): i is string => typeof i === "string" && i.trim() !== "");
+    if (kept.length) out[name] = kept;
+  }
+  return out;
+}
+
+/** The group an account is in ("" = none). */
+export function groupOf(groups: AccountGroups, id: string): string {
+  for (const [name, ids] of Object.entries(groups)) if (ids.includes(id)) return name;
+  return "";
+}
+
+/** The groups with ``id`` moved into ``name`` (null = into no group): one
+ *  group per account, a group left empty is dropped, the others unchanged
+ *  (an id of an account removed since stays where it was). */
+export function withAccountInGroup(groups: AccountGroups, id: string, name: string | null): AccountGroups {
+  const next: AccountGroups = {};
+  for (const [g, ids] of Object.entries(groups)) {
+    const kept = ids.filter((i) => i !== id);
+    if (kept.length) next[g] = kept;
+  }
+  const typed = (name ?? "").replace(/\s+/g, " ").trim();
+  if (!typed) return next;
+  // "work" typed beside an existing "Work" joins it (two groups may not
+  // differ only in case — the daemon refuses that).
+  const target = Object.keys(groups).find((g) => g.toLowerCase() === typed.toLowerCase()) ?? typed;
+  next[target] = [...(next[target] ?? []), id];
+  return next;
 }
 
 /** The answer has the shape the card needs (an older or mocked daemon may

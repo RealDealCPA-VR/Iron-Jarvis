@@ -36,6 +36,7 @@ import { BrowserPreview } from "@/components/harness/BrowserPreview";
 import { BranchView } from "@/components/harness/HarnessBranch";
 import { HarnessTimeline, type LiveTimelineHandle } from "@/components/harness/HarnessTimeline";
 import type { CatalogRow } from "@/lib/answeredModel";
+import type { BuildAccount } from "@/lib/buildAccounts";
 import { ConfirmButton } from "@/components/ui";
 import { Markdown } from "@/components/Markdown";
 import type { PlanView } from "@/lib/planChecklist";
@@ -456,6 +457,7 @@ export function HarnessPanes({
   pageSteps = 0,
   timeline = null,
   models,
+  account = null,
 }: {
   view: BuildSessionView;
   livePlan: PlanView | null;
@@ -463,6 +465,9 @@ export function HarnessPanes({
   timeline?: LiveTimelineHandle | null;
   /** v1.390.0: the model list, for the Timeline's model names. */
   models?: readonly CatalogRow[];
+  /** v1.393.0: the session's account (the cached snapshot's row), whose
+   *  current usage window the Timeline's header says. */
+  account?: BuildAccount | null;
   terminal: SessionTerminalApi;
   /** Bumped when a turn ends, so the changes are read again. */
   refreshKey: number;
@@ -560,7 +565,7 @@ export function HarnessPanes({
         className="relative min-h-0 flex-1 overflow-y-auto px-1"
       >
         {tab === "plan" ? <PlanPane view={view} livePlan={livePlan} /> : null}
-        {tab === "timeline" ? <HarnessTimeline view={view} live={timeline} models={models} /> : null}
+        {tab === "timeline" ? <HarnessTimeline view={view} live={timeline} models={models} account={account} /> : null}
         {tab === "changes" ? (
           <ChangesPane
             view={view}
