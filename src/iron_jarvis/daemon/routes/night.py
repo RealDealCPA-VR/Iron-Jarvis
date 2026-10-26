@@ -38,7 +38,6 @@ import asyncio
 import contextlib
 import logging
 import secrets
-from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 

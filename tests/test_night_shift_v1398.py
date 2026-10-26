@@ -25,7 +25,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -487,3 +486,125 @@ def test_the_desktop_keeps_the_pc_awake_for_night_shift(tmp_path):
     assert json.loads(proc.stdout.strip().splitlines()[-1]) == {
         "night": True, "idle": False, "off": False, "older": True,
     }
+
+
+# --------------------------------------------------------------------------- #
+# 9. a helper's ask in a night task, the checkers, the governor, the team, try on
+# --------------------------------------------------------------------------- #
+
+from tests.test_approvals_office_v1247 import _events, _session, _tc  # noqa: E402
+
+
+@pytest.fixture()
+def rt_night(tmp_path):
+    """The approvals-office runtime fixture's shape: a real platform, its bus
+    spied on, an AgentRuntime."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.agents.runtime import AgentRuntime
+
+    app = create_app(str(tmp_path / "rt"))
+    platform = app.state.platform
+    published: list[dict] = []
+    real_publish = platform.event_bus.publish
+
+    async def spy(type, payload=None, session_id=None, **kw):
+        published.append({"type": str(getattr(type, "value", type)), "payload": payload or {},
+                          "session_id": session_id})
+        return await real_publish(type, payload, session_id=session_id, **kw)
+
+    platform.event_bus.publish = spy
+    return SimpleNamespace(runtime=AgentRuntime(platform), platform=platform, published=published, app=app)
+
+
+async def test_a_helpers_ask_in_a_night_task_waits_the_nights_wait_then_is_declined(rt_night):
+    rt = rt_night
+    from iron_jarvis.agents.types import get_agent_definition
+    from iron_jarvis.core.models import AgentType
+
+    task = N.add_task(rt.platform.engine, folder="C:\\x", words="w")
+    token = N.set_turn(N.NightTurn(task_id=task["id"], card_wait_s=0.2, engine=rt.platform.engine))
+    try:
+        deny, extra = await rt.runtime._pause_for_approval(
+            _session("job:build-helper"), _tc("echo a"), get_agent_definition(AgentType.BUILDER), set(),
+        )
+    finally:
+        N.reset_turn(token)
+    assert deny.startswith("left for the user: run a command — nobody answered in 1 minute") and extra == set()
+    assert _events(rt, "approval.requested")[0]["payload"]["timeout_s"] == 1
+    N.flush_notes()
+    notes = N.get_task(rt.platform.engine, task["id"])["notes"]
+    assert [n["kind"] for n in notes] == ["declined"] and notes[0]["text"].startswith("Needs your OK: run a command")
+
+
+def test_the_checkers_find_the_main_folders_programs_in_a_branch_turn(tmp_path):
+    from iron_jarvis.harness import checkers as CK
+
+    main = tmp_path / "proj"
+    main.mkdir()
+    scripts = _fake_venv(main)
+    ruff = scripts / ("ruff.exe" if os.name == "nt" else "ruff")
+    ruff.write_bytes(b"")
+    if os.name != "nt":
+        ruff.chmod(0o755)
+    work = tmp_path / "wt"
+    work.mkdir()
+    (work / "ruff.toml").write_text("line-length = 100\n", encoding="utf-8")
+    token = B.set_turn_branch(
+        {"worktree": str(work), "repo": str(main), "branch": "ij/x", "checkout": str(main)}, str(work),
+    )
+    try:
+        found = CK.detect(work, path_env=CK._session_path())
+    finally:
+        B.reset_turn_branch(token)
+    got = [c for c in found if c.name == "ruff"]
+    assert got and Path(got[0].program).parent == scripts
+
+
+async def test_a_full_runs_at_once_cap_starts_no_night_task(app, repo, monkeypatch):
+    status, task = await asgi(app, "POST", "/build/night", {"folder": str(repo), "words": "w"})
+    assert status == 201
+    monkeypatch.setattr(N, "CLOCK", lambda: _local(23, 30))
+    orch = app.state.platform.orchestrator
+    app.state.platform.config.max_concurrent_sessions = 1
+    assert orch.try_hold_slot("someone-else")
+    out = await night_routes.night_pass(app.state.d)
+    assert out["started"] == [] and N.get_task(app.state.platform.engine, task["id"])["state"] == N.QUEUED
+    orch.release_slot("someone-else")
+
+
+async def test_the_team_rides_the_models_message_and_try_on_starts_attempts(app, repo, monkeypatch):
+    from types import SimpleNamespace
+
+    from iron_jarvis.daemon.routes import build_attempts
+    from tests.test_build_sessions_v1367 import messages_of
+
+    engine = app.state.platform.engine
+    monkeypatch.setattr(N, "CLOCK", lambda: _local(23, 30))
+    team = N.add_task(engine, folder=str(repo), words="TEAM: split the parser", team=True)
+    script = wire(app, Script(["Done."]))
+    out = await night_routes.night_pass(app.state.d)
+    assert out["started"] == [team["id"]]
+    await until(lambda: script.calls, 30)
+    sent = [str(getattr(m, "content", "")) for m in script.calls[0]["messages"] if getattr(m, "role", "") == "user"]
+    assert sent[-1].startswith("TEAM: split the parser") and night_routes.TEAM_NOTE in sent[-1]
+    started = N.get_task(engine, team["id"])
+    await until(lambda: any(m.get("role") == "assistant" for m in messages_of(app, started["thread_id"])), 30)
+    question = next(m for m in messages_of(app, started["thread_id"]) if m["role"] == "user")
+    assert question["content"] == "TEAM: split the parser", "the question line shows the user's words alone"
+
+    # Try on: the attempts' own start, as Iron Jarvis's (started_by night).
+    seen: list = []
+
+    async def fake_maybe_start(d, thread_id, text, turn_id, body, *, started_by="person"):
+        seen.append((thread_id, text, [(p.provider, p.model) for p in body.try_on], started_by))
+        return SimpleNamespace(turn_id=turn_id, task=None)
+
+    monkeypatch.setattr(build_attempts, "maybe_start", fake_maybe_start)
+    repo2 = make_repo(repo.parent / "proj2")
+    tried = N.add_task(engine, folder=str(repo2), words="TRY: fix it",
+                       try_on=[{"provider": "anthropic", "model": "a"}, {"provider": "openai", "model": "b"}])
+    out = await night_routes.night_pass(app.state.d)
+    assert tried["id"] in out["started"]
+    assert seen and seen[0][1] == "TRY: fix it" and seen[0][2] == [("anthropic", "a"), ("openai", "b")]
+    assert seen[0][3] == "night"

@@ -34,7 +34,6 @@ from iron_jarvis.daemon.app import create_app
 from iron_jarvis.daemon.routes import chat as chat_routes
 from iron_jarvis.daemon.routes import night as night_routes
 from iron_jarvis.harness import night as N
-from iron_jarvis.harness import sessions as S
 from iron_jarvis.providers.adapters.base import ToolCall
 from tests.test_build_git_v1375 import git, make_repo, no_real_gh, snapshot
 from tests.test_build_sessions_v1367 import (
