@@ -289,6 +289,15 @@ def test_local_only_never_considers_a_cloud_member(w):
     assert pick.record.name == "glm"  # busy, but the only one on this network
 
 
+def test_a_project_team_bounds_the_candidates(w):
+    team(w)
+    pick = T.route_role(w.p, "code", team=["custom:codex"])
+    assert pick.record.name == "codex"
+    pick = T.route_role(w.p, "read", team=["custom:codex", "builder"])
+    assert pick.record is None
+    assert pick.refusal.startswith("No one on this project's team holds reading")
+
+
 def test_a_paused_member_and_a_coordinator_are_skipped_with_why(w):
     member(w.p, "glm", LOCAL[0], LOCAL[1], roles=("code",))
     w.p.agents_registry.set_paused("glm", "on a break")

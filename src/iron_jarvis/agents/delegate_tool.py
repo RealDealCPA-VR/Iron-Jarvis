@@ -291,6 +291,12 @@ class DelegateTool(Tool):
         # still runs exactly as before; a role beside the name only says what
         # the piece is (its record). An unknown role, or one no usable member
         # holds, is refused in words — never a silent run as anyone else.
+        # A PROJECT MISSION'S TEAM (v1.308.0), read before routing (v1.395.0)
+        # so the team router only asks the project's team — see below.
+        _root = await asyncio.to_thread(
+            _team.mission_root, self.platform.engine, ctx.session_id, ctx.agent_run_id
+        )
+        _project_team = _team.mission_team(_root) if _root is not None else []
         _route = None
         _team_role = ""
         _piece = ""
@@ -306,7 +312,7 @@ class DelegateTool(Tool):
             if _role_text is not None or not str(args.get("agent_type") or "").strip():
                 _route = await asyncio.to_thread(
                     _model_team.route_for_call, self.platform, role=_team_role, piece=_piece,
-                    session_id=ctx.session_id, helper_parent=_hp,
+                    session_id=ctx.session_id, helper_parent=_hp, team=_project_team,
                 )
                 _helpers.note_route(_hp, role=_team_role, reason=_route.reason)
                 if _route.record is None:
@@ -379,11 +385,7 @@ class DelegateTool(Tool):
         # parent_id (v1.309.0): a teammate handing work on is held to the same
         # team, and children never inherit options. Every other caller has no
         # team and is unrestricted. Checked before any session exists, local
-        # or remote.
-        _root = await asyncio.to_thread(
-            _team.mission_root, self.platform.engine, ctx.session_id, ctx.agent_run_id
-        )
-        _project_team = _team.mission_team(_root) if _root is not None else []
+        # or remote. (``_root`` / ``_project_team`` were read above.)
         if _project_team:
             _who = entry.name if entry is not None else raw_type
             if not _team.on_team(_project_team, _who):

@@ -1401,16 +1401,18 @@ def _piece_passed_over(engine: Any, scope: str, role: str, piece: str) -> str:
 
 def route_role(platform: Any, role: str, *, local_only: bool = False, caller_pin: Any = None,
                caller_provider: str = "", caller_model: str = "", scope: str = "",
-               piece: str = "", now: Any = None) -> RolePick:
+               piece: str = "", now: Any = None, team: "list[str] | None" = None) -> RolePick:
     """THE TEAM ROUTER: the member that takes a piece of ``role`` now, and
-    why (see the section comment above). BLOCKING (SQLite reads: the record,
-    the allowance, the month's spend) — the doors call it off the loop.
-    Never raises (an internal fault is a refusal in words)."""
+    why (see the section comment above). ``team`` — a PROJECT mission's team
+    (roster names, ``agents/team.mission_team``): only its members are asked
+    (the doors refuse anyone else). BLOCKING (SQLite reads: the record, the
+    allowance, the month's spend) — the doors call it off the loop. Never
+    raises (an internal fault is a refusal in words)."""
     noun = ROLE_NOUNS.get(role, role)
     try:
         return _route(platform, role, noun, local_only=local_only, caller_pin=caller_pin,
                       caller_provider=caller_provider, caller_model=caller_model, scope=scope,
-                      piece=piece, now=now)
+                      piece=piece, now=now, team=list(team or []))
     except Exception:  # noqa: BLE001
         log.warning("model team routing failed", exc_info=True)
         return RolePick(role, refusal=(
@@ -1419,7 +1421,8 @@ def route_role(platform: Any, role: str, *, local_only: bool = False, caller_pin
 
 
 def _route(platform: Any, role: str, noun: str, *, local_only: bool, caller_pin: Any,
-           caller_provider: str, caller_model: str, scope: str, piece: str, now: Any) -> RolePick:
+           caller_provider: str, caller_model: str, scope: str, piece: str, now: Any,
+           team: "list[str] | None" = None) -> RolePick:
     from datetime import datetime, timezone
 
     from . import allowance
@@ -1430,6 +1433,16 @@ def _route(platform: Any, role: str, noun: str, *, local_only: bool, caller_pin:
     config = _config(platform)
     default_provider = str(getattr(config, "default_provider", "") or "")
     members = [r for r in team_members(platform) if role in roles_of(r)]
+    if team:
+        # A PROJECT mission: only the project's team (the user picked it).
+        from . import team as _team
+
+        members = [r for r in members if _team.on_team(team, f"custom:{r.name}")]
+        if not members:
+            return RolePick(role, reason=f"not started: no one on this project's team holds {noun}",
+                            refusal=(f"No one on this project's team holds {noun} — hand this piece to a "
+                                     f"team member by name ({', '.join(team)}), or give a member of the "
+                                     "team that role in Settings › Model team."))
     hidden = 0
     if local_only:
         kept = [r for r in members if not leaves_network(platform, r)]
@@ -1590,7 +1603,7 @@ def _picked(role: str, cand: _Cand, reason: str) -> RolePick:
 
 
 def route_for_call(platform: Any, *, role: str, piece: str, session_id: str,
-                   helper_parent: Any = None) -> RolePick:
+                   helper_parent: Any = None, team: "list[str] | None" = None) -> RolePick:
     """:func:`route_role` for one ``delegate`` / ``spawn_agent`` call: the
     caller's account pin, model and Local only read from where the call runs
     — a coding session's turn (``helper_parent``) or the calling run's own
@@ -1625,7 +1638,7 @@ def route_for_call(platform: Any, *, role: str, piece: str, session_id: str,
             pass
     return route_role(platform, role, local_only=local_only, caller_pin=pin,
                       caller_provider=caller_provider, caller_model=caller_model,
-                      scope=str(session_id or ""), piece=piece)
+                      scope=str(session_id or ""), piece=piece, team=team)
 
 
 async def note_piece(platform: Any, *, record: Any, role: str, session_id: str, scope: str,

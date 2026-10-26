@@ -47,6 +47,7 @@ import { HarnessTimeline } from "@/components/harness/HarnessTimeline";
 import { LiveHelperRows, SavedHelperRows } from "@/components/harness/HarnessHelpers";
 import { ModelTeam } from "@/components/settings/ModelTeam";
 import { applyHelperFrame, decodeSavedHelpers, settledFromLive, type HelperView } from "@/lib/buildHelpers";
+import { agentPhrase } from "@/lib/agentRun";
 import { decodeMessage, type BuildMessage, type BuildSessionView } from "@/lib/buildSessions";
 import { decodeTeam, recordWords, ROLE_NOUNS } from "@/lib/modelTeam";
 
@@ -147,6 +148,11 @@ describe("the live row", () => {
     const row = screen.getByTestId("helper-row");
     expect(row.getAttribute("data-state")).toBe("failed");
     expect(within(row).getByTestId("helper-reason").textContent).toBe(`Why: ${why}`);
+    // Named by the ROLE it asked for — no member was picked.
+    expect(row.textContent).toContain("A team member for testing could not start");
+    expect(agentPhrase("role:code")).toBe("a team member for coding");
+    expect(agentPhrase("role:design")).toBe("a team member");
+    expect(agentPhrase("custom:glm")).toBe("your glm agent");
   });
 
   it("junk on the wire reads as no reason", () => {

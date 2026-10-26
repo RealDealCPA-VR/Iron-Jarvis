@@ -331,6 +331,12 @@ class SpawnAgentTool(Tool):
         # it (MIRROR NOTE, lock-step): ``role`` or ``agent: "role:<id>"`` asks
         # the TEAM ROUTER; a named agent runs as before; an unknown role or one
         # no usable member holds is refused in words.
+        # A PROJECT MISSION'S TEAM, read before routing (v1.395.0) so the team
+        # router only asks the project's team (the same walk ``delegate`` does).
+        _root = await asyncio.to_thread(
+            _team.mission_root, self.platform.engine, ctx.session_id, ctx.agent_run_id
+        )
+        _project_team = _team.mission_team(_root) if _root is not None else []
         _route = None
         _team_role = ""
         _piece = ""
@@ -346,7 +352,7 @@ class SpawnAgentTool(Tool):
             if _role_text is not None or not str(args.get("agent") or "").strip():
                 _route = await asyncio.to_thread(
                     _model_team.route_for_call, self.platform, role=_team_role, piece=_piece,
-                    session_id=ctx.session_id, helper_parent=_hp,
+                    session_id=ctx.session_id, helper_parent=_hp, team=_project_team,
                 )
                 _helpers.note_route(_hp, role=_team_role, reason=_route.reason)
                 if _route.record is None:
@@ -408,11 +414,7 @@ class SpawnAgentTool(Tool):
         # A PROJECT MISSION'S TEAM (v1.308.0): the same rule `delegate`
         # applies — spawn is the other door the coordinator holds — read off
         # the mission ROOT through the same walk (v1.309.0), so a teammate
-        # spawning a helper is held to the team too.
-        _root = await asyncio.to_thread(
-            _team.mission_root, self.platform.engine, ctx.session_id, ctx.agent_run_id
-        )
-        _project_team = _team.mission_team(_root) if _root is not None else []
+        # spawning a helper is held to the team too. (Read above, v1.395.0.)
         if _project_team:
             _who = canonical_roster_name(self.platform, agent_name)
             if not _team.on_team(_project_team, _who):

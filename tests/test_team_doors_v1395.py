@@ -291,6 +291,32 @@ async def test_a_refused_role_says_it_waited_on_the_row(w, tmp_path):
         res = await w.p.registry.get("delegate").execute({"role": "test", "task": "t"}, _ctx(w.p, sid, tmp_path))
     assert not res.ok
     assert frames[-1]["reason"].startswith("waited: every cloud account that can take testing is near its limit")
+    # The row is named by the ROLE it asked for — never "the builder", which
+    # it is not (no member was picked).
+    assert {f["agent"] for f in frames} == {"role:test"}
+    assert H.call_target("delegate", {"role": "code", "task": "t"}) == ("role:code", "t")
+    assert H.call_target("spawn_agent", {"role": "read", "task": "t"}) == ("role:read", "t")
+    assert H.call_target("delegate", {"task": "t"}) == ("builder", "t")
+
+
+async def test_a_project_missions_team_bounds_the_pick(w, tmp_path):
+    """A project mission's coordinator may hand work only to the project's
+    team (v1.308.0); asked for a ROLE, the router only asks that team."""
+    import json
+
+    sid = await _parent(w.p)
+    with session_scope(w.p.engine) as db:
+        row = db.get(Session, sid)
+        row.options_json = json.dumps({"team": ["custom:codex"]})
+        db.add(row)
+        db.commit()
+    res = await w.p.registry.get("delegate").execute(
+        {"role": "code", "task": "Write util.py."}, _ctx(w.p, sid, tmp_path))
+    assert res.ok and res.data["target"] == "custom:codex"  # glm is not on the team
+    res = await w.p.registry.get("spawn_agent").execute(
+        {"role": "read", "task": "Read it."}, _ctx(w.p, sid, tmp_path))
+    assert not res.ok
+    assert res.error.startswith("No one on this project's team holds reading")
 
 
 def test_the_saved_line_keeps_the_role_and_the_reason():

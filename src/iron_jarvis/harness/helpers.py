@@ -932,13 +932,16 @@ def report_text(output: Any) -> str:
 
 
 def call_target(name: str, args: Any) -> tuple[str, str]:
-    """``(agent, task)`` a helper call names (the REAL tool's arguments)."""
+    """``(agent, task)`` a helper call names (the REAL tool's arguments). A
+    call that asks for a ROLE instead of a member (v1.395.0) is named
+    ``role:<id>`` until the team router picks the member — never "builder",
+    which it is not."""
     a = args if isinstance(args, dict) else {}
-    if name == "spawn_agent":
-        agent = str(a.get("agent") or "builder")
-    else:
-        agent = str(a.get("agent_type") or "builder")
-    return _short(agent, 80), _short(a.get("task"), TASK_CHARS)
+    agent = str((a.get("agent") if name == "spawn_agent" else a.get("agent_type")) or "").strip()
+    role = str(a.get("role") or "").strip()
+    if not agent and role:
+        agent = f"role:{role}"
+    return _short(agent or "builder", 80), _short(a.get("task"), TASK_CHARS)
 
 
 @contextlib.contextmanager
