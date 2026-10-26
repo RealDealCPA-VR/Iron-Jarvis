@@ -169,6 +169,14 @@ async function send(text: string) {
   fireEvent.keyDown(box(), { key: "Enter" });
 }
 
+/** v1.390.0 review: the running reply is DRAWN once a second (LIVE_READ_MS),
+ *  so a wait for rows the frames brought must outlast that tick — waitFor's
+ *  default 1 s bound is the tick itself, and a loaded runner lost the race
+ *  ("expected 1 to be greater than or equal to 5"; a 1.2 s tick reproduces it
+ *  on an idle machine). Far under vitest's 15 s budget, so a miss still
+ *  reports what it waited for. */
+const TICK_WAIT = { timeout: 5_000 };
+
 /** The recorded frames, up to (not including) the first `done`. */
 const BODY = FIXTURE.frames.filter(([e]) => e !== "done");
 
@@ -200,8 +208,8 @@ describe("the running reply: calm and cheap", () => {
       for (const [e, d] of BODY) s.push(e, d);
     });
     // The steps the frames carried are drawn, live.
-    await waitFor(() => expect(screen.getByTestId("timeline-live")).toHaveTextContent("Live"));
-    await waitFor(() => expect(screen.getAllByTestId("timeline-row").length).toBeGreaterThanOrEqual(5));
+    await waitFor(() => expect(screen.getByTestId("timeline-live")).toHaveTextContent("Live"), TICK_WAIT);
+    await waitFor(() => expect(screen.getAllByTestId("timeline-row").length).toBeGreaterThanOrEqual(5), TICK_WAIT);
     // A burst of 400 word frames: the tab reads the store no more than the
     // once-a-second tick allows (it never reads per word).
     const before = reads.n;
@@ -235,7 +243,7 @@ describe("the running reply: calm and cheap", () => {
     expect(screen.queryByTestId("pane-timeline")).toBeNull();
     // Opened, it draws everything folded meanwhile.
     fireEvent.click(screen.getByTestId("harness-pane-tab-timeline"));
-    await waitFor(() => expect(screen.getAllByTestId("timeline-row").length).toBeGreaterThanOrEqual(5));
+    await waitFor(() => expect(screen.getAllByTestId("timeline-row").length).toBeGreaterThanOrEqual(5), TICK_WAIT);
     expect(reads.n).toBeGreaterThan(0);
     s.end();
   });
@@ -281,7 +289,7 @@ describe("the running reply: calm and cheap", () => {
     await act(async () => {
       for (const [e, d] of BODY) s.push(e, d);
     });
-    await waitFor(() => expect(screen.getAllByTestId("timeline-row").length).toBeGreaterThanOrEqual(5));
+    await waitFor(() => expect(screen.getAllByTestId("timeline-row").length).toBeGreaterThanOrEqual(5), TICK_WAIT);
     const label = (el: Element) => el.querySelector("span[title]")?.getAttribute("title");
     // The session now holds the saved line (the daemon writes it before the
     // last frame) under the turn id the screen minted; the screen reads it
