@@ -590,8 +590,10 @@ class DelegateTool(Tool):
                     # model (and its own account pin) outside a coding session
                     # too (``model_team.member_scope``; a no-op for everyone
                     # else, and inside a session ``pinned`` does it).
+                    # v1.394.0 review: and a non-member started from inside a
+                    # member's run steps out of THAT member's hold.
                     with _helpers.pinned(_hp), (
-                        _model_team.member_scope(self.platform, rec)
+                        _model_team.member_scope(self.platform, rec, str(provider or ""))
                         if _hp is None else _model_team.member_scope(self.platform, None)
                     ):
                         child_task = asyncio.ensure_future(

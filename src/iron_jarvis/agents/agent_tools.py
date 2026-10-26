@@ -532,8 +532,10 @@ class SpawnAgentTool(Tool):
                     # (``helpers.helper_definition``; unchanged off a turn).
                     # v1.394.0: a member's run is held to its own model
                     # (``model_team.member_scope``) — the same as ``delegate``.
+                    # v1.394.0 review: and a non-member started from inside a
+                    # member's run steps out of THAT member's hold.
                     with _helpers.pinned(_hp), (
-                        _model_team.member_scope(self.platform, record)
+                        _model_team.member_scope(self.platform, record, str(provider or ""))
                         if _hp is None else _model_team.member_scope(self.platform, None)
                     ):
                         child_task = asyncio.ensure_future(

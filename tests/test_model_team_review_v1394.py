@@ -324,6 +324,115 @@ async def test_a_pinned_callers_group_refuses_a_member_at_the_door_before_any_se
     assert _child_rows(p, sid) == [] and log == []
 
 
+@pytest.fixture
+def failing(doors):
+    """The doors world, where a provider in ``fail`` answers every call with a
+    TRANSIENT overload (the kind a router fails over from)."""
+    from tests.test_model_team_doors_v1394 import PROVIDERS, Rec
+
+    p, log = doors
+    fail: set = set()
+    for name in PROVIDERS:
+        p.providers.register(name, lambda model=None, n=name: Rec(n, model, log, fail))
+    return p, log, fail
+
+
+# --------------------------------------------------------------------------- #
+# 5. consult: the third door onto a teammate (it was not fixed with the two)
+# --------------------------------------------------------------------------- #
+
+
+async def test_consult_asks_a_provider_pinned_agent_on_that_providers_own_model(doors, tmp_path):
+    """``consult`` handed an agent pinned to a PROVIDER the caller's model id
+    (another provider's) — the very bug the doer fixed in delegate and spawn."""
+    from tests.test_model_team_doors_v1394 import _ctx, _parent
+
+    p, log = doors
+    p.agents_registry.register("cx", "You code.", [], provider="codex-cli", model="")
+    sid = await _parent(p)
+    res = await p.registry.get("consult").execute(
+        {"agent": "custom:cx", "question": "Is this right?"}, _ctx(p, sid, tmp_path))
+    assert res.ok, res.error
+    assert [(c["provider"], c["model"]) for c in log] == [("codex-cli", "default")], log
+
+
+async def test_consult_holds_a_member_to_its_own_model(failing, tmp_path):
+    """Decision 5: a member's model is held — a consult of a member whose
+    model fails says so; it is never answered by another provider."""
+    from tests.test_model_team_doors_v1394 import _ctx, _parent
+
+    p, log, fail = failing
+    p.agents_registry.register("cx", "You code.", [], provider="codex-cli", model="", roles=["review"])
+    fail.add("codex-cli")
+    sid = await _parent(p)
+    from iron_jarvis.providers.adapters.base import ProviderError
+
+    with pytest.raises(ProviderError):  # the registry turns it into a failed call
+        await p.registry.get("consult").execute(
+            {"agent": "custom:cx", "question": "Is this right?"}, _ctx(p, sid, tmp_path))
+    assert log and {c["provider"] for c in log} == {"codex-cli"}, log
+
+
+# --------------------------------------------------------------------------- #
+# 6. a member's OWN hold never reaches the teammate it hands work to
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_members_run_can_consult_a_teammate_on_another_model(doors, tmp_path):
+    """Inside a member's run (outside a coding session) its model is held. A
+    consult of a teammate pinned to another model was refused by that hold,
+    in a coding session's words ("This Build session runs on codex-cli") —
+    though no coding session was involved. The teammate answers on its own
+    model, as for any other caller."""
+    from tests.test_model_team_doors_v1394 import _ctx, _parent
+
+    p, log = doors
+    member = p.agents_registry.register("cx", "You code.", [], provider="codex-cli", roles=["code"])
+    p.agents_registry.register("gm", "You check.", [], provider="google", model="gemini-3.8-flash")
+    sid = await _parent(p)
+    with T.member_scope(p, member):
+        res = await p.registry.get("consult").execute(
+            {"agent": "custom:gm", "question": "Is this right?"}, _ctx(p, sid, tmp_path))
+    assert res.ok, res.error
+    assert [c["provider"] for c in log] == ["google"]
+    assert log[0]["hold"] is None
+
+
+@pytest.mark.parametrize("door", ["delegate", "spawn_agent"])
+async def test_a_members_run_can_hand_work_to_a_teammate_on_another_model(doors, tmp_path, door):
+    from tests.test_model_team_doors_v1394 import _ctx, _parent
+
+    p, log = doors
+    member = p.agents_registry.register("cx", "You code.", [], provider="codex-cli", roles=["code"])
+    p.agents_registry.register("gm", "You check.", [], provider="google", model="gemini-3.8-flash")
+    sid = await _parent(p)
+    args = {"agent_type": "custom:gm", "task": "t"} if door == "delegate" else {"agent": "gm", "task": "t"}
+    with T.member_scope(p, member):
+        res = await p.registry.get(door).execute(args, _ctx(p, sid, tmp_path))
+    assert res.ok, res.error
+    assert log and {c["provider"] for c in log} == {"google"}, log
+    assert all(c["hold"] is None for c in log)
+
+
+async def test_a_coding_sessions_hold_is_never_lifted_for_a_teammate(doors, tmp_path):
+    """The control: a coding session's own hold (not a member's) stays — a
+    consult naming another provider there is still refused."""
+    from iron_jarvis.providers import hold as HOLD
+    from tests.test_model_team_doors_v1394 import _ctx, _parent
+
+    p, log = doors
+    p.agents_registry.register("gm", "You check.", [], provider="google", model="gemini-3.8-flash")
+    sid = await _parent(p)
+    token = HOLD.set_hold("codex-cli", "default")
+    try:
+        with pytest.raises(HOLD.HeldProviderRefused):
+            await p.registry.get("consult").execute(
+                {"agent": "custom:gm", "question": "Is this right?"}, _ctx(p, sid, tmp_path))
+    finally:
+        HOLD.reset_hold(token)
+    assert log == []
+
+
 @pytest.mark.parametrize("door", ["delegate", "spawn_agent"])
 async def test_a_same_vendor_member_takes_the_pinned_callers_own_account(doors, tmp_path, door):
     from tests.test_model_team_doors_v1394 import _ctx, _parent
@@ -341,3 +450,100 @@ async def test_a_same_vendor_member_takes_the_pinned_callers_own_account(doors, 
         P.reset_pin(token)
     assert res.ok, res.error
     assert log and all(c["provider"] == "claude-cli" and c["pin"] is spare for c in log), log
+
+
+# --------------------------------------------------------------------------- #
+# 7. Make a starter team: what it offers
+# --------------------------------------------------------------------------- #
+
+
+def _local_rows(*models):
+    return [{"provider": "ollama", "model": m, "available": True, "on_this_network": True} for m in models]
+
+
+def test_the_starter_never_offers_an_embedding_model_as_a_member():
+    """Ollama lists every model it holds — an embedding model (this app's own
+    embedder runs on one) cannot chat, so it is never a team member."""
+    p = _Platform()
+    catalog = _local_rows("qwen3:8b", "nomic-embed-text:latest", "mxbai-embed-large", "bge-m3")
+    rows = T.starter_preview(p, catalog)["rows"]
+    assert [r["model"] for r in rows] == ["qwen3:8b"], [r["model"] for r in rows]
+
+
+def test_a_fleet_with_many_local_models_ticks_only_a_few_by_default():
+    p = _Platform()
+    models = [f"model-{i}:7b" for i in range(12)]
+    rows = T.starter_preview(p, _local_rows(*models))["rows"]
+    assert len(rows) == 12  # every one is offered…
+    ticked = [r["model"] for r in rows if r["ticked"]]
+    assert ticked == models[: T.STARTER_TICKED_LOCAL]  # …only the first few ticked
+    assert 1 <= T.STARTER_TICKED_LOCAL <= 3
+
+
+# --------------------------------------------------------------------------- #
+# 8. the routes: the demo model is never a member; a same-vendor model change
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def plain_app(tmp_path):
+    from iron_jarvis.daemon.app import create_app
+
+    return create_app(str(tmp_path / "plain-home"))
+
+
+async def test_the_demo_model_is_never_a_team_member(plain_app):
+    from tests.test_build_sessions_v1367 import asgi
+
+    status, body = await asgi(plain_app, "POST", "/agents", {
+        "name": "fake", "system_prompt": "x", "provider": "mock", "roles": ["read"]})
+    assert status == 422 and "demo model" in body["detail"], body
+    status, body = await asgi(plain_app, "POST", "/agents", {
+        "name": "fake", "system_prompt": "x", "provider": "mock"})
+    assert status == 200, body
+    status, body = await asgi(plain_app, "PATCH", "/agents/fake", {"roles": ["read"]})
+    assert status == 422 and "demo model" in body["detail"], body
+    status, body = await asgi(plain_app, "POST", "/agents", {
+        "name": "real", "system_prompt": "x", "provider": "ollama", "model": "qwen3:8b", "roles": ["read"]})
+    assert status == 200, body
+    status, body = await asgi(plain_app, "PATCH", "/agents/real", {"provider": "mock", "model": ""})
+    assert status == 422 and "demo model" in body["detail"], body
+    assert T.roles_of(plain_app.state.platform.agents_registry.get("fake")) == []
+
+
+async def test_a_members_model_changes_within_its_vendor_while_iron_proxy_is_off(plain_app):
+    """A Codex member with an account of its own moves to another Codex model:
+    the account still applies (same vendor), so nothing is refused — the
+    doer's check refused EVERY provider change while Iron-Proxy was off or
+    not read yet, in words that named the API ("account: \\"\\"")."""
+    from tests.test_build_sessions_v1367 import asgi
+
+    reg = plain_app.state.platform.agents_registry
+    reg.register("cx", "x", [], provider="codex-cli", model="subscription", roles=["code"], account="x-plus")
+    status, body = await asgi(plain_app, "PATCH", "/agents/cx", {"provider": "codex-cli", "model": "gpt-5.5"})
+    assert status == 200, body
+    assert (body["provider"], body["model"], body["account"]) == ("codex-cli", "gpt-5.5", "x-plus")
+    # Another vendor's model with the account kept: refused in plain words.
+    status, body = await asgi(plain_app, "PATCH", "/agents/cx", {"provider": "claude-cli", "model": ""})
+    assert status == 422, body
+    assert "account: \\\"\\\"" not in body["detail"] and 'account: ""' not in body["detail"]
+    assert "No account of its own" in body["detail"] and "Model team" in body["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# 9. the planner's line: a long name is never cut
+# --------------------------------------------------------------------------- #
+
+
+def test_a_long_member_name_is_never_cut_when_its_facts_are_long():
+    from iron_jarvis.agents.roster import RosterEntry, _block_line
+
+    name = "custom:" + "quarterly-close-reconciliation-reader-for-clients"
+    entry = RosterEntry(name, "dynamic", "reads the ledgers and the bank feeds", True, True,
+                        {"sessions": 23, "success_rate": 0.87}, team={
+                            "roles": ["read", "code", "review", "test"], "provider": "ollama",
+                            "model": "qwen3-coder-30b-a3b-instruct-q4_k_m-128k-context-long",
+                            "place": "network", "cost": "free", "usage": None, "account": ""})
+    line = _block_line(entry, None)
+    assert line.startswith(name + " ") or line.startswith(name + " —"), line
+    assert line.endswith("(87% over 23 runs)")

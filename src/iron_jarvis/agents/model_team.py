@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from contextvars import ContextVar
 from typing import Any, Iterable
 
 log = logging.getLogger(__name__)
@@ -523,45 +524,86 @@ def team_members(platform: Any) -> list[Any]:
 # --------------------------------------------------------------------------- #
 
 
-class member_scope:  # noqa: N801 — a context manager read like a function
-    """The context a member's run TASK is created in, outside a coding
-    session (a mission, a plain agent run): its model HELD (``providers.
-    hold`` — no fallback, no failover, no capability reroute) and its account
-    pin (or none — never the caller's). A non-member, or a member with no
-    model of its own, sets nothing. Inside a coding session
-    ``harness.helpers.pinned`` does this with the session's other rules."""
+#: v1.394.0 review: True inside a MEMBER's run that :class:`member_scope`
+#: held (outside a coding session). That hold is the member's OWN — a teammate
+#: the member consults or hands work to steps out of it (it runs as it would
+#: for any caller); a coding session's hold is never lifted.
+MEMBER_RUN: ContextVar[bool] = ContextVar("ij_member_run", default=False)
 
-    def __init__(self, platform: Any, record: Any) -> None:
+
+class member_scope:  # noqa: N801 — a context manager read like a function
+    """The context a run TASK is created in (or a consult is asked in),
+    outside a coding session (a mission, a plain agent run):
+
+    * a MEMBER with a model of its own: its model HELD (``providers.hold`` —
+      no fallback, no failover, no capability reroute) and the account
+      :func:`member_account` names (its own; else the caller's when of its
+      vendor; else none — its provider's normal pick);
+    * v1.394.0 review: anyone else, INSIDE a member's run (:data:`MEMBER_RUN`):
+      out of that member's hold, and off its account pin unless the pin is of
+      the target's vendor (``provider``: the target's own, or the provider it
+      inherits) — before, a member's teammate on another model was refused
+      by the member's hold, in a coding session's words;
+    * otherwise nothing. Inside a coding session ``harness.helpers.pinned``
+      does this with the session's other rules."""
+
+    def __init__(self, platform: Any, record: Any, provider: str = "") -> None:
         self.on = runs_elsewhere(record)
         self.provider = str(getattr(record, "provider", "") or "").strip()
         self.model = pinned_model(platform, record) if self.on else ""
-        # v1.394.0 review: the account rule (``member_account``) — its own,
-        # else the CALLER's when of its vendor (a pinned caller's group
-        # after that), else none (its provider's normal pick).
-        self.pin = None
-        if self.on:
-            from ..iron_proxy.pin import current
+        from ..iron_proxy.pin import current
 
+        self.pin = None
+        self.lift = False
+        self.drop_pin = False
+        if self.on:
             self.pin = member_account(platform, record, current(), coding=False)[0]
+        elif MEMBER_RUN.get():
+            self.lift = True
+            pin = current()
+            if pin is not None:
+                try:
+                    from ..harness import build_accounts as BA
+
+                    vendor = BA.vendor_of(platform, str(provider or "").strip())
+                    keep = bool(vendor) and BA.VENDORS[vendor]["provider"] == getattr(pin, "ij_provider", "")
+                except Exception:  # noqa: BLE001 — unsure: no pin (a lease never moves)
+                    keep = False
+                self.drop_pin = not keep
         self._hold = None
         self._pin = None
+        self._flag = None
 
     def __enter__(self) -> "member_scope":
-        if not self.on:
+        if not (self.on or self.lift):
             return self
         from ..iron_proxy.pin import set_pin
         from ..providers.hold import set_hold
 
-        self._pin = set_pin(self.pin)
-        self._hold = set_hold(self.provider, self.model)
+        if self.on:
+            self._pin = set_pin(self.pin)
+            self._hold = set_hold(self.provider, self.model)
+            self._flag = MEMBER_RUN.set(True)
+        else:
+            if self.drop_pin:
+                self._pin = set_pin(None)
+            from ..providers.hold import PROVIDER_HOLD
+
+            self._hold = PROVIDER_HOLD.set(None)
+            self._flag = MEMBER_RUN.set(False)
         return self
 
     def __exit__(self, *exc: Any) -> None:
-        if not self.on:
+        if not (self.on or self.lift):
             return
         from ..iron_proxy.pin import reset_pin
         from ..providers.hold import reset_hold
 
+        if self._flag is not None:
+            try:
+                MEMBER_RUN.reset(self._flag)
+            except (ValueError, LookupError):
+                MEMBER_RUN.set(False)
         if self._hold is not None:
             reset_hold(self._hold)
         if self._pin is not None:
@@ -617,6 +659,12 @@ STARTER_ROLES: dict[str, list[str]] = {
     "codex-cli": ["code", "test"],
     GROUP_PAY: ["code", "review"],
 }
+
+#: v1.394.0 review: how many LOCAL rows the preview ticks by default (the
+#: first ones in the catalog's order). A fleet can list dozens of local
+#: models; every one is still OFFERED, but a press of Create must not make a
+#: team of thirty — the planner's team list shows ten.
+STARTER_TICKED_LOCAL = 3
 
 NOTHING_CONNECTED = (
     "No model is connected yet, so there is no one to put on the team. Connect a "
@@ -689,6 +737,11 @@ def starter_preview(platform: Any, catalog: list[dict[str, Any]], *, paid: bool 
     plan_done: set[str] = set()
     pay_done: set[str] = set()
     paid_available = 0
+    ticked_local = 0
+    try:
+        from ..fleet.picker import looks_like_embedding
+    except Exception:  # noqa: BLE001
+        looks_like_embedding = lambda *_a: False  # noqa: E731
     for m in catalog or []:
         try:
             if not m.get("available"):
@@ -700,12 +753,18 @@ def starter_preview(platform: Any, catalog: list[dict[str, Any]], *, paid: bool 
             key = _row_key(provider, model)
             if key in seen:
                 continue
+            # v1.394.0 review: an EMBEDDING model cannot chat (Ollama lists
+            # every model it holds, this app's own embedder included).
+            if looks_like_embedding(model):
+                continue
             local = bool(m.get("on_this_network"))
             cli = _served_cli(provider, manager)
             if local:
                 group = GROUP_LOCAL
                 roles = list(STARTER_ROLES[GROUP_LOCAL])
-                ticked = True
+                ticked = ticked_local < STARTER_TICKED_LOCAL and key not in existing
+                if ticked:
+                    ticked_local += 1
                 base = _slug(model) or _slug(provider)
                 description = "Reads, summarizes and writes simple code on a model of your own"
             elif cli in ("claude-cli", "codex-cli") and provider == cli:
@@ -838,8 +897,9 @@ def create_starter(platform: Any, preview: dict[str, Any], picks: list[dict[str,
 
 
 __all__ = [
-    "COST_FREE", "COST_PAY", "COST_PLAN", "COST_WORDS", "NOTHING_CONNECTED", "PLACE_WORDS",
-    "ROLES", "ROLE_IDS", "ROLE_LABELS", "STARTER_PROMPT", "StarterRefused", "TEAM_HEADER",
+    "COST_FREE", "COST_PAY", "COST_PLAN", "COST_WORDS", "MEMBER_RUN", "NOTHING_CONNECTED", "PLACE_WORDS",
+    "ROLES", "ROLE_IDS", "ROLE_LABELS", "STARTER_PROMPT", "STARTER_TICKED_LOCAL", "StarterRefused",
+    "TEAM_HEADER",
     "clean_roles", "cost_type", "create_starter", "facts_words", "is_member",
     "account_refusal", "leaves_network", "local_only_refusal", "member_account", "member_facts",
     "member_pin", "member_scope",
