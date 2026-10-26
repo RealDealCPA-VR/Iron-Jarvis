@@ -255,9 +255,25 @@ _FENCE_RX = re.compile(r"(^|\n)[ \t]*(```|~~~)[^\n]*\n.*?(?:\n[ \t]*\2[^\n]*(?=\
 _QUOTE_RX = re.compile(r"(^|\n)[ \t]*>[^\n]*")
 
 
+#: Words that end a list of names without being one ("…and Codex too",
+#: "…Codex, please", "…in parallel").
+_FILLER_TAIL_RX = re.compile(
+    r"(?:\s+|^)(?:too|as\s+well|also|again|now|please|pls|instead|thanks|thank\s+you|"
+    r"at\s+once|in\s+parallel|side\s+by\s+side|for\s+me|for\s+this(?:\s+one)?)$",
+    re.I,
+)
+#: A list that says NOT NOW ("…and Codex later") is no request.
+_NOT_NOW_RX = re.compile(r"\b(?:later|tomorrow|next\s+time|some\s*day|eventually|another\s+time)\b", re.I)
+
+
 def _clean_name(raw: str) -> str:
     name = re.sub(r"[`\"“”‘’]", "", str(raw or "")).strip().strip(".,!?").strip()
-    return " ".join(name.split())
+    name = " ".join(name.split())
+    while True:
+        cut = _FILLER_TAIL_RX.sub("", name).strip()
+        if cut == name:
+            return name
+        name = cut
 
 
 def _without_pasted(body: str) -> str:
@@ -313,8 +329,10 @@ def parse_request(text: Any) -> "Request | None":
             split = _SPLIT_TASK_RX.split(rest, maxsplit=1)
             names_part = split[0].strip().rstrip(".!?").strip()
             after = split[1].strip() if len(split) > 1 else ""
+            if _NOT_NOW_RX.search(names_part):
+                continue  # "try it with Claude and Codex later": not now
             req = Request(task=_task_without(body, sentence, after, last=last), said=sentence)
-            cm = _COUNT_RX.match(names_part)
+            cm = _COUNT_RX.match(_clean_name(names_part))
             if cm:
                 req.count = _COUNTS.get(" ".join(cm.group("n").lower().split()), 2)
                 return req
