@@ -472,4 +472,16 @@ class JarvisTeamRunner(JarvisRunner):
         # When it was read (the report shows the NEWEST: runs a second apart
         # share a finished_at to the second), and in this runner's order.
         self._reads += 1
-        return {"members": out, "thresholds": thresholds(), "read_at": time.time(), "read": self._reads}
+        return {"members": out, "thresholds": thresholds(), "read_at": time.time(), "read": self._reads,
+                # v1.396.0 review: whether the router HAD usage numbers to
+                # judge an account by (Iron-Proxy's cached snapshot). Off, its
+                # 80% rule never applied — the report says so.
+                "usage_numbers": self._usage_numbers()}
+
+    def _usage_numbers(self) -> bool:
+        try:
+            from ..harness import build_accounts as BA
+
+            return BA.snapshot(getattr(self.platform, "iron_proxy", None)) is not None
+        except Exception:  # noqa: BLE001 — not readable: none
+            return False

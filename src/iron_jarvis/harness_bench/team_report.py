@@ -367,22 +367,67 @@ def answer(team: tuple[Mapping[str, Any], list[Mapping[str, Any]]],
         return f"{NOT_ENOUGH}: no run both made was scored for both the team and {label} alone."
     x, n = _scored(t_by[k] for k in keys)
     a, _n = _scored(a_by[k] for k in keys)
-    line = f"passed {x} of {n} vs {label} alone {a} of {n}"
-    runs = f"the {n} run{'' if n == 1 else 's'} both made and both were scored on"
+    # v1.396.0 review: the PASS comparison leads, and a verdict is given only
+    # from the numbers — a team that passed fewer tasks never gets a "less
+    # usage" headline, and what the team spent BEYOND the planner's
+    # subscription (Codex list price, local tokens) is said beside it.
+    passes = (f"The team passed {x} of {n}, {label} alone {a} of {n} "
+              f"(the {n} run{'' if n == 1 else 's'} both made and both were scored on).")
     vendor = _vendor_of_planner(str(t_config.get("provider") or ""))
+    t_rows = [t_by[k] for k in keys]
+    a_rows = [a_by[k] for k in keys]
+    extra = _beyond(t_config, t_rows, vendor, "the team") + _beyond(a_config, a_rows, vendor, f"{label} alone")
+    tasks = "more tasks" if x > a else "as many tasks"
+    if x < a:
+        verdict = "No: the team passed fewer tasks."
     if vendor not in ("claude", "codex"):
-        return line + f" (over {runs}; the planner has no list price to compare)."
-    t_cost = _vendor_list_price(t_config, [t_by[k] for k in keys], vendor)
-    a_cost = _vendor_list_price(a_config, [a_by[k] for k in keys], vendor)
+        if x >= a:
+            verdict = f"The team passed {tasks}; the planner has no list price to compare."
+        return " ".join([verdict, passes, *extra])
     name = {"claude": "Claude", "codex": "Codex"}[vendor]
+    t_cost = _vendor_list_price(t_config, t_rows, vendor)
+    a_cost = _vendor_list_price(a_config, a_rows, vendor)
     if t_cost is None or a_cost is None:
-        return line + f" (over {runs}); {name} list-price is not known for every run, so the usage is not compared."
-    if a_cost <= 0:
-        return line + f" (over {runs}); {label} alone used no {name} list-price, so there is no percent to compare."
-    pct = (a_cost - t_cost) / a_cost * 100
-    more = "less" if pct >= 0 else "more"
-    return (line + f", using {abs(pct):.0f}% {more} {name} list-price "
-            f"({_money(t_cost)} vs {_money(a_cost)}, over {runs}).")
+        if x >= a:
+            verdict = f"Not known: the team passed {tasks}, but {name} list-price is not known for every run."
+        usage = f"{name} list-price is not known for every run, so it is not compared."
+    elif a_cost <= 0:
+        if x >= a:
+            verdict = f"Not known: the team passed {tasks}, but {label} alone used no {name} list-price to compare with."
+        usage = f"{label} alone used no {name} list-price, so there is no percent to compare."
+    else:
+        pct = (a_cost - t_cost) / a_cost * 100
+        if x >= a:
+            verdict = (f"Yes on these runs: {tasks}, with less {name} list-price." if t_cost < a_cost
+                       else f"No: {tasks}, but not less {name} list-price.")
+        usage = (f"{name} list-price: {_money(t_cost)} for the team vs {_money(a_cost)} alone "
+                 f"({abs(pct):.0f}% {'less' if pct >= 0 else 'more'}).")
+    return " ".join([verdict, passes, usage, *extra])
+
+
+def _beyond(config: Mapping[str, Any], records: list[Mapping[str, Any]], planner_vendor: str,
+            who: str) -> list[str]:
+    """``["Beyond Claude, the team also used …"]`` — every vendor other than
+    the planner's that ``who`` used on these runs (Codex list price, local
+    tokens, anything else), from the runs' own parts; [] when none."""
+    totals = _vendor_totals([run_parts(config, r) for r in records])
+    bits = []
+    for vendor in ("codex", "claude", "local", "other"):
+        row = totals.get(vendor)
+        if vendor == planner_vendor or not row:
+            continue
+        if vendor in ("claude", "codex"):
+            cost = row.get("cost_list_price_usd")
+            bits.append(f"{_money(cost) if cost is not None else 'an unknown amount'} of "
+                        f"{U.VENDOR_WORDS[vendor]} list-price")
+        else:
+            words = "local models" if vendor == "local" else "other models"
+            bits.append(f"{_tok(row.get('tokens_in'))} tokens in / {_tok(row.get('tokens_out'))} out on {words}"
+                        + (f" ({_money(row.get('cost_metered_usd'))} billed)" if row.get("cost_metered_usd") else ""))
+    if not bits:
+        return []
+    name = U.VENDOR_WORDS.get(planner_vendor, "the planner's model")
+    return [f"Beyond {name}, {who} also used " + "; ".join(bits) + "."]
 
 
 def _vendor_list_price(config: Mapping[str, Any], records: list[Mapping[str, Any]], vendor: str) -> float | None:
@@ -444,7 +489,65 @@ def who_lines(u: Mapping[str, Any]) -> list[str]:
     return lines
 
 
-def record_lines(u: Mapping[str, Any]) -> list[str]:
+#: v1.396.0 review: said when the router had NO usage numbers in a run (its
+#: rule that keeps new work off an account at a window's limit never fired).
+NO_USAGE_NUMBERS = (
+    "In {runs} the router had no usage numbers (Iron-Proxy was off in the benchmark's home), so its rule "
+    "that keeps new work off an account at {pct}% of a window never applied: every piece went by role and "
+    "record alone."
+)
+
+
+def no_usage_line(records: Iterable[Mapping[str, Any]]) -> str:
+    """:data:`NO_USAGE_NUMBERS` for the team runs that recorded the router had
+    no usage numbers ("" when none did, or no run said)."""
+    said = [r for r in _live(list(records)) if isinstance(r.get("team_records"), Mapping)
+            and "usage_numbers" in r["team_records"]]
+    without = [r for r in said if r["team_records"].get("usage_numbers") is False]
+    if not without:
+        return ""
+    th = without[-1]["team_records"].get("thresholds") or {}
+    runs = "every run" if len(without) == len(said) else f"{len(without)} of {len(said)} runs"
+    return NO_USAGE_NUMBERS.format(runs=runs, pct=f"{float(th.get('new_work_max_percent') or 80):g}")
+
+
+def piece_lines(records: Iterable[Mapping[str, Any]]) -> list[str]:
+    """v1.396.0 review: the numbers to tune the router's "good record" from,
+    beside the HIDDEN CHECK's verdict on the same runs — per member and role:
+    the pieces (done / failed by the helper's own state), the runs they were
+    in, how many of those runs passed the hidden check, and which tasks."""
+    rows: "OrderedDict[tuple[str, str], dict[str, Any]]" = OrderedDict()
+    for r in _live(list(records)):
+        key = _key(r)
+        for h in r.get("helpers") or ():
+            if not isinstance(h, Mapping) or not str(h.get("member") or ""):
+                continue
+            member, role = str(h["member"]), str(h.get("role") or "") or "by name"
+            row = rows.setdefault((member, role), {"pieces": 0, "done": 0, "failed": 0, "runs": {}, "tasks": set()})
+            row["pieces"] += 1
+            state = str(h.get("state") or "")
+            row["done"] += state == "done"
+            row["failed"] += state == "failed"
+            row["runs"][key] = r.get("passed")
+            row["tasks"].add(key[0])
+    if not rows:
+        return []
+    lines = [
+        "| Member | Role | Pieces | Done | Failed | Runs it worked in | Those runs: passed the hidden check / scored "
+        "| Tasks |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for (member, role), row in sorted(rows.items()):
+        verdicts = list(row["runs"].values())
+        scored = [v for v in verdicts if v is not None]
+        tasks = sorted(row["tasks"])
+        shown = ", ".join(tasks[:6]) + (f", and {len(tasks) - 6} more" if len(tasks) > 6 else "")
+        lines.append(f"| {member} | {role} | {row['pieces']} | {row['done']} | {row['failed']} | {len(verdicts)} | "
+                     f"{sum(1 for v in scored if v is True)} / {len(scored)} | {shown} |")
+    return lines
+
+
+def record_lines(u: Mapping[str, Any], records: Iterable[Mapping[str, Any]] = ()) -> list[str]:
     rec = u.get("router_record")
     if not isinstance(rec, Mapping):
         return []
@@ -466,7 +569,16 @@ def record_lines(u: Mapping[str, Any]) -> list[str]:
                 f"| {member} | {role} | {view.get('runs', 0)} | {view.get('passed', 0)} | "
                 f"{view.get('streak', 0)} | {view.get('words') or view.get('status') or '-'} |"
             )
-    return lines + ["", RECORD_NOTE]
+    lines += ["", RECORD_NOTE]
+    records = list(records)
+    pieces = piece_lines(records)
+    if pieces:
+        lines += ["", "The same pieces beside the hidden check, over the runs (the router never sees this column):",
+                  "", *pieces]
+    usage = no_usage_line(records)
+    if usage:
+        lines += ["", usage]
+    return lines
 
 
 def usage_section(config: Mapping[str, Any], records: list[Mapping[str, Any]]) -> list[str]:
@@ -496,7 +608,7 @@ def usage_section(config: Mapping[str, Any], records: list[Mapping[str, Any]]) -
     who = who_lines(u)
     if who:
         lines += ["", "## Who did what", "", *who]
-    rec = record_lines(u)
+    rec = record_lines(u, live)
     if rec:
         lines += ["", "## What the team router learned", "", *rec]
     return lines
@@ -549,7 +661,7 @@ def side_by_side(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any]],
         who = who_lines(u)
         if who:
             lines += ["Who did what:", "", *who, ""]
-        rec = record_lines(u)
+        rec = record_lines(u, t_records)
         if rec:
             lines += ["What the team router learned (the numbers to tune from):", "", *rec, ""]
     lines += [MEASURED_LIMITS]

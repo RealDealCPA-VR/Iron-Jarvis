@@ -48,6 +48,10 @@ SAME_WINDOW_S = 120.0
 #: A percent that goes DOWN by more than this between two readings means the
 #: window reset (or rolled) in between (the readings are rounded to a tenth).
 DROP_POINTS = 0.05
+#: v1.396.0 review: when a Codex snapshot's own ``observedAt`` is believed
+#: (Iron-Proxy's ``OBSERVED_MAX_AGE_MS`` / ``OBSERVED_MAX_SKEW_MS``).
+OBSERVED_MAX_AGE_S = 30 * 24 * 3600.0
+OBSERVED_MAX_SKEW_S = 60.0
 
 #: The vendor a provider's usage is counted under in the report.
 VENDOR_OF_PROVIDER: dict[str, str] = {
@@ -165,6 +169,16 @@ def readings_from(extra: Any, *, at: float) -> list[dict[str, Any]]:
                 })
         limits = extra.get("rate_limits")
         if isinstance(limits, Mapping):
+            # v1.396.0 review: a Codex snapshot is the one its SESSION last
+            # read (``account/rateLimits/read`` at start, then the updates
+            # Codex sends) — a parked session's older copy can ride an answer
+            # that arrives after a newer session's. Stamped with the time it
+            # was SEEN (``observedAt``, Iron-Proxy's own bound: at most 30
+            # days old, at most a minute ahead), an older copy sorts before
+            # the newer reading instead of reading as the window going down.
+            seen = _num(limits.get("observedAt"))
+            when = seen if seen is not None and at - OBSERVED_MAX_AGE_S <= seen <= at + OBSERVED_MAX_SKEW_S \
+                else float(at)
             for kind in ("primary", "secondary"):
                 win = limits.get(kind)
                 if not isinstance(win, Mapping):
@@ -177,7 +191,7 @@ def readings_from(extra: Any, *, at: float) -> list[dict[str, Any]]:
                     "window": kind, "window_mins": int(round(mins)) if mins and mins > 0 else None,
                     "percent": round(used, 1),
                     "resets_at": iso(_unix_seconds(win.get("resetsAt"))),
-                    "at": float(at),
+                    "at": when,
                 })
     except Exception:  # noqa: BLE001 — a reading that cannot be read is no reading
         return out

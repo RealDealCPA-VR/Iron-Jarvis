@@ -248,6 +248,109 @@ def test_a_member_that_fails_at_its_work_is_graded():
     assert "not signed in" in helper_infra(out)
 
 
+# --------------------------------------------------------------------------- #
+# the report: Iron-Proxy off, the router's record beside the hidden check
+# --------------------------------------------------------------------------- #
+
+
+async def test_the_report_says_the_router_had_no_usage_numbers_and_shows_pieces_beside_the_hidden_check(
+        world, tmp_path):
+    res = await _run(world, _runner(world, tmp_path), names=[W.TASK_A, W.TASK_B])
+    for rec in res.records:
+        assert rec["team_records"]["usage_numbers"] is False
+    report = (res.config_dir / "report.md").read_text(encoding="utf-8")
+    assert ("In every run the router had no usage numbers (Iron-Proxy was off in the benchmark's home), so its "
+            "rule that keeps new work off an account at 80% of a window never applied") in report
+    # Per member and role: pieces, their state, and the hidden check's
+    # verdict on the same runs, by task (glm wrote A's fix, which passes; B's
+    # piece changed nothing, which fails).
+    assert (f"| glm | code | 2 | 2 | 0 | 2 | 1 / 2 | {W.TASK_A}, {W.TASK_B} |") in report, report
+    assert (f"| codex | review | 2 | 2 | 0 | 2 | 1 / 2 | {W.TASK_A}, {W.TASK_B} |") in report
+    combined = (world.home / "harness-bench" / "report.md").read_text(encoding="utf-8")
+    assert "never applied" in combined and "| glm | code | 2 |" in combined
+
+
+# --------------------------------------------------------------------------- #
+# Codex readings in the order Codex said them
+# --------------------------------------------------------------------------- #
+
+
+def test_an_older_codex_snapshot_on_a_later_answer_is_not_a_window_going_down():
+    """Codex's snapshot is the one its SESSION last read: a parked session's
+    older copy can ride an answer that arrives after a newer session's
+    reading. Ordered by the answer's arrival it read as the window going down
+    ("not comparable"); stamped with when it was seen it is the earlier
+    reading it is."""
+    reset = 1_900_010_000
+
+    def snap(pct: int, seen: int) -> dict:
+        return {"rate_limits": {"planType": "plus", "observedAt": seen,
+                                "primary": {"usedPercent": pct, "windowDurationMins": 300, "resetsAt": reset}}}
+
+    fresh = U.readings_from(snap(42, 1_900_000_100), at=1_900_000_101.0)
+    stale = U.readings_from(snap(40, 1_900_000_050), at=1_900_000_200.0)  # arrived later, seen earlier
+    assert stale[0]["at"] == 1_900_000_050.0 and fresh[0]["at"] == 1_900_000_100.0
+    summary = U.window_summary(fresh + stale)
+    assert summary["one_period"] is True, summary["why"]
+    assert (summary["first"]["percent"], summary["last"]["percent"]) == (40.0, 42.0)
+    # A stamp that cannot be believed (from the future, or a month old) is
+    # not used: the arrival time stands.
+    future = U.readings_from(snap(40, 1_900_009_000), at=1_900_000_200.0)
+    assert future[0]["at"] == 1_900_000_200.0
+    ancient = U.readings_from(snap(40, 1_800_000_000), at=1_900_000_200.0)
+    assert ancient[0]["at"] == 1_900_000_200.0
+
+
+# --------------------------------------------------------------------------- #
+# the answer
+# --------------------------------------------------------------------------- #
+
+TEAM_CFG = {"runner": "jarvis-team", "provider": "claude-cli", "model": "sonnet"}
+ALONE_CFG = {"runner": "jarvis", "provider": "claude-cli", "model": "sonnet"}
+
+
+def _rec(task: str, passed, claude: float, *, codex: float = 0.0, local: int = 0) -> dict:
+    parts = {PLANNER: {"vendor": "claude", "cost_list_price_usd": claude, "cost_metered_usd": 0.0,
+                       "tokens_in": 100, "tokens_out": 10, "model_calls": 2}}
+    if codex:
+        parts["codex"] = {"vendor": "codex", "cost_list_price_usd": codex, "cost_metered_usd": 0.0,
+                          "tokens_in": 50, "tokens_out": 5, "model_calls": 1}
+    if local:
+        parts["glm"] = {"vendor": "local", "cost_list_price_usd": 0.0, "cost_metered_usd": 0.0,
+                        "tokens_in": local, "tokens_out": local // 10, "model_calls": 1}
+    return {"task_id": task, "passed": passed, "parts": parts}
+
+
+def test_a_team_that_passes_fewer_never_gets_a_less_usage_headline():
+    team = [_rec("a", True, 0.10, codex=0.02, local=700), _rec("b", False, 0.10, codex=0.02, local=700)]
+    alone = [_rec("a", True, 0.30), _rec("b", True, 0.30)]
+    words = TRP.answer((TEAM_CFG, team), (ALONE_CFG, alone))
+    # The pass comparison leads, and says no.
+    assert words.startswith("No: the team passed fewer tasks. The team passed 1 of 2, Claude alone 2 of 2"), words
+    assert "Yes" not in words
+    # The Claude list price is said (not as a win), and what the team spent
+    # beyond Claude is impossible to miss.
+    assert "Claude list-price: $0.2000 for the team vs $0.6000 alone (67% less)." in words
+    assert "Beyond Claude, the team also used $0.0400 of Codex list-price; 1,400 tokens in / 140 out on local models." \
+        in words
+
+
+def test_a_team_that_passes_as_many_with_less_claude_says_yes_and_what_else_it_used():
+    team = [_rec("a", True, 0.10, codex=0.02), _rec("b", True, 0.10, codex=0.02)]
+    alone = [_rec("a", True, 0.30), _rec("b", True, 0.30)]
+    words = TRP.answer((TEAM_CFG, team), (ALONE_CFG, alone))
+    assert words.startswith("Yes on these runs: as many tasks, with less Claude list-price."), words
+    assert "Beyond Claude, the team also used $0.0400 of Codex list-price." in words
+    # As many tasks but MORE Claude: no.
+    dearer = [_rec("a", True, 0.40), _rec("b", True, 0.40)]
+    assert TRP.answer((TEAM_CFG, dearer), (ALONE_CFG, alone)).startswith(
+        "No: as many tasks, but not less Claude list-price.")
+    # A Codex list price the team's runs could not read is said as unknown.
+    blind = [_rec("a", True, 0.10, codex=0.02)]
+    blind[0]["parts"]["codex"]["cost_list_price_usd"] = None
+    assert "an unknown amount of Codex list-price" in TRP.answer((TEAM_CFG, blind), (ALONE_CFG, alone[:1]))
+
+
 @pytest.mark.parametrize("error", [
     # The real words each adapter raises at an account's limit
     # (claude_native.transport.upstream_failure, codex_native.protocol.turn_failure).

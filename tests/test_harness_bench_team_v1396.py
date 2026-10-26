@@ -155,8 +155,16 @@ async def test_the_team_row_beside_claude_alone_answers_the_question(world, tmp_
     team_lp = sum(r["parts"][PLANNER]["cost_list_price_usd"] for r in team.records)
     alone_lp = sum(r["cost_list_price_usd"] for r in alone.records)
     pct = round((alone_lp - team_lp) / alone_lp * 100)
-    assert (f"**The answer:** passed 2 of 4 vs Claude alone 2 of 4, using {pct}% less Claude list-price "
-            f"(${team_lp:.4f} vs ${alone_lp:.4f}, over the 4 runs both made and both were scored on).") in section
+    # (v1.396.0 review: the pass comparison leads, and what the team used
+    # beyond Claude is said beside the Claude list price.)
+    codex_lp = sum(r["parts"]["codex"]["cost_list_price_usd"] for r in team.records)
+    local_in = sum(r["parts"]["glm"]["tokens_in"] for r in team.records)
+    local_out = sum(r["parts"]["glm"]["tokens_out"] for r in team.records)
+    assert (f"**The answer:** Yes on these runs: as many tasks, with less Claude list-price. "
+            f"The team passed 2 of 4, Claude alone 2 of 4 (the 4 runs both made and both were scored on). "
+            f"Claude list-price: ${team_lp:.4f} for the team vs ${alone_lp:.4f} alone ({pct}% less). "
+            f"Beyond Claude, the team also used ${codex_lp:.4f} of Codex list-price; "
+            f"{local_in:,} tokens in / {local_out:,} out on local models.") in section
     # It counts the task each passes that the other fails.
     assert f"- {W.TASK_A}: 2/2 / 0/2" in section and f"- {W.TASK_B}: 0/2 / 2/2" in section
     # Exact AND measured usage on the team's row, beside its pass rate per
@@ -520,7 +528,8 @@ def test_the_answer_says_not_enough_runs_when_the_numbers_cannot_answer():
     # An unknown list price is said, never compared.
     unknown = {**rec, "parts": {PLANNER: {**rec["parts"][PLANNER], "cost_list_price_usd": None}}}
     words = TRP.answer((team_cfg, [rec]), (alone_cfg, [unknown]))
-    assert words.startswith("passed 1 of 1 vs Claude alone 1 of 1") and "not known for every run" in words
+    assert words.startswith("Not known: the team passed as many tasks") and "not known for every run" in words
+    assert "The team passed 1 of 1, Claude alone 1 of 1" in words
     assert "%" not in words
 
 
@@ -539,8 +548,9 @@ def test_the_answer_counts_only_runs_both_setups_had_a_fair_go_at():
     team = [rec("a", True, 0.1), rec("b", None, 0.0)]  # b did not run for the team
     alone = [rec("a", True, 0.2), rec("b", True, 0.5)]
     assert TRP.answer((team_cfg, team), (alone_cfg, alone)) == (
-        "passed 1 of 1 vs Claude alone 1 of 1, using 50% less Claude list-price "
-        "($0.1000 vs $0.2000, over the 1 run both made and both were scored on).")
+        "Yes on these runs: as many tasks, with less Claude list-price. "
+        "The team passed 1 of 1, Claude alone 1 of 1 (the 1 run both made and both were scored on). "
+        "Claude list-price: $0.1000 for the team vs $0.2000 alone (50% less).")
 
 
 # --------------------------------------------------------------------------- #
@@ -731,8 +741,9 @@ def test_one_command_makes_the_team_row_the_planner_alone_row_and_the_answer(tmp
     # The team's row first (its members made, then gone), the planner alone after.
     assert out.output.index("jarvis-team-claude-cli") < out.output.index("jarvis-claude-cli-claude-opus-4-8-")
     report = (resolve_home(root) / "harness-bench" / "report.md").read_text(encoding="utf-8")
-    assert "**The answer:** passed 0 of 1 vs Claude alone 1 of 1, using " in report
-    assert "% less Claude list-price" in report
+    # (v1.396.0 review: a team that passed fewer gets no "less" headline.)
+    assert "**The answer:** No: the team passed fewer tasks. The team passed 0 of 1, Claude alone 1 of 1" in report
+    assert "% less)." in report
     plain = ["run", "--runner", "jarvis", "--provider", "claude-cli", "--model", "m", "--root", str(root)]
     refused = CliRunner().invoke(bench_app, [*plain, "--with-alone", "--dry-run"])
     assert refused.exit_code == 2 and "--with-alone applies to --runner jarvis-team only." in refused.output
