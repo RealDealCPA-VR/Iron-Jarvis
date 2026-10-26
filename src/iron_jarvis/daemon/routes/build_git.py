@@ -349,6 +349,68 @@ def register(app: FastAPI, d: Any) -> None:
         return await _held(thread_id, run)
 
 
+#: v1.399.0 (night shift N2): a night task's own commit could not run because
+#: its session was busy (a turn, a rewind, Compact or another git action).
+NIGHT_COMMIT_BUSY = "Its session was busy, so Iron Jarvis did not commit its work; it is still in its branch folder."
+
+
+async def commit_for_night(d: Any, thread_id: str, message: str) -> dict[str, Any]:
+    """IRON JARVIS'S OWN COMMIT of a night task's work when the task ends
+    (v1.399.0, night shift N2 — the user's decision 2): everything in the
+    session's worktree, on its OWN branch, with the task's words as the
+    message — the Commit button's own machinery (:func:`branches.commit`,
+    the user's git identity, hooks run as they always do) under the
+    session's git lock and HELD like every git action here (no turn, rewind
+    or Compact starts meanwhile). It NEVER pushes and never merges, and it
+    never runs on the user's main checkout (the worktree's HEAD must be on
+    the session's branch — ``branches._require_on_branch``).
+
+    Answers ``{committed, sha, subject, files, nothing, note}``: ``nothing``
+    True when nothing changed (no commit is made); ``note`` the plain words
+    when the commit did not go through (a hook refused it, a file was held).
+    NEVER raises — the task's settle carries on whatever git says."""
+    from .build import _COMPACTING, _STARTING, _running_turn, _setup_of
+
+    out: dict[str, Any] = {"committed": False, "sha": "", "subject": "", "files": 0, "nothing": False, "note": ""}
+    try:
+        row = await asyncio.to_thread(S.get_row, d.platform.engine, thread_id)
+        facts = B.facts_of(_setup_of(row)) if row is not None else None
+        if facts is None:
+            out["note"] = "Its session has no branch of its own, so there was nothing to commit to."
+            return out
+        if (thread_id in _GIT_ACTING or thread_id in _COMPACTING or thread_id in _STARTING
+                or _running_turn(d, thread_id)):
+            out["note"] = NIGHT_COMMIT_BUSY
+            return out
+        _STARTING.add(thread_id)
+        _GIT_ACTING.add(thread_id)
+        try:
+            done = await asyncio.to_thread(_locked, thread_id, lambda: B.commit(facts, message))
+        finally:
+            _GIT_ACTING.discard(thread_id)
+            _STARTING.discard(thread_id)
+        out.update(committed=True, sha=str(done.get("sha") or ""), subject=str(done.get("subject") or ""),
+                   files=int(done.get("files") or 0))
+        if done.get("note"):
+            out["note"] = str(done["note"])
+        return out
+    except B.GitRefused as exc:
+        if str(exc) == B.NOTHING_TO_COMMIT:
+            out["nothing"] = True
+            return out
+        detail = next((ln.strip() for ln in str(exc.details or "").splitlines() if ln.strip()), "")
+        words = f"Iron Jarvis could not commit its work: {exc}"
+        if detail:
+            words += f" ({detail[:200]})"
+        out["note"] = words + " Its changes are still in its branch folder."
+        return out
+    except Exception as exc:  # noqa: BLE001 — a commit never breaks the settle
+        log.warning("a night task's commit failed (%s)", thread_id, exc_info=True)
+        out["note"] = (f"Iron Jarvis could not commit its work ({type(exc).__name__}); its changes are still in "
+                       "its branch folder.")
+        return out
+
+
 async def draft_message(d: Any, thread_id: str) -> Any:
     """The commit-message draft (``POST …/git/draft``) — the same kind of
     one-shot as Compact (``harness/compact``): the session's OWN pair
@@ -427,4 +489,4 @@ async def draft_message(d: Any, thread_id: str) -> Any:
     return {"drafted": True, "message": message, "provider": served, "model": str(getattr(route, "model", "") or "")}
 
 
-__all__ = ["draft_message", "register"]
+__all__ = ["commit_for_night", "draft_message", "register"]

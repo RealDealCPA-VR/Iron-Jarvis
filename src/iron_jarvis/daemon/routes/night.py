@@ -263,6 +263,236 @@ def _parse(value: Any):
         return None
 
 
+def _cost_kind(platform: Any) -> Any:
+    """``(provider, model) -> "free" | "plan" | "pay"`` — the model team's
+    own classification (``agents/model_team.cost_type``); "" when unsure."""
+    from ...agents import model_team as MT
+
+    def kind(provider: str, model: str) -> str:
+        if not provider:
+            return ""
+        try:
+            return str(MT.cost_type(platform, provider, model) or "")
+        except Exception:  # noqa: BLE001 — a word, never a crash
+            return ""
+
+    return kind
+
+
+def _branch_numbers(git: "dict[str, str] | None") -> dict[str, Any]:
+    """The branch's numbers (``branches.branch_summary``), {} when they
+    cannot be read. BLOCKING; never raises."""
+    from ...harness import branches as B
+
+    if not git:
+        return {}
+    try:
+        return B.branch_summary(git)
+    except Exception:  # noqa: BLE001 — a gone folder, a git that fails: no numbers
+        log.debug("night task branch numbers unreadable", exc_info=True)
+        return {}
+
+
+async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[str, str] | None",
+                          state: str, messages: list[dict[str, Any]], fin: Any, tests_trusted: bool,
+                          stopped_by_emergency: bool, notes: "list[tuple[str, str]]") -> None:
+    """v1.399.0 (N2): one ended night task's COMMIT and its MORNING FACTS.
+
+    * THE COMMIT (decision 2): the task's work is committed to its own branch
+      by Iron Jarvis itself (``build_git.commit_for_night`` — the Commit
+      button's machinery under the session's git lock; never a push, never a
+      merge) with the task's words as the message (``night_morning.
+      commit_message``) — whatever it ended as, so a failed or needs-you
+      task's work is not lost. Nothing changed: no commit. Emergency stop:
+      no commit (it stops what runs by itself; the work stays in its branch
+      folder). A commit git refuses is a note in words.
+    * THE FACTS the summary reads (``NightTaskRecord.morning_json``): the
+      finish check's test verdict (and whether it can be trusted), the
+      branch's numbers (``branches.branch_summary``, after the commit), the
+      usage per account (each reply line's receipt), the commit.
+
+    Appends its notes to ``notes``. Never raises."""
+    from ...harness import night_morning as M
+    from .build_git import commit_for_night
+
+    platform = d.platform
+    engine = platform.engine
+    tid = task["id"]
+    branch = str((git or {}).get("branch") or task.get("branch") or "")
+    commit: "dict[str, Any] | None" = None
+    commit_note = ""
+    try:
+        if git:
+            if stopped_by_emergency:
+                commit_note = M.EMERGENCY_NOT_COMMITTED
+            else:
+                done = await commit_for_night(d, thread, M.commit_message(task.get("words") or "", state))
+                if done.get("committed") and done.get("sha"):
+                    commit = {"sha": str(done["sha"]), "subject": str(done.get("subject") or ""),
+                              "files": int(done.get("files") or 0)}
+                    notes.append(("commit", M.commit_note_words(branch, commit["sha"])))
+                    if done.get("note"):
+                        notes.append(("info", str(done["note"])))
+                elif done.get("nothing"):
+                    commit_note = M.TRY_ON_NOTE if task.get("try_on") else M.NOTHING_CHANGED
+                else:
+                    commit_note = str(done.get("note") or "")
+            if commit_note:
+                notes.append(("commit", commit_note))
+        numbers = await asyncio.to_thread(_branch_numbers, git)
+        usage = await asyncio.to_thread(M.usage_by_account, messages, _cost_kind(platform))
+        tests = fin.get("tests") if isinstance(fin, dict) and fin.get("tests") in ("passed", "failed") else ""
+        facts: dict[str, Any] = {
+            "tests": tests,
+            "tests_trusted": bool(tests_trusted),
+            "files": int(numbers.get("files") or 0),
+            "added": int(numbers.get("added") or 0),
+            "removed": int(numbers.get("removed") or 0),
+            "ahead": int(numbers.get("ahead") or 0),
+            "uncommitted": int(numbers.get("uncommitted") or 0),
+            "remote": str(numbers.get("remote") or ""),
+            "usage": usage,
+            "commit": commit,
+            "commit_note": commit_note,
+        }
+        await asyncio.to_thread(N.set_morning, engine, tid, facts, commit_sha=(commit or {}).get("sha", ""))
+    except Exception:  # noqa: BLE001 — the morning never breaks the settle
+        log.warning("night task %s: its morning facts could not be kept", tid, exc_info=True)
+
+
+#: v1.399.0: a night whose summary is made this long after it (an upgrade
+#: finding older nights) is listed but never announced.
+ANNOUNCE_WITHIN_DAYS = 1
+
+
+def _recent(key: str, now: Any) -> bool:
+    """Is night ``key`` (a local date) tonight's or last night's? Only those
+    are announced."""
+    from datetime import timedelta
+
+    try:
+        return key >= (now.date() - timedelta(days=ANNOUNCE_WITHIN_DAYS)).isoformat()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _announce_night(platform: Any, key: str, rows: list[dict[str, Any]]) -> None:
+    """``build.night_summary`` — the night's ONE notice (the bell, the tray,
+    the phone's one message). Never raises."""
+    from ...core.events import EventType
+    from ...harness import night_morning as M
+
+    try:
+        bus = getattr(platform, "event_bus", None)
+        if bus is None:
+            return
+        await bus.publish(EventType.BUILD_NIGHT_SUMMARY, M.notice_payload(key, rows), session_id=None)
+    except Exception:  # noqa: BLE001 — the night's record stands without its notice
+        log.warning("announcing night %s's summary failed", key, exc_info=True)
+
+
+async def morning_pass(d: Any, settled: "list[str] | None" = None) -> list[str]:
+    """v1.399.0 (N2): make each night's ONE Last night summary when it is
+    READY — the night's last task ended (nothing of that night runs, and
+    nothing queued can still start in its window: Emergency stop holds every
+    queued task), or its window closed — whichever comes first. The rows are
+    built from the records (``night_morning.rows_for_night``), never by a
+    model. A summary is announced ONCE (``build.night_summary``; only
+    tonight's or last night's — older nights an upgrade finds are listed
+    quietly), a task of a made night that ends later brings its row up to
+    date (no second notice), and the newest ``KEEP_NIGHTS`` are kept.
+    Returns the nights made."""
+    from ...harness import night_morning as M
+
+    platform = d.platform
+    engine = platform.engine
+    config = platform.config
+    settled_ids = set(settled or [])
+    start, end = N.window_of(config)
+    now = N.now_local()
+    current = M.night_key(now, start, end) if N.window_open(config, now) else ""
+    tasks = await asyncio.to_thread(N.list_tasks, engine)
+    queued = any(t["state"] == N.QUEUED for t in tasks)
+    emergency = _emergency(d)
+    by_night: dict[str, list[dict[str, Any]]] = {}
+    for t in tasks:
+        if t["state"] == N.QUEUED:
+            continue
+        key = M.task_night(t, start, end)
+        if key:
+            by_night.setdefault(key, []).append(t)
+    made: list[str] = []
+    for key in sorted(by_night):
+        group = by_night[key]
+        rows = M.rows_for_night(group, key, start, end)
+        if await asyncio.to_thread(M.has_summary, engine, key):
+            if any(t["id"] in settled_ids for t in group):
+                await asyncio.to_thread(M.refresh_summary, engine, key, rows)
+            continue
+        if key == current:
+            if any(t["state"] == N.RUNNING for t in group):
+                continue  # the night's work goes on
+            if queued and not emergency:
+                continue  # a queued task still starts in this window
+        if not await asyncio.to_thread(M.make_summary, engine, key, rows):
+            continue
+        made.append(key)
+        if _recent(key, now) and await asyncio.to_thread(M.claim_notice, engine, key):
+            await _announce_night(platform, key, rows)
+    if made:
+        await asyncio.to_thread(M.prune, engine)
+    return made
+
+
+def _session_facts(engine: Any, thread_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Each night session's branch as it is NOW (the buttons: pushed, a pull
+    request, the folder thrown away), off its stored git facts — no git
+    call. BLOCKING."""
+    from sqlmodel import select as _select
+
+    from ...core.db import session_scope
+    from ...core.models import ChatThreadRecord
+    from ...harness import branches as B
+
+    out: dict[str, dict[str, Any]] = {}
+    ids = [t for t in thread_ids if t]
+    if not ids:
+        return out
+    with session_scope(engine) as db:
+        rows = db.exec(_select(ChatThreadRecord).where(ChatThreadRecord.id.in_(ids))).all()  # type: ignore[attr-defined]
+        for row in rows:
+            facts = B.facts_of(S._setup(row)) or {}
+            out[row.id] = {
+                "exists": True,
+                "archived": bool(getattr(row, "archived_at", None)),
+                "has_branch": bool(facts),
+                "removed": bool(facts.get("removed_at")),
+                "pushed": bool(facts.get("pushed_at")),
+                "pr_url": str(facts.get("pr_url") or ""),
+                "merged": bool(facts.get("merged_at")),
+            }
+    return out
+
+
+def summaries_view(d: Any) -> dict[str, Any]:
+    """``GET /build/night/summaries``: the made summaries, newest night first
+    (the newest is "Last night"), each row with its session's branch as it is
+    now. BLOCKING."""
+    from ...harness import night_morning as M
+
+    engine = d.platform.engine
+    nights = M.list_summaries(engine)
+    ids = [str(r.get("thread_id") or "") for n in nights for r in n["rows"]]
+    live = _session_facts(engine, ids)
+    gone = {"exists": False, "archived": False, "has_branch": False, "removed": False, "pushed": False,
+            "pr_url": "", "merged": False}
+    for n in nights:
+        for r in n["rows"]:
+            r["session"] = live.get(str(r.get("thread_id") or ""), gone)
+            r["usage_words"] = [M.usage_words(u) for u in r.get("usage") or []]
+    return {"nights": nights, "keep": M.KEEP_NIGHTS}
+
+
 async def settle_running(d: Any) -> list[str]:
     """Settle every RUNNING night task whose turn is over: its ended state
     and notes from its reply line (``night.outcome_of``), its slot given
@@ -377,7 +607,8 @@ async def settle_running(d: Any) -> list[str]:
                 if str(rec.get("thread_id") or "") == thread:
                     await asyncio.to_thread(RR.drop, engine, str(rec.get("turn_id") or ""))
         # The transcript is up to 200 lines of JSON: parsed off the loop.
-        line = await asyncio.to_thread(lambda: N.last_reply_line(S._messages(row)))
+        messages = await asyncio.to_thread(S._messages, row)
+        line = N.last_reply_line(messages)
         state, notes = N.outcome_of(task, line)
         if forced:
             state = N.STOPPED
@@ -386,6 +617,7 @@ async def settle_running(d: Any) -> list[str]:
             state = N.STOPPED
             notes.append(("emergency", N.EMERGENCY_NOTE))
         git = B.facts_of(setup)
+        borrowed = None
         if git:
             borrowed = await asyncio.to_thread(
                 find_main_env, git.get("checkout", ""), S.folder_of(row), git.get("repo", ""),
@@ -395,6 +627,7 @@ async def settle_running(d: Any) -> list[str]:
                 notes.append(("env", "Tests and checks in its branch folder used "
                               f"{borrowed.words()}; nothing was installed."))
         fin = (line or {}).get("finish") if isinstance(line, dict) else None
+        tests_trusted = True
         if isinstance(fin, dict) and fin.get("tests") in ("passed", "failed"):
             words = "Its tests passed." if fin["tests"] == "passed" else "Its tests failed."
             if git and borrowed and tests_line(borrowed):
@@ -405,6 +638,7 @@ async def settle_running(d: Any) -> list[str]:
                     from ...harness.main_env import untrusted_words
 
                     words += " " + untrusted_words(borrowed)
+                    tests_trusted = False
                     if fin["tests"] == "passed" and state == N.DONE:
                         state = N.NEEDS_YOU  # a pass nobody can rely on
             notes.append(("tests", words))
@@ -432,6 +666,14 @@ async def settle_running(d: Any) -> list[str]:
         if ended_pids:
             notes.append(("info", f"It left {len(ended_pids)} program(s) running in the background; "
                           "they were stopped when it ended."))
+        # v1.399.0 (N2, decision 2): Iron Jarvis COMMITS the task's work to
+        # its own branch (the Commit button's machinery; never a push, never a
+        # merge) — a failed or needs-you task's too, so nothing is lost — and
+        # keeps what the morning summary reads, off the records.
+        stopped_by_emergency = emergency or N.has_note(task, "emergency") or any(
+            k == "emergency" for k, _t in notes)
+        await _settle_morning(d, task, thread, git, state, messages, fin, tests_trusted,
+                              stopped_by_emergency, notes)
         for kind, text in notes:
             await asyncio.to_thread(N.add_note, engine, tid, kind, text)
         await asyncio.to_thread(N.finish_task, engine, tid, state)
@@ -463,7 +705,11 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
     platform = d.platform
     engine = platform.engine
     tid = task["id"]
-    if not await asyncio.to_thread(N.mark_running, engine, tid):
+    from ...harness.night_morning import night_key
+
+    # v1.399.0 (N2): the night it runs in (the morning's summary is per night).
+    night = night_key(N.now_local(), *N.window_of(platform.config))
+    if not await asyncio.to_thread(N.mark_running, engine, tid, night):
         return False  # someone else took it (cancelled, started)
     _STARTING_TASKS.add(tid)
     try:
@@ -561,8 +807,15 @@ async def night_pass(d: Any) -> dict[str, list[str]]:
 
 
 async def _night_pass(d: Any) -> dict[str, list[str]]:
-    out: dict[str, list[str]] = {"settled": [], "started": []}
+    out: dict[str, list[str]] = {"settled": [], "started": [], "summaries": []}
     out["settled"] = await settle_running(d)
+    # v1.399.0 (N2): a night whose last task just ended, or whose window has
+    # closed, gets its ONE summary now — inside the window or not, Emergency
+    # stop or not (the passes below may return early).
+    try:
+        out["summaries"] = await morning_pass(d, out["settled"])
+    except Exception:  # noqa: BLE001 — the morning never stops the night
+        log.warning("night summary pass failed", exc_info=True)
     platform = d.platform
     config = platform.config
     if _emergency(d):
@@ -733,6 +986,13 @@ def register(app: FastAPI, d: Any) -> None:
         ended ones of the last days; the window in words; the limits."""
         return list_view(d)
 
+    @app.get("/build/night/summaries")
+    def night_summaries() -> dict[str, Any]:
+        """v1.399.0 (N2): the Last night view — each night's summary, newest
+        first (the last 14), its tasks failed and needs-you first, each with
+        its branch as it is now (pushed, a pull request, thrown away)."""
+        return summaries_view(d)
+
     @app.post("/build/night", status_code=201)
     async def night_add(body: NightTaskBody) -> dict[str, Any]:
         try:
@@ -830,6 +1090,6 @@ def register(app: FastAPI, d: Any) -> None:
 
 __all__ = [
     "NightTaskBody", "NightTaskPatch", "OVERRUN_GRACE_S", "TEAM_NOTE", "TICK_S", "list_view",
-    "night_loop", "night_pass", "register", "settle_running", "start_task", "title_of",
-    "wake_night_loop",
+    "morning_pass", "night_loop", "night_pass", "register", "settle_running", "start_task",
+    "summaries_view", "title_of", "wake_night_loop",
 ]

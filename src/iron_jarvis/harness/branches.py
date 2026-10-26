@@ -1043,6 +1043,41 @@ def branch_changes(facts: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def branch_summary(facts: dict[str, str]) -> dict[str, Any]:
+    """The branch in NUMBERS (v1.399.0, night shift N2 — the morning
+    summary's record of a night task's branch): the files it changed against
+    its base (where they meet, :func:`merge_base` — committed and not, new
+    files included, like the Branch view), lines added and removed, its
+    commits ahead of the base, the files not committed yet, and whether it
+    has a remote to push to. The status's own reads (:func:`status`) without
+    the GitHub CLI's sign-in check (a network call nobody asked for at
+    night) and without one patch per file (:func:`branch_changes`).
+    Read-only. :class:`GitRefused` for a gone worktree."""
+    wt = _live(facts)
+    mb = merge_base(facts, wt)
+    entries = _name_status(wt, mb)
+    counts = _numstat(wt, mb)
+    added = removed = 0
+    for code, old, new in entries:
+        a, r = counts.get(new or old, (None, None))
+        added += int(a or 0)
+        removed += int(r or 0)
+    new_files = _untracked(wt)
+    for rel in new_files:
+        row = _new_file_change(wt, rel)
+        added += int(row.get("added") or 0)
+    count = _g(["rev-list", "--count", f"{mb}..HEAD"], wt, reads=True)
+    branch = facts.get("branch", "")
+    return {
+        "files": len(entries) + len(new_files),
+        "added": added,
+        "removed": removed,
+        "ahead": int(count.out.strip() or 0) if count.ok else 0,
+        "uncommitted": len(_porcelain(wt)),
+        "remote": pick_remote(wt, branch) if branch else "",
+    }
+
+
 # --------------------------------------------------------------------------- #
 # commit
 # --------------------------------------------------------------------------- #
