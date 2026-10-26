@@ -96,6 +96,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Coding sessions cut off by a restart weren't carried on",
     href: "/terminals",
   },
+  // v1.398.0 (night shift N1): the loop that starts the Tonight list's
+  // coding tasks inside the night window and settles them when they end.
+  night_shift: {
+    label: "Night shift",
+    problem: "Tonight's coding tasks aren't being started or checked",
+    href: "/terminals",
+  },
   dispatcher: { label: "Queued tasks", problem: "Queued tasks aren't starting", href: TEAM },
   autonomy: { label: "Autonomy", problem: "Work Jarvis plans on its own isn't being checked", href: "/autonomy" },
   sentinels: { label: "Watchers", problem: "Your watchers aren't checking", href: "/sentinels" },

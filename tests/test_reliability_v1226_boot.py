@@ -280,6 +280,10 @@ def test_system_activity_counts_live_sessions_and_runs(tmp_path):
     # v1.391.0 review, MOVED ON PURPOSE: `working` — the part of `busy` that
     # runs by itself (work parked on the user's answer is busy, not working);
     # the sleep blocker reads it (tests/test_build_resume_review_v1391.py).
+    # v1.398.0 (night shift N1), MOVED ON PURPOSE: `night_shift` — a night task
+    # is running, or one is queued while the night window is open; the sleep
+    # blocker holds for it too (tests/test_night_shift_v1398.py). `working`
+    # keeps its own meaning.
     assert idle == {
         "active_sessions": 0,
         "running_workflow_runs": 0,
@@ -290,6 +294,7 @@ def test_system_activity_counts_live_sessions_and_runs(tmp_path):
         "busy": False,
         "keep_awake": True,
         "working": False,
+        "night_shift": False,
     }
     with session_scope(app.state.platform.engine) as db:
         s = Session(task="t", status=SessionStatus.ACTIVE)

@@ -780,6 +780,29 @@ class Orchestrator:
         )
         return None
 
+    def try_hold_slot(self, key: str) -> bool:
+        """Take one governed slot for work that is not a Session row — a
+        NIGHT TASK's coding session (v1.398.0, night shift N1: "night tasks
+        count toward ``max_concurrent_sessions`` when it is set"). True when
+        taken (always, with no cap — like every run with a row, so a cap set
+        mid-flight counts it); False when every slot is busy (the night loop
+        then starts nothing more this pass; it never parks). Release with
+        :meth:`release_slot`. Thread-safe."""
+        with self._gov_lock:
+            limit = self._session_limit()
+            if limit > 0 and key not in self._governed and len(self._governed) >= limit:
+                return False
+            self._governed.add(key)
+            return True
+
+    def release_slot(self, key: str) -> None:
+        """Give back a slot :meth:`try_hold_slot` took; a parked run may start."""
+        with self._gov_lock:
+            held = key in self._governed
+            self._governed.discard(key)
+        if held:
+            self._dequeue_next()
+
     def _session_limit(self) -> int:
         """``config.max_concurrent_sessions`` as an int (0 = no cap)."""
         try:
@@ -1717,6 +1740,18 @@ class Orchestrator:
         # live session for the loop above to find, so it kept waiting under
         # the switch (and its schedule row kept "Needs you").
         stopped.extend(self._stop_waiting_workflows(reason, limit=limit))
+        # v1.398.0 (night shift N1): a CODING SESSION's turn Iron Jarvis
+        # started by itself — a night task, Resume when ready, a move within
+        # an account group, a reply carried on after a restart — has no
+        # Session row either. Each is stopped by its name (thread-safe); a
+        # night task's record says why. A turn a person started is never
+        # listed there, so it keeps going.
+        try:
+            from ..harness.night import stop_unattended_turns
+
+            stopped.extend(stop_unattended_turns(self.p.engine))
+        except Exception:  # noqa: BLE001 — the rest of the stop still happened
+            log.exception("Emergency stop could not stop the coding turns")
         if stopped:
             log.warning("Emergency stop stopped %d unattended run(s)", len(stopped))
         return stopped

@@ -250,6 +250,7 @@ _LATE_MODEL_MODULES = (
     "..harness.library_models",  # HarnessLibraryRecord — a folder's lessons + harness edits (v1.370.0)
     "..agents.team_record",   # TeamRoleRun — the model team's record per (member, role) (v1.395.0)
     "..harness.attempt_spend",  # AttemptSpendRecord — an attempt's metered spend (v1.397.0)
+    "..harness.night",        # NightTaskRecord — a coding task queued for the night (v1.398.0)
 )
 
 

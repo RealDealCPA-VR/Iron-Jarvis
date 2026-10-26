@@ -3999,7 +3999,13 @@ function keepAwakeDecision(activity, state) {
     return { want: held && misses < KEEP_AWAKE_MISSES_RELEASE, misses };
   }
   const working = typeof activity.working === "boolean" ? activity.working : activity.busy === true;
-  return { want: activity.keep_awake !== false && working, misses: 0 };
+  // v1.398.0 (night shift N1): a night task is running, or one is queued
+  // while the night window is open (`night_shift`). Its questions wait only
+  // the night's card wait, so the PC stays awake for it even while a turn of
+  // it is parked on one — `working` keeps its own meaning (the update warning
+  // reads it). An older daemon answers no `night_shift`: as before.
+  const night = activity.night_shift === true;
+  return { want: activity.keep_awake !== false && (working || night), misses: 0 };
 }
 
 // Hold or let go of THE one blocker (`blocker` is Electron's powerSaveBlocker;

@@ -581,6 +581,21 @@ def build_env(base: "dict[str, str] | None" = None) -> dict[str, str]:
     return env
 
 
+def build_turn_env() -> dict[str, str]:
+    """:func:`build_env`, plus — in a coding turn whose session works on its
+    own branch — the MAIN folder's ``.venv`` / ``node_modules/.bin`` in front
+    (v1.398.0, night shift N1, decision 3: ``harness/main_env``; nothing is
+    installed and nothing is made in the branch folder). Every other Build
+    call: exactly :func:`build_env`. BLOCKING (stats); never raises."""
+    env = build_env()
+    try:
+        from ..harness.main_env import apply_for_turn
+
+        return apply_for_turn(env)
+    except Exception:  # noqa: BLE001 — the user's own environment, as before
+        return env
+
+
 #: The tools a coding session usually reaches for, in the order the
 #: description names them.
 BUILD_TOOLS: tuple[str, ...] = ("git", "gh", "node", "npm", "npx", "pnpm", "yarn", "python", "py",
@@ -789,7 +804,7 @@ class NativeSandbox(Sandbox):
         never calls a tool on that PATH missing). BLOCKING (it builds the
         environment :meth:`run` would)."""
         if self.policy.modify_env == "deny":
-            env = build_env() if build else scrubbed_env()
+            env = build_turn_env() if build else scrubbed_env()
         else:
             env = dict(os.environ)
         key = next((k for k in env if k.upper() == "PATH"), "PATH")
@@ -818,7 +833,7 @@ class NativeSandbox(Sandbox):
         # an ANSI byte and `python export.py > out.csv` write UTF-8 Excel
         # misreads. A Python child keeps its own page; `_as_text` judges it.
         if self.policy.modify_env == "deny":
-            env = build_env() if build else scrubbed_env()
+            env = build_turn_env() if build else scrubbed_env()
         else:
             env = None
         argv: Any = command

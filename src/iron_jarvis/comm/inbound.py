@@ -1676,7 +1676,18 @@ class InboundPoller:
     def _approval_prompt_stale(self, prompt: Any) -> bool:
         """Whether an approval prompt outlived the runtime's answer window.
         On any read quirk say fresh — the registry's resolve() is the real
-        arbiter, and a flaky timestamp must not expire a live gate."""
+        arbiter, and a flaky timestamp must not expire a live gate.
+
+        v1.398.0 (night shift N1): a gate the approval registry still holds
+        OPEN is never stale, whatever its age. A coding session's card has no
+        expiry (``timeout_s`` 0) and reaches the phone five minutes after it
+        was asked; the age check below (the runtime's 300 s) refused a phone
+        answer that came more than five minutes after the question ARRIVED
+        ("approval_gone") while the card was still waiting — a night task's
+        card waits fifteen. The age check stays the belt for a gate whose
+        end the registry no longer knows (a missed ``approval.resolved``)."""
+        if self._approval_still_open(prompt):
+            return False
         try:
             created = getattr(prompt, "created_at", None)
             if created is None:
@@ -1686,6 +1697,19 @@ class InboundPoller:
                 # SQLite round-trips naive; the store stamps UTC (core.ids).
                 created = created.replace(tzinfo=now.tzinfo)
             return (now - created).total_seconds() > self._approval_ttl()
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _approval_still_open(self, prompt: Any) -> bool:
+        """Does the approval registry (``platform.approvals``) still hold the
+        prompt's gate open? False on any doubt (the age check then decides,
+        as before). Never raises."""
+        try:
+            approvals = getattr(self.platform, "approvals", None)
+            if approvals is None:
+                return False
+            ref = str(getattr(prompt, "ref_id", "") or "")
+            return bool(ref) and ref in set(approvals.pending_ids())
         except Exception:  # noqa: BLE001
             return False
 

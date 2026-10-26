@@ -824,6 +824,20 @@ class Config(BaseModel):
     #: directly (``delegate`` / ``spawn_agent``, a task an agent queued) is
     #: held to it too; work the USER starts is not, but its spend counts.
     team_paid_cap_usd: float = Field(default=0.0, ge=0.0)
+    #: v1.398.0 (night shift N1, ``harness/night``): the NIGHT WINDOW, local
+    #: time "HH:MM" — queued coding tasks start only inside it (it may cross
+    #: midnight); a task not started by its end waits for the next night.
+    #: TOLERANT at load (a hand-edited value never stops a boot: an unreadable
+    #: one reads as the default); the settings writer refuses one in words.
+    night_window_start: str = "23:00"
+    night_window_end: str = "07:00"
+    #: How many night tasks may run at once (one per folder whatever this says).
+    night_max_at_once: int = Field(default=2, ge=1, le=8)
+    #: Each night task's time limit, in minutes (its session's reply cap).
+    night_task_minutes: int = Field(default=90, ge=5, le=1440)
+    #: How long a question in a night task waits for an answer (the phone gets
+    #: it meanwhile) before that one step is declined and the task carries on.
+    night_card_wait_minutes: int = Field(default=15, ge=1, le=240)
     # SHARE MY PROFILE WITH BUILD (v1.306.0) — one switch per vendor CLI, OFF
     # by default: when on, Iron Jarvis keeps a generated block (the profile +
     # confirmed preferences) in that CLI's user-level instruction file
@@ -898,6 +912,17 @@ class Config(BaseModel):
             if ids:
                 out[name] = ids
         return out
+
+    @field_validator("night_window_start", "night_window_end", mode="before")
+    @classmethod
+    def _clean_night_time(cls, v: Any, info: Any) -> str:
+        # v1.398.0: TOLERANT — "7:00", " 23:00 " read as "07:00" / "23:00";
+        # anything that is not a time of day reads as the field's default
+        # (a load never fails over it; the writer refuses it in words first).
+        from ..harness.night_window import clean_time
+
+        default = "23:00" if info.field_name == "night_window_start" else "07:00"
+        return clean_time(v) or default
 
     @field_validator("browser_access")
     @classmethod
