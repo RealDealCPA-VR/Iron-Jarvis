@@ -3699,6 +3699,59 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **A coding reply NEVER STALLS SILENTLY: a stall notice with Stop the step, a
+  question to the phone, a summary mid-reply, an optional cap** (v1.392.0,
+  Phase 3 of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`; a doer + a reviewer that
+  found 7 more defects). STALL: `harness/stall.StallWatch` in
+  `routes/build.recorded_turn` (`STALL_AFTER_S` 600, `TICK_S` 5, injectable
+  `CLOCK`). Progress = any frame, or a command's output through
+  `core/progress`'s ContextVar mark (`core/procs` uses its moving readers only
+  while that mark is armed). `core/events._drop_build_turn_scope` drops the
+  mark too, or a handler's own output reset the reply's clock. The watch names
+  the turn's HELD model (no frame says it). A step whose own registry deadline
+  ends it at the window is not announced (`step_deadline`,
+  `DEADLINE_GRACE_S` 60): the default `tool_call_timeout_s` IS 600. Frame
+  `stall {words, minutes, step?}` / `{over}`; event `build.turn_stalled` (the
+  bell, plus the tray with no window; `one-notice-v13600` fixture row);
+  `POST /build/sessions/{id}/stop-step {step_id, turn_id?, reply?}`. Each tool
+  call runs as its own task keyed by (turn, call id); the registry's cancel
+  path writes "stopped by you" and the model gets `stall.stopped_result`,
+  keeping the unit rule. PHONE: a coding session's card unanswered for
+  `PHONE_AFTER_S` (300) publishes `approval.requested` `{surface: "build",
+  thread_id, title, count?}` (session_id None) through the EXISTING notifier +
+  `comm/prompts` path; the phone's approve maps to ONCE; an in-app answer
+  closes the phone prompt. `stall.phone_may_ask` never sends a once-only card,
+  the cloud card, a priced card, or ANY card of a Local only turn
+  (`egress.current_scope().on` at the call site; decided at integration: a
+  phone channel is a cloud service). Words "Your coding session …"
+  (`notifier.CODING_SESSION`, the twin of `lib/buildWords`). SUMMARY:
+  `harness/reply_summary` reuses `AgentRuntime._maybe_compact(complete=,
+  ledger=, report=)` on the reply's pinned model through `router.complete(
+  pin=True)` under the hold and Local only. The ledger window starts at the
+  original question; billed to the reply's tally; raced against Stop
+  (`_prep_step`); the demo model writes none; `RETRY_ROUNDS` 3. Frame
+  `summarized`, `model_call` kind "summary", line key `summarized`. A restart
+  loses the summary and rewrites it at the resumed reply's first round. CAP:
+  `setup.cap {minutes?, usd?}` via PATCH, saved EXACTLY as sent or 400
+  `CAP_REFUSED` (`reply_cap.strict`). At the cap the reply ends the step-limit
+  way: done `cap`, line `capMet`, Keep going. A carried-on reply counts its
+  cut parts' RUNNING time (`ran_since`, never the hours the app was off) and
+  their spend. Off = byte-identical. OPEN: the cost cap ignores helpers'
+  spend; a futile summary turns summaries off for the rest of the reply; a
+  pack's progress counts only when the turn draws MCP cards; the composer's
+  plain Stop still waits for a hung step; a notice can fire right after the
+  PC wakes; not driven in the packaged app or with a real phone. Pins:
+  `tests/test_build_stall{,_review}_v1392.py`,
+  `test_build_phone_ask{,_review}_v1392.py`,
+  `test_build_phone_local_only_v1392.py`, `test_build_reply_summary_v1392.py`,
+  `test_build_reply_cap{,_review}_v1392.py`, `dashboard/__tests__/
+  build-long-jobs-v1392.test.tsx`, `build-stall-words-review-v1392.test.ts`,
+  the one-notice fixture. SAME RELEASE (test-only):
+  `test_bash_dialect_review_v1386`'s background-server test reads the
+  server's pid file only after waiting for it — the model's own `sleep 1` is
+  no promise Python has started (a 3 s slow start reproduces the full suite's
+  `FileNotFoundError` on the old read).
+
 - **A coding reply SURVIVES sleep and restarts: awake while WORKING, its own
   record kept per round, carried on by itself exactly once** (v1.391.0, Phase 2
   of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`; a doer + a reviewer that found

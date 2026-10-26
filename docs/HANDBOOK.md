@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.391.0 (2026-10-25).*
+holds itself to. Current as of v1.392.0 (2026-10-25).*
 
 ---
 
@@ -1897,6 +1897,37 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A long coding reply never goes quiet without telling you (v1.392.0)
+
+- **No progress for 10 minutes.** If a coding reply makes no progress for 10
+  minutes, its line says so, and so does the bell (or the tray when no window
+  is open). For example: "No progress for 10 minutes — waiting on this step:
+  running a command (pytest)".
+  - A command that keeps printing is making progress.
+  - A reply waiting for your answer is not stalled.
+  - A step that its own time limit is about to end is left to that limit.
+  - **Stop the step** stops just that step: the reply is told and carries
+    on.
+  - **Stop** stops the reply.
+- **Your phone gets the question.** If a coding session's question waits 5
+  minutes unanswered in the app, it goes to your phone, if a phone channel is
+  set up. Answering there counts like the card, and allows that one step only.
+  These never go to the phone and wait in the app:
+  - the cards about git, a project's own commands, risky page clicks, the
+    plan, sending to the cloud or spending money;
+  - every question from a **Local only** session (a phone channel is a cloud
+    service).
+- **A very long reply keeps its memory.** When a reply nearly fills what the
+  model can read at once, it writes itself a summary of its earlier steps,
+  checked against what really happened, instead of quietly dropping them. The
+  reply line and the Timeline say "Summarized N earlier steps to fit the
+  model".
+- **An optional cap per session.** In the session's ⋯ menu you can set a time
+  limit (minutes) or a cost limit (list-price dollars). It is off unless you
+  set it. At the cap the reply stops and reports its progress, and **Keep
+  going** continues. The cost limit counts the reply's own model calls, not
+  its helpers'.
 
 ## Long coding replies survive sleep and restarts (v1.391.0)
 
