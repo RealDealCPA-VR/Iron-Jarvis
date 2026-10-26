@@ -509,17 +509,20 @@ def side_by_side(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any]],
             f"**Team {str(t_config.get('key', ''))[:12]}** (planner {_model_cell(t_config)}; tier {tiers}; "
             f"{shape[1]} repeat(s)).",
             "",
-            "| Setup | Runner | Model | Pass rate (range) | Per repeat | Passed / scored | Time (a run) "
+            "| Setup | Runner | Model | Tasks | Pass rate (range) | Per repeat | Passed / scored | Time (a run) "
             "| Claude exact | Claude measured | Codex exact | Codex measured | Local tokens |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
         for config, records, s in [(t_config, t_records, t_s), *peers]:
             u = summarize_usage(config, records)
             v = u["vendors"]
             local = v.get("local")
             per_repeat = ", ".join(f"{p['passed']}/{p['scored']}" for p in (s.get("per_repeat") or {}).values())
+            # A row's numbers are over ITS runs: a setup that ran more tasks
+            # says so here (the answer below is over the runs both made).
+            tasks = len({str(r.get("task_id") or "") for r in _live(records)})
             lines.append(
-                f"| {str(config.get('key', ''))[:12]} | {config.get('runner')} | {_model_cell(config)} | "
+                f"| {str(config.get('key', ''))[:12]} | {config.get('runner')} | {_model_cell(config)} | {tasks} | "
                 f"{_rate_words(s)} | {per_repeat or '-'} | {s['passed']} / {s['scored']} | "
                 f"{_secs(u['wall_s_total'])} ({_secs(u['wall_s_mean'])}) | "
                 f"{exact_words(v, 'claude')} | {measured_words(u['measured'], 'claude', v)} | "

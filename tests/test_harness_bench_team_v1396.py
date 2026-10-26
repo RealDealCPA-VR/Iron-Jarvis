@@ -162,7 +162,7 @@ async def test_the_team_row_beside_claude_alone_answers_the_question(world, tmp_
     # Exact AND measured usage on the team's row, beside its pass rate per
     # repeat, mean and range.
     team_row = next(line for line in section.splitlines() if line.startswith("| ") and "| jarvis-team |" in line)
-    assert "| 50% (50%–50%) | 1/2, 1/2 | 2 / 4 |" in team_row
+    assert "| 2 | 50% (50%–50%) | 1/2, 1/2 | 2 / 4 |" in team_row
     exact_claude = sum(r["parts"][PLANNER]["tokens_in"] for r in team.records)
     assert f"| {exact_claude:,} in / " in team_row and f"${team_lp:.4f} list price" in team_row
     first5 = min(r["accounts"][f"{W.PLANNER[0]}:{U.THIS_PC}"]["windows"]["5h"]["first"]["percent"]
@@ -219,6 +219,15 @@ async def test_a_run_with_no_reading_is_not_known_never_zero(world, tmp_path):
     usage_row = next(line for line in report.splitlines() if line.startswith("| Claude |"))
     assert "not known: no reading came" in usage_row
     assert "0%" not in usage_row and "+0" not in usage_row
+    # A run that recorded no accounts at all — Claude Code's own CLI, or a
+    # Jarvis run from before v1.396.0 — used Claude and is "not known" too.
+    cli = {"runner": "claude", "provider": "claude", "model": "sonnet"}
+    cli_run = {"task_id": "a", "passed": True, "tokens_in": 10, "tokens_out": 2, "model_calls": 1,
+               "cost_metered_usd": 0.0, "cost_list_price_usd": 0.01}
+    u = TRP.summarize_usage(cli, [cli_run])
+    assert TRP.measured_words(u["measured"], "claude", u["vendors"]) == "not known: no reading came"
+    assert TRP.measured_words(u["measured"], "codex", u["vendors"]) == "not used"
+    assert TRP.result_words(U.measured_span([])) == "not known: no reading came"
 
 
 async def test_a_changed_team_is_a_new_folder_never_a_reused_record(world, tmp_path):
@@ -226,13 +235,20 @@ async def test_a_changed_team_is_a_new_folder_never_a_reused_record(world, tmp_p
     assert team.records[0]["passed"] is True
     again = await _team(world, tmp_path, repeats=1, names=[W.TASK_A])
     assert again.config_dir == team.config_dir and again.records[0]["reused"] is True
-    changed = T.JarvisTeamRunner(world.platform, team=_spec(tmp_path, local_model="glm-5.3-air"))
+    # The same runner settings (the round budget _team gives), only the team
+    # changed: another folder, nothing reused.
+    changed = T.JarvisTeamRunner(world.platform, team=_spec(tmp_path, local_model="glm-5.3-air"), round_budget=12)
     dry = await run_bench(runner=changed, home=world.home, tasks=TASKS, names=[W.TASK_A], dry_run=True)
     assert dry.config_dir != team.config_dir
     assert any("would run" in line for line in dry.plan_lines)
-    roles = T.JarvisTeamRunner(world.platform, team=_spec(tmp_path, codex_roles='["review", "test"]'))
+    roles = T.JarvisTeamRunner(world.platform, team=_spec(tmp_path, codex_roles='["review", "test"]'),
+                               round_budget=12)
     other = await run_bench(runner=roles, home=world.home, tasks=TASKS, names=[W.TASK_A], dry_run=True)
     assert other.config_dir not in (team.config_dir, dry.config_dir)
+    same = T.JarvisTeamRunner(world.platform, team=_spec(tmp_path), round_budget=12)
+    reread = await run_bench(runner=same, home=world.home, tasks=TASKS, names=[W.TASK_A], dry_run=True)
+    assert reread.config_dir == team.config_dir
+    assert any("would reuse the stored result" in line for line in reread.plan_lines)
 
 
 async def test_a_dry_run_lists_the_team_and_the_tasks_and_calls_nothing(world, tmp_path):
@@ -377,6 +393,49 @@ def test_readings_are_read_as_iron_proxy_reads_them_and_never_invented():
     assert codex == [{"window": "primary", "window_mins": 300, "percent": 61.0,
                       "resets_at": "2030-03-17T17:46:40Z", "at": 1.0}]
     assert U.readings_from({}, at=1.0) == [] and U.readings_from(None, at=1.0) == []
+
+
+def test_an_unpinned_call_under_iron_proxy_names_no_account():
+    """Which account a call ran on is read, never guessed: the pin's; this
+    PC's own sign-in when Iron-Proxy is off or holds no account of that
+    vendor; NOT KNOWN when Iron-Proxy picked one per call."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.iron_proxy import pin as P
+    from tests._fakes.team_world_v1395 import FakeSvc
+
+    off = SimpleNamespace(iron_proxy=SimpleNamespace(enabled=False))
+    assert R.call_account(off, "claude-cli") == (U.THIS_PC, U.THIS_PC_WORDS)
+    assert R.call_account(off, "fleet-spark") == ("", "")
+    svc = FakeSvc()
+    svc.add("c-work", "anthropic", "Work Max", percent=12)
+    on = SimpleNamespace(iron_proxy=svc)
+    assert R.call_account(on, "claude-cli") == ("", "")  # Iron-Proxy picks per call: not known
+    assert R.call_account(on, "codex-cli") == (U.THIS_PC, U.THIS_PC_WORDS)  # it holds no Codex account
+    token = P.set_pin(P.AccountPin(profile_id="c-work", ij_provider="claude-cli", title="Work Max"))
+    try:
+        assert R.call_account(on, "claude-cli") == ("c-work", "Work Max")
+        # A Claude pin says nothing about a Codex call.
+        assert R.call_account(on, "codex-cli") == (U.THIS_PC, U.THIS_PC_WORDS)
+    finally:
+        P.reset_pin(token)
+
+
+def test_a_window_that_resets_inside_one_run_says_so():
+    """A run whose own readings straddle a reset (the reset instant moved)
+    is not one period — and a span holding it is not comparable."""
+    readings = [
+        {"window": "5h", "window_mins": 300, "percent": 92.0, "resets_at": "2030-01-01T05:00:00Z", "at": 10.0},
+        {"window": "5h", "window_mins": 300, "percent": 93.5, "resets_at": "2030-01-01T05:00:00Z", "at": 11.0},
+        {"window": "5h", "window_mins": 300, "percent": 1.5, "resets_at": "2030-01-01T10:00:00Z", "at": 12.0},
+    ]
+    summary = U.window_summary(readings)
+    assert summary["one_period"] is False and "reset in between" in summary["why"]
+    assert (summary["first"]["percent"], summary["last"]["percent"], summary["readings"]) == (92.0, 1.5, 3)
+    span = U.measured_span([summary])
+    assert span["state"] == "not_comparable" and "reset in between" in span["why"]
+    calm = U.window_summary(readings[:2])
+    assert calm["one_period"] is True and U.measured_span([calm])["points"] == 1.5
 
 
 def test_a_span_is_measured_only_inside_one_window_period():
