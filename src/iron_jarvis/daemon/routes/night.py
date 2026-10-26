@@ -140,6 +140,33 @@ def _emergency(d: Any) -> bool:
     return emergency_stop_on(getattr(d.platform, "config", None))
 
 
+def _main_state(git: dict[str, Any], folder: str) -> dict[str, str]:
+    """The user's main checkout now (``harness/night_guard.snapshot``), with
+    the ``.venv`` this branch borrows. BLOCKING; never raises."""
+    from ...harness import night_guard as G
+    from ...harness.main_env import find as find_main_env
+
+    borrowed = find_main_env(git.get("checkout", ""), folder, git.get("repo", ""), git.get("worktree", ""))
+    return G.snapshot(git.get("main", "") or git.get("repo", ""), borrowed.venv if borrowed else "")
+
+
+def _keep_main_before(engine: Any, task_id: str, git: dict[str, Any], folder: str) -> None:
+    from ...harness import night_guard as G
+
+    N.set_main_before(engine, task_id, G.dumps(_main_state(git, folder)))
+
+
+def _main_moved(engine: Any, task_id: str, git: dict[str, Any], folder: str) -> "list[str] | None":
+    """What moved in the user's main checkout since the task started, or None
+    when it cannot be said. BLOCKING; never raises."""
+    from ...harness import night_guard as G
+
+    before = G.loads(N.main_before(engine, task_id))
+    if before is None:
+        return None
+    return G.changes(before, _main_state(git, folder))
+
+
 def title_of(words: str) -> str:
     first = next((line.strip() for line in str(words or "").splitlines() if line.strip()), "")
     return (first[:77] + "…") if len(first) > 80 else (first or "Night task")
@@ -279,6 +306,21 @@ async def settle_running(d: Any) -> list[str]:
             if git and borrowed and tests_line(borrowed):
                 words += " They ran with your main folder's environment."
             notes.append(("tests", words))
+        if git:
+            # v1.398.0 review: the user's MAIN folder, compared with what it
+            # was when the task started — its commands are not confined to
+            # its branch, so a change there is the one thing the morning must
+            # never miss ("needs you", a note of its own, ``main_changed``).
+            from ...harness import night_guard as G
+
+            moved = await asyncio.to_thread(_main_moved, engine, tid, git, S.folder_of(row))
+            if moved:
+                notes.insert(0, ("outside", G.changed_words(git.get("main", "") or git.get("repo", ""), moved)))
+                if state == N.DONE:
+                    state = N.NEEDS_YOU
+            elif moved is None:
+                notes.append(("info", G.UNCHECKED))
+            notes.append(("info", G.NOT_CONFINED))
         for kind, text in notes:
             await asyncio.to_thread(N.add_note, engine, tid, kind, text)
         await asyncio.to_thread(N.finish_task, engine, tid, state)
@@ -328,6 +370,15 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
             await asyncio.to_thread(
                 N.set_session, engine, tid, thread_id=row.id, branch=str(git.get("branch") or ""),
             )
+            if not git:
+                # v1.398.0 review: a night task ALWAYS works on its own
+                # branch (the route refused a folder that cannot have one;
+                # this is the folder changing in between). Never in the
+                # user's folder itself.
+                raise CreateRefused("Its folder can no longer have a branch of its own, so it did not start.")
+            # v1.398.0 review: the user's MAIN folder as it is now, to compare
+            # when the task ends (its commands are not confined to its branch).
+            await asyncio.to_thread(_keep_main_before, engine, tid, git, S.folder_of(row))
             turn_id = "bt_" + secrets.token_hex(8)
             picks = task.get("try_on") or []
             if picks:

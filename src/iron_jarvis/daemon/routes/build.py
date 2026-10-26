@@ -2763,6 +2763,14 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                     session_id=S.session_id_for(thread_id),
                     plan_mode=S.mode_of(row) == S.MODE_PLAN,
                     reply_record=record,
+                    # v1.398.0 review (night shift N1): a NIGHT task that went
+                    # to low trust earlier (its record keeps it) carries on at
+                    # low trust — the flagged words ride the conversation this
+                    # turn continues, so its commands never come back.
+                    **(
+                        {"trust": "low", "trust_reason": _night.LOW_TRUST_CARRIED}
+                        if night_task is not None and _night.has_note(night_task, "low_trust") else {}
+                    ),
                     # v1.392.0 (decision 8): only when the session has a cap.
                     **({"reply_cap": reply_cap} if reply_cap is not None else {}),
                 )

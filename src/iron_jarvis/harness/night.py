@@ -90,7 +90,7 @@ ENDED_SHOWN_DAYS = 3
 
 #: The note kinds (the morning's sections, N2).
 NOTE_KINDS = ("declined", "unanswered", "low_trust", "limit", "env", "error", "stopped", "emergency",
-              "restart", "account", "tests", "info")
+              "restart", "account", "tests", "info", "outside")
 
 #: The command tools the night posture grants for the turn (decision 4):
 #: "runs commands inside its own branch folder without asking" — the model's
@@ -156,6 +156,10 @@ class NightTaskRecord(SQLModel, table=True):
     branch: str = ""
     #: ``[{kind, text, at}]``, newest last, bounded.
     notes_json: str = ""
+    #: v1.398.0 review: the user's MAIN checkout as it was when the task
+    #: started (``harness/night_guard.snapshot``: digests and refs, never
+    #: file contents), compared when it ends.
+    main_before_json: str = ""
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
@@ -211,6 +215,9 @@ def view(row: Any) -> dict[str, Any]:
         "turn_id": row.turn_id or "",
         "branch": row.branch or "",
         "notes": _notes(row),
+        # v1.398.0 review: the user's main folder changed while it ran — the
+        # one fact the morning must never miss (the list shows it first).
+        "main_changed": any(n.get("kind") == "outside" for n in _notes(row)),
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
         "started_at": _iso(row.started_at),
@@ -421,6 +428,23 @@ def set_session(engine: Any, task_id: str, *, thread_id: str = "", turn_id: str 
         row.updated_at = utcnow()
         db.add(row)
         db.commit()
+
+
+def set_main_before(engine: Any, task_id: str, raw: str) -> None:
+    """Keep the main checkout's state at the task's start. BLOCKING."""
+    with session_scope(engine) as db:
+        row = db.get(NightTaskRecord, str(task_id or ""))
+        if row is None:
+            return
+        row.main_before_json = str(raw or "")
+        db.add(row)
+        db.commit()
+
+
+def main_before(engine: Any, task_id: str) -> str:
+    with session_scope(engine) as db:
+        row = db.get(NightTaskRecord, str(task_id or ""))
+        return str(getattr(row, "main_before_json", "") or "") if row is not None else ""
 
 
 def add_note(engine: Any, task_id: str, kind: str, text: str) -> bool:
@@ -832,15 +856,32 @@ def outcome_of(task: dict[str, Any], line: "dict[str, Any] | None") -> tuple[str
         notes.append(("limit", "Stopped at its step limit; the reply says what it got done."))
     else:
         state = DONE
+    low = has_note(task, "low_trust")
     if line is not None and line.get("trust") == "low":
-        why = str(line.get("trustReason") or line.get("trustNote") or "").strip()
-        notes.append(("low_trust", "It ran at low trust after reading something flagged"
-                      + (f" ({why})" if why else "") + "; commands and page actions were not available after that."))
+        low = True
+        if not has_note(task, "low_trust"):
+            why = str(line.get("trustReason") or line.get("trustNote") or "").strip()
+            notes.append(("low_trust", low_trust_note_words(why)))
     if line is not None and isinstance(line.get("accountLimit"), dict):
         notes.append(("account", "Its account reached a limit."))
-    if state == DONE and (has_note(task, "declined") or has_note(task, "unanswered")):
+    # v1.398.0 review: a task that ran at LOW TRUST (it read something
+    # flagged; its commands were taken away from then on) never reads "done" —
+    # its work stopped short in a way the morning must look at.
+    if state == DONE and (has_note(task, "declined") or has_note(task, "unanswered") or low):
         state = NEEDS_YOU
     return state, notes
+
+
+#: The trust reason a LATER turn of a night task that went to low trust
+#: starts with (``routes/build.start_build_turn``).
+LOW_TRUST_CARRIED = "this night task read something flagged earlier, so it stays at low trust"
+
+
+def low_trust_note_words(reason: str = "") -> str:
+    """The record's note when a night task's turn went to LOW TRUST."""
+    why = " ".join(str(reason or "").split())
+    return ("It ran at low trust after reading something flagged" + (f" ({why})" if why else "")
+            + "; commands and page actions were not available after that, for the rest of the task.")
 
 
 def task_has_stop(task: dict[str, Any]) -> bool:

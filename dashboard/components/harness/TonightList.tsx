@@ -17,7 +17,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, Loader2, Moon, Plus } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Loader2, Moon, Plus } from "lucide-react";
 import { Badge, ConfirmButton } from "@/components/ui";
 import { modelPickWords } from "@/lib/onboarding";
 import { useModels } from "@/lib/useModels";
@@ -32,6 +32,7 @@ import {
   folderName,
   howItRunsWords,
   listNight,
+  mainChangedWords,
   moveNight,
   nightLimitsLine,
   nightStateWords,
@@ -293,6 +294,14 @@ function TaskRow({
         {folderName(task.folder)}
         {task.branch ? ` · ${task.branch}` : ""} · {howItRunsWords(task, nameOf)}
       </p>
+      {task.mainChanged ? (
+        // v1.398.0 review: never folded, never by hue alone — the icon and
+        // the words say it (its commands are not confined to its branch).
+        <p data-testid={`tonight-main-changed-${task.id}`} className="flex items-start gap-1.5 break-words text-[12px] font-medium text-tone-warn">
+          <AlertTriangle size={13} aria-hidden="true" className="mt-[2px] shrink-0" />
+          <span className="min-w-0">{mainChangedWords(task)}</span>
+        </p>
+      ) : null}
       {task.notes.length ? (
         <details className="text-[12px] text-zinc-400" data-testid={`tonight-notes-${task.id}`}>
           <summary className="cursor-pointer select-none text-zinc-500 hover:text-zinc-300">

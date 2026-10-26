@@ -3247,6 +3247,16 @@ async def _taint_chat_turn(
     state["tainted"] = True
     state["reason"] = taint_reason(tool, str(inj.get("category") or ""))
     overrides.update(low_trust_overrides(overrides))
+    # v1.398.0 review (night shift N1): a NIGHT task's record keeps it at
+    # once — every later turn of that task (a carry-on after a restart,
+    # Resume when ready) starts at low trust from it (``routes/build.
+    # start_build_turn``): the flagged words are in the conversation those
+    # turns carry on, so commands must not come back with them.
+    from ..harness import night as _night
+
+    _nt = _night.current()
+    if _nt is not None:
+        _nt.note("low_trust", _night.low_trust_note_words(state["reason"]))
     bus = getattr(d.platform, "event_bus", None)
     if bus is None:
         return

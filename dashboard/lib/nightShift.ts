@@ -38,8 +38,18 @@ export interface NightTask {
   threadId: string;
   branch: string;
   notes: NightNote[];
+  /** v1.398.0 review: the user's MAIN folder changed while the task ran
+   *  (its commands are not confined to its branch) — shown un-folded. */
+  mainChanged: boolean;
   startedAt: string | null;
   endedAt: string | null;
+}
+
+/** The note the row shows OPEN when the main folder changed (the daemon's
+ *  "outside" note), else "" — never folded under "What happened". */
+export function mainChangedWords(t: Pick<NightTask, "mainChanged" | "notes">): string {
+  if (!t.mainChanged) return "";
+  return t.notes.find((n) => n.kind === "outside")?.text ?? "Your main folder changed while this task ran.";
 }
 
 export interface NightWindow {
@@ -101,6 +111,7 @@ export function decodeTask(raw: unknown): NightTask | null {
     threadId: str(r.thread_id, 120),
     branch: str(r.branch, 300),
     notes: (Array.isArray(r.notes) ? (r.notes as unknown[]) : []).map(decodeNote).filter((n): n is NightNote => n !== null),
+    mainChanged: r.main_changed === true,
     startedAt: typeof r.started_at === "string" ? r.started_at : null,
     endedAt: typeof r.ended_at === "string" ? r.ended_at : null,
   };
