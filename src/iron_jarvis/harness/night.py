@@ -914,11 +914,20 @@ def stop_unattended_turns(engine: Any = None, *, note: str = EMERGENCY_NOTE) -> 
     BLOCKING (the note); never raises."""
     from ..core.turns import TURNS
 
+    from .stall import running_steps, stop_step
+
     stopped: list[str] = []
     for turn_id, (thread_id, by) in unattended_turns().items():
         try:
             if TURNS.stop(turn_id):
                 stopped.append(f"turn:{turn_id}")
+            # v1.398.0 review: and its RUNNING STEPS, now — a turn's Stop
+            # waits for the step in flight (v1.392.0's open line), so a hung
+            # command kept running for its whole deadline (ten minutes by
+            # default) after Emergency stop. Each step is cancelled the way
+            # "Stop the step" does it (a command's tree is killed).
+            for call_id in running_steps(turn_id):
+                stop_step(turn_id, call_id)
         except Exception:  # noqa: BLE001 — one turn never keeps the rest going
             log.warning("Emergency stop could not stop coding turn %s", turn_id, exc_info=True)
             continue

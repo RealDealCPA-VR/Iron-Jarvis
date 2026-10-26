@@ -565,6 +565,46 @@ async def test_an_open_card_on_the_phone_is_taken_and_an_expired_one_never_is(pl
     assert open_fut.done() and open_fut.result() == "once"
 
 
+async def test_emergency_stop_ends_a_night_tasks_running_command_at_once(tmp_path, monkeypatch, night):
+    """A turn's Stop waits for the step in flight, so a hung command at night
+    ran on for its whole deadline (ten minutes by default) after Emergency
+    stop. Its running steps are stopped now too."""
+    import time
+
+    from tests.test_build_attempts_v1397 import _alive
+    from tests.test_build_sessions_v1367 import until
+
+    repo = make_repo(tmp_path / "proj")
+    app = create_app(str(tmp_path / "home"))
+    hung = ('python -c "import os, pathlib, time; pathlib.Path(\'pid.txt\').write_text(str(os.getpid())); '
+            'time.sleep(120)"')
+    wire(app, NightScript({"TASK-HUNG": [
+        [ToolCall(id="h1", name="Bash", arguments={"command": hung, "timeout": 600000})],
+        "Never said.",
+    ]}))
+    task = await _queue(app, repo, "TASK-HUNG: run the long thing")
+    await night_routes.night_pass(app.state.d)
+    started = _task(app, task["id"])
+    worktree = Path(_git_of(app, started)["worktree"])
+
+    def _pid() -> int:
+        try:
+            return int((worktree / "pid.txt").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return 0
+
+    pid = await until(_pid, 60)
+    assert pid and _alive(pid)
+    app.state.platform.config.autonomy_kill_switch = True
+    began = time.monotonic()
+    stopped = await asyncio.to_thread(app.state.platform.orchestrator.stop_unattended)
+    assert f"turn:{started['turn_id']}" in stopped
+    ended = await _ended(app, task["id"], 60)
+    assert time.monotonic() - began < 45, "Emergency stop waited for the command to finish"
+    assert ended["state"] == N.STOPPED
+    assert await until(lambda: not _alive(pid), 30), "the command outlived Emergency stop"
+
+
 @pytest.mark.parametrize("by", ["night", "wait", "restart"])
 async def test_emergency_stop_stops_every_kind_iron_jarvis_starts_by_itself(tmp_path, by):
     """Every daemon-started kind (a night task's turn, Resume when ready and a
