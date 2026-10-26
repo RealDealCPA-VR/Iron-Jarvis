@@ -509,6 +509,14 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
         except Exception as exc:  # noqa: BLE001 — one task never stops the night
             log.warning("night task %s did not start", tid, exc_info=True)
             why = f"It could not start ({type(exc).__name__})."
+        from .build import UNATTENDED_REFUSAL
+
+        if why == UNATTENDED_REFUSAL:
+            # v1.398.0 review: Emergency stop turned on while it was starting
+            # — STOPPED by it (as every running task is), never "failed".
+            await asyncio.to_thread(N.add_note, engine, tid, "emergency", N.EMERGENCY_NOTE)
+            await asyncio.to_thread(N.finish_task, engine, tid, N.STOPPED)
+            return False
         await asyncio.to_thread(N.add_note, engine, tid, "error", why)
         await asyncio.to_thread(N.finish_task, engine, tid, N.FAILED)
         return False

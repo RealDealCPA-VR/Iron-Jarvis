@@ -59,6 +59,31 @@ async def test_two_overlapping_passes_never_start_more_than_n_or_two_in_one_fold
         h.gate.set()
 
 
+async def test_emergency_stop_turned_on_while_a_task_starts_stops_it_never_fails_it(tmp_path, monkeypatch):
+    """The window between "marked running" and its first turn (its session
+    and worktree are being made): Emergency stop turned on there refused the
+    turn, and the record said FAILED with the refusal as the error."""
+    from iron_jarvis.daemon.routes import build as build_routes
+
+    repo = make_repo(tmp_path / "proj")
+    app = create_app(str(tmp_path / "home"))
+    script = wire(app, NightScript({"TASK-MID": ["Never."]}))
+    real_create = build_routes.create_session_row
+
+    async def _then_the_stop(d, folder, **kw):
+        out = await real_create(d, folder, **kw)
+        d.platform.config.autonomy_kill_switch = True
+        return out
+
+    monkeypatch.setattr(build_routes, "create_session_row", _then_the_stop)
+    task = await _queue(app, repo, "TASK-MID: work")
+    await night_routes.night_pass(app.state.d)
+    ended = _task(app, task["id"])
+    assert ended["state"] == N.STOPPED, ended
+    assert [n["kind"] for n in ended["notes"]] == ["emergency"], ended["notes"]
+    assert script.calls == []
+
+
 async def test_a_night_task_on_a_pay_per_use_model_never_starts_at_a_zero_limit(tmp_path, monkeypatch):
     real = MT.cost_type
     monkeypatch.setattr(MT, "cost_type", lambda platform, provider, model="": (
