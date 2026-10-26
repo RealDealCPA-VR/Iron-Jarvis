@@ -1,0 +1,199 @@
+{
+ "_doc": "v1.395.0: a REAL recorded coding reply whose planner asked for role:code twice; the team router's reasons ride each helper (tests/test_team_live_v1395.py). Regenerate with IJ_REGEN_TEAM_ROUTER=1.",
+ "question": {
+  "role": "user",
+  "content": "Write util.py and cli.py.",
+  "turnId": "day-1",
+  "at": "2026-10-26T12:26:06.063251+00:00"
+ },
+ "line": {
+  "role": "assistant",
+  "content": "Done: A and B written.",
+  "turnId": "day-1",
+  "route": {
+   "requested": "codex-cli",
+   "provider": "codex-cli",
+   "model": "subscription",
+   "reason": "explicit",
+   "from": "",
+   "why": "",
+   "reasoning": "",
+   "label": "",
+   "text_only": false,
+   "local_only": false,
+   "allowed_once": false,
+   "on_this_network": false,
+   "harness": {
+    "family": "gpt",
+    "dialect": "gpt",
+    "fingerprint": "735e2ba32df948f44a956370ee70b3822baa2d498d7ea6423c74a00687b3fe5e",
+    "layers": [
+     "default",
+     "family:gpt"
+    ],
+    "nudged": false,
+    "map": {
+     "files": 1,
+     "chars": 211,
+     "limit": 2560,
+     "complete": true
+    }
+   },
+   "account": {
+    "id": "x-plus",
+    "name": "Codex Plus"
+   }
+  },
+  "toolsUsed": [
+   "delegate",
+   "delegate"
+  ],
+  "documents": [],
+  "deniedTools": [],
+  "usage": {
+   "input_tokens": 30,
+   "output_tokens": 12,
+   "list_price_equivalent": true
+  },
+  "steps": [
+   {
+    "name": "delegate",
+    "ok": true,
+    "ms": 95,
+    "start": 156,
+    "helper": true,
+    "detail": {
+     "input": "{\"agent_type\": \"role:code\", \"task\": \"Piece A: write util.py.\"}",
+     "output": "[custom:claude-code agent_run_id=run_e68e9551fa29 session=session_04f24d903c7d]\nWrote util.py."
+    }
+   },
+   {
+    "name": "delegate",
+    "ok": true,
+    "ms": 50,
+    "start": 264,
+    "helper": true,
+    "detail": {
+     "input": "{\"agent_type\": \"role:code\", \"task\": \"Piece B: write cli.py.\"}",
+     "output": "[custom:claude-code agent_run_id=run_e7e1cc8a2737 session=session_8cb6a046f31a]\nclaude-cli did: Piece B: write cli.py."
+    }
+   }
+  ],
+  "truncated": false,
+  "folderRules": [],
+  "approved": [],
+  "doors": [],
+  "timing": {
+   "startedAt": 1793017566064,
+   "firstTokenAt": 1793017566384,
+   "endedAt": 1793017566390,
+   "ms": 326
+  },
+  "helpers": [
+   {
+    "id": "p-a",
+    "work": [
+     {
+      "name": "read_file",
+      "ok": true,
+      "ms": 9,
+      "start": 196,
+      "target": "app.py",
+      "detail": {
+       "input": "{\"path\": \"app.py\"}",
+       "output": "x = 1\n"
+      }
+     }
+    ],
+    "steps": 1,
+    "agent": "custom:claude-code",
+    "task": "Piece A: write util.py.",
+    "state": "done",
+    "startedAt": 1793017566221,
+    "start": 157,
+    "role": "code",
+    "reason": "Claude Code (Work Max): the local box is busy",
+    "session": "session_04f24d903c7d",
+    "provider": "claude-cli",
+    "model": "subscription",
+    "result": "Wrote util.py.",
+    "endedAt": 1793017566316,
+    "end": 252,
+    "usage": {
+     "input_tokens": 20,
+     "output_tokens": 8,
+     "list_price_equivalent": true
+    }
+   },
+   {
+    "id": "p-b",
+    "work": [],
+    "steps": 0,
+    "agent": "custom:claude-code",
+    "task": "Piece B: write cli.py.",
+    "state": "done",
+    "startedAt": 1793017566327,
+    "start": 264,
+    "role": "code",
+    "reason": "Claude Code (Spare): the local box is busy; skipped Claude Code (Work Max): 83% of its 5-hour window",
+    "session": "session_8cb6a046f31a",
+    "provider": "claude-cli",
+    "model": "subscription",
+    "result": "claude-cli did: Piece B: write cli.py.",
+    "endedAt": 1793017566378,
+    "end": 314,
+    "usage": {
+     "input_tokens": 10,
+     "output_tokens": 4,
+     "list_price_equivalent": true
+    }
+   }
+  ],
+  "context": {
+   "window": 32000,
+   "used": 1448,
+   "tokens": 1448,
+   "percent": 5,
+   "suggest_at": 70,
+   "auto_at": 92,
+   "level": "ok",
+   "window_known": false
+  },
+  "calls": [
+   {
+    "start": 126,
+    "ms": 28,
+    "provider": "codex-cli",
+    "model": "subscription",
+    "usage": {
+     "input_tokens": 10,
+     "output_tokens": 4,
+     "list_price_equivalent": true
+    }
+   },
+   {
+    "start": 255,
+    "ms": 8,
+    "provider": "codex-cli",
+    "model": "subscription",
+    "usage": {
+     "input_tokens": 10,
+     "output_tokens": 4,
+     "list_price_equivalent": true
+    }
+   },
+   {
+    "start": 316,
+    "ms": 5,
+    "provider": "codex-cli",
+    "model": "subscription",
+    "usage": {
+     "input_tokens": 10,
+     "output_tokens": 4,
+     "list_price_equivalent": true
+    }
+   }
+  ],
+  "at": "2026-10-26T12:26:06.392675+00:00"
+ }
+}

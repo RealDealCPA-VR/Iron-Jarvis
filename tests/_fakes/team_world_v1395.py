@@ -117,7 +117,12 @@ class World(SimpleNamespace):
 
 
 def make_world(tmp_path, monkeypatch, *, available: set[str] | None = None) -> World:
-    p = build_platform(str(tmp_path))
+    return wire_platform(build_platform(str(tmp_path)), monkeypatch, available=available)
+
+
+def wire_platform(p, monkeypatch, *, available: set[str] | None = None) -> World:
+    """The doubles, the snapshot and the sampler on an EXISTING platform (an
+    app's, ``create_app(...).state.platform``)."""
     log: list[dict] = []
     fail: set[str] = set()
     answers: dict[str, str] = {}
