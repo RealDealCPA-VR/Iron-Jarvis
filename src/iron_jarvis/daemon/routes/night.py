@@ -818,6 +818,12 @@ def register(app: FastAPI, d: Any) -> None:
         turn = _running_turn(d, task["thread_id"]) if task["thread_id"] else ""
         if turn:
             TURNS.stop(turn)
+            # v1.398.0 review: and its running step (a hung command ran on
+            # for its whole deadline after Stop).
+            from ...harness.stall import running_steps, stop_step
+
+            for call_id in running_steps(turn):
+                stop_step(turn, call_id)
         wake_night_loop()
         return {"task": N.get_task(engine, task_id), "stopped_turn": turn}
 

@@ -642,6 +642,37 @@ async def test_the_overrun_backstop_ends_a_hung_command_not_only_the_turn(tmp_pa
     assert await until(lambda: not _alive(pid), 30), "the hung command outlived the backstop"
 
 
+async def test_stop_on_the_tonight_list_ends_a_hung_command_at_once(tmp_path, monkeypatch, night):
+    from tests.test_build_attempts_v1397 import _alive
+    from tests.test_build_sessions_v1367 import asgi, until
+
+    repo = make_repo(tmp_path / "proj")
+    app = create_app(str(tmp_path / "home"))
+    hung = ('python -c "import os, pathlib, time; pathlib.Path(\'pid.txt\').write_text(str(os.getpid())); '
+            'time.sleep(120)"')
+    wire(app, NightScript({"TASK-STOP": [
+        [ToolCall(id="h1", name="Bash", arguments={"command": hung, "timeout": 600000})],
+        "Never said.",
+    ]}))
+    task = await _queue(app, repo, "TASK-STOP: run the long thing")
+    await night_routes.night_pass(app.state.d)
+    started = _task(app, task["id"])
+    worktree = Path(_git_of(app, started)["worktree"])
+
+    def _pid() -> int:
+        try:
+            return int((worktree / "pid.txt").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return 0
+
+    pid = await until(_pid, 60)
+    status, out = await asgi(app, "POST", f"/build/night/{task['id']}/cancel", {})
+    assert status == 200 and out["stopped_turn"] == started["turn_id"], out
+    ended = await _ended(app, task["id"], 45)
+    assert ended["state"] == N.STOPPED
+    assert await until(lambda: not _alive(pid), 30), "the command outlived Stop"
+
+
 @pytest.mark.parametrize("by", ["night", "wait", "restart"])
 async def test_emergency_stop_stops_every_kind_iron_jarvis_starts_by_itself(tmp_path, by):
     """Every daemon-started kind (a night task's turn, Resume when ready and a
