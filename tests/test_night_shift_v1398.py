@@ -94,7 +94,10 @@ def test_the_settings_are_tolerant_at_load_and_refused_in_words_by_the_writer(tm
     assert (defaults.night_window_start, defaults.night_window_end) == ("23:00", "07:00")
     assert (defaults.night_max_at_once, defaults.night_task_minutes, defaults.night_card_wait_minutes) == (2, 90, 15)
     row = schema.BY_KEY["night_window_start"]
-    assert row.group == "automation" and row.section == "Night shift" and row.tier == "allow"
+    # Review (moved on purpose): WHEN and HOW MUCH runs unattended asks from
+    # chat (tests/test_night_shift_window_v1398.py); the Settings page sets it
+    # directly, as before (the next test).
+    assert row.group == "automation" and row.section == "Night shift" and row.tier == "ask"
     with pytest.raises(ValueError, match="time of day"):
         row.check("25:00")
     row.check("23:30")

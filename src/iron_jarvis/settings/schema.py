@@ -428,26 +428,28 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="allow",
       aliases=("resume when ready", "auto resume", "account limit", "carry on after a limit")),
     # v1.398.0 (night shift N1, harness/night): the queue in Coding sessions ›
-    # Tonight is the opt-in; these say WHEN and HOW MUCH. Allow tier: none of
-    # them lets a task do more than its own branch folder (the safety floors
-    # are not settings), and a shorter window or limit only does less.
+    # Tonight is the opt-in; these say WHEN and HOW MUCH. Review: WHEN and
+    # HOW MUCH work runs with nobody watching is the user's to change — from
+    # chat they ask (the "Runs at once" rule, ``max_concurrent_sessions``),
+    # so a model cannot widen the window or the limits by itself. The card
+    # wait only decides how long a question waits: allow.
     S("night_window_start", "Night tasks start at", "automation", "string",
       "Tasks in Coding sessions › Tonight start from this time (24-hour, like 23:00), each on its own "
       "branch. A task not started before the window ends waits for the next night.",
-      tier="allow", section="Night shift", check=_night_time, placeholder="23:00",
+      tier="ask", section="Night shift", check=_night_time, placeholder="23:00",
       aliases=("night window", "night shift start", "tonight starts")),
     S("night_window_end", "Night tasks stop starting at", "automation", "string",
       "No new night task starts after this time (24-hour, like 07:00). A task already running "
-      "finishes under its own time limit.",
-      tier="allow", section="Night shift", check=_night_time, placeholder="07:00",
+      "finishes under its own time limit; one waiting for its account's limit to reset is stopped.",
+      tier="ask", section="Night shift", check=_night_time, placeholder="07:00",
       aliases=("night window end", "night shift end")),
     S("night_max_at_once", "Night tasks at once", "automation", "number",
       "How many night tasks may run at the same time. Never two in the same folder.",
-      tier="allow", section="Night shift", check=_range(1, 8),
+      tier="ask", section="Night shift", check=_range(1, 8),
       aliases=("night tasks at once", "night shift at once")),
     S("night_task_minutes", "Time limit per night task (minutes)", "automation", "number",
       "A night task stops after this many minutes and says what it got done.",
-      tier="allow", section="Night shift", check=_range(5, 1440),
+      tier="ask", section="Night shift", check=_range(5, 1440),
       aliases=("night task limit", "night time limit")),
     S("night_card_wait_minutes", "Wait for an answer at night (minutes)", "automation", "number",
       "When a night task needs your OK, it waits this long (your phone gets the question, if a phone "

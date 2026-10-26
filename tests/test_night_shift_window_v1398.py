@@ -245,6 +245,30 @@ def test_a_queued_task_keeps_the_pc_awake_from_the_evening_not_only_once_the_win
     assert N.awake_needed(engine, cfg, _local(22, 30)) is False
 
 
+async def test_a_chat_model_cannot_widen_the_night_by_itself(tmp_path):
+    """WHEN and HOW MUCH runs with nobody watching asks from chat (the "Runs
+    at once" rule): the first cut let ``config_set`` move the window to the
+    whole day or raise the limits with no card."""
+    from iron_jarvis.settings.tools import ConfigSetTool
+    from iron_jarvis.tools.base import ToolContext
+
+    app = create_app(str(tmp_path / "home"))
+    platform = app.state.platform
+    tool = ConfigSetTool(platform)
+    ctx = ToolContext(workspace=tmp_path, session_id="chat", agent_run_id="r", config=platform.config,
+                      event_bus=platform.event_bus, engine=platform.engine)
+    for key, value in (("night_window_start", "00:00"), ("night_window_end", "23:59"),
+                       ("night_max_at_once", 8), ("night_task_minutes", 1440)):
+        before = getattr(platform.config, key)
+        res = await tool.execute({"key": key, "value": value}, ctx)
+        assert res.ok is False and "config_change" in (res.error or ""), (key, res)
+        assert getattr(platform.config, key) == before, key
+    # How long a question waits only decides how long it waits: allow.
+    res = await tool.execute({"key": "night_card_wait_minutes", "value": 5}, ctx)
+    assert res.ok is True, res
+    assert platform.config.night_card_wait_minutes == 5
+
+
 def test_a_reply_that_ended_on_its_accounts_limit_is_never_done():
     state, notes = N.outcome_of({"notes": []}, {
         "role": "assistant", "content": "Part of it.", "accountLimit": {"account": "a1"},
