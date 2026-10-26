@@ -1176,10 +1176,9 @@ _ACCOUNT_WAIT_KEYS = ("account", "account_name", "resets_at", "armed_at", "next_
                       # account was in when the wait was armed (for words —
                       # the move itself reads the live groups).
                       "group")
-#: v1.393.0: the wait's flags — ``auto`` (armed by itself, no press), ``once``
-#: (only a move within the group was tried: the user turned the self-arming
-#: wait off), ``told`` (the wait loop said the limit on the bell itself).
-_ACCOUNT_WAIT_FLAGS = ("auto", "once", "told")
+#: v1.393.0: the wait's flags — ``auto`` (armed by itself, no press) and
+#: ``told`` (the wait loop said the limit on the bell itself).
+_ACCOUNT_WAIT_FLAGS = ("auto", "told")
 #: v1.393.0: moves within a group since the last turn an account served.
 _ACCOUNT_MOVES_MAX = 99
 

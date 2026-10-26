@@ -445,11 +445,16 @@ def account_patch(platform: Any, setup: dict[str, Any], account_id: "str | None"
     Claude Code account serves ``claude-cli``, a Codex account ``codex-cli``;
     another account of the SAME vendor keeps the model, a different vendor's
     gets ``model`` or that vendor's default. Any change cancels a "Resume when
-    ready" wait and clears the old limit card. ``HTTPException`` in words."""
+    ready" wait and clears the old limit card. ``HTTPException`` in words.
+
+    v1.393.0 review: and it starts the count of moves within an account
+    group again (``account_moves``) — the user's own pick is not an automatic
+    move (:func:`_move_within_group` sets its own count over this)."""
     from ...harness import build_accounts as BA
 
     if not account_id:
-        return {"account": None, "account_name": None, "account_wait": None, "account_limit": None}
+        return {"account": None, "account_name": None, "account_wait": None, "account_limit": None,
+                "account_moves": None}
     svc = _svc_of(platform)
     if svc is None or not getattr(svc, "enabled", False):
         raise HTTPException(status_code=409, detail=ACCOUNT_OFF)
@@ -462,7 +467,7 @@ def account_patch(platform: Any, setup: dict[str, Any], account_id: "str | None"
         raise HTTPException(status_code=409, detail=ACCOUNT_TURNED_OFF)
     patch: dict[str, Any] = {
         "account": row["id"], "account_name": row["name"], "provider": row["provider"],
-        "account_wait": None, "account_limit": None,
+        "account_wait": None, "account_limit": None, "account_moves": None,
     }
     if model:
         patch["model"] = model
@@ -1376,12 +1381,13 @@ def auto_wait(platform: Any, setup: dict[str, Any], limit: "dict[str, Any] | Non
     * ``group`` — the account shares a group with another account of its own
       vendor and the limit is one a takeover answers (``MOVE_KINDS``): the
       wait loop looks AT ONCE for another account of the group to carry on
-      with (``next_check_at`` = now), and every pass after that;
-    * ``once`` — the user turned the self-arming wait off
-      (``build_auto_resume``) but made a group: only the move is tried, and
-      with nothing usable in the group the wait ends (the card waits for the
-      press).
+      with (``next_check_at`` = now), and every pass after that.
 
+    Never when the user turned "Carry on by itself after an account's limit"
+    off (``build_auto_resume``) — v1.393.0 review: OFF means NOTHING carries
+    on by itself, and a move within a group is a reply carrying on by itself
+    (on another account); the card waits for the press, and the wait the
+    press arms may then move within the group (the press is the consent).
     Never for an account that cannot come back (``resumable`` False), a
     Local only session, or a card about an account the session no longer
     runs on. Cached reads only; never raises."""
@@ -1396,19 +1402,16 @@ def auto_wait(platform: Any, setup: dict[str, Any], limit: "dict[str, Any] | Non
         if not account or account != str(setup.get("account") or ""):
             return None
         cfg = getattr(platform, "config", None)
-        auto = bool(getattr(cfg, "build_auto_resume", True))
+        if not bool(getattr(cfg, "build_auto_resume", True)):
+            return None
         group = ""
         if _may_move(setup, limit):
             group = BA.group_partners(_svc_of(platform), getattr(cfg, "account_groups", None), account)
-        if not auto and not group:
-            return None
         wait = wait_record(setup, limit.get("resets_at"))
         wait["auto"] = True
         if group:
             wait["group"] = group
             wait["next_check_at"] = wait["armed_at"]  # the loop looks at once
-        if not auto:
-            wait["once"] = True
         return wait
     except Exception:  # noqa: BLE001 — no self-armed wait is the safe answer (the press)
         log.warning("arming a build session's wait by itself failed", exc_info=True)
@@ -1435,7 +1438,7 @@ def _may_move(setup: dict[str, Any], limit: "dict[str, Any] | None" = None) -> b
 
 async def _keep_account_limit(engine: Any, thread_id: str, turn_id: str,
                               limit: "dict[str, Any] | None", *, done: bool,
-                              platform: Any = None) -> None:
+                              platform: Any = None, served_calls: bool = False) -> None:
     """The RECORD half of a turn's account outcome: keep the session's limit
     card across a reload (``setup.account_limit``) — or clear it (and a
     "Resume when ready" wait) when a turn on the account was served. Written
@@ -1445,6 +1448,12 @@ async def _keep_account_limit(engine: Any, thread_id: str, turn_id: str,
     v1.393.0 (the long-jobs plan's Phase 4): with ``platform``, a card the
     account can come back from ARMS ITS WAIT BY ITSELF in the same write
     (:func:`auto_wait`) — the screen's one re-read shows the waiting card.
+
+    v1.393.0 review: ``served_calls`` — the account answered at least one
+    model call of this turn before its limit. The moves within a group in a
+    row (:data:`MAX_GROUP_MOVES`) count only accounts that failed at once (a
+    snapshot a little behind); an account that did work SERVED, so the chain
+    starts again — a long job through a group of accounts keeps moving.
     Off the loop; never raises."""
     try:
         if limit:
@@ -1453,10 +1462,15 @@ async def _keep_account_limit(engine: Any, thread_id: str, turn_id: str,
                 "at": utcnow().isoformat(), "turn_id": turn_id,
             }
             changes: dict[str, Any] = {"account_limit": record}
+            if served_calls:
+                changes["account_moves"] = None
             if platform is not None:
                 row = await asyncio.to_thread(S.get_row, engine, thread_id)
                 if row is not None and getattr(row, "archived_at", None) is None:
-                    wait = auto_wait(platform, _setup_of(row), limit)
+                    setup = _setup_of(row)
+                    if served_calls:
+                        setup.pop("account_moves", None)
+                    wait = auto_wait(platform, setup, limit)
                     if wait is not None:
                         changes["account_wait"] = wait
             await asyncio.to_thread(S.update, engine, thread_id, setup=changes)
@@ -1524,7 +1538,7 @@ async def _announce_account_limit(platform: Any, thread_id: str, limit: "dict[st
             return
         await _publish_account_limit(
             platform, thread_id, getattr(row, "title", "") or "", limit,
-            waiting=bool(wait is not None and wait.get("auto") and not wait.get("once")),
+            waiting=bool(wait is not None and wait.get("auto")),
         )
     except Exception:  # noqa: BLE001 — the turn never fails on its session record
         log.warning("announcing build session %s's account limit failed", thread_id, exc_info=True)
@@ -1613,8 +1627,11 @@ async def _record_turn_end(engine: Any, thread_id: str, turn_id: str, watch: "_R
             await asyncio.to_thread(S.append_lines, engine, thread_id, lines)
     served = _turn_served(pin, status)
     if pin is not None and platform is not None and (watch.account_limit or served):
+        # v1.393.0 review: a billed model call (or streamed words) this turn
+        # means the account served it before any limit it met.
+        served_calls = bool(watch.clock.calls) or watch.first_token_at is not None
         await _keep_account_limit(engine, thread_id, turn_id, watch.account_limit, done=served,
-                                  platform=platform)
+                                  platform=platform, served_calls=served_calls)
 
 
 #: v1.391.0: the frames that PARK a reply on the user (an approval card — a
@@ -2835,10 +2852,9 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
     cached snapshot, never a vendor call) the reply carries on with it
     (:func:`_move_within_group`). Its own account is checked first when its
     wait is due (the user's pick wins). A grouped wait's limit is said on the
-    bell HERE, once (``told``), when nothing in the group could take over —
-    and a wait the user turned off (``once``) then ends. Every write of a
-    wait after a check is conditional (``S.amend_wait``): a Cancel or a
-    Choose account that landed meanwhile is never undone."""
+    bell HERE, once (``told``), when nothing in the group could take over.
+    Every write of a wait after a check is conditional (``S.amend_wait``): a
+    Cancel or a Choose account that landed meanwhile is never undone."""
     from datetime import timedelta
 
     from ...core.events import EventType
@@ -2857,12 +2873,11 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
         wait = setup.get("account_wait") or {}
         account = str(setup.get("account") or "")
         due_at = _parse_iso(wait.get("next_check_at")) or _parse_iso(wait.get("resets_at")) or when
-        once = wait.get("once") is True
         due = due_at <= when
         grouped = bool(account) and _may_move(setup) and BA.group_of(groups, account) is not None
         # A grouped wait's limit not yet said on the bell (the group may have
         # been changed since it was armed) is looked at now, due or not.
-        untold = bool(wait.get("group") or once) and not wait.get("told")
+        untold = bool(wait.get("group")) and not wait.get("told")
         if not due and not grouped and not untold:
             continue
         if thread_id in _STARTING or _running_turn(d, thread_id):
@@ -2873,9 +2888,7 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
             continue
         armed_at = str(wait.get("armed_at") or "")
         limit: "dict[str, Any] | None" = None
-        if due and not once:
-            # (A wait the user turned off — `once` — never carries on by
-            # itself on its own account: only a move was asked for.)
+        if due:
             limit = await asyncio.to_thread(check_account, platform, setup)
             if limit is None:
                 turn_id = "bt_" + secrets.token_hex(8)
@@ -2923,15 +2936,13 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
                 card = {"account": account, "account_name": str(setup.get("account_name") or "")}
             row = await asyncio.to_thread(S.get_row, engine, thread_id)
             changed = await asyncio.to_thread(
-                S.amend_wait, engine, thread_id, armed_at, account, None if once else {"told": True},
+                S.amend_wait, engine, thread_id, armed_at, account, {"told": True},
             )
             if not changed:
                 continue  # cancelled, chosen or carried on meanwhile: nothing to say
             await _publish_account_limit(
-                platform, thread_id, getattr(row, "title", "") or "", card, waiting=not once,
+                platform, thread_id, getattr(row, "title", "") or "", card, waiting=True,
             )
-            if once:
-                continue  # the user turned the wait off: the card waits for a press
             wait = {**wait, "told": True}
         if limit is None:
             continue  # not due: its own account is looked at at its reset
@@ -2963,6 +2974,11 @@ async def account_wait_loop(d: Any, on_tick: Any) -> None:
     _WAKE.update(loop=loop, event=event)
     try:
         while True:
+            # v1.393.0 review: cleared BEFORE the pass, never after it — a
+            # wake that lands WHILE the pass runs (a turn that ended on a
+            # limit, a press) must make the next pass come at once; clearing
+            # after the pass lost it and the loop slept the whole tick.
+            event.clear()
             try:
                 await resume_due(d)
                 on_tick(True, None)
@@ -2970,7 +2986,6 @@ async def account_wait_loop(d: Any, on_tick: Any) -> None:
                 raise
             except Exception as exc:  # noqa: BLE001 — a failed pass is a row, not a crash
                 on_tick(False, exc)
-            event.clear()
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(event.wait(), timeout=WAIT_TICK_S)
     finally:
@@ -3350,6 +3365,23 @@ def register(app: FastAPI, d: Any) -> None:
             (view["account"] or {}).get("vendor")
             or BA.vendor_of(d.platform, str(setup.get("provider") or ""))
         )
+        # v1.393.0 review: the waiting card's words name the group the LOOP
+        # would move the reply within NOW (the live groups — `resume_due`'s own
+        # rule), never the group stored when the wait was armed: a wait the
+        # press armed, or one armed before the group was made, moves too, and
+        # an account taken out of its group no longer does. The stored record
+        # (who says the limit on the bell) is unchanged.
+        wait = view.get("account_wait")
+        if isinstance(wait, dict):
+            wait = {k: v for k, v in wait.items() if k != "group"}
+            account = str(setup.get("account") or "")
+            if account and wait.get("account") == account and _may_move(setup):
+                group = BA.group_partners(
+                    svc, getattr(getattr(d.platform, "config", None), "account_groups", None), account,
+                )
+                if group:
+                    wait["group"] = group
+            view["account_wait"] = wait
         if view.get("no_folder"):
             # v1.379.0: where a session with no folder makes its own folder
             # (the header says it before the first turn makes it).
@@ -3372,9 +3404,10 @@ def register(app: FastAPI, d: Any) -> None:
             return {}
         row = BA.default_for(_svc_of(platform), new_vendor) if new_vendor else None
         if row is None:
-            return {"account": None, "account_name": None, "account_wait": None, "account_limit": None}
+            return {"account": None, "account_name": None, "account_wait": None, "account_limit": None,
+                    "account_moves": None}
         return {"account": row["id"], "account_name": row["name"], "account_wait": None,
-                "account_limit": None}
+                "account_limit": None, "account_moves": None}
 
     @app.get("/build/accounts")
     def build_accounts() -> dict[str, Any]:

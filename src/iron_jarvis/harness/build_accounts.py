@@ -442,12 +442,19 @@ def usable_now(row: Mapping[str, Any] | None, state: Mapping[str, Any] | None,
 def takeover(svc: Any, groups: Any, account_id: str) -> dict[str, Any] | None:
     """The account that takes over from ``account_id`` at its limit: another
     account of the SAME group and the SAME vendor that is usable now
-    (:func:`usable_now`), the lowest usage first (an account with no window in
-    progress counts as none used), Iron-Proxy's order breaking a tie. Its row
-    with ``group`` (the group's name) and ``percent`` (its peak, or None).
-    None when the account is in no group, or nothing in its group can serve —
-    then the reply waits for the reset instead. Cached reads only; never a
-    call; never raises."""
+    (:func:`usable_now`). Its row with ``group`` (the group's name) and
+    ``percent`` (its peak, or None). None when the account is in no group, or
+    nothing in its group can serve — then the reply waits for the reset
+    instead. Cached reads only; never a call; never raises.
+
+    ORDER (v1.393.0 review): every account whose usage numbers are KNOWN
+    (below :data:`TAKEOVER_MAX_PERCENT`) first, the lowest first; then the
+    accounts the vendor has sent no numbers for — such an account may be the
+    one AT its limit (numbers arrive only after a call), so it is never read
+    as 0% used. It is still tried before the session's own reset: it is in
+    the group the user made, a wrong guess costs one refused call, and the
+    move cap (``routes/build.MAX_GROUP_MOVES``) bounds the chain.
+    Iron-Proxy's order breaks a tie."""
     try:
         snap = snapshot(svc)
         found = group_of(groups, account_id)
@@ -460,7 +467,7 @@ def takeover(svc: Any, groups: Any, account_id: str) -> dict[str, Any] | None:
         vendor = own["vendor"]
         now = datetime.now(timezone.utc)
         order = {r["id"]: i for i, r in enumerate(vendor_rows(snap, vendor, include_off=True))}
-        best: tuple[tuple[float, int], dict[str, Any]] | None = None
+        best: tuple[tuple[bool, float, int], dict[str, Any]] | None = None
         for pid in ids:
             if pid == account_id or pid not in order:
                 continue
@@ -471,7 +478,7 @@ def takeover(svc: Any, groups: Any, account_id: str) -> dict[str, Any] | None:
             if not usable_now(row, state, now):
                 continue
             peak = peak_percent(state, now)
-            key = (peak if peak is not None else 0.0, order[pid])
+            key = (peak is None, peak if peak is not None else 0.0, order[pid])
             if best is None or key < best[0]:
                 best = (key, {**row, "group": name, "percent": peak})
         return best[1] if best is not None else None

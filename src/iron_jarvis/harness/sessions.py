@@ -1020,14 +1020,17 @@ def amend_wait(engine: Any, thread_id: str, armed_at: str, account: str,
     Cancel, a Choose account or the user's own turn that landed meanwhile is
     never undone by a write of the old wait (the loop used to re-arm a wait
     the user had just cancelled). The same lock as :func:`update`. Answers
-    whether it wrote. BLOCKING."""
+    whether it wrote. Never on an ARCHIVED session (v1.393.0 review — the
+    rule :func:`take_wait` keeps: a pass racing an archive must not mark,
+    and so announce, the limit of a session the user just put away).
+    BLOCKING."""
     from ..daemon.routes.chat import _clean_setup
 
     if not armed_at or not account:
         return False
     with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
         row = db.get(ChatThreadRecord, str(thread_id or ""))
-        if row is None or not is_build_thread(row):
+        if row is None or not is_build_thread(row) or getattr(row, "archived_at", None) is not None:
             return False
         setup = _setup(row)
         wait = setup.get("account_wait")

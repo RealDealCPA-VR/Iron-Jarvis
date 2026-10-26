@@ -304,12 +304,14 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="ask", put=False, aliases=("iron proxy", "iron-proxy", "shared accounts", "accounts switcher")),
     # v1.393.0 (the long-jobs plan's Phase 4, decision 4): account groups.
     # Made on the Iron-Proxy card's Group choice (the same writer); which
-    # account ids exist is the writer's check at save time. "ask" in chat:
-    # which accounts may take over each other's conversations is the user's
-    # privacy decision (work and personal never mix).
+    # account ids exist is the writer's check at save time. "ask-floor" in
+    # chat (v1.393.0 review; the doer had "ask", which a yolo chat runs with
+    # no card and a standing grant may lift): which accounts may take over
+    # each other's conversations is the user's privacy decision (work and
+    # personal never mix), so every change from chat is carded, every time.
     S("account_groups", "Account groups", "connections", "dict",
       ACCOUNT_GROUPS_HELP,
-      tier="ask", section="Several accounts", advanced=True, check=_account_groups_shape,
+      tier="ask-floor", section="Several accounts", advanced=True, check=_account_groups_shape,
       aliases=("account group", "account groups", "work accounts", "take over at a limit")),
     S("browser_access", "Your browser", "connections", "enum",
       "What Jarvis may do in your own browser through the add-on.",
@@ -399,9 +401,10 @@ SETTINGS: tuple[SettingDef, ...] = (
     # (today's "Resume when ready", with no press). Read live.
     S("build_auto_resume", "Carry on by itself after an account's limit", "automation", "bool",
       "When a coding session's Claude Code or Codex account reaches its limit, the reply waits "
-      "for the reset and then carries on by itself, the way Resume when ready does. Cancel or "
-      "Choose account on the limit card still work. Off: the card waits for you to press "
-      "Resume when ready.",
+      "for the reset and then carries on by itself, the way Resume when ready does; if the "
+      "account is in an account group, another account of that group may carry it on first. "
+      "Cancel or Choose account on the limit card still work. Off: nothing carries on by "
+      "itself; the card waits for you to press Resume when ready.",
       tier="allow",
       aliases=("resume when ready", "auto resume", "account limit", "carry on after a limit")),
     # v1.350.0: an agent's plan, shown before any step runs. Turning it OFF

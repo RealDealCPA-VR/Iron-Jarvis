@@ -336,7 +336,10 @@ def test_a_hand_edited_config_never_stops_a_boot():
 
 def test_the_groups_row_says_what_a_group_is():
     d = schema.get("account_groups")
-    assert (d.type, d.tier, d.store) == ("dict", "ask", "config")
+    # v1.393.0 review (moved on purpose): "ask-floor" — carded every time
+    # from chat, never lifted by a grant or by yolo (work and personal never
+    # mix). tests/test_build_limits_review_v1393.py pins why.
+    assert (d.type, d.tier, d.store) == ("dict", "ask-floor", "config")
     assert d.help == (
         "Accounts in the same group can take over from each other when one reaches its limit. "
         "Work and personal accounts should be in different groups."
@@ -494,30 +497,12 @@ async def test_moves_in_a_row_are_bounded(app, fake, work, monkeypatch):
     assert setup_of(app, sid)["account"] == "c-work"
 
 
-async def test_with_the_setting_off_a_group_still_moves_once_and_never_waits(app, fake, work, monkeypatch):
-    app.state.platform.config.build_auto_resume = False
-    beh, sid = await _limit(app, fake, work, monkeypatch, groups={"Work": ["c-work", "c-gone"]})
-    assert setup_of(app, sid)["account_wait"]["once"] is True
-    # Nothing in the group can serve: the wait ENDS (the card waits for a
-    # press), and the limit is said as a question that needs the user. Even
-    # with c-work's own reset already past, it is NOT carried on by itself:
-    # the user turned that off (only the move was asked for).
-    _reset(fake)
-    assert await build_routes.resume_due(app.state.d, now=_later()) == []
-    assert len(beh.calls) == 1
-    assert "account_wait" not in setup_of(app, sid)
-    [said] = _events(app, "build.account_limit")
-    assert said["waiting"] is False
-    _reset(fake)
-    assert await build_routes.resume_due(app.state.d, now=_later()) == []
-    assert len(beh.calls) == 1, "never carried on by itself"
-
-
-async def test_with_the_setting_off_a_usable_group_account_still_takes_over(app, fake, work, monkeypatch):
-    app.state.platform.config.build_auto_resume = False
-    beh, sid = await _limit(app, fake, work, monkeypatch, groups={"Work": ["c-work", "c-spare"]})
-    assert await build_routes.resume_due(app.state.d) == [sid]
-    assert _events(app, "build.resumed")[-1]["account"] == "c-spare"
+# v1.393.0 review (moved on purpose, decision 1(b)): with "Carry on by itself
+# after an account's limit" OFF, NOTHING carries on by itself — not even a
+# move within a group (the doer tried one move, `once`). The card waits for
+# the press; the wait the press arms may then move within the group.
+# Pinned in tests/test_build_limits_review_v1393.py
+# (test_with_the_setting_off_nothing_carries_on_by_itself_not_even_a_move).
 
 
 def test_a_moved_reply_a_crash_cut_off_still_names_both_accounts(tmp_path):
