@@ -682,6 +682,12 @@ WAIT_TIME_USED_UP = (
     "Its account reached a limit, and its time limit is used up, so it was stopped. Open the "
     "session to carry it on."
 )
+#: The refusal of a night turn on a model billed per use with no room left
+#: under the user's pay-per-use limit (v1.398.0 review).
+PAY_USED_UP = (
+    "This night task's model is billed per use, and your pay-per-use limit has no room left "
+    "(Settings › Models › Model team), so it did not run."
+)
 #: The refusal of a night task's carry-on turn when its time is used up.
 TIME_USED_UP = "This night task has used up its time limit, so it was not carried on."
 #: The refusal of a night task's carry-on turn outside the night window.

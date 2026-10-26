@@ -628,6 +628,10 @@ async def test_a_night_turn_past_its_limit_and_the_grace_is_stopped_by_the_loop(
     work.mkdir()
     sid = new_session(app, work)["id"]
     engine = app.state.platform.engine
+    # Review (moved on purpose): the session's model (anthropic, no key here)
+    # reads as billed per use, and a night task spends pay-per-use money only
+    # under the user's limit (tests/test_night_shift_limits_v1398.py).
+    app.state.platform.config.team_paid_cap_usd = 50.0
     task = N.add_task(engine, folder=str(work), words="hold on")
     assert N.mark_running(engine, task["id"])
     N.set_session(engine, task["id"], thread_id=sid)

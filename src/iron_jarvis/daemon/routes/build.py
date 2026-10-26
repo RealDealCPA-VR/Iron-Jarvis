@@ -2701,6 +2701,21 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
 
         origin = _naive_utc(resume.get("origin_at")) if resume is not None else None
         record.origin_at = origin
+        if night_task is not None:
+            # v1.398.0 review: on a model billed per use, a night turn may
+            # spend only what is left of the user's pay-per-use limit (its
+            # reply's dollar cap) — the pair the turn really holds (its pick,
+            # the project's default, the app's); none left = it does not run.
+            from .night import pay_room
+
+            room = await asyncio.to_thread(pay_room, platform, *_turn_pair(platform, chat_body, project))
+            if room is not None:
+                if room < 0.01:
+                    raise HTTPException(status_code=409, detail=_night.PAY_USED_UP)
+                _cap = dict(setup.get(RC.SETUP_KEY) or {})
+                if not _cap.get("usd") or float(_cap["usd"]) > room:
+                    _cap["usd"] = round(room, 2)
+                setup = {**setup, RC.SETUP_KEY: _cap}
         # v1.392.0 review: the cap's clock counts the time the reply RAN —
         # its cut-off part(s), then this one from now — never the time Iron
         # Jarvis was off in between (a reply cut off ten minutes in by a crash

@@ -167,6 +167,64 @@ def _main_moved(engine: Any, task_id: str, git: dict[str, Any], folder: str) -> 
     return G.changes(before, _main_state(git, folder))
 
 
+def _night_pair(platform: Any, task: dict[str, Any]) -> "tuple[str, str]":
+    """The model a night task's session runs on: its own pick, else the
+    app's default (what the session's first turn holds)."""
+    cfg = getattr(platform, "config", None)
+    provider = str(task.get("provider") or "") or str(getattr(cfg, "default_provider", "") or "")
+    model = str(task.get("model") or "") if task.get("provider") else str(getattr(cfg, "default_model", "") or "")
+    return provider, model
+
+
+def pay_problem(platform: Any, provider: str, model: str) -> str:
+    """v1.398.0 review: a night task never SPENDS pay-per-use money beyond
+    the user's limit (the plan: "Pay-per-use never goes above your limit
+    (default $0)"; decision 4's "spending" floor). A model billed per use —
+    an API key, a proxy name that goes to a cloud service, or Auto, which may
+    pick one — runs a night task only while the model team's monthly
+    pay-per-use limit has room; the sentence when it has none, "" otherwise.
+    BLOCKING (this month's spend); never raises (refused when unsure — the
+    honest side for money)."""
+    from ...agents import model_team as MT
+
+    try:
+        if not provider or MT.cost_type(platform, provider, model) != MT.COST_PAY:
+            return ""
+        try:
+            cap = max(0.0, float(getattr(platform.config, "team_paid_cap_usd", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            cap = 0.0
+        name = f"{provider} · {model}" if model else provider
+        if cap <= 0:
+            return (f"{name} is billed per use (or may be), and your pay-per-use limit is $0 a month "
+                    f"({MT.PAY_PLACE}), so a night task does not run on it. Pick a model on your plan "
+                    "or on this PC, or raise the limit there.")
+        spend = MT.paid_spend_this_month(platform)
+        if spend >= cap:
+            return (f"{name} is billed per use, and this month's pay-per-use spend (${spend:.2f}) has "
+                    f"reached your ${cap:.2f} limit ({MT.PAY_PLACE}), so a night task does not run on it.")
+        return ""
+    except Exception:  # noqa: BLE001 — unsure: refused
+        log.debug("night pay check failed", exc_info=True)
+        return "The cost of this task's model could not be checked, so it did not start."
+
+
+def pay_room(platform: Any, provider: str, model: str) -> "float | None":
+    """v1.398.0 review: what is left of the model team's monthly pay-per-use
+    limit for a night turn on a model billed per use (its reply's dollar
+    cap), or None when the model is not billed per use. 0.0 when there is no
+    room (or it cannot be read). BLOCKING; never raises."""
+    from ...agents import model_team as MT
+
+    try:
+        if not provider or MT.cost_type(platform, provider, model) != MT.COST_PAY:
+            return None
+        cap = max(0.0, float(getattr(platform.config, "team_paid_cap_usd", 0.0) or 0.0))
+        return max(0.0, cap - MT.paid_spend_this_month(platform))
+    except Exception:  # noqa: BLE001 — unsure: no room
+        return 0.0
+
+
 def title_of(words: str) -> str:
     first = next((line.strip() for line in str(words or "").splitlines() if line.strip()), "")
     return (first[:77] + "…") if len(first) > 80 else (first or "Night task")
@@ -398,6 +456,12 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
             problem = await asyncio.to_thread(S.folder_problem, folder)
             if problem:
                 raise CreateRefused(f"This folder cannot be used: {problem}")
+            if not task.get("try_on"):
+                # v1.398.0 review: never pay-per-use beyond the user's limit
+                # (attempts and the team apply it to their own models).
+                why = await asyncio.to_thread(pay_problem, platform, *_night_pair(platform, task))
+                if why:
+                    raise CreateRefused(why)
             setup = {k: v for k, v in {"provider": task["provider"], "model": task["model"]}.items() if v}
             setup = await asyncio.to_thread(_with_initial_account, platform, setup, "")
             row, _note = await create_session_row(
@@ -452,8 +516,27 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
         _STARTING_TASKS.discard(tid)
 
 
+def _pass_lock(platform: Any) -> asyncio.Lock:
+    """ONE pass at a time per platform (v1.398.0 review): two passes that
+    overlapped (the loop's and another caller's) each counted the room before
+    either started anything, and together started more than "at most N" — and
+    two tasks of one folder."""
+    lock = getattr(platform, "_night_pass_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        with contextlib.suppress(Exception):
+            platform._night_pass_lock = lock
+    return lock
+
+
 async def night_pass(d: Any) -> dict[str, list[str]]:
-    """ONE pass of the night loop (see the module docstring)."""
+    """ONE pass of the night loop (see the module docstring). Serialized per
+    platform (:func:`_pass_lock`)."""
+    async with _pass_lock(d.platform):
+        return await _night_pass(d)
+
+
+async def _night_pass(d: Any) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {"settled": [], "started": []}
     out["settled"] = await settle_running(d)
     platform = d.platform
