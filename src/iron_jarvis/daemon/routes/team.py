@@ -87,10 +87,16 @@ def member_row(platform: Any, record: Any) -> dict[str, Any]:
 
 
 def team_view(platform: Any) -> dict[str, Any]:
-    return {
-        "roles": [{"id": rid, "label": label} for rid, label in T.ROLES],
-        "members": [member_row(platform, r) for r in T.team_members(platform)],
-    }
+    # A STATUS VIEW (v1.333.0, as /health): a CLI's sign-in verdict is read
+    # from the cache — no ``claude auth status`` is started from here
+    # (v1.394.0 review).
+    from ...providers.cli_auth import cached_verdicts
+
+    with cached_verdicts():
+        return {
+            "roles": [{"id": rid, "label": label} for rid, label in T.ROLES],
+            "members": [member_row(platform, r) for r in T.team_members(platform)],
+        }
 
 
 def register(app: FastAPI, d) -> None:

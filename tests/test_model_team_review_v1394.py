@@ -530,6 +530,24 @@ async def test_a_members_model_changes_within_its_vendor_while_iron_proxy_is_off
     assert "No account of its own" in body["detail"] and "Model team" in body["detail"]
 
 
+async def test_get_team_is_a_status_view_that_starts_no_cli_sign_in_check(plain_app, monkeypatch):
+    """Settings › Model team says whether each member's model is connected.
+    Like /health (v1.333.0) it reads CLI sign-in verdicts through
+    ``cli_auth.cached_verdicts`` — a status view never starts a
+    ``claude auth status`` refresh of its own."""
+    from iron_jarvis.providers import cli_auth
+    from tests.test_build_sessions_v1367 import asgi
+
+    seen: list[bool] = []
+    mgr = plain_app.state.platform.providers
+    monkeypatch.setattr(mgr, "available", lambda name: seen.append(cli_auth._CACHED_ONLY.get()) or True)
+    plain_app.state.platform.agents_registry.register(
+        "cl", "x", [], provider="claude-cli", model="subscription", roles=["review"])
+    status, body = await asgi(plain_app, "GET", "/team")
+    assert status == 200 and body["members"][0]["available"] is True
+    assert seen and all(seen), seen
+
+
 # --------------------------------------------------------------------------- #
 # 9. the planner's line: a long name is never cut
 # --------------------------------------------------------------------------- #
