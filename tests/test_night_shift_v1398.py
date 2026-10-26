@@ -207,6 +207,26 @@ def test_how_a_task_ended_is_read_from_its_reply_line(line, notes, state):
         assert kept == [("limit", "Stopped at its 90-minute limit; the reply says what it got done.")]
 
 
+def test_an_event_handler_never_runs_as_the_night_tasks_turn():
+    """A handler of an event published inside a night turn runs in a copy of
+    its context: the night task is dropped there (like the hold and the pin),
+    so work a handler starts never takes the night's card wait."""
+    import contextvars
+
+    from iron_jarvis.core import events
+
+    token = N.set_turn(N.NightTurn(task_id="t", card_wait_s=1.0))
+    try:
+        def handler():
+            events._drop_build_turn_scope()
+            return N.current()
+
+        assert contextvars.copy_context().run(handler) is None
+        assert N.current() is not None
+    finally:
+        N.reset_turn(token)
+
+
 def test_low_trust_reaches_the_record():
     _state, kept = N.outcome_of({"notes": []}, {
         "role": "assistant", "content": "Done.", "trust": "low", "trustReason": "a fetched page was flagged",
