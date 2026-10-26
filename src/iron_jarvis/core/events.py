@@ -320,7 +320,8 @@ class Event:
 
 
 def _drop_build_turn_scope() -> None:
-    """Clear a Build turn's model hold and account pin (v1.372.0 review) in
+    """Clear a Build turn's model hold, account pin, command rule and progress
+    mark (v1.372.0 review; v1.392.0 review: the mark) in
     the CURRENT context — always the worker thread's own copy of the
     publisher's context (``asyncio.to_thread`` runs the handlers in a copy),
     so the turn itself keeps both. A helper's run is finalized INSIDE the
@@ -345,6 +346,16 @@ def _drop_build_turn_scope() -> None:
         from ..harness.command_shell import TURN_RULE
 
         TURN_RULE.set(None)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        # v1.392.0 review: and its progress mark (core/progress — the stall
+        # watch's ear): output from work a handler starts (a reflex run, the
+        # skill-distill sweep) is not the reply's, and must never move the
+        # reply's stall clock.
+        from .progress import _PROGRESS
+
+        _PROGRESS.set(None)
     except Exception:  # noqa: BLE001
         pass
 

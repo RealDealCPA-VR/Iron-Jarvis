@@ -1578,8 +1578,17 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
     # in the bell, once per episode — never while the reply waits on the user
     # (the card is the notice). `harness/stall`.
     from ...harness import stall as _stall
+    from ...providers.hold import current_hold
 
-    stall_watch = _stall.StallWatch(parked=lambda: bool(open_asks))
+    # v1.392.0 review: a silent model is NAMED — the turn's held model (the
+    # driver task runs inside `start_build_turn`'s hold) until a model call
+    # says who answered.
+    _held = current_hold()
+    stall_watch = _stall.StallWatch(
+        parked=lambda: bool(open_asks),
+        provider=_held.provider if _held is not None else "",
+        manager=getattr(platform, "providers", None) if platform is not None else None,
+    )
 
     async def _announce_stall(notice: dict[str, Any]) -> None:
         if platform is not None:

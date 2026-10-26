@@ -148,12 +148,14 @@ def step_words(name: str, args: Any) -> str:
         return "a step"
 
 
-def model_words(provider: str) -> str:
-    """What a reply waits on when no tool is running: the model's answer."""
+def model_words(provider: str, manager: Any = None) -> str:
+    """What a reply waits on when no tool is running: the model's answer,
+    named the failure words' way ("Claude Code's answer"; a fleet node by
+    its label when the provider manager is given)."""
     try:
         from ..providers.failure_words import plain_name
 
-        name = plain_name(str(provider or "")).strip()
+        name = plain_name(str(provider or ""), manager).strip()
     except Exception:  # noqa: BLE001
         name = ""
     if not name or name.startswith("fleet-") or name == str(provider or ""):
@@ -182,7 +184,8 @@ class StallWatch:
     the user right now (the reply writer's open asks)."""
 
     def __init__(self, *, parked: "Callable[[], bool] | None" = None,
-                 after_s: "float | None" = None) -> None:
+                 after_s: "float | None" = None, provider: str = "",
+                 manager: Any = None) -> None:
         self.after_s = float(STALL_AFTER_S if after_s is None else after_s)
         self._parked = parked or (lambda: False)
         self._last = now()
@@ -190,7 +193,13 @@ class StallWatch:
         #: and has not finished, in the order they started.
         self._running: dict[str, tuple[str, Any]] = {}
         self._helper_calls: set[str] = set()
-        self.provider = ""
+        #: v1.392.0 review: WHO the reply waits on when no step runs — the
+        #: turn's held model (``routes/build.recorded_turn`` passes it), then
+        #: whoever answered its latest model call (the Timeline's
+        #: ``model_call`` frame). The doer read a ``meta`` frame no code
+        #: emits, so every notice said "the model's answer".
+        self.provider = str(provider or "")
+        self.manager = manager
         #: The open episode's notice (None = none).
         self.episode: "dict[str, Any] | None" = None
         #: How many episodes the reply had (for tests and the line).
@@ -212,7 +221,7 @@ class StallWatch:
             return False
         self.progress()
         for event, data in parsed:
-            if event not in ("tool_call", "meta", "helper"):
+            if event not in ("tool_call", "meta", "helper", "model_call"):
                 continue
             try:
                 frame = json.loads(data or "{}")
@@ -220,7 +229,7 @@ class StallWatch:
                 continue
             if not isinstance(frame, dict):
                 continue
-            if event == "meta":
+            if event in ("meta", "model_call"):
                 self.provider = str(frame.get("provider") or self.provider)
             elif event == "helper":
                 hid = str(frame.get("id") or "")
@@ -244,7 +253,7 @@ class StallWatch:
             if cid in self._helper_calls:
                 return f"the helper it started ({step_words(name, args)})", None
             return f"this step: {step_words(name, args)}", {"id": cid, "name": name}
-        return model_words(self.provider), None
+        return model_words(self.provider, self.manager), None
 
     def check(self) -> "dict[str, Any] | None":
         """The frame data to send now, or None: a NEW episode's notice once
