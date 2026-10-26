@@ -3699,6 +3699,70 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **A MODEL TEAM member is a custom agent with ROLES; it runs on ITS OWN
+  model, held, on an account the user's groups allow** (v1.394.0, Phase 5
+  Part A of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`, decisions 5 and 6; a doer
+  + a reviewer that found 15 more defects, each red first). `agents/
+  model_team.py` is THE module. `ROLES` (read / code / review / test; twin
+  `dashboard/lib/teamRoles.ts`, pinned equal); `DynamicAgentRecord.roles_json`
+  + `account` are ADDITIVE columns normalised only by the registry
+  (`_with_defaults`); `POST/PATCH /agents` take them (an unknown role or an
+  account of another vendor / not in the CACHED snapshot is a 422 sentence;
+  `_KEEP` keeps the rest). ACCOUNT (`member_account`, cached reads only,
+  never a call): its OWN account, refused in words when it sits in ANOTHER
+  account group than the caller's pin (both grouped); else no account for a
+  non-subscription model; else the caller's pin when of the same vendor;
+  else an account of that vendor IN the caller's group (none → a refusal,
+  never outside the group); else (a coding session, any pinned caller) the
+  vendor's first usable account, else its Default, PINNED — never "first
+  free, rotating"; else (an unpinned objective/agent run) None.
+  `account_refusal` runs at every door BEFORE a session row exists. HOLD:
+  `member_scope` (outside coding sessions) sets `providers.hold` to the
+  member's provider + `pinned_model` and its pin, and `MEMBER_RUN` so a
+  teammate the member consults or hands work to steps OUT of that hold (and
+  off its pin unless the pin is of the target's vendor) — a coding session's
+  hold is never lifted; `core/events._drop_build_turn_scope` keeps a
+  handler out of a member's run (pinned). In a coding session
+  `harness/helpers.for_member` does the same and `target_refusal` allows a
+  member (non-members pinned elsewhere, remotes and — under Local only — a
+  member whose model leaves the network are still refused). DOORS:
+  `delegate`, `spawn_agent` AND `consult` run a pinned custom agent on its
+  own provider/model (spawn ignored the pin; delegate handed a provider-only
+  pin the parent's model id); `Orchestrator.create_session` no longer fills
+  the CONFIGURED default model into a run on ANOTHER provider with no model
+  named (a behaviour change for existing employees — the intended fix). A
+  member whose provider is down is refused by the hold, never moved. LOCAL
+  ONLY: `leaves_network` / `local_only_refusal`; the roster, `list_agents`,
+  the team section and every door hide or refuse a cloud member. PLANNER:
+  `roster.roster_block` member lines carry model / place / cost / roles /
+  usage (`member_facts`, `usage_words` — "Not known yet", never 0%), non-
+  member lines byte-identical; a coding session's `team_block` ("# Your
+  model team", ≤ 10) rides the harness block BEFORE the planner, out of the
+  fingerprint, only when a helper can start; a long name is never cut.
+  ROUTES `routes/team.py`: `GET /team` (members + usage from the cached
+  snapshot, CLI sign-in through `cached_verdicts()` — a status view never
+  spawns), `GET /team/starter?paid=` (a preview built at READ time from
+  `selectable_models`; local first, `STARTER_TICKED_LOCAL` = 3 ticked;
+  Claude Code / Codex unticked; pay per use only with `paid`; no embedding
+  model; the demo model never; `NOTHING_CONNECTED` and nothing created),
+  `POST /team/starter` (rebuilds the preview at press time; a row no longer
+  offered, a model a member already runs on, or a taken name is skipped with
+  its reason, so a second press adds nothing twice; `StarterRefused` in
+  words). DASHBOARD: Settings ›
+  Models › Model team (`components/settings/ModelTeam.tsx`, section
+  `models-team`; role ticks save at once and keep what was LAST SENT — two
+  quick ticks lost the first, the v1.393.0 lost-update lesson; a refused
+  save puts the row back and says why), "Team roles" on the agent card
+  (`TeamRoleChecks.tsx`), helper rows say "On <model>", Timeline rows "Your
+  <member> agent · <model>". OPEN (for Phase 6/later): assignments and
+  schedules do not apply `member_scope` (a queued/scheduled member runs as
+  any custom agent: its pin, no hold); `create_agent`'s upsert can reset a
+  member's model; a low-trust run can still delegate to a member of another
+  vendor; `HeldProviderRefused` still says "Build session". Pins:
+  `tests/test_model_team{,_doors,_live,_planner,_review}_v1394.py`,
+  `dashboard/__tests__/model-team{,-timeline,-review}-v1394.test.tsx`
+  (+ fixture `model-team-timeline-v1394.json`), e2e
+  `dashboard/e2e/model-team-fit.spec.ts` (390 px, keyboard).
 - **An account limit is WAITED OUT by itself; a move to another account
   happens only WITHIN a group the user made, same vendor** (v1.393.0, Phase 4
   of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`; a doer + a reviewer that found

@@ -58,3 +58,12 @@ class DynamicAgentRecord(SQLModel, table=True):
     #: the deny floor in ``tools/permissions.py`` means it can only narrow).
     deny_tools_json: str = "[]"
     created_at: datetime = Field(default_factory=utcnow)
+    # --- the model team (v1.394.0, the long-jobs plan's Phase 5) -------------
+    # ADDITIVE like the job card: NULL on a row written before this release,
+    # read as the defaults by ``dynamic._with_defaults`` only.
+    #: JSON list[str] of ROLES (``agents.model_team.ROLE_IDS``: read, code,
+    #: review, test). One or more makes the agent a TEAM MEMBER.
+    roles_json: str = "[]"
+    #: The Iron-Proxy account a member's runs use ("" = its provider's normal
+    #: pick). An account id, never shown; its name comes from the snapshot.
+    account: str = ""

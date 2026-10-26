@@ -134,6 +134,9 @@ class _Consultation:
     model: str = ""
     asker: str = ""
     error: str = ""
+    #: v1.394.0 review: the custom agent's record (a team member is held to
+    #: its own model while it answers); None for a builtin or a remote.
+    record: Any = None
 
 
 class ConsultTool(Tool):
@@ -327,6 +330,7 @@ class ConsultTool(Tool):
 
         provider = model = ""
         base_prompt = ""
+        record = None
         if entry.kind == "dynamic":
             slug = entry.name.partition(":")[2] or entry.name
             registry = getattr(self.platform, "agents_registry", None)
@@ -342,18 +346,32 @@ class ConsultTool(Tool):
 
             base_prompt = AgentThreads._dynamic_prompt(registry, slug, row)
             provider = str(getattr(row, "provider", "") or "")
-            model = str(getattr(row, "model", "") or "")
+            # v1.394.0 review: an agent pinned to a PROVIDER answers on that
+            # provider's model — its own, else that provider's default — never
+            # the caller's model id (another provider's), as in delegate and
+            # spawn_agent (``model_team.pinned_model``).
+            from . import model_team as _model_team
+
+            model = _model_team.pinned_model(self.platform, row) if provider else str(
+                getattr(row, "model", "") or ""
+            )
+            record = row
+            # …and a TEAM MEMBER's account stays in the caller's group.
+            refusal = _model_team.account_refusal(self.platform, row)
+            if refusal:
+                return _Consultation(error=refusal)
         else:
             from .threads import AgentThreads
 
             base_prompt = AgentThreads._builtin_prompt(entry.name)
 
-        if not provider or not model:
+        if not provider:
             # Inherit the CALLER's provider/model, exactly as delegate does, so
             # a real multi-agent run stays on the user's chosen model end to end
-            # (a dynamic agent's own pin wins — pinning is the point of pinning).
+            # (a dynamic agent's own pin wins — pinning is the point of pinning;
+            # a pinned provider never borrows the caller's model id).
             session = self._caller_session(ctx)
-            provider = provider or str(getattr(session, "provider", "") or "")
+            provider = str(getattr(session, "provider", "") or "")
             model = model or str(getattr(session, "model", "") or "")
 
         return _Consultation(
@@ -362,6 +380,7 @@ class ConsultTool(Tool):
             provider=provider,
             model=model,
             asker=asker,
+            record=record,
         )
 
     def _paused_sentence(self, wanted: str) -> str:
@@ -542,19 +561,26 @@ class ConsultTool(Tool):
             except Exception:  # noqa: BLE001 — never break a consult
                 pass
 
-        route = await self.platform.router.complete(
-            provider=plan.provider or None,
-            model=plan.model or None,
-            system=system,
-            messages=[
-                LLMMessage(
-                    role="user",
-                    content=self._user_message(question, context, plan.asker),
-                )
-            ],
-            tools=[],
-            session_id=getattr(ctx, "session_id", None),
-        )
+        # v1.394.0 review: a TEAM MEMBER answers on its own model, HELD there
+        # (decision 5 — never another provider), on the account the team's
+        # rule names; a teammate consulted from inside a member's run steps
+        # out of that member's hold (``model_team.member_scope``).
+        from . import model_team as _model_team
+
+        with _model_team.member_scope(self.platform, plan.record, plan.provider):
+            route = await self.platform.router.complete(
+                provider=plan.provider or None,
+                model=plan.model or None,
+                system=system,
+                messages=[
+                    LLMMessage(
+                        role="user",
+                        content=self._user_message(question, context, plan.asker),
+                    )
+                ],
+                tools=[],
+                session_id=getattr(ctx, "session_id", None),
+            )
         text = (getattr(route.response, "text", "") or "").strip()
         if not text:
             return ToolResult(

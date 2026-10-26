@@ -211,6 +211,13 @@ class RosterEntry:
     #: blocked}. None when the lookup failed or no store exists — and then
     #: ``activity`` stays "unknown" rather than claiming "idle".
     health: dict | None = None
+    #: THE MODEL TEAM (v1.394.0): a member's facts (``agents.model_team.
+    #: member_facts`` — roles, provider, model, place, cost, usage); None for
+    #: everyone who is not on the team. The prompt line carries them.
+    team: dict | None = None
+    #: v1.394.0: True when this custom agent's OWN model leaves the user's
+    #: network (a pinned cloud provider) — a Local only list leaves it out.
+    leaves_network: bool = False
 
     def line(self) -> str:
         """One honest line, e.g. ``researcher — digger (87% over 23 runs)``.
@@ -262,6 +269,7 @@ class RosterEntry:
             "allowance": self.allowance,
             "reports_to": self.reports_to,
             "health": self.health,
+            "team": self.team,
             "line": self.line(),
         }
 
@@ -691,6 +699,18 @@ def _dynamic_entries(
             # allowance is one ledger read per custom agent, inside this
             # per-record try so one failure never drops the roster.
             pause_reason = _one_line(getattr(record, "paused_reason", ""))
+            # THE MODEL TEAM (v1.394.0): a member's model, place, cost type,
+            # roles and usage (cheap, cached reads; never a network call),
+            # and whether its own model leaves the network (Local only).
+            team_facts: dict | None = None
+            off_network = False
+            try:
+                from . import model_team as _mt
+
+                team_facts = _mt.member_facts(platform, record)
+                off_network = _mt.leaves_network(platform, record)
+            except Exception:  # noqa: BLE001 — no facts beats no roster
+                team_facts = None
             allowance_state: dict | None = None
             try:
                 from . import allowance as _allowance
@@ -719,6 +739,8 @@ def _dynamic_entries(
                     # it has actually run, which renders "(no runs yet)".
                     stats=_stat_for(stats_by_name, entry_name),
                     activity=activity.get(_norm(entry_name), _UNKNOWN),
+                    team=team_facts,
+                    leaves_network=off_network,
                 )
             )
         except Exception:  # noqa: BLE001 — skip one bad record, keep the rest
@@ -870,14 +892,34 @@ def _clamp(text: str, limit: int = _BLOCK_LINE_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def _block_line(entry: RosterEntry) -> str:
+#: v1.394.0: a TEAM MEMBER's line carries its facts too (model, place, cost
+#: type, roles, usage), so its budget is wider; the description is still the
+#: only part that is clamped.
+_MEMBER_LINE_CHARS = 170
+
+
+def _block_line(entry: RosterEntry, platform=None) -> str:
     """Budgeted line for the prompt block: the DESCRIPTION is clamped, the
     stats/offline suffix never is — a truncated "(87% over 2…" would render
-    the bare percentage the honesty rules forbid."""
+    the bare percentage the honesty rules forbid. A team member's FACTS
+    bracket (v1.394.0) is never clamped either: it is what the planner
+    chooses by."""
     suffix = entry._suffix()
     head = entry.name
     if entry.description:
         head = f"{entry.name} — {entry.description}"
+    if entry.team:
+        from .model_team import facts_words
+
+        facts = f"[{facts_words(platform, entry.team)}]"
+        tail = f"{facts} {suffix}"
+        room = _MEMBER_LINE_CHARS - len(tail) - 1
+        # v1.394.0 review: the NAME is never cut — it is what the planner
+        # hands the work to ("custom:<name>"). With no room for a description
+        # beside long facts, the line is the name alone.
+        if room < len(entry.name) + 4:
+            return f"{entry.name} {tail}"
+        return f"{_clamp(_one_line(head), room)} {tail}"
     return f"{_clamp(_one_line(head), _BLOCK_LINE_CHARS - len(suffix) - 1)} {suffix}"
 
 
@@ -899,15 +941,31 @@ def roster_block(platform, *, limit: int = 14, only: list[str] | None = None) ->
     if only:
         wanted = {_norm(n) for n in only}
         entries = [e for e in entries if _norm(e.name) in wanted]
+    # LOCAL ONLY (v1.394.0): a custom agent whose OWN model leaves the
+    # network is not shown at all — a Local only planner must never be
+    # offered work it cannot hand out (the doors refuse it in words too).
+    if _local_only_now():
+        entries = [e for e in entries if not e.leaves_network]
     main = [e for e in entries if e.delegable and e.healthy][: max(0, limit)]
     offline = [e.name for e in entries if e.kind == "remote" and not e.healthy]
     if not main and not offline:
         return ""
     lines = [_BLOCK_HEADER]
-    lines.extend("- " + _block_line(e) for e in main)
+    lines.extend("- " + _block_line(e, platform) for e in main)
     if offline:
         lines.append(_clamp("offline: " + ", ".join(offline)))
     return "\n".join(lines)
+
+
+def _local_only_now() -> bool:
+    """Is the work in flight in THIS context Local only? (The chat lanes and
+    the runtime set the scope around the whole turn / run.) Never raises."""
+    try:
+        from ..providers.egress import current_scope
+
+        return bool(current_scope().on)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def delegable_names(platform) -> list[str]:

@@ -341,6 +341,14 @@ def _drop_build_turn_scope() -> None:
     except Exception:  # noqa: BLE001
         pass
     try:
+        # v1.394.0 review: and a model team member's run marker — work a
+        # handler starts is not the member's run.
+        from ..agents.model_team import MEMBER_RUN
+
+        MEMBER_RUN.set(False)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
         # v1.381.0: and its command rule (harness/command_shell) — work a
         # handler starts is not the command's turn.
         from ..harness.command_shell import TURN_RULE

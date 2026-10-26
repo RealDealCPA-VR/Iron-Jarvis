@@ -1059,6 +1059,12 @@ export interface DynamicAgent {
    * the bug this pair of fields exists to close. ABSENT on older daemons.
    */
   effective_tools?: string[];
+  /* ---- v1.394.0 (the model team). OPTIONAL like the job card: an older
+     daemon omits them and the card reads as before. ---- */
+  /** Team roles (lib/teamRoles): one or more make the agent a team member. */
+  roles?: string[];
+  /** The Iron-Proxy account its runs use ("" = Iron-Proxy's pick). */
+  account?: string;
 }
 
 export interface AgentsResponse {

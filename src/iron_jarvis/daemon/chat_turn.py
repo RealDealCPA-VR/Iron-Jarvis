@@ -5266,6 +5266,19 @@ async def _build_harness(
         shell_description=shell_words,
         bash_description=bash_words,
     )
+    # v1.394.0 (the long-jobs plan's Phase 5): the user's MODEL TEAM, when
+    # this turn can start a helper — each member on its OWN model; under
+    # Local only a member whose model leaves the network is not listed.
+    # Off the loop (cached reads); "" with no team. MIRROR NOTE (lock-step):
+    # both lanes build their harness turn here.
+    if turn.plan.gate & {"delegate", "spawn_agent"}:
+        from ..agents.model_team import team_block
+
+        try:
+            turn.team_section = await asyncio.to_thread(team_block, d.platform)
+        except Exception:  # noqa: BLE001 — the team list never breaks a turn
+            log.debug("model team block failed", exc_info=True)
+            turn.team_section = ""
     # IJ harness part 3, Phase 3 — MIRROR NOTE (lock-step): both lanes build
     # their harness turn here, so both get all three.
     _window = _context_window(d, prov, mod)

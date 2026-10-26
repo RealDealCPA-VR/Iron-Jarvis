@@ -1898,6 +1898,48 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Your model team (v1.394.0)
+
+- **A team of the models you already have.** Give an agent one or more roles
+  and it joins your model team. The roles are Reading and summarizing,
+  Writing code, Reviewing a change, and Running and fixing tests.
+  - Set them on the agent's card on the Agents page, under **Team roles**.
+  - See the whole team in **Settings › Models › Model team**.
+- **Each member works on its own model**, the one its card names. The model
+  you talk to stays the one you picked.
+  - When a coding session or an objective hands out a piece of work, the
+    planner sees, for each member: its model, where it runs (this PC, your
+    network or the cloud), what it costs (free, your plan or pay per use),
+    and how much of its plan it has used.
+  - Usage comes from numbers Iron Jarvis already has. When it has none for a
+    member, it says "Not known yet".
+- **Make a starter team.** In Settings › Models › Model team, **Make a
+  starter team** shows a preview of the models you have connected. Nothing
+  is added until you press **Create**.
+  - Your local models come first. They are free, and up to three are ticked.
+  - Claude Code and Codex are offered unticked, so you choose whether to add
+    them.
+  - Pay-per-use models appear only when you tick **Include pay-per-use
+    models**.
+  - With nothing connected, it says so and adds no one. The demo model is
+    never a member.
+- **Which account a member uses.** A member's row can name an account of its
+  own. Without one:
+  - in a coding session, it uses the session's account when both are the
+    same kind (Claude Code or Codex); otherwise an account in the session's
+    account group;
+  - for other work, Iron-Proxy picks one.
+  - Work never moves between account groups. A member whose account sits in
+    a different group than the work's is refused, and the refusal says why.
+- **A member stays on its model.** If its model is not connected, the work
+  is refused with a plain sentence. It is never moved to another model.
+- **Local only.** In a Local only chat or session, a member whose model
+  leaves your network is not listed and cannot be started.
+- **A fix for every custom agent.** Handing work to an agent that names its
+  own model now runs it on that model, every way it can be started. Before,
+  one way ignored the agent's model. Also, an agent that named only a
+  provider could be handed another provider's default model.
+
 ## Account limits without a press (v1.393.0)
 
 - **A reply at an account's limit carries on by itself.** When a coding

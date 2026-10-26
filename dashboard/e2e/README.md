@@ -47,6 +47,13 @@ follows the menu when the composer moves, an ancestor with a `transform` /
 `backdrop-filter` cannot move the menu (the portal), the app's palette covers
 an open menu, and the IJ harness's Ctrl+K from a row of the menu stays in it.
 
+`e2e/model-team-fit.spec.ts` (v1.394.0 review) opens Settings › Model team
+with GET /team, /build/accounts and /team/starter stubbed to members and
+accounts with long names, at 390 × 844 and 1280 × 720: every part of a
+member's row (model, role boxes, account picker) and of a starter row sits
+inside its own box and the page never pans sideways; the role boxes and the
+account picker are reached with Tab alone.
+
 Run from `dashboard/`:
 
 ```bash
