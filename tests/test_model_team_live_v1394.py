@@ -19,6 +19,7 @@ lease their account exactly as the real CLI adapters do.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -250,6 +251,49 @@ async def test_a_claude_session_hands_reading_to_a_local_member_and_coding_to_a_
     done = dict(frames)["done"]
     assert done["route"]["provider"] == "claude-cli"
     assert done["route"]["account"]["id"] == "c-work"
+
+    # The dashboard draws THIS recorded reply (its Timeline and helper rows):
+    # dashboard/__tests__/fixtures/model-team-timeline-v1394.json. Regenerate
+    # with IJ_REGEN_TEAM_TIMELINE=1; otherwise a fresh recording must carry
+    # the fixture's shape and its three models.
+    question = [m for m in messages_of(app, sid) if m.get("role") == "user"][-1]
+    _check_fixture(question, line, str(work))
+
+
+TEAM_FIXTURE = (Path(__file__).resolve().parents[1] / "dashboard" / "__tests__" / "fixtures"
+                / "model-team-timeline-v1394.json")
+
+
+def _scrub(value: Any, folder: str) -> Any:
+    """The recording without this run's temporary folder (a path is not a fact
+    the dashboard draws)."""
+    text = json.dumps(value)
+    for form in {folder, folder.replace("\\", "/"), json.dumps(folder)[1:-1]}:
+        text = text.replace(form, "<work>")
+    return json.loads(text)
+
+
+def _models_of(line: dict) -> set[str]:
+    return {c["provider"] for c in line.get("calls") or []} | {
+        h.get("provider") for h in line.get("helpers") or []}
+
+
+def _check_fixture(question: dict, line: dict, folder: str) -> None:
+    import os
+
+    if os.environ.get("IJ_REGEN_TEAM_TIMELINE") == "1":
+        TEAM_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+        TEAM_FIXTURE.write_text(json.dumps({
+            "_doc": "v1.394.0: a REAL recorded coding reply on Claude that handed reading to a "
+                    "local team member and coding to a Codex member (tests/test_model_team_live_"
+                    "v1394.py). Regenerate with IJ_REGEN_TEAM_TIMELINE=1.",
+            "question": _scrub(question, folder),
+            "line": _scrub(line, folder),
+        }, indent=1) + "\n", encoding="utf-8", newline="\n")
+    fx = json.loads(TEAM_FIXTURE.read_text(encoding="utf-8"))
+    assert sorted(fx["line"]) == sorted(k for k in line)
+    assert sorted({k for h in fx["line"]["helpers"] for k in h}) == sorted({k for h in line["helpers"] for k in h})
+    assert _models_of(fx["line"]) == _models_of(line) == {"claude-cli", "ollama", "codex-cli"}
 
 
 async def test_a_codex_member_with_no_account_takes_its_providers_normal_pick(app, fake, work, monkeypatch):
