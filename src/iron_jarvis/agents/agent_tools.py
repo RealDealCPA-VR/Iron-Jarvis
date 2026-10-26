@@ -155,9 +155,18 @@ class ListAgentsTool(Tool):
         return list(definition.tools) if definition is not None else None
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        from . import model_team as _model_team
+        from .delegate_tool import _local_only_now
+
         builtin = sorted(t.value for t in _DEFINITIONS)
         dynamic = []
+        # LOCAL ONLY (v1.394.0): an agent whose OWN model leaves the network
+        # is not listed — the roster leaves it out too, and both doors refuse
+        # it in words; listing it here would offer work nobody can take.
+        local_only = _local_only_now()
         for r in self.registry.list():
+            if local_only and _model_team.leaves_network(self.platform, r):
+                continue
             row: dict[str, Any] = {
                 "name": r.name,
                 "base_type": r.base_type,
@@ -166,6 +175,11 @@ class ListAgentsTool(Tool):
             tools = self._effective_tools(r.name)
             if tools is not None:
                 row["effective_tools"] = tools
+            # THE MODEL TEAM (v1.394.0): a member says its roles and the
+            # model it runs on — the facts the planner's list carries.
+            facts = _model_team.member_facts(self.platform, r)
+            if facts is not None:
+                row["team"] = _model_team.facts_words(self.platform, facts)
             dynamic.append(row)
         lines = ["Built-in agents: " + ", ".join(builtin)]
         if dynamic:
@@ -177,6 +191,8 @@ class ListAgentsTool(Tool):
             lines.append("Dynamic agents:")
             for row in dynamic:
                 head = f"  - {row['name']} (base={row['base_type']})"
+                if row.get("team"):
+                    head += f" [team member: {row['team']}]"
                 tools = row.get("effective_tools")
                 if tools is None:
                     # UNKNOWN, said as unknown. "no tools" here would read as a
@@ -250,6 +266,7 @@ class SpawnAgentTool(Tool):
             _MAX_DELEGATION_DEPTH,
             TIME_LIMIT_REASON,
             DelegateTool,
+            _local_only_now,
             _with_handle,
             delegation_handle,
             publish_delegation_completed,
@@ -267,6 +284,7 @@ class SpawnAgentTool(Tool):
             inherited_workspace_root,
         )
         from . import team as _team
+        from . import model_team as _model_team
         from ..harness import helpers as _helpers
         from .runtime import AgentRuntime
         from .types import get_agent_definition
@@ -366,8 +384,15 @@ class SpawnAgentTool(Tool):
         # and its PROJECT, so a spawned child grounds in the parent's workspace
         # (not whatever project is globally active now).
         parent = orch.get_session(ctx.session_id)
-        provider = parent.provider if parent else None
-        model = parent.model if parent else None
+        # v1.394.0 (the long-jobs plan's Phase 5): a custom agent's OWN pinned
+        # model is honoured here exactly as ``delegate`` honours it (spawn used
+        # to ignore the pin and run every custom agent on the parent's model).
+        # An agent pinned to a provider runs that provider's model — its own,
+        # else that provider's default; never the parent's model id.
+        rec_provider = (record.provider or None) if record is not None else None
+        rec_model = (_model_team.pinned_model(self.platform, record) or None) if record is not None else None
+        provider = rec_provider or (parent.provider if parent else None)
+        model = rec_model if rec_provider else (rec_model or (parent.model if parent else None))
         project_id = parent.project_id if parent else None
         # …and the FOLDER (v1.193.0), on the same terms as `delegate`: a parent
         # working directly in the user's real folder hands that folder to its
@@ -400,9 +425,17 @@ class SpawnAgentTool(Tool):
         _pin_refusal = _helpers.target_refusal(
             _hp, raw=agent_name, record=record,
             manager=getattr(self.platform, "providers", None),
+            platform=self.platform,
         )
         if _pin_refusal:
             return ToolResult(ok=False, output="", error=_pin_refusal)
+        # LOCAL ONLY outside a coding session (v1.394.0), as in ``delegate``.
+        if _hp is None and record is not None and _local_only_now():
+            _lo = _model_team.local_only_refusal(self.platform, record, agent_name)
+            if _lo:
+                return ToolResult(ok=False, output="", error=_lo)
+        # v1.394.0: a member's helper runs on ITS OWN model and account.
+        _hp = _helpers.for_member(_hp, self.platform, record)
         _helper_options = None
         if _hp is not None:
             provider, model = _hp.provider or provider, _hp.model or model
@@ -492,12 +525,17 @@ class SpawnAgentTool(Tool):
                     # v1.372.0: created with the turn's account pin armed.
                     # v1.372.0 review: and it works with the SESSION's tools
                     # (``helpers.helper_definition``; unchanged off a turn).
-                    with _helpers.pinned(_hp):
+                    # v1.394.0: a member's run is held to its own model
+                    # (``model_team.member_scope``) — the same as ``delegate``.
+                    with _helpers.pinned(_hp), (
+                        _model_team.member_scope(self.platform, record)
+                        if _hp is None else _model_team.member_scope(self.platform, None)
+                    ):
                         child_task = asyncio.ensure_future(
                             AgentRuntime(self.platform).run(
                                 child_session,
                                 _helpers.helper_definition(
-                                    _hp, definition, custom=record is not None
+                                    _hp, definition, custom=_model_team.helper_is_custom(record)
                                 ),
                                 parent_id=ctx.agent_run_id,
                             )

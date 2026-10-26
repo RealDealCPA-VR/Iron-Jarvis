@@ -54,6 +54,7 @@ from ...agents.allowance import allowance_state, month_spend, refusal_for
 # THE FOLDER (v1.297.0): the one slug rule, lifted out of this module so the
 # agent's folder, portrait and face key cannot disagree.
 from ...agents.files import agent_slug
+from ...agents import model_team as _team
 from ...core.events import EventType
 from ...core.models import AgentType
 from ...core.logging import get_logger
@@ -1844,9 +1845,46 @@ def register(app: FastAPI, d) -> None:
             "paused": paused,
             # The monthly allowance against this month's ledger, or null.
             "allowance": allowance,
+            # --- the model team (v1.394.0) ------------------------------
+            # One or more roles make it a team member; `account` is the
+            # Iron-Proxy account its runs use ("" = the provider's normal
+            # pick). Additive: an older page simply does not read them.
+            "roles": _team.roles_of(r),
+            "account": str(getattr(r, "account", "") or ""),
         }
 
-    def _employee_fields(body: Any, *, name: str, creating: bool) -> dict[str, Any]:
+    def _team_account_problem(account: str, provider: str) -> str:
+        """Why a team member cannot run on ``account`` (v1.394.0), or "".
+        Read from Iron-Proxy's CACHED snapshot (never a call): the account
+        must be one it lists, and of the vendor the agent's model runs on."""
+        from ...harness import build_accounts as BA
+
+        svc = getattr(d.platform, "iron_proxy", None)
+        if BA.snapshot(svc) is None:
+            return (
+                "Iron-Proxy is off or has not listed its accounts yet — turn it on in "
+                "Settings › Connections, or leave the account blank for the normal pick"
+            )
+        row = BA.find(svc, account)
+        if row is None:
+            return "Iron-Proxy does not list that account — pick one it lists, or leave it blank"
+        served = _team._served_cli(provider, getattr(d.platform, "providers", None))
+        if not served:
+            return (
+                f"'{row['name']}' is a {row['vendor_label']} account, and an account only "
+                "applies to an agent that runs on Claude Code or Codex — pick its model first"
+            )
+        if served != row["provider"]:
+            return (
+                f"'{row['name']}' is a {row['vendor_label']} account, and this agent runs on "
+                f"{_team.model_words(d.platform, provider, '')} — pick an account of that "
+                "vendor, or leave it blank for the normal pick"
+            )
+        return ""
+
+    def _employee_fields(
+        body: Any, *, name: str, creating: bool, provider: str = ""
+    ) -> dict[str, Any]:
         """Validate a hire/edit body's employee fields and return ONLY the
         provided ones as ``register()`` kwargs (v1.295.0).
 
@@ -1953,6 +1991,27 @@ def register(app: FastAPI, d) -> None:
                     )
             out["reports_to"] = target
 
+        # THE MODEL TEAM (v1.394.0): the roles are a small fixed vocabulary
+        # (agents/model_team.ROLES) — an unknown one is refused, never
+        # dropped quietly; an empty list takes the agent off the team.
+        roles = getattr(body, "roles", None)
+        if roles is not None:
+            bad = _team.unknown_roles(roles)
+            if bad:
+                refuse(
+                    f"roles must be some of: {', '.join(_team.ROLE_IDS)} — "
+                    f"'{bad[0]}' is not one"
+                )
+            out["roles"] = _team.clean_roles(roles)
+        account = getattr(body, "account", None)
+        if account is not None:
+            acct = " ".join(str(account).split())
+            if acct:
+                problem = _team_account_problem(acct, provider)
+                if problem:
+                    refuse(problem)
+            out["account"] = acct
+
         for field in ("skills", "deny_tools"):
             items = getattr(body, field, None)
             if items is None:
@@ -1996,7 +2055,7 @@ def register(app: FastAPI, d) -> None:
                     "instead of re-creating it"
                 ),
             )
-        fields = _employee_fields(body, name=name, creating=True)
+        fields = _employee_fields(body, name=name, creating=True, provider=body.provider)
         rec = d.platform.agents_registry.register(
             name,
             body.system_prompt,
@@ -3614,7 +3673,25 @@ def register(app: FastAPI, d) -> None:
         # registry keeps an omitted one). The old route re-passed
         # `rec.provider`/`rec.model`/`rec.base_type` unconditionally, so a
         # PATCH that changed the model was silently a no-op.
-        fields = _employee_fields(body, name=rec.name, creating=False)
+        fields = _employee_fields(
+            body, name=rec.name, creating=False,
+            provider=body.provider if body.provider is not None else rec.provider,
+        )
+        # THE MODEL TEAM (v1.394.0): an account belongs to ONE vendor's model.
+        # Moving a member with an account to another vendor's model would
+        # leave its runs pinned to an account that cannot serve them — said
+        # here, never cleared behind the user's back.
+        stored_account = str(getattr(rec, "account", "") or "")
+        if body.provider is not None and stored_account and "account" not in fields:
+            problem = _team_account_problem(stored_account, body.provider)
+            if problem:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"{rec.name} runs on an Iron-Proxy account of its own — {problem}. "
+                        "Clear its account (account: \"\") in the same change to move it."
+                    ),
+                )
         updated = d.platform.agents_registry.register(
             name,
             body.system_prompt if body.system_prompt is not None else rec.system_prompt,

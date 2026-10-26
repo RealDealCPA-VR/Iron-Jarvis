@@ -521,6 +521,12 @@ class HarnessTurn:
         #: Part 3, Phase 3: the project's OWN checkers found for this turn
         #: (``harness/checkers.ProjectCheckers``; None = none run).
         self.checkers: Any = None
+        #: v1.394.0 (the long-jobs plan's Phase 5): the user's MODEL TEAM —
+        #: the members a helper may run on, each on its own model (``agents/
+        #: model_team.team_block``) — set only when this turn can start a
+        #: helper. Per turn (usage moves), never part of the fingerprint;
+        #: "" (a byte-identical prompt) when there is no team.
+        self.team_section: str = ""
 
     # -- the prompt --------------------------------------------------------- #
 
@@ -553,9 +559,11 @@ class HarnessTurn:
         _map_text = str(getattr(self.project_map, "text", "") or "")
         if _map_text:
             project_map = "\n\n" + _map_text
+        # v1.394.0: the model team the turn's helpers may run on ("" = none).
+        team = ("\n\n" + self.team_section) if self.team_section else ""
         return (
             "\n\n" + self.rendered + date + prompt_line(self.plan.gate) + prompt_section()
-            + summary_section() + branch_line() + project_map
+            + summary_section() + branch_line() + team + project_map
         )
 
     @staticmethod

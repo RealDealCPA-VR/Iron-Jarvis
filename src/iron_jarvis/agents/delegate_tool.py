@@ -185,6 +185,17 @@ def stopped_by_user_error(target: str) -> str:
     )
 
 
+def _local_only_now() -> bool:
+    """Is the run this tool call belongs to Local only? (The runtime sets the
+    scope around a local-only run's whole body.) Never raises."""
+    try:
+        from ..providers.egress import current_scope
+
+        return bool(current_scope().on)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class DelegateTool(Tool):
     name = "delegate"
     description = (
@@ -245,6 +256,7 @@ class DelegateTool(Tool):
             inherited_workspace_root,
         )
         from . import team as _team
+        from . import model_team as _model_team
         from ..harness import helpers as _helpers
         from .runtime import AgentRuntime
         from .types import get_agent_definition
@@ -372,15 +384,31 @@ class DelegateTool(Tool):
             if reason:
                 return ToolResult(ok=False, output="", error=reason)
             # A harness turn's helper runs on the SESSION's model: a custom
-            # agent pinned to another one is refused, never run on its pin.
+            # agent pinned to another one is refused, never run on its pin —
+            # unless it is a MODEL TEAM MEMBER (v1.394.0, decision 5), which
+            # runs on its own model (refused only under Local only when that
+            # model leaves the network).
             _pin_refusal = _helpers.target_refusal(
                 _hp, entry=entry, record=rec,
                 manager=getattr(self.platform, "providers", None),
+                platform=self.platform,
             )
             if _pin_refusal:
                 return ToolResult(ok=False, output="", error=_pin_refusal)
+            # LOCAL ONLY outside a coding session (v1.394.0): a run that is
+            # Local only never starts an agent whose own model leaves the
+            # network — said here, before any session exists.
+            if _hp is None and _local_only_now():
+                _lo = _model_team.local_only_refusal(self.platform, rec, entry.name)
+                if _lo:
+                    return ToolResult(ok=False, output="", error=_lo)
             dyn_provider = (rec.provider or None) if rec is not None else None
-            dyn_model = (rec.model or None) if rec is not None else None
+            # v1.394.0: an agent pinned to a PROVIDER runs its own model, else
+            # that provider's own default (``model_team.pinned_model``).
+            dyn_model = (_model_team.pinned_model(self.platform, rec) or None) if rec is not None else None
+            # v1.394.0: a member's helper inherits from the turn but runs on
+            # ITS OWN model and account (no-op for everyone else).
+            _hp = _helpers.for_member(_hp, self.platform, rec)
             agent_type = definition.type
         else:
             _name = entry.name if entry is not None else raw_type
@@ -437,7 +465,10 @@ class DelegateTool(Tool):
         # the inheritance — pinning is the point of pinning.
         parent = orch.get_session(ctx.session_id)
         provider = dyn_provider or (parent.provider if parent else None)
-        model = dyn_model or (parent.model if parent else None)
+        # v1.394.0: an agent pinned to a PROVIDER runs that provider's model —
+        # its own, else that provider's default; never the parent's model id,
+        # which belongs to another provider (``spawn_agent``: the same rule).
+        model = dyn_model if dyn_provider else (dyn_model or (parent.model if parent else None))
         # Spine: the child stays in the PARENT's project (not whatever is globally
         # active now), so a delegated subtask grounds in the same workspace.
         project_id = parent.project_id if parent else None
@@ -549,14 +580,21 @@ class DelegateTool(Tool):
                     # turn's account pin armed (``helpers.pinned``).
                     # v1.372.0 review: and it works with the SESSION's tools
                     # (``helpers.helper_definition``; unchanged off a turn).
-                    with _helpers.pinned(_hp):
+                    # v1.394.0: a MODEL TEAM MEMBER's run is HELD to its own
+                    # model (and its own account pin) outside a coding session
+                    # too (``model_team.member_scope``; a no-op for everyone
+                    # else, and inside a session ``pinned`` does it).
+                    with _helpers.pinned(_hp), (
+                        _model_team.member_scope(self.platform, rec)
+                        if _hp is None else _model_team.member_scope(self.platform, None)
+                    ):
                         child_task = asyncio.ensure_future(
                             AgentRuntime(self.platform).run(
                                 child_session,
                                 _helpers.helper_definition(
                                     _hp,
                                     definition or get_agent_definition(child_session.agent_type),
-                                    custom=rec is not None,
+                                    custom=_model_team.helper_is_custom(rec),
                                 ),
                                 parent_id=ctx.agent_run_id,
                             )
