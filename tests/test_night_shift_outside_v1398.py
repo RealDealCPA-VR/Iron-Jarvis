@@ -42,7 +42,7 @@ from tests.test_night_shift_review_v1398 import (  # noqa: F401 — fixtures
     night,
 )
 
-pytestmark = pytest.mark.usefixtures("no_network")
+pytestmark = pytest.mark.usefixtures("no_network", "night")
 
 
 def _repo_with_venv(path: Path) -> Path:
@@ -67,7 +67,7 @@ def _py(code: str) -> str:
     return f'python -c "{code}"'
 
 
-async def test_a_task_that_changes_the_main_folder_ends_needs_you_and_says_so(tmp_path, monkeypatch, night):
+async def test_a_task_that_changes_the_main_folder_ends_needs_you_and_says_so(tmp_path, monkeypatch):
     repo = _repo_with_venv(tmp_path / "proj")
     stray = (repo / "stray.txt").as_posix()
     app = create_app(str(tmp_path / "home"))
@@ -88,7 +88,7 @@ async def test_a_task_that_changes_the_main_folder_ends_needs_you_and_says_so(tm
     assert any(n["text"] == G.NOT_CONFINED for n in ended["notes"])
 
 
-async def test_a_package_installed_into_the_main_venv_is_seen(tmp_path, monkeypatch, night):
+async def test_a_package_installed_into_the_main_venv_is_seen(tmp_path, monkeypatch):
     """``pip install`` from a branch folder lands in the main folder's
     ``.venv`` (it is first on PATH there, decision 3)."""
     repo = _repo_with_venv(tmp_path / "proj")
@@ -112,7 +112,7 @@ async def test_a_package_installed_into_the_main_venv_is_seen(tmp_path, monkeypa
 
 
 async def test_a_task_that_leaves_the_main_folder_alone_is_done_and_says_what_was_not_confined(
-    tmp_path, monkeypatch, night,
+    tmp_path, monkeypatch,
 ):
     repo = _repo_with_venv(tmp_path / "proj")
     app = create_app(str(tmp_path / "home"))
@@ -153,7 +153,7 @@ SLEEPER = (
 )
 
 
-async def test_a_program_a_night_task_left_running_ends_with_the_task(tmp_path, monkeypatch, night):
+async def test_a_program_a_night_task_left_running_ends_with_the_task(tmp_path, monkeypatch):
     """A dev server or a watcher a night task started in the background ran
     on all night and into the morning (Emergency stop stopped the turn, not
     it). It ends when the task ends, and the record says so."""

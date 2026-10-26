@@ -41,7 +41,7 @@ from tests.test_night_shift_review_v1398 import (  # noqa: F401 — fixtures
     night,
 )
 
-pytestmark = pytest.mark.usefixtures("no_network")
+pytestmark = pytest.mark.usefixtures("no_network", "night")
 
 PYPROJECT = b"""[project]
 name = "mypkg"
@@ -89,7 +89,7 @@ def _real_editable_install(repo: Path) -> None:
 
 
 async def test_a_branchs_python_imports_the_branchs_code_not_the_main_folders_editable_install(
-    tmp_path, monkeypatch, night,
+    tmp_path, monkeypatch,
 ):
     repo = _project(tmp_path / "proj")
     _real_editable_install(repo)
@@ -149,7 +149,7 @@ def test_editable_installs_are_read_never_run_and_a_missing_branch_copy_is_not_t
     assert "NOT TRUSTED:" in line
 
 
-async def test_a_pass_that_cannot_be_trusted_says_so_and_ends_needs_you(tmp_path, monkeypatch, night):
+async def test_a_pass_that_cannot_be_trusted_says_so_and_ends_needs_you(tmp_path, monkeypatch):
     """The main folder's venv points an install at a folder the branch does
     not have (an ignored, generated one): the pass is said NOT TRUSTED, in
     the finish check's words and the night record, and the task needs you."""
