@@ -47,6 +47,16 @@ v1.383.0 (IJ harness part 3, Phase 1):
 * A task's SETUP step (:mod:`.setup_step`) makes its tree after the copy and
   before the tripwire; a step that fails is "did not run", never a fail.
 
+v1.396.0 (the long-jobs plan's Phase 7, MEASURED): a THIRD kind of Jarvis
+setup, the TEAM (``--runner jarvis-team --team <file>``, :mod:`.team`). A
+runner may now say it is ready (``check_ready``: a refusal in words before any
+task), make what it needs before the first task (``prepare``) and undo it
+after the last (``close``, however the invocation ends), and list more in a
+dry run (``dry_run_lines``). A Jarvis run's record carries its PARTS (each
+model's share, :mod:`.ledger`), its ACCOUNTS' usage-window readings
+(:mod:`.usage`), WHO DID WHAT (its helper rows) and, for a team, the router's
+record after the run.
+
 EVERY RUN IS WORKED ALONE (v1.383.0 review). An agent used to work in
 ``runs/<key>/work`` itself — two folders from repeat 1's finished work of the
 same task (and every other finished run of the setup), with that path in its
@@ -81,7 +91,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .. import __version__
 from .catalog import TASKS_DIR, Task, TaskError, load_tasks, materialize, select_tasks, tree_hash
@@ -120,6 +130,9 @@ MODEL_NOT_A_MODEL = (
     "--model {model} names no particular model (it means the runner's own default), so the record "
     "could not say which one ran: name the model itself, for example --model sonnet."
 )
+#: v1.396.0: the runners that name a PROVIDER (Iron Jarvis's own; the team's
+#: is its planner's, from the team file).
+PROVIDER_RUNNERS = frozenset({"jarvis", "jarvis-team"})
 #: … and when the Jarvis runner was given no provider.
 PROVIDER_REQUIRED = (
     "Name the provider with --provider (for example --provider claude-cli), so the record says "
@@ -450,6 +463,13 @@ def _record(
         "tool_calls": outcome.tool_calls, "model_rounds": outcome.model_rounds,
         "model_calls": model_calls,
         "wall_s": round(wall_s, 3),
+        # v1.396.0 (Jarvis runners): each model's share of the run (the totals
+        # below are their sum), every account's usage-window readings, who did
+        # what, and (a team) the router's record after the run.
+        **({"parts": outcome.parts} if outcome.parts is not None else {}),
+        **({"accounts": outcome.accounts} if outcome.accounts is not None else {}),
+        **({"helpers": outcome.helpers} if outcome.helpers is not None else {}),
+        **({"team_records": outcome.team_records} if outcome.team_records is not None else {}),
         "tokens_in": outcome.tokens_in, "tokens_out": outcome.tokens_out,
         "tokens_cached": outcome.tokens_cached,
         "cost_metered_usd": outcome.cost_metered_usd,
@@ -659,6 +679,74 @@ async def _run_in_agent_folder(
     return record
 
 
+#: v1.396.0 review: the longest a folder a program is STARTED in may be.
+#: Windows refuses a working folder of MAX_PATH (260) or more even with long
+#: paths turned on (``[WinError 267] The directory name is invalid``); the
+#: margin leaves room for the drive's own rules.
+MAX_RUN_DIR_CHARS = 248
+
+
+def run_folder_too_deep(cfg_dir: Path, keys: Iterable[str]) -> str:
+    """One sentence when a planned run's folders would be too long to start a
+    program in — a run's grading folder (where its hidden check is started)
+    or the agent's own work folder under the system temp — else "". Reads no
+    disk."""
+    if os.name != "nt":
+        return ""
+    keys = list(keys)
+    if not keys:
+        return ""
+    try:
+        base = Path(cfg_dir).resolve()
+        grade = max((str(base / "runs" / k / "grade") for k in keys), key=len)
+        work = str(agent_runs_root() / ("0" * 16) / "run" / "work")
+    except (OSError, ValueError):
+        return ""
+    for folder, words in ((grade, "a run's grading folder"), (work, "the agent's work folder")):
+        if len(folder) > MAX_RUN_DIR_CHARS:
+            return (f"{words[0].upper() + words[1:]} would be {len(folder)} characters long ({folder}), past the "
+                    f"{MAX_RUN_DIR_CHARS} Windows allows for a folder a program starts in, so every check would "
+                    "fail to start. Use a shorter --root (for example C:\\ijbench)"
+                    + (" and a shorter TEMP folder." if words.startswith("the agent") else "."))
+    return ""
+
+
+async def _crashed_run(
+    task: Task, runner: Any, config: Configuration, cfg_dir: Path, ledger: BudgetLedger, *,
+    repeat: int, label: str, exc: BaseException, echo: Callable[[str], None],
+) -> dict[str, Any]:
+    """The record of a run the bench ITSELF crashed on (v1.396.0 review):
+    "did not run" (infrastructure, no completion marker) with the crash in
+    words, its numbers what the ledger saw for it (its rollout when it had
+    begun, else a new empty one) so the plan still adds up. Never raises."""
+    key = run_key(task.id, repeat)
+    rollout = next((r for r in reversed(ledger.rollouts) if r.task_id == key), None) or ledger.begin(
+        key, getattr(runner, "name", ""))
+    totals = rollout.totals()
+    detail = " ".join(str(exc).split())[:200]
+    reason = f"the benchmark itself failed ({type(exc).__name__}: {detail})" if detail else (
+        f"the benchmark itself failed ({type(exc).__name__})")
+    outcome = RunOutcome(error=reason, tokens_in=totals["tokens_in"], tokens_out=totals["tokens_out"],
+                         cost_metered_usd=totals["cost_metered_usd"],
+                         cost_list_price_usd=totals["cost_list_price_usd"], usage_source="ledger",
+                         facts={"bench_failed": reason})
+    record = _record(task, config, config.fingerprint(task, repeat), outcome, None, wall_s=0.0, started=_now(),
+                     files_outside=[], model_calls=len(rollout.calls), passed_as=passed_facts(runner, config),
+                     repeat=repeat)
+    try:
+        ledger.verify_record(record, rollout)
+        record["ledger_ok"] = True
+    except BudgetMismatch as mismatch:
+        record["ledger_ok"] = False
+        record["error"] = record["error"] + "; " + str(mismatch)
+    try:
+        await asyncio.to_thread(_write_json, cfg_dir / "runs" / key / RESULT_NAME, record)
+    except Exception:  # noqa: BLE001 — the record still reaches results.json
+        pass
+    echo(f"  {label}: did not run ({reason})")
+    return record
+
+
 def check_effort(effort: str) -> str:
     """The effort, lowered — or :class:`BenchRefused` in plain words."""
     value = (effort or "").strip().lower()
@@ -687,16 +775,43 @@ def require_model(runner_name: str, provider: str, model: str) -> None:
         raise BenchRefused(MODEL_REQUIRED)
     if model.strip().lower() in NOT_A_MODEL:
         raise BenchRefused(MODEL_NOT_A_MODEL.format(model=model.strip()))
-    if runner_name == "jarvis" and not (provider or "").strip():
+    if runner_name in PROVIDER_RUNNERS and not (provider or "").strip():
         raise BenchRefused(PROVIDER_REQUIRED)
+
+
+#: Every ``--runner`` (v1.396.0: the team's beside the three of :data:`RUNNERS`).
+RUNNER_NAMES: tuple[str, ...] = ("jarvis", "jarvis-team", "claude", "codex")
 
 
 def make_runner(runner: str, *, root: str, provider: str = "", model: str = "",
                 rounds: int = DEFAULT_ROUNDS, binary: str | None = None,
-                dialect: str = "auto", effort: str = "") -> Any:
-    if runner not in RUNNERS:
-        raise BenchRefused(f"--runner must be one of: {', '.join(RUNNERS)}")
+                dialect: str = "auto", effort: str = "", team: str = "") -> Any:
+    if runner not in RUNNER_NAMES:
+        raise BenchRefused(f"--runner must be one of: {', '.join(RUNNER_NAMES)}")
     effort = check_effort(effort) if effort else ""
+    if runner == "jarvis-team":
+        # v1.396.0: the team file names the planner and the members.
+        from .team import JarvisTeamRunner, load_team_file
+
+        if provider or model:
+            raise BenchRefused(
+                "--provider and --model do not apply to --runner jarvis-team: the team file names "
+                "the planner's provider and model."
+            )
+        if not (team or "").strip():
+            raise BenchRefused("Name the team file with --team (it names the planner and the members).")
+        spec = load_team_file(team)
+        from ..daemon.chat_turn import turn_harness
+        from ..platform import build_platform
+
+        try:
+            turn_harness(dialect or "auto")
+        except ValueError as exc:
+            raise BenchRefused(f"--dialect: {exc}") from exc
+        return JarvisTeamRunner(build_platform(root), team=spec, round_budget=rounds,
+                                dialect=dialect or "auto", effort=effort)
+    if (team or "").strip():
+        raise BenchRefused("--team applies to --runner jarvis-team only.")
     if runner == "jarvis":
         from ..daemon.chat_turn import turn_harness
         from ..platform import build_platform
@@ -798,11 +913,26 @@ async def run_bench(
     plan = [(t, k) for k in range(1, repeats + 1) for t in selected]
     result = BenchResult(config_dir=cfg_dir, config=config, planned=[run_key(t.id, k) for t, k in plan],
                          dry_run=dry_run)
+    # v1.396.0 review: a --root so deep that a run's grading folder (the
+    # check's working folder) passes Windows's limit for a program's folder
+    # made EVERY check "could not start" — a whole night unscored. Refused
+    # here, before any task, in words.
+    deep = run_folder_too_deep(cfg_dir, result.planned)
+    if deep:
+        raise BenchRefused(deep)
+    # v1.396.0: a runner refuses in words, before any task, a home it cannot
+    # measure in (a single-model row beside someone else's model team).
+    ready = getattr(runner, "check_ready", None)
+    if callable(ready):
+        await asyncio.to_thread(ready)
     if dry_run:
         result.plan_lines.append(
             f"{config.folder_name} (seed {use_seed}), {len(selected)} task(s)"
             + (f", {repeats} repeats each:" if repeats > 1 else ":")
         )
+        lines = getattr(runner, "dry_run_lines", None)
+        if callable(lines):
+            result.plan_lines += list(lines())
         for t, k in plan:
             stored = await asyncio.to_thread(
                 reusable_result, cfg_dir / "runs" / run_key(t.id, k), config.fingerprint(t, k)
@@ -822,10 +952,33 @@ async def run_bench(
     ledger = ledger if ledger is not None else BudgetLedger()
     echo(f"{config.folder_name}: {len(selected)} task(s), seed {use_seed}"
          + (f", {repeats} repeats" if repeats > 1 else ""))
-    for task, k in plan:
-        label = f"{task.id} (repeat {k} of {repeats})" if repeats > 1 else task.id
-        result.records.append(await run_task(task, runner, config, cfg_dir, ledger, echo=echo,
-                                             repeat=k, label=label))
+    # v1.396.0 review: what the checks before the first task could only say
+    # (a CLI's sign-in not known yet, Iron-Proxy off, a role nobody holds).
+    for note in getattr(runner, "ready_notes", None) or ():
+        echo(f"  note: {note}")
+    # v1.396.0: what the runner needs before its first task (a team's
+    # members), undone however the invocation ends.
+    prepare, close = getattr(runner, "prepare", None), getattr(runner, "close", None)
+    try:
+        if callable(prepare):
+            await asyncio.to_thread(prepare)
+        for task, k in plan:
+            label = f"{task.id} (repeat {k} of {repeats})" if repeats > 1 else task.id
+            try:
+                record = await run_task(task, runner, config, cfg_dir, ledger, echo=echo,
+                                        repeat=k, label=label)
+            except Exception as exc:  # noqa: BLE001 — one run's crash never ends the invocation
+                # v1.396.0 review: a crash in the bench's OWN step for one run
+                # (grading, bringing the work home — a file a leftover program
+                # holds) used to end the whole invocation: an unattended night
+                # stopped at that task. The run is "did not run" (no marker,
+                # tried again next time) and the next task runs.
+                record = await _crashed_run(task, runner, config, cfg_dir, ledger, repeat=k,
+                                            label=label, exc=exc, echo=echo)
+            result.records.append(record)
+    finally:
+        if callable(close):
+            await asyncio.to_thread(close)
     reused = [record_key(r) for r in result.records if r.get("reused")]
     try:
         ledger.verify_plan(result.planned, reused, result.records)

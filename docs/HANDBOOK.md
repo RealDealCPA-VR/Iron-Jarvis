@@ -1898,6 +1898,62 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Measuring your model team (v1.396.0)
+
+`ironjarvis bench-harness` (a developer tool, not in the app's menus) can now
+benchmark a model team against one model.
+
+- **A team file** names the planner and the members:
+
+  ```toml
+  [planner]
+  provider = "claude-cli"
+  model = "sonnet"
+
+  [[members]]
+  name = "glm"
+  provider = "custom"
+  model = "glm-5.3-flash"
+  roles = ["read", "code", "test"]
+
+  [[members]]
+  name = "codex"
+  provider = "codex-cli"
+  model = "gpt-6-astra"
+  roles = ["code", "review"]
+  ```
+
+  A member may also set `effort` and `max_steps` (1–200). They default to
+  `--effort` and the planner's round budget.
+- **One command runs the team, then the planner alone**, one after the other,
+  so neither uses the usage windows while the other runs:
+  `ironjarvis bench-harness run --runner jarvis-team --team team.toml --root
+  <scratch> --tier frontier --repeats 3 --effort medium --with-alone`. Run it
+  with `--dry-run` first.
+- **Checks before the first task.** Every model is checked first:
+  - an unknown provider;
+  - a CLI that is signed out or not installed;
+  - a model server that does not answer, needs a key, or does not list the
+    model.
+  A problem stops the run in one sentence. What can't be checked in advance
+  is listed as a note.
+- **What the report shows:**
+  - The team beside the planner alone: tasks passed, then Claude list price.
+    The verdict comes first, and a team that passes fewer tasks is told so
+    plainly.
+  - What else the team used: Codex list price, local tokens.
+  - The usage-window readings your accounts sent. "Not comparable" when a
+    window reset during the run; "not known" when none came.
+  - Who did what, with the router's reasons.
+  - Each member's record per role, which is what the router's defaults are
+    tuned from.
+- **Failures that aren't the team's fault.** A run where a member hit its
+  account limit, or wasn't signed in, counts as "did not run" (not a team
+  failure), and is tried again the next time the same command runs.
+- **Keep `--root` short** (for example `C:\ijbench`). A deep folder makes
+  Windows refuse the checks' working folders, so the run refuses it before
+  starting.
+
 ## Local first, limits watched (v1.395.0)
 
 - **The planner asks for a role, and Iron Jarvis picks the member.** When a

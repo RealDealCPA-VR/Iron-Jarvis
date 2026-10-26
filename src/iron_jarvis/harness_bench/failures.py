@@ -63,6 +63,10 @@ FACT_KEYS = frozenset({
     "finished", "timed_out", "cut_off", "cli_missing", "start_failed",
     "demo_answered", "answered_by", "refused", "fix_kind", "acted",
     "sandbox_refused", "setup_failed",
+    # v1.396.0 review: a helper (a team member) could not do its piece for an
+    # infrastructure reason (:func:`helper_infra`'s words); the bench's own
+    # step crashed on the run (``bench._crashed_run``'s words).
+    "member_infra", "bench_failed",
 })
 
 #: An infrastructure failure, by its own words → the plain reason. First
@@ -86,7 +90,52 @@ INFRA_WORDS: tuple[tuple[str, str], ...] = (
      "the model server could not be reached"),
 )
 
-_RUNNER_NAMES = {"claude": "Claude Code", "codex": "Codex", "jarvis": "Iron Jarvis"}
+_RUNNER_NAMES = {"claude": "Claude Code", "codex": "Codex", "jarvis": "Iron Jarvis",
+                 "jarvis-team": "Iron Jarvis with its team"}
+
+#: v1.396.0 review: a failed HELPER's row says why in one of two voices — the
+#: raw provider error (a run that raised: "delegated agent 'codex' crashed:
+#: ProviderError: … usage limit …", read by :data:`INFRA_WORDS`), or the run's
+#: own plain summary (``providers.failure_words``: "The run failed: Codex is
+#: busy. …"). These are that second voice's infrastructure headlines → the
+#: plain reason. "answered with an error" is NOT here: a 4xx can be the
+#: member's own doing (a request it made too big), so it stays graded.
+HELPER_WORDS: tuple[tuple[str, str], ...] = (
+    (r"isn't signed in|refused your sign-in|refused your key",
+     "the account is not signed in or its key was refused"),
+    (r"\bis busy\b", "the model service was busy (a usage or rate limit, or an overload)"),
+    (r"failed several times in a row", "the model service kept failing"),
+    (r"isn't connected right now|didn't answer in time|the connection to .{1,80} dropped",
+     "the model server could not be reached"),
+)
+#: The helper states that end a helper's piece without its work done.
+_FAILED_HELPER_STATES = frozenset({"failed"})
+
+
+def helper_infra(rows: Any) -> str:
+    """v1.396.0 review: ``"<member> could not do its piece (<reason>)"`` for
+    the FIRST helper (a model-team member, or a helper on the turn's own
+    model) whose piece FAILED for an infrastructure reason — its account's
+    limit, a sign-in, a server that could not be reached — else "". A team
+    that lost a member that way never had its fair go: the run is "did not
+    run" (unscored, tried again next time), never the team's failure. A
+    member that ran and did not finish its piece (its step limit, a wrong
+    answer, a refusal) is the team's own result: graded. Never raises."""
+    try:
+        for row in rows or ():
+            if not isinstance(row, Mapping) or str(row.get("state") or "") not in _FAILED_HELPER_STATES:
+                continue
+            text = str(row.get("result") or "")
+            reason = infra_reason(text)
+            if not reason:
+                lowered = text.lower()
+                reason = next((words for pattern, words in HELPER_WORDS if re.search(pattern, lowered)), "")
+            if reason:
+                who = str(row.get("member") or row.get("agent") or "a helper")
+                return f"{who} could not do its piece ({reason})"
+    except Exception:  # noqa: BLE001 — a row that cannot be read is no evidence
+        return ""
+    return ""
 
 
 @dataclass(frozen=True)
@@ -119,6 +168,8 @@ def classify_failure(runner: str, ok_run: bool, facts: Mapping[str, Any], error:
         return Failure(INFRASTRUCTURE, str(f["refused"]))
     if f.get("setup_failed"):
         return Failure(INFRASTRUCTURE, str(f["setup_failed"]))
+    if f.get("bench_failed"):
+        return Failure(INFRASTRUCTURE, str(f["bench_failed"]))
     if f.get("cli_missing"):
         return Failure(INFRASTRUCTURE, f"{name} is not installed on this PC")
     if f.get("start_failed"):
@@ -131,6 +182,10 @@ def classify_failure(runner: str, ok_run: bool, facts: Mapping[str, Any], error:
         return Failure(INFRASTRUCTURE, "the demo model answered instead of a real model")
     if f.get("answered_by"):
         return Failure(INFRASTRUCTURE, f"another provider answered ({f['answered_by']})")
+    if f.get("member_infra"):
+        # v1.396.0 review: before the time limit and "finished" — whatever
+        # the planner did after, the team it measures was not all there.
+        return Failure(INFRASTRUCTURE, str(f["member_infra"]))
     if f.get("timed_out"):
         return Failure(AGENT, "it reached the time limit")
     if f.get("cut_off"):

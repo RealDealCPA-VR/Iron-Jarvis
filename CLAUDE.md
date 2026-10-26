@@ -3699,6 +3699,57 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **The bench MEASURES a team: one command runs the team, then the planner
+  alone, and refuses the night before it starts** (v1.396.0, Phase 7 of
+  `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`; a doer + a reviewer that found 10
+  more defects, each red first). `harness_bench/team.py`: `--runner
+  jarvis-team --team <toml>` (planner + members: name, provider, model,
+  roles, optional account / `effort` / `max_steps` 1–200). Members are made
+  as custom agents in the `--root` home before the first task and removed at
+  the end; the single-model runner removes the bench's own leftovers and
+  refuses members someone else made, so the alone row never sees a team.
+  `--with-alone` runs the planner alone AFTER, in series (neither measured
+  span holds the other's use). Members get the file's `effort` else
+  `--effort`, sent only on that member's calls and only where
+  `providers.reasoning` offers a level (`counting_router(reasoning_for=)`),
+  and `max_steps` else the planner's round budget (60) — the home's
+  `max_agent_steps` 12 starved them; both are recorded per part and in the
+  identity (`member_effort`, `member_steps`, `team`, router constants,
+  member prompt, `model_team`/`team_record` sources — a changed router is a
+  new setup, so a live run is started from a frozen checkout). PREFLIGHT
+  (`preflight.check_models`, dry run AND real run, before any task):
+  unknown provider, a CLI the CACHED answer calls signed out or missing (it
+  never starts a CLI), a model server that does not answer / wants a key
+  the home lacks / refuses it / does not list the model (one bounded 5 s
+  `_probe_endpoint_models`, the home's own key, no redirects), a bad Claude
+  id — one sentence each; what it cannot check is a printed note. RECORDS:
+  `parts {who: provider, model, vendor, pieces, calls, tokens, metered and
+  list-price cost, effort_passed, steps}`, `accounts {<provider>:<account>:
+  windows {first, last, one_period, why}}` read from the vendors' own extras
+  (claude-cli relay `ratelimit_headers`, Codex `rateLimits` stamped with the
+  snapshot's own `observedAt`; parsed as Iron-Proxy parses them),
+  `helpers` with role + reason, `team_records` (+ `usage_numbers`). The ledger
+  counts helper receipts (a single-model run with a helper used to read
+  `ledger_ok: False` forever and re-run every time) and an idle member counts
+  0 roundings. FAILURES: `failures.helper_infra` reads a failed helper in both
+  voices (raw `ProviderError` or the run's plain summary) — a member lost to
+  its account or sign-in makes the run DID-NOT-RUN (`member_infra`), never a
+  team result; a crash in the bench's own step is `bench_failed` and the
+  night goes on; a plan whose grading or work folder would pass 248 chars is
+  refused before any task (Windows refuses a 260+ char working folder:
+  WinError 267). REPORT (`team_report.py`): the VERDICT first ("No: the team
+  passed fewer tasks." / "Yes on these runs: …" only when both hold), pass
+  counts, Claude list price over runs BOTH made and scored, then "Beyond
+  Claude, the team also used $X of Codex list-price; N tokens … on local
+  models"; measured windows ("not comparable" across a reset, "not known"
+  with no reading, other use of the account inside the number); says when
+  the router had no usage numbers (Iron-Proxy off in the scratch home, so
+  the 80% rule never applied); a per member/role table to tune from. OPEN: no
+  wait for a reset (limit runs are did-not-run; re-run the command later);
+  Codex's model name is not checked in advance; a `~/.ironjarvis/config.toml`
+  would layer into the scratch home. Pins:
+  `tests/test_harness_bench_{team,helpers_ledger,team_review}_v1396.py` (+
+  `tests/_fakes/bench_{team,tonight}_v1396.py`).
 - **The planner asks for a ROLE; the team router picks the member, local
   first, never past an account's limit, never across an account group**
   (v1.395.0, Phase 6 of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`, decisions 7
