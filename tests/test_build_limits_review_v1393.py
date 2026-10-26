@@ -213,7 +213,7 @@ async def test_a_turn_that_failed_at_once_keeps_the_move_count(app, fake, work, 
     """The other half: a limit on the FIRST call served nothing — the cap
     still ends the chain on a wait."""
     await enable(app)
-    beh = wire_doubles(app, monkeypatch, Behaviour(["LIMIT"]))
+    wire_doubles(app, monkeypatch, Behaviour(["LIMIT"]))
     assert (await _groups(app, {"Work": ["c-work", "c-spare"]}))[0] == 200
     sid = await _session(app, work)
     S.update(app.state.platform.engine, sid, setup={"account_moves": build_routes.MAX_GROUP_MOVES})
