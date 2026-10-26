@@ -423,7 +423,20 @@ async def test_under_emergency_stop_a_cut_off_reply_is_not_carried_on_after_a_re
     second = _reboot(home)
     second.state.platform.config.autonomy_kill_switch = True
     wire(second, Script(["Never."]))
-    assert await build_routes.resume_after_restart(second.state.d) == []
+    # The pass does not even try (the turn's own refusal is the second guard).
+    tried: list = []
+    real_start = build_routes.start_build_turn
+
+    async def spy(*a, **kw):
+        tried.append(kw.get("started_by"))
+        return await real_start(*a, **kw)
+
+    build_routes.start_build_turn = spy
+    try:
+        assert await build_routes.resume_after_restart(second.state.d) == []
+    finally:
+        build_routes.start_build_turn = real_start
+    assert tried == []
     # Kept: with the stop off, the next boot may carry it on (Retry stays).
     from iron_jarvis.harness import reply_record as RR
 
@@ -545,9 +558,10 @@ async def test_a_helpers_ask_in_a_night_task_waits_the_nights_wait_then_is_decli
     task = N.add_task(rt.platform.engine, folder="C:\\x", words="w")
     token = N.set_turn(N.NightTurn(task_id=task["id"], card_wait_s=0.2, engine=rt.platform.engine))
     try:
-        deny, extra = await rt.runtime._pause_for_approval(
+        # Bounded: the attended no-clock wait would hold the test forever.
+        deny, extra = await asyncio.wait_for(rt.runtime._pause_for_approval(
             _session("job:build-helper"), _tc("echo a"), get_agent_definition(AgentType.BUILDER), set(),
-        )
+        ), 20)
     finally:
         N.reset_turn(token)
     assert deny.startswith("left for the user: run a command — nobody answered in 1 minute") and extra == set()
