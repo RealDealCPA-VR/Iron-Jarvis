@@ -210,6 +210,47 @@ async def test_a_hung_step_is_said_once_at_ten_minutes_and_stop_the_step_ends_on
     assert told and "stopped by the user" in told[0].content
 
 
+async def test_stop_the_step_ends_exactly_that_calls_process_and_nothing_else_the_session_runs(
+    app, work, tmp_path, clock, checks,
+):
+    """A program the reply started earlier (a dev server, ``process_start``)
+    keeps running: only the stopped call's process is gone — by pid."""
+    sid = new_session(app, work, approval_mode="yolo")["id"]
+    server_pid = tmp_path / "server.pid"
+    hang_pid = tmp_path / "hang.pid"
+    server = (
+        f'"{sys.executable}" -c "import os,time,pathlib; '
+        f"pathlib.Path('{server_pid.as_posix()}').write_text(str(os.getpid())); time.sleep(600)\""
+    )
+    wire(app, Script([
+        [ToolCall(id="b1", name="Bash", arguments={"command": server, "run_in_background": True})],
+        [ToolCall(id="c1", name="Bash", arguments={"command": _hang(hang_pid)})],
+        "Carried on.",
+    ]))
+    drop = asyncio.Event()
+    task = asyncio.create_task(open_turn(app, sid, {"text": "start it, then the slow thing", "turn_id": "bt-two"},
+                                         drop=drop, timeout=120))
+    try:
+        background = await _pid(server_pid)
+        hung = await _pid(hang_pid)
+        assert background != hung
+        clock.advance(601)
+        got = await until(lambda: _stalls(app, "bt-two"), 30)
+        assert got and got[0]["step"]["id"] == "c1"
+        status, _ = await asgi(app, "POST", f"/build/sessions/{sid}/stop-step", {"step_id": "c1"})
+        assert status == 200
+        assert await until(lambda: not _alive(hung), 30)
+        lg = turn_log(app, "bt-two")
+        assert await until(lambda: lg.status != "running", 60)
+        assert _alive(background), "Stop the step ended a program the session started earlier"
+        assert dict(turn_frames(app, "bt-two"))["done"]["reply"] == "Carried on."
+    finally:
+        drop.set()
+        await task
+        procs.end_session(f"build:{sid}")
+        P.end_session(f"build:{sid}")
+
+
 async def test_stop_the_step_answers_404_for_a_step_that_is_not_running(app, work):
     sid = new_session(app, work)["id"]
     status, out = await asgi(app, "POST", f"/build/sessions/{sid}/stop-step", {"step_id": "nope"})

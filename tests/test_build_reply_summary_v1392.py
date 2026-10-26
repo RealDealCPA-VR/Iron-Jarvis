@@ -176,6 +176,49 @@ async def test_a_300_round_reply_keeps_every_path_it_touched_and_cuts_one_no_rec
     assert len([s for s in line["steps"] if s["name"] == "write_file"]) == ROUNDS
 
 
+async def test_the_summary_is_checked_against_this_replys_own_ledger(app, work, monkeypatch):
+    """The record that may back the summary is the SESSION's ledger
+    (``build:<id>`` — a coding session has no Session row for the agent
+    runtime's own reader) limited to what THIS reply did: a file an earlier
+    reply wrote is not this reply's evidence."""
+    seen: list[set[str]] = []
+    real = C.compact_messages
+
+    async def spy(covered, **kw):
+        seen.append(set(kw.get("ledger_paths") or set()))
+        return await real(covered, **kw)
+
+    monkeypatch.setattr(C, "compact_messages", spy)
+    sid = new_session(app, work, approval_mode="yolo")["id"]
+    # An earlier reply of the same session wrote old.py.
+    app.state.platform.router.stream = _OneWrite("old.py").stream
+    status, raw = await open_turn(app, sid, {"text": "write old.py", "turn_id": "bt-old"}, timeout=120)
+    assert status == 200 and (work / "old.py").exists()
+    _wire(app, LongReply(app, rounds=150))
+    await _run(app, sid, "bt-ledger")
+    assert seen, "the reply never summarized itself"
+    last = seen[-1]
+    assert any(p.replace("\\", "/").endswith("/f0.py") or p == "f0.py" for p in last), sorted(last)[:5]
+    assert not any(p.replace("\\", "/").endswith("old.py") for p in last), "an earlier reply's file backed this summary"
+
+
+class _OneWrite:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.done = False
+
+    async def stream(self, *, provider=None, model=None, system="", messages=(), tools=None, **kw):
+        if tools and not self.done:
+            self.done = True
+            resp = LLMResponse(text="", tool_calls=[ToolCall(id="o1", name="Write",
+                                                            arguments={"file_path": self.name, "content": "1\n"})],
+                               usage={"input_tokens": 3, "output_tokens": 1})
+        else:
+            resp = LLMResponse(text="Written.", usage={"input_tokens": 3, "output_tokens": 1})
+            yield {"type": "text", "text": "Written."}
+        yield {"type": "final", "response": resp, "provider": CLAUDE[0], "model": CLAUDE[1]}
+
+
 async def test_the_demo_model_writes_no_summary(app, work):
     script = _wire(app, LongReply(app, rounds=120, who=("mock", "mock")))
     sid = new_session(app, work, approval_mode="yolo", provider="mock", model="mock")["id"]
