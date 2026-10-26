@@ -124,6 +124,10 @@ import {
   type Summarized,
 } from "@/lib/buildLongJobs";
 import { LiveHelperRows, SavedHelperRows } from "@/components/harness/HarnessHelpers";
+// v1.397.0: try one task on several models — the attempts' rows, their card
+// (Keep) and the box's "Try on…" control.
+import { AttemptsCardView, LiveAttemptRows } from "@/components/harness/HarnessAttempts";
+import { TryOnControl } from "@/components/harness/HarnessTryOn";
 // v1.374.0 (part 2, Phase 3): the task list under the reply, how full the
 // conversation is (and Compact), and "the user is looking at this session".
 import { LivePlan, SettledPlan } from "@/components/harness/HarnessPlan";
@@ -141,6 +145,7 @@ import {
 } from "@/lib/buildContext";
 import { LOOKING_BEAT_MS, noteLooking, stopLooking } from "@/lib/buildWatching";
 import { applyHelperFrame, helperCallIds, type HelperView } from "@/lib/buildHelpers";
+import { applyAttemptFrame, tryOnBody, type AttemptView, type TryOnPick } from "@/lib/buildAttempts";
 import {
   AttachButton,
   AttachmentChips,
@@ -278,6 +283,8 @@ interface TurnExtras {
    *  in the box when the message never starts. */
   command?: string;
   typed?: string;
+  /** v1.397.0: the models the "Try on…" control picked for this message. */
+  tryOn?: TryOnPick[];
 }
 
 /** The live reply: subscribed HERE, so the session does not re-render per token. */
@@ -441,16 +448,27 @@ export function HarnessSession({
   // v1.372.0: the helper agents the running turn started, one row each
   // (its `helper` frames; lib/buildHelpers). The reply keeps them after.
   const [helpers, setHelpers] = useState<HelperView[]>(() => (kept?.page.helpers as HelperView[] | undefined) ?? []);
+  // v1.397.0: the attempts the running turn started, one row each (its
+  // `attempt` frames; lib/buildAttempts). The reply keeps them after, as a card.
+  const [attempts, setAttempts] = useState<AttemptView[]>(() => (kept?.page.attempts as AttemptView[] | undefined) ?? []);
   // v1.384.0: the frames' folds of THIS session (helpers, questions) as the
   // running reply builds them — the truth the state above is drawn from, so a
   // replay folds silently and is drawn ONCE (at `caught_up`), and the kept
   // reply carries them. Every write goes through the setters below.
-  const pageRef = useRef<{ helpers: HelperView[]; questions: AskUserAsk[] }>({ helpers, questions });
+  const pageRef = useRef<{ helpers: HelperView[]; questions: AskUserAsk[]; attempts: AttemptView[] }>({
+    helpers,
+    questions,
+    attempts,
+  });
   const replayingRef = useRef(false);
   const steerRef = useRef<string[]>(steerNotes);
   const setPageHelpers = useCallback((next: HelperView[]) => {
     pageRef.current = { ...pageRef.current, helpers: next };
     setHelpers(next);
+  }, []);
+  const setPageAttempts = useCallback((next: AttemptView[]) => {
+    pageRef.current = { ...pageRef.current, attempts: next };
+    setAttempts(next);
   }, []);
   const setPageQuestions = useCallback((f: (prev: AskUserAsk[]) => AskUserAsk[]) => {
     const next = f(pageRef.current.questions);
@@ -490,6 +508,10 @@ export function HarnessSession({
   const [skill, setSkill] = useState<PickedSkill | null>(null);
   const skillRef = useRef<PickedSkill | null>(null);
   skillRef.current = skill;
+  // v1.397.0: the models the "Try on…" control picked for the NEXT message.
+  const [tryOn, setTryOn] = useState<TryOnPick[]>([]);
+  const tryOnRef = useRef<TryOnPick[]>([]);
+  tryOnRef.current = tryOn;
   const [atFiles, setAtFiles] = useState<AtFile[]>([]);
   const atFilesRef = useRef<AtFile[]>([]);
   atFilesRef.current = atFiles;
@@ -755,6 +777,7 @@ export function HarnessSession({
   const drawPage = useCallback(() => {
     setHelpers(pageRef.current.helpers);
     setQuestions(pageRef.current.questions);
+    setAttempts(pageRef.current.attempts);
   }, []);
   const onFrame = useCallback((event: string, data: Record<string, unknown>) => {
     if (event === "resume") {
@@ -762,7 +785,7 @@ export function HarnessSession({
       // not drawn; `resumed: false` is the whole turn — fold it from nothing.
       replayingRef.current = true;
       if (data.resumed !== true) {
-        pageRef.current = { helpers: [], questions: [] };
+        pageRef.current = { helpers: [], questions: [], attempts: [] };
         timeline.reset(turnRef.current ?? "");
       }
       return;
@@ -797,6 +820,9 @@ export function HarnessSession({
       return;
     } else if (event === "helper") {
       pageRef.current = { ...page, helpers: applyHelperFrame(page.helpers, data) };
+    } else if (event === "attempt") {
+      // v1.397.0: an attempt's row (its state, steps, an approval card).
+      pageRef.current = { ...page, attempts: applyAttemptFrame(page.attempts, data) };
     } else if (event === STALL_FRAME) {
       // v1.392.0: no progress for ten minutes (once per episode), or the
       // progress that ended it.
@@ -846,8 +872,10 @@ export function HarnessSession({
       if (turnRef.current === null) {
         setPending(null);
         setSteers([]);
-        // The reply line now keeps the helpers (its `helpers`).
+        // The reply line now keeps the helpers (its `helpers`) — and the
+        // attempts (its `attempts` card).
         setPageHelpers([]);
+        setPageAttempts([]);
         setPageQuestions((prev) => prev.map((q) => (q.outcome ? q : { ...q, outcome: "stopped" })));
       }
       const sent = readSentSteers(threadId);
@@ -878,7 +906,7 @@ export function HarnessSession({
       }
       return clean;
     },
-    [load, onChanged, threadId, refreshAccounts, setSteers, setPageHelpers, setPageQuestions],
+    [load, onChanged, threadId, refreshAccounts, setSteers, setPageHelpers, setPageAttempts, setPageQuestions],
   );
 
   /** A message that never started goes back in the box: its words and what
@@ -908,6 +936,8 @@ export function HarnessSession({
         setAtFiles((cur) => withFilesRestored(cur, back));
       }
       if (extras.attachments.length) restoreUploads(extras.attachments);
+      // v1.397.0: the "Try on…" picks go back on the chip.
+      if (extras.tryOn?.length) setTryOn(extras.tryOn);
     },
     [restoreUploads],
   );
@@ -925,6 +955,7 @@ export function HarnessSession({
         stream: seed,
         page: {
           helpers: pageRef.current.helpers,
+          attempts: pageRef.current.attempts,
           questions: pageRef.current.questions,
           steerNotes: steerRef.current,
           pending: pendingRef.current,
@@ -958,7 +989,10 @@ export function HarnessSession({
       setRewindNote(null);
       // A new (or rejoined: its frames replay) turn draws its own helpers —
       // v1.384.0: one carried on from where the user was keeps its own.
-      if (!resume) setPageHelpers([]);
+      if (!resume) {
+        setPageHelpers([]);
+        setPageAttempts([]);
+      }
       // v1.392.0: and its own stall notice and summary line.
       if (!resume) {
         setStall(null);
@@ -1001,6 +1035,9 @@ export function HarnessSession({
                 // v1.379.0: one of Claude Code's own commands (the daemon
                 // expands it; `text` is its words).
                 ...(extras?.command ? { command: extras.command } : {}),
+                // v1.397.0: the "Try on…" control's models (the daemon starts
+                // one attempt per model; the words alone ask the same).
+                ...(extras?.tryOn?.length ? { try_on: tryOnBody(extras.tryOn) } : {}),
                 ...(preview ? { preview_url: preview } : {}),
                 // v1.384.0: every frame tagged with its resume position.
                 ids: true,
@@ -1079,7 +1116,7 @@ export function HarnessSession({
       }
       if (started && !leavingRef.current) await settle(id, unread, clean);
     },
-    [stream, threadId, onFrame, load, settle, restoreToBox, keepRunning, setPageHelpers, timeline],
+    [stream, threadId, onFrame, load, settle, restoreToBox, keepRunning, setPageHelpers, setPageAttempts, timeline],
   );
 
   // Open: read the session, its accounts, and follow a turn already running.
@@ -1151,6 +1188,7 @@ export function HarnessSession({
           setTurnId(null);
           stream.abort();
           setPageHelpers([]);
+          setPageAttempts([]);
           setSteers([]);
           setPending(null);
         }
@@ -1284,7 +1322,10 @@ export function HarnessSession({
       typedLine = raw;
     }
     // v1.379.0: a skill or a command alone is a message too.
-    if (!text && files.length === 0 && picks.length === 0 && !picked && !command) return;
+    // v1.397.0: the "Try on…" picks ride the next message from the box —
+    // review: and a waiting message keeps its own.
+    const trying: TryOnPick[] = fromBox ? tryOnRef.current : (item.tryOn ?? []);
+    if (!text && files.length === 0 && picks.length === 0 && !picked && !command && !trying.length) return;
     if (busy) {
       // A note while it works is words only; the files and the skill wait
       // in the box.
@@ -1303,6 +1344,7 @@ export function HarnessSession({
       att.clear();
       setAtFiles([]);
       setSkill(null);
+      setTryOn([]);
     }
     setUsageNote(null);
     // v1.384.0: a message the user sends brings them to the bottom.
@@ -1322,6 +1364,7 @@ export function HarnessSession({
       files: picks,
       skill: picked,
       ...(command ? { command, typed: typedLine } : {}),
+      ...(trying.length ? { tryOn: trying } : {}),
     });
   }
 
@@ -1401,7 +1444,8 @@ export function HarnessSession({
     const text = input.trim();
     const files = att.filesRef.current;
     const picks = atFilesRef.current;
-    if (!text && files.length === 0 && picks.length === 0) return;
+    const trying = tryOnRef.current;
+    if (!text && files.length === 0 && picks.length === 0 && trying.length === 0) return;
     if (att.busyRef.current) {
       setError("A file is still being attached. Queue the message when it is done.");
       return;
@@ -1415,6 +1459,8 @@ export function HarnessSession({
       ...(skillRef.current ? { skill: skillRef.current } : {}),
       ...(picks.length ? { files: picks } : {}),
       ...(files.length ? { attachments: files } : {}),
+      // Review (v1.397.0): the "Try on…" picks wait with THIS message.
+      ...(trying.length ? { tryOn: trying } : {}),
     };
     const next = [...queued, item];
     setQueued(next);
@@ -1424,6 +1470,7 @@ export function HarnessSession({
     att.clear();
     setAtFiles([]);
     setSkill(null);
+    setTryOn([]);
   }
 
   async function stop() {
@@ -2101,7 +2148,7 @@ export function HarnessSession({
   // v1.371.0: a picture alone is a message; one still going up is waited for.
   // v1.373.0: so is a file picked with "@".
   const sendReady =
-    (!!input.trim() || att.files.length > 0 || att.uploading || atFiles.length > 0 || !!skill) &&
+    (!!input.trim() || att.files.length > 0 || att.uploading || atFiles.length > 0 || !!skill || tryOn.length > 0) &&
     !!view &&
     !offline &&
     !compacting &&
@@ -2452,6 +2499,20 @@ export function HarnessSession({
                 <SummarizedLine summarized={decodeSummarized(m.summarized)} />
                 {/* v1.372.0: the helper agents this reply's turn started. */}
                 <SavedHelperRows raw={m.helpers} models={catalog.models} />
+                {/* v1.397.0: the attempts on several models, side by side —
+                    and Keep (only while nothing runs). */}
+                {m.turnId && m.attempts ? (
+                  <AttemptsCardView
+                    raw={m.attempts}
+                    threadId={threadId}
+                    turnId={m.turnId}
+                    canKeep={!busy && !view.archived}
+                    onKept={() => {
+                      void load();
+                      onChanged();
+                    }}
+                  />
+                ) : null}
                 {m.content ? (
                   <div className={HARNESS_REPLY_PROSE}>
                     <MemoMarkdown content={m.content} />
@@ -2602,6 +2663,8 @@ export function HarnessSession({
               {/* v1.372.0: each helper is ONE row (its own tool card is not
                   drawn a second time). */}
               <LiveHelperRows helpers={helpers} models={catalog.models} />
+              {/* v1.397.0: each attempt is ONE row while it runs. */}
+              <LiveAttemptRows attempts={attempts} />
               {(() => {
                 const ids = helperCallIds(helpers);
                 const cards = ids.size ? stream.tools.filter((t) => !ids.has(t.id)) : stream.tools;
@@ -2910,6 +2973,15 @@ export function HarnessSession({
                 <ListChecks size={14} aria-hidden className="shrink-0" />
                 <span>{view.mode === "plan" ? "Planning" : "Plan first"}</span>
               </button>
+              {/* v1.397.0: try the next message on up to three models, each on
+                  its own branch (the words "try this with …" ask the same). */}
+              <TryOnControl
+                models={catalog.models}
+                localOnly={view.setup.localOnly}
+                picks={tryOn}
+                onChange={setTryOn}
+                disabled={view.archived || view.mode === "plan"}
+              />
               {/* Review (v1.374.0): this group may WRAP, right-aligned, and
                   never grows past the row. With the meter added, a model that
                   offers reasoning levels pushed Send out of the box at 390 px

@@ -462,6 +462,10 @@ export interface QueuedItem {
    *  the session's command list cannot be read. Never saved in the queue
    *  (`decodeQueuedItem` reads it back as words). */
   resend?: { command: string };
+  /** v1.397.0 review: the "Try on…" control's models for THIS message — a
+   *  message queued while a reply works keeps them (they rode the next
+   *  message typed instead, and this one ran as a plain turn). */
+  tryOn?: { provider: string; model: string; label: string }[];
 }
 
 function str(v: unknown, cap: number): string {
@@ -498,7 +502,16 @@ export function decodeQueuedItem(raw: unknown): QueuedItem | null {
     ups.push({ name, path, bytes, label: str(o?.label, 400) || name });
   }
   if (ups.length) item.attachments = ups;
-  if (!text.trim() && !files.length && !ups.length) return null;
+  const tries: { provider: string; model: string; label: string }[] = [];
+  for (const t of Array.isArray(r.try_on) ? r.try_on.slice(0, 3) : []) {
+    const o = t && typeof t === "object" ? (t as Record<string, unknown>) : null;
+    const provider = str(o?.provider, 120);
+    if (!provider) continue;
+    const model = str(o?.model, 300);
+    tries.push({ provider, model, label: str(o?.label, 200) || model || provider });
+  }
+  if (tries.length) item.tryOn = tries;
+  if (!text.trim() && !files.length && !ups.length && !tries.length) return null;
   return item;
 }
 
@@ -511,6 +524,9 @@ export function queuedItemBody(item: QueuedItem): Record<string, unknown> {
     ...(item.attachments?.length
       ? { attachments: item.attachments.map((a) => ({ name: a.name, path: a.path, bytes: a.bytes, label: a.label })) }
       : {}),
+    ...(item.tryOn?.length
+      ? { try_on: item.tryOn.map((t) => ({ provider: t.provider, model: t.model, label: t.label })) }
+      : {}),
   };
 }
 
@@ -521,6 +537,7 @@ export function queuedWords(item: QueuedItem): string {
   const n = (item.files?.length ?? 0) + (item.attachments?.length ?? 0);
   if (n) parts.push(n === 1 ? "1 file" : `${n} files`);
   if (item.skill) parts.push(`skill ${item.skill.name}`);
+  if (item.tryOn?.length) parts.push(item.tryOn.length === 1 ? `try on ${item.tryOn[0].label}` : `try on ${item.tryOn.length} models`);
   return parts.join(" · ");
 }
 

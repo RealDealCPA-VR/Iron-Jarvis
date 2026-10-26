@@ -192,6 +192,14 @@ class BuildFolderRename(BaseModel):
     name: str = Field(max_length=400)
 
 
+class TryOnPick(BaseModel):
+    """v1.397.0: one model the box's "Try on…" control picked (a row of the
+    model menu, by its exact provider and model)."""
+
+    provider: str = Field(min_length=1, max_length=120)
+    model: str = Field(default="", max_length=300)
+
+
 class BuildTurnBody(BaseModel):
     text: str = ""
     turn_id: str = ""
@@ -228,6 +236,11 @@ class BuildTurnBody(BaseModel):
     #: ``GET /chat/turns/{id}/stream?after=<i>:<c>`` and be sent only what it
     #: missed. False (an API caller): the frames exactly as before.
     ids: bool = False
+    #: v1.397.0 (``harness/attempts``): the box's "Try on…" control — try
+    #: this message's work on these models, each on its own branch (at most
+    #: three; more is refused in words, not a 422). Empty: the words decide
+    #: ("try this with A, B and C"), and an ordinary message is unchanged.
+    try_on: list[TryOnPick] = Field(default_factory=list, max_length=10)
 
 
 class BuildStopStepBody(BaseModel):
@@ -697,6 +710,11 @@ class _ReplyWatch:
         #: reply on with ANOTHER account of the same group ({from, fromName,
         #: to, toName, group}) — kept on the line as ``accountMove``.
         self.account_move: dict[str, Any] | None = None
+        #: v1.397.0 (try one task on several models, ``harness/attempts``):
+        #: each attempt's row as its ``attempt`` frames last said it, by id —
+        #: the card a turn that never reached its ``done`` keeps (a Stop
+        #: before the card, a crash).
+        self.attempts: dict[str, dict[str, Any]] = {}
 
     def see(self, event: str, raw: str) -> "dict[str, Any] | None":
         """Fold one frame. Answers the frame's data with its Timeline offsets
@@ -823,6 +841,11 @@ class _ReplyWatch:
             tool = str(data.get("tool") or "")
             if tool and tool not in self.granted:
                 self.granted.append(tool)
+        elif event == "attempt":
+            # v1.397.0: an attempt's row (``harness/attempts``).
+            aid = str(data.get("id") or "")
+            if aid and (aid in self.attempts or len(self.attempts) < 3):
+                self.attempts[aid] = {**self.attempts.get(aid, {}), **data}
         elif event == "done":
             self.done = data
         elif event == "error":
@@ -1005,6 +1028,15 @@ class _ReplyWatch:
             fin = saved_record(done.get("finish"))
             if fin is not None:
                 line["finish"] = fin
+            # v1.397.0: the ATTEMPTS card of a "try this on several models"
+            # turn (``harness/attempts.saved_card`` — each attempt's model,
+            # tests, files, time and usage, why it stopped, and its branch for
+            # Keep).
+            from ...harness.attempts import LINE_KEY as _ATTEMPTS_KEY, saved_card
+
+            card = saved_card(done.get(_ATTEMPTS_KEY))
+            if card is not None:
+                line[_ATTEMPTS_KEY] = card
             if done.get("trust") and done.get("trust") != "full":
                 line["trust"] = done.get("trust")
                 line["trustReason"] = done.get("trust_reason") or ""
@@ -1046,7 +1078,7 @@ class _ReplyWatch:
             if technical and technical != words:
                 line["errorDetail"] = technical
         else:
-            if not partial.strip() and not self.helpers and not keep_empty:
+            if not partial.strip() and not self.helpers and not self.attempts and not keep_empty:
                 return out  # stopped before a word: nothing to keep
             # (v1.372.0: a turn stopped while its helpers worked keeps a line
             # for them — what they did is part of the session.)
@@ -1081,6 +1113,22 @@ class _ReplyWatch:
         if self.helpers:
             # v1.372.0: the helper agents this turn started.
             line["helpers"] = self.helper_lines(status)
+        if self.attempts and "attempts" not in line:
+            # v1.397.0: attempts a turn left without its card (stopped before
+            # it, or a crash): what each row last said, never "running".
+            from ...harness.attempts import card_from_frames
+
+            card = card_from_frames(self.attempts, cut_off=status == "interrupted")
+            if card is not None:
+                line["attempts"] = card
+        if self.attempts and status == "interrupted" and line.get("error"):
+            # v1.397.0 review: an attempts turn a restart or a crash cut off
+            # says so in its own words — never "press Retry" (nothing
+            # restarts on its own; a finished attempt can still be kept).
+            from ...harness.attempts import CUT_OFF_LINE
+
+            line["error"] = CUT_OFF_LINE
+            line.pop("errorTitle", None)
         if self.last_plan:
             # v1.374.0: the turn's task list as it last stood (the reply folds it).
             line["plan"] = saved_plan(self.last_plan)
@@ -1177,7 +1225,9 @@ def replayed_reply_line(turn_id: str, frames: Any, *, started_at: float) -> "lis
                 now_ms[0] = max(now_ms[0], off)
                 timed = True
             watch.see(event, raw if isinstance(raw, str) else json.dumps(raw))
-        if not timed:
+        if not timed and not watch.attempts:
+            # v1.397.0: an attempts turn's frames carry no offsets, but its
+            # rows are what the line must keep (the card, cut off).
             return None
         return watch.lines(turn_id, "interrupted", keep_empty=True)
     except Exception:  # noqa: BLE001 — the boot's rebuild never fails the boot
@@ -1656,13 +1706,20 @@ _ANSWER_EVENTS = ("approval_resolved", "mcp_resolved")
 #: card, so it parks the reply too.
 _HELPER_EVENT = "helper"
 _HELPER_OVER = ("done", "failed", "stopped")
+#: v1.397.0: an ATTEMPT's approval card is drawn on its row of the card
+#: (``harness/attempts``: an ``attempt`` frame whose ``ask`` names it, ``ask:
+#: null`` once answered, a final state when the attempt is over) — it parks
+#: the reply on the user exactly as a helper's does.
+_ATTEMPT_EVENT = "attempt"
+_ATTEMPT_OVER = ("done", "failed", "stopped", "limit")
 
 
 def _asks_after(open_asks: set[str], parsed: "list[tuple[str, str]]") -> bool:
     """Fold a chunk's ask / answer frames into ``open_asks`` (ids) and say
     whether the reply is parked on the user now. Pure apart from the set."""
     for event, data in parsed:
-        if event not in _ASK_EVENTS and event not in _ANSWER_EVENTS and event != _HELPER_EVENT:
+        if (event not in _ASK_EVENTS and event not in _ANSWER_EVENTS and event != _HELPER_EVENT
+                and event != _ATTEMPT_EVENT):
             continue
         try:
             frame = json.loads(data or "{}")
@@ -1671,15 +1728,16 @@ def _asks_after(open_asks: set[str], parsed: "list[tuple[str, str]]") -> bool:
         aid = str(frame.get("id") or "") if isinstance(frame, dict) else ""
         if not aid:
             continue
-        if event == _HELPER_EVENT:
-            key = f"helper:{aid}"
+        if event in (_HELPER_EVENT, _ATTEMPT_EVENT):
+            key = f"{event}:{aid}"
             if "ask" in frame:
                 ask = frame.get("ask")
                 if isinstance(ask, dict) and ask.get("id"):
                     open_asks.add(key)
                 else:
                     open_asks.discard(key)
-            if frame.get("ended") or frame.get("state") in _HELPER_OVER:
+            over = _HELPER_OVER if event == _HELPER_EVENT else _ATTEMPT_OVER
+            if frame.get("ended") or frame.get("state") in over:
                 open_asks.discard(key)
         elif event in _ASK_EVENTS:
             open_asks.add(aid)
@@ -1691,7 +1749,8 @@ def _asks_after(open_asks: set[str], parsed: "list[tuple[str, str]]") -> bool:
 def _parks_or_answers(parsed: "list[tuple[str, str]]") -> bool:
     """Does this chunk hold a frame that can park the reply on the user or
     end such a wait (:func:`_asks_after` reads only these)?"""
-    return any(ev in _ASK_EVENTS or ev in _ANSWER_EVENTS or ev == _HELPER_EVENT for ev, _ in parsed)
+    return any(ev in _ASK_EVENTS or ev in _ANSWER_EVENTS or ev in (_HELPER_EVENT, _ATTEMPT_EVENT)
+               for ev, _ in parsed)
 
 
 async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, *,
@@ -3265,7 +3324,8 @@ async def rewind_session(d: Any, thread_id: str, to: str) -> Any:
                 }, session_id=S.session_id_for(thread_id))
         return {
             "rewound": True, **plan.view(), **committed,
-            "note": R.commands_note(plan.commands),
+            # v1.397.0 review: a kept attempt stays in the session (said).
+            "note": " ".join(p for p in (R.commands_note(plan.commands), plan.attempts_note) if p),
             "messages": cut.get("count", 0),
             "mode": cut.get("mode", S.MODE_ACT),
             "library_dropped": dropped,
@@ -3677,6 +3737,20 @@ def register(app: FastAPI, d: Any) -> None:
 
         facts = B.facts_of(_setup_of(row))
         moved: dict[str, Any] | None = None
+        # v1.397.0 review: the folders of attempts on several models this
+        # session started go to the trash with it (their branches stay), never
+        # left beside the repository with no session that knows them. One
+        # that cannot move refuses the delete in words, nothing deleted.
+        from ...harness.attempts import discard_for_delete
+        from .build_git import _locked as _git_locked
+
+        S.end_session_programs(thread_id)
+        try:
+            left = _git_locked(thread_id, lambda: discard_for_delete(d.platform, row))
+        except B.GitRefused as exc:
+            return JSONResponse(status_code=exc.status, content={"detail": f"{exc} The session was not deleted."})
+        if left:
+            return JSONResponse(status_code=409, content={"detail": f"{left} The session was not deleted."})
         if facts and not facts.get("removed_at"):
             from .build_git import _locked
 
@@ -3742,7 +3816,8 @@ def register(app: FastAPI, d: Any) -> None:
                     await asyncio.to_thread(rewind_commit_facts, row, plan.cut_at)
                     if row is not None else {}
                 )
-                return {**plan.view(), **committed, "note": R.commands_note(plan.commands),
+                note = " ".join(p for p in (R.commands_note(plan.commands), plan.attempts_note) if p)
+                return {**plan.view(), **committed, "note": note,
                         "detail": R.problems_sentence(plan.problems) if plan.problems else ""}
             points = await asyncio.to_thread(R.checkpoints, platform.engine, thread_id)
         except R.RewindError as exc:
@@ -3845,6 +3920,12 @@ def register(app: FastAPI, d: Any) -> None:
             lines, question = S.branch_lines(messages, turn_id, at)
         except S.BranchRefused as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+        # v1.397.0 review: an attempts card in the copied conversation belongs
+        # to THIS session's folders — the copy names where it came from and
+        # can never keep, discard or delete them.
+        from ...harness.attempts import copied_lines
+
+        lines = copied_lines(lines, thread_id)
         title = S.BRANCH_TITLE.format(title=(row.title or S.NEW_SESSION_TITLE))
         new_setup: dict[str, Any] = {
             k: setup[k] for k in (
@@ -3975,7 +4056,9 @@ def register(app: FastAPI, d: Any) -> None:
         # v1.373.0 review: a blank entry is no file — `{"files": ["  "]}` used
         # to pass this check and start a turn that sent the model nothing.
         has_files = any(str(p or "").strip() for p in [*(body.attachments or []), *(body.files or [])])
-        picks = bool((body.skill or "").strip() or (body.folder_skill or "").strip() or (body.command or "").strip())
+        picks = bool((body.skill or "").strip() or (body.folder_skill or "").strip() or (body.command or "").strip()
+                     # v1.397.0: "Try on…" with an empty box tries the last question.
+                     or body.try_on)
         if not text and not has_files and not picks:
             # v1.371.0: a picture alone is a message (the chat page's rule,
             # v1.275.0) — v1.373.0: so is a file picked with "@"; v1.379.0:
@@ -4013,6 +4096,21 @@ def register(app: FastAPI, d: Any) -> None:
                 return _follow_response(existing.follow(with_ids=body.ids))
         else:
             turn_id = "bt_" + secrets.token_hex(8)
+        # v1.397.0 (harness/attempts): "try this with A, B and C" — or the
+        # box's "Try on…" control — starts ATTEMPTS, each on its own branch
+        # and its own model. A message whose names are none of the user's
+        # models is an ordinary message (None), unchanged.
+        from . import build_attempts as _attempts
+
+        try:
+            attempts_log = await _attempts.maybe_start(d, thread_id, text, turn_id, body)
+        except SessionBusy:
+            return JSONResponse(
+                status_code=409,
+                content={"detail": RUNNING_SENTENCE, "turn_id": _running_turn(d, thread_id)},
+            )
+        if attempts_log is not None:
+            return _follow_response(attempts_log.follow(with_ids=body.ids))
         try:
             lg = await start_build_turn(d, thread_id, text, turn_id,
                                         attachments=list(body.attachments or []),

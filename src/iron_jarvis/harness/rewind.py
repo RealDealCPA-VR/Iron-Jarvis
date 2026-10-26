@@ -104,6 +104,9 @@ class RewindPlan:
     skill: str = ""
     #: v1.377.0 review: "folder" | "yours" | "" (an older line said nothing).
     skill_source: str = ""
+    #: v1.397.0 review: a kept attempt in the rewound turns stays in the
+    #: session — said beside the commands note ("" when none).
+    attempts_note: str = ""
 
     def view(self) -> dict[str, Any]:
         return {
@@ -574,6 +577,14 @@ def plan(engine: Any, home: Any, registry: Any, thread_id: str, to: str,
     for problem in out.problems:
         unique.setdefault(_key(Path(str(problem.get("path") or ""))), problem)
     out.problems = list(unique.values())
+    # v1.397.0 review: attempts on several models these turns started — their
+    # folders still beside the repository refuse the rewind (the card that
+    # keeps or discards them would be cut away); a kept one is said.
+    from .attempts import rewind_facts
+    from .sessions import get_row
+
+    attempt_problems, out.attempts_note = rewind_facts(messages, turns, get_row(engine, thread_id))
+    out.problems += attempt_problems
     return out
 
 

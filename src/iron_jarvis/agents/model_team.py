@@ -1630,14 +1630,32 @@ def paid_spend_this_month(platform: Any, now: Any = None) -> float:
     """What the PAY-PER-USE members of the team spent this calendar month, in
     METERED dollars only (the allowance's reading, ``agents/allowance``: each
     run's own recorded cost — a subscription's list-price equivalent never
-    counts). BLOCKING; 0.0 when it cannot be read."""
+    counts) — and (v1.397.0 review) what ATTEMPTS on several models spent on
+    pay-per-use models (``harness/attempt_spend``): work the user started
+    counts toward the limit. BLOCKING; 0.0 when it cannot be read."""
     engine = getattr(platform, "engine", None)
+    if engine is None:
+        return 0.0
+    from .allowance import _month_bounds
+
+    start, end = _month_bounds(now)
+    try:
+        from ..harness.attempt_spend import metered_between
+
+        attempts = metered_between(engine, start, end)
+    except Exception:  # noqa: BLE001
+        attempts = 0.0
+    return attempts + _member_spend(platform, engine, start, end)
+
+
+def _member_spend(platform: Any, engine: Any, start: Any, end: Any) -> float:
+    """The pay-per-use members' metered dollars in ``[start, end)``."""
     names = []
     for r in team_members(platform):
         provider = str(getattr(r, "provider", "") or "").strip()
         if provider and cost_type(platform, provider, pinned_model(platform, r)) == COST_PAY:
             names.append(f"custom:{r.name}")
-    if engine is None or not names:
+    if not names:
         return 0.0
     try:
         from sqlmodel import select
@@ -1645,9 +1663,8 @@ def paid_spend_this_month(platform: Any, now: Any = None) -> float:
         from ..core.db import session_scope
         from ..core.models import Session
         from ..eval.pricing import is_list_price_equivalent, recorded_cost
-        from .allowance import _month_bounds, _naive
+        from .allowance import _naive
 
-        start, end = _month_bounds(now)
         total = 0.0
         with session_scope(engine) as db:
             for row in db.exec(select(Session).where(Session.agent_name.in_(names))):  # type: ignore[attr-defined]

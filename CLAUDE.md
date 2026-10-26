@@ -3699,6 +3699,71 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **TRY ON SEVERAL MODELS: up to three attempts, each its own branch, worktree,
+  model and account; opt-in by the user's words or the Try on… chip only; Keep
+  lands one** (v1.397.0, Phase 5 Part B of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`
+  = part 3's Phase 8, part 3 decision 8; a doer + a reviewer that found 10 more
+  defects, each red first). `harness/attempts.py` + `routes/build_attempts.py`
+  (`POST /build/sessions/{id}/attempts/keep {turn_id, attempt}` and
+  `/attempts/discard`). OPT-IN: `parse_request` — only the FIRST or LAST
+  sentence can ask, fenced blocks and quoted lines are ignored, the words must
+  name TWO or more models (one model = the chip, `BuildTurnBody.try_on
+  [{provider, model}]`), an unknown name refuses only when it looks like a
+  model, a count phrase must be the whole name list, "both" is no count,
+  "later" means not now, the task keeps its line breaks; a table of 16 asking
+  + 31 ordinary rows runs through the real route (13 of 31 went wrong before
+  the review). When unsure it is an ordinary turn. No tool can start
+  attempts. EACH ATTEMPT is a harness turn of the stream lane (not an
+  agent-run helper, so the finish check, the dialect and the coding tools
+  apply) under session `build:<thread>~try<n>`, turn `<turn>.try<n>`, with its
+  own hold, pin (`member_account` with the session's pin + `work_group`),
+  branch (`ij/try-…`, a worktree beside the repo) and a tool ceiling without
+  delegate / spawn_agent / list_agents / assign_work / consult /
+  delegate_remote / ask_user / exit_plan_mode / the exits. Refused before
+  anything starts, in words: > `MAX_ATTEMPTS` 3, unknown/ambiguous/twin
+  names, cloud under Local only, provider not connected, the 95% floor, the
+  group, the pay limit (the session's own model exempt), not a git repo
+  (`NEEDS_GIT`), plan mode, files/skill/command with the request. UNCOMMITTED
+  WORK is carried: `snapshot_commit` makes a commit object of the session's
+  current files (new ones too) through a throwaway index — the session's own
+  index, files and branch untouched — and every attempt starts from it
+  (`StartPoint.carried`). KEEP: a clean start commits the attempt (Iron
+  Jarvis's own commit, like the Commit button; never pushes) and merges it
+  into the session's branch; a CARRIED start lands the result in the session
+  folder as UNCOMMITTED changes (`land`: two-tree `read-tree -m -u` through a
+  throwaway index) only while the folder still holds exactly what the
+  attempts started from (`KEEP_CHANGED_SINCE`); a no-branch session ADOPTS
+  the kept branch (`S.adopt_branch`) so the user's main checkout is never
+  touched (proven byte-identical). Keep refuses while any attempt runs
+  (`KEEP_RUNNING`), a second time, and on a card COPIED by Branch from here
+  (`KEEP_COPIED`; the copy names `from_session`, holds no git facts).
+  Discard all (two presses) trashes the folders; every branch is kept;
+  deleting a session trashes its attempts' folders (refused in words while
+  one is in use); a rewind past a try turn with live folders is refused
+  ("keep one or Discard all first"). SPEND: `harness/attempt_spend.
+  AttemptSpendRecord` (late model, in `_LATE_MODEL_MODULES`), written once per
+  attempt at its end (a cut-off too), is added to `paid_spend_this_month`;
+  `SharedCap` shares the session's `setup.cap` across the attempts as ONE
+  reply. RECORD: `attempt` SSE frames (each attempt's first frame carries the
+  card's own facts, so a card rebuilt after Stop or a crash still knows
+  adopt/base/carried); the card rides `done` and the reply line (`attempts`,
+  in `harness/sessions.LINE_KEYS` and the dashboard's); a saved card never
+  has `ask` and never says running. RESTART: a cut-off card says
+  `CUT_OFF_LINE` (nothing restarts on its own; a finished one can still be
+  kept) and the page offers NO Retry on a reply with an attempts card (a
+  Retry would start every attempt again). Dashboard: `lib/buildAttempts.ts`,
+  `components/harness/HarnessAttempts.tsx` + `HarnessTryOn.tsx` (portaled,
+  fixed, inside the window on a phone); a queued message keeps its picks
+  (`QueuedItem.tryOn`). OPEN: an attempt's ask never goes to the phone, and
+  "Stop the step", the mid-reply summary and the Timeline do not cover
+  attempts (the lane keys them on `reply_record`); a crash between making the
+  worktrees and writing the question line leaves worktrees nothing knows
+  about; a landed Keep is not in the undo journal; concurrent attempts all
+  pass the pay check at start; Emergency stop does not reach attempts (like
+  every Build turn until night shift N1). Pins:
+  `tests/test_build_attempts{,_review}_v1397.py`,
+  `dashboard/__tests__/build-attempts{,-review}-v1397.test.tsx`, e2e
+  `dashboard/e2e/ij-harness-attempts.spec.ts` (390 px, 1280 px, keyboard).
 - **The bench MEASURES a team: one command runs the team, then the planner
   alone, and refuses the night before it starts** (v1.396.0, Phase 7 of
   `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`; a doer + a reviewer that found 10

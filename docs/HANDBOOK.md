@@ -1898,6 +1898,56 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Try one task on several models (v1.397.0)
+
+In a coding session in a git folder, you can try one task on up to three
+models at once and keep the best result.
+
+- **How to start it:**
+  - Begin or end your message with a sentence naming the models, for example
+    "Try this with Claude, Codex and the local model: fix the date parsing in
+    `report.py`."
+  - Or press **Try on…** in the box and pick one to three models.
+  - It only starts when you ask. Ordinary sentences such as "Try it with a
+    smaller input" or "Try this with Claude's API format" stay ordinary
+    messages.
+- **While they run.** Each attempt works on its own branch, in its own folder
+  beside your repository, on its own model and account. Each one shows as a
+  row with its steps. An attempt's questions appear on its own row.
+- **When they end.** One card shows the attempts side by side:
+  - the model and account;
+  - finished, failed, stopped, or held by an account limit;
+  - tests;
+  - files changed;
+  - time;
+  - usage (list price on your plan, money on pay per use, free on your own
+    hardware).
+- **Keep and Discard all.**
+  - **Keep** puts the chosen attempt's work into your session. If the session
+    had work not committed yet, the attempts start from it, and Keep lands
+    the result as uncommitted changes, so committing stays yours.
+  - **Discard all** (two presses) moves the attempts' folders to the trash.
+  - Either way, every attempt's branch is kept. Your main folder is never
+    touched.
+- **Refused in one sentence before anything starts:**
+  - more than three models;
+  - a name that isn't one of your models;
+  - a cloud model in a Local only session;
+  - a model whose provider isn't connected;
+  - an account at 95% of its usage window, or outside your account group;
+  - pay-per-use over your monthly limit;
+  - a folder that isn't a git repository;
+  - plan mode.
+- **Limits.** Attempts share the session's own time and cost cap, and their
+  pay-per-use spend counts toward your monthly limit.
+- **Stopping and cleaning up.**
+  - **Stop** ends every attempt and everything it started.
+  - Deleting the session moves its attempts' folders to the trash.
+  - A rewind past a message that tried models asks you to keep one or discard
+    them first.
+  - After a restart, the attempts read "cut off" and nothing starts again on
+    its own. One that finished can still be kept.
+
 ## Measuring your model team (v1.396.0)
 
 `ironjarvis bench-harness` (a developer tool, not in the app's menus) can now

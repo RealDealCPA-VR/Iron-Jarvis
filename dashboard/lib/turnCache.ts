@@ -32,6 +32,8 @@ import type { StreamSeed } from "./useChatStream";
 export interface CachedPage {
   helpers: unknown[];
   questions: unknown[];
+  /** v1.397.0: the running turn's attempts (absent on an older kept reply). */
+  attempts?: unknown[];
   steerNotes: string[];
   /** v1.384.0 review: the question the user sent HERE for this reply (the
    *  page's `pending` bubble). The session view a return paints was read

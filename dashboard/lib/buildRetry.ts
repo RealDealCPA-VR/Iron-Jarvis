@@ -35,6 +35,11 @@ export function retryOffered(
   if (!m || m.role !== "assistant" || !o.newest || o.busy || o.archived) return false;
   if (m.errorKind === "refusal") return false;
   if (m.accountLimit) return false;
+  // v1.397.0 review: a reply that tried the work on several models keeps its
+  // card (a finished attempt can still be kept); Retry would start every
+  // attempt again — new branches, new spend — and a "Try on…" message's
+  // retry was a plain turn on the session's own model.
+  if (m.attempts) return false;
   return (typeof m.error === "string" && m.error.trim() !== "") || m.interrupted === true;
 }
 
