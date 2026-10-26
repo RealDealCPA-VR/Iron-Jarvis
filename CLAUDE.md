@@ -3764,6 +3764,18 @@ does not need a bump, stop and bump it.
   `tests/test_build_attempts{,_review}_v1397.py`,
   `dashboard/__tests__/build-attempts{,-review}-v1397.test.tsx`, e2e
   `dashboard/e2e/ij-harness-attempts.spec.ts` (390 px, 1280 px, keyboard).
+  v1.397.1 (test-only): v1.397.0's Tests gate went red (Release passed and
+  published) on `test_iron_proxy_routes_v1301::test_the_real_bundle_starts_
+  answers_and_stops` — the account list read `[]` right after a 201 create.
+  Every Iron-Proxy route asks `/iron/health` with a 2 s wait
+  (`HEALTH_TIMEOUT_S`, bound as `_health`'s DEFAULT, so patching the constant
+  alone changes nothing), and on the loaded runner one answer came later, so
+  the bundle read as not running and the view listed nothing. The real-bundle
+  tests and the stand-in fixture now set a 30 s health wait (both the
+  constant and `_health.__defaults__`) and the view assertion prints the
+  status. Reproduced with a plugin that makes every health answer take 2.5 s
+  (the old shape fails, the new passes). A wait bound as a DEFAULT argument
+  is patched through `__defaults__`.
 - **The bench MEASURES a team: one command runs the team, then the planner
   alone, and refuses the night before it starts** (v1.396.0, Phase 7 of
   `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`; a doer + a reviewer that found 10

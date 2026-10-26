@@ -74,6 +74,10 @@ def _use_fake_bundle(monkeypatch):
     # and passed alone; an 11 s simulated start reproduces all three on the old
     # shape. 60 s is a hang detector, not a speed bar (the v1.374.1 rule).
     monkeypatch.setattr(svc_mod, "START_TIMEOUT_S", 60.0)
+    # v1.397.1: and each health check (2 s, bound as `_health`'s default) —
+    # a slow answer on a loaded runner reads as "not running".
+    monkeypatch.setattr(svc_mod, "HEALTH_TIMEOUT_S", 30.0)
+    monkeypatch.setattr(svc_mod._health, "__defaults__", (30.0,))
 
 
 @pytest.fixture
@@ -455,6 +459,9 @@ def test_the_real_bundle_through_the_service(tmp_path, monkeypatch):
     # False, the start abandoned). This test proves the bundle starts,
     # answers and stops — not how fast a loaded runner is.
     monkeypatch.setattr(svc_mod, "START_TIMEOUT_S", 60.0)
+    # v1.397.1: the same for each health check (see the routes twin).
+    monkeypatch.setattr(svc_mod, "HEALTH_TIMEOUT_S", 30.0)
+    monkeypatch.setattr(svc_mod._health, "__defaults__", (30.0,))
     s = IronProxyService(_cfg(tmp_path), register=False)
     assert s.bundled() is True
     st = s.start()

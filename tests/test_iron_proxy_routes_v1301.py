@@ -526,6 +526,15 @@ def test_the_real_bundle_starts_answers_and_stops(proj, tmp_path, monkeypatch):
     # loaded runner (the service twin of this test failed v1.374.0's Tests
     # gate that way); this proves the bundle works, not the runner's speed.
     monkeypatch.setattr("iron_jarvis.iron_proxy.service.START_TIMEOUT_S", 60.0)
+    # v1.397.1: the same for each health check. Every route asks
+    # /iron/health with a 2 s wait (HEALTH_TIMEOUT_S, bound as `_health`'s
+    # default), and on v1.397.0's loaded Tests runner one answer came later:
+    # Iron Jarvis read the bundle as not running and the view listed no
+    # accounts (line "== [acct['id']]" got []). On this PC 2 s is ample.
+    from iron_jarvis.iron_proxy import service as _svc_mod
+
+    monkeypatch.setattr(_svc_mod, "HEALTH_TIMEOUT_S", 30.0)
+    monkeypatch.setattr(_svc_mod._health, "__defaults__", (30.0,))
     descriptor = tmp_path / "ipd" / "proxy.json"
     with TestClient(create_app(str(proj))) as raw:
         c = _Bodies(raw)
@@ -542,7 +551,9 @@ def test_the_real_bundle_starts_answers_and_stops(proj, tmp_path, monkeypatch):
         acct = r.json()
         assert acct["provider"] == "anthropic" and acct["lane"] == "cli" and acct["home"]
         view = c.get("/iron-proxy").json()
-        assert [a["id"] for a in view["accounts"]] == [acct["id"]]
+        assert [a["id"] for a in view["accounts"]] == [acct["id"]], json.dumps(
+            view.get("status"), default=str
+        )
         assert view["accounts"][0]["state"]["status"]
         r = c.patch(f"/iron-proxy/accounts/{acct['id']}", json={"title": "Renamed"})
         assert r.status_code == 200 and r.json()["title"] == "Renamed"
