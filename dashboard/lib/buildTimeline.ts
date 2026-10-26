@@ -86,6 +86,8 @@ export interface TimelineHelper {
   end: number | null;
   provider: string;
   model: string;
+  /** v1.395.0: why the team router gave it this piece ("" = it was named). */
+  reason: string;
   usage?: TurnUsage;
   /** Its steps (the first HELPER_STEPS), and how many it took in all. */
   steps: TimelineStep[];
@@ -179,6 +181,7 @@ function decodeHelper(raw: unknown): TimelineHelper | null {
     end: ms(r.end),
     provider: str(r.provider, 120),
     model: str(r.model, 200),
+    reason: str(r.reason, 300),
     ...(usage ? { usage } : {}),
     steps,
     stepCount: Math.max(steps.length, ms(r.steps) ?? 0),
@@ -354,6 +357,7 @@ function foldHelper(s: LiveState, data: Record<string, unknown>): void {
       end: null,
       provider: "",
       model: "",
+      reason: "",
       steps: [],
       stepCount: 0,
       session: "",
@@ -372,6 +376,9 @@ function foldHelper(s: LiveState, data: Record<string, unknown>): void {
   if (provider) h.provider = provider;
   const model = str(data.model, 200);
   if (model) h.model = model;
+  // v1.395.0: the team router's reason (said when it picked, kept after).
+  const reason = str(data.reason, 300);
+  if (reason) h.reason = reason;
   const usage = turnUsageFrom(data.usage);
   if (usage) h.usage = usage;
   if (data.state === "done" || data.state === "failed" || data.state === "stopped") h.state = data.state;

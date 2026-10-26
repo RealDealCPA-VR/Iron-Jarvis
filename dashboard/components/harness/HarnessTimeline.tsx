@@ -332,6 +332,8 @@ function Card({
           rows={[
             ["Status", STATE_WORDS[h.state]],
             ["Model", h.provider || h.model ? modelName(h.provider, h.model, models) : null],
+            // v1.395.0: why the team router gave it this piece.
+            ["Why", h.reason || null],
             ["Started", h.start !== null ? startWords(h.start) : null],
             ["Took", h.start !== null && h.end !== null ? durationWords(h.end - h.start) : null],
             ["Steps", `${h.stepCount.toLocaleString("en-US")}${more > 0 ? ` (the first ${h.steps.length} are drawn)` : ""}`],
@@ -387,6 +389,7 @@ const Row = memo(function Row({
   row,
   duration,
   label,
+  note,
   usage,
   segments,
   open,
@@ -397,6 +400,9 @@ const Row = memo(function Row({
   row: TimelineRow;
   duration: number;
   label: string;
+  /** v1.395.0: a helper row's reason (the team router's one sentence),
+   *  after its label in the row's quieter grey. */
+  note?: string;
   usage?: TurnUsage;
   segments?: Segment[];
   open: boolean;
@@ -413,7 +419,7 @@ const Row = memo(function Row({
   const Icon =
     row.kind === "reply" ? Sparkles : row.kind === "helper" ? Bot : STEP_ICON[toolKind(row.step.name)];
   const foldable = row.kind === "reply" || row.kind === "helper";
-  const words = `${label}, ${STATE_WORDS[row.state].toLowerCase()}, ${startWords(row.start).toLowerCase()}, took ${durationWords(row.end - row.start)}`;
+  const words = `${label}${note ? ` (${note})` : ""}, ${STATE_WORDS[row.state].toLowerCase()}, ${startWords(row.start).toLowerCase()}, took ${durationWords(row.end - row.start)}`;
   return (
     <div
       data-testid="timeline-row"
@@ -438,10 +444,15 @@ const Row = memo(function Row({
         )}
         <Icon size={13} aria-hidden className="shrink-0 text-zinc-500" />
         <span
-          title={label}
+          title={note ? `${label} · ${note}` : label}
           className={`min-w-0 truncate text-[12px] ${row.state === "failed" ? "text-tone-danger" : row.depth === 0 ? "font-medium text-zinc-100" : "text-zinc-300"}`}
         >
           {label}
+          {note ? (
+            <span data-testid="timeline-row-reason" className="font-normal text-zinc-500">
+              {` · ${note}`}
+            </span>
+          ) : null}
         </span>
       </div>
       <div className="relative h-full min-w-0 overflow-hidden">
@@ -751,6 +762,7 @@ export const HarnessTimeline = memo(function HarnessTimeline({
                   row={r}
                   duration={reply.durationMs}
                   label={rowLabel(r)}
+                  note={r.kind === "helper" ? r.helper.reason || undefined : undefined}
                   usage={r.kind === "reply" ? reply.usage : r.kind === "helper" ? r.helper.usage : undefined}
                   segments={r.kind === "reply" ? segments : undefined}
                   open={!collapsed.has(r.key)}

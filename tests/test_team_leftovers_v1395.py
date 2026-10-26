@@ -99,7 +99,7 @@ async def test_a_queued_job_naming_another_model_is_held_in_words_before_any_ses
     assert out["held"] == 1 and not out["started"]
     row = w.p.assignments.get(rec.id)
     assert row.held_reason.startswith("'codex' is on your model team and runs on its own model (Codex), "
-                                      "but this job names google.")
+                                      "but this task names google.")
     assert not _sessions(w.p) and not w.log
 
 

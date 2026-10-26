@@ -673,7 +673,7 @@ def queued_refusal(platform: Any, record: Any, *, provider: str = "", model: str
     or refused with BEFORE any session row exists (v1.395.0 — the doors'
     rules, at the doors that start work by themselves): its account must be
     one the user's groups allow (:func:`account_refusal`); Local only work
-    never starts a member whose model leaves the network; and a job that
+    never starts a member whose model leaves the network; and a task that
     names ANOTHER provider or model than the member runs on is said, never
     silently swapped (a member runs on its own model). "" when it may run.
     Never raises."""
@@ -693,8 +693,8 @@ def queued_refusal(platform: Any, record: Any, *, provider: str = "", model: str
         asked = "/".join(p for p in (asked_provider, asked_model) if p)
         return (
             f"'{name}' is on your model team and runs on its own model "
-            f"({model_words(platform, own_provider, own_model)}), but this job names {asked}. "
-            "Remove the job's model, or change the member's model in Settings › Model team."
+            f"({model_words(platform, own_provider, own_model)}), but this task names {asked}. "
+            "Remove the task's model, or change the member's model in Settings › Model team."
         )
     return account_refusal(platform, record)
 

@@ -24,7 +24,6 @@ from __future__ import annotations
 import pytest
 from sqlmodel import select
 
-from iron_jarvis.agents import model_team as T
 from iron_jarvis.agents import team_record as TR
 from iron_jarvis.agents.orchestrator import Orchestrator
 from iron_jarvis.core.db import session_scope

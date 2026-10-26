@@ -32,6 +32,22 @@ export interface TeamUsage {
   resetsAt: string | null;
 }
 
+/** v1.395.0: a member's RECORD for one role (the daemon's
+ *  agents/team_record RoleRecord.view): pieces, how many passed, failures in a
+ *  row, its judgement (good | unknown | not_good) and the plain words. */
+export interface TeamRoleRecord {
+  runs: number;
+  passed: number;
+  streak: number;
+  status: "good" | "unknown" | "not_good";
+  words: string;
+}
+
+/** The role as a noun, as the team router's reasons say it — the TWIN of the
+ *  daemon's agents/model_team.ROLE_NOUNS, pinned equal by
+ *  tests/test_team_words_v1395.py. */
+export const ROLE_NOUNS: Record<string, string> = { read: "reading", code: "coding", review: "reviewing", test: "testing" };
+
 export interface TeamMember {
   name: string;
   rosterName: string;
@@ -50,6 +66,8 @@ export interface TeamMember {
   /** Can its model be reached right now? null = not known. */
   available: boolean | null;
   paused: boolean;
+  /** v1.395.0: its record per role it holds ({} from an older daemon). */
+  records: Record<string, TeamRoleRecord>;
 }
 
 export interface StarterRow {
@@ -96,6 +114,35 @@ function decodeUsage(raw: unknown): TeamUsage | null {
   };
 }
 
+function decodeRecords(raw: unknown, roles: readonly string[]): Record<string, TeamRoleRecord> {
+  const r = rec(raw);
+  const out: Record<string, TeamRoleRecord> = {};
+  if (!r) return out;
+  for (const role of roles) {
+    const x = rec(r[role]);
+    const words = str(x?.words, 120);
+    if (!x || !words) continue;
+    const status = x.status === "good" || x.status === "not_good" ? x.status : "unknown";
+    out[role] = {
+      runs: Math.max(0, Math.round(num(x.runs) ?? 0)),
+      passed: Math.max(0, Math.round(num(x.passed) ?? 0)),
+      streak: Math.max(0, Math.round(num(x.streak) ?? 0)),
+      status,
+      words,
+    };
+  }
+  return out;
+}
+
+/** "reading: good (4 of 5 passed) · coding: no record yet" — a member's
+ *  record, one role after another, in the daemon's own words ("" for none). */
+export function recordWords(m: Pick<TeamMember, "roles" | "records">): string {
+  return m.roles
+    .filter((role) => m.records[role])
+    .map((role) => `${ROLE_NOUNS[role] ?? role}: ${m.records[role].words}`)
+    .join(" · ");
+}
+
 export function decodeMember(raw: unknown): TeamMember | null {
   const r = rec(raw);
   const name = str(r?.name, 120);
@@ -115,6 +162,7 @@ export function decodeMember(raw: unknown): TeamMember | null {
     usage: decodeUsage(r.usage),
     available: typeof r.available === "boolean" ? r.available : null,
     paused: r.paused === true,
+    records: decodeRecords(r.records, cleanRoles(r.roles)),
   };
 }
 
