@@ -137,6 +137,11 @@ class _Consultation:
     #: v1.394.0 review: the custom agent's record (a team member is held to
     #: its own model while it answers); None for a builtin or a remote.
     record: Any = None
+    #: v1.395.0 review: the account a member answers on, worked out WITH the
+    #: work's account group (``model_team.work_group``) and checked against
+    #: the floor — ``pin_set`` False leaves it to ``member_scope``.
+    pin: Any = None
+    pin_set: bool = False
 
 
 class ConsultTool(Tool):
@@ -331,6 +336,7 @@ class ConsultTool(Tool):
         provider = model = ""
         base_prompt = ""
         record = None
+        _pin, _pin_set = None, False
         if entry.kind == "dynamic":
             slug = entry.name.partition(":")[2] or entry.name
             registry = getattr(self.platform, "agents_registry", None)
@@ -364,14 +370,21 @@ class ConsultTool(Tool):
             # member answers only under the pay-per-use limit (a model asking
             # spends the money), and nothing new starts on an account at the
             # floor (95% of a window). Off the loop (``_resolve`` runs in a
-            # worker thread); the pin is the caller's, as ``member_scope``
-            # will read it.
+            # worker thread); the account worked out here is the one
+            # ``member_scope`` pins while it answers (``pin_set``).
             refusal = _model_team.pay_refusal(self.platform, row, tail=_model_team.QUESTION_TAIL)
             if not refusal and _model_team.runs_elsewhere(row):
                 from ..iron_proxy.pin import current as _current_pin
 
-                _pin = _model_team.member_account(self.platform, row, _current_pin())[0]
-                refusal = _model_team.floor_refusal(self.platform, row, _pin, tail=_model_team.QUESTION_TAIL)
+                # The account it answers on stays in the WORK's account group
+                # (the group its earlier pieces ran in — work never moves
+                # between groups, a question included).
+                _caller = _current_pin()
+                _group = _model_team.work_group(self.platform, _caller, str(getattr(ctx, "session_id", "") or ""))
+                _pin, refusal = _model_team.member_account(self.platform, row, _caller, group=_group)
+                _pin_set = not refusal
+                if not refusal:
+                    refusal = _model_team.floor_refusal(self.platform, row, _pin, tail=_model_team.QUESTION_TAIL)
             if refusal:
                 return _Consultation(error=refusal)
         else:
@@ -391,6 +404,8 @@ class ConsultTool(Tool):
         return _Consultation(
             entry=entry,
             base_prompt=base_prompt,
+            pin=_pin,
+            pin_set=_pin_set,
             provider=provider,
             model=model,
             asker=asker,
@@ -581,7 +596,14 @@ class ConsultTool(Tool):
         # out of that member's hold (``model_team.member_scope``).
         from . import model_team as _model_team
 
-        with _model_team.member_scope(self.platform, plan.record, plan.provider):
+        # v1.395.0 review: on the account ``_resolve`` worked out (the work's
+        # group, below the floor), when it did.
+        _scope = (
+            _model_team.member_scope(self.platform, plan.record, plan.provider, pin=plan.pin)
+            if plan.pin_set
+            else _model_team.member_scope(self.platform, plan.record, plan.provider)
+        )
+        with _scope:
             route = await self.platform.router.complete(
                 provider=plan.provider or None,
                 model=plan.model or None,

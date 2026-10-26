@@ -603,6 +603,19 @@ async def test_a_question_to_a_member_is_under_the_same_limits(w, tmp_path):
     assert not [c for c in w.log if c["provider"] in ("openai", "claude-cli", "codex-cli")]
 
 
+async def test_a_question_keeps_to_the_group_its_work_started_in(w, tmp_path):
+    groups(w)
+    member(w.p, "claude-code", "claude-cli", "subscription", roles=("code",))
+    member(w.p, "codex", "codex-cli", "subscription", roles=("review",))
+    sid = await _parent(w.p)
+    T.route_role(w.p, "code", scope=sid, piece="a")  # this work starts in 'work'
+    res = await w.p.registry.get("consult").execute({"agent": "custom:codex", "question": "Is this right?"},
+                                                    _ctx(w.p, sid, tmp_path))
+    assert res.ok, res.error
+    calls = [c for c in w.log if c["provider"] == "codex-cli"]
+    assert calls and all(c["pin"] is not None and c["pin"].profile_id == "x-work" for c in calls)
+
+
 async def test_a_task_the_user_queued_for_a_pay_member_runs_and_one_an_agent_queued_is_held(w):
     from iron_jarvis.agents.orchestrator import Orchestrator
     from iron_jarvis.assignments.dispatcher import AssignmentDispatcher
