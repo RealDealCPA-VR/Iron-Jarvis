@@ -748,6 +748,8 @@ def check_target(platform: Any, target: Target, *, local_only: bool, session_pai
         pin, why = MT.member_account(platform, record, caller_pin, coding=True, group=group,
                                      recent=led.recent)
         if why:
+            if target.record is None:
+                why = why.replace(_MEMBER_ACCOUNT_TAIL, "")
             raise AttemptsRefused(why.rstrip() + " Nothing started.")
         floor = MT.floor_refusal(platform, record, pin, tail=ATTEMPT_TAIL)
         if floor:
@@ -1065,12 +1067,37 @@ class Attempt:
         elif isinstance(limit, dict) and limit:
             from ..daemon.routes.build import limit_words
 
-            said = limit_words(limit)
+            said = _attempt_limit_words(limit_words(limit))
             self.state, self.why = "limit", "limit"
             self.words = f"{WHY_WORDS['limit']}: {said}" if said else WHY_WORDS["limit"]
         else:
             self.state, self.why = "failed", "failed"
             self.words = f"{WHY_WORDS['failed']}: {self.error}" if self.error else WHY_WORDS["failed"]
+
+
+#: The SESSION's way out in an account's own limit sentence
+#: (``accounts.pinned_words``) — an attempt is not the session's turn, so its
+#: card says only what happened to the account.
+_SESSION_CHOICE_RX = re.compile(
+    r"(?:,\s*or|\s+—)\s+choose another account for this session\.?$|\s*Wait for it to reset,?\s*$",
+)
+
+
+def _attempt_limit_words(said: str) -> str:
+    """The account's own limit sentence for an attempt's card: "The Claude
+    account "Work Max" is at its request limit until 1:31 PM." — without the
+    session's "or choose another account for this session". Never raises."""
+    out = str(said or "").strip()
+    out = _SESSION_CHOICE_RX.sub("", out).strip()
+    out = re.sub(r"\.\s*Wait for it to reset$", ".", out).strip()
+    if out and out[-1] not in ".!?":
+        out += "."
+    return out
+
+
+#: The member-only way out in the model team's group refusal: a model from the
+#: menu has no "own account" to set.
+_MEMBER_ACCOUNT_TAIL = ", or set the member's own account in Settings › Model team"
 
 
 # --------------------------------------------------------------------------- #

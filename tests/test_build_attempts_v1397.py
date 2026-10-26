@@ -902,3 +902,52 @@ async def test_the_worktrees_are_all_or_nothing(app, fake, repo, tmp_path, monke
     assert not git_ok("rev-parse", "--verify", f"refs/heads/{made[0]['branch']}", cwd=repo)
     assert world.calls == []
     assert not any(m.get("role") == "user" for m in messages_of(app, view["id"]))
+
+
+async def test_the_account_groups_hold_for_every_attempt(app, fake, repo, tmp_path, monkeypatch):
+    """Work and personal accounts never mix (decision 4): a session on an
+    account of the user's "work" group runs a Codex attempt only on a Codex
+    account of THAT group — none there is a refusal in words, nothing
+    started."""
+    await enable(app)
+    world = wire_models(app, monkeypatch, World({"codex-cli": passing_script()}))
+    app.state.platform.config.account_groups = {"work": ["c-work"]}
+    view = await new_session(app, repo)
+    status, raw = await open_turn(app, view["id"], {
+        "text": "Try this with Codex and the local model: fix add.", "turn_id": "grp-1",
+    })
+    assert status == 400, raw
+    detail = json.loads(raw)["detail"]
+    assert "'work' account group, which has no Codex account" in detail
+    assert "Model team" not in detail, "a model from the menu is not a member"
+    assert world.calls == []
+    _no_attempt_made(app, view["id"], tmp_path)
+    # A Codex account in the group: the attempt runs on THAT one (never the
+    # first free Codex account outside it).
+    app.state.platform.config.account_groups = {"work": ["c-work", "x-team"]}
+    frames = await attempts_turn(app, view["id"], "Try this with Codex: fix add in calc.py.", "grp-2")
+    assert item_for(card_of(frames), "codex-cli")["account"] == "x-team"
+    assert {c["pin"] for c in world.calls if c["provider"] == "codex-cli"} == {"x-team"}
+
+
+async def test_with_iron_proxy_off_an_attempt_runs_on_this_pcs_own_login(app, repo, monkeypatch):
+    """No Iron-Proxy (the default): no account at all — the attempt runs on
+    this PC's own login, exactly like the session's own turns."""
+    world = wire_models(app, monkeypatch, World({"codex-cli": passing_script()}))
+    view = await new_session(app, repo)
+    frames = await attempts_turn(app, view["id"], "Try this with Codex: fix add in calc.py.", "off-1")
+    codex = item_for(card_of(frames), "codex-cli")
+    assert "account" not in codex and codex["tests"] == "passed"
+    assert {c["pin"] for c in world.calls} == {None}
+
+
+def test_an_attempts_limit_words_say_the_account_never_the_sessions_choice():
+    """The account's own sentence, without "choose another account for this
+    session" (an attempt is not the session's turn)."""
+    a = A.Attempt(id="try1", target=A.Target(label="Claude", provider="claude-cli", model=""),
+                  pin=P.AccountPin(profile_id="c-work", ij_provider="claude-cli", title="Work Max"),
+                  git={}, folder="", sid="build:x~try1", turn_id="t.try1")
+    a.pin.limit = {"provider": "claude-cli", "account_name": "Work Max", "kind": "usage", "resets_at": None}
+    a.settle()
+    assert a.state == "limit" and a.why == "limit"
+    assert "Work Max" in a.words and "for this session" not in a.words
