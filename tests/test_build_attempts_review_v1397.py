@@ -1,0 +1,273 @@
+"""v1.397.0 REVIEW — try one task on several models (``harness/attempts``).
+
+Each pin here failed on the doer's merged code (b4789be7..7b9410d0) and
+passes on the fix beside it. Driven like the doer's own proof: the REAL app
+factory, the real build turn route, the real stream lane per attempt, real
+git in a scratch repository; only the models are scripted doubles and the
+model menu a fixed list. Nothing here reaches a real model or service.
+"""
+
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+import pytest
+
+from iron_jarvis.daemon.app import create_app
+from iron_jarvis.harness import attempts as A
+from tests.test_build_accounts_v1368 import enable, isolate, make_fake
+from tests.test_build_attempts_v1397 import (
+    BUGGY,
+    MENU,
+    World,
+    attempts_turn,
+    card_of,
+    failing_script,
+    item_for,
+    make_calc_repo,
+    new_session,
+    passing_script,
+    wire_models,
+)
+from tests.test_build_git_v1375 import git, no_real_gh, snapshot
+from tests.test_build_sessions_v1367 import asgi, frames_of, messages_of, open_turn, setup_of
+
+
+@pytest.fixture(autouse=True)
+def _isolated(tmp_path, monkeypatch):
+    no_real_gh(monkeypatch)
+    yield from isolate(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def fake(tmp_path):
+    f = make_fake(tmp_path)
+    yield f
+    f.stop()
+
+
+@pytest.fixture
+def app(tmp_path):
+    return create_app(str(tmp_path / "home"))
+
+
+@pytest.fixture
+def repo(tmp_path) -> Path:
+    return make_calc_repo(tmp_path / "proj")
+
+
+GIT = shutil.which("git")
+pytestmark = pytest.mark.skipif(GIT is None, reason="git is not installed")
+
+NOTE_LINE = "# the session's own note, not committed yet\n"
+SESSION_CALC = NOTE_LINE.encode() + BUGGY
+FIXED_WITH_NOTE = NOTE_LINE + "def add(a, b):\n    return a + b  # fixed\n"
+NOTES_MD = b"Notes the session wrote, never committed.\n"
+
+
+def _text(p: Path) -> str:
+    return p.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+
+# --------------------------------------------------------------------------- #
+# 1. A session with work not committed yet can try on several models
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_session_with_uncommitted_work_tries_on_two_models_and_keep_lands_the_result(
+    app, fake, repo, monkeypatch,
+):
+    """The agent asks before every commit (v1.375.0), so a session that has
+    done ANY work has changes not committed. The attempts must start from
+    the session's CURRENT files (its uncommitted edit AND its new file), and
+    Keep must leave the session with exactly the kept attempt's result —
+    the session's own work kept, never lost."""
+    await enable(app)
+    wire_models(app, monkeypatch, World({"codex-cli": passing_script(), "ollama": failing_script()}))
+    view = await new_session(app, repo)
+    sid = view["id"]
+    wt = Path(view["git"]["worktree"])
+    head_before = git("rev-parse", "HEAD", cwd=wt)
+    # The session's own work so far, not committed: an edit and a new file.
+    (wt / "calc.py").write_bytes(SESSION_CALC)
+    (wt / "NOTES.md").write_bytes(NOTES_MD)
+    before = snapshot(repo)
+
+    frames = await attempts_turn(app, sid, "Try this with Codex and the local model: fix add in calc.py.", "uc-1")
+    card = card_of(frames)
+    codex, local = item_for(card, "codex-cli"), item_for(card, "ollama")
+    cwt, lwt = Path(codex["git"]["worktree"]), Path(local["git"]["worktree"])
+    # Each attempt SAW the session's work: Codex's patch applied on top of the
+    # note, and the new file is in both attempts' folders.
+    assert _text(cwt / "calc.py") == FIXED_WITH_NOTE
+    assert (cwt / "NOTES.md").read_bytes() == NOTES_MD
+    assert (lwt / "NOTES.md").read_bytes() == NOTES_MD
+    # The card counts only what each ATTEMPT changed (not the session's own
+    # work it started from).
+    assert codex["files"] == ["calc.py"], codex["files"]
+    assert codex["tests"] == "passed"
+    # The session's folder is untouched while they run.
+    assert (wt / "calc.py").read_bytes() == SESSION_CALC
+
+    status, kept = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "uc-1", "attempt": codex["id"]})
+    assert status == 200, kept
+    # Exactly the kept result in the session's folder: the session's note,
+    # Codex's fix, and the session's own new file — nothing lost.
+    assert _text(wt / "calc.py") == FIXED_WITH_NOTE
+    assert (wt / "NOTES.md").read_bytes() == NOTES_MD
+    # The session's own commits are still the user's to make: nothing was
+    # committed on the session's branch.
+    assert git("rev-parse", "HEAD", cwd=wt) == head_before
+    # The other attempt's folder went to the trash; its branch stays.
+    assert not lwt.exists()
+    assert git("rev-parse", "--verify", f"refs/heads/{local['branch']}", cwd=repo)
+    assert snapshot(repo) == before
+
+
+async def test_keep_refuses_in_words_when_the_session_changed_since_the_attempts_started(
+    app, fake, repo, monkeypatch,
+):
+    """Keep never loses work the session did AFTER the attempts started: its
+    files no longer match what the attempts started from, so Keep refuses in
+    words and NOTHING moves."""
+    await enable(app)
+    wire_models(app, monkeypatch, World({"codex-cli": passing_script(), "ollama": failing_script()}))
+    view = await new_session(app, repo)
+    sid = view["id"]
+    wt = Path(view["git"]["worktree"])
+    (wt / "calc.py").write_bytes(SESSION_CALC)
+    frames = await attempts_turn(app, sid, "Try this with Codex and the local model: fix add in calc.py.", "uc-2")
+    codex = item_for(card_of(frames), "codex-cli")
+    # Later work in the session, after the attempts started.
+    (wt / "LATER.md").write_bytes(b"written after the attempts started\n")
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "uc-2", "attempt": codex["id"]})
+    assert status == 409, body
+    assert "changed since" in body["detail"] and "nothing" in body["detail"].lower()
+    assert (wt / "calc.py").read_bytes() == SESSION_CALC
+    assert (wt / "LATER.md").exists()
+    assert Path(codex["git"]["worktree"]).exists()
+    line = next(m for m in messages_of(app, sid) if m.get("role") == "assistant" and m.get("turnId") == "uc-2")
+    assert "kept" not in line[A.LINE_KEY]
+
+
+async def test_a_session_in_its_folder_with_uncommitted_work_moves_onto_the_kept_branch(
+    app, fake, repo, monkeypatch,
+):
+    """No branch of its own, work not committed in the folder: the attempts
+    still start from the folder's CURRENT files, and Keep moves the session
+    onto the kept branch — the user's main checkout is byte-for-byte what it
+    was (its own uncommitted changes included)."""
+    await enable(app)
+    wire_models(app, monkeypatch, World({"codex-cli": passing_script(), "ollama": failing_script()}))
+    view = await new_session(app, repo, branch=False)
+    sid = view["id"]
+    (repo / "calc.py").write_bytes(SESSION_CALC)
+    (repo / "NOTES.md").write_bytes(NOTES_MD)
+    before = snapshot(repo)
+    frames = await attempts_turn(app, sid, "Try this with Codex and the local model: fix add in calc.py.", "uc-3")
+    codex = item_for(card_of(frames), "codex-cli")
+    assert _text(Path(codex["folder"]) / "calc.py") == FIXED_WITH_NOTE
+    assert (Path(codex["folder"]) / "NOTES.md").read_bytes() == NOTES_MD
+    status, kept = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "uc-3", "attempt": codex["id"]})
+    assert status == 200, kept
+    assert setup_of(app, sid)["git"]["branch"] == codex["branch"]
+    assert _text(Path(codex["folder"]) / "calc.py") == FIXED_WITH_NOTE
+    assert snapshot(repo) == before
+
+
+# --------------------------------------------------------------------------- #
+# 2. The opt-in: every phrasing is a row, both ways
+# --------------------------------------------------------------------------- #
+
+#: Messages that ASK for attempts (the user's words). (text, names or count)
+ASKS = [
+    ("Try this with Claude, Codex and the local model: fix the failing test.", ["Claude", "Codex", "the local model"]),
+    ("Try this with Claude and Codex: fix add.", ["Claude", "Codex"]),
+    ("Please try this using Codex and Claude - make add() add", ["Codex", "Claude"]),
+    ("Can you try it with Codex and the local model? The parser drops a field.", ["Codex", "the local model"]),
+    ("Fix the failing test. Try it on two models.", 2),
+    ("Try it on three models: speed up the parser.", 3),
+    ("Can you try it across three different models? The parser drops a field.", 3),
+    ("try it on 2 models", 2),
+    ("Try this on several models.", 3),
+    ("Try it with `glm-local` and Codex", ["glm-local", "Codex"]),
+    ("Now try the same thing with Codex and Claude.", ["Codex", "Claude"]),
+    ("Try with Claude and Codex: add a docstring.", ["Claude", "Codex"]),
+]
+
+#: Messages that must stay ORDINARY turns — coding words that start "Try …"
+#: and name something model-ish, a single model in a coding sense, a data
+#: "model", a pasted line in the middle of the message.
+ORDINARY = [
+    "Try this with Claude's API format",
+    "Try it with the Codex CLI flags I pasted",
+    "Try this with a local cache",
+    "Try that with GPT-style prompts",
+    "try with the local model's config",
+    "Try it with the User model and see if the migration runs.",
+    "Try this with the Order model instead.",
+    "Try it on both models and check the foreign keys.",
+    "Try it on two models first, then roll it out to the rest.",
+    "Try it on the old model and compare the loss.",
+    "Try it with gpt-5.5 instead of gpt-4o in the client.",
+    "Try it with Claude and see what happens.",
+    "Try it with Codex",
+    "Try this with the local model: fix add.",
+    "Try it with Ollama: the app should call localhost:11434.",
+    "Try it on other models.",
+    "Here is the README:\nTry it with Claude and Codex in two terminals.\nInstall it with pip.\nSummarize it.",
+    "Summarize this.\n```\nTry it with Claude and Codex\n```\nThanks.",
+    "Did you try it with Claude and Codex?",
+    "I'll try this with Claude and Codex later.",
+    "We should try harder.",
+    "Try to make it faster.",
+]
+
+MENU_NAMES = [*MENU, {"provider": "claude-cli", "model": "claude-sonnet-4-5", "available": True,
+                      "on_this_network": False}]
+
+
+@pytest.mark.parametrize("text, want", ASKS)
+def test_the_words_that_ask_for_attempts_table(text, want):
+    req = A.parse_request(text)
+    assert req is not None, text
+    if isinstance(want, int):
+        assert req.count == want and not req.names, (text, req)
+    else:
+        assert req.names == want and req.count == 0, (text, req)
+
+
+async def _ordinary(app, monkeypatch, repo, text: str, turn: str) -> list[tuple[str, dict]]:
+    world = wire_models(app, monkeypatch, World({"claude-cli": ["Sure."]}))
+    view = await new_session(app, repo)
+    status, raw = await open_turn(app, view["id"], {"text": text, "turn_id": turn}, timeout=60.0)
+    assert status == 200, (text, raw)
+    frames = frames_of(raw)
+    assert not any(e == A.EVENT for e, _ in frames), text
+    assert A.LINE_KEY not in dict(frames).get("done", {}), text
+    assert {c["provider"] for c in world.calls} <= {"claude-cli"}, text
+    return frames
+
+
+@pytest.mark.parametrize("text", ORDINARY)
+async def test_coding_words_that_start_with_try_stay_an_ordinary_turn(app, fake, repo, monkeypatch, text):
+    await enable(app)
+    await _ordinary(app, monkeypatch, repo, text, "ord-x")
+
+
+def test_the_work_keeps_its_line_breaks_and_pasted_code():
+    """The work every attempt is given is the message as written: its pasted
+    code keeps its lines (it was joined into one line, so a function pasted
+    with the request reached every attempt flattened)."""
+    text = "Try this with Claude and Codex: fix the function below.\n```py\ndef f():\n    return 1\n```"
+    req = A.parse_request(text)
+    assert req is not None and req.names == ["Claude", "Codex"]
+    assert req.task.startswith("fix the function below.")
+    assert "```py\ndef f():\n    return 1\n```" in req.task
+    last = A.parse_request("The parser drops a field.\nSee parse.py.\nTry it on two models.")
+    assert last is not None and last.count == 2
+    assert last.task == "The parser drops a field.\nSee parse.py."

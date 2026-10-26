@@ -477,7 +477,10 @@ async def test_local_only_refuses_a_cloud_model_in_the_list_and_nothing_starts(a
     assert world.calls == [], "no model was asked"
     _no_attempt_made(app, sid, tmp_path)
     # Local models only: allowed (and Local only rides each attempt).
-    status, raw = await open_turn(app, sid, {"text": "Try this with the local model: fix add.", "turn_id": "lo-2"},
+    # (Review, v1.397.0: ONE model is the "Try on…" control's — the words ask
+    # for several.)
+    status, raw = await open_turn(app, sid, {"text": "fix add.", "turn_id": "lo-2",
+                                             "try_on": [{"provider": LOCAL[0], "model": LOCAL[1]}]},
                                   timeout=120.0)
     assert status == 200, raw
     card = card_of(frames_of(raw))
@@ -573,7 +576,7 @@ def test_a_model_cannot_start_attempts():
     ("Please try this using Codex and Claude - make add() add", ["Codex", "Claude"], 0, "make add() add"),
     ("Can you try it across three different models? The parser drops a field.",
      [], 3, "The parser drops a field."),
-    ("try it with `glm-local`", ["glm-local"], 0, ""),
+    ("try it with `glm-local` and Codex", ["glm-local", "Codex"], 0, ""),
 ])
 def test_the_words_that_ask_for_attempts(text, names, count, task):
     req = A.parse_request(text)
@@ -778,7 +781,7 @@ async def test_an_attempts_approval_card_is_drawn_on_its_row_and_answered_there(
     view = await new_session(app, repo, approval_mode="always_ask")
     sid = view["id"]
     task = asyncio.create_task(open_turn(app, sid, {
-        "text": "Try this with the local model: say hello.", "turn_id": "ap-1",
+        "text": "say hello.", "turn_id": "ap-1", "try_on": [{"provider": LOCAL[0], "model": LOCAL[1]}],
     }, timeout=120.0))
 
     def asking():
@@ -925,7 +928,8 @@ async def test_the_account_groups_hold_for_every_attempt(app, fake, repo, tmp_pa
     # A Codex account in the group: the attempt runs on THAT one (never the
     # first free Codex account outside it).
     app.state.platform.config.account_groups = {"work": ["c-work", "x-team"]}
-    frames = await attempts_turn(app, view["id"], "Try this with Codex: fix add in calc.py.", "grp-2")
+    frames = await attempts_turn(app, view["id"], "fix add in calc.py.", "grp-2",
+                                 try_on=[{"provider": CODEX[0], "model": CODEX[1]}])
     assert item_for(card_of(frames), "codex-cli")["account"] == "x-team"
     assert {c["pin"] for c in world.calls if c["provider"] == "codex-cli"} == {"x-team"}
 
@@ -935,7 +939,8 @@ async def test_with_iron_proxy_off_an_attempt_runs_on_this_pcs_own_login(app, re
     this PC's own login, exactly like the session's own turns."""
     world = wire_models(app, monkeypatch, World({"codex-cli": passing_script()}))
     view = await new_session(app, repo)
-    frames = await attempts_turn(app, view["id"], "Try this with Codex: fix add in calc.py.", "off-1")
+    frames = await attempts_turn(app, view["id"], "fix add in calc.py.", "off-1",
+                                 try_on=[{"provider": CODEX[0], "model": CODEX[1]}])
     codex = item_for(card_of(frames), "codex-cli")
     assert "account" not in codex and codex["tests"] == "passed"
     assert {c["pin"] for c in world.calls} == {None}

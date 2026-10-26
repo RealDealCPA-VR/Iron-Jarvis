@@ -40,8 +40,12 @@ model's work honest still holds, per attempt:
   ``procs.end_session`` ends them when the attempt ends), so the FINISH CHECK
   runs inside each attempt and its record rides the attempt's ``done``;
 * a folder that is not in a git repository is refused in words
-  (:data:`NEEDS_GIT`), and so is a session with changes not committed (the
-  attempts start from its last commit, and Keep's merge would refuse them).
+  (:data:`NEEDS_GIT`). A session's work NOT COMMITTED yet (review: the agent
+  asks before every commit, so a session that did anything has some) is
+  CARRIED into every attempt (:func:`snapshot_commit`), and Keep then lands
+  the kept result in the session's folder as changes not committed
+  (:func:`land`) — only while the folder still holds what the attempts
+  started from.
 
 WHERE THE ATTEMPTS START (``branches.start`` with a start point): the
 session's own branch head; a session that works in its folder directly
@@ -133,14 +137,6 @@ NEEDS_GIT = (
     "This session's folder is not in a git repository, so nothing started."
 )
 TOO_MANY = "At most three attempts run at once. Name up to three models; nothing started."
-UNCOMMITTED = (
-    "This session has changes that are not committed yet, and the attempts would start from its "
-    "last commit without them. Commit them first (the Branch pane), then try again; nothing started."
-)
-UNCOMMITTED_FOLDER = (
-    "This folder has changes that are not committed yet, and the attempts would start from its last "
-    "commit without them. Commit them first, then try again; nothing started."
-)
 NO_TASK = (
     "Say what to try, for example: “Try this with Claude and Codex: fix the failing test.” "
     "Nothing started."
@@ -209,9 +205,6 @@ class Request:
     task: str = ""
     #: The user's own words that asked (the sentence), for the question line.
     said: str = ""
-    #: The names part mentions a model ("on these models") — a request even
-    #: when no name is known.
-    says_model: bool = False
 
 
 #: Words that may come before "try" at the start of a sentence.
@@ -222,18 +215,28 @@ _TRY_RX = re.compile(
     r"(?:with|on|using|across|against)\s+(?P<rest>\S.*)$",
     re.I | re.S,
 )
+#: "two models", "three different models", "several models" — the WHOLE names
+#: part (review, v1.397.0): a count followed by more words ("two models first,
+#: then roll it out") is someone's code talk, not a request. "both" is not a
+#: count here: "both models" names two models the user already has (an ORM's,
+#: an ML project's).
 _COUNT_RX = re.compile(
-    r"^(?:the\s+)?(?P<n>two|three|2|3|both|a\s+couple\s+of|a\s+few|several)\s+"
-    r"(?:different\s+|other\s+|of\s+(?:my|your|the)\s+)?models?\b",
+    r"^(?:the\s+)?(?P<n>two|three|2|3|a\s+couple\s+of|a\s+few|several)\s+"
+    r"(?:different\s+|other\s+|of\s+(?:my|your|the)\s+)?(?:ai\s+|llm\s+)?models?"
+    r"(?:\s+(?:at\s+once|in\s+parallel|side\s+by\s+side))?$",
     re.I,
 )
-_COUNTS = {"two": 2, "2": 2, "both": 2, "a couple of": 2, "three": 3, "3": 3, "a few": 3, "several": 3}
+_COUNTS = {"two": 2, "2": 2, "a couple of": 2, "three": 3, "3": 3, "a few": 3, "several": 3}
 #: Where the names end and the work begins: "…the local model: fix the test".
 _SPLIT_TASK_RX = re.compile(r"\s*(?::|;|\s—\s|\s–\s|\s-\s)\s*")
 _NAME_SPLIT_RX = re.compile(r"\s*(?:,|\band\b|\bor\b|&|\+|\bplus\b)\s*", re.I)
 #: A sentence boundary (a period/question/exclamation mark followed by space,
 #: or a line break). A model id like "claude-4.5" has no space after its dot.
 _SENTENCE_RX = re.compile(r"(?<=[.!?])\s+(?=\S)|\n+")
+#: A fenced block (``` or ~~~) — pasted code or output, never the user asking.
+_FENCE_RX = re.compile(r"(^|\n)[ \t]*(```|~~~)[^\n]*\n.*?(?:\n[ \t]*\2[^\n]*(?=\n|$)|$)", re.S)
+#: A quoted line ("> …") — someone else's words.
+_QUOTE_RX = re.compile(r"(^|\n)[ \t]*>[^\n]*")
 
 
 def _clean_name(raw: str) -> str:
@@ -241,22 +244,52 @@ def _clean_name(raw: str) -> str:
     return " ".join(name.split())
 
 
+def _without_pasted(body: str) -> str:
+    """The message with fenced blocks and quoted lines blanked (each becomes a
+    line break), so a pasted README or log that says "Try it with Claude and
+    Codex" is never read as the user asking."""
+    out = _FENCE_RX.sub(lambda m: m.group(1) + "\n", body)
+    return _QUOTE_RX.sub(lambda m: m.group(1) + "\n", out)
+
+
+def _task_without(body: str, sentence: str, after: str, *, last: bool) -> str:
+    """The work to try: the request sentence's own words after its colon, and
+    the REST of the message as written — its line breaks and pasted code kept
+    (review, v1.397.0: the rest was joined into one line, so code pasted with
+    the request reached every attempt flattened)."""
+    at = body.rfind(sentence) if last else body.find(sentence)
+    if at < 0:
+        rest = ""
+    else:
+        rest = (body[:at] + body[at + len(sentence):]).strip()
+    if after and rest:
+        return f"{after}\n{rest}" if not last else f"{rest}\n{after}"
+    return (after or rest).strip()
+
+
 def parse_request(text: Any) -> "Request | None":
     """The attempts a MESSAGE asks for, or None for an ordinary message.
 
-    Only a sentence that STARTS with "try" (after "please", "can you" …) and
-    goes on "this/it with|on|using|across …" asks: "Try this with Claude,
-    Codex and the local model: fix the failing test." / "Fix the test. Try it
-    on two models." The first such sentence counts. Whether the names are
-    models is decided later (:func:`resolve`): a sentence whose names are
-    none of the user's models ("try it with a smaller input") is an ordinary
+    Only the FIRST or the LAST sentence of the message can ask (review,
+    v1.397.0: a pasted README line "Try it with Claude and Codex" in the
+    middle started attempts), never a fenced block or a quoted line, and only
+    a sentence that STARTS with "try" (after "please", "can you" …) and goes
+    on "this/it with|on|using|across …": "Try this with Claude, Codex and the
+    local model: fix the failing test." / "Fix the test. Try it on two
+    models." Whether the names are models is decided later (:func:`resolve`):
+    a sentence whose names are not two or more of the user's models ("try it
+    with a smaller input", "try it with the User model") is an ordinary
     message. Pure; never raises."""
     try:
         body = str(text or "").strip()
         if not body or "try" not in body.lower():
             return None
-        parts = [p for p in _SENTENCE_RX.split(body) if p and p.strip()]
-        for idx, sentence in enumerate(parts):
+        parts = [p.strip() for p in _SENTENCE_RX.split(_without_pasted(body)) if p and p.strip()]
+        if not parts:
+            return None
+        order = [(0, False)] + ([(len(parts) - 1, True)] if len(parts) > 1 else [])
+        for idx, last in order:
+            sentence = parts[idx]
             m = _TRY_RX.match(sentence)
             if not m:
                 continue
@@ -264,17 +297,17 @@ def parse_request(text: Any) -> "Request | None":
             split = _SPLIT_TASK_RX.split(rest, maxsplit=1)
             names_part = split[0].strip().rstrip(".!?").strip()
             after = split[1].strip() if len(split) > 1 else ""
-            others = [p.strip() for j, p in enumerate(parts) if j != idx]
-            task = " ".join([after, *others]).strip() if after else " ".join(others).strip()
-            req = Request(task=task, said=sentence.strip())
-            req.says_model = bool(re.search(r"\bmodels?\b", names_part, re.I))
+            req = Request(task=_task_without(body, sentence, after, last=last), said=sentence)
             cm = _COUNT_RX.match(names_part)
             if cm:
                 req.count = _COUNTS.get(" ".join(cm.group("n").lower().split()), 2)
                 return req
             names = [_clean_name(n) for n in _NAME_SPLIT_RX.split(names_part)]
             req.names = [n for n in names if n]
-            if not req.names:
+            if len(req.names) < 2:
+                # One name is someone's code talk as often as a request ("try
+                # it with Ollama", "try it with gpt-5.5"): the words ask for
+                # SEVERAL models; one model is the "Try on…" control's.
                 continue
             return req
     except Exception:  # noqa: BLE001 — a message that cannot be read is an ordinary one
@@ -639,8 +672,17 @@ def resolve(platform: Any, req: Request, menu: Menu, *, local_only: bool = False
             raise AttemptsRefused(NOTHING_TO_TRY.format(local=" that stay on this network" if local_only else ""))
         return picked
     resolved: list["Target | str | None"] = [_resolve_one(platform, menu, n) for n in req.names]
-    if not any(isinstance(r, (Target, str)) for r in resolved) and not req.says_model:
-        return None  # "try it with a smaller input": not models at all
+    known = [r for r in resolved if isinstance(r, (Target, str))]
+    unknown = [n for n, r in zip(req.names, resolved) if r is None]
+    # THE OPT-IN (review, v1.397.0): the words ask only when they name at
+    # least two models. A name that is not a model ("the User model", "see
+    # what happens", "Codex in two terminals") makes it an ordinary message —
+    # unless it reads like a model's NAME beside a known one ("Codex and
+    # Mistral Large"), which is said in words. When unsure: an ordinary turn.
+    if len(known) < 2 and not (known and unknown and all(_looks_like_a_name(n) for n in unknown)):
+        return None
+    if unknown and not all(_looks_like_a_name(n) for n in unknown):
+        return None
     if len(req.names) > MAX_ATTEMPTS:
         raise AttemptsRefused(TOO_MANY)
     for name, got in zip(req.names, resolved):
@@ -652,6 +694,29 @@ def resolve(platform: Any, req: Request, menu: Menu, *, local_only: bool = False
                 "from the model menu (or “the local model”); nothing started."
             )
     return _no_twins([t for t in resolved if isinstance(t, Target)])
+
+
+#: Words a NAME never starts with: an article or a possessive (a thing of the
+#: user's — "the User model", "my cache"), or a verb (a clause — "see what
+#: happens", "let me know").
+_NOT_A_NAME_START = frozenset({
+    "the", "a", "an", "my", "your", "our", "this", "that", "these", "those", "its", "their", "his", "her",
+    "see", "let", "tell", "check", "show", "make", "run", "compare", "report", "pick", "keep", "give",
+    "find", "fix", "write", "add", "then", "also", "and", "or", "if", "when", "so", "use", "do", "try",
+    "other", "some", "any", "all", "both", "each", "every", "more", "different", "same", "another",
+})
+
+
+def _looks_like_a_name(raw: str) -> bool:
+    """Does an unknown name read like a MODEL's name ("Mistral Large",
+    "llama-3.3", "Qwen3 Coder")? One to three words, never an article, a
+    possessive or a verb first, never the word "model". Pure."""
+    words = _norm(raw).split()
+    if not 1 <= len(words) <= 3:
+        return False
+    if words[0] in _NOT_A_NAME_START or any(w in ("model", "models") for w in words):
+        return False
+    return not any("'" in w for w in words)
 
 
 def _no_twins(targets: list[Target]) -> list[Target]:
@@ -769,19 +834,121 @@ class StartPoint:
     """Where the attempts start: the folder their worktrees are made for, the
     commit, the branch they name as their base (the session's own, or the
     folder's), and whether Keep MOVES the session onto the kept branch (a
-    session that worked in its folder directly)."""
+    session that worked in its folder directly).
+
+    ``carried`` (review, v1.397.0): the session had work NOT COMMITTED yet
+    (the agent asks before every commit, so a session that did anything has
+    some) — ``sha`` is then a commit Iron Jarvis made of the session's CURRENT
+    files on top of ``head`` (:func:`snapshot_commit`), every attempt starts
+    from it, and Keep lands the kept result in the session's folder instead
+    of merging (:func:`land`)."""
 
     checkout: str
     sha: str
     base: str
     adopt: bool
     folder: str
+    head: str = ""
+    carried: bool = False
+
+
+#: The subject of the commit that carries a session's work not committed yet
+#: into its attempts (on the ATTEMPTS' branches only — never the session's).
+CARRIED_SUBJECT = "Work not committed yet in the session, carried into this attempt"
+
+
+def _gi(args: list[str], cwd: Path, index: "Path | None" = None, *, timeout: float = 300.0,
+        input: "bytes | None" = None) -> Any:
+    """One git call through the branch module's own runner (bounded, the tree
+    killed on a timeout, no terminal prompt), with a THROWAWAY index file when
+    ``index`` is given — the folder's own index is never written. BLOCKING."""
+    from ..git.integration import git_env, run_git
+
+    env = git_env({"GIT_INDEX_FILE": str(index)} if index is not None else None)
+    return run_git(["-c", "core.quotepath=off", *args], Path(cwd), timeout=timeout, env=env,
+                   identity=False, input=input, encoding="utf-8")
+
+
+def _copy_own_index(cwd: Path, to: Path) -> bool:
+    """Copy the folder's own index to ``to`` (READ only: its file stats let
+    ``git add -A`` skip every file that did not change instead of hashing the
+    whole repository). False when there is none to copy. BLOCKING."""
+    import shutil
+
+    got = _gi(["rev-parse", "--git-path", "index"], cwd)
+    if not got.ok or not got.out.strip():
+        return False
+    own = Path(got.out.strip())
+    if not own.is_absolute():
+        own = Path(cwd) / own
+    try:
+        shutil.copyfile(own, to)
+        return True
+    except OSError:
+        return False
+
+
+def folder_tree(cwd: Path, head: str) -> str:
+    """The tree of the folder's CURRENT files — committed or not, new files
+    included, ignored ones left out (``git add -A`` into a THROWAWAY copy of
+    its index, else one read from ``head``). The folder's own index, files
+    and refs are not touched. "" when it cannot be read. BLOCKING."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="ij-attempt-index-") as tmp:
+        index = Path(tmp) / "index"
+        for copied in (True, False):
+            if copied:
+                if not _copy_own_index(cwd, index):
+                    continue
+            else:
+                with contextlib.suppress(OSError):
+                    index.unlink()
+                if not _gi(["read-tree", head], cwd, index).ok:
+                    return ""
+            if not _gi(["add", "-A", "--", "."], cwd, index).ok:
+                continue
+            got = _gi(["write-tree"], cwd, index)
+            if got.ok and got.out.strip():
+                return got.out.strip()
+        return ""
+
+
+def _tree_of(cwd: Path, commit: str) -> str:
+    got = _gi(["rev-parse", "--verify", "-q", f"{commit}^{{tree}}"], cwd)
+    return got.out.strip() if got.ok else ""
+
+
+def snapshot_commit(cwd: Path, head: str) -> str:
+    """A commit OBJECT of the folder's current files on top of ``head`` (no
+    branch, no ref moves: nothing of the user's changes) — "" when the folder
+    has nothing that is not committed. Raises :class:`AttemptsRefused` when
+    the files cannot be read. BLOCKING."""
+    from ..git.integration import default_identity, git_env, has_identity
+
+    tree = folder_tree(cwd, head)
+    if not tree:
+        raise AttemptsRefused(
+            "The session's files could not be read to start the attempts from them; nothing started.", 409,
+        )
+    if tree == _tree_of(cwd, head):
+        return ""
+    ident = [] if has_identity(cwd, git_env()) else default_identity()
+    made = _gi([*ident, "commit-tree", tree, "-p", head, "-F", "-"], cwd,
+               input=(CARRIED_SUBJECT + "\n").encode("utf-8"))
+    sha = made.out.strip() if made.ok else ""
+    if not sha:
+        raise AttemptsRefused(
+            "The session's work not committed yet could not be carried into the attempts; nothing started.", 409,
+        )
+    return sha
 
 
 def start_point(row: Any) -> StartPoint:
     """The session's start point, or :class:`AttemptsRefused` in words: no
-    git, not a repository, a branch that cannot be made, changes not
-    committed. BLOCKING (a few git reads)."""
+    git, not a repository, a branch that cannot be made. Work not committed
+    yet is CARRIED into the attempts (:func:`snapshot_commit`). BLOCKING (a
+    few git reads, one ``git add -A`` into a throwaway index)."""
     from . import branches as B
     from . import sessions as S
 
@@ -797,13 +964,13 @@ def start_point(row: Any) -> StartPoint:
             B._require_on_branch(facts, wt)  # noqa: SLF001 — the branch module's own check
         except B.GitRefused as exc:
             raise AttemptsRefused(str(exc), 409) from None
-        if B._porcelain(wt, untracked=False):  # noqa: SLF001
-            raise AttemptsRefused(UNCOMMITTED, 409)
-        sha = B._ref_sha(wt, "HEAD")  # noqa: SLF001
-        if not sha:
+        head = B._ref_sha(wt, "HEAD")  # noqa: SLF001
+        if not head:
             raise AttemptsRefused(NEEDS_GIT, 409)
-        return StartPoint(checkout=facts.get("checkout") or facts.get("repo", ""), sha=sha,
-                          base=facts.get("branch", ""), adopt=False, folder=folder)
+        carried = snapshot_commit(wt, head)
+        return StartPoint(checkout=facts.get("checkout") or facts.get("repo", ""), sha=carried or head,
+                          base=facts.get("branch", ""), adopt=False, folder=folder, head=head,
+                          carried=bool(carried))
     if not folder:
         raise AttemptsRefused(NEEDS_GIT, 409)
     info = B.inspect_folder(folder)
@@ -812,12 +979,59 @@ def start_point(row: Any) -> StartPoint:
     if not info.get("can_branch"):
         raise AttemptsRefused(f"{info.get('note') or NEEDS_GIT} Nothing started.", 409)
     root = Path(info["root"])
-    if B._porcelain(root, untracked=False):  # noqa: SLF001
-        raise AttemptsRefused(UNCOMMITTED_FOLDER, 409)
-    sha = B._ref_sha(root, "HEAD")  # noqa: SLF001
-    if not sha:
+    head = B._ref_sha(root, "HEAD")  # noqa: SLF001
+    if not head:
         raise AttemptsRefused(NEEDS_GIT, 409)
-    return StartPoint(checkout=folder, sha=sha, base=str(info.get("branch") or ""), adopt=True, folder=folder)
+    carried = snapshot_commit(root, head)
+    return StartPoint(checkout=folder, sha=carried or head, base=str(info.get("branch") or ""), adopt=True,
+                      folder=folder, head=head, carried=bool(carried))
+
+
+KEEP_CHANGED_SINCE = (
+    "This session's files changed since the attempts started, so keeping one now would lose those "
+    "changes. Nothing was changed. Commit or undo the newer changes, or try the work again."
+)
+KEEP_LAND_FAILED = (
+    "The kept attempt's files could not be put in this session's folder ({why}). Nothing was changed."
+)
+
+
+def land(session_wt: Path, from_tree: str, to_tree: str) -> None:
+    """KEEP for attempts that CARRIED the session's work not committed yet:
+    the session's folder goes from ``from_tree`` (what the attempts started
+    from — the folder must still hold exactly that, :func:`folder_tree`) to
+    ``to_tree`` (the kept attempt's result), as changes NOT COMMITTED — the
+    session's own commits stay the user's to make. One two-tree
+    ``read-tree -m -u`` through a throwaway index: git refuses before it
+    writes anything when a file is not what it should be. The session's own
+    index and branch are not touched. Raises :class:`AttemptsRefused`.
+    BLOCKING."""
+    import tempfile
+
+    head = _gi(["rev-parse", "--verify", "-q", "HEAD"], session_wt)
+    if not head.ok or folder_tree(session_wt, head.out.strip()) != from_tree:
+        raise AttemptsRefused(KEEP_CHANGED_SINCE, 409)
+    with tempfile.TemporaryDirectory(prefix="ij-attempt-keep-") as tmp:
+        index = Path(tmp) / "index"
+        # A copy of the session's own index keeps the stats of every file
+        # that is unchanged (a single-tree ``read-tree -m`` reuses them).
+        if not (_copy_own_index(session_wt, index) and _gi(["read-tree", "-m", from_tree], session_wt, index).ok):
+            with contextlib.suppress(OSError):
+                index.unlink()
+            if not _gi(["read-tree", from_tree], session_wt, index).ok:
+                raise AttemptsRefused(KEEP_LAND_FAILED.format(why="git could not read the attempts' start"), 409)
+        steps = (
+            ["update-index", "-q", "--refresh"],
+            ["read-tree", "-m", "-u", from_tree, to_tree],
+        )
+        for args in steps:
+            got = _gi(args, session_wt, index)
+            if not got.ok and args[0] != "update-index":
+                from .branches import _masked
+
+                said = (got.err or got.out or "").strip()
+                why = _masked(said, 300).splitlines()[0] if said else "git refused"
+                raise AttemptsRefused(KEEP_LAND_FAILED.format(why=why), 409)
 
 
 def make_worktrees(start: StartPoint, targets: list[Target]) -> list[dict[str, str]]:
@@ -1344,13 +1558,17 @@ def summary_words(card: dict[str, Any]) -> str:
 
 def card_of(plan: Plan) -> dict[str, Any]:
     """The card as the done frame and the reply line carry it."""
-    return {
+    out = {
         "task": _short(plan.task, TASK_CHARS),
         "base": plan.start.base,
         "base_commit": plan.start.sha[:40],
         "adopt": plan.start.adopt,
         "items": [_saved_item(a.frame()) for a in plan.attempts],
     }
+    if plan.start.carried:
+        # Review: they started from the session's work not committed yet.
+        out["carried"] = True
+    return out
 
 
 async def run_attempts(platform: Any, personas: dict, plan: Plan) -> AsyncIterator[str]:
@@ -1539,6 +1757,9 @@ def saved_card(raw: Any, *, cut_off: bool = False) -> "dict[str, Any] | None":
         if isinstance(v, str) and v:
             out[key] = v[:cap]
     out["adopt"] = raw.get("adopt") is True
+    for key in ("carried", "landed"):
+        if raw.get(key) is True:
+            out[key] = True
     return out
 
 
@@ -1626,12 +1847,31 @@ def keep(platform: Any, thread_id: str, turn_id: str, attempt_id: str) -> dict[s
     out: dict[str, Any] = {"kept": attempt_id}
     before = B._ref_sha(wt, "HEAD")  # noqa: SLF001
     made = ""
+    carried = card.get("carried") is True
     try:
         if B._porcelain(wt):  # noqa: SLF001
             got = B.commit(facts, _keep_message(card, item))
             made = B._ref_sha(wt, "HEAD")  # noqa: SLF001
             out["commit"] = str(got.get("sha", ""))
-        if adopt:
+        if carried and not adopt:
+            # Review (v1.397.0): the attempts started from the session's work
+            # NOT COMMITTED yet. Its branch cannot take a merge over that
+            # work, and committing the session's own work is the user's call:
+            # the kept result goes into the session's folder as changes not
+            # committed yet — only while the folder still holds exactly what
+            # the attempts started from (nothing of later work is lost).
+            start_tree = _tree_of(wt, str(card.get("base_commit") or ""))
+            kept_tree = _tree_of(wt, "HEAD")
+            if not start_tree or not kept_tree:
+                raise AttemptsRefused(KEEP_NO_BRANCH, 409)
+            if start_tree == kept_tree:
+                raise AttemptsRefused(f"Nothing to keep: the attempt on {label} made no changes.", 409)
+            session_wt = Path(str((session_facts or {}).get("worktree") or ""))
+            if not session_wt.is_dir():
+                raise AttemptsRefused(KEEP_SESSION_GONE, 409)
+            land(session_wt, start_tree, kept_tree)
+            out["landed"] = True
+        elif adopt:
             was = S.folder_of(row)
             if not S.adopt_branch(platform.engine, thread_id, facts, str(item.get("folder") or facts["worktree"]),
                                   was_folder=was):
@@ -1686,11 +1926,23 @@ def keep(platform: Any, thread_id: str, turn_id: str, attempt_id: str) -> dict[s
     if out.get("merged_into"):
         card["merged_into"] = out["merged_into"]
         card["merge_commit"] = str(out.get("merge_commit") or "")
+    if out.get("landed"):
+        card["landed"] = True
+    if adopt and carried:
+        # The folder's own changes not committed stay in the folder (it is
+        # never touched); the session's branch has them too now.
+        notes.append(
+            f"The changes not committed in {S.folder_of(row) or 'your folder'} are still there as well; "
+            "this session's branch has them too."
+        )
     if notes:
         card["keep_note"] = " ".join(notes)[:600]
     if adopt:
         said = (f"Kept the attempt on {label}: this session now works on its branch "
                 f"{facts.get('branch')}.")
+    elif out.get("landed"):
+        said = (f"Kept the attempt on {label}: its result is in this session's folder, not committed "
+                "yet (the attempts started from this session's work that was not committed).")
     else:
         said = f"Kept the attempt on {label}: merged into {out.get('merged_into') or facts.get('base')}."
     content = str(line.get("content") or "").rstrip()
