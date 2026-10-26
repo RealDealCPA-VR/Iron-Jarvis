@@ -93,13 +93,19 @@ async def publish_delegation_started(
     target: str,
     task: str,
     handoff_id: str | None = None,
+    role: str = "",
+    reason: str = "",
 ) -> None:
     """Announce a handoff on the PARENT's session (see ``EventType``).
 
     ``handoff_id`` (v1.309.0) rides only on a REMOTE handoff, which opens no
     child session: it is the key a reader groups that handoff's started and
     completed events by, so two handoffs to one remote are two cards — never
-    one collapsed by agent name."""
+    one collapsed by agent name.
+
+    ``role`` / ``reason`` (v1.395.0) ride only when the planner asked for a
+    ROLE and the team router picked the member: the role and its one
+    sentence of why."""
     await platform.event_bus.publish(
         EventType.DELEGATION_STARTED,
         {
@@ -108,6 +114,7 @@ async def publish_delegation_started(
             "agent": target,
             "task": _short(task),
             **({"handoff_id": handoff_id} if handoff_id else {}),
+            **({"role": role, "reason": _short(reason, 300)} if role and reason else {}),
         },
         session_id=session_id,
     )
@@ -209,13 +216,21 @@ class DelegateTool(Tool):
         "('builder', 'researcher', 'reviewer'), a listed "
         "'custom:<name>' agent, or a listed 'remote:<name>' agent; defaults "
         "to 'builder' — and task (the self-contained instruction for the "
-        "subagent)."
+        "subagent). Instead of a name you may give role — read, code, review "
+        "or test — and Iron Jarvis picks the member of the user's model team "
+        "for it (a local one first when its record for that role is good; a "
+        "cloud account near its usage limit gets no new work); the answer says "
+        "who took it. Give piece (a short name for this piece of work) and "
+        "hand it out again under the same piece name if it failed: after it "
+        "fails twice on one member it moves to the next one up."
     )
     input_schema = {
         "type": "object",
         "properties": {
             "agent_type": {"type": "string"},
             "task": {"type": "string"},
+            "role": {"type": "string", "enum": ["read", "code", "review", "test"]},
+            "piece": {"type": "string"},
         },
         "required": ["task"],
     }
@@ -268,6 +283,39 @@ class DelegateTool(Tool):
         # trust and approval posture (``harness/helpers``). None for every
         # other caller, whose behaviour below is unchanged.
         _hp = _helpers.parent_for(ctx)
+
+        # A ROLE INSTEAD OF A NAME (v1.395.0, the long-jobs plan's Phase 6,
+        # decision 7): ``role`` (or ``agent_type: "role:<id>"`` — the dialects'
+        # own helper tools carry no role argument) asks the TEAM ROUTER for
+        # the member (``model_team.route_role``, off the loop). A NAMED member
+        # still runs exactly as before; a role beside the name only says what
+        # the piece is (its record). An unknown role, or one no usable member
+        # holds, is refused in words — never a silent run as anyone else.
+        _route = None
+        _team_role = ""
+        _piece = ""
+        _role_text = _model_team.role_named(raw_type)
+        _role_arg = args.get("role")
+        if _role_text is not None or str(_role_arg or "").strip():
+            _asked = _role_text if _role_text is not None else _role_arg
+            _team_role = _model_team.role_id(_asked)
+            if not _team_role:
+                _helpers.note_route(_hp, reason="not started: that is not a team role")
+                return ToolResult(ok=False, output="", error=_model_team.unknown_role_refusal(_asked))
+            _piece = _model_team.piece_key(args.get("piece"), task)
+            if _role_text is not None or not str(args.get("agent_type") or "").strip():
+                _route = await asyncio.to_thread(
+                    _model_team.route_for_call, self.platform, role=_team_role, piece=_piece,
+                    session_id=ctx.session_id, helper_parent=_hp,
+                )
+                _helpers.note_route(_hp, role=_team_role, reason=_route.reason)
+                if _route.record is None:
+                    return ToolResult(
+                        ok=False, output="", error=_route.refusal,
+                        data={"role": _team_role, "reason": _route.reason, "state": "not_started",
+                              "waited": _route.waited},
+                    )
+                raw_type = f"custom:{_route.record.name}"
 
         # CAPABILITY ROSTER (v1.139.0): resolve the target through the roster
         # first — it validates builtin names AND surfaces dynamic
@@ -414,7 +462,12 @@ class DelegateTool(Tool):
             dyn_model = (_model_team.pinned_model(self.platform, rec) or None) if rec is not None else None
             # v1.394.0: a member's helper inherits from the turn but runs on
             # ITS OWN model and account (no-op for everyone else).
-            _hp = _helpers.for_member(_hp, self.platform, rec)
+            # v1.395.0: on the account the TEAM ROUTER chose, when it chose.
+            _hp = (
+                _helpers.for_member(_hp, self.platform, rec, pin=_route.pin)
+                if (_route is not None and _route.pin_set)
+                else _helpers.for_member(_hp, self.platform, rec)
+            )
             agent_type = definition.type
         else:
             _name = entry.name if entry is not None else raw_type
@@ -498,6 +551,16 @@ class DelegateTool(Tool):
             approval_mode = approval_mode or (rec.approval_mode or "")
             max_steps = rec.max_steps or None
         target_name = entry.name if entry is not None else agent_type.value
+        # v1.395.0: a ROLE's piece is credited to the member's record for it
+        # (``agents/team_record``) — only when the member HOLDS that role.
+        _record_role = (
+            _team_role
+            if (rec is not None and _team_role and _team_role in _model_team.roles_of(rec))
+            else ""
+        )
+        # A reviewer member is asked for a verdict line (team_record), which
+        # the record credits to the work it reviewed.
+        _child_task = _model_team.review_task(_record_role, task)
         # AN IJ HARNESS TURN'S HELPER (v1.372.0) has no parent ROW (its turn
         # runs under ``build:<id>``): everything above read None and would
         # have handed it the configured default model in a scratch folder.
@@ -531,7 +594,7 @@ class DelegateTool(Tool):
             child_fanout_key(ctx.agent_run_id, ctx.session_id),
         ), _helpers.helper_slot(_hp):
             child_session = await orch.create_session(
-                task,
+                _child_task,
                 agent_type,
                 provider=provider,
                 model=model,
@@ -562,6 +625,8 @@ class DelegateTool(Tool):
                 child_session_id=child_session.id,
                 target=target_name,
                 task=task,
+                role=_team_role if _route is not None else "",
+                reason=_route.reason if _route is not None else "",
             )
             # v1.372.0: the harness row starts following the helper.
             _helpers.child_started(_hp, self.platform, child_session.id, target_name, task)
@@ -592,10 +657,16 @@ class DelegateTool(Tool):
                     # else, and inside a session ``pinned`` does it).
                     # v1.394.0 review: and a non-member started from inside a
                     # member's run steps out of THAT member's hold.
-                    with _helpers.pinned(_hp), (
-                        _model_team.member_scope(self.platform, rec, str(provider or ""))
-                        if _hp is None else _model_team.member_scope(self.platform, None)
-                    ):
+                    # v1.395.0: on the account the TEAM ROUTER chose, when it chose.
+                    if _hp is not None:
+                        _scope = _model_team.member_scope(self.platform, None)
+                    elif _route is not None and _route.pin_set:
+                        _scope = _model_team.member_scope(
+                            self.platform, rec, str(provider or ""), pin=_route.pin
+                        )
+                    else:
+                        _scope = _model_team.member_scope(self.platform, rec, str(provider or ""))
+                    with _helpers.pinned(_hp), _scope:
                         child_task = asyncio.ensure_future(
                             AgentRuntime(self.platform).run(
                                 child_session,
@@ -685,6 +756,12 @@ class DelegateTool(Tool):
                     f"{type(exc).__name__}: {exc}"
                 )
                 await orch._finalize_failed(child_session, exc)
+                # v1.395.0: a piece that crashed or was refused counts against
+                # the member's record for its role.
+                await _model_team.note_piece(
+                    self.platform, record=rec, role=_record_role, session_id=child_session.id,
+                    scope=ctx.session_id, piece=_piece, finished=False,
+                )
                 await publish_delegation_completed(
                     self.platform,
                     session_id=ctx.session_id,
@@ -703,6 +780,7 @@ class DelegateTool(Tool):
                         "child_session_id": child_session.id,
                         "agent_type": child_session.agent_type.value,
                         "state": "failed",
+                        **({"role": _team_role, "reason": _route.reason} if _route is not None else {}),
                     },
                 )
 
@@ -747,6 +825,12 @@ class DelegateTool(Tool):
             await orch._post_run_allowance(child_session)
 
             ok = run.state is AgentState.COMPLETED
+            # v1.395.0: the piece's row in the member's record for its role
+            # (and a reviewer's verdict on the work it reviewed).
+            await _model_team.note_piece(
+                self.platform, record=rec, role=_record_role, session_id=child_session.id,
+                scope=ctx.session_id, piece=_piece, finished=ok, report=run.result,
+            )
             await publish_delegation_completed(
                 self.platform,
                 session_id=ctx.session_id,
@@ -778,6 +862,8 @@ class DelegateTool(Tool):
                     # Where the child actually worked: the parent's real folder
                     # when it had one, else its own disposable workspace.
                     "workspace": child_session.workspace_path,
+                    # v1.395.0: the role asked for, and why this member took it.
+                    **({"role": _team_role, "reason": _route.reason} if _route is not None else {}),
                 },
             )
 

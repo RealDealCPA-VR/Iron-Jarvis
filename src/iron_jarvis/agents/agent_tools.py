@@ -90,8 +90,29 @@ class CreateAgentTool(Tool):
                     "rather than inherited. Call tool_list to see what exists."
                 ),
             )
-        description = args.get("description") or ""
-        base_type = args.get("base_type") or "builder"
+        # AN UPSERT KEEPS WHAT THE CALL DOES NOT NAME (v1.395.0, the Phase 5
+        # review's open item — the ``_KEEP`` rule ``register`` already applies
+        # to the job card). This tool names a prompt and a tool list; on an
+        # EXISTING agent it used to reset its description to "", its base type
+        # to "builder" and its model to the default — so a model "updating" a
+        # team member's prompt quietly moved it off the model, roles and
+        # account the user gave it. Now only the fields the call names change;
+        # roles and the account are never this tool's to touch.
+        existing = None
+        try:
+            existing = self.registry.get(name)
+        except Exception:  # noqa: BLE001 — no record: a create
+            existing = None
+        if args.get("description") is not None:
+            description = str(args.get("description") or "")
+        else:
+            description = str(getattr(existing, "description", "") or "") if existing is not None else ""
+        if args.get("base_type"):
+            base_type = str(args.get("base_type"))
+        else:
+            base_type = str(getattr(existing, "base_type", "") or "builder") if existing is not None else "builder"
+        provider = str(getattr(existing, "provider", "") or "") if existing is not None else ""
+        model = str(getattr(existing, "model", "") or "") if existing is not None else ""
 
         record = self.registry.register(
             name,
@@ -99,6 +120,8 @@ class CreateAgentTool(Tool):
             [str(t) for t in tools],
             base_type=base_type,
             description=description,
+            provider=provider,
+            model=model,
         )
         return ToolResult(
             ok=True,
@@ -240,15 +263,24 @@ class SpawnAgentTool(Tool):
         "it works in that same folder. "
         "Args: agent (a built-in type like 'builder' or the name of a "
         "dynamic agent created with `create_agent`) and task (the self-contained "
-        "instruction)."
+        "instruction). Instead of an agent you may give role — read, code, "
+        "review or test — and Iron Jarvis picks the member of the user's model "
+        "team for it (a local one first when its record for that role is good; "
+        "a cloud account near its usage limit gets no new work). Give piece (a "
+        "short name for this piece of work) and use the same piece name if you "
+        "hand it out again after it failed: after it fails twice on one member "
+        "it moves to the next one up."
     )
     input_schema = {
         "type": "object",
         "properties": {
             "agent": {"type": "string"},
             "task": {"type": "string"},
+            "role": {"type": "string", "enum": ["read", "code", "review", "test"]},
+            "piece": {"type": "string"},
         },
-        "required": ["agent", "task"],
+        # v1.395.0: ``agent`` OR ``role`` — checked by ``execute`` in words.
+        "required": ["task"],
     }
     permission_key = "spawn_agent"
     #: It awaits a whole child run — outside the per-call deadline (v1.288.0),
@@ -294,6 +326,46 @@ class SpawnAgentTool(Tool):
         # AN IJ HARNESS TURN'S HELPER (v1.372.0) — the same parent ``delegate``
         # reads (``harness/helpers``); None for every other caller.
         _hp = _helpers.parent_for(ctx)
+
+        # A ROLE INSTEAD OF A NAME (v1.395.0) — exactly as ``delegate`` reads
+        # it (MIRROR NOTE, lock-step): ``role`` or ``agent: "role:<id>"`` asks
+        # the TEAM ROUTER; a named agent runs as before; an unknown role or one
+        # no usable member holds is refused in words.
+        _route = None
+        _team_role = ""
+        _piece = ""
+        _role_text = _model_team.role_named(agent_name)
+        _role_arg = args.get("role")
+        if _role_text is not None or str(_role_arg or "").strip():
+            _asked = _role_text if _role_text is not None else _role_arg
+            _team_role = _model_team.role_id(_asked)
+            if not _team_role:
+                _helpers.note_route(_hp, reason="not started: that is not a team role")
+                return ToolResult(ok=False, output="", error=_model_team.unknown_role_refusal(_asked))
+            _piece = _model_team.piece_key(args.get("piece"), task)
+            if _role_text is not None or not str(args.get("agent") or "").strip():
+                _route = await asyncio.to_thread(
+                    _model_team.route_for_call, self.platform, role=_team_role, piece=_piece,
+                    session_id=ctx.session_id, helper_parent=_hp,
+                )
+                _helpers.note_route(_hp, role=_team_role, reason=_route.reason)
+                if _route.record is None:
+                    return ToolResult(
+                        ok=False, output="", error=_route.refusal,
+                        data={"role": _team_role, "reason": _route.reason, "state": "not_started",
+                              "waited": _route.waited},
+                    )
+                agent_name = _route.record.name
+        elif not str(args.get("agent") or "").strip():
+            # v1.395.0: ``agent`` is no longer a required key (a role may
+            # stand in for it) — with neither, it is said, as the registry's
+            # required check said it before.
+            return ToolResult(
+                ok=False, output="",
+                error="missing required: agent — spawn_agent needs agent (a built-in type or a "
+                "custom agent's name) or role (read, code, review or test), and task",
+            )
+
         # A harness helper never leaves this PC (a ``remote:`` name is
         # refused, as in ``delegate``).
         _remote_refusal = _helpers.target_refusal(_hp, raw=agent_name)
@@ -440,7 +512,20 @@ class SpawnAgentTool(Tool):
             if _ar:
                 return ToolResult(ok=False, output="", error=_ar)
         # v1.394.0: a member's helper runs on ITS OWN model and account.
-        _hp = _helpers.for_member(_hp, self.platform, record)
+        # v1.395.0: on the account the TEAM ROUTER chose, when it chose.
+        _hp = (
+            _helpers.for_member(_hp, self.platform, record, pin=_route.pin)
+            if (_route is not None and _route.pin_set)
+            else _helpers.for_member(_hp, self.platform, record)
+        )
+        # v1.395.0: a ROLE's piece is credited to the member's record for it
+        # — only when the member HOLDS that role (``delegate``'s rule).
+        _record_role = (
+            _team_role
+            if (record is not None and _team_role and _team_role in _model_team.roles_of(record))
+            else ""
+        )
+        _child_task = _model_team.review_task(_record_role, task)
         _helper_options = None
         if _hp is not None:
             provider, model = _hp.provider or provider, _hp.model or model
@@ -463,7 +548,7 @@ class SpawnAgentTool(Tool):
             child_fanout_key(ctx.agent_run_id, ctx.session_id),
         ), _helpers.helper_slot(_hp):
             child_session = await orch.create_session(
-                task,
+                _child_task,
                 base_type,
                 provider=provider,
                 model=model,
@@ -497,6 +582,8 @@ class SpawnAgentTool(Tool):
                 child_session_id=child_session.id,
                 target=agent_name,
                 task=task,
+                role=_team_role if _route is not None else "",
+                reason=_route.reason if _route is not None else "",
             )
             # v1.372.0: the harness row starts following the helper.
             _helpers.child_started(
@@ -534,10 +621,16 @@ class SpawnAgentTool(Tool):
                     # (``model_team.member_scope``) — the same as ``delegate``.
                     # v1.394.0 review: and a non-member started from inside a
                     # member's run steps out of THAT member's hold.
-                    with _helpers.pinned(_hp), (
-                        _model_team.member_scope(self.platform, record, str(provider or ""))
-                        if _hp is None else _model_team.member_scope(self.platform, None)
-                    ):
+                    # v1.395.0: on the account the TEAM ROUTER chose, when it chose.
+                    if _hp is not None:
+                        _scope = _model_team.member_scope(self.platform, None)
+                    elif _route is not None and _route.pin_set:
+                        _scope = _model_team.member_scope(
+                            self.platform, record, str(provider or ""), pin=_route.pin
+                        )
+                    else:
+                        _scope = _model_team.member_scope(self.platform, record, str(provider or ""))
+                    with _helpers.pinned(_hp), _scope:
                         child_task = asyncio.ensure_future(
                             AgentRuntime(self.platform).run(
                                 child_session,
@@ -608,6 +701,12 @@ class SpawnAgentTool(Tool):
                     f"{type(exc).__name__}: {exc}"
                 )
                 await orch._finalize_failed(child_session, exc)
+                # v1.395.0: a piece that crashed or was refused counts against
+                # the member's record for its role (``delegate``'s rule).
+                await _model_team.note_piece(
+                    self.platform, record=record, role=_record_role, session_id=child_session.id,
+                    scope=ctx.session_id, piece=_piece, finished=False,
+                )
                 await publish_delegation_completed(
                     self.platform,
                     session_id=ctx.session_id,
@@ -669,6 +768,11 @@ class SpawnAgentTool(Tool):
             await orch._post_run_allowance(child_session)
 
             ok = run.state is AgentState.COMPLETED
+            # v1.395.0: the piece's row in the member's record for its role.
+            await _model_team.note_piece(
+                self.platform, record=record, role=_record_role, session_id=child_session.id,
+                scope=ctx.session_id, piece=_piece, finished=ok, report=run.result,
+            )
             await publish_delegation_completed(
                 self.platform,
                 session_id=ctx.session_id,
@@ -696,6 +800,8 @@ class SpawnAgentTool(Tool):
                     "child_session_id": child_session.id,
                     "state": run.state.value,
                     "workspace": child_session.workspace_path,
+                    # v1.395.0: the role asked for, and why this member took it.
+                    **({"role": _team_role, "reason": _route.reason} if _route is not None else {}),
                 },
             )
 

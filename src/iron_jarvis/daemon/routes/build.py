@@ -850,6 +850,15 @@ class _ReplyWatch:
             val = data.get(key)
             if isinstance(val, str) and val:
                 h[dest] = val
+        # v1.395.0 (the long-jobs plan's Phase 6): the ROLE the planner asked
+        # for and the team router's one sentence of why this member took it —
+        # kept on the line, so the Timeline still says it after a reload.
+        from ...harness.helpers import REASON_CHARS
+
+        for key, cap in (("role", 20), ("reason", REASON_CHARS)):
+            val = data.get(key)
+            if isinstance(val, str) and val:
+                h[key] = val[:cap]
         state = data.get("state")
         if state in STATES:
             h["state"] = state

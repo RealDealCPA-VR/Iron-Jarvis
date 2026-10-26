@@ -198,6 +198,9 @@ class HelperParent:
     #: ``pin`` is the member's own account pin — or None, which is then SET
     #: (its provider's normal pick), never left to inherit the session's.
     own_model: bool = False
+    #: v1.395.0: the MEMBER's name when ``own_model`` (its hold's refusal
+    #: names it — never "This Build session" for a member's own model).
+    member: str = ""
 
     def grants(self) -> tuple[list[str], str]:
         """``(allow_tools, approval_mode)`` for the helper's row:
@@ -310,7 +313,12 @@ def target_refusal(parent: "HelperParent | None", *, entry: Any = None, raw: str
     return ""
 
 
-def for_member(parent: "HelperParent | None", platform: Any, record: Any) -> "HelperParent | None":
+#: A keyword default that is not None (None is a real pin: "no account").
+_UNSET: Any = object()
+
+
+def for_member(parent: "HelperParent | None", platform: Any, record: Any, *,
+               pin: Any = _UNSET) -> "HelperParent | None":
     """The parent a MODEL TEAM MEMBER's helper runs from (v1.394.0, decision
     5): the same session, folder, posture, grants, trust and Local only — but
     ITS OWN provider + model (held by :func:`pinned`) and the account
@@ -320,7 +328,11 @@ def for_member(parent: "HelperParent | None", platform: Any, record: Any) -> "He
     (v1.394.0 review: an unpinned pick landed a member on an account nobody
     picked, and rotated). Never the session's pin for another vendor (a
     Codex helper must not lease under the session's Claude pin). Anyone who
-    is not a member with a model of its own gets ``parent`` back unchanged."""
+    is not a member with a model of its own gets ``parent`` back unchanged.
+
+    v1.395.0: ``pin`` — the account the TEAM ROUTER chose for a role's piece
+    (``model_team.RolePick.pin``, the lowest usage below its threshold among
+    the accounts the same rules allow) — replaces ``member_account``'s."""
     if parent is None or record is None:
         return parent
     from ..agents import model_team as _mt
@@ -331,8 +343,9 @@ def for_member(parent: "HelperParent | None", platform: Any, record: Any) -> "He
         parent,
         provider=str(getattr(record, "provider", "") or "").strip(),
         model=_mt.pinned_model(platform, record),
-        pin=_mt.member_account(platform, record, parent.pin, coding=True)[0],
+        pin=pin if pin is not _UNSET else _mt.member_account(platform, record, parent.pin, coding=True)[0],
         own_model=True,
+        member=str(getattr(record, "name", "") or ""),
     )
 
 
@@ -440,7 +453,9 @@ def pinned(parent: "HelperParent | None") -> Iterator[None]:
     # provider's normal pick): leaving the session's pin in the copied
     # context would lease a Codex helper under the session's Claude account.
     token = set_pin(parent.pin) if (parent.pin is not None or parent.own_model) else None
-    hold_token = set_hold(parent.provider, parent.model)
+    # v1.395.0: a member's own model is HIS hold — its refusal names it.
+    who = f"member:{parent.member}" if (parent.own_model and parent.member) else ""
+    hold_token = set_hold(parent.provider, parent.model, who)
     rule_token = set_turn_rule(parent.command_rule)
     try:
         yield
@@ -618,6 +633,12 @@ class HelperCall:
     #: (the long-jobs plan's Phase 5) shows itself.
     provider: str = ""
     model: str = ""
+    #: v1.395.0 (the long-jobs plan's Phase 6): the ROLE the planner asked
+    #: for ("read", "code", …) when it asked for one instead of a member, and
+    #: the TEAM ROUTER's one sentence of why this member took it ("local: good
+    #: record for reading", "waited: …") — on the row and its Timeline row.
+    role: str = ""
+    reason: str = ""
 
     # -- frames ------------------------------------------------------------- #
 
@@ -636,6 +657,10 @@ class HelperCall:
             out["provider"] = self.provider
         if self.model:
             out["model"] = self.model
+        if self.role:
+            out["role"] = self.role
+        if self.reason:
+            out["reason"] = self.reason
         out.update(extra)
         return out
 
@@ -942,6 +967,25 @@ def helper_call(parent: "HelperParent | None", call_id: str, name: str, args: An
         call.close()
 
 
+#: How much of the router's reason a row carries.
+REASON_CHARS = 300
+
+
+def note_route(parent: "HelperParent | None", *, role: str = "", reason: str = "") -> None:
+    """The TEAM ROUTER decided (v1.395.0): the row says the role it was asked
+    for and why this member took it — or why nothing started. Said at once
+    (before the helper's session exists), and on every later frame of the
+    row. A no-op outside a coding session."""
+    if parent is None or parent.call is None:
+        return
+    call = parent.call
+    if role:
+        call.role = _short(role, 20)
+    if reason:
+        call.reason = _short(reason, REASON_CHARS)
+    call.say()
+
+
 def child_started(parent: "HelperParent | None", platform: Any, child_session_id: str,
                   agent: str = "", task: str = "") -> None:
     """Called by ``delegate`` / ``spawn_agent`` once the helper's session
@@ -1021,7 +1065,8 @@ __all__ = [
     "AGENT_TOOLS", "ASK_POLL_S", "FINAL_STATES", "HELPER_EVENT", "HELPER_ORIGIN",
     "HELPER_PARENT", "HELPER_TOOLS", "HelperCall", "HelperParent", "MAX_HELPERS", "for_member",
     "NOT_FOR_HELPERS", "READ_ONLY_TYPES",
-    "SKILL_TOOLS", "STOPPED_RESULT", "asking", "call_target", "child_started", "helper_call",
+    "REASON_CHARS", "SKILL_TOOLS", "STOPPED_RESULT", "asking", "call_target", "child_started",
+    "helper_call", "note_route",
     "helper_definition",
     "helper_slot", "invoke_helper", "live_helpers", "parent_for", "pinned", "report_text",
     "stop_helpers", "target_refusal", "until_stopped",
