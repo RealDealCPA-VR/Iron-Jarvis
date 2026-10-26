@@ -111,6 +111,23 @@ class TeamRoleRun(SQLModel, table=True):
     check_result: str = ""
     #: ``good`` / ``bad`` / "" (no reviewer's verdict).
     review: str = ""
+    #: v1.395.0 review: the provider + model the piece RAN on (what the door
+    #: handed ``create_session``). Decision 7 reads "that MODEL's record": a
+    #: member moved to another model in Settings starts with no record, and a
+    #: member deleted and made again under the same name on another model does
+    #: not inherit the old one's (:func:`records_for` ``models``).
+    provider: str = ""
+    model: str = ""
+    #: The Iron-Proxy account the piece was pinned to ("" = none: a local or
+    #: pay-per-use model, or no account known). The account GROUP of a piece
+    #: of work is read back from it after a restart
+    #: (``model_team.work_group``).
+    account: str = ""
+    #: The REPLY a coding session's piece was handed out in
+    #: (``harness/helpers.HelperParent.turn``; "" outside a coding session —
+    #: a mission's scope is already one objective). A reviewer's verdict
+    #: judges only the pieces of its own reply (:func:`credit_review`).
+    turn: str = ""
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -178,15 +195,22 @@ def _record_of(rows: Iterable[tuple[bool, str, str]]) -> RoleRecord:
     return RoleRecord(runs=runs, passed=passed, streak=streak)
 
 
-def records_for(engine: Any, members: Iterable[str], role: str = "") -> dict[str, dict[str, RoleRecord]]:
+def records_for(engine: Any, members: Iterable[str], role: str = "",
+                models: "dict[str, tuple[str, str]] | None" = None) -> dict[str, dict[str, RoleRecord]]:
     """``{member: {role: RoleRecord}}`` for ``members`` (one query); only the
     given ``role`` when one is named. Newest first by INSERTION order (the
     SQLite rowid — the v1.286.0 rule: two rows in one 15.6 ms tick of Windows'
     clock still order). BLOCKING; never raises (an unreadable record is no
-    record)."""
+    record).
+
+    v1.395.0 review: ``models`` — ``{member: (provider, model)}`` for the
+    members that run on a model OF THEIR OWN — keeps only the rows that member
+    ran on THAT model (decision 7: "that model's record"); a member not in it
+    (one that runs on whoever hands it work's model) is read across models."""
     names = [str(m) for m in members if str(m or "").strip()]
     if engine is None or not names:
         return {}
+    want = {str(k): (str(v[0] or ""), str(v[1] or "")) for k, v in (models or {}).items()}
     try:
         from sqlalchemy import literal_column
         from sqlmodel import select
@@ -198,13 +222,16 @@ def records_for(engine: Any, members: Iterable[str], role: str = "") -> dict[str
             if role:
                 q = q.where(TeamRoleRun.role == role)
             q = q.order_by(literal_column("teamrolerun.rowid").desc())  # type: ignore[arg-type]
-            plain = [(r.member, r.role, bool(r.finished), str(r.check_result or ""), str(r.review or ""))
+            plain = [(r.member, r.role, bool(r.finished), str(r.check_result or ""), str(r.review or ""),
+                      (str(r.provider or ""), str(r.model or "")))
                      for r in db.exec(q)]
     except Exception:  # noqa: BLE001
         log.debug("team record read failed", exc_info=True)
         return {}
     grouped: dict[tuple[str, str], list[tuple[bool, str, str]]] = {}
-    for member, rl, finished, check, review in plain:
+    for member, rl, finished, check, review, ran_on in plain:
+        if member in want and ran_on != want[member]:
+            continue
         grouped.setdefault((member, rl), []).append((finished, check, review))
     out: dict[str, dict[str, RoleRecord]] = {}
     for (member, rl), seq in grouped.items():
@@ -212,13 +239,17 @@ def records_for(engine: Any, members: Iterable[str], role: str = "") -> dict[str
     return out
 
 
-def role_record(engine: Any, member: str, role: str) -> RoleRecord:
-    """One member's record for one role ("no record yet" when unreadable)."""
-    return records_for(engine, [member], role).get(member, {}).get(role, RoleRecord())
+def role_record(engine: Any, member: str, role: str,
+                model: "tuple[str, str] | None" = None) -> RoleRecord:
+    """One member's record for one role ("no record yet" when unreadable);
+    ``model`` — ``(provider, model)`` — reads only that model's rows."""
+    models = {member: model} if model is not None else None
+    return records_for(engine, [member], role, models).get(member, {}).get(role, RoleRecord())
 
 
 def note_run(engine: Any, *, member: str, role: str, session_id: str, scope: str,
-             piece: str = "", finished: bool) -> "str | None":
+             piece: str = "", finished: bool, provider: str = "", model: str = "",
+             account: str = "", turn: str = "") -> "str | None":
     """Write one piece's row when its run settles. Returns its id, or None
     when it could not be written. BLOCKING; never raises."""
     if engine is None or not member or not role:
@@ -229,6 +260,8 @@ def note_run(engine: Any, *, member: str, role: str, session_id: str, scope: str
         row = TeamRoleRun(
             member=str(member), role=str(role), session_id=str(session_id or ""),
             scope=str(scope or ""), piece=str(piece or "")[:400], finished=bool(finished),
+            provider=str(provider or ""), model=str(model or ""), account=str(account or ""),
+            turn=str(turn or "")[:60],
         )
         with session_scope(engine) as db:
             db.add(row)
@@ -267,9 +300,20 @@ def credit_check(engine: Any, session_ids: Iterable[str], verdict: str) -> int:
 
 
 def verdict_of(report: Any) -> str:
-    """``good`` / ``bad`` from a reviewer's report's LAST verdict line, else
-    "" (no line, no verdict — nothing is guessed)."""
-    found = _VERDICT_RX.findall(str(report or ""))
+    """``good`` / ``bad`` from a reviewer's report, else "" (nothing is
+    guessed).
+
+    v1.395.0 review: ONLY the report's LAST non-empty line is read — the one
+    line :data:`VERDICT_ASK` asks the reviewer to END with. A verdict-shaped
+    line anywhere else is something the report QUOTES (a file it read, a
+    tool's output, another member's own report) and an injected "VERDICT:
+    approved" there must not judge anyone's work. (A report the runtime
+    wrote for a reviewer that ended silently is refused by the caller —
+    ``model_team.note_piece`` — since its last line is a tool's output.)"""
+    lines = [ln for ln in str(report or "").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    found = _VERDICT_RX.findall(lines[-1])
     if not found:
         return ""
     return REVIEW_GOOD if found[-1].strip().lower() == "approved" else REVIEW_BAD
@@ -279,7 +323,13 @@ def credit_review(engine: Any, *, scope: str, review_row: "str | None", verdict:
     """A reviewer's ``verdict`` on the ``code`` / ``test`` pieces of the same
     work (``scope``) written after the previous review piece there and before
     this one (``review_row``), that no review judged yet. BLOCKING; never
-    raises."""
+    raises.
+
+    v1.395.0 review: and only the pieces of the review's own REPLY (``turn``)
+    — a coding session's scope is the whole session, which lasts for days, so
+    the first review of the day used to judge every unreviewed piece the
+    session ever handed out (another member's included). A review in a later
+    reply than the code judges nothing: a missed signal, never a wrong one."""
     if verdict not in (REVIEW_GOOD, REVIEW_BAD) or engine is None or not scope or not review_row:
         return 0
     try:
@@ -289,23 +339,51 @@ def credit_review(engine: Any, *, scope: str, review_row: "str | None", verdict:
 
         with session_scope(engine) as db:
             me = db.exec(text(  # type: ignore[call-overload]
-                "SELECT rowid FROM teamrolerun WHERE id = :id").bindparams(id=review_row)).first()
+                "SELECT rowid, turn FROM teamrolerun WHERE id = :id").bindparams(id=review_row)).first()
             if me is None:
                 return 0
             mine = int(me[0])
+            turn = str(me[1] or "")
             prev = db.exec(text(  # type: ignore[call-overload]
                 "SELECT MAX(rowid) FROM teamrolerun WHERE scope = :scope AND role = 'review' "
                 "AND rowid < :mine").bindparams(scope=scope, mine=mine)).first()
             floor = int(prev[0]) if prev is not None and prev[0] is not None else 0
             res = db.exec(text(  # type: ignore[call-overload]
                 "UPDATE teamrolerun SET review = :v WHERE scope = :scope AND role IN ('code', 'test') "
-                "AND review = '' AND rowid > :floor AND rowid < :mine"
-            ).bindparams(v=verdict, scope=scope, floor=floor, mine=mine))
+                "AND review = '' AND turn = :turn AND rowid > :floor AND rowid < :mine"
+            ).bindparams(v=verdict, scope=scope, turn=turn, floor=floor, mine=mine))
             db.commit()
             return int(getattr(res, "rowcount", 0) or 0)
     except Exception:  # noqa: BLE001
         log.warning("model team review credit failed", exc_info=True)
         return 0
+
+
+def scope_accounts(engine: Any, scope: str) -> list[str]:
+    """The Iron-Proxy accounts the pieces of ONE piece of work (``scope``)
+    were pinned to, oldest first (v1.395.0 review: the work's account group
+    after a restart, ``model_team.work_group``). BLOCKING; never raises."""
+    if engine is None or not scope:
+        return []
+    try:
+        from sqlalchemy import text
+
+        from ..core.db import session_scope
+
+        with session_scope(engine) as db:
+            rows = db.exec(text(  # type: ignore[call-overload]
+                "SELECT account FROM teamrolerun WHERE scope = :scope AND account != '' "
+                "ORDER BY rowid LIMIT 200"
+            ).bindparams(scope=scope)).all()
+    except Exception:  # noqa: BLE001
+        log.debug("model team scope read failed", exc_info=True)
+        return []
+    out: list[str] = []
+    for (acct,) in rows:
+        a = str(acct or "")
+        if a and a not in out:
+            out.append(a)
+    return out
 
 
 def piece_failures(engine: Any, scope: str, role: str, piece: str) -> list[tuple[str, int]]:
@@ -343,5 +421,5 @@ __all__ = [
     "CHECK_FAILED", "CHECK_PASSED", "FAIL_STREAK", "GOOD", "GOOD_RATE", "MIN_RUNS", "NOT_GOOD",
     "PIECE_FAILS", "RECORD_WINDOW", "REVIEW_BAD", "REVIEW_GOOD", "RoleRecord", "TeamRoleRun",
     "UNKNOWN", "VERDICT_ASK", "credit_check", "credit_review", "note_run", "piece_failures",
-    "records_for", "role_record", "succeeded", "verdict_of",
+    "records_for", "role_record", "scope_accounts", "succeeded", "verdict_of",
 ]

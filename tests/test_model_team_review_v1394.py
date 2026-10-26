@@ -241,8 +241,12 @@ def test_member_account_rule_table():
     n = _Platform({"work": ["c-work", "c-spare"]})
     pin, why = T.member_account(n, _rec("codex-cli"), work, coding=True)
     assert pin is None and "'work'" in why and "Codex" in why
-    # Outside a coding session with no caller pin: the normal pick (None).
-    assert T.member_account(p, _rec("codex-cli"), None, coding=False) == (None, "")
+    # Outside a coding session with no caller pin: v1.395.0 review — the
+    # vendor's first usable account, PINNED, as everywhere else. Iron-Proxy's
+    # normal pick takes the first READY account whatever its usage, so a
+    # member started new work on an account at 99% (decision 8's floor).
+    pin, why = T.member_account(p, _rec("codex-cli"), None, coding=False)
+    assert pin.profile_id == "x-plus" and why == ""
     # Not a subscription model: no account at all.
     assert T.member_account(p, _rec("ollama"), work, coding=True) == (None, "")
 

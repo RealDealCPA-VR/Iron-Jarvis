@@ -201,6 +201,13 @@ class HelperParent:
     #: v1.395.0: the MEMBER's name when ``own_model`` (its hold's refusal
     #: names it — never "This Build session" for a member's own model).
     member: str = ""
+    #: v1.395.0 review: one id per REPLY (made with the turn's base,
+    #: ``chat_turn.helper_base``). The model team's record keeps it on every
+    #: piece, and a reviewer's verdict judges only the code / test pieces of
+    #: the same reply (``agents/team_record.credit_review``) — a coding
+    #: session lasts for days, and a review of this reply's change must not
+    #: judge every unreviewed piece the session ever handed out.
+    turn: str = ""
 
     def grants(self) -> tuple[list[str], str]:
         """``(allow_tools, approval_mode)`` for the helper's row:

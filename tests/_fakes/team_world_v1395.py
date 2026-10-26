@@ -154,12 +154,18 @@ def member(p, name: str, provider: str, model: str = "", roles=("code",), **kw):
 
 def note(p, name: str, role: str, outcomes, *, scope: str = "s-old", piece: str = "") -> None:
     """Write ``outcomes`` (oldest first) into ``name``'s record for ``role``:
-    True = a piece that passed, False = one that failed its check."""
+    True = a piece that passed, False = one that failed its check. Each row
+    on the model the member runs on NOW (v1.395.0 review: the record is that
+    model's — ``team_record.records_for``)."""
+    from iron_jarvis.agents import model_team as T
     from iron_jarvis.agents import team_record as TR
 
+    rec = p.agents_registry.get(name)
+    provider = str(getattr(rec, "provider", "") or "") if rec is not None else ""
+    model = T.pinned_model(p, rec) if (rec is not None and provider) else ""
     for i, ok in enumerate(outcomes):
         sid = f"{name}-{role}-{i}-{scope}"
         TR.note_run(p.engine, member=name, role=role, session_id=sid, scope=scope, piece=piece,
-                    finished=True)
+                    finished=True, provider=provider, model=model)
         if not ok:
             TR.credit_check(p.engine, [sid], TR.CHECK_FAILED)

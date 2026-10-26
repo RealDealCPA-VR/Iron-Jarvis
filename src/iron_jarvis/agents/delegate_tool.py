@@ -414,6 +414,9 @@ class DelegateTool(Tool):
         definition = None
         dyn_provider = dyn_model = None
         rec = None
+        # v1.395.0 review: the account a member's piece is pinned to, when the
+        # router or ``named_account`` decided it (None is a real answer: none).
+        _member_pin, _member_pin_set = None, False
         if entry is not None and entry.kind == "dynamic":
             slug = entry.name.split(":", 1)[-1]
             registry = getattr(self.platform, "agents_registry", None)
@@ -458,16 +461,36 @@ class DelegateTool(Tool):
                 _ar = _model_team.account_refusal(self.platform, rec)
                 if _ar:
                     return ToolResult(ok=False, output="", error=_ar)
+            # v1.395.0 review: a member NAMED by the planner runs on an account
+            # decision 8's floor allows (never new work at 95%), in the WORK's
+            # account group, under the pay-per-use limit — or is refused in
+            # words here, before any session exists (``named_account``). The
+            # router already did this for a role's pick.
+            if _route is None and _model_team.runs_elsewhere(rec):
+                from ..iron_proxy.pin import current as _current_pin
+
+                _named = await asyncio.to_thread(
+                    _model_team.named_account, self.platform, rec,
+                    _hp.pin if _hp is not None else _current_pin(),
+                    scope=str(ctx.session_id or ""), coding=_hp is not None,
+                )
+                if _named.refusal:
+                    return ToolResult(ok=False, output="", error=_named.refusal)
+                _member_pin, _member_pin_set = _named.pin, True
+            elif _route is not None and _route.pin_set:
+                _member_pin, _member_pin_set = _route.pin, True
             dyn_provider = (rec.provider or None) if rec is not None else None
             # v1.394.0: an agent pinned to a PROVIDER runs its own model, else
             # that provider's own default (``model_team.pinned_model``).
             dyn_model = (_model_team.pinned_model(self.platform, rec) or None) if rec is not None else None
             # v1.394.0: a member's helper inherits from the turn but runs on
             # ITS OWN model and account (no-op for everyone else).
-            # v1.395.0: on the account the TEAM ROUTER chose, when it chose.
+            # v1.395.0: on the account the TEAM ROUTER chose, when it chose
+            # (review: and the account ``named_account`` chose for a member
+            # named directly).
             _hp = (
-                _helpers.for_member(_hp, self.platform, rec, pin=_route.pin)
-                if (_route is not None and _route.pin_set)
+                _helpers.for_member(_hp, self.platform, rec, pin=_member_pin)
+                if _member_pin_set
                 else _helpers.for_member(_hp, self.platform, rec)
             )
             agent_type = definition.type
@@ -659,12 +682,13 @@ class DelegateTool(Tool):
                     # else, and inside a session ``pinned`` does it).
                     # v1.394.0 review: and a non-member started from inside a
                     # member's run steps out of THAT member's hold.
-                    # v1.395.0: on the account the TEAM ROUTER chose, when it chose.
+                    # v1.395.0: on the account the TEAM ROUTER chose, when it chose
+                    # (review: or ``named_account`` for a member named directly).
                     if _hp is not None:
                         _scope = _model_team.member_scope(self.platform, None)
-                    elif _route is not None and _route.pin_set:
+                    elif _member_pin_set:
                         _scope = _model_team.member_scope(
-                            self.platform, rec, str(provider or ""), pin=_route.pin
+                            self.platform, rec, str(provider or ""), pin=_member_pin
                         )
                     else:
                         _scope = _model_team.member_scope(self.platform, rec, str(provider or ""))
@@ -758,12 +782,14 @@ class DelegateTool(Tool):
                     f"{type(exc).__name__}: {exc}"
                 )
                 await orch._finalize_failed(child_session, exc)
-                # v1.395.0: a piece that crashed or was refused counts against
-                # the member's record for its role.
-                await _model_team.note_piece(
-                    self.platform, record=rec, role=_record_role, session_id=child_session.id,
-                    scope=ctx.session_id, piece=_piece, finished=False,
-                )
+                # v1.395.0 review: a run that RAISED writes NO row on the
+                # member's record. A run fails at its WORK by ending failed
+                # (its steps ran out, it gave up — the settle path below); an
+                # exception escaping it is the provider (down, busy, refusing),
+                # the account (its limit, a sign-in), Local only, the hold — or
+                # Iron Jarvis itself. None of that says the member is bad at
+                # the role, and counting it demoted a local member whose box
+                # was merely busy, or a cloud member whose account hit its limit.
                 await publish_delegation_completed(
                     self.platform,
                     session_id=ctx.session_id,
@@ -828,10 +854,14 @@ class DelegateTool(Tool):
 
             ok = run.state is AgentState.COMPLETED
             # v1.395.0: the piece's row in the member's record for its role
-            # (and a reviewer's verdict on the work it reviewed).
+            # (and a reviewer's verdict on the work it reviewed). Review: on
+            # the model it ran on, and the account it was pinned to.
             await _model_team.note_piece(
                 self.platform, record=rec, role=_record_role, session_id=child_session.id,
                 scope=ctx.session_id, piece=_piece, finished=ok, report=run.result,
+                provider=str(provider or ""), model=str(model or ""),
+                account=str(getattr(_hp.pin if _hp is not None else _member_pin, "profile_id", "") or ""),
+                turn=str(getattr(_hp, "turn", "") or ""),
             )
             await publish_delegation_completed(
                 self.platform,

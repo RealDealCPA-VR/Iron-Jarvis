@@ -189,11 +189,12 @@ def team(app) -> None:
     reg.register("glm", "You write code.", [], description="local coder",
                  provider=LOCAL[0], model=LOCAL[1], roles=["read", "code"])
     reg.register("claude-code", "You write code.", [], description="writes code on the Claude plan",
-                 provider="claude-cli", model="subscription", roles=["code"])
-    # Yesterday: glm wrote five pieces of code that all passed their checks.
+                 provider="claude-cli", model="subscription", roles=["code", "review"])
+    # Yesterday: glm wrote five pieces of code that all passed their checks
+    # (v1.395.0 review: on the model it runs on — the record is that model's).
     for i in range(5):
         TR.note_run(app.state.platform.engine, member="glm", role="code", session_id=f"yday-{i}",
-                    scope="build:yesterday", finished=True)
+                    scope="build:yesterday", finished=True, provider=LOCAL[0], model=LOCAL[1])
         TR.credit_check(app.state.platform.engine, [f"yday-{i}"], TR.CHECK_PASSED)
 
 
@@ -262,6 +263,15 @@ async def test_a_scripted_day_local_first_limits_watched(app, fake, work, monkey
     async def refresh() -> None:
         # Iron-Proxy's watch loop re-reads the accounts every 30 s; here, now.
         await asyncio.to_thread(svc.refresh_accounts)
+
+    # (v1.395.0 review) The spare account has numbers of its own, as a real
+    # Claude account does after any call: 45% of its 5-hour window — above
+    # c-work's 38%, so the morning's first piece still goes to c-work. (With
+    # NO numbers, the router would let it take only a few new pieces before
+    # its numbers arrive: ``model_team.UNKNOWN_BURST_MAX``.)
+    fake.states["c-spare"]["windows"] = [{"kind": "5h", "usedPercent": 45, "windowMins": 300,
+                                          "resetsAt": iso(9000)}]
+    await refresh()
 
     # ------------------------------------------------------------------ 1
     # Morning. The local box is busy. Claude Code takes the first code
@@ -343,21 +353,35 @@ async def test_a_scripted_day_local_first_limits_watched(app, fake, work, monkey
         ("c-work", "1")] * len(a)
 
     # ------------------------------------------------------------------ 3
-    # The local member fails coding twice: the third piece is not given to
-    # it first.
+    # (v1.395.0 review) The local box stops answering for one piece: that is
+    # the PROVIDER failing, not glm at coding — its record is untouched and it
+    # is still first. Then glm writes two pieces the REVIEWER says need
+    # changes: they count against glm (decision 7: the reviewer, not "it
+    # finished"), and the next code piece is not given to glm first.
     sampler.waiting.clear()
     day.fail.add("ollama")
-    day.main = [spawn("p-e", "Piece E: write a.py."), spawn("p-f", "Piece F: write b.py."),
-                spawn("p-g", "Piece G: write c.py."), "Done: E, F and G."]
+
+    def box_back():
+        day.fail.discard("ollama")
+        return spawn("p-e", "Piece E: write a.py.")
+
+    day.helper_moves["claude-cli"] = ["a.py and b.py miss the empty-input case.\nVERDICT: changes needed"]
+    day.main = [spawn("p-x", "Piece X: write z.py."), box_back, spawn("p-f", "Piece F: write b.py."),
+                spawn("p-r", "Piece R: review a.py and b.py.", role="review"),
+                spawn("p-g", "Piece G: write c.py."), "Done: E, F and G, reviewed."]
     start = len(day.calls)
-    await run_turn(app, sid, "Write a.py, b.py and c.py.", "day-3")
+    await run_turn(app, sid, "Write a.py, b.py and c.py, and have them reviewed.", "day-3")
     rows = saved_helpers(app, sid)
-    assert rows["p-e"]["reason"] == rows["p-f"]["reason"] == "local: good record for coding"
-    assert rows["p-e"]["state"] == rows["p-f"]["state"] == "failed"
+    assert rows["p-x"]["state"] == "failed"
+    assert rows["p-x"]["reason"] == rows["p-e"]["reason"] == rows["p-f"]["reason"] == (
+        "local: good record for coding")
+    assert rows["p-e"]["state"] == rows["p-f"]["state"] == "done"
+    assert rows["p-r"]["reason"] == ("Claude Code (Spare): no local member holds reviewing; "
+                                     "skipped Claude Code (Work Max): 83% of its 5-hour window")
     assert rows["p-g"]["reason"] == ("Claude Code (Spare): the local member failed coding 2 times in a row; "
                                      "skipped Claude Code (Work Max): 83% of its 5-hour window")
     assert rows["p-g"]["state"] == "done"
-    rec = TR.role_record(app.state.platform.engine, "glm", "code")
+    rec = TR.role_record(app.state.platform.engine, "glm", "code", LOCAL)
     assert (rec.streak, rec.status) == (2, TR.NOT_GOOD)
 
     # ------------------------------------------------------------------ 4
@@ -406,7 +430,18 @@ async def test_a_scripted_day_local_first_limits_watched(app, fake, work, monkey
 
     with session_scope(app.state.platform.engine) as db:
         rows = db.exec(select(TR.TeamRoleRun).order_by(literal_column("teamrolerun.rowid")))
-        today = [(r.member, r.finished) for r in rows if r.scope != "build:yesterday"]
-    assert today == [("claude-code", True), ("claude-code", True), ("glm", True), ("claude-code", True),
-                     ("glm", False), ("glm", False), ("claude-code", True), ("glm", True), ("glm", True),
-                     ("glm", True)]
+        today = [(r.member, r.role, r.finished, r.review, r.provider, r.account)
+                 for r in rows if r.scope != "build:yesterday"]
+    # (v1.395.0 review) Piece X (the box not answering) wrote NO row; the
+    # reviewer's "changes needed" judged E and F — only them, the pieces of
+    # its own reply, never the morning's A–D; each row keeps the model it ran
+    # on and the account it was pinned to.
+    cc, g = ("claude-code", "claude-cli"), ("glm", "ollama")
+    assert today == [
+        (cc[0], "code", True, "", cc[1], "c-work"), (cc[0], "code", True, "", cc[1], "c-spare"),
+        (g[0], "code", True, "", g[1], ""), (cc[0], "code", True, "", cc[1], "c-spare"),
+        (g[0], "code", True, TR.REVIEW_BAD, g[1], ""), (g[0], "code", True, TR.REVIEW_BAD, g[1], ""),
+        (cc[0], "review", True, "", cc[1], "c-spare"), (cc[0], "code", True, "", cc[1], "c-spare"),
+        (g[0], "code", True, "", g[1], ""), (g[0], "code", True, "", g[1], ""),
+        (g[0], "code", True, "", g[1], ""),
+    ]

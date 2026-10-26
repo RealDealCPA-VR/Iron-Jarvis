@@ -347,6 +347,10 @@ class AssignmentDispatcher:
                     provider=str(payload.get("provider") or ""),
                     model=str(payload.get("model") or ""),
                     local_only=await self._local_only_of(row),
+                    # v1.395.0 review: a task an AGENT queued (assign_work)
+                    # is a model handing out work — under the pay-per-use
+                    # limit; one the user queued is theirs to spend on.
+                    by_model=str(getattr(row, "source", "") or "").startswith("agent:"),
                 )
                 if why:
                     return why

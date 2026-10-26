@@ -513,11 +513,30 @@ class SpawnAgentTool(Tool):
             _ar = _model_team.account_refusal(self.platform, record)
             if _ar:
                 return ToolResult(ok=False, output="", error=_ar)
+        # v1.395.0 review: a member NAMED directly runs on an account decision
+        # 8's floor allows, in the work's account group, under the pay-per-use
+        # limit — or is refused in words before any session exists
+        # (``named_account``; ``delegate``'s rule, MIRROR NOTE).
+        _member_pin, _member_pin_set = None, False
+        if _route is None and record is not None and _model_team.runs_elsewhere(record):
+            from ..iron_proxy.pin import current as _current_pin
+
+            _named = await asyncio.to_thread(
+                _model_team.named_account, self.platform, record,
+                _hp.pin if _hp is not None else _current_pin(),
+                scope=str(ctx.session_id or ""), coding=_hp is not None,
+            )
+            if _named.refusal:
+                return ToolResult(ok=False, output="", error=_named.refusal)
+            _member_pin, _member_pin_set = _named.pin, True
+        elif _route is not None and _route.pin_set:
+            _member_pin, _member_pin_set = _route.pin, True
         # v1.394.0: a member's helper runs on ITS OWN model and account.
-        # v1.395.0: on the account the TEAM ROUTER chose, when it chose.
+        # v1.395.0: on the account the TEAM ROUTER chose, when it chose
+        # (review: or ``named_account`` for a member named directly).
         _hp = (
-            _helpers.for_member(_hp, self.platform, record, pin=_route.pin)
-            if (_route is not None and _route.pin_set)
+            _helpers.for_member(_hp, self.platform, record, pin=_member_pin)
+            if _member_pin_set
             else _helpers.for_member(_hp, self.platform, record)
         )
         # v1.395.0: a ROLE's piece is credited to the member's record for it
@@ -623,12 +642,13 @@ class SpawnAgentTool(Tool):
                     # (``model_team.member_scope``) — the same as ``delegate``.
                     # v1.394.0 review: and a non-member started from inside a
                     # member's run steps out of THAT member's hold.
-                    # v1.395.0: on the account the TEAM ROUTER chose, when it chose.
+                    # v1.395.0: on the account the TEAM ROUTER chose, when it chose
+                    # (review: or ``named_account`` for a member named directly).
                     if _hp is not None:
                         _scope = _model_team.member_scope(self.platform, None)
-                    elif _route is not None and _route.pin_set:
+                    elif _member_pin_set:
                         _scope = _model_team.member_scope(
-                            self.platform, record, str(provider or ""), pin=_route.pin
+                            self.platform, record, str(provider or ""), pin=_member_pin
                         )
                     else:
                         _scope = _model_team.member_scope(self.platform, record, str(provider or ""))
@@ -703,12 +723,9 @@ class SpawnAgentTool(Tool):
                     f"{type(exc).__name__}: {exc}"
                 )
                 await orch._finalize_failed(child_session, exc)
-                # v1.395.0: a piece that crashed or was refused counts against
-                # the member's record for its role (``delegate``'s rule).
-                await _model_team.note_piece(
-                    self.platform, record=record, role=_record_role, session_id=child_session.id,
-                    scope=ctx.session_id, piece=_piece, finished=False,
-                )
+                # v1.395.0 review: a run that RAISED writes no row on the
+                # member's record (``delegate``'s rule: the provider, the
+                # account, a policy — never the member failing at its role).
                 await publish_delegation_completed(
                     self.platform,
                     session_id=ctx.session_id,
@@ -770,10 +787,14 @@ class SpawnAgentTool(Tool):
             await orch._post_run_allowance(child_session)
 
             ok = run.state is AgentState.COMPLETED
-            # v1.395.0: the piece's row in the member's record for its role.
+            # v1.395.0: the piece's row in the member's record for its role
+            # (review: on the model it ran on, and the account it was pinned to).
             await _model_team.note_piece(
                 self.platform, record=record, role=_record_role, session_id=child_session.id,
                 scope=ctx.session_id, piece=_piece, finished=ok, report=run.result,
+                provider=str(provider or ""), model=str(model or ""),
+                account=str(getattr(_hp.pin if _hp is not None else _member_pin, "profile_id", "") or ""),
+                turn=str(getattr(_hp, "turn", "") or ""),
             )
             await publish_delegation_completed(
                 self.platform,

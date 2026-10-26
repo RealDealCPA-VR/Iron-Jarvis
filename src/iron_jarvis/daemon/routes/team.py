@@ -110,7 +110,11 @@ def team_view(platform: Any) -> dict[str, Any]:
     from ...agents.team_record import records_for
 
     members = T.team_members(platform)
-    records = records_for(getattr(platform, "engine", None), [r.name for r in members])
+    # v1.395.0 review: each member's record on the model it runs on NOW (the
+    # router's own reading — a member moved to another model starts again).
+    models = {r.name: (str(r.provider).strip(), T.pinned_model(platform, r))
+              for r in members if str(getattr(r, "provider", "") or "").strip()}
+    records = records_for(getattr(platform, "engine", None), [r.name for r in members], "", models)
     with cached_verdicts():
         return {
             "roles": [{"id": rid, "label": label} for rid, label in T.ROLES],

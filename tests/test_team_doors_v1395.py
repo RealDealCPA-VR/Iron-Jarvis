@@ -184,13 +184,17 @@ async def test_no_usable_member_is_refused_in_words_never_a_builder_run(w, tmp_p
 # --------------------------------------------------------------------------- #
 
 
-async def test_a_piece_whose_run_crashed_is_a_failed_piece(w, tmp_path):
+async def test_a_piece_whose_provider_failed_writes_no_row(w, tmp_path):
+    """v1.395.0 review: a run that RAISED failed at the provider (here: busy,
+    529), not at its role — the member's record is untouched (it used to
+    count as a failed piece, so a busy box demoted a good local member).
+    A run that ENDS failed by itself still counts: test_team_router_review."""
     sid = await _parent(w.p)
     w.fail.add("ollama")
     res = await w.p.registry.get("delegate").execute(
         {"role": "read", "task": "Read it."}, _ctx(w.p, sid, tmp_path))
     assert not res.ok
-    assert [(r.member, r.finished) for r in _runs(w.p)] == [("glm", False)]
+    assert _runs(w.p) == []
 
 
 async def test_a_reviewers_verdict_lands_on_the_code_it_reviewed(w, tmp_path):
