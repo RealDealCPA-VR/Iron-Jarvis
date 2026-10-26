@@ -201,10 +201,18 @@ function replyLength(m: Record<string, unknown>): number | null {
 
 /** Why a saved reply has no timeline: "early" — written since the Timeline,
  *  it ended before any work started (an error or a Stop before the model
- *  was first asked); "before" — a reply made before the Timeline. */
-export function noTimelineReason(line: BuildMessage | null | undefined): "early" | "before" {
+ *  was first asked); "cut" — Iron Jarvis itself stopped while answering (a
+ *  crash), and the line rebuilt at boot (harness/sessions
+ *  reconcile_interrupted_turns) keeps what was streamed and no times at all;
+ *  "before" — a reply made before the Timeline. */
+export function noTimelineReason(line: BuildMessage | null | undefined): "early" | "cut" | "before" {
   if (!line) return "before";
-  return replyLength(line as unknown as Record<string, unknown>) !== null ? "early" : "before";
+  const m = line as unknown as Record<string, unknown>;
+  if (replyLength(m) !== null) return "early";
+  // Every line the reply's own writer wrote has `timing`; only the boot's
+  // rebuild of a reply cut off mid-way has none.
+  if (m.interrupted === true && !rec(m.timing)) return "cut";
+  return "before";
 }
 
 /**

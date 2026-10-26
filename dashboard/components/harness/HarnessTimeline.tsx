@@ -82,6 +82,10 @@ export const NO_TIMELINE_WHY = "It was made before Iron Jarvis kept the time of 
 /** v1.390.0 review: a reply written since the Timeline that ended before the
  *  model was first asked (an error or a Stop) — never "made before". */
 export const NO_TIMELINE_EARLY = "It ended before any work started.";
+/** v1.390.0 review: a reply a crash cut off (its line, rebuilt at boot,
+ *  keeps no times) — never "made before" either. */
+export const NO_TIMELINE_CUT = "Iron Jarvis stopped while answering, so this reply's times were not kept.";
+const NO_TIMELINE_REASON = { early: NO_TIMELINE_EARLY, cut: NO_TIMELINE_CUT, before: NO_TIMELINE_WHY } as const;
 /** v1.390.0 review: a step Iron Jarvis ran ITSELF to check the reply (the
  *  finish check's test run, a project check) — never drawn as the model's. */
 export const CHECK_WORDS: Readonly<Record<StepCheck, string>> = {
@@ -643,9 +647,9 @@ export const HarnessTimeline = memo(function HarnessTimeline({
         <div data-testid="timeline-none" className="space-y-1">
           <p className="text-[13px] text-zinc-300">{NO_TIMELINE}</p>
           <p className="text-[12px] text-zinc-500">
-            {effective !== null && effective !== "live" && noTimelineReason(view.messages[Number(effective)]) === "early"
-              ? NO_TIMELINE_EARLY
-              : NO_TIMELINE_WHY}
+            {NO_TIMELINE_REASON[
+              effective !== null && effective !== "live" ? noTimelineReason(view.messages[Number(effective)]) : "before"
+            ]}
           </p>
         </div>
       ) : (
