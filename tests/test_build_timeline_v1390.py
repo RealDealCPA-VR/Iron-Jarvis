@@ -247,20 +247,58 @@ async def test_the_calls_add_up_to_the_receipt_and_every_bar_lies_inside_the_rep
     assert max(r["start"] + r["ms"] for r in reads) <= second["start"] + 5
 
 
+class _StepClock:
+    """The lane's clock for one test (v1.390.0 CI fix): ``perf_counter`` reads
+    ``now``, which each slow read moves to ITS OWN end as it finishes; every
+    other ``time`` name is the real one. The release gate's runner stretched
+    the 0.2 s read to 535 ms (the step's bookkeeping waited on a loaded disk),
+    so a bound on the measured length was a bound on the hardware — the rule
+    from v1.266.1: bill by an injected clock, never by a sleep."""
+
+    def __init__(self) -> None:
+        import time as _real
+
+        self._real = _real
+        self.now = 1000.0
+
+    def perf_counter(self) -> float:
+        return self.now
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
 async def test_reads_that_ran_together_overlap_on_the_axis(app, work, monkeypatch):
+    import importlib
+
+    chat_routes = importlib.import_module("iron_jarvis.daemon.routes.chat")
+    clock = _StepClock()
+    monkeypatch.setattr(chat_routes, "time", clock)
     sid = new_session(app, work)
-    slow_reads(app, monkeypatch)
+    tool = app.state.platform.registry.get("read_file")
+    real = tool.execute
+
+    async def slow(*a, **kw):
+        args = a[0] if a and isinstance(a[0], dict) else kw.get("args") or {}
+        name = Path(str(args.get("path") or args.get("file_path") or "")).name
+        took = READ_TIMES.get(name, READ_S)
+        await asyncio.sleep(took)  # the real order: the shorter read ends first
+        clock.now = 1000.0 + took  # ... and the lane's clock says exactly when
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(tool, "execute", slow)
     wire(app, Timed(_three_calls_and_reads()))
     await _turn(app, sid, "read both files and make made.py", "tl-3")
     reads = [s for s in _reply(app, sid)["steps"] if s["name"] == "read_file"]
     assert len(reads) == 2
     a, b = reads
-    # Each kept its OWN time: the shorter read is not stretched to the
-    # pair's (their frames alone finish together, at the longer one's end) ...
-    short, long_ = sorted(reads, key=lambda r: r["ms"])
-    assert int(READ_TIMES["app.py"] * 1000) - 20 <= short["ms"] < int(READ_TIMES["util.py"] * 1000) - 100, reads
-    assert int(READ_TIMES["util.py"] * 1000) - 20 <= long_["ms"] < int(sum(READ_TIMES.values()) * 1000) - 50, reads
-    # ... and started together: laid end to end, the second would start
+    # Each kept its OWN time, read off the clock the lane measures with: the
+    # shorter read is not stretched to the pair's (their frames alone finish
+    # together, at the longer one's end).
+    by_len = sorted(r["ms"] for r in reads)
+    want = [READ_TIMES["app.py"] * 1000, READ_TIMES["util.py"] * 1000]
+    assert all(abs(got - exp) <= 1 for got, exp in zip(by_len, want)), reads
+    # ... and they started together: laid end to end, the second would start
     # where the first ends.
     assert abs(a["start"] - b["start"]) < 100, reads
     assert max(a["start"], b["start"]) < min(a["start"] + a["ms"], b["start"] + b["ms"])

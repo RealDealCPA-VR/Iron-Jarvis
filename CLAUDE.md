@@ -3735,6 +3735,13 @@ does not need a bump, stop and bump it.
   harness-timeline{,-live,-return,-review}-v1390.test.tsx`,
   `use-models-stable-v1390.test.ts`, fixture `build-timeline-v1390.json`
   (`IJ_REGEN_BUILD_TIMELINE=1`).
+  v1.390.1 (test-only): v1.390.0's Tests gate went red on
+  `test_reads_that_ran_together_overlap_on_the_axis` — the runner measured
+  the 0.2 s read at 535 ms (a step's length includes its bookkeeping, which
+  waited on a loaded disk) against a "< 400 ms" bound, a bound on the
+  hardware. The test now reads the lane's clock as an injected stand-in
+  (`_StepClock`, each read moves it to its own end), so the lengths are
+  exact; dropping the lane's own-length measurement still turns it red.
 
 - **A coding-session reply is a reply the whole app can see; a failed one
   has a press; the view's name lives in ONE constant** (v1.389.0, the v1.388.0
