@@ -1160,7 +1160,8 @@ class _Acct:
     pin: Any = None
     pin_set: bool = False
     name: str = ""
-    #: When not usable: what was skipped, in words, and when it resets.
+    #: What was skipped, in words — ``(words, at a usage limit)`` — and when
+    #: those accounts reset (ISO instants).
     skips: list = field(default_factory=list)
     resets: list = field(default_factory=list)
     limited: bool = False
@@ -1333,7 +1334,8 @@ def _plan_account(platform: Any, record: Any, provider: str, caller: Any, now: A
         if own is not None:
             if _other_group(platform, record, own, caller):
                 return _Acct(usable=False, skips=[
-                    f"skipped {record.name}: its own account is in another account group than this work's"])
+                    (f"skipped {record.name}: its own account is in another account group than this work's",
+                     False)])
             row = BA.find(svc, own.profile_id) if snap is not None else None
             if row is None:
                 return _Acct(pin=own, pin_set=True, name=str(getattr(own, "title", "") or ""))
@@ -1354,19 +1356,20 @@ def _plan_account(platform: Any, record: Any, provider: str, caller: Any, now: A
                 every = [r for r in every if r["id"] in ids]
                 if not every:
                     return _Acct(usable=False, skips=[
-                        f"skipped {record.name}: your '{gname}' account group has no {label} account"])
+                        (f"skipped {record.name}: your '{gname}' account group has no {label} account", False)])
             rows = [(r, AccountPin(profile_id=r["id"], ij_provider=r["provider"], title=r["name"]))
                     for r in every]
             if not rows:
-                return _Acct(usable=False, skips=[f"skipped {record.name}: Iron-Proxy lists no {label} account"])
+                return _Acct(usable=False, skips=[(f"skipped {record.name}: Iron-Proxy lists no {label} account",
+                                                   False)])
         out = _Acct(usable=False)
         best: "tuple[tuple, dict, Any, float | None] | None" = None
         for order, (row, pin) in enumerate(rows):
             state = snap[1].get(row["id"]) if snap is not None else None
             usable, peak, why, resets, limited = _account_check(label, row, state, now)
             if not usable:
-                if why and why not in out.skips:
-                    out.skips.append(why)
+                if why and (why, limited) not in out.skips:
+                    out.skips.append((why, limited))
                 if resets:
                     out.resets.append(resets)
                 out.limited = out.limited or limited
@@ -1461,6 +1464,9 @@ def _route(platform: Any, role: str, noun: str, *, local_only: bool, caller_pin:
     passed_over = _piece_passed_over(engine, scope, role, piece) if piece else ""
     cands: list[_Cand] = []
     skipped: list[str] = []
+    #: the accounts passed over for their USAGE (at or over the threshold, or
+    #: at their limit) — named in a cloud pick's reason
+    limit_skips: list[str] = []
     local_notes: list[str] = []
     resets: list[str] = []
     limited = False
@@ -1519,9 +1525,11 @@ def _route(platform: Any, role: str, noun: str, *, local_only: bool, caller_pin:
                                True, note=fall))
         elif cost == COST_PLAN:
             acct = _plan_account(platform, r, provider, caller_pin, now)
-            for s in acct.skips:
+            for s, at_limit in acct.skips:
                 if s not in skipped:
                     skipped.append(s)
+                if at_limit and s not in limit_skips:
+                    limit_skips.append(s)
             if not acct.usable:
                 resets.extend(acct.resets)
                 limited = limited or acct.limited
@@ -1554,8 +1562,7 @@ def _route(platform: Any, role: str, noun: str, *, local_only: bool, caller_pin:
             head = "local" if only.local else only.label
             return _picked(role, only, f"{head}: this piece failed its check twice here, but {stay}")
     if not cands:
-        earliest = min(resets) if resets else ""
-        when = _reset_words(earliest)
+        when = _reset_words(_earliest(resets))
         listed = "; ".join(skipped[:6]) or "nothing on the team can take it"
         lo = " (this work is Local only, so only members on this PC or your network were asked)" if local_only else ""
         refusal = (f"No team member can take {noun} now{lo}: {listed}."
@@ -1581,7 +1588,6 @@ def _route(platform: Any, role: str, noun: str, *, local_only: bool, caller_pin:
         parts = [why_not]
         if top.tier == 2 and top.note:
             parts.append(top.note)
-        limit_skips = [s for s in skipped if s.startswith("skipped ") and ("%" in s or "limit" in s)]
         parts.extend(limit_skips[:2])
         reason = f"{top.label}: " + "; ".join(parts)
     else:
@@ -1593,6 +1599,19 @@ def _route(platform: Any, role: str, noun: str, *, local_only: bool, caller_pin:
             head = f"nothing else can take {noun} now"
         reason = f"local: {head}; {top.note}" if top.note else f"local: {head}"
     return _picked(role, top, reason)
+
+
+def _earliest(resets: list) -> str:
+    """The EARLIEST of some ISO instants (parsed — never compared as text),
+    as it was given; "" when none parses."""
+    from ..harness.build_accounts import _parse
+
+    best: "tuple[Any, str] | None" = None
+    for iso in resets:
+        when = _parse(iso)
+        if when is not None and (best is None or when < best[0]):
+            best = (when, str(iso))
+    return best[1] if best is not None else ""
 
 
 def _picked(role: str, cand: _Cand, reason: str) -> RolePick:

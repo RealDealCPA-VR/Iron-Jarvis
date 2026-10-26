@@ -218,6 +218,23 @@ def test_when_cloud_is_near_its_limit_the_work_goes_local(w):
     assert pick.reason.startswith("local: every cloud account that can take coding is near its limit; its record is")
 
 
+def test_the_earliest_reset_is_read_as_time_never_as_text():
+    # 10:00 at +05:00 is 05:00Z — earlier than 06:00Z, though not as text.
+    assert T._earliest(["2026-10-26T06:00:00Z", "2026-10-26T10:00:00+05:00", "junk"]) == "2026-10-26T10:00:00+05:00"
+    assert T._earliest([]) == "" and T._earliest(["junk"]) == ""
+
+
+def test_only_accounts_passed_over_for_usage_are_named_in_a_cloud_pick(w):
+    """A skipped member whose NAME happens to hold "limit" or "%" is not an
+    account at its limit (the reason is built from flags, never from words)."""
+    member(w.p, "limit-50%", LOCAL[0], LOCAL[1], roles=("code",))
+    w.p.agents_registry.set_paused("limit-50%", "off today")
+    member(w.p, "claude-code", "claude-cli", "subscription", roles=("code",))
+    pick = T.route_role(w.p, "code")
+    assert pick.record.name == "claude-code"
+    assert pick.reason == "Claude Code (Work Max): the local member is paused"
+
+
 def test_a_session_on_a_busy_account_never_moves_its_helper_to_another_account(w):
     """A member with no account of its own, called from work pinned to an
     account of its vendor, runs on THAT account (the v1.372.0 rule) — at 80%
