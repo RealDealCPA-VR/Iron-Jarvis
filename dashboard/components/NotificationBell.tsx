@@ -914,6 +914,11 @@ export function toActivity(e: IJEvent): ActivityItem | null {
             : `A Build session resumed${name ? ` on the ${name} account` : ""}`,
       body: waitingRow ? buildLimitWaitingBody(title, p.resets_at) : clipped,
       ...(limitRow && !waitingRow ? { attention: true } : {}),
+      // v1.393.0 review: the two NEWS rows (it waits by itself; it carried
+      // on with another account of its group) follow the v1.374.0 rule — the
+      // user LOOKING at that session already sees it there (the waiting
+      // card, the move line), so the bell says nothing then.
+      ...((waitingRow || from) && thread ? { build: thread } : {}),
     };
   }
   if (e.type === "build.turn_finished") {
