@@ -156,7 +156,7 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
         if night_task is not None:
             # v1.398.0: the night posture for every attempt (their bodies and
             # the shared cap read the plan's setup).
-            setup = _night.posture_setup(setup, platform.config)
+            setup = _night.posture_setup(setup, platform.config, night_task)
         local_only = setup.get("local_only") is True
         project = await asyncio.to_thread(project_for_path, platform.engine, S.checkout_of(row))
         session_pair = _turn_pair(platform, SimpleNamespace(
@@ -258,6 +258,14 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
             _night.note_unattended_turn(turn_id, thread_id, started_by)
             with contextlib.suppress(Exception):
                 lg.task.add_done_callback(lambda _t, _tid=turn_id: _night.forget_unattended_turn(_tid))
+                if night_task is not None:
+                    # v1.398.0 review: the attempts' time counts against the
+                    # TASK's limit too.
+                    lg.task.add_done_callback(
+                        lambda _t, _lg=lg, _ntid=str(night_task["id"]): _night.ran_later(
+                            platform.engine, _ntid, getattr(_lg, "started_at", None),
+                        )
+                    )
                 from .night import wake_night_loop
 
                 lg.task.add_done_callback(lambda _t: wake_night_loop())

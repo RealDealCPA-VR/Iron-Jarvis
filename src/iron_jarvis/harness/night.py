@@ -160,6 +160,9 @@ class NightTaskRecord(SQLModel, table=True):
     #: started (``harness/night_guard.snapshot``: digests and refs, never
     #: file contents), compared when it ends.
     main_before_json: str = ""
+    #: v1.398.0 review: the running time of the task's turns that ended, in
+    #: seconds — its time limit is the TASK's, across every turn.
+    ran_s: float = 0.0
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
@@ -218,6 +221,7 @@ def view(row: Any) -> dict[str, Any]:
         # v1.398.0 review: the user's main folder changed while it ran — the
         # one fact the morning must never miss (the list shows it first).
         "main_changed": any(n.get("kind") == "outside" for n in _notes(row)),
+        "ran_s": round(float(getattr(row, "ran_s", 0.0) or 0.0), 3),
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
         "started_at": _iso(row.started_at),
@@ -441,6 +445,25 @@ def set_main_before(engine: Any, task_id: str, raw: str) -> None:
         db.commit()
 
 
+def add_ran(engine: Any, task_id: str, seconds: float) -> None:
+    """Add one ended turn's running time to the task (its limit is the
+    task's). BLOCKING; never raises."""
+    try:
+        secs = max(0.0, float(seconds or 0.0))
+    except (TypeError, ValueError):
+        return
+    try:
+        with session_scope(engine) as db:
+            row = db.get(NightTaskRecord, str(task_id or ""))
+            if row is None:
+                return
+            row.ran_s = float(row.ran_s or 0.0) + secs
+            db.add(row)
+            db.commit()
+    except Exception:  # noqa: BLE001 — the turn's end never fails over it
+        log.warning("a night task's running time could not be kept", exc_info=True)
+
+
 def main_before(engine: Any, task_id: str) -> str:
     with session_scope(engine) as db:
         row = db.get(NightTaskRecord, str(task_id or ""))
@@ -637,12 +660,44 @@ def max_at_once(config: Any) -> int:
         return 2
 
 
-def posture_setup(setup: dict[str, Any], config: Any) -> dict[str, Any]:
+def minutes_left(task: "dict[str, Any] | None", config: Any) -> float:
+    """What is left of a night task's time limit, in minutes (v1.398.0
+    review): the limit is the TASK's, across every turn it runs — its first
+    turn, a carry-on after a restart, Resume when ready — never a fresh limit
+    per turn. ``ran_s`` is the running time of its turns that ended."""
+    try:
+        ran = float((task or {}).get("ran_s") or 0.0)
+    except (TypeError, ValueError):
+        ran = 0.0
+    return max(0.0, task_minutes(config) - ran / 60.0)
+
+
+#: The record's note when a night task waiting on its account is stopped
+#: because the window closed / its time is used up (v1.398.0 review).
+WAIT_WINDOW_CLOSED = (
+    "Its account reached a limit that did not reset before the night window closed, so it was "
+    "stopped. Press Resume when ready in the session to carry it on."
+)
+WAIT_TIME_USED_UP = (
+    "Its account reached a limit, and its time limit is used up, so it was stopped. Open the "
+    "session to carry it on."
+)
+#: The refusal of a night task's carry-on turn when its time is used up.
+TIME_USED_UP = "This night task has used up its time limit, so it was not carried on."
+#: The refusal of a night task's carry-on turn outside the night window.
+WINDOW_CLOSED = (
+    "The night window has closed, so this night task was not carried on by itself. Open the "
+    "session to carry it on."
+)
+
+
+def posture_setup(setup: dict[str, Any], config: Any, task: "dict[str, Any] | None" = None) -> dict[str, Any]:
     """The session's setup AS A NIGHT TURN RUNS IT (a copy; nothing stored):
     "Approve for me" plus the command tools granted (decision 4) — the
     night's allow-list (:data:`RUNS_UNASKED`) is the stream lane's own rule
-    on top — and the reply capped at the task's minutes (a cap the session
-    already has that is SHORTER is kept)."""
+    on top — and the reply capped at what is LEFT of the task's minutes
+    (:func:`minutes_left`; a cap the session already has that is SHORTER is
+    kept)."""
     from .reply_cap import SETUP_KEY as CAP_KEY
     from .reply_cap import clean as clean_cap
 
@@ -653,7 +708,7 @@ def posture_setup(setup: dict[str, Any], config: Any) -> dict[str, Any]:
         if name not in granted:
             granted.append(name)
     out["granted_tools"] = granted
-    minutes = task_minutes(config)
+    minutes = max(1, int(minutes_left(task, config))) if task is not None else task_minutes(config)
     cap = dict(clean_cap(out.get(CAP_KEY)) or {})
     if not cap.get("minutes") or int(cap["minutes"]) > minutes:
         cap["minutes"] = minutes
@@ -716,6 +771,27 @@ class NightTurn:
 
 
 _NOTE_THREADS: set[threading.Thread] = set()
+
+
+def ran_later(engine: Any, task_id: str, started_at: Any) -> None:
+    """A night turn ended: add its running time (from ``started_at``, the
+    turn log's wall-clock start) to its task, on a thread of its own (the
+    caller is the turn's done callback, on the loop). Never raises; waited
+    for by :func:`flush_notes`."""
+    start = _naive(started_at)
+    if engine is None or start is None:
+        return
+    seconds = max(0.0, (_naive(utcnow()) - start).total_seconds())
+
+    def _write() -> None:
+        add_ran(engine, task_id, seconds)
+
+    try:
+        t = threading.Thread(target=_write, name="night-ran", daemon=True)
+        t.start()
+        _NOTE_THREADS.add(t)
+    except RuntimeError:  # pragma: no cover — interpreter shutting down
+        _write()
 
 
 def flush_notes(timeout: float = 5.0) -> None:

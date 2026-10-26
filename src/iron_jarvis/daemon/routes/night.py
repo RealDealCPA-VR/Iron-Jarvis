@@ -255,7 +255,9 @@ async def settle_running(d: Any) -> list[str]:
 
             lg = _turn_logs(d).get(turn) if turn else None
             started = _naive(getattr(lg, "started_at", None)) if lg is not None else None
-            limit_s = 60.0 * N.task_minutes(platform.config)
+            # v1.398.0 review: what is LEFT of the task's limit (its earlier
+            # turns' time counts), never a fresh limit per turn.
+            limit_s = 60.0 * N.minutes_left(task, platform.config)
             if (turn and started is not None and now is not None
                     and (now - started).total_seconds() > limit_s + OVERRUN_GRACE_S):
                 # The backstop: the reply cap ends a reply at a step
@@ -276,18 +278,45 @@ async def settle_running(d: Any) -> list[str]:
         setup = _setup_of(row)
         task = await asyncio.to_thread(N.get_task, engine, tid) or task
         stopping = emergency or N.task_has_stop(task)
-        if not stopping and (setup.get("account_wait") or thread in kept):
-            # Waiting on its account's reset (Resume when ready carries it
-            # on), or on the boot's resume pass: still the night's task.
+        # v1.398.0 review: the boot's resume pass may still carry a cut-off
+        # reply on — only until that pass has run (a reply it did not carry
+        # on would otherwise hold the task "running", its slot and the PC's
+        # keep-awake, forever).
+        resume_pending = thread in kept and not getattr(platform, "build_resume_done", False)
+        if not stopping and resume_pending:
             _keep_held(d, tid)
             continue
-        if stopping and setup.get("account_wait"):
-            # Stopped (Emergency stop, or the user's Cancel): its wait must
-            # not carry it on later.
+        waiting = bool(setup.get("account_wait"))
+        if (not stopping and waiting and N.window_open(platform.config)
+                and N.minutes_left(task, platform.config) >= 1.0):
+            # Waiting on its account's reset (Resume when ready carries it
+            # on, inside the window): still the night's task.
+            _keep_held(d, tid)
+            continue
+        forced: "list[tuple[str, str]]" = []
+        if waiting:
+            # Stopped (Emergency stop, the user's Cancel), the window closed,
+            # or its time is used up: its wait must not carry it on later —
+            # by day, under the night's posture.
             await asyncio.to_thread(S.update, engine, thread, setup={"account_wait": None})
+            if not stopping:
+                forced.append(("account", N.WAIT_WINDOW_CLOSED if not N.window_open(platform.config)
+                               else N.WAIT_TIME_USED_UP))
+        if thread in kept:
+            # v1.398.0 review: a cut-off reply nothing carried on is never
+            # carried on later (a later boot would run it under the user's
+            # own posture, a day late): Retry is on the session's page.
+            from ...harness import reply_record as RR
+
+            for rec in await asyncio.to_thread(RR.kept, engine):
+                if str(rec.get("thread_id") or "") == thread:
+                    await asyncio.to_thread(RR.drop, engine, str(rec.get("turn_id") or ""))
         # The transcript is up to 200 lines of JSON: parsed off the loop.
         line = await asyncio.to_thread(lambda: N.last_reply_line(S._messages(row)))
         state, notes = N.outcome_of(task, line)
+        if forced:
+            state = N.STOPPED
+            notes = [*forced, *notes]
         if emergency and state != N.STOPPED:
             state = N.STOPPED
             notes.append(("emergency", N.EMERGENCY_NOTE))

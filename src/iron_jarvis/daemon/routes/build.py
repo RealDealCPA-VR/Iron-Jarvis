@@ -2545,14 +2545,25 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         setup = _setup_of(row)
         # v1.398.0 (night shift N1, decision 4): a turn Iron Jarvis started
         # by itself in a session whose night task is running runs under the
-        # night posture — "Don't ask" with the command tools granted and the
-        # task's time limit as the reply's cap — for THIS turn only (nothing
-        # is stored: the user's own messages in the morning run as before).
+        # night posture — "Approve for me" with the command tools granted, the
+        # night's allow-list, and what is left of the TASK's time limit as the
+        # reply's cap — for THIS turn only (nothing is stored: the user's own
+        # messages in the morning run as before).
         night_task = None
         if started_by != _night.BY_PERSON:
             night_task = await asyncio.to_thread(_night.running_task_for, platform.engine, thread_id)
+        if night_task is not None and started_by != _night.BY_NIGHT:
+            # v1.398.0 review: a night task's CARRY-ON (Resume when ready, a
+            # move within a group, a reply cut off by a restart) starts only
+            # inside the night window and only with time left on the TASK's
+            # limit — never at 9 AM under the night's posture, never a fresh
+            # 90 minutes per turn.
+            if not _night.window_open(platform.config):
+                raise HTTPException(status_code=409, detail=_night.WINDOW_CLOSED)
+            if _night.minutes_left(night_task, platform.config) < 1.0:
+                raise HTTPException(status_code=409, detail=_night.TIME_USED_UP)
         if night_task is not None:
-            setup = _night.posture_setup(setup, platform.config)
+            setup = _night.posture_setup(setup, platform.config, night_task)
         # v1.391.0: a reply a restart cut off, carried on (the boot's pass).
         resume: "dict[str, Any] | None" = None
         if resume_turn:
@@ -2834,6 +2845,15 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 _night.note_unattended_turn(turn_id, thread_id, started_by)
                 with contextlib.suppress(Exception):
                     lg.task.add_done_callback(lambda _t, _tid=turn_id: _night.forget_unattended_turn(_tid))
+                    if night_task is not None:
+                        # v1.398.0 review: the turn's running time counts
+                        # against the TASK's limit (kept BEFORE the loop is
+                        # woken: the done callbacks run in order).
+                        lg.task.add_done_callback(
+                            lambda _t, _lg=lg, _ntid=str(night_task["id"]): _night.ran_later(
+                                platform.engine, _ntid, getattr(_lg, "started_at", None),
+                            )
+                        )
                     from .night import wake_night_loop
 
                     lg.task.add_done_callback(lambda _t: wake_night_loop())
@@ -3214,6 +3234,20 @@ async def _ready_for_resume(platform: Any) -> None:
 
 
 async def resume_after_restart(d: Any) -> list[str]:
+    """:func:`_resume_after_restart`, then — however it ended — the platform
+    says the pass is over (``build_resume_done``, v1.398.0 review): the night
+    loop holds a night task whose cut-off reply is kept only until then."""
+    try:
+        return await _resume_after_restart(d)
+    finally:
+        with contextlib.suppress(Exception):
+            d.platform.build_resume_done = True
+            from .night import wake_night_loop
+
+            wake_night_loop()
+
+
+async def _resume_after_restart(d: Any) -> list[str]:
     """THE BOOT'S ONE PASS (v1.391.0): every coding-session reply a restart
     or a crash cut off WHILE IT WORKED is carried on by itself, from its last
     finished step — a new named turn of the same session
@@ -3225,6 +3259,7 @@ async def resume_after_restart(d: Any) -> list[str]:
     first; runs after the boot reconciles, as its own task. Returns the
     thread ids carried on."""
     from ...core.events import EventType
+    from ...harness import night as _night
     from ...harness import reply_record as RR
     from .chat import _turn_logs
 
@@ -3278,6 +3313,19 @@ async def resume_after_restart(d: Any) -> list[str]:
                 # v1.398.0: Emergency stop turned on during the pass — the
                 # kept conversation stays (as when it was on before the pass).
                 continue
+            if exc.detail in (_night.WINDOW_CLOSED, _night.TIME_USED_UP):
+                # v1.398.0 review: a NIGHT task's reply cut off by a restart
+                # is carried on only inside the window and within its time;
+                # its record says why it was not.
+                task = await asyncio.to_thread(_night.running_task_for, engine, thread_id)
+                if task is not None:
+                    await asyncio.to_thread(
+                        _night.add_note, engine, task["id"], "restart",
+                        "Cut off when Iron Jarvis restarted. "
+                        + ("The night window had closed" if exc.detail == _night.WINDOW_CLOSED
+                           else "Its time limit was used up")
+                        + ", so it was not carried on by itself.",
+                    )
             await asyncio.to_thread(RR.drop, engine, turn_id)
             continue
         except Exception:  # noqa: BLE001 — one session never stops the pass
