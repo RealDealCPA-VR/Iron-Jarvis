@@ -1,12 +1,12 @@
 {
   "line": {
-    "at": "2026-10-26T01:27:12.174466+00:00",
+    "at": "2026-10-26T01:35:07.527796+00:00",
     "calls": [
       {
         "model": "claude-sonnet-4-5",
         "ms": 0,
         "provider": "anthropic",
-        "start": 203,
+        "start": 180,
         "usage": {
           "cost_usd": 2.4e-05,
           "input_tokens": 3,
@@ -17,7 +17,7 @@
         "model": "claude-sonnet-4-5",
         "ms": 0,
         "provider": "anthropic",
-        "start": 218,
+        "start": 191,
         "usage": {
           "cost_usd": 2.4e-05,
           "input_tokens": 3,
@@ -26,7 +26,7 @@
       },
       {
         "ms": 0,
-        "start": 225,
+        "start": 197,
         "state": "stopped"
       }
     ],
@@ -40,10 +40,10 @@
           "input": "{\"content\": \"1\", \"path\": \"one.txt\"}",
           "output": "wrote 1 bytes to one.txt"
         },
-        "ms": 8,
+        "ms": 6,
         "name": "write_file",
         "ok": true,
-        "start": 204,
+        "start": 181,
         "target": "one.txt"
       },
       {
@@ -51,18 +51,18 @@
           "input": "{\"content\": \"2\", \"path\": \"two.txt\"}",
           "output": "wrote 1 bytes to two.txt"
         },
-        "ms": 5,
+        "ms": 4,
         "name": "write_file",
         "ok": true,
-        "start": 219,
+        "start": 192,
         "target": "two.txt"
       }
     ],
     "timing": {
-      "endedAt": 1792978031348,
+      "endedAt": 1792978506915,
       "firstTokenAt": null,
-      "ms": 225,
-      "startedAt": 1792978031123
+      "ms": 197,
+      "startedAt": 1792978506718
     },
     "turnId": "bt-1"
   }

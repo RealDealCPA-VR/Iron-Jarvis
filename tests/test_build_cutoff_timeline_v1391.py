@@ -79,7 +79,8 @@ async def test_a_reply_a_crash_cut_off_keeps_its_steps_calls_and_times(tmp_path)
         assert 0 <= c["start"] and c["start"] + c["ms"] <= timing["ms"]
 
     if os.environ.get("IJ_REGEN_CUTOFF_TIMELINE"):
-        FIXTURE.write_text(json.dumps({"line": line}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        FIXTURE.write_text(json.dumps({"line": line}, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+                           newline="\n")
     kept = json.loads(FIXTURE.read_text(encoding="utf-8"))["line"]
     # The fixture holds the same SHAPE the daemon writes (times differ per run).
     assert sorted(kept) == sorted(line), "regenerate with IJ_REGEN_CUTOFF_TIMELINE=1"

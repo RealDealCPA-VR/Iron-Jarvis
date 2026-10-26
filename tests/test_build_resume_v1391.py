@@ -118,10 +118,20 @@ async def _cut_off_mid_reply(app, sid: str, turn_id: str = "bt-1", *, stop: str 
         await logs.shutdown()
     else:
         lg = logs.get(turn_id)
-        # What a crash leaves: the record as last written (running), nothing
-        # more. The live task is then torn down without its own end.
-        await lg.persist_now(app.state.platform.engine)
-        stored = json.dumps(lg.frames)
+        engine = app.state.platform.engine
+
+        def on_disk():
+            with session_scope(engine) as db:
+                rec = db.get(ChatTurnRecord, turn_id)
+                frames = json.loads(rec.frames_json) if rec is not None else []
+            return frames if len(frames) == len(lg.frames) else None
+
+        # What a crash leaves: the record as it was last written by ITSELF
+        # (v1.391.0: a reply gone quiet still writes its last frames within
+        # the interval — never `persist_now` here), nothing more. The live
+        # task is then torn down without its own end.
+        stored = json.dumps(await until(on_disk, 10))
+        assert stored != "null", "the record never caught up with the reply's last frames"
         lg.task.cancel()
         with pytest.raises(BaseException):
             await lg.task
