@@ -221,7 +221,13 @@ async def settle_running(d: Any) -> list[str]:
         turn = _running_turn(d, thread)
         if turn or thread in _STARTING:
             _keep_held(d, tid)
-            started = _parse(task.get("started_at"))
+            # The backstop counts THIS turn's own time (a reply carried on
+            # after a restart starts a new turn; the hours Iron Jarvis was
+            # off are never counted — the reply cap's own rule).
+            from .chat import _turn_logs
+
+            lg = _turn_logs(d).get(turn) if turn else None
+            started = _naive(getattr(lg, "started_at", None)) if lg is not None else None
             limit_s = 60.0 * N.task_minutes(platform.config)
             if (turn and started is not None and now is not None
                     and (now - started).total_seconds() > limit_s + OVERRUN_GRACE_S):
@@ -252,8 +258,8 @@ async def settle_running(d: Any) -> list[str]:
             # Stopped (Emergency stop, or the user's Cancel): its wait must
             # not carry it on later.
             await asyncio.to_thread(S.update, engine, thread, setup={"account_wait": None})
-        messages = S._messages(row)
-        line = N.last_reply_line(messages)
+        # The transcript is up to 200 lines of JSON: parsed off the loop.
+        line = await asyncio.to_thread(lambda: N.last_reply_line(S._messages(row)))
         state, notes = N.outcome_of(task, line)
         if emergency and state != N.STOPPED:
             state = N.STOPPED

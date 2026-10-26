@@ -595,6 +595,46 @@ def test_the_checkers_find_the_main_folders_programs_in_a_branch_turn(tmp_path):
     assert got and Path(got[0].program).parent == scripts
 
 
+async def test_a_night_turn_past_its_limit_and_the_grace_is_stopped_by_the_loop(app, tmp_path):
+    from tests.test_build_resume_v1391 import Hold
+
+    work = tmp_path / "w"
+    work.mkdir()
+    sid = new_session(app, work)["id"]
+    engine = app.state.platform.engine
+    task = N.add_task(engine, folder=str(work), words="hold on")
+    assert N.mark_running(engine, task["id"])
+    N.set_session(engine, task["id"], thread_id=sid)
+    hold = Hold()
+    wire(app, Script([hold]))
+    lg = await build_routes.start_build_turn(app.state.d, sid, "hold on", "bt-long", started_by="night")
+    await asyncio.wait_for(hold.reached.wait(), 30)
+    # Within its time: the loop leaves it alone — even when the TASK began
+    # hours ago (a reply carried on after a restart: the time off is never
+    # counted, only this turn's own).
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.ids import utcnow
+
+    with session_scope(engine) as db:
+        rec = db.get(N.NightTaskRecord, task["id"])
+        rec.started_at = utcnow() - timedelta(hours=8)
+        db.add(rec)
+        db.commit()
+    assert await night_routes.settle_running(app.state.d) == []
+    from iron_jarvis.core.turns import TURNS
+
+    assert TURNS.handle("bt-long").stopped is False, "nobody asked it to stop"
+    assert lg.status == "running"
+    # Past its limit and the grace (the turn's OWN time): stopped, and said.
+    lg.started_at = lg.started_at - timedelta(minutes=90) - timedelta(seconds=night_routes.OVERRUN_GRACE_S + 60)
+    await night_routes.settle_running(app.state.d)
+    await until(lambda: lg.status != "running", 30)
+    assert lg.status != "running"
+    hold.gate.set()
+    notes = N.get_task(engine, task["id"])["notes"]
+    assert any(n["kind"] == "limit" and "ran past its 90-minute limit" in n["text"] for n in notes)
+
+
 async def test_a_full_runs_at_once_cap_starts_no_night_task(app, repo, monkeypatch):
     status, task = await asgi(app, "POST", "/build/night", {"folder": str(repo), "words": "w"})
     assert status == 201
