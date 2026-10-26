@@ -25,7 +25,10 @@ def _split(names: str | None) -> list[str] | None:
 
 @bench_app.command("run")
 def run_command(
-    runner: str = typer.Option(..., "--runner", help="jarvis, claude or codex."),
+    runner: str = typer.Option(
+        ..., "--runner",
+        help="jarvis, jarvis-team, claude or codex. jarvis-team runs Iron Jarvis with a model team "
+        "(--team names its file)."),
     provider: str = typer.Option(
         "", "--provider", help="Jarvis only, and required for it: the provider to answer with."),
     model: str = typer.Option(
@@ -53,6 +56,11 @@ def run_command(
         help="Jarvis only: auto (the model family's own tool dialect, the default), generic "
         "(Iron Jarvis's own tool names), or a dialect to force: claude, gpt, qwen.",
     ),
+    team: str = typer.Option(
+        "", "--team",
+        help="jarvis-team only, and required for it: a TOML file naming the planner ([planner] "
+        "provider + model) and the members ([[members]] name, provider, model, roles, optional "
+        "account). The team is part of the setup: another team is another results folder."),
     refine: bool = typer.Option(
         False, "--refine",
         help="Jarvis only: improve the harness (Propose-Probe-Compose). A model proposes harness "
@@ -90,18 +98,23 @@ def run_command(
             "(uv run ironjarvis bench-harness run ...), not from the installed app."
         )
         raise typer.Exit(code=2)
-    if runner != "jarvis" and rounds is not None:
-        typer.echo("--rounds applies to the jarvis runner only.")
+    if runner not in ("jarvis", "jarvis-team") and rounds is not None:
+        typer.echo("--rounds applies to the jarvis and jarvis-team runners only.")
         raise typer.Exit(code=2)
     if refine and runner != "jarvis":
         typer.echo("--refine improves Iron Jarvis's own harness: run it with --runner jarvis.")
+        raise typer.Exit(code=2)
+    if team and runner != "jarvis-team":
+        typer.echo("--team applies to --runner jarvis-team only.")
         raise typer.Exit(code=2)
     try:
         # v1.383.0: refused BEFORE any task starts (and before the Jarvis
         # runner builds its platform), in one plain sentence each.
         effort = check_effort(effort)
         repeats = check_repeats(repeats)
-        if not dry_run:
+        if not dry_run and runner != "jarvis-team":
+            # (The team runner's planner and members name their own models,
+            # checked when its file is read.)
             require_model(runner, provider, model)
     except BenchRefused as exc:
         typer.echo(str(exc))
@@ -121,7 +134,7 @@ def run_command(
         bench_runner = make_runner(
             runner, root=root, provider=provider, model=model,
             rounds=rounds if rounds is not None else DEFAULT_ROUNDS, binary=binary or None,
-            dialect=dialect, effort=effort,
+            dialect=dialect, effort=effort, team=team,
         )
         result = asyncio.run(run_bench(
             runner=bench_runner, home=home, names=_split(tasks), seed=seed,

@@ -47,6 +47,16 @@ v1.383.0 (IJ harness part 3, Phase 1):
 * A task's SETUP step (:mod:`.setup_step`) makes its tree after the copy and
   before the tripwire; a step that fails is "did not run", never a fail.
 
+v1.396.0 (the long-jobs plan's Phase 7, MEASURED): a THIRD kind of Jarvis
+setup, the TEAM (``--runner jarvis-team --team <file>``, :mod:`.team`). A
+runner may now say it is ready (``check_ready``: a refusal in words before any
+task), make what it needs before the first task (``prepare``) and undo it
+after the last (``close``, however the invocation ends), and list more in a
+dry run (``dry_run_lines``). A Jarvis run's record carries its PARTS (each
+model's share, :mod:`.ledger`), its ACCOUNTS' usage-window readings
+(:mod:`.usage`), WHO DID WHAT (its helper rows) and, for a team, the router's
+record after the run.
+
 EVERY RUN IS WORKED ALONE (v1.383.0 review). An agent used to work in
 ``runs/<key>/work`` itself — two folders from repeat 1's finished work of the
 same task (and every other finished run of the setup), with that path in its
@@ -120,6 +130,9 @@ MODEL_NOT_A_MODEL = (
     "--model {model} names no particular model (it means the runner's own default), so the record "
     "could not say which one ran: name the model itself, for example --model sonnet."
 )
+#: v1.396.0: the runners that name a PROVIDER (Iron Jarvis's own; the team's
+#: is its planner's, from the team file).
+PROVIDER_RUNNERS = frozenset({"jarvis", "jarvis-team"})
 #: … and when the Jarvis runner was given no provider.
 PROVIDER_REQUIRED = (
     "Name the provider with --provider (for example --provider claude-cli), so the record says "
@@ -450,6 +463,13 @@ def _record(
         "tool_calls": outcome.tool_calls, "model_rounds": outcome.model_rounds,
         "model_calls": model_calls,
         "wall_s": round(wall_s, 3),
+        # v1.396.0 (Jarvis runners): each model's share of the run (the totals
+        # below are their sum), every account's usage-window readings, who did
+        # what, and (a team) the router's record after the run.
+        **({"parts": outcome.parts} if outcome.parts is not None else {}),
+        **({"accounts": outcome.accounts} if outcome.accounts is not None else {}),
+        **({"helpers": outcome.helpers} if outcome.helpers is not None else {}),
+        **({"team_records": outcome.team_records} if outcome.team_records is not None else {}),
         "tokens_in": outcome.tokens_in, "tokens_out": outcome.tokens_out,
         "tokens_cached": outcome.tokens_cached,
         "cost_metered_usd": outcome.cost_metered_usd,
@@ -687,16 +707,43 @@ def require_model(runner_name: str, provider: str, model: str) -> None:
         raise BenchRefused(MODEL_REQUIRED)
     if model.strip().lower() in NOT_A_MODEL:
         raise BenchRefused(MODEL_NOT_A_MODEL.format(model=model.strip()))
-    if runner_name == "jarvis" and not (provider or "").strip():
+    if runner_name in PROVIDER_RUNNERS and not (provider or "").strip():
         raise BenchRefused(PROVIDER_REQUIRED)
+
+
+#: Every ``--runner`` (v1.396.0: the team's beside the three of :data:`RUNNERS`).
+RUNNER_NAMES: tuple[str, ...] = ("jarvis", "jarvis-team", "claude", "codex")
 
 
 def make_runner(runner: str, *, root: str, provider: str = "", model: str = "",
                 rounds: int = DEFAULT_ROUNDS, binary: str | None = None,
-                dialect: str = "auto", effort: str = "") -> Any:
-    if runner not in RUNNERS:
-        raise BenchRefused(f"--runner must be one of: {', '.join(RUNNERS)}")
+                dialect: str = "auto", effort: str = "", team: str = "") -> Any:
+    if runner not in RUNNER_NAMES:
+        raise BenchRefused(f"--runner must be one of: {', '.join(RUNNER_NAMES)}")
     effort = check_effort(effort) if effort else ""
+    if runner == "jarvis-team":
+        # v1.396.0: the team file names the planner and the members.
+        from .team import JarvisTeamRunner, load_team_file
+
+        if provider or model:
+            raise BenchRefused(
+                "--provider and --model do not apply to --runner jarvis-team: the team file names "
+                "the planner's provider and model."
+            )
+        if not (team or "").strip():
+            raise BenchRefused("Name the team file with --team (it names the planner and the members).")
+        spec = load_team_file(team)
+        from ..daemon.chat_turn import turn_harness
+        from ..platform import build_platform
+
+        try:
+            turn_harness(dialect or "auto")
+        except ValueError as exc:
+            raise BenchRefused(f"--dialect: {exc}") from exc
+        return JarvisTeamRunner(build_platform(root), team=spec, round_budget=rounds,
+                                dialect=dialect or "auto", effort=effort)
+    if (team or "").strip():
+        raise BenchRefused("--team applies to --runner jarvis-team only.")
     if runner == "jarvis":
         from ..daemon.chat_turn import turn_harness
         from ..platform import build_platform
@@ -798,11 +845,19 @@ async def run_bench(
     plan = [(t, k) for k in range(1, repeats + 1) for t in selected]
     result = BenchResult(config_dir=cfg_dir, config=config, planned=[run_key(t.id, k) for t, k in plan],
                          dry_run=dry_run)
+    # v1.396.0: a runner refuses in words, before any task, a home it cannot
+    # measure in (a single-model row beside someone else's model team).
+    ready = getattr(runner, "check_ready", None)
+    if callable(ready):
+        await asyncio.to_thread(ready)
     if dry_run:
         result.plan_lines.append(
             f"{config.folder_name} (seed {use_seed}), {len(selected)} task(s)"
             + (f", {repeats} repeats each:" if repeats > 1 else ":")
         )
+        lines = getattr(runner, "dry_run_lines", None)
+        if callable(lines):
+            result.plan_lines += list(lines())
         for t, k in plan:
             stored = await asyncio.to_thread(
                 reusable_result, cfg_dir / "runs" / run_key(t.id, k), config.fingerprint(t, k)
@@ -822,10 +877,19 @@ async def run_bench(
     ledger = ledger if ledger is not None else BudgetLedger()
     echo(f"{config.folder_name}: {len(selected)} task(s), seed {use_seed}"
          + (f", {repeats} repeats" if repeats > 1 else ""))
-    for task, k in plan:
-        label = f"{task.id} (repeat {k} of {repeats})" if repeats > 1 else task.id
-        result.records.append(await run_task(task, runner, config, cfg_dir, ledger, echo=echo,
-                                             repeat=k, label=label))
+    # v1.396.0: what the runner needs before its first task (a team's
+    # members), undone however the invocation ends.
+    prepare, close = getattr(runner, "prepare", None), getattr(runner, "close", None)
+    try:
+        if callable(prepare):
+            await asyncio.to_thread(prepare)
+        for task, k in plan:
+            label = f"{task.id} (repeat {k} of {repeats})" if repeats > 1 else task.id
+            result.records.append(await run_task(task, runner, config, cfg_dir, ledger, echo=echo,
+                                                 repeat=k, label=label))
+    finally:
+        if callable(close):
+            await asyncio.to_thread(close)
     reused = [record_key(r) for r in result.records if r.get("reused")]
     try:
         ledger.verify_plan(result.planned, reused, result.records)
