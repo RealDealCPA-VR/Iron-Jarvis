@@ -1697,6 +1697,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         bg_tasks["build_resume"] = asyncio.create_task(_resume_cut_off_replies())
 
+        # NIGHT SHIFT (v1.398.0, N1): the queued coding tasks start by
+        # themselves inside the night window, each on its own branch, on THIS
+        # loop (never a scheduler thread). Each pass reports ITS OWN outcome on
+        # loop_health["night_shift"]; an empty queue costs one indexed read.
+        from .routes.night import night_loop as _night_loop
+
+        bg_tasks["night_shift"] = asyncio.create_task(
+            _night_loop(_app.state.d, lambda ok, exc: _tick("night_shift", ok, exc))
+        )
+
         # SHARE MY PROFILE WITH BUILD (v1.306.0): when a switch is on, bring
         # its block up to date — on a timer THREAD (poke returns at once), so
         # boot never waits on a file write.
@@ -1929,6 +1939,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 try:
                     await asyncio.wait_for(
                         asyncio.gather(_build_resume, return_exceptions=True), timeout=5.0
+                    )
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    pass
+            _night_shift = bg_tasks.pop("night_shift", None)
+            if _night_shift is not None:
+                # v1.398.0: the night loop stops BEFORE the turns are cut off
+                # (a pass starting a task at this point would be cut off at once).
+                _night_shift.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(_night_shift, return_exceptions=True), timeout=5.0
                     )
                 except Exception:  # noqa: BLE001 — shutdown never raises
                     pass
@@ -3488,6 +3509,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build_attempts as _build_attempts_routes
 
     _build_attempts_routes.register(app, d)
+    # Night shift (v1.398.0, N1): Coding sessions › Tonight — the queue of
+    # coding tasks that start by themselves in the night window, each on its
+    # own branch (harness/night; the loop is started in the lifespan).
+    from .routes import night as _night_routes
+
+    _night_routes.register(app, d)
     # Share my profile with Build (v1.306.0): the per-CLI switches on the
     # Memory page's "What Jarvis knows about you" card.
     from .routes import profile_share as _profile_share_routes

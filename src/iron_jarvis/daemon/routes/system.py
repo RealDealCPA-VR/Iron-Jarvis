@@ -208,7 +208,23 @@ def activity_snapshot(d) -> dict[str, Any]:
         # 1 holds sleep off "only while ... is working", and the plan's own
         # words tell working from "waiting on you" (decision 2).
         "working": _working(d, live_sessions, writing, chat_replies, working_panes),
+        # v1.398.0 (night shift N1): a night task is running, or one is queued
+        # while the night window is open — the desktop keeps the PC awake for
+        # it too (a night task parked on a question still waits only its card
+        # wait, so it is never "parked forever"). `working` keeps its own
+        # meaning (the update warning and Phase 2's rule read it).
+        "night_shift": _night_shift_awake(d),
     }
+
+
+def _night_shift_awake(d) -> bool:
+    """``harness/night.awake_needed`` for this daemon. Never raises."""
+    try:
+        from ...harness.night import awake_needed
+
+        return bool(awake_needed(d.platform.engine, d.platform.config))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _working(d, live_sessions: "list[Any]", writing: int, chat_replies: int, working_panes: int) -> bool:

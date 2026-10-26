@@ -2602,6 +2602,15 @@ class AgentRuntime:
         # WAITING, NOT REFUSING (v1.247.0): an attended run waits for its
         # person; an unattended door keeps SESSION_APPROVAL_TIMEOUT_S.
         timeout = _ask_timeout_for(getattr(session, "origin", None) or "")
+        # v1.398.0 (night shift N1, decision 1): a HELPER of a night task's
+        # coding turn (its run copies the turn's context) waits the night's
+        # card wait, then that step is declined — never the attended no-clock
+        # wait, which would hold the task until morning.
+        from ..harness import night as _night
+
+        _night_turn = _night.current()
+        if _night_turn is not None:
+            timeout = _night_turn.card_wait_s
         examples: list = []
         # G79 (v1.356.0): a PRICED ask's sentence rides the registry entry
         # too, so the session row's `waiting_on` and the mission screen's own
@@ -2792,6 +2801,14 @@ class AgentRuntime:
             return "", {*names, perm}
         if decision == "deny":
             return "the user declined this call when asked", set()
+        if _night_turn is not None:
+            # v1.398.0: nobody answered a night task's helper's ask — this
+            # step is left for the user, and the night record keeps it.
+            from ..harness.night import call_words
+
+            what = call_words(tc.name)
+            _night_turn.note("declined", _night_turn.note_words(what))
+            return _night_turn.declined_words(what), set()
         return PAUSE_TIMEOUT_REASON, set()
 
     async def ask_plan_approval(

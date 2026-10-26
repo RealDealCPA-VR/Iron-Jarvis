@@ -2471,6 +2471,19 @@ class FinishCheck:
             if out and fence is not None:
                 out = str(await fence(out))
             lines.append(head + (f" Its output:\n{out}" if out else ""))
+        # v1.398.0 (night shift N1, decision 3): a session on its own branch
+        # ran them with its MAIN folder's .venv / node_modules — said, so the
+        # verdict is read for what it is (``harness/main_env``).
+        if any(r.verdict in (TESTS_PASSED, TESTS_FAILED) for r in self.runs):
+            from .main_env import for_current_turn, tests_line
+
+            try:
+                borrowed = await asyncio.to_thread(for_current_turn)
+            except Exception:  # noqa: BLE001 — the note without the sentence
+                borrowed = None
+            line = tests_line(borrowed)
+            if line:
+                lines.append(line)
         return "\n".join(lines)
 
     #: Review: the list is the FILE TOOLS' (the undo journal). A command the

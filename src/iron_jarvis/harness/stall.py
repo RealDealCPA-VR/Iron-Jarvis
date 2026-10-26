@@ -551,7 +551,8 @@ class PhoneAsk:
     nothing at all. Names only on the event — never the call's arguments."""
 
     def __init__(self, platform: Any, approval_id: str, tool: str, *, thread_id: str = "",
-                 count: int = 1) -> None:
+                 count: int = 1, after_s: "float | None" = None,
+                 expires_s: "float | None" = None) -> None:
         self.platform = platform
         self.approval_id = str(approval_id or "")
         self.tool = str(tool or "")
@@ -559,9 +560,19 @@ class PhoneAsk:
         self.count = int(count or 1)
         self.asked_at = now()
         self.sent: "asyncio.Task[Any] | None" = None
+        #: v1.398.0 review (night shift N1, decision 1): how long the card
+        #: waits in the app before the phone gets it — :data:`PHONE_AFTER_S`
+        #: by default; 0 for a NIGHT task's card (nobody is at the screen at
+        #: night, and the card is declined after the night's wait: waiting
+        #: five minutes first spent a third of it, and a wait of five
+        #: minutes or less never reached the phone at all).
+        self.after_s = PHONE_AFTER_S if after_s is None else max(0.0, float(after_s))
+        #: v1.398.0 review: a card that EXPIRES (a night task's) says when, so
+        #: the phone's prompt never reads "no expiry" (``timeout_s`` 0).
+        self.expires_s = expires_s
 
     def due(self) -> bool:
-        return self.sent is None and now() - self.asked_at >= PHONE_AFTER_S
+        return self.sent is None and now() - self.asked_at >= self.after_s
 
     def tick(self) -> None:
         if not self.due():
@@ -593,7 +604,12 @@ class PhoneAsk:
                 "approval_id": self.approval_id,
                 "tool": self.tool,
                 # 0 = no expiry: the reply waits for an answer (v1.247.0).
-                "timeout_s": 0,
+                # v1.398.0 review: a night task's card says what is left of
+                # its wait.
+                "timeout_s": (
+                    max(1, int(self.expires_s - (now() - self.asked_at)))
+                    if self.expires_s is not None else 0
+                ),
                 "surface": PHONE_SURFACE,
                 "thread_id": self.thread_id,
                 "title": await self._title(),

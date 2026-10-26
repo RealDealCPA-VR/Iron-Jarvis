@@ -3418,6 +3418,14 @@ async def chat_stream(
     # other turn (chat, the sidebar, the benchmark, POST /chat): none of it.
     _coding_session = reply_record is not None
     _step_turn = str(getattr(body, "turn_id", "") or "").strip()
+    # v1.398.0 (night shift N1, decision 1): the NIGHT TASK this turn belongs
+    # to (``harness/night.NightTurn``, armed by ``routes/build.
+    # start_build_turn`` and the attempts' start while the driver task is
+    # made) — its cards wait the night's card wait, then that step is
+    # declined. None for every other turn: nothing below changes for it.
+    from ...harness import night as _night_mod
+
+    _night_turn = _night_mod.current()
     from ...tools.base import ToolResult as _ToolResult
 
     # (The 400 for empty messages is `_eager_checks`, run by
@@ -5171,6 +5179,10 @@ async def chat_stream(
                     _ct = d.platform.registry.get(_c.name)
                     _cp = _ct.perm_key() if _ct is not None else _c.name
                     _cm = d.platform.permissions.mode_for(_cp, overrides)
+                    if _night_asks(_c.name) and _cm is not PermissionMode.DENY:
+                        # v1.398.0 review: THE NIGHT ALLOW-LIST — the per-call
+                        # branch below decides (MIRROR NOTE).
+                        return _cp
                     _sc = _spend.get(id(_c))
                     if (approval_mode == "yolo" and _c.name not in ALWAYS_CARD_TOOLS
                             and not _finish_needs_a_person(_c)):
@@ -5196,6 +5208,18 @@ async def chat_stream(
                         # priced asks, whatever a grant said.
                         _asks = bool(_sc.ask)
                     return _cp if _asks else ""
+
+                def _night_asks(_name: str) -> bool:
+                    # v1.398.0 review (night shift N1, decision 4): in a NIGHT
+                    # task's turn only the night's allow-list runs unasked
+                    # (`harness/night.RUNS_UNASKED`: file edits, commands,
+                    # reading, the step list, the helpers); every other tool
+                    # it holds — the web, the agent's browser, an app — is
+                    # CARDED whatever its tier or the posture says, past
+                    # every grant, and so is declined after the card wait.
+                    # False for every other turn (no NightTurn). MIRROR NOTE:
+                    # `_would_card` and the per-call branch read it the same.
+                    return _night_turn is not None and _night_mod.asks_at_night(_name)
 
                 def _finish_needs_a_person(_c) -> bool:
                     # THE FINISH CHECK (part 3, Phase 2; review): the folder's
@@ -5346,7 +5370,17 @@ async def chat_stream(
                     )
                     if _local_ask or _once_only:
                         _needs_card = True
-                    if _needs_card and not _local_ask and not _once_only and _tab_covered(tc):
+                    # v1.398.0 review: THE NIGHT ALLOW-LIST (`_night_asks`):
+                    # carded whatever the posture said, and no grant below —
+                    # tab, standing, a free spend verdict — lifts it.
+                    _night_card = (
+                        not _unarmed and _night_asks(tc.name)
+                        and _mode is not PermissionMode.DENY
+                    )
+                    if _night_card:
+                        _needs_card = True
+                        _grant_extra = set()
+                    if _needs_card and not _local_ask and not _once_only and not _night_card and _tab_covered(tc):
                         # A COVERED CALL CARRIES ITS GRANT (v1.270.1). The
                         # card is skipped, but the registry's own permission
                         # gate still runs inside `invoke` and refuses an
@@ -5360,7 +5394,7 @@ async def chat_stream(
                         _needs_card = False
                         if _engine_asks:
                             _grant_extra = {tc.name, _perm_name}
-                    if _needs_card and not _local_ask and not _once_only and _grant_covers(
+                    if _needs_card and not _local_ask and not _once_only and not _night_card and _grant_covers(
                         d.platform, _grant_scopes, tc.name, tc.arguments
                     ):
                         # A STANDING GRANT COVERS IT (v1.299.0): no card. The
@@ -5382,7 +5416,7 @@ async def chat_stream(
                         if _sc.ask:
                             _needs_card = True
                             _spend_card = True
-                        elif not _local_ask:
+                        elif not _local_ask and not _night_card:
                             _needs_card = False
                             if _engine_asks:
                                 _grant_extra = {tc.name, _perm_name}
@@ -5420,9 +5454,13 @@ async def chat_stream(
                                     d.platform, _grant_scopes, _trust_state, tc.name
                                 ) and not _local_ask and not _spend_card and not _once_only,
                                 # 0 = no expiry (v1.247.0): the turn waits
-                                # for the person it asked.
+                                # for the person it asked. v1.398.0: a night
+                                # task's card waits the night's card wait,
+                                # then that step is declined (decision 1).
                                 "timeout_s": (
-                                    max(1, int(CHAT_ASK_TIMEOUT_S))
+                                    max(1, int(_night_turn.card_wait_s))
+                                    if _night_turn is not None
+                                    else max(1, int(CHAT_ASK_TIMEOUT_S))
                                     if CHAT_ASK_TIMEOUT_S else 0
                                 ),
                             }
@@ -5490,7 +5528,9 @@ async def chat_stream(
                             _stopped = False
                             _aloop = asyncio.get_running_loop()
                             _deadline = (
-                                _aloop.time() + CHAT_ASK_TIMEOUT_S
+                                _aloop.time() + _night_turn.card_wait_s
+                                if _night_turn is not None
+                                else _aloop.time() + CHAT_ASK_TIMEOUT_S
                                 if CHAT_ASK_TIMEOUT_S else None
                             )
                             _beat = _aloop.time()
@@ -5507,6 +5547,13 @@ async def chat_stream(
                                     d.platform, _ap_id, tc.name,
                                     thread_id=str(getattr(body, "thread_id", "") or ""),
                                     count=_count,
+                                    # v1.398.0 review (decision 1): a NIGHT
+                                    # task's card goes to the phone at once,
+                                    # and says when it is declined.
+                                    **(
+                                        {"after_s": 0.0, "expires_s": float(_night_turn.card_wait_s)}
+                                        if _night_turn is not None else {}
+                                    ),
                                 )
                                 if _coding_session and _stall.phone_may_ask(
                                     once_only=bool(_once_only), local_ask=bool(_local_ask),
@@ -5646,6 +5693,16 @@ async def chat_stream(
                             _plan["card_deny"] = (
                                 "you declined this call when asked"
                             )
+                        elif _night_turn is not None:
+                            # v1.398.0 (night shift N1, decision 1): nobody
+                            # answered a night task's card — this step is
+                            # declined (a safety card the same way, never
+                            # allowed), the model is told in plain words and
+                            # carries on, and the night record keeps it for
+                            # the morning ("needs you").
+                            _nwhat = _night_mod.call_words(tc.name)
+                            _plan["card_deny"] = _night_turn.declined_words(_nwhat)
+                            _night_turn.note("declined", _night_turn.note_words(_nwhat))
                         else:
                             _plan["card_deny"] = (
                                 "the approval request timed out with no"

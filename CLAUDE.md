@@ -3699,6 +3699,73 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **NIGHT SHIFT N1: a queue of coding tasks that run overnight on their own
+  branches; file edits and commands run unasked, EVERYTHING else is carded
+  and declined; the main folder is WATCHED** (v1.398.0, phase N1 of
+  `docs/NIGHT-SHIFT-PLAN.md`, decisions 1, 3, 4 accepted 2026-10-26; a doer +
+  a reviewer that found 16 more defects, each red first). `harness/night.py`
+  (`NightTaskRecord`, a late model; states queued|running|done|failed|
+  needs_you|stopped; notes `{kind, text, at}` written under `_RECORD_LOCK`),
+  `harness/night_window.py`, `harness/night_guard.py`, `harness/main_env.py`,
+  `routes/night.py` (`GET/POST /build/night`, PATCH/DELETE, `/move`,
+  `/cancel`), `TonightList.tsx`, `lib/nightShift.ts`. Settings (Agents &
+  automation › Night shift): `night_window_start/end` "23:00"/"07:00",
+  `night_max_at_once` 2, `night_task_minutes` 90 — these three ASK from chat
+  (they widen the night) — and `night_card_wait_minutes` 15 (allow). THE
+  LOOP (`bg_tasks`, `_tick("night_shift")`, a per-platform pass LOCK so two
+  passes never exceed N or share a folder) starts tasks only inside the
+  window, each a NEW `ij/` branch session through the lifted create path and
+  `start_build_turn(started_by="night")` on the MAIN loop; a task is held to
+  its ACCUMULATED `ran_s` (the cap is what is left), and a carry-on (restart
+  resume, Resume when ready) is refused outside the window or with no time
+  left. THE POSTURE (decision 4) is `approve_for_me` + the night's own
+  allow-list `RUNS_UNASKED` (file read/edit/patch, glob/grep/list,
+  shell/process_*, plan_update, skills, the helpers) applied PER TURN, never
+  stored on the session; the stream lane cards EVERYTHING else
+  (`routes/chat._night_asks`/`_night_card`) past tab grants, standing grants
+  and a free spend verdict, helpers get the same as "ask" rules, and the
+  model is told the night's rule. The first cut used yolo, and `web_fetch`/
+  `web_search` RAN unasked — pinned through the REAL `registry.invoke`.
+  CARDS (decision 1): a card waits `night_card_wait_minutes`, goes to the
+  phone AT ONCE when one is set up (`stall.after_s/expires_s`; safety and
+  once-only cards never), then that call is DECLINED with "left for the
+  user: …" and the task ends needs_you. A project's own command lines still
+  card once-only and are declined; folder checks and project checkers run
+  under the command grant. Low trust carries over to the task's later turns
+  and ends needs_you; an account limit ends needs_you. MAIN FOLDER GUARD
+  (`night_guard.snapshot/changes`, before and after each task): HEAD, branch,
+  porcelain status, a hash of `diff HEAD`, the stash, non-`ij/` branches and
+  tags, the `.venv` package list — a change ends needs_you with
+  `main_changed` shown un-folded; every record says what is NOT confined
+  (`NOT_CONFINED`: commands run as the user; outside-repo writes, untracked
+  contents, other ignored files and the network are unseen). ENV (decision
+  3): `main_env` puts the main checkout's `.venv` and `node_modules/.bin`
+  on the shell, the finish check and the checkers — never a junction or
+  symlink in the worktree; `editable_redirects` reads `.pth` / editable
+  finders (parsed, never run) / `direct_url.json` and puts the branch's import
+  roots first on PYTHONPATH, else "NOT TRUSTED" + needs_you (proven with a
+  real offline `uv pip install -e`). EMERGENCY STOP now covers every coding
+  turn Iron Jarvis started by itself (`started_by` night | wait | restart,
+  account moves, night-started attempts) — never a person's — at each
+  automatic start AND the top of each resume pass, and stops the running
+  STEP (a hung command no longer runs to its 10 min deadline);
+  `stop_unattended` returns `turn:<id>` entries; a stop during a start
+  records STOPPED. Background programs end at settle
+  (`S.end_session_programs`). Night tasks hold a "runs at once" slot
+  (`Orchestrator.try_hold_slot/release_slot`). PAY: `pay_problem`/`pay_room`
+  — no start at a $0 or spent limit; with room the reply's dollar cap is
+  what is left. KEEP-AWAKE: `/system/activity` gains `night_shift` (running,
+  or queued from `AWAKE_BEFORE_S` 6 h before the window opens); `working`
+  keeps its meaning. The phone's 5-minute refusal of an answer to a card the
+  app still holds open is fixed (an EXPIRED agent card is still refused).
+  OPEN: a night task's starting account ignores the 95% floor and group
+  spreading; the team's pay ledger does not count the night session's own
+  spend; `ask_user` questions do not go to the phone; Cancel of a queued task
+  is one press; not driven in the packaged app or with a real phone. NOT
+  YET (N2): committing finished tasks, the morning summary. Pins:
+  `tests/test_night_shift{,_run,_waits,_review,_outside,_editable,_window,
+  _limits,_attempts}_v1398.py`, `dashboard/__tests__/tonight{,-review}-v1398.test.tsx`, e2e
+  `dashboard/e2e/ij-harness-tonight.spec.ts`.
 - **TRY ON SEVERAL MODELS: up to three attempts, each its own branch, worktree,
   model and account; opt-in by the user's words or the Try on… chip only; Keep
   lands one** (v1.397.0, Phase 5 Part B of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`

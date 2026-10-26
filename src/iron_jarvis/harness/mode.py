@@ -398,8 +398,54 @@ def dialect_section(plan: ToolPlan, *, ask_words: str = "") -> str:
     return (text + ("\n" + ask_words if ask_words else "")).strip()
 
 
+def _night_sentence(plan: ToolPlan, local_only: bool) -> str:
+    """v1.398.0 review (night shift N1): what a NIGHT task's model is told —
+    the truth of the night's allow-list (``night.RUNS_UNASKED``), never the
+    day posture's words. A shown tool asks when any real tool it can run
+    asks at night; under Local only a command tool still asks (its own
+    card)."""
+    from . import night as _night
+    from ..providers import egress as _egress
+
+    def _asks(real: str) -> bool:
+        return _night.asks_at_night(real) or (local_only and real in _egress.RUNS_COMMANDS_TOOLS)
+
+    gate = set(plan.armed) | set(plan.ask)
+    free: list[str] = []
+    asking: list[str] = []
+    for t in plan.dialect_tools:
+        real = [x for x in t.targets if x in gate] or list(t.targets)
+        (asking if any(_asks(x) for x in real) else free).append(t.name)
+    for n in plan.passthrough:
+        (asking if _asks(n) else free).append(n)
+    once = [t.name for t in plan.dialect_tools if t.targets and t.targets[0] in ONCE_ONLY_TOOLS]
+    once += [n for n in plan.passthrough if n in ONCE_ONLY_TOOLS]
+    asking = [n for n in asking if n not in once]
+    parts = ["This task runs at night with nobody watching."]
+    if free:
+        parts.append(", ".join(free) + " run without asking, inside this task's own folder.")
+    if asking or once:
+        parts.append(
+            "Calls to " + ", ".join([*asking, *once]) + " wait for an answer that may not come; "
+            "after the wait the step is declined: do not repeat it, carry on without it and say at "
+            "the end what was left for the user."
+        )
+    parts.append(
+        "A commit or push of your own, a project's own command lines and anything that spends "
+        "money always wait for the user, and are declined the same way."
+    )
+    return " ".join(parts)
+
+
 def ask_sentence(plan: ToolPlan, *, approval_mode: str, local_only: bool, registry: Any) -> str:
-    """Which shown tools pause for the user (stream lane only)."""
+    """Which shown tools pause for the user (stream lane only).
+
+    v1.398.0 review: a NIGHT task's turn (``night.current()``) is told the
+    night's own rule (:func:`_night_sentence`), whatever the posture."""
+    from . import night as _night
+
+    if _night.current() is not None:
+        return _night_sentence(plan, local_only)
     if not plan.ask:
         return ""
     asking = set(plan.ask)

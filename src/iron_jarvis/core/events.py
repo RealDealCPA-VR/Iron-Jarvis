@@ -366,6 +366,15 @@ def _drop_build_turn_scope() -> None:
         _PROGRESS.set(None)
     except Exception:  # noqa: BLE001
         pass
+    try:
+        # v1.398.0 (night shift N1): and its night task — work a handler
+        # starts is not the night task's turn, and must never take its
+        # card wait (or write notes on its record).
+        from ..harness.night import NIGHT_TURN
+
+        NIGHT_TURN.set(None)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class EventBus:

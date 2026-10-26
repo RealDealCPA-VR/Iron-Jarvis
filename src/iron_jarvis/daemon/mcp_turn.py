@@ -138,6 +138,18 @@ class _Ask:
         return True
 
 
+#: v1.398.0 (night shift N1): how an ask nobody answered in a NIGHT task's
+#: card wait is settled — the model's own question as not answered (it
+#: decides itself and says what it assumed), an app's question declined, an
+#: app's request to ask the model denied — and the words the night record
+#: keeps for it.
+NIGHT_OUTCOMES = {"ask_user": "unanswered", "elicitation": "decline", "sampling": "denied"}
+NIGHT_WHAT = {
+    "ask_user": "answer the agent's question",
+    "elicitation": "answer an app's question",
+    "sampling": "let an app ask the model",
+}
+
 #: Every pending ask of every live stream turn, by id — the routes resolve
 #: through this. An entry leaves when its ask is settled (answered, stopped,
 #: turn ended), so a finished id is honestly unknown (404).
@@ -254,6 +266,13 @@ class TurnInteractions:
         self.poll_s = float(poll_s) if poll_s and poll_s > 0 else ASK_POLL_S
         self.closed = False
         self._mine: dict[str, _Ask] = {}
+        #: v1.398.0 (night shift N1, decision 1): the night task this turn
+        #: belongs to (read from the turn's own context when it is built) — a
+        #: question then waits the night's card wait and is settled as not
+        #: answered (:data:`NIGHT_OUTCOMES`). None: no clock, as before.
+        from ..harness import night as _night
+
+        self.night = _night.current()
 
     # -- frames ------------------------------------------------------------ #
 
@@ -337,7 +356,15 @@ class TurnInteractions:
 
     async def _wait(self, ask: _Ask) -> tuple[str, Any]:
         """Park until the ask is settled. No clock: an answer, Stop, a
-        dropped connection or the turn's end are the only ways out."""
+        dropped connection or the turn's end are the only ways out.
+
+        v1.398.0 (night shift N1): in a NIGHT task's turn the night's card
+        wait is the clock — then the ask is settled as not answered
+        (:data:`NIGHT_OUTCOMES`: the model's own question "unanswered", an
+        app's question declined, a model request denied) and the night
+        record keeps it for the morning."""
+        night = self.night
+        deadline = (asyncio.get_running_loop().time() + night.card_wait_s) if night is not None else None
         try:
             while True:
                 try:
@@ -346,6 +373,14 @@ class TurnInteractions:
                     if await self._should_stop():
                         ask.resolve("stopped")
                         # resolve() on this loop sets the result at once.
+                        return await asyncio.shield(ask.fut)
+                    if night is not None and deadline is not None and asyncio.get_running_loop().time() >= deadline:
+                        what = NIGHT_WHAT.get(ask.kind, "a question")
+                        if ask.resolve(NIGHT_OUTCOMES.get(ask.kind, "stopped")):
+                            night.note(
+                                "unanswered" if ask.kind == "ask_user" else "declined",
+                                night.note_words(what),
+                            )
                         return await asyncio.shield(ask.fut)
         finally:
             _drop(ask.id)
@@ -421,6 +456,9 @@ class TurnInteractions:
             return "answered", content
         if outcome == "skipped":
             return "skipped", None
+        if outcome == "unanswered":
+            # v1.398.0: a night task's question nobody answered in its wait.
+            return "unanswered", None
         return "stopped", None
 
     # -- sampling ---------------------------------------------------------- #

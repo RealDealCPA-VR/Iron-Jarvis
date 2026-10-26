@@ -1898,6 +1898,51 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Night shift: the Tonight list (v1.398.0)
+
+Queue coding tasks before bed, and they run overnight, each on its own
+branch.
+
+- **Adding a task.** In Coding sessions, open **Tonight** (under New
+  session). Add a task: the folder, what to do, and what it runs on. The
+  choices are your default model, one model, your model team, or try on 2
+  or 3 models. Ctrl+Enter adds it. Queued tasks can be moved up or down,
+  edited, cancelled or removed.
+- **When tasks run.**
+  - Tasks start only in the night window: 11 PM to 7 AM by default.
+  - At most 2 run at once, and never two in the same folder.
+  - Each task has 90 minutes and runs on a new branch of its own.
+  - A task that hasn't started by 7 AM waits for the next night.
+  - Change these in **Settings › Agents & automation › Night shift**.
+    Changing them from chat asks first.
+- **What a night task may do without asking.** It edits files and runs
+  commands in its own branch folder.
+  - Anything else waits 15 minutes for your OK, going to your phone at once
+    if a phone channel is set up, and is then skipped and listed for you.
+    "Anything else" includes the web, a commit or push, your connected apps,
+    a project's own command lines, risky clicks, and spending.
+  - The task carries on with the rest of its work, and ends as **Needs
+    you**.
+- **Your main folder is watched.** Commands run as you, so they could reach
+  other folders. Before and after each task, Iron Jarvis checks your main
+  folder: its commit, branches, changed files and `.venv` packages. A change
+  ends the task as **Needs you**, shown on its row.
+- **Tests on a branch** use your main folder's `.venv` and `node_modules`.
+  Nothing is installed.
+  - If a package is installed in editable mode, the branch's own code comes
+    first.
+  - When that can't be done, the result says the tests are "not trusted".
+- **Limits hold.** Pay-per-use stays within your monthly limit. A carry-on
+  after a restart or an account reset happens only inside the window, and
+  only with the task's own time left.
+- **Emergency stop** stops every night task, and everything Iron Jarvis
+  started by itself, such as an automatic resume. A coding reply you started
+  yourself is never stopped.
+- **The PC stays awake** while a night task runs, and from 6 hours before
+  the window opens while one is queued.
+- **Coming in the next release:** each finished task committed to its
+  branch, and one morning summary.
+
 ## Try one task on several models (v1.397.0)
 
 In a coding session in a git folder, you can try one task on up to three
