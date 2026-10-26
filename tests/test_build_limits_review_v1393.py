@@ -282,6 +282,34 @@ async def test_config_change_refuses_account_groups(app):
     assert app.state.platform.config.account_groups == {}
 
 
+async def test_the_chat_card_for_account_groups_names_the_accounts(app, fake):
+    """The card a chat change of account_groups puts up is the user's whole
+    privacy decision: it must say WHICH accounts end up together, never only
+    Iron-Proxy's ids. Mutation: show the raw value again."""
+    from iron_jarvis.settings.tools import ConfigChangeProtectedTool
+
+    await enable(app)
+    tool = ConfigChangeProtectedTool(app.state.platform)
+    shown = tool.redact_args({"key": "account_groups",
+                              "value": {"All": ["c-work", "x-plus", "gone-1"], "Home": ["c-spare"]}})
+    assert shown["key"] == "account_groups"
+    # ONE line the card shows at a glance (a nested value is folded away).
+    assert shown["value"] == "All: Work Max (Claude Code), Codex Plus (Codex), gone-1; Home: Spare (Claude Code)"
+    # A model's JSON string reads the same; no groups says so; another
+    # setting is untouched.
+    shown = tool.redact_args({"key": "account_groups", "value": '{"Work": ["c-spare"]}'})
+    assert shown["value"] == "Work: Spare (Claude Code)"
+    assert tool.redact_args({"key": "account_groups", "value": {}})["value"] == "no groups"
+    assert tool.redact_args({"key": "max_agent_steps", "value": "9"}) == {"key": "max_agent_steps", "value": "9"}
+    # The grant key is the REAL arguments, never the words shown.
+    from iron_jarvis.core.grants import args_hash
+
+    real = {"key": "account_groups", "value": {"All": ["c-work"]}}
+    assert args_hash("config_change_protected", real) != args_hash(
+        "config_change_protected", tool.redact_args(real),
+    )
+
+
 # --------------------------------------------------------------------------- #
 # races
 # --------------------------------------------------------------------------- #
