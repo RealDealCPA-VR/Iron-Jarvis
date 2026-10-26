@@ -29,9 +29,6 @@ beyond that loopback gateway.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
 from iron_jarvis.harness_bench import team as T
@@ -268,6 +265,42 @@ async def test_the_report_says_the_router_had_no_usage_numbers_and_shows_pieces_
     assert (f"| codex | review | 2 | 2 | 0 | 2 | 1 / 2 | {W.TASK_A}, {W.TASK_B} |") in report
     combined = (world.home / "harness-bench" / "report.md").read_text(encoding="utf-8")
     assert "never applied" in combined and "| glm | code | 2 |" in combined
+
+
+# --------------------------------------------------------------------------- #
+# the refine ledger still refuses a real mismatch
+# --------------------------------------------------------------------------- #
+
+
+def test_the_refine_ledger_still_catches_a_real_mismatch():
+    """v1.396.0 let a record of several receipts sit one rounding per receipt
+    away from its calls. The refine loop's ledger reads that count too: a
+    token off by one, or money past the receipts' own rounding, is still a
+    problem — and a member that did nothing widens nothing."""
+    from iron_jarvis.harness_bench.ledger import CallEntry, Rollout, receipts_of
+    from iron_jarvis.harness_bench.refine import RefineLedger
+
+    def ledger(record: dict) -> list[str]:
+        led = RefineLedger({"proposals": 1, "probe_runs": 1})
+        stage = led.stage("baseline", "x")
+        roll = Rollout(task_id="a", runner="jarvis")
+        roll.add(CallEntry(provider="claude-cli", model="m", tokens_in=100, tokens_out=10, tokens_cached=0,
+                           cost_metered_usd=0.0, cost_list_price_usd=0.1, complete=True, who=PLANNER))
+        stage.rollouts.append(roll)
+        stage.records.append(record)
+        return led.problems()
+
+    three = {PLANNER: {"receipts": 1}, "glm": {"receipts": 1}, "codex": {"receipts": 1}}
+    idle = {PLANNER: {"receipts": 1}, "glm": {"receipts": 0}, "codex": {"receipts": 0}}
+    assert receipts_of({"parts": three}) == 3 and receipts_of({"parts": idle}) == 1
+    good = {"tokens_in": 100, "tokens_out": 10, "cost_metered_usd": 0.0, "cost_list_price_usd": 0.1}
+    assert ledger({**good, "parts": three}) == []
+    # Within three receipts' rounding: fine; past it: a problem.
+    assert ledger({**good, "cost_list_price_usd": 0.1 + 1.2e-6, "parts": three}) == []
+    assert ledger({**good, "cost_list_price_usd": 0.1 + 1.2e-6, "parts": idle})
+    assert ledger({**good, "cost_list_price_usd": 0.1 + 2e-6, "parts": three})
+    # A token off by one is a problem however many receipts.
+    assert any("tokens_in" in p for p in ledger({**good, "tokens_in": 101, "parts": three}))
 
 
 # --------------------------------------------------------------------------- #

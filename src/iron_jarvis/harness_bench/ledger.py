@@ -176,7 +176,11 @@ def receipts_of(record: Mapping[str, Any]) -> int:
     half a millionth away from its calls): one per part receipt, else one."""
     parts = record.get("parts")
     if isinstance(parts, Mapping) and parts:
-        return max(1, sum(max(1, int(p.get("receipts") or 1)) for p in parts.values() if isinstance(p, Mapping)))
+        # v1.396.0 review: an IDLE part (a member that was never handed a
+        # piece: no receipt, nothing rounded) adds no tolerance — counting it
+        # as one widened every team run's money check by a rounding per
+        # member.
+        return max(1, sum(int(p.get("receipts") or 0) for p in parts.values() if isinstance(p, Mapping)))
     return 1
 
 
