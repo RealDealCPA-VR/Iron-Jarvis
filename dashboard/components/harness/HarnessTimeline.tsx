@@ -55,6 +55,7 @@ import { carriedOnTurns, timelineResumeNote } from "@/lib/buildResume";
 import type { BuildSessionView } from "@/lib/buildSessions";
 import { providerDisplay } from "@/lib/onboarding";
 import { kindWords, rowSubject, stepPhrase, stepPhraseText } from "@/lib/stepWords";
+import { summarizedWords } from "@/lib/buildLongJobs";
 import { LIST_PRICE_TITLE, type TurnUsage } from "@/lib/types";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { toolKind } from "@/lib/workTarget";
@@ -176,6 +177,9 @@ function callLabel(c: TimelineCall, n: number, models: readonly CatalogRow[]): s
   const who = modelName(c.provider, c.model, models);
   if (c.kind === "final") return `${who}: its final answer`;
   if (c.kind === "rewrite") return `${who}: the answer again, in your language`;
+  // v1.392.0: the reply's own model summarizing its older rounds.
+  if (c.kind === "summary")
+    return c.summarized !== undefined ? `${who}: ${summarizedWords({ steps: c.summarized })}` : `${who}: a summary of earlier steps`;
   return `${who}: model call ${n}`;
 }
 

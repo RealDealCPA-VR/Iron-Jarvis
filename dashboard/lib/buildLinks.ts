@@ -11,8 +11,11 @@
  *
  * IMPORT-FREE on purpose: the bell is on every page, and ~71 test files mock
  * lib/api wholesale — a helper living beside an api import would vanish under
- * them (lib/missionLinks's rule).
+ * them (lib/missionLinks's rule). (lib/buildWords is import-free too, so its
+ * words may be read here.)
  */
+
+import { CODING_SESSION } from "./buildWords";
 
 /** The process / tool session id prefix of a Build session's calls. */
 export const BUILD_SESSION_PREFIX = "build:";
@@ -151,4 +154,22 @@ export function buildFinishedBody(title: unknown, seconds: unknown): string {
   const t = typeof title === "string" ? title.trim() : "";
   const clipped = t.length > 120 ? `${t.slice(0, 119)}…` : t;
   return [clipped, buildTookWords(seconds)].filter((b) => b).join(" · ");
+}
+
+/** v1.392.0 (long jobs, Phase 3): the bell's headline for
+ *  `build.turn_stalled` — a Build reply that made no progress for ten
+ *  minutes (once per episode). The twin of comm/notifier
+ *  `BUILD_STALLED_HEADLINE` and desktop/main.js (one fixture:
+ *  one-notice-v13600). v1.392.0 review: a NEW sentence, so it names the
+ *  session the user's way (lib/buildWords, v1.389.0) — never "Build
+ *  session". */
+export const BUILD_STALLED_HEADLINE = `Your ${CODING_SESSION} has stopped making progress`;
+
+/** Its line: the session's title and the live line's own sentence ("No
+ *  progress for 10 minutes — waiting on …"), "" when neither is known. */
+export function buildStalledBody(title: unknown, words: unknown): string {
+  const t = typeof title === "string" ? title.trim() : "";
+  const clipped = t.length > 120 ? `${t.slice(0, 119)}…` : t;
+  const w = typeof words === "string" ? words.trim() : "";
+  return [clipped, w].filter((b) => b).join(" · ");
 }

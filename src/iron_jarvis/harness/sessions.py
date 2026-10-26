@@ -152,6 +152,11 @@ LINE_KEYS: tuple[str, ...] = (
     # on: the turn id of the reply a restart cut off (the screen's one plain
     # line says the reply carried on by itself after Iron Jarvis restarted).
     "resumedFrom",
+    # v1.392.0 (the long-jobs plan's Phase 3): on a reply, the summary it
+    # wrote of its own older rounds to fit the model ({steps, times} —
+    # "Summarized N earlier steps to fit the model"), and the session's cap it
+    # met ({kind: "time" | "cost", limit} — the screen offers "Keep going").
+    "summarized", "capMet",
 )
 
 
@@ -832,6 +837,8 @@ def session_view(row: Any, *, states: "dict[str, dict[str, bool]] | None" = None
             k: setup[k] for k in (
                 "provider", "model", "reasoning", "approval_mode", "local_only", "granted_tools",
                 "account", "account_name",
+                # v1.392.0 (decision 8): the session's optional cap.
+                "cap",
             ) if k in setup
         },
         "messages": _messages(row),

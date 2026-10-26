@@ -1,5 +1,5 @@
 {
-  "_about": "v1.360.0 lane 10A: ONE notice per run outcome. Each case is a persisted event (the audit's shape: id, type, session_id, ts, payload). `pings` = the dashboard bell raises a desktop ping for it while a window is open (so the daemon keeps 'This PC' quiet: comm/notifier.bell_pings); `attention` = it counts on the bell's badge, and the desktop app says it while it sits in the tray (comm/notifier.bell_attention, desktop/main.js runOutcomeNotice); `title` / `body` / `href` = the bell row's words, which the tray notice repeats. Read by tests/test_one_notice_v13600.py (Python + main.js under node) and dashboard/__tests__/one-notice-v13600.test.tsx (the real bell). v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ran longer than a minute and ended (`build.turn_finished`) is a ringing row too, said from the tray once; `phone` (default true) = the default notifier also sends it to a phone destination; a Build turn's notice is desktop only (not a default alert).",
+  "_about": "v1.360.0 lane 10A: ONE notice per run outcome. Each case is a persisted event (the audit's shape: id, type, session_id, ts, payload). `pings` = the dashboard bell raises a desktop ping for it while a window is open (so the daemon keeps 'This PC' quiet: comm/notifier.bell_pings); `attention` = it counts on the bell's badge, and the desktop app says it while it sits in the tray (comm/notifier.bell_attention, desktop/main.js runOutcomeNotice); `title` / `body` / `href` = the bell row's words, which the tray notice repeats. Read by tests/test_one_notice_v13600.py (Python + main.js under node) and dashboard/__tests__/one-notice-v13600.test.tsx (the real bell). v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ran longer than a minute and ended (`build.turn_finished`) is a ringing row too, said from the tray once; `phone` (default true) = the default notifier also sends it to a phone destination; a Build turn's notice is desktop only (not a default alert). v1.392.0 (the long-jobs plan's Phase 3): a Build reply that made no progress for ten minutes (`build.turn_stalled`, once per stall episode) rings the same way and is said from the tray once; desktop only (not a default alert).",
   "cases": [
     {
       "case": "schedule-failed",
@@ -304,6 +304,29 @@
       "title": "Your Build session could not finish",
       "body": "Move the tests · took 2 min",
       "href": "/terminals?session=bs_err"
+    },
+    {
+      "case": "build-turn-stalled",
+      "event": {
+        "id": "evt_build_stall",
+        "type": "build.turn_stalled",
+        "session_id": "build:bs_stuck",
+        "ts": "2026-10-19T03:14:00",
+        "payload": {
+          "thread_id": "bs_stuck",
+          "turn_id": "bt_stuck1",
+          "title": "Port the parser",
+          "words": "No progress for 10 minutes — waiting on this step: running a command (pytest)",
+          "minutes": 10,
+          "step": {"id": "c4", "name": "shell"}
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "phone": false,
+      "title": "Your coding session has stopped making progress",
+      "body": "Port the parser · No progress for 10 minutes — waiting on this step: running a command (pytest)",
+      "href": "/terminals?session=bs_stuck"
     }
   ]
 }

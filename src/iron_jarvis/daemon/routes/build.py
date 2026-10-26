@@ -162,6 +162,17 @@ class BuildSessionPatch(BaseModel):
     mode: str | None = None
     local_only: bool | None = None
     account: str | None = Field(default=None, max_length=200)
+    #: v1.392.0 (the long-jobs plan's Phase 3, decision 8): the session's
+    #: OPTIONAL cap on a reply — ``{"minutes": n}`` and/or ``{"usd": x}``;
+    #: ``null`` removes it (no cap: the default). Checked by
+    #: ``harness/reply_cap.clean`` (a cap with nothing valid is a 400).
+    cap: dict[str, Any] | None = None
+
+
+#: v1.392.0: a cap the PATCH could not keep, in words.
+CAP_REFUSED = (
+    "A limit is a whole number of minutes (1 to 10,080) and/or an amount in dollars (0.01 to 10,000)."
+)
 
 
 class BuildAccountChoice(BaseModel):
@@ -217,6 +228,23 @@ class BuildTurnBody(BaseModel):
     #: ``GET /chat/turns/{id}/stream?after=<i>:<c>`` and be sent only what it
     #: missed. False (an API caller): the frames exactly as before.
     ids: bool = False
+
+
+class BuildStopStepBody(BaseModel):
+    """``POST /build/sessions/{id}/stop-step`` (v1.392.0): the running tool
+    call to stop (its call id, from the ``stall`` notice) and, optionally,
+    the reply it belongs to ("" = the session's running reply)."""
+
+    step_id: str = Field(min_length=1, max_length=200)
+    turn_id: str = Field(default="", max_length=80)
+    #: Also stop the REPLY (the stall line's "Stop" while a step hangs): the
+    #: reply is stopped first, then the step, so the reply ends at once
+    #: instead of waiting out a step that makes no progress.
+    reply: bool = False
+
+
+#: v1.392.0: the stop-step route's 404, in words.
+STEP_GONE = "That step is no longer running."
 
 
 class BuildCompactBody(BaseModel):
@@ -656,6 +684,10 @@ class _ReplyWatch:
         #: ("" for every other turn) — kept on the reply line as
         #: ``resumedFrom``, the one plain line the screen says it by.
         self.resumed_from = ""
+        #: v1.392.0: the newest summary the reply wrote of its own older
+        #: rounds (the ``summarized`` frame, ``harness/reply_summary``) —
+        #: kept on the line as ``summarized`` ({steps, times}).
+        self.summarized: dict[str, Any] | None = None
 
     def see(self, event: str, raw: str) -> "dict[str, Any] | None":
         """Fold one frame. Answers the frame's data with its Timeline offsets
@@ -768,6 +800,16 @@ class _ReplyWatch:
             # v1.390.0: the helper's row and its step on the reply's clock.
             stamped = self.clock.helper(data)
             self.see_helper(stamped)
+        elif event == "summarized":
+            # v1.392.0: the reply summarized its own older rounds to fit the
+            # model (the newest summary covers from the beginning).
+            steps = data.get("steps")
+            if isinstance(steps, int) and not isinstance(steps, bool) and steps >= 0:
+                times = data.get("times")
+                self.summarized = {
+                    "steps": steps,
+                    "times": times if isinstance(times, int) and not isinstance(times, bool) and times > 0 else 1,
+                }
         elif event == "approval_resolved" and data.get("decision") == "conversation":
             tool = str(data.get("tool") or "")
             if tool and tool not in self.granted:
@@ -930,6 +972,14 @@ class _ReplyWatch:
             sl = done.get("step_limit")
             if isinstance(sl, dict) and isinstance(sl.get("limit"), int) and not isinstance(sl.get("limit"), bool):
                 line["stepLimit"] = {"limit": int(sl["limit"]), "safety": bool(self.no_limit)}
+            # v1.392.0 (decision 8): the session's cap the reply met — which
+            # cap and its limit; the screen says so and offers "Keep going",
+            # exactly as for the step limit.
+            from ...harness.reply_cap import receipt as _cap_receipt
+
+            cap = _cap_receipt(done.get("cap"))
+            if cap is not None:
+                line["capMet"] = cap
             # Part 3, Phase 2: what the reply's FINISH CHECK did (present only
             # when it ran) — the work line's "Checked: tests passed, …".
             from ...harness.finish import saved_record
@@ -988,6 +1038,9 @@ class _ReplyWatch:
         if self.resumed_from:
             # v1.391.0: this reply carried on a reply a restart cut off.
             line["resumedFrom"] = self.resumed_from
+        if self.summarized:
+            # v1.392.0: "Summarized N earlier steps to fit the model".
+            line["summarized"] = dict(self.summarized)
         if self.thinking:
             line["thinking"] = "".join(self.thinking)
         if self.account_limit:
@@ -1380,6 +1433,34 @@ async def _announce_turn_finished(platform: Any, thread_id: str, turn_id: str, s
         log.warning("announcing build session %s's finished turn failed", thread_id, exc_info=True)
 
 
+async def _announce_turn_stalled(platform: Any, thread_id: str, turn_id: str,
+                                 notice: dict[str, Any]) -> None:
+    """``build.turn_stalled`` (v1.392.0): ONE per stall episode of a Build
+    reply (``harness/stall``) — the session's title, the live line's own
+    sentence and the step "Stop the step" would stop. The bell says it
+    unless the user is looking at that session; "This PC" stays quiet for it
+    (``comm/notifier.bell_pings``). Never raises."""
+    try:
+        bus = getattr(platform, "event_bus", None)
+        if bus is None:
+            return
+        from ...core.events import EventType
+
+        row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
+        payload: dict[str, Any] = {
+            "thread_id": thread_id,
+            "turn_id": turn_id,
+            "title": (getattr(row, "title", "") or "") if row is not None else "",
+            "words": str(notice.get("words") or ""),
+            "minutes": notice.get("minutes"),
+        }
+        if isinstance(notice.get("step"), dict):
+            payload["step"] = notice["step"]
+        await bus.publish(EventType.BUILD_TURN_STALLED, payload, session_id=S.session_id_for(thread_id))
+    except Exception:  # noqa: BLE001 — the turn never fails on its notice
+        log.warning("announcing build session %s's stall failed", thread_id, exc_info=True)
+
+
 async def _note_account_limit(platform: Any, thread_id: str, turn_id: str,
                               limit: "dict[str, Any] | None", *, done: bool) -> None:
     """Both halves at once (:func:`_keep_account_limit` then
@@ -1491,6 +1572,46 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
     watch.no_limit = bool(no_limit)
     watch.resumed_from = str(getattr(record, "resumed_from", "") or "")
     open_asks: set[str] = set()
+    # v1.392.0 (never stalls silently, the long-jobs plan's Phase 3): ten
+    # minutes with no frame and no tool output is said on the live line and
+    # in the bell, once per episode — never while the reply waits on the user
+    # (the card is the notice). `harness/stall`.
+    from ...harness import stall as _stall
+    from ...providers.hold import current_hold
+
+    # v1.392.0 review: a silent model is NAMED — the turn's held model (the
+    # driver task runs inside `start_build_turn`'s hold) until a model call
+    # says who answered.
+    _held = current_hold()
+
+    def _step_deadline(name: str) -> "float | None":
+        # v1.392.0 review: the deadline the registry puts on this step (the
+        # lane passes `chat_tool_deadline` to every call; a tool that waits on
+        # a person or runs a whole helper is exempt). Read live, like the lane.
+        if platform is None:
+            return None
+        from ..chat_turn import chat_tool_deadline
+
+        deadline = chat_tool_deadline(platform)
+        if deadline is None:
+            return None
+        registry = getattr(platform, "registry", None)
+        tool = registry.get(name) if registry is not None else None
+        if tool is not None and getattr(tool, "deadline_exempt", False):
+            return None
+        return deadline
+
+    stall_watch = _stall.StallWatch(
+        parked=lambda: bool(open_asks),
+        provider=_held.provider if _held is not None else "",
+        manager=getattr(platform, "providers", None) if platform is not None else None,
+        step_deadline=_step_deadline,
+    )
+
+    async def _announce_stall(notice: dict[str, Any]) -> None:
+        if platform is not None:
+            await _announce_turn_stalled(platform, thread_id, turn_id, notice)
+
     status = "stopped"
     limit_sent = False
     # THE END IS WRITTEN BEFORE IT IS SAID (v1.369.0 review). The reply line
@@ -1512,8 +1633,8 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
         return ending
 
     try:
-        async with contextlib.aclosing(frames):
-            async for chunk in frames:
+        async with contextlib.aclosing(_stall.watched(frames, stall_watch, announce=_announce_stall)) as _frames:
+            async for chunk in _frames:
                 parsed = _durable.parse_chunk(chunk)
                 terminal = any(ev in _TERMINAL_EVENTS for ev, _ in parsed)
                 if pin is not None and terminal:
@@ -1539,11 +1660,14 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                         stamped_frames.append(_durable.sse(event, stamped if stamped is not None else data))
                 if stamped_frames is not None:
                     chunk = "".join(stamped_frames)
-                if record is not None and _parks_or_answers(parsed):
+                if _parks_or_answers(parsed):
                     # v1.391.0: parked on the user (or answered) — on the
                     # record BEFORE the card reaches anyone, so a crash while
-                    # it waits never resumes the reply by itself.
-                    await record.set_waiting(_asks_after(open_asks, parsed))
+                    # it waits never resumes the reply by itself. v1.392.0:
+                    # kept for every turn — the stall watch reads it too.
+                    parked_now = _asks_after(open_asks, parsed)
+                    if record is not None:
+                        await record.set_waiting(parked_now)
                 if watch.approved_plans or watch.granted:
                     await _apply_session_changes(engine, thread_id, watch)
                 if terminal and (watch.done is not None or watch.error is not None):
@@ -1866,7 +1990,68 @@ def _resume_inputs(platform: Any, row: Any, turn_id: str) -> "dict[str, Any] | N
         "skill": yours,
         "folder_skill": folder_skill,
         "playbook": playbook,
+        # v1.392.0 (decision 8): the reply carried on counts from its ORIGINAL
+        # question — when it was asked, and what its cut-off part(s) cost.
+        "origin_at": question.get("at"),
+        "spent_usd": spent_since(messages, idx),
+        # v1.392.0 review: and how long those part(s) RAN — the time cap
+        # counts the reply's own running time, never the hours Iron Jarvis
+        # was off between the cut-off and this boot.
+        "ran_s": ran_since(messages, idx),
     }
+
+
+def ran_since(messages: "list[dict[str, Any]]", idx: int) -> float:
+    """How long the replies after the question at ``idx`` RAN, in seconds —
+    the cut-off part(s) of a reply carried on after a restart (v1.392.0
+    review): each line's own running length (``timing.ms``, the Timeline's —
+    a crash's line is rebuilt with it at boot), else its ``endedAt -
+    startedAt``; a line with neither counts nothing. Never raises."""
+    total = 0.0
+
+    def _num(v: Any) -> "float | None":
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else None
+
+    for m in messages[idx + 1:]:
+        if not isinstance(m, dict) or m.get("role") != "assistant":
+            continue
+        timing = m.get("timing")
+        if not isinstance(timing, dict):
+            continue
+        ms = _num(timing.get("ms"))
+        if ms is None:
+            a, b = _num(timing.get("startedAt")), _num(timing.get("endedAt"))
+            ms = (b - a) if a is not None and b is not None and b >= a else None
+        if ms is not None:
+            total += ms / 1000.0
+    return max(0.0, total)
+
+
+def spent_since(messages: "list[dict[str, Any]]", idx: int) -> float:
+    """What the replies after the question at ``idx`` already cost — the
+    cut-off part(s) of a reply carried on after a restart (v1.392.0): each
+    line's billed model calls (``calls[].usage.cost_usd``, the Timeline's —
+    list-price equivalent included, the receipt's figure), else its usage.
+    Never raises."""
+    total = 0.0
+    for m in messages[idx + 1:]:
+        if not isinstance(m, dict) or m.get("role") != "assistant":
+            continue
+        calls = m.get("calls") if isinstance(m.get("calls"), list) else []
+        priced = [
+            c["usage"]["cost_usd"] for c in calls
+            if isinstance(c, dict) and isinstance(c.get("usage"), dict)
+            and isinstance(c["usage"].get("cost_usd"), (int, float))
+            and not isinstance(c["usage"].get("cost_usd"), bool)
+        ]
+        if priced:
+            total += float(sum(priced))
+            continue
+        usage = m.get("usage")
+        if isinstance(usage, dict) and isinstance(usage.get("cost_usd"), (int, float)) \
+                and not isinstance(usage.get("cost_usd"), bool):
+            total += float(usage["cost_usd"])
+    return max(0.0, total)
 
 
 def _command_rule(row: Any, setup: "dict[str, Any]", started: Any, continuation: bool) -> Any:
@@ -2219,6 +2404,24 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             )
         else:
             record = RR.ReplyRecord(platform.engine, thread_id, turn_id)
+        # v1.392.0 (the long-jobs plan's Phase 3): when the reply BEGAN — its
+        # question now, or the ORIGINAL question of a reply carried on after a
+        # restart — for the summary's ledger window and the session's cap;
+        # and the cap itself (None = no cap: the default, byte-identical).
+        from ...harness import reply_cap as RC
+        from ...harness.rewind import _naive_utc
+
+        origin = _naive_utc(resume.get("origin_at")) if resume is not None else None
+        record.origin_at = origin
+        # v1.392.0 review: the cap's clock counts the time the reply RAN —
+        # its cut-off part(s), then this one from now — never the time Iron
+        # Jarvis was off in between (a reply cut off ten minutes in by a crash
+        # the night before used to be capped the moment it carried on).
+        reply_cap = RC.from_setup(
+            setup,
+            started_at=RC.WALL() - (float(resume.get("ran_s") or 0.0) if resume is not None else 0.0),
+            spent_usd=float(resume.get("spent_usd") or 0.0) if resume is not None else 0.0,
+        )
         token = set_pin(pin) if pin is not None else None
         # v1.371.0: the Browser pane's address for this turn — armed while the
         # lane is built and the driver task created (the task copies the
@@ -2273,6 +2476,8 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                     session_id=S.session_id_for(thread_id),
                     plan_mode=S.mode_of(row) == S.MODE_PLAN,
                     reply_record=record,
+                    # v1.392.0 (decision 8): only when the session has a cap.
+                    **({"reply_cap": reply_cap} if reply_cap is not None else {}),
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -3072,6 +3277,22 @@ def register(app: FastAPI, d: Any) -> None:
             setup["mode"] = "plan" if mode == S.MODE_PLAN else None
         if "local_only" in fields and body.local_only is not None:
             setup["local_only"] = True if body.local_only else None
+        if "cap" in fields:
+            # v1.392.0 (decision 8): set, change or remove the session's cap.
+            # It applies from the NEXT reply (a running one keeps its own).
+            from ...harness.reply_cap import SETUP_KEY as _CAP_KEY
+            from ...harness.reply_cap import strict as _strict_cap
+
+            if body.cap is None:
+                setup[_CAP_KEY] = None
+            else:
+                # v1.392.0 review: kept EXACTLY as sent or refused — never
+                # half-kept (a wrong dollar figure beside good minutes used to
+                # be dropped in silence, 200).
+                cleaned = _strict_cap(body.cap)
+                if cleaned is None:
+                    raise HTTPException(status_code=400, detail=CAP_REFUSED)
+                setup[_CAP_KEY] = cleaned
         title = body.title if "title" in fields else None
         row = S.update(engine_of(), thread_id, title=title, setup=setup)
         if row is None:
@@ -3491,6 +3712,30 @@ def register(app: FastAPI, d: Any) -> None:
         # v1.384.0: `ids` — every frame tagged with its resume position, so a
         # page that leaves mid-reply comes back with only what it missed.
         return _follow_response(lg.follow(with_ids=body.ids))
+
+    @app.post("/build/sessions/{thread_id}/stop-step")
+    async def stop_build_step(thread_id: str, body: BuildStopStepBody) -> dict[str, Any]:
+        """STOP THE STEP (v1.392.0, never stalls silently): cancel EXACTLY one
+        running tool call of this session's running reply — a command's
+        process tree is killed, its row says "stopped by you" — and the reply
+        carries on, told in plain words that the user stopped it. 404 when no
+        reply runs here, or that step is not running (it finished meanwhile,
+        or it is not this reply's)."""
+        running = _running_turn(d, thread_id)
+        turn = (body.turn_id or "").strip() or running
+        if not running or turn != running:
+            raise HTTPException(status_code=404, detail=STEP_GONE)
+        from ...harness import stall as _stall
+
+        if body.reply:
+            # The reply first: once the step is stopped, the next thing the
+            # reply does is look for a Stop — and finds it.
+            TURNS.stop(turn)
+        if not _stall.stop_step(turn, body.step_id):
+            if body.reply:
+                return {"ok": True, "turn_id": turn, "step_id": body.step_id, "step": False}
+            raise HTTPException(status_code=404, detail=STEP_GONE)
+        return {"ok": True, "turn_id": turn, "step_id": body.step_id, "step": True}
 
     @app.post("/build/sessions/{thread_id}/answer")
     def answer_build_question(thread_id: str, body: BuildAnswerBody) -> dict[str, Any]:

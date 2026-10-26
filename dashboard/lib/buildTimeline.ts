@@ -45,8 +45,11 @@ export interface TimelineCall {
   model: string;
   usage?: TurnUsage;
   /** "final" (asked for its final answer), "rewrite" (rewrote the answer in
-   *  your language); absent for a call of the work itself. */
-  kind?: "final" | "rewrite";
+   *  your language), v1.392.0 "summary" (wrote a summary of the reply's own
+   *  older rounds to fit the model); absent for a call of the work itself. */
+  kind?: "final" | "rewrite" | "summary";
+  /** v1.392.0: on a "summary" call, how many earlier steps it covers. */
+  summarized?: number;
   state: BarState;
 }
 
@@ -126,7 +129,8 @@ function decodeCall(raw: unknown, index: number): TimelineCall | null {
     provider: str(r.provider, 120),
     model: str(r.model, 200),
     ...(usage ? { usage } : {}),
-    ...(r.kind === "final" || r.kind === "rewrite" ? { kind: r.kind } : {}),
+    ...(r.kind === "final" || r.kind === "rewrite" || r.kind === "summary" ? { kind: r.kind } : {}),
+    ...(r.kind === "summary" && ms(r.summarized) !== null ? { summarized: ms(r.summarized) as number } : {}),
     state: st,
   };
 }

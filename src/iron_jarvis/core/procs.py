@@ -77,10 +77,13 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import weakref
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Sequence
+
+from . import progress as _progress
 
 #: True while the current task is running unattended background work.
 _BACKGROUND: ContextVar[bool] = ContextVar("ij_background_lane", default=False)
@@ -890,8 +893,19 @@ def run(
             kill_tree(proc)
             _bounded_drain(proc, drain_timeout)
             return Result(-1, b"", b"", cancelled=True, args=argv, timeout=timeout)
+        # v1.392.0: inside a coding session's turn the output is read piece
+        # by piece, each piece a progress mark (core/progress — a command that
+        # keeps printing is never a stall). Nothing listens anywhere else, and
+        # there the call is exactly what it was.
+        moving = _progress.current() if input is None else None
         try:
-            out, err = proc.communicate(input, timeout=timeout)
+            if moving is not None:
+                out, err, timed_out = _communicate_moving(proc, timeout, drain_timeout, moving)
+                if timed_out:
+                    code = proc.returncode if proc.returncode is not None else -1
+                    return Result(code, out, err, timed_out=True, args=argv, timeout=timeout)
+            else:
+                out, err = proc.communicate(input, timeout=timeout)
         except subprocess.TimeoutExpired:
             kill_tree(proc)
             out, err = _bounded_drain(proc, drain_timeout)
@@ -904,6 +918,102 @@ def run(
         return Result(proc.returncode, out or b"", err or b"", args=argv, timeout=timeout)
     finally:
         release(proc, stop_windowless=ended_early)
+
+
+#: v1.392.0: how often a command writing to FILES is looked at for new output
+#: (``run_to_files`` inside a watched turn).
+MOVING_LOOK_S = 1.0
+
+
+def _communicate_moving(
+    proc: Any, timeout: float | None, drain_timeout: float, fn: Callable[[], None],
+) -> tuple[bytes, bytes, bool]:
+    """``proc.communicate(timeout=timeout)`` for a child with no stdin to
+    feed, reading each pipe PIECE BY PIECE on a thread of its own so every
+    piece calls ``fn`` (v1.392.0, ``core/progress``). The same bound as
+    ``communicate``: the child AND its pipes must be done within ``timeout``
+    (a background job still holding a pipe counts, as it always did), else
+    the tree is killed and the pipes drained for at most ``drain_timeout``.
+    ``(out, err, timed_out)``."""
+    mark = _progress.safe(fn)
+    sinks: dict[str, list[bytes]] = {"out": [], "err": []}
+
+    def _read(fh: Any, sink: list[bytes]) -> None:
+        if fh is None:
+            return
+        read1 = getattr(fh, "read1", None)
+        try:
+            while True:
+                data = read1(65536) if read1 is not None else fh.read(4096)
+                if not data:
+                    return
+                sink.append(data)
+                mark()
+        except (OSError, ValueError):
+            return
+
+    readers = [
+        threading.Thread(target=_read, args=(proc.stdout, sinks["out"]), name="ij-proc-out", daemon=True),
+        threading.Thread(target=_read, args=(proc.stderr, sinks["err"]), name="ij-proc-err", daemon=True),
+    ]
+    for t in readers:
+        t.start()
+    deadline = None if timeout is None else time.monotonic() + float(timeout)
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+        for t in readers:
+            t.join(None if deadline is None else max(0.0, deadline - time.monotonic()))
+            if t.is_alive():
+                raise subprocess.TimeoutExpired(getattr(proc, "args", ""), timeout or 0)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        kill_tree(proc)
+        _bounded_wait(proc, drain_timeout)
+        end = time.monotonic() + drain_timeout
+        for t in readers:
+            t.join(max(0.0, end - time.monotonic()))
+    if not any(t.is_alive() for t in readers):
+        for fh in (proc.stdout, proc.stderr):
+            with contextlib.suppress(Exception):
+                if fh is not None:
+                    fh.close()
+    return b"".join(sinks["out"]), b"".join(sinks["err"]), timed_out
+
+
+def _wait_moving(proc: Any, timeout: float | None, fds: Sequence[int], fn: Callable[[], None]) -> None:
+    """``proc.wait(timeout=timeout)`` for a child writing to FILES, looking
+    at their sizes every :data:`MOVING_LOOK_S`: a file that grew calls ``fn``
+    (v1.392.0, ``core/progress``). Raises ``TimeoutExpired`` at the deadline
+    like ``wait``."""
+    mark = _progress.safe(fn)
+
+    def _sizes() -> list[int]:
+        out = []
+        for fd in fds:
+            try:
+                out.append(os.fstat(fd).st_size)
+            except OSError:
+                out.append(-1)
+        return out
+
+    seen = _sizes()
+    deadline = None if timeout is None else time.monotonic() + float(timeout)
+    while True:
+        step = MOVING_LOOK_S
+        if deadline is not None:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise subprocess.TimeoutExpired(getattr(proc, "args", ""), timeout or 0)
+            step = min(step, left)
+        try:
+            proc.wait(timeout=step)
+            return
+        except subprocess.TimeoutExpired:
+            now = _sizes()
+            if now != seen:
+                seen = now
+                mark()
 
 
 def _capture_file(kind: str) -> tuple[int, int]:
@@ -1021,7 +1131,13 @@ def run_to_files(
                 _bounded_wait(proc, drain_timeout)
                 return Result(-1, b"", b"", cancelled=True, args=argv, timeout=timeout)
             try:
-                proc.wait(timeout=timeout)
+                # v1.392.0: a watched turn's command is looked at as it runs
+                # (its output files growing are progress — core/progress).
+                moving = _progress.current()
+                if moving is not None:
+                    _wait_moving(proc, timeout, (out_r, err_r), moving)
+                else:
+                    proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 kill_tree(proc)
                 _bounded_wait(proc, drain_timeout)

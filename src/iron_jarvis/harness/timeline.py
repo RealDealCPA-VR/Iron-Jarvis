@@ -60,7 +60,10 @@ from ..eval.pricing import UsageTally
 #: The new frame's event name.
 MODEL_CALL_EVENT = "model_call"
 #: The kinds of a call outside the tool loop (absent = a call of the loop).
-CALL_KINDS = ("final", "rewrite")
+#: v1.392.0: "summary" — the reply's own model writing the summary of its
+#: older rounds (``harness/reply_summary``); its frame also says how many
+#: earlier steps that summary covers (``summarized``).
+CALL_KINDS = ("final", "rewrite", "summary")
 #: Model calls a reply line keeps, at most (the step cap: two a round at the
 #: safety stop, ``harness.mode.BUILD_SAFETY_ROUNDS``).
 MAX_CALLS = 2000
@@ -220,6 +223,9 @@ class ReplyClock:
             entry["usage"] = data["usage"]
         if data.get("kind") in CALL_KINDS:
             entry["kind"] = data["kind"]
+        summarized = _int(data.get("summarized"))
+        if entry.get("kind") == "summary" and summarized is not None and summarized >= 0:
+            entry["summarized"] = summarized
         if len(self.calls) < MAX_CALLS:
             self.calls.append(entry)
         return {**data, "start": entry["start"]}
