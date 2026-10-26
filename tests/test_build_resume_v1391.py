@@ -38,7 +38,6 @@ from tests.test_build_sessions_v1367 import (
     messages_of,
     new_session,
     open_turn,
-    setup_of,
     until,
     wire,
 )

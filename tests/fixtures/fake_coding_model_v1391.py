@@ -168,7 +168,11 @@ class ScriptedCoder:
                 data = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
                 self._send(200, data.encode(), "text/event-stream")
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), _H)
+        class _Quiet(ThreadingHTTPServer):
+            def handle_error(self, request: Any, client_address: Any) -> None:
+                return  # the daemon went away mid-answer (a stop, a kill): expected here
+
+        self._server = _Quiet(("127.0.0.1", 0), _H)
         self._server.daemon_threads = True
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
