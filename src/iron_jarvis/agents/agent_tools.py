@@ -327,16 +327,16 @@ class SpawnAgentTool(Tool):
         # reads (``harness/helpers``); None for every other caller.
         _hp = _helpers.parent_for(ctx)
 
-        # A ROLE INSTEAD OF A NAME (v1.395.0) — exactly as ``delegate`` reads
-        # it (MIRROR NOTE, lock-step): ``role`` or ``agent: "role:<id>"`` asks
-        # the TEAM ROUTER; a named agent runs as before; an unknown role or one
-        # no usable member holds is refused in words.
         # A PROJECT MISSION'S TEAM, read before routing (v1.395.0) so the team
         # router only asks the project's team (the same walk ``delegate`` does).
         _root = await asyncio.to_thread(
             _team.mission_root, self.platform.engine, ctx.session_id, ctx.agent_run_id
         )
         _project_team = _team.mission_team(_root) if _root is not None else []
+        # A ROLE INSTEAD OF A NAME (v1.395.0) — exactly as ``delegate`` reads
+        # it (MIRROR NOTE, lock-step): ``role`` or ``agent: "role:<id>"`` asks
+        # the TEAM ROUTER; a named agent runs as before; an unknown role or one
+        # no usable member holds is refused in words.
         _route = None
         _team_role = ""
         _piece = ""

@@ -284,6 +284,12 @@ class DelegateTool(Tool):
         # other caller, whose behaviour below is unchanged.
         _hp = _helpers.parent_for(ctx)
 
+        # A PROJECT MISSION'S TEAM (v1.308.0), read before routing (v1.395.0)
+        # so the team router only asks the project's team — see below.
+        _root = await asyncio.to_thread(
+            _team.mission_root, self.platform.engine, ctx.session_id, ctx.agent_run_id
+        )
+        _project_team = _team.mission_team(_root) if _root is not None else []
         # A ROLE INSTEAD OF A NAME (v1.395.0, the long-jobs plan's Phase 6,
         # decision 7): ``role`` (or ``agent_type: "role:<id>"`` — the dialects'
         # own helper tools carry no role argument) asks the TEAM ROUTER for
@@ -291,12 +297,6 @@ class DelegateTool(Tool):
         # still runs exactly as before; a role beside the name only says what
         # the piece is (its record). An unknown role, or one no usable member
         # holds, is refused in words — never a silent run as anyone else.
-        # A PROJECT MISSION'S TEAM (v1.308.0), read before routing (v1.395.0)
-        # so the team router only asks the project's team — see below.
-        _root = await asyncio.to_thread(
-            _team.mission_root, self.platform.engine, ctx.session_id, ctx.agent_run_id
-        )
-        _project_team = _team.mission_team(_root) if _root is not None else []
         _route = None
         _team_role = ""
         _piece = ""
