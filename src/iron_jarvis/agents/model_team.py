@@ -314,7 +314,20 @@ def member_facts(platform: Any, record: Any) -> "dict[str, Any] | None":
     facts["place"] = place_of(platform, provider, model)
     facts["cost"] = cost_type(platform, provider, model)
     if facts["cost"] == COST_PLAN:
-        facts["usage"] = usage_for(platform, provider, account)
+        # v1.394.0 review: the usage of the account it WOULD run on from here
+        # (``member_account`` with this context's pin: in a coding session the
+        # session's own account for the same vendor, or one of its group) —
+        # not the first free account's, which it may never touch.
+        on = account
+        if not on:
+            try:
+                from ..iron_proxy.pin import current
+
+                pin, _why = member_account(platform, record, current(), coding=False)
+                on = str(getattr(pin, "profile_id", "") or "") if pin is not None else ""
+            except Exception:  # noqa: BLE001
+                on = ""
+        facts["usage"] = usage_for(platform, provider, on)
     return facts
 
 
@@ -377,10 +390,10 @@ def local_only_refusal(platform: Any, record: Any, name: str) -> str:
 
 
 def member_pin(platform: Any, record: Any) -> Any:
-    """The Iron-Proxy :class:`~iron_jarvis.iron_proxy.pin.AccountPin` a
-    member's run is pinned to: its own ``account`` when it names one (that
-    account or a plain refusal — never another), else None (its provider's
-    normal pick, never the caller's pin). Never raises."""
+    """The Iron-Proxy :class:`~iron_jarvis.iron_proxy.pin.AccountPin` of a
+    member's OWN ``account`` when it names one (that account or a plain
+    refusal at lease — never another), else None. Never raises. Which account
+    a member with none runs on is :func:`member_account`'s rule."""
     account = str(getattr(record, "account", "") or "").strip()
     if not account:
         return None
@@ -397,6 +410,95 @@ def member_pin(platform: Any, record: Any) -> Any:
     except Exception:  # noqa: BLE001 — no pin is the caller's to refuse at lease
         log.debug("model team member pin failed", exc_info=True)
     return None
+
+
+def _group_words(name: str) -> str:
+    return f"'{name}'"
+
+
+def member_account(platform: Any, record: Any, caller: Any = None, *,
+                   coding: bool = False) -> "tuple[Any, str]":
+    """``(AccountPin | None, refusal)`` — the account a member's run leases
+    (v1.394.0 review; decision 4 + decision 5 + v1.393.0's groups):
+
+    1. its OWN ``account`` when it names one (:func:`member_pin`);
+    2. not a subscription model (a local model, an API key): no account;
+    3. ``caller`` (the session's / the calling run's pin) is of the SAME
+       vendor: THAT pin object — the session's own account (a helper's limit
+       is the session's limit; v1.372.0's rule for every helper);
+    4. ``caller`` sits in one of the user's ACCOUNT GROUPS: an account of the
+       member's vendor IN THAT GROUP (usable now first, else the first one on,
+       Iron-Proxy's order) — none in the group = ``refusal`` in words: work
+       never moves to an account outside a group the user made;
+    5. a coding session (``coding``) or any pinned caller: the vendor's first
+       usable account, else its Default — PINNED (a coding session never runs
+       "first free, rotating": ``routes/build.turn_account``);
+    6. otherwise (an objective, an agent run, nothing pinned): None — its
+       provider's normal pick, as every unpinned agent run.
+
+    Cached reads only; never a call; never raises (no pin on an error)."""
+    own = member_pin(platform, record)
+    if own is not None:
+        return own, ""
+    try:
+        from ..harness import build_accounts as BA
+        from ..iron_proxy.pin import AccountPin
+
+        vendor = BA.vendor_of(platform, str(getattr(record, "provider", "") or ""))
+        if not vendor:
+            return None, ""
+        provider = BA.VENDORS[vendor]["provider"]
+        if caller is not None and str(getattr(caller, "ij_provider", "") or "") == provider:
+            return caller, ""
+        if caller is None and not coding:
+            return None, ""
+        svc = _svc(platform)
+        snap = BA.snapshot(svc)
+        if snap is None:
+            return None, ""
+        every = BA.vendor_rows(snap, vendor, include_off=True)
+        states = snap[1]
+        groups = getattr(_config(platform), "account_groups", None) or {}
+        found = BA.group_of(groups, str(getattr(caller, "profile_id", "") or "")) if caller else None
+        if found is not None:
+            gname, ids = found
+            every = [r for r in every if r["id"] in ids]
+            if not every:
+                who = str(getattr(record, "name", "") or "This member")
+                label = BA.VENDORS[vendor]["label"]
+                return None, (
+                    f"'{who}' runs on {label}, and the account this work runs on is in your "
+                    f"{_group_words(gname)} account group, which has no {label} account — add one "
+                    "to the group in Settings › Connections, or set the member's own account in "
+                    "Settings › Model team."
+                )
+        if not every:
+            return None, ""
+        on = [r for r in every if r.get("status") != BA.OFF]
+        row = next((r for r in on if BA.usable_now(r, states.get(r["id"]))), None)
+        if row is None:
+            # Nothing usable now: the Default (or the first one on) — its
+            # lease then says why in words (a limit, a sign-in), never moves.
+            row = next((r for r in on if r.get("default")), on[0] if on else every[0])
+        return AccountPin(profile_id=row["id"], ij_provider=row["provider"], title=row["name"]), ""
+    except Exception:  # noqa: BLE001 — no pin (a lease refuses honestly, never moves)
+        log.debug("model team member account failed", exc_info=True)
+        return None, ""
+
+
+def account_refusal(platform: Any, record: Any) -> str:
+    """The sentence a door refuses a member with, BEFORE any session exists,
+    when the account it would run on (:func:`member_account`, from the pin of
+    the context it is called in) cannot be one the user's groups allow; ""
+    otherwise. Never raises."""
+    if not runs_elsewhere(record):
+        return ""
+    try:
+        from ..iron_proxy.pin import current
+
+        return member_account(platform, record, current(), coding=False)[1]
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def runs_elsewhere(record: Any) -> bool:
@@ -433,7 +535,14 @@ class member_scope:  # noqa: N801 — a context manager read like a function
         self.on = runs_elsewhere(record)
         self.provider = str(getattr(record, "provider", "") or "").strip()
         self.model = pinned_model(platform, record) if self.on else ""
-        self.pin = member_pin(platform, record) if self.on else None
+        # v1.394.0 review: the account rule (``member_account``) — its own,
+        # else the CALLER's when of its vendor (a pinned caller's group
+        # after that), else none (its provider's normal pick).
+        self.pin = None
+        if self.on:
+            from ..iron_proxy.pin import current
+
+            self.pin = member_account(platform, record, current(), coding=False)[0]
         self._hold = None
         self._pin = None
 
@@ -732,7 +841,8 @@ __all__ = [
     "COST_FREE", "COST_PAY", "COST_PLAN", "COST_WORDS", "NOTHING_CONNECTED", "PLACE_WORDS",
     "ROLES", "ROLE_IDS", "ROLE_LABELS", "STARTER_PROMPT", "StarterRefused", "TEAM_HEADER",
     "clean_roles", "cost_type", "create_starter", "facts_words", "is_member",
-    "leaves_network", "local_only_refusal", "member_facts", "member_pin", "member_scope",
+    "account_refusal", "leaves_network", "local_only_refusal", "member_account", "member_facts",
+    "member_pin", "member_scope",
     "model_words", "place_of", "roles_of", "runs_elsewhere", "starter_preview", "team_block",
     "team_members", "unknown_roles", "usage_for", "usage_words",
 ]

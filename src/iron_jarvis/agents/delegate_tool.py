@@ -402,6 +402,12 @@ class DelegateTool(Tool):
                 _lo = _model_team.local_only_refusal(self.platform, rec, entry.name)
                 if _lo:
                     return ToolResult(ok=False, output="", error=_lo)
+            # v1.394.0 review: a member's account stays in the caller's
+            # account GROUP — refused here, before any session exists.
+            if _hp is None:
+                _ar = _model_team.account_refusal(self.platform, rec)
+                if _ar:
+                    return ToolResult(ok=False, output="", error=_ar)
             dyn_provider = (rec.provider or None) if rec is not None else None
             # v1.394.0: an agent pinned to a PROVIDER runs its own model, else
             # that provider's own default (``model_team.pinned_model``).

@@ -290,7 +290,10 @@ def target_refusal(parent: "HelperParent | None", *, entry: Any = None, raw: str
         if _mt.runs_elsewhere(record):
             if parent.local_only:
                 return _mt.local_only_refusal(platform, record, name)
-            return ""
+            # v1.394.0 review: the account it would run on stays in the
+            # session's account GROUP (decision 4) — refused in words when the
+            # group has no account of the member's vendor.
+            return _mt.member_account(platform, record, parent.pin, coding=True)[1]
         prov = str(getattr(record, "provider", "") or "").strip()
         mod = str(getattr(record, "model", "") or "").strip()
         # v1.372.0 review: an ALIAS of the session's provider is the session's
@@ -310,11 +313,14 @@ def target_refusal(parent: "HelperParent | None", *, entry: Any = None, raw: str
 def for_member(parent: "HelperParent | None", platform: Any, record: Any) -> "HelperParent | None":
     """The parent a MODEL TEAM MEMBER's helper runs from (v1.394.0, decision
     5): the same session, folder, posture, grants, trust and Local only — but
-    ITS OWN provider + model (held by :func:`pinned`) and ITS OWN account pin
-    (``model_team.member_pin``: its ``account`` when it names one, else None —
-    its provider's normal pick, never the session's account: a helper on
-    Codex must not lease under the session's Claude pin). Anyone who is not a
-    member with a model of its own gets ``parent`` back unchanged."""
+    ITS OWN provider + model (held by :func:`pinned`) and the account
+    ``model_team.member_account`` names: its own ``account``, else the
+    SESSION's account when it is of the member's vendor, else an account of
+    the session's group, else the vendor's first usable one — always PINNED
+    (v1.394.0 review: an unpinned pick landed a member on an account nobody
+    picked, and rotated). Never the session's pin for another vendor (a
+    Codex helper must not lease under the session's Claude pin). Anyone who
+    is not a member with a model of its own gets ``parent`` back unchanged."""
     if parent is None or record is None:
         return parent
     from ..agents import model_team as _mt
@@ -325,7 +331,7 @@ def for_member(parent: "HelperParent | None", platform: Any, record: Any) -> "He
         parent,
         provider=str(getattr(record, "provider", "") or "").strip(),
         model=_mt.pinned_model(platform, record),
-        pin=_mt.member_pin(platform, record),
+        pin=_mt.member_account(platform, record, parent.pin, coding=True)[0],
         own_model=True,
     )
 

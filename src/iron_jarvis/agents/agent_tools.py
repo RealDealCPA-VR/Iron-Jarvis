@@ -434,6 +434,11 @@ class SpawnAgentTool(Tool):
             _lo = _model_team.local_only_refusal(self.platform, record, agent_name)
             if _lo:
                 return ToolResult(ok=False, output="", error=_lo)
+        # v1.394.0 review: and its account stays in the caller's group.
+        if _hp is None and record is not None:
+            _ar = _model_team.account_refusal(self.platform, record)
+            if _ar:
+                return ToolResult(ok=False, output="", error=_ar)
         # v1.394.0: a member's helper runs on ITS OWN model and account.
         _hp = _helpers.for_member(_hp, self.platform, record)
         _helper_options = None

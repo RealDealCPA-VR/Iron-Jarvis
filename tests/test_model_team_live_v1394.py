@@ -296,7 +296,12 @@ def _check_fixture(question: dict, line: dict, folder: str) -> None:
     assert _models_of(fx["line"]) == _models_of(line) == {"claude-cli", "ollama", "codex-cli"}
 
 
-async def test_a_codex_member_with_no_account_takes_its_providers_normal_pick(app, fake, work, monkeypatch):
+async def test_a_codex_member_with_no_account_takes_its_vendors_first_usable_account_pinned(
+        app, fake, work, monkeypatch):
+    """v1.394.0 review (moved on purpose): a coding session never runs "first
+    free, rotating" — a member with no account of its own (and no group) takes
+    its vendor's first usable account, PINNED; never the session's Claude pin.
+    (tests/test_model_team_review_v1394.py pins the whole rule.)"""
     await enable(app)
     world = World([[agent_call("h-code", "codex-coder", "Write it.")], "Done."])
     wire(app, monkeypatch, world)
@@ -306,10 +311,11 @@ async def test_a_codex_member_with_no_account_takes_its_providers_normal_pick(ap
     fake.queries.clear()
     await run_turn(app, sid, "go", "team-2")
     coder = [c for c in world.calls if not c["main"] and c["provider"] == "codex-cli"]
-    assert coder and all(c["pin"] is None for c in coder)
+    assert coder and all(c["pin"] is not None and c["pin"].ij_provider == "codex-cli" for c in coder)
     codex_picks = [q for q in picks(fake) if q["provider"] == "openai"]
-    # Iron-Proxy's normal pick: no account id, no pin — and never Claude's.
-    assert codex_picks and all("profileId" not in q and "pinned" not in q for q in codex_picks)
+    # The first usable Codex account, pinned — never Claude's.
+    assert codex_picks and all(
+        q.get("profileId") == "x-plus" and q.get("pinned") == "1" for q in codex_picks)
 
 
 # --------------------------------------------------------------------------- #
