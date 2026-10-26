@@ -126,7 +126,9 @@ import type { ArgEntry } from "@/lib/approvalPreview";
 export { toolKind, type WorkKind };
 
 /* v1.329.0 (G2): the WORDS live in lib/stepWords, shared with the expanded
- * receipt so both say a step the same way; only the icons stay here. */
+ * receipt so both say a step the same way; only the icons stay here.
+ * v1.390.0: exported as STEP_ICON — the coding session's Timeline draws each
+ * step with the same icon (components/harness/HarnessTimeline). */
 const ICON: Record<WorkKind, LucideIcon> = {
   read: FileText,
   make: FilePlus,
@@ -145,6 +147,7 @@ const ICON: Record<WorkKind, LucideIcon> = {
   app: Plug,
   tool: Wrench,
 };
+export const STEP_ICON: Readonly<Record<WorkKind, LucideIcon>> = ICON;
 
 /** v1.324.0: an app's progress report in words — "40%" when it said how far
  *  it has to go, else "step 3"; its own message after a dot, kept short.
@@ -222,6 +225,10 @@ export function workCounts(steps: ReceiptStep[]): string[] {
 /** How long the turn took, from its own timing; null when not known. */
 export function workDuration(timing: ReceiptTiming | null | undefined): string | null {
   if (!timing || typeof timing !== "object") return null;
+  // v1.390.0 review: a coding reply's own measured length, when its line
+  // keeps one — the same number its Timeline's top says (the wall stamps
+  // tick every 15.6 ms on Windows and can step).
+  if (typeof timing.ms === "number" && Number.isFinite(timing.ms) && timing.ms >= 0) return secondsText(timing.ms);
   const { startedAt, endedAt } = timing;
   if (typeof startedAt !== "number" || typeof endedAt !== "number") return null;
   if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || endedAt < startedAt) return null;

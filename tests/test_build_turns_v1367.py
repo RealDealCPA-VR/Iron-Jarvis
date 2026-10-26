@@ -159,7 +159,9 @@ async def test_a_build_turn_is_a_harness_turn_on_the_sessions_folder_under_its_o
     assert reply["toolsUsed"] == ["write_file"] and reply["route"]["harness"]["dialect"] == "claude"
     assert any(p.endswith("hello.py") for p in reply["documents"])
     assert reply["steps"][0]["name"] == "write_file" and reply["steps"][0]["ok"] is True
-    assert set(reply["timing"]) == {"startedAt", "firstTokenAt", "endedAt"}
+    # (v1.390.0 review, moved on purpose: the reply's own precise length, the
+    # Timeline's axis, rides beside the wall-clock stamps as `ms`.)
+    assert set(reply["timing"]) == {"startedAt", "firstTokenAt", "endedAt", "ms"}
     # Its title is its first question; the usage of this thread counts it.
     assert app.state.platform.turn_logs.get("bt-1").status == "done"
     status, usage = await asgi(app, "GET", f"/chat/threads/{sid}/usage")

@@ -328,14 +328,19 @@ describe("the files pane", () => {
   it("the tabs are a tablist the arrow keys walk", () => {
     renderPanes(view());
     const list = screen.getByTestId("harness-pane-tabs");
+    // v1.390.0 (moved on purpose): the Timeline tab sits beside Plan (the
+    // long-jobs plan's decision 9), so ArrowRight from Plan lands on it.
     expect(within(list).getAllByRole("tab").map((t) => t.textContent)).toEqual([
       "Plan",
+      "Timeline",
       "Terminal",
       "Changes",
       "Browser",
       "Files",
     ]);
     fireEvent.keyDown(screen.getByTestId("harness-pane-tab-plan"), { key: "ArrowRight" });
+    expect(screen.getByTestId("harness-pane-tab-timeline")).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(screen.getByTestId("harness-pane-tab-timeline"), { key: "ArrowRight" });
     expect(screen.getByTestId("harness-pane-tab-terminal")).toHaveAttribute("aria-selected", "true");
   });
 });

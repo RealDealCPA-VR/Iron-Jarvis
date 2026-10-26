@@ -248,6 +248,10 @@ export type BuildMessage = PaneMessage & {
    *  `decodeFinish`) — the work line's "Checked: …". Absent on a reply that
    *  changed no file, and on every line an older daemon wrote. */
   finish?: unknown;
+  /** v1.390.0 (the Timeline): each billed model call of the reply — start,
+   *  length, provider, model, usage (raw; lib/buildTimeline). Absent on
+   *  every line written before the Timeline. */
+  calls?: unknown;
 };
 
 /** Part 3, Phase 2: a reply line's `finish`, whitelisted — the known keys
@@ -360,6 +364,9 @@ const LINE_KEYS = [
   "stepLimit",
   // Part 3, Phase 2: what the reply's finish check did (raw; decodeFinish).
   "finish",
+  // v1.390.0 (the Timeline): each billed model call of the reply (raw;
+  // lib/buildTimeline replyTimeline).
+  "calls",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {

@@ -13,6 +13,7 @@ import json
 import logging
 import re as _re
 import threading
+import time
 import weakref
 
 from fastapi import FastAPI, HTTPException, Request
@@ -82,6 +83,8 @@ from ...harness.finish import SEPARATOR as _FINISH_SEPARATOR
 # chat_turn).
 from ...harness.checkers import CALLED_AS as _checkers_called_as
 from ...providers import turn_scope as _turn_scope
+# v1.390.0 (the Timeline): a harness turn says each billed model call.
+from ...harness import timeline as _timeline_mod
 from ..chat_turn import (
     preference_block,
     remembered_from_result,
@@ -4429,6 +4432,16 @@ async def chat_stream(
         # v1.300.0: the whole usage per completion, priced per step.
         # MIRROR NOTE (lock-step): chat_turn.run_chat_turn keeps one too.
         _tally = UsageTally()
+        # THE TIMELINE (v1.390.0, the long-jobs plan's Phase 1): a HARNESS
+        # turn (a coding session's reply, the benchmark) says each billed
+        # model call as it ends — a `model_call` frame beside the tally's own
+        # `add`, with that call's usage in the receipt's shape — and each
+        # finished tool call's OWN run time (`ms`). Every other turn's frames
+        # are byte-identical. MIRROR NOTE (lock-step): the POST lane
+        # (chat_turn.run_chat_turn) sends no frames and has no Build caller —
+        # there is nothing of this to mirror there.
+        _timeline = _harness is not None
+        _call_t0 = time.perf_counter()
         tools_used: list[str] = []          # ONLY tools that actually executed
         remembered: list[str] = []          # v1.282.0: preferences kept this turn (lock-step)
         config_cards: list[dict[str, Any]] = []  # redesign S3/S4 (lock-step)
@@ -4571,6 +4584,7 @@ async def chat_stream(
                 _send, _send_system = _fit_turn_transcript(
                     d, msgs, system, provider_choice, model_choice, head=_head
                 )
+                _call_t0 = time.perf_counter()  # v1.390.0: this call's start (Timeline)
                 # v1.287.0: raced against Stop (see `_frames_until_stop`), so a
                 # Stop pressed before the model's first frame ends the turn now
                 # instead of when that frame finally arrives — and CLOSED when
@@ -4682,6 +4696,11 @@ async def chat_stream(
                 usage_out += int(_u.get("output_tokens", 0) or 0)
                 _tally.add(route_provider, route_model, _u)
                 completions += 1
+                if _timeline:
+                    # v1.390.0: the call just billed, as the Timeline draws it.
+                    yield _sse(_timeline_mod.MODEL_CALL_EVENT, _timeline_mod.model_call_frame(
+                        route_provider, route_model, _u, (time.perf_counter() - _call_t0) * 1000,
+                    ))
                 calls = final_resp.tool_calls or []
                 # IJ HARNESS (v1.366.0) — TRANSLATION AT THE BOUNDARY, the
                 # lock-step copy of chat_turn's: from here on `calls` are the
@@ -5591,11 +5610,27 @@ async def chat_stream(
                         )
                     _slots[i] = {"result": result, "content": content, "ran": ran}
 
+                # v1.390.0 (the Timeline): each call's OWN run time, measured
+                # around its invoke — reads that run TOGETHER finish together
+                # (one batch), so their frames alone would give each the
+                # batch's length. A harness turn only (`_timeline`).
+                _own_ms: dict[int, int] = {}
+
+                async def _timed_invoke(i: int) -> tuple[Any, str]:
+                    _t0 = time.perf_counter()
+                    try:
+                        return await _invoke(i)
+                    finally:
+                        _own_ms[i] = int((time.perf_counter() - _t0) * 1000)
+
+                def _own(i: int) -> dict[str, int]:
+                    return {"ms": _own_ms[i]} if _timeline and i in _own_ms else {}
+
                 async with contextlib.aclosing(
                     # v1.324.0: the turn's side queue — a pack's frames are
                     # yielded WHILE its tool runs, drained before it settles.
                     _run_tool_round(
-                        _batched, _invoke, _settle, side=_ti.side,
+                        _batched, _timed_invoke if _timeline else _invoke, _settle, side=_ti.side,
                         # v1.372.0: a harness turn's helpers run together
                         # (lock-step with chat_turn's `together=`).
                         together=_chat_turn.helper_together(
@@ -5637,6 +5672,7 @@ async def chat_stream(
                                     "detail": _chat_turn.step_detail(
                                         tc.name, _plans[_i]["safe_args"], content,
                                     ),
+                                    **_own(_i),  # v1.390.0 (Timeline)
                                 })
                                 _ck_text = await _cks.take(
                                     tc, result, str(content or ""),
@@ -5660,6 +5696,7 @@ async def chat_stream(
                                 "detail": _chat_turn.step_detail(
                                     tc.name, _plans[_i]["safe_args"], content,
                                 ),
+                                **_own(_i),  # v1.390.0 (Timeline)
                             })
                             # v1.344.0 (P1): a refused call is an outcome the
                             # agent should know about too (lock-step).
@@ -5850,6 +5887,9 @@ async def chat_stream(
                             "detail": _chat_turn.step_detail(
                                 tc.name, _plans[_i]["safe_args"], content,
                             ),
+                            # v1.390.0 (Timeline): a harness turn's step says
+                            # its own run time; every other frame unchanged.
+                            **_own(_i),
                         })
                         if _finish is not None:
                             # THE FINISH CHECK (part 3, Phase 2) — lock-step
@@ -5973,6 +6013,7 @@ async def chat_stream(
             )):
                 _f_resp = None
                 _f_route = ("", "")
+                _call_t0 = time.perf_counter()  # v1.390.0 (Timeline)
                 try:
                     async with contextlib.aclosing(_frames_until_stop(_bounded_frames(
                         d.platform.router,
@@ -6031,6 +6072,11 @@ async def chat_stream(
                     usage_out += int(_fu.get("output_tokens", 0) or 0)
                     _tally.add(_f_route[0], _f_route[1], _fu)
                     completions += 1
+                    if _timeline:
+                        # v1.390.0: the final-answer call, as the Timeline draws it.
+                        yield _sse(_timeline_mod.MODEL_CALL_EVENT, _timeline_mod.model_call_frame(
+                            _f_route[0], _f_route[1], _fu, (time.perf_counter() - _call_t0) * 1000, "final",
+                        ))
                     reply_text = (_f_resp.text or "").strip() or reply_text
                     # v1.323.0: the nudge was the final answering call.
                     _truncated = _chat_turn._truncated_by(_f_resp)
@@ -6042,6 +6088,7 @@ async def chat_stream(
                 _r_resp = None
                 _r_route = ("", "")
                 _reset_sent = False
+                _call_t0 = time.perf_counter()  # v1.390.0 (Timeline)
                 try:
                     async with contextlib.aclosing(_frames_until_stop(_bounded_frames(
                         d.platform.router,
@@ -6090,6 +6137,11 @@ async def chat_stream(
                     _l_out = int(_ru.get("output_tokens", 0) or 0)
                     _l_n = 1
                     _tally.add(_r_route[0], _r_route[1], _ru)
+                    if _timeline:
+                        # v1.390.0: the rewrite's call, as the Timeline draws it.
+                        yield _sse(_timeline_mod.MODEL_CALL_EVENT, _timeline_mod.model_call_frame(
+                            _r_route[0], _r_route[1], _ru, (time.perf_counter() - _call_t0) * 1000, "rewrite",
+                        ))
                     _before_rewrite = reply_text or ""
                     reply_text, lang_note = _rewrite_verdict(
                         reply_text or "", _r_resp.text or "", _code, _user_text,

@@ -551,6 +551,13 @@ class HelperCall:
     #: run moved on, and sent on the row's frame when it changed.
     _plan: Any = None
     _plan_due: bool = False
+    #: v1.390.0 (the Timeline): the provider + model the helper's run is
+    #: served by (its run's own ``meta`` frame; the row of its session at the
+    #: end) — "" until known. Held to the session's pair today (part 2,
+    #: decision 4); the Timeline names it per row so a team of models
+    #: (the long-jobs plan's Phase 5) shows itself.
+    provider: str = ""
+    model: str = ""
 
     # -- frames ------------------------------------------------------------- #
 
@@ -565,6 +572,10 @@ class HelperCall:
         }
         if self.child:
             out["session"] = self.child
+        if self.provider:
+            out["provider"] = self.provider
+        if self.model:
+            out["model"] = self.model
         out.update(extra)
         return out
 
@@ -647,6 +658,13 @@ class HelperCall:
                 # Already redacted by the runtime (RunSink.tool_started).
                 step["args"] = data["args"]
             self.say(step=step)
+        elif event == "meta":
+            # v1.390.0: the model the helper's run is served by.
+            provider = _short(data.get("provider"), 120)
+            model = _short(data.get("model"), 200)
+            if (provider, model) != (self.provider, self.model) and (provider or model):
+                self.provider, self.model = provider or self.provider, model or self.model
+                self.say()
         elif event == "phase":
             title = str(data.get("phase") or "")
             if title:
@@ -733,8 +751,46 @@ class HelperCall:
                     if not calls:
                         _LIVE.pop(self.session_id, None)
 
-    def finish(self, result: Any, *, stopped: bool = False, crash: str = "") -> None:
-        """The helper's last frame: how it ended and what it reported."""
+    def child_of(self, result: Any) -> str:
+        """The helper's own session id: the one it attached, else the one its
+        call's result names."""
+        if self.child:
+            return self.child
+        data = getattr(result, "data", None) if result is not None else None
+        data = data if isinstance(data, dict) else {}
+        return str(data.get("child_session_id") or "")
+
+    async def read_usage(self, result: Any) -> "dict[str, Any] | None":
+        """v1.390.0 (the Timeline): what the helper's run USED, read off its
+        session's row once it ended (the run settles its tokens and cost
+        there before its call returns): ``{input_tokens, output_tokens,
+        cost_usd?, list_price_equivalent?}`` — the receipt's shape, its cost by
+        ``eval.pricing.recorded_cost`` (the ONE rule every spend reader uses);
+        the row's provider/model are taken too. Off the loop; None when there
+        is no row (the helper never started) or it cannot be read. Never
+        raises."""
+        platform = self._platform
+        child = self.child_of(result)
+        engine = getattr(platform, "engine", None)
+        if engine is None or not child:
+            return None
+        try:
+            row = await asyncio.to_thread(_session_usage, engine, child)
+        except Exception:  # noqa: BLE001 — a row never breaks a helper
+            return None
+        if row is None:
+            return None
+        provider, model, usage = row
+        if provider:
+            self.provider = provider
+        if model:
+            self.model = model
+        return usage
+
+    def finish(self, result: Any, *, stopped: bool = False, crash: str = "",
+               usage: "dict[str, Any] | None" = None) -> None:
+        """The helper's last frame: how it ended and what it reported (and,
+        v1.390.0, what it used — ``usage`` from :meth:`read_usage`)."""
         data = getattr(result, "data", None) if result is not None else None
         data = data if isinstance(data, dict) else {}
         if not self.child and data.get("child_session_id"):
@@ -750,7 +806,33 @@ class HelperCall:
             text = str(getattr(result, "error", "") or "The helper failed.")
         self.state = state
         self.ask_id = ""
-        self.say(result=_short(text, RESULT_CHARS), ended=_now_ms(), ask=None)
+        extra: dict[str, Any] = {"usage": usage} if isinstance(usage, dict) else {}
+        self.say(result=_short(text, RESULT_CHARS), ended=_now_ms(), ask=None, **extra)
+
+
+def _session_usage(engine: Any, session_id: str) -> "tuple[str, str, dict[str, Any]] | None":
+    """``(provider, model, usage)`` of a helper's session row (see
+    :meth:`HelperCall.read_usage`). BLOCKING."""
+    from ..core.db import session_scope
+    from ..core.models import Session
+    from ..eval.pricing import is_list_price_equivalent, is_priced, recorded_cost
+
+    with session_scope(engine) as db:
+        row = db.get(Session, session_id)
+        if row is None:
+            return None
+        provider = str(row.provider or "")
+        model = str(row.model or "")
+        inp = int(row.input_tokens or 0)
+        out = int(row.output_tokens or 0)
+        stored = float(row.cost_usd or 0.0)
+    usage: dict[str, Any] = {"input_tokens": inp, "output_tokens": out}
+    cost = recorded_cost(provider, model, inp, out, stored)
+    if stored > 0 or is_priced(provider, model):
+        usage["cost_usd"] = round(float(cost), 9)
+    if is_list_price_equivalent(provider, model):
+        usage["list_price_equivalent"] = True
+    return provider, model, usage
 
 
 def report_text(output: Any) -> str:
@@ -835,7 +917,15 @@ async def invoke_helper(parent: "HelperParent | None", call_id: str, name: str, 
         if call is not None:
             # Every step frame still queued goes out BEFORE the last frame.
             call.close()
-            call.finish(result, stopped=stopped)
+            # v1.390.0 (the Timeline): the last frame says what it used — read
+            # only when a row listens (the POST lane draws none); a cancel
+            # landing on the read still sends the last frame.
+            usage = None
+            try:
+                if call.emit is not None:
+                    usage = await call.read_usage(result)
+            finally:
+                call.finish(result, stopped=stopped, usage=usage)
         return result, stopped
 
 

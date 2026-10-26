@@ -311,6 +311,10 @@ export interface ReceiptTiming {
   startedAt: number;
   firstTokenAt: number | null;
   endedAt: number;
+  /** v1.390.0 review: a coding reply's own length on the daemon's precise
+   *  clock (its Timeline's axis); the stamps above stay wall-clock epochs.
+   *  Absent on a chat reply and on every line written before the Timeline. */
+  ms?: number;
 }
 
 /** A duration in words: "0.3 s", "12 s", "2 min 5 s". Null for a value that

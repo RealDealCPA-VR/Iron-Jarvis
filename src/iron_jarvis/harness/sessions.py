@@ -141,6 +141,12 @@ LINE_KEYS: tuple[str, ...] = (
     # (``harness/finish.saved_record``: tests, command, removed, kept,
     # points, unmet, after[, why]) — the work line's "Checked: …".
     "finish",
+    # v1.390.0 (the Timeline): on a reply, each billed model call — its
+    # start (ms from the reply's start), length, provider, model and usage in
+    # the receipt's shape — plus the call in flight when it ended
+    # (``harness/timeline.ReplyClock``). Steps keep their ``start`` inside
+    # ``steps``; helpers their model and usage inside ``helpers``.
+    "calls",
 )
 
 

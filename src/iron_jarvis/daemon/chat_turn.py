@@ -54,9 +54,7 @@ from ..providers.reasoning import normalize_level
 # v1.387.0: a reply cut off at the output limit — recovered, not ended (see
 # the note beside `_truncated_by`). MIRROR NOTE (lock-step): both lanes.
 from ..providers.reply_budget import (
-    CUT_OFF_NOTES_MAX,
     cut_off_end,
-    cut_off_end_text,
     cut_off_exhausted,
     cut_off_note,
     cut_off_receipt,
@@ -8788,6 +8786,10 @@ async def run_chat_turn(
             usage_out += int(_u.get("output_tokens", 0) or 0)
             _tally.add(getattr(route, "provider", ""), getattr(route, "model", ""), _u)
             completions += 1
+            # v1.390.0 (the Timeline): the stream lane says each billed call
+            # of a harness turn as a `model_call` frame here. This lane sends
+            # no frames and has no Build caller, so it keeps the tally only —
+            # deliberately not mirrored (routes/chat.py, "THE TIMELINE").
             _thinking_parts.append(_thinking_of(route.response))
             _truncated = _truncated_by(route.response)
             # v1.387.0 review: a reply CUT OFF at the output limit (see the

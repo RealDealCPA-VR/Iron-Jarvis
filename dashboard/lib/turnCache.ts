@@ -38,6 +38,9 @@ export interface CachedPage {
    *  before the send; without it the question popped in above the live reply
    *  once the open read landed. null/absent = none of its own. */
   pending?: unknown;
+  /** v1.390.0: the running reply's Timeline as folded so far (lib/
+   *  buildTimeline `createLiveTimeline` adopts it back); absent = none. */
+  timeline?: unknown;
 }
 
 export interface CachedTurn {
