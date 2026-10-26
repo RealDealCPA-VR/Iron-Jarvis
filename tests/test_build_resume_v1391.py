@@ -284,15 +284,19 @@ async def test_a_working_reply_carries_on_by_itself_from_its_last_round(home, wo
     ]
 
 
-async def test_a_call_cut_off_while_it_ran_is_answered_and_never_run_again_blindly(home, work, monkeypatch):
+@pytest.mark.parametrize("kind", ["write", "read"])
+async def test_a_call_cut_off_while_it_ran_is_answered_and_never_run_again_blindly(home, work, monkeypatch, kind):
     """The app stops while a tool RUNS: the kept list ends on the turn that
-    asked for it, and the resumed model is told it was cut off (the store's
-    own words: a write "may have landed, check first")."""
-    from iron_jarvis.tools.registry import INTERRUPTED_MAY_HAVE_LANDED
+    asked for it, and the resumed model is told it was cut off — in the
+    store's own words, judged by the REAL tool behind the model's name
+    (Claude's ``Write`` is ``write_file``: "may have landed, check first";
+    its ``Read`` is ``read_file``, which only reads: "safe to run again")."""
+    from iron_jarvis.tools.registry import INTERRUPTED_MAY_HAVE_LANDED, INTERRUPTED_SAFE
 
     first = create_app(home)
     sid = new_session(first, work)["id"]
-    tool = first.state.platform.registry.get("write_file")
+    (work / "two.txt").write_text("old", encoding="utf-8")
+    tool = first.state.platform.registry.get("write_file" if kind == "write" else "read_file")
     real = tool.execute
     running = asyncio.Event()
 
@@ -303,7 +307,9 @@ async def test_a_call_cut_off_while_it_ran_is_answered_and_never_run_again_blind
         return await real(args, ctx)
 
     monkeypatch.setattr(tool, "execute", slow)
-    wire(first, Script([_write("c1", "one.txt", "1"), _write("c2", "two.txt", "2"), "x"]))
+    second_call = (_write("c2", "two.txt", "2") if kind == "write"
+                   else [ToolCall(id="c2", name="Read", arguments={"file_path": "two.txt"})])
+    wire(first, Script([_write("c1", "one.txt", "1"), second_call, "x"]))
     drop = asyncio.Event()
     follower = asyncio.create_task(open_turn(first, sid, {"text": "make files", "turn_id": "bt-cut"},
                                              drop=drop, timeout=60))
@@ -323,9 +329,50 @@ async def test_a_call_cut_off_while_it_ran_is_answered_and_never_run_again_blind
     await until(lambda: script.calls, 30)
     sent = script.calls[0]["messages"]
     cut = next(m for m in sent if m.role == "tool" and m.tool_call_id == "c2")
-    assert cut.content == INTERRUPTED_MAY_HAVE_LANDED
+    assert cut.content == (INTERRUPTED_MAY_HAVE_LANDED if kind == "write" else INTERRUPTED_SAFE)
     assert sent[-1].content == RR.RESUME_NOTE
     await until(lambda: not second.state.platform.turn_logs.running(), 30)
+
+
+async def test_a_resumed_reply_keeps_its_whole_conversation_for_the_next_restart(home, work):
+    """Stopped AGAIN while it carried on: the resumed reply's own kept list is
+    the WHOLE turn — the question, the rounds it was given, the resume note
+    and its own rounds — so the next boot carries it on once more, from there,
+    and no finished step runs a second time."""
+    first = create_app(home)
+    sid = new_session(first, work)["id"]
+    await _cut_off_mid_reply(first, sid)
+
+    second = _reboot(home)
+    hold = Hold()
+    wire(second, Script([_write("c3", "three.txt", "3"), hold]))
+    assert await build_routes.resume_after_restart(second.state.d) == [sid]
+    await asyncio.wait_for(hold.reached.wait(), 30)
+    logs = second.state.platform.turn_logs
+    new_turn = next(lg.turn_id for lg in logs.running() if lg.thread_id == sid)
+    kept = _kept_list(second, new_turn)
+    assert [(r["role"], [c["id"] for c in r.get("tool_calls", [])], r.get("tool_call_id")) for r in kept] == [
+        ("user", [], None),
+        ("assistant", ["c1"], None), ("tool", [], "c1"),
+        ("assistant", ["c2"], None), ("tool", [], "c2"),
+        ("user", [], None),
+        ("assistant", ["c3"], None), ("tool", [], "c3"),
+    ]
+    assert kept[0]["content"] == "make three files" and kept[5]["content"] == RR.RESUME_NOTE
+    await logs.shutdown()
+    hold.gate.set()
+
+    third = _reboot(home)
+    script = wire(third, Script(["All three are there."]))
+    assert await build_routes.resume_after_restart(third.state.d) == [sid]
+    await until(lambda: script.calls, 30)
+    tail = [(m.role, m.tool_call_id or "") for m in script.calls[0]["messages"][-9:]]
+    assert tail == [("user", ""), ("assistant", ""), ("tool", "c1"), ("assistant", ""), ("tool", "c2"),
+                    ("user", ""), ("assistant", ""), ("tool", "c3"), ("user", "")]
+    await until(lambda: not third.state.platform.turn_logs.running(), 30)
+    assert len(_ledger(third)) == 3, "each file written once across three boots"
+    carried = [m["resumedFrom"] for m in messages_of(third, sid) if m["role"] == "user" and m.get("resumedFrom")]
+    assert carried == ["bt-1", new_turn]
 
 
 async def test_a_reply_waiting_on_you_is_never_carried_on_by_itself(home, work):
