@@ -274,6 +274,19 @@ async def test_coding_words_that_start_with_try_stay_an_ordinary_turn(app, fake,
     await _ordinary(app, monkeypatch, repo, text, "ord-x")
 
 
+def test_the_try_on_control_with_try_words_hands_on_only_the_work():
+    """The control's picks win over the words — and the work every attempt
+    gets is the words' own task, not "Try this with Claude and Codex: …"."""
+    from iron_jarvis.daemon.routes.build_attempts import request_of
+
+    body = SimpleNamespace(try_on=[SimpleNamespace(provider="codex-cli", model="gpt-5.5"),
+                                   SimpleNamespace(provider="ollama", model="glm-local")])
+    req = request_of(body, "Try this with Claude and Codex: fix add in calc.py.")
+    assert req.picks == [("codex-cli", "gpt-5.5"), ("ollama", "glm-local")]
+    assert req.task == "fix add in calc.py."
+    assert request_of(body, "fix add").task == "fix add"
+
+
 def test_the_work_keeps_its_line_breaks_and_pasted_code():
     """The work every attempt is given is the message as written: its pasted
     code keeps its lines (it was joined into one line, so a function pasted

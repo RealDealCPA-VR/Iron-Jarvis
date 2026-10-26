@@ -342,7 +342,13 @@ export function usageWords(a: AttemptView): string {
 /** Review: the attempts' folders are still beside the repository (not kept,
  *  not discarded, not a branched copy's) — Discard all has something to do. */
 export function hasLiveFolders(card: AttemptsCard): boolean {
-  return !card.fromSession && !card.kept && card.items.some((a) => a.keepable && !a.trashed);
+  // (A kept card's folders went to the trash with Keep — but one in use
+  // stayed, and Discard all moves it later. The attempt a session ADOPTED is
+  // the session's own folder now.)
+  return (
+    !card.fromSession &&
+    card.items.some((a) => a.keepable && !a.trashed && !(card.adopt && a.id === card.kept))
+  );
 }
 
 /** The one line under the card before Keep is pressed. */

@@ -63,9 +63,13 @@ def request_of(body: Any, text: str) -> "A.Request | None":
     words (:func:`harness.attempts.parse_request`), else None."""
     picks = list(getattr(body, "try_on", None) or [])
     if picks:
+        # Review (v1.397.0): picks AND the words "try this with A and B: …"
+        # — the work is the words' own task, never "try this with A and B"
+        # handed to every attempt as part of it.
+        said = A.parse_request(text)
         return A.Request(
             picks=[(str(p.provider or "").strip(), str(p.model or "").strip()) for p in picks],
-            task=text,
+            task=said.task if said is not None else text,
         )
     return A.parse_request(text)
 

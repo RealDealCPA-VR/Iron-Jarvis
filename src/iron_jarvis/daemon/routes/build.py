@@ -3745,7 +3745,10 @@ def register(app: FastAPI, d: Any) -> None:
         from .build_git import _locked as _git_locked
 
         S.end_session_programs(thread_id)
-        left = _git_locked(thread_id, lambda: discard_for_delete(d.platform, row))
+        try:
+            left = _git_locked(thread_id, lambda: discard_for_delete(d.platform, row))
+        except B.GitRefused as exc:
+            return JSONResponse(status_code=exc.status, content={"detail": f"{exc} The session was not deleted."})
         if left:
             return JSONResponse(status_code=409, content={"detail": f"{left} The session was not deleted."})
         if facts and not facts.get("removed_at"):
