@@ -29,20 +29,30 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 from iron_jarvis.core import ids as _ids
+from iron_jarvis.daemon.app import create_app
 from iron_jarvis.harness import checkers as CK
 from iron_jarvis.harness import finish as F
 from iron_jarvis.providers.adapters.base import ToolCall
-from tests.test_build_timeline_v1390 import (  # noqa: F401 — fixtures
-    Timed,
-    _reply,
-    _turn,
-    app,
-    new_session,
-    wire,
-    work,
-)
+from tests.test_build_timeline_v1390 import Timed, _reply, _turn, new_session, wire
 from tests.test_chat_turn_stop_v1241 import _asgi_post
+
+
+@pytest.fixture()
+def app(tmp_path):
+    return create_app(str(tmp_path / "home"))
+
+
+@pytest.fixture()
+def work(tmp_path) -> Path:
+    folder = tmp_path / "work"
+    folder.mkdir()
+    (folder / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (folder / "util.py").write_text("def f():\n    return 2\n", encoding="utf-8")
+    return folder
+
 
 #: How far the wall clock steps forward in the middle of the reply.
 STEP_S = 6.0
