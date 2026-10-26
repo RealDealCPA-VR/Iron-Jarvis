@@ -621,3 +621,75 @@ async def test_the_sessions_cost_cap_bounds_the_attempts_together(app, fake, rep
     commands = [c for c in world.calls if c["provider"] == "codex-cli"]
     assert len(commands) <= 2, commands
     assert "Did all three." not in json.dumps(card)
+
+
+# --------------------------------------------------------------------------- #
+# 7. The safety floors still card inside an attempt, on its own row
+# --------------------------------------------------------------------------- #
+
+
+async def _asking_row(app, turn: str, provider: str):
+    from tests.test_build_sessions_v1367 import turn_frames, until
+
+    def asking():
+        return next((d for e, d in turn_frames(app, turn)
+                     if e == A.EVENT and d.get("provider") == provider
+                     and isinstance(d.get("ask"), dict) and d["ask"].get("id")), None)
+
+    return await until(asking, 60.0)
+
+
+async def test_the_git_guard_cards_an_attempts_commit_once_only_even_in_yolo(app, fake, repo, monkeypatch):
+    import asyncio
+
+    from tests.test_build_attempts_v1397 import shell
+
+    await enable(app)
+    wire_models(app, monkeypatch, World({
+        "codex-cli": ["Nothing to do."],
+        "ollama": [shell("g1", "git commit -am wip"), "Tried to commit."],
+    }))
+    view = await new_session(app, repo, approval_mode="yolo")
+    sid = view["id"]
+    task = asyncio.create_task(open_turn(app, sid, {"text": TRY2, "turn_id": "gg-1"}, timeout=120.0))
+    row = await _asking_row(app, "gg-1", "ollama")
+    assert row is not None, "the attempt's commit asked on its row"
+    ask = row["ask"]
+    assert ask["tool"] == "shell" and ask.get("once_only") is True and ask.get("once_reason") == "git", ask
+    status, _ = await asgi(app, "POST", f"/chat/approvals/{ask['id']}", {"decision": "deny"})
+    assert status == 200
+    status, raw = await task
+    assert status == 200
+    local = item_for(card_of(frames_of(raw)), "ollama")
+    wt = Path(local["git"]["worktree"])
+    # Nothing was committed on the attempt's branch by the agent.
+    assert git("rev-list", "--count", "HEAD", cwd=wt) == git("rev-list", "--count", "HEAD", cwd=repo)
+
+
+async def test_a_local_only_attempts_command_cards_once_only(app, fake, repo, monkeypatch):
+    import asyncio
+
+    from tests.test_build_attempts_v1397 import shell
+
+    await enable(app)
+    menu = [*MENU, {"provider": "ollama", "model": "qwen-local", "available": True, "on_this_network": True}]
+    wire_models(app, monkeypatch, World({"ollama": [shell("l1", "echo hi"), "Ran it."]}), menu=menu)
+    view = await new_session(app, repo, approval_mode="yolo")
+    sid = view["id"]
+    status, _ = await asgi(app, "PATCH", f"/build/sessions/{sid}", {"local_only": True})
+    assert status == 200
+    task = asyncio.create_task(open_turn(app, sid, {
+        "text": "say hi", "turn_id": "lo-a",
+        "try_on": [{"provider": "ollama", "model": "glm-local"}, {"provider": "ollama", "model": "qwen-local"}],
+    }, timeout=120.0))
+    row = await _asking_row(app, "lo-a", "ollama")
+    assert row is not None
+    assert row["ask"].get("once_only") is True and row["ask"]["tool"] == "shell", row["ask"]
+    for _ in range(2):
+        r = await _asking_row(app, "lo-a", "ollama")
+        if r is None:
+            break
+        await asgi(app, "POST", f"/chat/approvals/{r['ask']['id']}", {"decision": "once"})
+        await asyncio.sleep(0.2)
+    status, raw = await task
+    assert status == 200 and frames_of(raw)[-1][0] == "done"

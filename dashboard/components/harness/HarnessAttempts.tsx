@@ -23,13 +23,16 @@ import { useState, type ReactNode } from "react";
 import { Check, GitBranch, Loader2 } from "lucide-react";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { WorkRow } from "@/components/chat/WorkLine";
+import { ConfirmButton } from "@/components/ui";
 import {
   afterKeepWords,
   attemptName,
   cardLead,
   decodeAttemptsCard,
+  discardAttempts,
   endWords,
   filesWords,
+  hasLiveFolders,
   keepAttempt,
   liveWords,
   testsWords,
@@ -115,7 +118,19 @@ export function AttemptsCardView({
     setSaid({ ok: out.ok, words: [out.words, out.note].filter(Boolean).join(" ") });
     if (out.ok) onKept();
   }
+  // Review (v1.397.0): DISCARD ALL — the attempts' folders to the trash,
+  // their branches kept (Keep's own trash), two presses like any discard.
+  async function discardAll() {
+    if (busy) return;
+    setBusy("discard");
+    setSaid(null);
+    const out = await discardAttempts(threadId, turnId);
+    setBusy(null);
+    setSaid({ ok: out.ok, words: [out.words, out.note].filter(Boolean).join(" ") });
+    if (out.ok) onKept();
+  }
   const lead = cardLead(card);
+  const canDiscard = canKeep && hasLiveFolders(card);
   return (
     <section data-testid="attempts-card" className="mb-2 min-w-0" aria-label="Attempts on several models">
       <div className="grid min-w-0 gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -126,17 +141,35 @@ export function AttemptsCardView({
             attempt={a}
             // A finished attempt, or one that changed files before it was
             // stopped (its work is there to keep, the card says how it ended).
-            keepable={canKeep && !card.kept && a.keepable && (a.why === "finished" || a.files.length > 0)}
+            keepable={
+              canKeep && !card.kept && !card.fromSession && a.keepable && !a.trashed &&
+              (a.why === "finished" || a.files.length > 0)
+            }
             working={busy === a.id}
             disabled={!!busy}
             onKeep={() => void keep(a)}
           />
         ))}
       </div>
-      {lead ? (
-        <p data-testid="attempts-lead" className="mt-2 text-[12px] leading-5 text-zinc-500">
-          {lead}
-        </p>
+      {lead || canDiscard ? (
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          {lead ? (
+            <p data-testid="attempts-lead" className="min-w-0 text-[12px] leading-5 text-zinc-500">
+              {lead}
+            </p>
+          ) : null}
+          {canDiscard ? (
+            <span data-testid="attempts-discard" className="shrink-0">
+              <ConfirmButton
+                variant="calm"
+                label="Discard all"
+                confirmLabel="Move their folders to the trash"
+                title="Every attempt's folder goes to the trash; their branches stay"
+                onConfirm={discardAll}
+              />
+            </span>
+          ) : null}
+        </div>
       ) : null}
       {card.keepNote ? (
         <p data-testid="attempts-keep-note" className="mt-1 text-[12px] leading-5 text-tone-warn">

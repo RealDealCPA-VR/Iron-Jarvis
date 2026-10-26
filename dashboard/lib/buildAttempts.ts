@@ -93,6 +93,16 @@ export interface AttemptsCard {
   kept: string;
   mergedInto: string;
   keepNote: string;
+  /** Review (v1.397.0): the attempts started from the session's work NOT
+   *  COMMITTED yet — Keep lands the kept result in the session's folder as
+   *  changes not committed (``landed`` once it did). */
+  carried: boolean;
+  landed: boolean;
+  /** Review: a card a session got when it was BRANCHED from another one —
+   *  that session's attempts (keep or discard them there). "" = this one's. */
+  fromSession: string;
+  /** Review: Discard all was pressed (when). */
+  discardedAt: string;
 }
 
 const rec = (v: unknown): Record<string, unknown> | null =>
@@ -234,6 +244,10 @@ export function decodeAttemptsCard(raw: unknown): AttemptsCard | null {
     kept: str(r.kept, 20),
     mergedInto: str(r.merged_into, 200),
     keepNote: str(r.keep_note, 600),
+    carried: r.carried === true,
+    landed: r.landed === true,
+    fromSession: str(r.from_session, 80),
+    discardedAt: str(r.discarded_at, 40),
   };
 }
 
@@ -325,14 +339,30 @@ export function usageWords(a: AttemptView): string {
   return t;
 }
 
+/** Review: the attempts' folders are still beside the repository (not kept,
+ *  not discarded, not a branched copy's) — Discard all has something to do. */
+export function hasLiveFolders(card: AttemptsCard): boolean {
+  return !card.fromSession && !card.kept && card.items.some((a) => a.keepable && !a.trashed);
+}
+
 /** The one line under the card before Keep is pressed. */
 export function cardLead(card: AttemptsCard): string {
+  if (card.fromSession) {
+    return "These attempts belong to the session this one was branched from: keep or discard them there.";
+  }
   if (card.kept) return "";
-  const keepable = card.items.some((a) => a.keepable && (a.why === "finished" || a.files.length > 0));
+  if (card.discardedAt && !hasLiveFolders(card)) {
+    return "Discarded: the attempts' folders are in the trash, and their branches stay.";
+  }
+  const keepable = card.items.some((a) => a.keepable && !a.trashed && (a.why === "finished" || a.files.length > 0));
   if (!keepable) return "No attempt finished or changed a file, so there is nothing to keep.";
-  return card.adopt
-    ? "Keep one: this session then works on its branch. The other attempts' folders go to the trash; their branches stay."
-    : "Keep one: only its work joins this session's branch. The other attempts' folders go to the trash; their branches stay.";
+  if (card.adopt) {
+    return "Keep one: this session then works on its branch. The other attempts' folders go to the trash; their branches stay.";
+  }
+  if (card.carried) {
+    return "Keep one: its result goes into this session's folder, not committed yet. The other attempts' folders go to the trash; their branches stay.";
+  }
+  return "Keep one: only its work joins this session's branch. The other attempts' folders go to the trash; their branches stay.";
 }
 
 /** What a row says after Keep. */
@@ -340,6 +370,7 @@ export function afterKeepWords(card: AttemptsCard, a: AttemptView): string {
   if (!card.kept) return "";
   if (a.id === card.kept) {
     if (card.adopt) return "Kept: this session works on its branch now";
+    if (card.landed) return "Kept: its result is in this session's folder, not committed yet";
     return card.mergedInto ? `Kept: merged into ${card.mergedInto}` : "Kept";
   }
   return a.trashed ? "Folder in the trash · branch kept" : "Not kept · branch kept";
@@ -371,6 +402,25 @@ export async function keepAttempt(threadId: string, turnId: string, attempt: str
         : e instanceof Error && e.message
           ? e.message
           : "The attempt could not be kept.";
+    return { ok: false, words, note: "" };
+  }
+}
+
+/** POST /build/sessions/{id}/attempts/discard — Discard all (a person's
+ *  press): the attempts' folders to the trash, their branches kept. */
+export async function discardAttempts(threadId: string, turnId: string): Promise<KeepAnswer> {
+  try {
+    const out = rec(
+      await post<unknown>(`/build/sessions/${encodeURIComponent(threadId)}/attempts/discard`, { turn_id: turnId }),
+    );
+    return { ok: true, words: str(out?.words, 600), note: str(out?.note, 600) };
+  } catch (e) {
+    const words =
+      e instanceof ApiError && e.status === 404
+        ? "Those attempts are not there any more. Reload the session."
+        : e instanceof Error && e.message
+          ? e.message
+          : "The attempts could not be discarded.";
     return { ok: false, words, note: "" };
   }
 }
