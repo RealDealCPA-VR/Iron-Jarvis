@@ -3481,6 +3481,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build_git as _build_git_routes
 
     _build_git_routes.register(app, d)
+    # Try one task on several models (v1.397.0, harness/attempts): Keep one
+    # attempt (its work joins the session's branch; the others' folders go
+    # to the trash, their branches kept). The attempts themselves start from
+    # the build turn route.
+    from .routes import build_attempts as _build_attempts_routes
+
+    _build_attempts_routes.register(app, d)
     # Share my profile with Build (v1.306.0): the per-CLI switches on the
     # Memory page's "What Jarvis knows about you" card.
     from .routes import profile_share as _profile_share_routes
