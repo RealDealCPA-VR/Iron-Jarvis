@@ -193,8 +193,13 @@ def test_the_activity_answer_carries_the_setting_live(tmp_path):
     assert client.get("/system/activity").json()["keep_awake"] is False
 
 
-async def test_a_coding_reply_waiting_on_your_answer_still_counts_as_work(tmp_path):
-    """So the PC stays awake for the answer to reach it."""
+async def test_a_coding_reply_waiting_on_your_answer_is_busy_but_not_working(tmp_path):
+    """MOVED in the review (v1.391.0): a reply parked on an approval card is
+    still ``busy`` (an update cuts it off, so the update's warning names it),
+    but it is not WORKING — it goes on only when the person answers, so it no
+    longer holds the PC awake (decision 1: "only while ... working"; the
+    doer's version said "so the answer can still reach it", but a sleeping
+    PC wakes with the card still open)."""
     from tests.test_build_sessions_v1367 import Script, asgi, new_session, open_turn, until, wire
     from iron_jarvis.providers.adapters.base import ToolCall
 
@@ -209,6 +214,7 @@ async def test_a_coding_reply_waiting_on_your_answer_still_counts_as_work(tmp_pa
     await until(lambda: logs.get("ka-1") is not None and any(e == "approval" for e, _ in logs.get("ka-1").frames), 30)
     status, body = await asgi(app, "GET", "/system/activity")
     assert status == 200 and body["busy"] is True and body["chat_replies"] == 1
+    assert body["working"] is False, "parked on the user: not work that runs"
     await logs.shutdown()
     drop.set()
     await asyncio.wait_for(follower, 30)

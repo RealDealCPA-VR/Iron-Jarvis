@@ -490,7 +490,8 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("keep_awake", "Keep this PC awake while work runs", "system", "bool",
       "While a reply, an agent run, a workflow or a coding tool in a Build terminal is working, "
       "the desktop app keeps Windows from going to sleep, so the work can finish. The screen can "
-      "still turn off. When nothing is working, the PC sleeps as usual.",
+      "still turn off. Work waiting for your answer does not keep it awake. When nothing is "
+      "working, the PC sleeps as usual.",
       tier="allow", section="Power",
       aliases=("keep awake", "prevent sleep", "stay awake", "sleep", "power")),
     S("pi_sessions_dir", "Pi sessions folder", "system", "string", "Where Pi coding sessions are read from.",

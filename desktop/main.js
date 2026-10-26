@@ -3935,11 +3935,11 @@ function probeDaemonActivity(timeoutMs) {
 // --- Keep this PC awake while work runs (v1.391.0) -----------------------
 // The long-jobs plan's Phase 2, decision 1: a coding reply runs for an hour
 // and Windows put the PC to sleep in the middle of it. While the daemon says
-// work is in flight (GET /system/activity `busy`: a chat or coding reply —
-// one waiting on the user's answer too, so the answer can still reach it —,
-// an agent run or a mission, a workflow run, a Build terminal whose coding
-// tool is working) the app holds Electron's sleep blocker, and lets go the
-// moment nothing is. ONE blocker id, never stacked; "prevent-app-suspension"
+// work RUNS (GET /system/activity `working`: a chat or coding reply, an agent
+// run or a mission, a workflow run, a Build terminal whose coding tool is
+// working — never one of these parked on the user's answer, v1.391.0 review)
+// the app holds Electron's sleep blocker, and lets go the moment nothing
+// runs. ONE blocker id, never stacked; "prevent-app-suspension"
 // ONLY — the screen still turns off (never the blocker that holds the display).
 //
 // THE SETTING ("Keep this PC awake while work runs", the System group, on by
@@ -3959,6 +3959,14 @@ const keepAwakeState = { id: null, misses: 0 };
 
 // Pure: should the blocker be held, given one /system/activity answer (null
 // = no answer) and the state so far? Returns { want, misses }.
+//
+// v1.391.0 review: WORK THAT RUNS, never work parked on the user. `busy` also
+// counts a reply on an approval card, a Build terminal whose coding tool
+// shows its question ("blocked"), a workflow waiting for an answer — none of
+// it goes on until the person answers, and a laptop left with one card open
+// overnight never slept. The daemon answers `working` beside `busy`
+// (routes/system `_working`); an older daemon that does not is read by
+// `busy`, as before.
 function keepAwakeDecision(activity, state) {
   const held = !!(state && state.id !== null && state.id !== undefined);
   if (!activity || typeof activity !== "object") {
@@ -3966,7 +3974,8 @@ function keepAwakeDecision(activity, state) {
     const misses = prior + 1;
     return { want: held && misses < KEEP_AWAKE_MISSES_RELEASE, misses };
   }
-  return { want: activity.keep_awake !== false && activity.busy === true, misses: 0 };
+  const working = typeof activity.working === "boolean" ? activity.working : activity.busy === true;
+  return { want: activity.keep_awake !== false && working, misses: 0 };
 }
 
 // Hold or let go of THE one blocker (`blocker` is Electron's powerSaveBlocker;

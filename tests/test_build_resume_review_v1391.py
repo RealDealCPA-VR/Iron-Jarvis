@@ -372,6 +372,101 @@ async def test_the_start_itself_refuses_a_resume_once_the_user_sent_a_newer_mess
     assert RR.has_record(engine, "bt-1"), "a refused start takes nothing"
 
 
+# --------------------------------------------------------------------------- #
+# 4. the sleep blocker holds for work that RUNS, never for work parked on you
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node not on PATH")
+def test_the_blocker_reads_working_never_busy_when_the_daemon_says_it(tmp_path):
+    """Decision 1: "only while a coding reply, a mission or an agent run is
+    working". The desktop's blocker read ``busy``, which also counts work
+    parked on the user (a card, a Build terminal's question), so a laptop left
+    with a card open never slept. It reads ``working`` now; an older daemon
+    without the key is read by ``busy``."""
+    from tests.test_keep_awake_v1391 import _BLOCKER, _decl, _fn, _run
+
+    script = "\n".join([
+        _decl("KEEP_AWAKE_MISSES_RELEASE"), _decl("KEEP_AWAKE_TYPE"),
+        _fn("keepAwakeDecision"), _fn("applyKeepAwake"), _BLOCKER,
+        """
+const state = { id: null, misses: 0 };
+const out = [];
+function step(activity) {
+  const d = keepAwakeDecision(activity, state);
+  state.misses = d.misses;
+  applyKeepAwake(d.want, blocker, state);
+  out.push(state.id !== null);
+}
+step({ busy: true, working: true, keep_awake: true });    // a reply works
+step({ busy: true, working: false, keep_awake: true });   // it waits on a card: let go
+step({ busy: true, working: false, keep_awake: true });   // still waiting
+step({ busy: true, working: true, keep_awake: false });   // the setting off
+step({ busy: true, keep_awake: true });                   // an older daemon: busy decides
+console.log(JSON.stringify({ out }));
+""",
+    ])
+    assert _run(script, tmp_path, "keep_awake_working")["out"] == [True, False, False, False, True]
+
+
+def _activity(app) -> dict:
+    from fastapi.testclient import TestClient
+
+    return TestClient(app).get("/system/activity").json()
+
+
+def test_a_build_terminal_waiting_on_its_question_is_busy_but_not_working(home, monkeypatch):
+    app = create_app(home)
+    panes = {"state": "blocked"}
+    monkeypatch.setattr(app.state.platform.terminals, "list",
+                        lambda: [{"id": "p1", "alive": True, "state": panes["state"], "agent_cli": "claude"}])
+    body = _activity(app)
+    assert body["busy"] is True and body["busy_panes"] == 1, "the update's warning still names it"
+    assert body["working"] is False, "a coding tool showing its question is parked on the user"
+    panes["state"] = "working"
+    assert _activity(app)["working"] is True
+
+
+async def test_an_attended_run_on_its_card_is_parked_and_an_unattended_one_still_works(home):
+    """An attended run's ask waits for the person with no clock: parked. An
+    UNATTENDED run's ask expires by itself and its run goes on — still work
+    (letting the PC sleep through the clock would suspend the run for the
+    night)."""
+    from iron_jarvis.core.models import Session, SessionStatus
+
+    app = create_app(home)
+    platform = app.state.platform
+    with session_scope(platform.engine) as db:
+        db.add(Session(id="s-att", task="t", origin="job:mission", status=SessionStatus.ACTIVE))
+        db.commit()
+    ask, fut = platform.approvals.request("write_file", {"path": "a"}, session_id="s-att")
+    body = await asyncio.to_thread(_activity, app)
+    assert body["busy"] is True and body["working"] is False
+    with session_scope(platform.engine) as db:
+        row = db.get(Session, "s-att")
+        row.origin = "schedule:nightly"
+        db.add(row)
+        db.commit()
+    assert (await asyncio.to_thread(_activity, app))["working"] is True
+    platform.approvals.resolve(ask, "deny")
+
+
+async def test_a_coding_reply_that_works_holds_the_pc_awake(home, unchecked):
+    app = create_app(home)
+    sid = new_session(app, unchecked)["id"]
+    hold = _Hold()
+    wire(app, Script([hold]))
+    drop = asyncio.Event()
+    follower = asyncio.create_task(open_turn(app, sid, {"text": "x", "turn_id": "bt-w"}, drop=drop, timeout=60))
+    await asyncio.wait_for(hold.reached.wait(), 30)
+    body = await asyncio.to_thread(_activity, app)
+    assert body["busy"] is True and body["working"] is True
+    await app.state.platform.turn_logs.shutdown()
+    drop.set()
+    hold.gate.set()
+    await asyncio.wait_for(follower, 30)
+
+
 async def test_a_resumed_reply_a_crash_cut_off_still_says_it_carried_on(home, unchecked):
     """A crash (no writer of its own) cut the carrying-on reply: the boot
     writes its line from its stored frames — it keeps ``resumedFrom``, so the
