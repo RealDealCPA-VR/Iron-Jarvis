@@ -358,6 +358,13 @@ class RunTranscript(SQLModel, table=True):
     session_id: str = Field(default="", index=True)
     messages_json: str = "[]"
     updated_at: datetime = Field(default_factory=utcnow)
+    #: v1.391.0 (the long-jobs plan's Phase 2): a CODING SESSION's reply keeps
+    #: its conversation here too (``harness/reply_record``, ``run_id`` =
+    #: ``build-turn:<turn id>``), and this says the reply was parked on the
+    #: user (an approval card, its own question, an app's question) — a boot
+    #: never resumes such a reply by itself. NULL for every agent run (and
+    #: for a reply that is working). Additive; the reconciler adds it.
+    waiting: bool | None = None
 
 
 class RunPlan(SQLModel, table=True):

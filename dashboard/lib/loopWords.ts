@@ -89,6 +89,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Build sessions waiting for an account to reset aren't being checked",
     href: "/terminals",
   },
+  // v1.391.0 (long jobs, Phase 2): the boot's pass that carries on a coding
+  // session's reply a restart cut off while it worked.
+  build_resume: {
+    label: "Carry on after a restart",
+    problem: "Coding sessions cut off by a restart weren't carried on",
+    href: "/terminals",
+  },
   dispatcher: { label: "Queued tasks", problem: "Queued tasks aren't starting", href: TEAM },
   autonomy: { label: "Autonomy", problem: "Work Jarvis plans on its own isn't being checked", href: "/autonomy" },
   sentinels: { label: "Watchers", problem: "Your watchers aren't checking", href: "/sentinels" },

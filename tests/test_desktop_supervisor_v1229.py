@@ -108,6 +108,11 @@ const LADDER_DECLS = ["RESTART_BACKOFF_MS", "FAST_DEATH_MS", "FAST_DEATHS_TO_VER
 // belong to the ladder's scope, not to any one scenario.
 for (const d of ["WINDOWS_SHUTDOWN_EXIT_CODES", "WINDOWS_SHUTDOWN_GRACE_MS", "windowsSessionEnding"]) eval(decl(d));
 eval(fnSource("isWindowsShutdownExit"));
+// v1.391.0 (moved on purpose, the same rule): the tray menu says "Keeping this
+// PC awake while work runs" while the sleep blocker is held, so every harness
+// that builds the menu needs the blocker's state.
+for (const d of ["keepAwakeState", "KEEP_AWAKE_TRAY_WORDS"]) eval(decl(d));
+eval(fnSource("keepAwakeHeld"));
 """
 
 # --------------------------------------------------------------------------

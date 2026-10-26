@@ -38,6 +38,7 @@ const {
   ipcMain,
   clipboard,
   powerMonitor,
+  powerSaveBlocker,
 } = require("electron");
 const { spawn, spawnSync } = require("child_process");
 const crypto = require("crypto");
@@ -2664,6 +2665,11 @@ function buildTrayContextMenu() {
       { type: "separator" }
     );
   }
+  // v1.391.0 (long jobs, Phase 2): said ONLY while the sleep blocker is held
+  // (a line, not a switch — the setting lives in Settings › System).
+  if (keepAwakeHeld()) {
+    template.push({ label: KEEP_AWAKE_TRAY_WORDS, enabled: false }, { type: "separator" });
+  }
   template.push(
     {
       label: hotkeyState.window
@@ -3926,6 +3932,95 @@ function probeDaemonActivity(timeoutMs) {
   });
 }
 
+// --- Keep this PC awake while work runs (v1.391.0) -----------------------
+// The long-jobs plan's Phase 2, decision 1: a coding reply runs for an hour
+// and Windows put the PC to sleep in the middle of it. While the daemon says
+// work is in flight (GET /system/activity `busy`: a chat or coding reply —
+// one waiting on the user's answer too, so the answer can still reach it —,
+// an agent run or a mission, a workflow run, a Build terminal whose coding
+// tool is working) the app holds Electron's sleep blocker, and lets go the
+// moment nothing is. ONE blocker id, never stacked; "prevent-app-suspension"
+// ONLY — the screen still turns off (never the blocker that holds the display).
+//
+// THE SETTING ("Keep this PC awake while work runs", the System group, on by
+// default) is read LIVE from the same answer (`keep_awake`), never from
+// config.toml at spawn like `lan_access`: the daemon is asked every check
+// anyway, and a change then applies at the next check with no restart.
+// A daemon that does not answer keeps the blocker for a few checks (a busy
+// moment is not the end of the work), then lets go; Quit always lets go.
+const KEEP_AWAKE_POLL_MS = 15000;
+//: Unanswered checks in a row before a held blocker is let go.
+const KEEP_AWAKE_MISSES_RELEASE = 3;
+//: The blocker's type — sleep only, never the display.
+const KEEP_AWAKE_TYPE = "prevent-app-suspension";
+//: The tray's line while the blocker is held.
+const KEEP_AWAKE_TRAY_WORDS = "Keeping this PC awake while work runs";
+const keepAwakeState = { id: null, misses: 0 };
+
+// Pure: should the blocker be held, given one /system/activity answer (null
+// = no answer) and the state so far? Returns { want, misses }.
+function keepAwakeDecision(activity, state) {
+  const held = !!(state && state.id !== null && state.id !== undefined);
+  if (!activity || typeof activity !== "object") {
+    const prior = state && Number.isFinite(Number(state.misses)) ? Number(state.misses) : 0;
+    const misses = prior + 1;
+    return { want: held && misses < KEEP_AWAKE_MISSES_RELEASE, misses };
+  }
+  return { want: activity.keep_awake !== false && activity.busy === true, misses: 0 };
+}
+
+// Hold or let go of THE one blocker (`blocker` is Electron's powerSaveBlocker;
+// a test passes a stand-in). Returns true when it changed.
+function applyKeepAwake(want, blocker, state) {
+  const held = state.id !== null && state.id !== undefined;
+  if (want) {
+    if (held && blocker.isStarted(state.id)) return false; // already held: never stacked
+    state.id = blocker.start(KEEP_AWAKE_TYPE);
+    return true;
+  }
+  if (!held) return false;
+  try {
+    if (blocker.isStarted(state.id)) blocker.stop(state.id);
+  } finally {
+    state.id = null;
+  }
+  return true;
+}
+
+function keepAwakeHeld() {
+  return keepAwakeState.id !== null && keepAwakeState.id !== undefined;
+}
+
+function keepAwakeTick() {
+  if (isQuitting) return;
+  probeDaemonActivity(ACTIVITY_PROBE_TIMEOUT_MS).then((activity) => {
+    if (isQuitting) return;
+    const d = keepAwakeDecision(activity, keepAwakeState);
+    keepAwakeState.misses = d.misses;
+    try {
+      if (applyKeepAwake(d.want, powerSaveBlocker, keepAwakeState)) {
+        desktopLog("info", d.want ? "[power] keeping this PC awake while work runs" : "[power] work finished — this PC may sleep");
+        refreshTrayMenu();
+      }
+    } catch (err) {
+      desktopLog("error", "[power] sleep blocker failed:", err && err.message);
+    }
+  });
+}
+
+function releaseKeepAwake() {
+  try {
+    if (applyKeepAwake(false, powerSaveBlocker, keepAwakeState)) refreshTrayMenu();
+  } catch {
+    /* quitting: nothing to keep */
+  }
+}
+
+function installKeepAwake() {
+  keepAwakeTick();
+  setInterval(keepAwakeTick, KEEP_AWAKE_POLL_MS);
+}
+
 function requestUpdateInstall() {
   if (!pendingUpdateInfo || updateInstallInFlight || updatePromptInFlight) return;
   updatePromptInFlight = true;
@@ -4509,6 +4604,7 @@ async function startup() {
   checkForUpdates();
   // Long-lived tray apps must keep looking for updates, not just at boot.
   setInterval(checkForUpdates, UPDATE_RECHECK_MS);
+  installKeepAwake(); // v1.391.0: no sleep while work runs (Settings › System)
 }
 
 // The last lines a child wrote, for the failure classifier (v1.249.0, R-06).
@@ -5495,6 +5591,7 @@ if (!gotLock) {
   // synchronously (shuttingDown set) before quitAndInstall, so this falls through.
   app.on("before-quit", (event) => {
     isQuitting = true;
+    releaseKeepAwake(); // v1.391.0: Quit always lets the PC sleep again
     flushWindowState();
     if (shuttingDown || quitProcessed) return; // teardown already done/in-flight
     event.preventDefault();
@@ -5529,6 +5626,7 @@ if (!gotLock) {
     _dwTimer = null;
     if (_hotkeyRetryTimer) clearInterval(_hotkeyRetryTimer);
     _hotkeyRetryTimer = null;
+    releaseKeepAwake(); // v1.391.0: also on a quit that skipped before-quit's teardown
     if (tray) {
       try {
         tray.destroy();

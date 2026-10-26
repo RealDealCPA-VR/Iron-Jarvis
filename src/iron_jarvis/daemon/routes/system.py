@@ -195,6 +195,12 @@ def activity_snapshot(d) -> dict[str, Any]:
         "busy_panes": busy_panes,
         "busy_pane_clis": busy_pane_clis,
         "busy": bool(sessions or run_states or chat_replies or busy_panes),
+        # v1.391.0 (long jobs, Phase 2, decision 1): the "Keep this PC awake
+        # while work runs" setting, read LIVE by the desktop app beside
+        # `busy` (it holds off sleep only while both are true). A chat or a
+        # coding reply waiting on the user is in `chat_replies`, so an answer
+        # can still reach it; a waiting workflow run is in the run count.
+        "keep_awake": bool(getattr(d.platform.config, "keep_awake", True)),
     }
 
 

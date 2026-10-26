@@ -189,6 +189,8 @@ class TurnLog:
         self._dirty = False
         self._last_persist = 0.0
         self._persisting: "asyncio.Task | None" = None
+        #: v1.391.0: the pending end-of-interval write (see :meth:`maybe_persist`).
+        self._flush_handle: "asyncio.TimerHandle | None" = None
         self.task: "asyncio.Task | None" = None
         self.finished_at: float | None = None
         #: approval id -> (tool, asked at ISO) for every approval card this turn
@@ -435,9 +437,16 @@ class TurnLog:
 
     def maybe_persist(self, engine: Any) -> None:
         now = time.monotonic()
-        if not self._dirty or now - self._last_persist < self.persist_interval():
+        if not self._dirty:
             return
-        if self._persisting is not None and not self._persisting.done():
+        wait = self.persist_interval() - (now - self._last_persist)
+        if wait > 0 or (self._persisting is not None and not self._persisting.done()):
+            # v1.391.0: the frames that arrived inside the interval are written
+            # when it ends even if NO later frame comes — a reply that goes
+            # quiet (the model thinking for minutes, a long command) used to
+            # keep its last burst of steps in memory only, and a crash then
+            # lost them from the record the boot rebuilds the reply from.
+            self._flush_later(engine, max(wait, 0.25))
             return
         self._last_persist = now
         self._dirty = False
@@ -446,7 +455,27 @@ class TurnLog:
             asyncio.to_thread(_write_record, engine, self.turn_id, self.started_at, values)
         )
 
+    def _flush_later(self, engine: Any, delay: float) -> None:
+        """One pending write of the record at the end of the interval (none
+        when one is already pending, or no loop runs)."""
+        if self._flush_handle is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        def _fire() -> None:
+            self._flush_handle = None
+            if self.status == "running":
+                self.maybe_persist(engine)
+
+        self._flush_handle = loop.call_later(delay, _fire)
+
     async def persist_now(self, engine: Any) -> None:
+        if self._flush_handle is not None:
+            self._flush_handle.cancel()
+            self._flush_handle = None
         if self._persisting is not None:
             with contextlib.suppress(Exception):
                 await self._persisting
